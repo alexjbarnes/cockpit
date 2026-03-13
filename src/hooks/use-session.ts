@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
-import type { ChatMessage, ServerMessage, ToolUse, ContentBlock } from "@/types";
+import type { ChatMessage, ServerMessage, ToolUse, ContentBlock, PermissionMode, ThinkingLevel } from "@/types";
 import { useWebSocket } from "./use-websocket";
 
 export interface PendingPermission {
@@ -12,13 +12,18 @@ export interface PendingPermission {
 
 interface UseSessionReturn {
   messages: ChatMessage[];
+  historyLoaded: boolean;
   isResponding: boolean;
   pendingPermissions: PendingPermission[];
   modelPicker: string | null;
+  bypassActive: boolean;
+  thinkingLevel: ThinkingLevel;
   sendMessage: (text: string) => void;
   interrupt: () => void;
-  respondToPermission: (requestId: string, allowed: boolean) => void;
+  respondToPermission: (requestId: string, allowed: boolean, permissionMode?: PermissionMode) => void;
   selectModel: (model: string) => void;
+  setBypassAll: (enabled: boolean) => void;
+  setThinkingLevel: (level: ThinkingLevel) => void;
 }
 
 export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
@@ -27,6 +32,9 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
   const [isResponding, setIsResponding] = useState(false);
   const [pendingPermissions, setPendingPermissions] = useState<PendingPermission[]>([]);
   const [modelPicker, setModelPicker] = useState<string | null>(null);
+  const [bypassActive, setBypassActive] = useState(false);
+  const [thinkingLevel, setThinkingLevelState] = useState<ThinkingLevel>("high");
+  const [historyLoaded, setHistoryLoaded] = useState(false);
 
   // Track the in-progress assistant message being streamed
   const streamingRef = useRef<{
@@ -37,6 +45,7 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
 
   // Track nested agent tool calls
   const agentStackRef = useRef<ToolUse[]>([]);
+
 
   // Re-send session:connect whenever WS (re)connects
   useEffect(() => {
@@ -54,8 +63,46 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
 
       switch (msg.type) {
         case "history": {
-          setMessages(msg.messages);
+          const seen = new Set<string>();
+          const deduped = msg.messages.filter((m: ChatMessage) => {
+            if (seen.has(m.id)) return false;
+            seen.add(m.id);
+            return true;
+          });
+          setMessages(deduped);
+          setHistoryLoaded(true);
           streamingRef.current = null;
+          break;
+        }
+
+        case "assistant:thinking": {
+          if (!streamingRef.current) {
+            streamingRef.current = { content: "", toolUses: [], blocks: [] };
+          }
+          const tBlocks = streamingRef.current.blocks;
+          const lastTBlock = tBlocks[tBlocks.length - 1];
+          if (lastTBlock && lastTBlock.type === "thinking") {
+            lastTBlock.text += msg.text;
+          } else {
+            tBlocks.push({ type: "thinking", text: msg.text });
+          }
+
+          const tStreaming = streamingRef.current;
+          setMessages((prev) => {
+            const streamMsg: ChatMessage = {
+              id: "streaming",
+              role: "assistant",
+              content: tStreaming.content,
+              toolUses: tStreaming.toolUses,
+              blocks: [...tStreaming.blocks],
+              timestamp: Date.now(),
+            };
+            const last = prev[prev.length - 1];
+            if (last?.id === "streaming") {
+              return [...prev.slice(0, -1), streamMsg];
+            }
+            return [...prev, streamMsg];
+          });
           break;
         }
 
@@ -97,7 +144,6 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
           if (!streamingRef.current) {
             streamingRef.current = { content: "", toolUses: [], blocks: [] };
           }
-
           const existing = streamingRef.current.toolUses.find(
             (t) => t.id === msg.toolId && t.status === "running"
           );
@@ -238,6 +284,7 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
           setMessages([]);
           streamingRef.current = null;
           agentStackRef.current = [];
+          setBypassActive(false);
           break;
         }
 
@@ -245,6 +292,62 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
           const pickerPrefix = "__model_picker::";
           if (msg.text.startsWith(pickerPrefix)) {
             setModelPicker(msg.text.slice(pickerPrefix.length));
+            break;
+          }
+          const bypassPrefix = "__bypass_state::";
+          if (msg.text.startsWith(bypassPrefix)) {
+            setBypassActive(msg.text.slice(bypassPrefix.length) === "on");
+            break;
+          }
+          const thinkingPrefix = "__thinking_level::";
+          if (msg.text.startsWith(thinkingPrefix)) {
+            const level = msg.text.slice(thinkingPrefix.length) as ThinkingLevel;
+            setThinkingLevelState(level);
+            const sysMsg: ChatMessage = {
+              id: "thinking-" + Date.now(),
+              role: "system",
+              content: `Thinking: ${level}`,
+              toolUses: [],
+              blocks: [],
+              timestamp: Date.now(),
+            };
+            setMessages((prev) => [...prev, sysMsg]);
+            break;
+          }
+          if (msg.text === "__compact_boundary__") {
+            const compactMsg: ChatMessage = {
+              id: "compact-done-" + Date.now(),
+              role: "system",
+              content: "__compacted__",
+              toolUses: [],
+              blocks: [],
+              timestamp: Date.now(),
+            };
+            setMessages((prev) => [...prev, compactMsg]);
+            break;
+          }
+          const compactPrefix = "__compact::";
+          if (msg.text.startsWith(compactPrefix)) {
+            const state = msg.text.slice(compactPrefix.length);
+            if (state === "start") {
+              const compactMsg: ChatMessage = {
+                id: "compact-progress",
+                role: "system",
+                content: "__compacting__",
+                toolUses: [],
+                blocks: [],
+                timestamp: Date.now(),
+              };
+              setMessages((prev) => [...prev, compactMsg]);
+            } else if (state === "done") {
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === "compact-progress"
+                    ? { ...m, id: "compact-done-" + Date.now(), content: "__compacted__" }
+                    : m
+                )
+              );
+            }
             break;
           }
           const sysMsg: ChatMessage = {
@@ -293,8 +396,8 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
   }, [send, sessionId]);
 
   const respondToPermission = useCallback(
-    (requestId: string, allowed: boolean) => {
-      send({ type: "permission:response", sessionId, requestId, allowed });
+    (requestId: string, allowed: boolean, permissionMode?: PermissionMode) => {
+      send({ type: "permission:response", sessionId, requestId, allowed, permissionMode });
       setPendingPermissions((prev) => prev.filter((p) => p.requestId !== requestId));
     },
     [send, sessionId]
@@ -308,5 +411,21 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
     [send, sessionId]
   );
 
-  return { messages, isResponding, pendingPermissions, modelPicker, sendMessage, interrupt, respondToPermission, selectModel };
+  const setBypassAll = useCallback(
+    (enabled: boolean) => {
+      setBypassActive(enabled);
+      send({ type: "permission:set_bypass", sessionId, enabled });
+    },
+    [send, sessionId]
+  );
+
+  const setThinkingLevel = useCallback(
+    (level: ThinkingLevel) => {
+      setThinkingLevelState(level);
+      send({ type: "session:set_thinking", sessionId, level });
+    },
+    [send, sessionId]
+  );
+
+  return { messages, historyLoaded, isResponding, pendingPermissions, modelPicker, bypassActive, thinkingLevel, sendMessage, interrupt, respondToPermission, selectModel, setBypassAll, setThinkingLevel };
 }

@@ -1,0 +1,11 @@
+services:
+  aperture:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      - APERTURE_TOKEN=${APERTURE_TOKEN}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+    volumes:
+      - ${HOME}:/home/user
+    working_dir: /app

@@ -1,0 +1,39 @@
+{
+  "name": "aperture",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "tsx watch --env-file=.env server.ts",
+    "build": "next build && tsc -p tsconfig.server.json",
+    "start": "node dist/server.js"
+  },
+  "dependencies": {
+    "@pierre/diffs": "^1.0.11",
+    "@radix-ui/react-slot": "^1.2.4",
+    "@tailwindcss/postcss": "^4",
+    "class-variance-authority": "^0.7",
+    "clsx": "^2",
+    "lucide-react": "^0.468",
+    "next": "^15",
+    "react": "^19",
+    "react-dom": "^19",
+    "react-markdown": "^9",
+    "rehype-highlight": "^7",
+    "remark-gfm": "^4",
+    "shiki": "^4.0.2",
+    "tailwind-merge": "^2",
+    "tailwindcss": "^4",
+    "uuid": "^11",
+    "ws": "^8"
+  },
+  "devDependencies": {
+    "@types/node": "^22",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "@types/uuid": "^10",
+    "@types/ws": "^8",
+    "tsx": "^4",
+    "typescript": "^5",
+    "vitest": "^4.1.0"
+  }
+}

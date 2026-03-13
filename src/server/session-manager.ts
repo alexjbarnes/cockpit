@@ -2,7 +2,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { type Writable } from "node:stream";
 import { EventEmitter } from "node:events";
 import { v4 as uuidv4 } from "uuid";
-import type { SessionInfo, ChatMessage, ToolUse, ContentBlock } from "@/types";
+import type { SessionInfo, ChatMessage, ToolUse, ContentBlock, ThinkingLevel } from "@/types";
 import { EventParser, type ParsedEvent } from "./event-parser";
 import { loadTranscript, transcriptExists } from "./transcript";
 
@@ -18,6 +18,10 @@ interface Session {
   stdin: Writable | null;
   emitter: EventEmitter;
   hasSpawnedBefore: boolean;
+  allowedTools: Set<string>;
+  bypassAllPermissions: boolean;
+  compacting: boolean;
+  thinkingLevel: ThinkingLevel;
 }
 
 export class SessionManager {
@@ -41,6 +45,10 @@ export class SessionManager {
       stdin: null,
       emitter: new EventEmitter(),
       hasSpawnedBefore: false,
+      allowedTools: new Set(),
+      bypassAllPermissions: false,
+      compacting: false,
+      thinkingLevel: "high",
     });
 
     return info;
@@ -63,6 +71,10 @@ export class SessionManager {
         stdin: null,
         emitter: new EventEmitter(),
         hasSpawnedBefore: true,
+        allowedTools: new Set(),
+        bypassAllPermissions: false,
+      compacting: false,
+      thinkingLevel: "high",
       };
       this.sessions.set(id, session);
     }
@@ -171,6 +183,51 @@ export class SessionManager {
     return true;
   }
 
+  allowToolAlways(sessionId: string, toolName: string): void {
+    const session = this.sessions.get(sessionId);
+    if (session) session.allowedTools.add(toolName);
+  }
+
+  setBypassAllPermissions(sessionId: string): void {
+    const session = this.sessions.get(sessionId);
+    if (!session || session.bypassAllPermissions) return;
+    session.bypassAllPermissions = true;
+    this.emitSystem(session, sessionId, "__bypass_state::on");
+  }
+
+  clearBypassAllPermissions(sessionId: string): void {
+    const session = this.sessions.get(sessionId);
+    if (!session || !session.bypassAllPermissions) return;
+    session.bypassAllPermissions = false;
+    this.emitSystem(session, sessionId, "__bypass_state::off");
+  }
+
+  isBypassActive(sessionId: string): boolean {
+    const session = this.sessions.get(sessionId);
+    return session?.bypassAllPermissions ?? false;
+  }
+
+  shouldAutoAllow(sessionId: string, toolName: string): boolean {
+    const session = this.sessions.get(sessionId);
+    if (!session) return false;
+    return session.bypassAllPermissions || session.allowedTools.has(toolName);
+  }
+
+  setThinkingLevel(sessionId: string, level: ThinkingLevel): void {
+    const session = this.sessions.get(sessionId);
+    if (!session || session.thinkingLevel === level) return;
+    session.thinkingLevel = level;
+    // Kill current process so next message spawns with new env var
+    this.killProcess(session);
+    session.info.status = "idle";
+    session.emitter.emit("status", sessionId, "idle");
+    this.emitSystem(session, sessionId, `__thinking_level::${level}`);
+  }
+
+  getThinkingLevel(sessionId: string): ThinkingLevel {
+    return this.sessions.get(sessionId)?.thinkingLevel ?? "high";
+  }
+
   private killProcess(session: Session): void {
     if (session.process) {
       session.process.on("close", () => {});
@@ -178,6 +235,9 @@ export class SessionManager {
       session.process = null;
       session.stdin = null;
     }
+    session.allowedTools.clear();
+    session.bypassAllPermissions = false;
+    session.compacting = false;
   }
 
   private emitSystem(session: Session, sessionId: string, text: string): void {
@@ -294,6 +354,11 @@ export class SessionManager {
     if (text.startsWith("/")) {
       const handled = this.handleCommand(sessionId, text);
       if (handled) return true;
+
+      if (text.trim().toLowerCase().startsWith("/compact")) {
+        session.compacting = true;
+        this.emitSystem(session, sessionId, "__compact::start");
+      }
     }
 
     if (session.info.status === "running") {
@@ -336,6 +401,8 @@ export class SessionManager {
       args.push("--model", session.info.model);
     }
 
+    args.push("--effort", session.thinkingLevel);
+
     const env = { ...process.env };
     delete env.CLAUDECODE;
     delete env.CLAUDE_CODE_ENTRYPOINT;
@@ -368,7 +435,14 @@ export class SessionManager {
       for (const line of lines) {
         const events = parser.parseLine(line);
         for (const event of events) {
-          if (event.type === "text_delta" && event.text) {
+          if (event.type === "thinking" && event.text) {
+            const last = pendingBlocks[pendingBlocks.length - 1];
+            if (last && last.type === "thinking") {
+              last.text += event.text;
+            } else {
+              pendingBlocks.push({ type: "thinking", text: event.text });
+            }
+          } else if (event.type === "text_delta" && event.text) {
             const last = pendingBlocks[pendingBlocks.length - 1];
             if (last && last.type === "text") {
               last.text += event.text;
@@ -421,6 +495,8 @@ export class SessionManager {
                 tool.status = "done";
               }
             }
+          } else if (event.type === "system_message" && event.text) {
+            this.emitSystem(session, sessionId, event.text);
           } else if (event.type === "message_done" && event.message) {
             const hasStreamedText = pendingBlocks.some((b) => b.type === "text");
             if (event.message.content && !hasStreamedText) {
@@ -437,6 +513,11 @@ export class SessionManager {
 
             session.info.status = "idle";
             session.emitter.emit("status", sessionId, "idle");
+
+            if (session.compacting) {
+              session.compacting = false;
+              this.emitSystem(session, sessionId, "__compact::done");
+            }
           }
           session.emitter.emit("event", sessionId, event);
         }
@@ -471,6 +552,11 @@ export class SessionManager {
       session.stdin = null;
       session.info.status = "idle";
       session.emitter.emit("status", sessionId, "idle");
+
+      if (session.compacting) {
+        session.compacting = false;
+        this.emitSystem(session, sessionId, "__compact::done");
+      }
 
       if (code !== 0 && stderrBuffer.trim()) {
         session.emitter.emit("error", sessionId, stderrBuffer.trim());
