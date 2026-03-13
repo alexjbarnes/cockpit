@@ -108,6 +108,15 @@ export function createWebSocketHandler(
             });
           }
 
+          const currentUsage = sessionManager.getContextUsage(msg.sessionId);
+          if (currentUsage) {
+            send(ws, {
+              type: "session:usage",
+              sessionId: msg.sessionId,
+              usage: currentUsage,
+            });
+          }
+
           const unsubEvent = sessionManager.subscribe(
             msg.sessionId,
             (event: ParsedEvent) => {
@@ -174,6 +183,18 @@ export function createWebSocketHandler(
             }
           );
           if (unsubInfoUpdated) cleanups.push(unsubInfoUpdated);
+
+          const unsubUsage = sessionManager.onUsage(
+            msg.sessionId,
+            (usage) => {
+              send(ws, {
+                type: "session:usage",
+                sessionId: msg.sessionId,
+                usage,
+              });
+            }
+          );
+          if (unsubUsage) cleanups.push(unsubUsage);
           });
           break;
         }

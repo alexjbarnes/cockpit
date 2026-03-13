@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
-import type { ChatMessage, ServerMessage, ToolUse, ContentBlock, PermissionMode, ThinkingLevel } from "@/types";
+import type { ChatMessage, ServerMessage, ToolUse, ContentBlock, PermissionMode, ThinkingLevel, ContextUsage } from "@/types";
 import { useWebSocket } from "./use-websocket";
 
 export interface PendingPermission {
@@ -18,6 +18,7 @@ interface UseSessionReturn {
   modelPicker: string | null;
   bypassActive: boolean;
   thinkingLevel: ThinkingLevel;
+  contextUsage: ContextUsage | null;
   sendMessage: (text: string) => void;
   interrupt: () => void;
   respondToPermission: (requestId: string, allowed: boolean, permissionMode?: PermissionMode) => void;
@@ -35,6 +36,7 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
   const [bypassActive, setBypassActive] = useState(false);
   const [thinkingLevel, setThinkingLevelState] = useState<ThinkingLevel>("high");
   const [historyLoaded, setHistoryLoaded] = useState(false);
+  const [contextUsage, setContextUsage] = useState<ContextUsage | null>(null);
 
   // Track the in-progress assistant message being streamed
   const streamingRef = useRef<{
@@ -362,6 +364,11 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
           break;
         }
 
+        case "session:usage": {
+          setContextUsage(msg.usage);
+          break;
+        }
+
         case "permission:request": {
           setPendingPermissions((prev) => [
             ...prev,
@@ -427,5 +434,5 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
     [send, sessionId]
   );
 
-  return { messages, historyLoaded, isResponding, pendingPermissions, modelPicker, bypassActive, thinkingLevel, sendMessage, interrupt, respondToPermission, selectModel, setBypassAll, setThinkingLevel };
+  return { messages, historyLoaded, isResponding, pendingPermissions, modelPicker, bypassActive, thinkingLevel, contextUsage, sendMessage, interrupt, respondToPermission, selectModel, setBypassAll, setThinkingLevel };
 }

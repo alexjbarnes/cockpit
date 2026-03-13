@@ -2,7 +2,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { type Writable } from "node:stream";
 import { EventEmitter } from "node:events";
 import { v4 as uuidv4 } from "uuid";
-import type { SessionInfo, ChatMessage, ToolUse, ContentBlock, ThinkingLevel } from "@/types";
+import type { SessionInfo, ChatMessage, ToolUse, ContentBlock, ThinkingLevel, ContextUsage } from "@/types";
 import { EventParser, type ParsedEvent } from "./event-parser";
 import { loadTranscript, transcriptExists } from "./transcript";
 
@@ -22,6 +22,7 @@ interface Session {
   bypassAllPermissions: boolean;
   compacting: boolean;
   thinkingLevel: ThinkingLevel;
+  contextUsage: ContextUsage | null;
 }
 
 export class SessionManager {
@@ -49,6 +50,7 @@ export class SessionManager {
       bypassAllPermissions: false,
       compacting: false,
       thinkingLevel: "high",
+      contextUsage: null,
     });
 
     return info;
@@ -75,6 +77,7 @@ export class SessionManager {
         bypassAllPermissions: false,
       compacting: false,
       thinkingLevel: "high",
+      contextUsage: null,
       };
       this.sessions.set(id, session);
     }
@@ -226,6 +229,35 @@ export class SessionManager {
 
   getThinkingLevel(sessionId: string): ThinkingLevel {
     return this.sessions.get(sessionId)?.thinkingLevel ?? "high";
+  }
+
+  getContextUsage(sessionId: string): ContextUsage | null {
+    return this.sessions.get(sessionId)?.contextUsage ?? null;
+  }
+
+  onUsage(
+    id: string,
+    listener: (usage: ContextUsage) => void
+  ): (() => void) | null {
+    const session = this.sessions.get(id);
+    if (!session) return null;
+    const handler = (_sessionId: string, usage: ContextUsage) => listener(usage);
+    session.emitter.on("usage", handler);
+    return () => session.emitter.off("usage", handler);
+  }
+
+  private extractUsage(session: Session, sessionId: string, line: string): void {
+    try {
+      const raw = JSON.parse(line.trim());
+      if (raw.type !== "assistant" || !raw.message?.usage) return;
+      const u = raw.message.usage;
+      const used = (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.cache_read_input_tokens || 0);
+      const usage: ContextUsage = { used, total: 200_000 };
+      session.contextUsage = usage;
+      session.emitter.emit("usage", sessionId, usage);
+    } catch {
+      // not valid JSON, ignore
+    }
   }
 
   private killProcess(session: Session): void {
@@ -433,6 +465,7 @@ export class SessionManager {
       lineBuffer = lines.pop() || "";
 
       for (const line of lines) {
+        this.extractUsage(session, sessionId, line);
         const events = parser.parseLine(line);
         for (const event of events) {
           if (event.type === "thinking" && event.text) {

@@ -5,7 +5,8 @@ import { Button } from "@/components/ui/button";
 import { Send, Square, Settings2, ShieldOff, ShieldCheck, Brain } from "lucide-react";
 import { SlashCommandMenu, getFilteredCommands } from "@/components/slash-command-menu";
 import type { SlashCommand } from "@/lib/commands";
-import type { ThinkingLevel } from "@/types";
+import type { ThinkingLevel, ContextUsage } from "@/types";
+import { ContextIndicator } from "./context-indicator";
 
 const thinkingLevels: { value: ThinkingLevel; label: string }[] = [
   { value: "low", label: "Low" },
@@ -21,10 +22,11 @@ interface InputAreaProps {
   onSetBypass: (enabled: boolean) => void;
   thinkingLevel: ThinkingLevel;
   onSetThinking: (level: ThinkingLevel) => void;
+  contextUsage: ContextUsage | null;
   dismissKeyboard: boolean;
 }
 
-export function InputArea({ onSend, onInterrupt, isResponding, bypassActive, onSetBypass, thinkingLevel, onSetThinking, dismissKeyboard }: InputAreaProps) {
+export function InputArea({ onSend, onInterrupt, isResponding, bypassActive, onSetBypass, thinkingLevel, onSetThinking, contextUsage, dismissKeyboard }: InputAreaProps) {
   const [text, setText] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [optionsOpen, setOptionsOpen] = useState(false);
@@ -102,7 +104,7 @@ export function InputArea({ onSend, onInterrupt, isResponding, bypassActive, onS
   }, []);
 
   return (
-    <div className="border-t bg-background p-4">
+    <div className="border-t bg-background px-1 py-1">
       <div className="mx-auto max-w-3xl">
         {optionsOpen && (
           <div className="mb-2 rounded-md border border-input bg-muted/50 p-2 space-y-1">
@@ -151,7 +153,7 @@ export function InputArea({ onSend, onInterrupt, isResponding, bypassActive, onS
             </div>
           </div>
         )}
-        <div className="relative flex items-end gap-2">
+        <div className="relative flex items-stretch gap-1">
           {showMenu && (
             <SlashCommandMenu
               query={query}
@@ -159,14 +161,17 @@ export function InputArea({ onSend, onInterrupt, isResponding, bypassActive, onS
               onSelect={handleSelectCommand}
             />
           )}
-          <Button
-            size="icon"
-            variant="ghost"
-            className={`shrink-0 ${bypassActive ? "text-orange-500" : ""}`}
-            onClick={() => setOptionsOpen((v) => !v)}
-          >
-            <Settings2 className="h-4 w-4" />
-          </Button>
+          <div className="flex flex-col items-center justify-evenly w-8 shrink-0">
+            {contextUsage && <ContextIndicator usage={contextUsage} />}
+            <Button
+              size="icon"
+              variant="ghost"
+              className={`h-8 w-8 ${bypassActive ? "text-orange-500" : ""}`}
+              onClick={() => setOptionsOpen((v) => !v)}
+            >
+              <Settings2 className="h-4 w-4" />
+            </Button>
+          </div>
           <textarea
             ref={textareaRef}
             value={text}
@@ -174,19 +179,21 @@ export function InputArea({ onSend, onInterrupt, isResponding, bypassActive, onS
             onKeyDown={handleKeyDown}
             onInput={handleInput}
             placeholder="Send a message..."
-            rows={1}
+            rows={3}
             className="flex-1 resize-none rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             disabled={isResponding}
           />
-          {isResponding ? (
-            <Button size="icon" variant="destructive" onClick={onInterrupt}>
-              <Square className="h-4 w-4" />
-            </Button>
-          ) : (
-            <Button size="icon" onClick={handleSend} disabled={!text.trim()}>
-              <Send className="h-4 w-4" />
-            </Button>
-          )}
+          <div className="flex flex-col items-center justify-center w-8 shrink-0">
+            {isResponding ? (
+              <Button size="icon" variant="destructive" className="h-8 w-8" onClick={onInterrupt}>
+                <Square className="h-4 w-4" />
+              </Button>
+            ) : (
+              <Button size="icon" className="h-8 w-8" onClick={handleSend} disabled={!text.trim()}>
+                <Send className="h-4 w-4" />
+              </Button>
+            )}
+          </div>
         </div>
       </div>
     </div>

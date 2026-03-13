@@ -10,7 +10,7 @@ import { PermissionPrompt } from "./permission-prompt";
 import { ModelPicker } from "./model-picker";
 
 export function ChatView({ sessionId, cwd }: { sessionId: string; cwd?: string }) {
-  const { messages, historyLoaded, isResponding, pendingPermissions, modelPicker, bypassActive, thinkingLevel, sendMessage, interrupt, respondToPermission, selectModel, setBypassAll, setThinkingLevel } = useSession(sessionId, cwd);
+  const { messages, historyLoaded, isResponding, pendingPermissions, modelPicker, bypassActive, thinkingLevel, contextUsage, sendMessage, interrupt, respondToPermission, selectModel, setBypassAll, setThinkingLevel } = useSession(sessionId, cwd);
   const { settings } = useSettings();
   const scrollRef = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);
@@ -114,6 +114,7 @@ export function ChatView({ sessionId, cwd }: { sessionId: string; cwd?: string }
           onSetBypass={setBypassAll}
           thinkingLevel={thinkingLevel}
           onSetThinking={setThinkingLevel}
+          contextUsage={contextUsage}
           dismissKeyboard={settings.dismissKeyboardOnSend}
         />
       </div>

@@ -38,6 +38,11 @@ export interface ChatMessage {
   timestamp: number;
 }
 
+export interface ContextUsage {
+  used: number;
+  total: number;
+}
+
 export type PermissionMode = "allow" | "allow_always" | "allow_all" | "deny";
 
 export type ThinkingLevel = "low" | "medium" | "high";
@@ -67,5 +72,6 @@ export type ServerMessage =
   | { type: "session:clear"; sessionId: string }
   | { type: "session:system"; sessionId: string; text: string }
   | { type: "session:info_updated"; sessionId: string; info: SessionInfo }
+  | { type: "session:usage"; sessionId: string; usage: ContextUsage }
   | { type: "history"; sessionId: string; messages: ChatMessage[] }
   | { type: "pong" };
