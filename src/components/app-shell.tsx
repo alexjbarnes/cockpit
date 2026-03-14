@@ -1,28 +1,76 @@
 "use client";
 
-import { useState, useEffect, useCallback, type ReactNode } from "react";
+import {
+  createContext,
+  useContext,
+  useState,
+  useEffect,
+  useCallback,
+  useRef,
+  type ReactNode,
+} from "react";
 import { useRouter } from "next/navigation";
 import { AuthGuard } from "@/components/auth-guard";
 import { WebSocketProvider } from "@/hooks/use-websocket";
 import { ConnectionStatus } from "@/components/connection-status";
-import { ThemeToggle } from "@/components/theme-toggle";
-import { Sidebar } from "@/components/sidebar";
+import { UsageButton } from "@/components/usage-modal";
+import { Sidebar, type SidebarHandle } from "@/components/sidebar";
 import { Button } from "@/components/ui/button";
-import { ArrowLeft, Menu, Settings } from "lucide-react";
-import Link from "next/link";
+import { ArrowLeft, Menu } from "lucide-react";
+import { GitStatusButton } from "@/components/git-status-modal";
 
-interface AppShellProps {
+interface HeaderConfig {
   title: string;
-  showBack?: boolean;
-  children: ReactNode;
+  showBack: boolean;
 }
 
-export function AppShell({ title, showBack, children }: AppShellProps) {
+interface ShellContextValue {
+  setHeader: (config: HeaderConfig) => void;
+  cwd: string | undefined;
+  setCwd: (cwd: string | undefined) => void;
+}
+
+const ShellContext = createContext<ShellContextValue>({
+  setHeader: () => {},
+  cwd: undefined,
+  setCwd: () => {},
+});
+
+export function useShell() {
+  return useContext(ShellContext);
+}
+
+export function usePageHeader(title: string, showBack = false) {
+  const { setHeader } = useShell();
+  useEffect(() => {
+    setHeader({ title, showBack });
+  }, [title, showBack, setHeader]);
+}
+
+export function useShellCwd(cwd: string | undefined) {
+  const { setCwd } = useShell();
+  useEffect(() => {
+    setCwd(cwd);
+    return () => setCwd(undefined);
+  }, [cwd, setCwd]);
+}
+
+export function AppShell({ children }: { children: ReactNode }) {
   const router = useRouter();
-  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const sidebarRef = useRef<SidebarHandle>(null);
+  const [header, setHeaderState] = useState<HeaderConfig>({ title: "Aperture", showBack: false });
+  const [cwd, setCwdState] = useState<string | undefined>(undefined);
+
+  const setHeader = useCallback((config: HeaderConfig) => {
+    setHeaderState(config);
+  }, []);
+
+  const setCwd = useCallback((val: string | undefined) => {
+    setCwdState(val);
+  }, []);
 
   const toggleSidebar = useCallback(() => {
-    setSidebarOpen((prev) => !prev);
+    sidebarRef.current?.toggle();
   }, []);
 
   useEffect(() => {
@@ -39,30 +87,28 @@ export function AppShell({ title, showBack, children }: AppShellProps) {
   return (
     <AuthGuard>
       <WebSocketProvider>
-        <div className="fixed inset-0 flex flex-col">
-          <header className="shrink-0 flex items-center gap-2 border-b px-4 py-2 bg-background">
-            <Button variant="ghost" size="icon" onClick={toggleSidebar} title="Toggle sidebar (Ctrl+B)">
-              <Menu className="h-4 w-4" />
-            </Button>
-            {showBack && (
-              <Button variant="ghost" size="icon" onClick={() => router.push("/")}>
-                <ArrowLeft className="h-4 w-4" />
+        <ShellContext.Provider value={{ setHeader, cwd, setCwd }}>
+          <div className="fixed inset-0 flex flex-col">
+            <header className="shrink-0 flex items-center gap-2 border-b px-4 py-2 bg-background">
+              <Button variant="ghost" size="icon" onClick={toggleSidebar} title="Toggle sidebar (Ctrl+B)">
+                <Menu className="h-4 w-4" />
               </Button>
-            )}
-            <span className="text-sm font-bold">{title}</span>
-            <div className="ml-auto flex items-center gap-1">
-              <ConnectionStatus />
-              <ThemeToggle />
-              <Button variant="ghost" size="icon" asChild>
-                <Link href="/settings">
-                  <Settings className="h-4 w-4" />
-                </Link>
-              </Button>
-            </div>
-          </header>
-          {children}
-        </div>
-        <Sidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
+              {header.showBack && (
+                <Button variant="ghost" size="icon" onClick={() => router.back()}>
+                  <ArrowLeft className="h-4 w-4" />
+                </Button>
+              )}
+              <span className="text-sm font-bold">{header.title}</span>
+              <div className="ml-auto flex items-center gap-2">
+                <ConnectionStatus />
+                <UsageButton />
+                <GitStatusButton cwd={cwd} />
+              </div>
+            </header>
+            {children}
+          </div>
+          <Sidebar ref={sidebarRef} />
+        </ShellContext.Provider>
       </WebSocketProvider>
     </AuthGuard>
   );

@@ -3,7 +3,8 @@
 import { useState, useRef, useCallback, type KeyboardEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { Send, Square, Settings2, ShieldOff, ShieldCheck, Brain } from "lucide-react";
-import { SlashCommandMenu, getFilteredCommands } from "@/components/slash-command-menu";
+import { SlashCommandMenu } from "@/components/slash-command-menu";
+import { MentionMenu, type MentionItem } from "@/components/mention-menu";
 import type { SlashCommand } from "@/lib/commands";
 import type { ThinkingLevel, ContextUsage } from "@/types";
 import { ContextIndicator } from "./context-indicator";
@@ -24,22 +25,54 @@ interface InputAreaProps {
   onSetThinking: (level: ThinkingLevel) => void;
   contextUsage: ContextUsage | null;
   dismissKeyboard: boolean;
+  cwd?: string;
 }
 
-export function InputArea({ onSend, onInterrupt, isResponding, bypassActive, onSetBypass, thinkingLevel, onSetThinking, contextUsage, dismissKeyboard }: InputAreaProps) {
+function getMentionContext(text: string, cursorPos: number): { active: boolean; query: string; start: number } {
+  const before = text.slice(0, cursorPos);
+  const match = before.match(/@([^\s]*)$/);
+  if (!match) return { active: false, query: "", start: 0 };
+  return { active: true, query: match[1], start: cursorPos - match[0].length };
+}
+
+export function InputArea({ onSend, onInterrupt, isResponding, bypassActive, onSetBypass, thinkingLevel, onSetThinking, contextUsage, dismissKeyboard, cwd }: InputAreaProps) {
   const [text, setText] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [optionsOpen, setOptionsOpen] = useState(false);
+  const [mentionSelectedIndex, setMentionSelectedIndex] = useState(0);
+  const [cursorPos, setCursorPos] = useState(0);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const mentionItemsRef = useRef<MentionItem[]>([]);
+  const slashItemsRef = useRef<SlashCommand[]>([]);
 
   const showMenu = text.startsWith("/") && !text.includes(" ");
   const query = showMenu ? text.slice(1) : "";
+
+  const mention = getMentionContext(text, cursorPos);
+  const showMention = !showMenu && mention.active && !!cwd;
 
   const handleSelectCommand = useCallback((cmd: SlashCommand) => {
     setText(cmd.command + " ");
     setSelectedIndex(0);
     textareaRef.current?.focus();
   }, []);
+
+  const handleSelectMention = useCallback((path: string) => {
+    const before = text.slice(0, mention.start);
+    const after = text.slice(cursorPos);
+    const newText = before + "@" + path + " " + after;
+    setText(newText);
+    setMentionSelectedIndex(0);
+    const newCursor = mention.start + 1 + path.length + 1;
+    setCursorPos(newCursor);
+    requestAnimationFrame(() => {
+      const el = textareaRef.current;
+      if (el) {
+        el.focus();
+        el.setSelectionRange(newCursor, newCursor);
+      }
+    });
+  }, [text, mention.start, cursorPos]);
 
   const handleSend = useCallback(() => {
     const trimmed = text.trim();
@@ -58,21 +91,21 @@ export function InputArea({ onSend, onInterrupt, isResponding, bypassActive, onS
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLTextAreaElement>) => {
       if (showMenu) {
-        const filtered = getFilteredCommands(query);
-        if (filtered.length > 0) {
+        const items = slashItemsRef.current;
+        if (items.length > 0) {
           if (e.key === "ArrowDown") {
             e.preventDefault();
-            setSelectedIndex((i) => (i + 1) % filtered.length);
+            setSelectedIndex((i) => (i + 1) % items.length);
             return;
           }
           if (e.key === "ArrowUp") {
             e.preventDefault();
-            setSelectedIndex((i) => (i - 1 + filtered.length) % filtered.length);
+            setSelectedIndex((i) => (i - 1 + items.length) % items.length);
             return;
           }
           if (e.key === "Enter" || e.key === "Tab") {
             e.preventDefault();
-            handleSelectCommand(filtered[selectedIndex]);
+            handleSelectCommand(items[selectedIndex]);
             return;
           }
         }
@@ -83,12 +116,46 @@ export function InputArea({ onSend, onInterrupt, isResponding, bypassActive, onS
         }
       }
 
+      if (showMention && mentionItemsRef.current.length > 0) {
+        const count = mentionItemsRef.current.length;
+        if (e.key === "ArrowDown") {
+          e.preventDefault();
+          setMentionSelectedIndex((i) => (i + 1) % count);
+          return;
+        }
+        if (e.key === "ArrowUp") {
+          e.preventDefault();
+          setMentionSelectedIndex((i) => (i - 1 + count) % count);
+          return;
+        }
+        if (e.key === "Enter" || e.key === "Tab") {
+          e.preventDefault();
+          handleSelectMention(mentionItemsRef.current[mentionSelectedIndex].value);
+          return;
+        }
+        if (e.key === "Escape") {
+          e.preventDefault();
+          const before = text.slice(0, mention.start);
+          const after = text.slice(cursorPos);
+          setText(before + after);
+          const newPos = mention.start;
+          setCursorPos(newPos);
+          requestAnimationFrame(() => {
+            const el = textareaRef.current;
+            if (el) {
+              el.setSelectionRange(newPos, newPos);
+            }
+          });
+          return;
+        }
+      }
+
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
         handleSend();
       }
     },
-    [showMenu, query, selectedIndex, handleSend, handleSelectCommand]
+    [showMenu, showMention, query, selectedIndex, mentionSelectedIndex, handleSend, handleSelectCommand, handleSelectMention, text, mention.start, cursorPos]
   );
 
   const handleInput = useCallback(() => {
@@ -100,7 +167,9 @@ export function InputArea({ onSend, onInterrupt, isResponding, bypassActive, onS
 
   const handleChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setText(e.target.value);
+    setCursorPos(e.target.selectionStart ?? 0);
     setSelectedIndex(0);
+    setMentionSelectedIndex(0);
   }, []);
 
   return (
@@ -159,6 +228,17 @@ export function InputArea({ onSend, onInterrupt, isResponding, bypassActive, onS
               query={query}
               selectedIndex={selectedIndex}
               onSelect={handleSelectCommand}
+              cwd={cwd}
+              onItemsChange={(items) => { slashItemsRef.current = items; }}
+            />
+          )}
+          {showMention && cwd && (
+            <MentionMenu
+              query={mention.query}
+              cwd={cwd}
+              selectedIndex={mentionSelectedIndex}
+              onSelect={handleSelectMention}
+              onItemsChange={(items) => { mentionItemsRef.current = items; }}
             />
           )}
           <div className="flex flex-col items-center justify-evenly w-8 shrink-0">
