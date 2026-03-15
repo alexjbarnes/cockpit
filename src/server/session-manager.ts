@@ -2,7 +2,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { type Writable } from "node:stream";
 import { EventEmitter } from "node:events";
 import { v4 as uuidv4 } from "uuid";
-import type { SessionInfo, ChatMessage, ToolUse, ContentBlock, ThinkingLevel, ContextUsage, TodoItem } from "@/types";
+import type { SessionInfo, ChatMessage, ToolUse, ContentBlock, ThinkingLevel, ContextUsage, TodoItem, ImageAttachment, DocumentAttachment } from "@/types";
 import { EventParser, type ParsedEvent } from "./event-parser";
 import { loadTranscript, transcriptExists } from "./transcript";
 import { logRawLine } from "./debug-logger";
@@ -431,7 +431,22 @@ export class SessionManager {
     return false;
   }
 
-  sendMessage(sessionId: string, text: string): boolean {
+  private buildContent(text: string, images?: ImageAttachment[], documents?: DocumentAttachment[]): string | Record<string, unknown>[] {
+    if (!images?.length && !documents?.length) return text;
+    return [
+      ...images?.map((img) => ({
+        type: "image",
+        source: { type: "base64", media_type: img.mediaType, data: img.data },
+      })) || [],
+      ...documents?.map((doc) => ({
+        type: "document",
+        source: { type: "base64", media_type: doc.mediaType, data: doc.data },
+      })) || [],
+      ...(text ? [{ type: "text", text }] : []),
+    ];
+  }
+
+  sendMessage(sessionId: string, text: string, images?: ImageAttachment[], documents?: DocumentAttachment[]): boolean {
     const session = this.sessions.get(sessionId);
     if (!session) return false;
 
@@ -453,17 +468,19 @@ export class SessionManager {
     session.info.status = "running";
     session.emitter.emit("status", sessionId, "running");
 
+    const content = this.buildContent(text, images, documents);
+
     if (session.process && session.stdin) {
-      const userInput = { type: "user", message: { role: "user", content: text } };
+      const userInput = { type: "user", message: { role: "user", content } };
       session.stdin.write(JSON.stringify(userInput) + "\n");
       return true;
     }
 
-    this.spawnProcess(session, sessionId, text);
+    this.spawnProcess(session, sessionId, text, images, documents);
     return true;
   }
 
-  private spawnProcess(session: Session, sessionId: string, text: string): void {
+  private spawnProcess(session: Session, sessionId: string, text: string, images?: ImageAttachment[], documents?: DocumentAttachment[]): void {
     const args = [
       "-p",
       "--verbose",
@@ -501,7 +518,8 @@ export class SessionManager {
     session.stdin = proc.stdin!;
     session.hasSpawnedBefore = true;
 
-    const userInput = { type: "user", message: { role: "user", content: text } };
+    const content = this.buildContent(text, images, documents);
+    const userInput = { type: "user", message: { role: "user", content } };
     proc.stdin!.write(JSON.stringify(userInput) + "\n");
 
     const parser = new EventParser();

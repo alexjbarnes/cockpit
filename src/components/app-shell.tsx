@@ -112,10 +112,10 @@ export function AppShell({ children }: { children: ReactNode }) {
               )}
               <span className="text-sm font-bold">{header.title}</span>
               <div className="ml-auto flex items-center gap-2">
-                <TodoIndicator todos={todos} />
-                <BackgroundTasksButton tasks={backgroundTasks} />
-                <UsageButton />
-                <GitStatusButton cwd={cwd} />
+                {cwd && <TodoIndicator todos={todos} />}
+                {cwd && <BackgroundTasksButton tasks={backgroundTasks} />}
+                {cwd && <UsageButton />}
+                {cwd && <GitStatusButton cwd={cwd} />}
               </div>
             </header>
             {children}

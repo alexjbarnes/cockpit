@@ -238,7 +238,7 @@ export function createWebSocketHandler(
         }
 
         case "message:send": {
-          sessionManager.sendMessage(msg.sessionId, msg.text);
+          sessionManager.sendMessage(msg.sessionId, msg.text, msg.images, msg.documents);
           break;
         }
 

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
-import type { ChatMessage, ServerMessage, ToolUse, ContentBlock, PermissionMode, ThinkingLevel, ContextUsage, BackgroundTask, TodoItem } from "@/types";
+import type { ChatMessage, ServerMessage, ToolUse, ContentBlock, PermissionMode, ThinkingLevel, ContextUsage, BackgroundTask, TodoItem, ImageAttachment, DocumentAttachment, TextFileAttachment } from "@/types";
 import { useWebSocket } from "./use-websocket";
 
 export interface PendingPermission {
@@ -30,7 +30,7 @@ interface UseSessionReturn {
   suggestions: string[];
   backgroundTasks: BackgroundTask[];
   todos: TodoItem[];
-  sendMessage: (text: string) => void;
+  sendMessage: (text: string, images?: ImageAttachment[], documents?: DocumentAttachment[], textFiles?: TextFileAttachment[]) => void;
   interrupt: () => void;
   respondToPermission: (requestId: string, allowed: boolean, permissionMode?: PermissionMode) => void;
   respondToQuestion: (requestId: string, answers: Record<string, string>) => void;
@@ -529,7 +529,14 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
   }, [sessionId, send, subscribe]);
 
   const sendMessage = useCallback(
-    (text: string) => {
+    (text: string, images?: ImageAttachment[], documents?: DocumentAttachment[], textFiles?: TextFileAttachment[]) => {
+      // Inline text file contents into the API text but keep structured data on the message for rendering
+      let apiText = text;
+      if (textFiles?.length) {
+        const fileParts = textFiles.map((f) => `<file path="${f.name}">\n${f.content}\n</file>`);
+        apiText = fileParts.join("\n\n") + (text ? "\n\n" + text : "");
+      }
+
       const userMsg: ChatMessage = {
         id: "user-" + Date.now(),
         role: "user",
@@ -537,10 +544,19 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
         toolUses: [],
         blocks: [],
         timestamp: Date.now(),
+        images: images?.length ? images : undefined,
+        documents: documents?.length ? documents : undefined,
+        textFiles: textFiles?.length ? textFiles : undefined,
       };
       setMessages((prev) => [...prev, userMsg]);
       setSuggestions([]);
-      send({ type: "message:send", sessionId, text });
+      send({
+        type: "message:send",
+        sessionId,
+        text: apiText,
+        images: images?.length ? images : undefined,
+        documents: documents?.length ? documents : undefined,
+      });
     },
     [send, sessionId]
   );

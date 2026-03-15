@@ -7,7 +7,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
 import { cn } from "@/lib/utils";
-import { Loader2, Check, ChevronDown, ChevronRight, Brain } from "lucide-react";
+import { Loader2, Check, ChevronDown, ChevronRight, Brain, FileText, File } from "lucide-react";
 
 const CLI_XML_RE = /<(?:task-notification|local-command-caveat|local-command-stdout|command-name|system-reminder)[^>]*>[\s\S]*?<\/(?:task-notification|local-command-caveat|local-command-stdout|command-name|system-reminder)>[\s\S]*/g;
 
@@ -92,7 +92,38 @@ export const MessageBubble = memo(function MessageBubble({ message, collapsedByD
           </button>
         )}
         {isUser ? (
-          <p className="whitespace-pre-wrap text-sm">{message.content}</p>
+          <>
+            {message.images && message.images.length > 0 && (
+              <div className="flex gap-2 flex-wrap mb-2">
+                {message.images.map((img, i) => (
+                  <img
+                    key={i}
+                    src={`data:${img.mediaType};base64,${img.data}`}
+                    className="max-h-60 rounded border border-primary-foreground/20 object-contain"
+                    alt=""
+                  />
+                ))}
+              </div>
+            )}
+            {message.documents && message.documents.length > 0 && (
+              <div className="flex gap-2 flex-wrap mb-2">
+                {message.documents.map((doc, i) => (
+                  <div key={i} className="flex items-center gap-1.5 rounded border border-primary-foreground/20 px-2 py-1 text-xs">
+                    <FileText className="h-3.5 w-3.5" />
+                    <span>{doc.name}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+            {message.textFiles && message.textFiles.length > 0 && (
+              <div className="space-y-1.5 mb-2">
+                {message.textFiles.map((f, i) => (
+                  <TextFileBlock key={i} name={f.name} content={f.content} />
+                ))}
+              </div>
+            )}
+            {message.content && <p className="whitespace-pre-wrap text-sm">{message.content}</p>}
+          </>
         ) : hasBlocks ? (
           <div className="space-y-2">
             {visibleBlocks.map((block, i) =>
@@ -132,6 +163,36 @@ export const MessageBubble = memo(function MessageBubble({ message, collapsedByD
     </div>
   );
 });
+
+function TextFileBlock({ name, content }: { name: string; content: string }) {
+  const [expanded, setExpanded] = useState(false);
+  const lineCount = content.split("\n").length;
+
+  return (
+    <div className="rounded border border-blue-500/20 bg-blue-500/5">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="flex w-full items-center gap-1.5 px-3 py-1.5 text-xs text-blue-400 hover:text-blue-300"
+      >
+        <File className="h-3 w-3" />
+        <span className="font-medium">{name}</span>
+        <span className="text-muted-foreground ml-1">
+          {lineCount} lines
+        </span>
+        {expanded ? (
+          <ChevronDown className="h-3 w-3 ml-auto" />
+        ) : (
+          <ChevronRight className="h-3 w-3 ml-auto" />
+        )}
+      </button>
+      {expanded && (
+        <div className="border-t border-blue-500/20 px-3 py-2 text-xs text-muted-foreground whitespace-pre-wrap max-h-60 overflow-y-auto font-mono">
+          {content}
+        </div>
+      )}
+    </div>
+  );
+}
 
 function ThinkingBlock({ text }: { text: string }) {
   const [expanded, setExpanded] = useState(false);

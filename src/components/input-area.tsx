@@ -1,13 +1,13 @@
 "use client";
 
-import { useState, useRef, useCallback, type KeyboardEvent } from "react";
+import { useState, useRef, useCallback, type KeyboardEvent, type ClipboardEvent, type DragEvent } from "react";
 import { Button } from "@/components/ui/button";
-import { Send, Square, Settings2, ShieldOff, ShieldCheck, Brain, Loader2 } from "lucide-react";
+import { Send, Square, Settings2, ShieldOff, ShieldCheck, Brain, Loader2, X, Paperclip, FileText } from "lucide-react";
 import { useWebSocket } from "@/hooks/use-websocket";
 import { SlashCommandMenu } from "@/components/slash-command-menu";
 import { MentionMenu, type MentionItem } from "@/components/mention-menu";
 import type { SlashCommand } from "@/lib/commands";
-import type { ThinkingLevel, ContextUsage } from "@/types";
+import type { ThinkingLevel, ContextUsage, ImageAttachment, DocumentAttachment, TextFileAttachment } from "@/types";
 import { ContextIndicator } from "./context-indicator";
 
 const thinkingLevels: { value: ThinkingLevel; label: string }[] = [
@@ -16,8 +16,99 @@ const thinkingLevels: { value: ThinkingLevel; label: string }[] = [
   { value: "high", label: "High" },
 ];
 
+const IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
+
+const TEXT_EXTENSIONS = new Set([
+  ".txt", ".md", ".py", ".js", ".ts", ".tsx", ".jsx", ".json", ".csv",
+  ".xml", ".yaml", ".yml", ".html", ".css", ".log", ".sh", ".go", ".rs",
+  ".java", ".c", ".cpp", ".h", ".rb", ".swift", ".kt", ".toml", ".cfg",
+  ".ini", ".env", ".sql", ".r", ".lua", ".pl", ".php",
+]);
+
+function getFileExtension(name: string): string {
+  const dot = name.lastIndexOf(".");
+  return dot >= 0 ? name.slice(dot).toLowerCase() : "";
+}
+
+// 5MB API limit on base64. Use 3.5MB raw file size as threshold since base64 is ~133% of raw.
+const MAX_RAW_IMAGE_BYTES = 3_500_000;
+const MAX_BASE64_BYTES = 4_500_000;
+
+function readFileAsBase64(file: File): Promise<string | null> {
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result as string;
+      resolve(result.split(",")[1] || null);
+    };
+    reader.onerror = () => resolve(null);
+    reader.readAsDataURL(file);
+  });
+}
+
+function processImageFile(file: File): Promise<ImageAttachment | null> {
+  if (file.size <= MAX_RAW_IMAGE_BYTES) {
+    return readFileAsBase64(file).then((data) =>
+      data ? { mediaType: file.type as ImageAttachment["mediaType"], data } : null
+    );
+  }
+  return resizeImageFile(file);
+}
+
+function resizeImageFile(file: File): Promise<ImageAttachment | null> {
+  return new Promise((resolve) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      const canvas = document.createElement("canvas");
+      // Scale dimensions based on how far over the limit we are
+      const ratio = Math.sqrt(MAX_RAW_IMAGE_BYTES / file.size);
+      const width = Math.round(img.width * ratio);
+      const height = Math.round(img.height * ratio);
+
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) { resolve(null); return; }
+      ctx.drawImage(img, 0, 0, width, height);
+
+      let quality = 0.85;
+      let result = canvas.toDataURL("image/jpeg", quality).split(",")[1] || "";
+
+      while (result.length > MAX_BASE64_BYTES && quality > 0.3) {
+        quality -= 0.1;
+        result = canvas.toDataURL("image/jpeg", quality).split(",")[1] || "";
+      }
+
+      resolve({ mediaType: "image/jpeg", data: result });
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      resolve(null);
+    };
+    img.src = url;
+  });
+}
+
+function readFileAsText(file: File): Promise<string | null> {
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = () => resolve(null);
+    reader.readAsText(file);
+  });
+}
+
+
+const FILE_ACCEPT = [
+  "image/*",
+  ".pdf",
+  ...Array.from(TEXT_EXTENSIONS),
+].join(",");
+
 interface InputAreaProps {
-  onSend: (text: string) => void;
+  onSend: (text: string, images?: ImageAttachment[], documents?: DocumentAttachment[], textFiles?: TextFileAttachment[]) => void;
   onInterrupt: () => void;
   isResponding: boolean;
   bypassActive: boolean;
@@ -44,7 +135,12 @@ export function InputArea({ onSend, onInterrupt, isResponding, bypassActive, onS
   const [optionsOpen, setOptionsOpen] = useState(false);
   const [mentionSelectedIndex, setMentionSelectedIndex] = useState(0);
   const [cursorPos, setCursorPos] = useState(0);
+  const [pendingImages, setPendingImages] = useState<ImageAttachment[]>([]);
+  const [pendingDocs, setPendingDocs] = useState<DocumentAttachment[]>([]);
+  const [pendingTextFiles, setPendingTextFiles] = useState<TextFileAttachment[]>([]);
+  const [dragOver, setDragOver] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const mentionItemsRef = useRef<MentionItem[]>([]);
   const slashItemsRef = useRef<SlashCommand[]>([]);
 
@@ -77,11 +173,23 @@ export function InputArea({ onSend, onInterrupt, isResponding, bypassActive, onS
     });
   }, [text, mention.start, cursorPos]);
 
+  const hasAttachments = pendingImages.length > 0 || pendingDocs.length > 0 || pendingTextFiles.length > 0;
+
   const handleSend = useCallback(() => {
     const trimmed = text.trim();
-    if (!trimmed || !connected) return;
-    onSend(trimmed);
+    if (!trimmed && !hasAttachments) return;
+    if (!connected) return;
+
+    onSend(
+      trimmed,
+      pendingImages.length > 0 ? pendingImages : undefined,
+      pendingDocs.length > 0 ? pendingDocs : undefined,
+      pendingTextFiles.length > 0 ? pendingTextFiles : undefined,
+    );
     setText("");
+    setPendingImages([]);
+    setPendingDocs([]);
+    setPendingTextFiles([]);
     setSelectedIndex(0);
     if (textareaRef.current) {
       textareaRef.current.style.height = "auto";
@@ -89,7 +197,7 @@ export function InputArea({ onSend, onInterrupt, isResponding, bypassActive, onS
         textareaRef.current.blur();
       }
     }
-  }, [text, onSend, dismissKeyboard]);
+  }, [text, hasAttachments, pendingImages, pendingDocs, pendingTextFiles, onSend, dismissKeyboard, connected]);
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -175,8 +283,96 @@ export function InputArea({ onSend, onInterrupt, isResponding, bypassActive, onS
     setMentionSelectedIndex(0);
   }, []);
 
+  const addFiles = useCallback(async (files: File[]) => {
+    for (const file of files) {
+      if (IMAGE_TYPES.has(file.type)) {
+        const attachment = await processImageFile(file);
+        if (attachment) {
+          setPendingImages((prev) => [...prev, attachment]);
+        }
+      } else if (file.type === "application/pdf") {
+        const base64 = await readFileAsBase64(file);
+        if (base64) {
+          setPendingDocs((prev) => [...prev, { mediaType: "application/pdf", data: base64, name: file.name }]);
+        }
+      } else if (TEXT_EXTENSIONS.has(getFileExtension(file.name)) || file.type.startsWith("text/")) {
+        const content = await readFileAsText(file);
+        if (content !== null) {
+          setPendingTextFiles((prev) => [...prev, { name: file.name, content }]);
+        }
+      }
+    }
+  }, []);
+
+  const handlePaste = useCallback((e: ClipboardEvent<HTMLTextAreaElement>) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    const files: File[] = [];
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      if (item.kind === "file") {
+        const file = item.getAsFile();
+        if (file) files.push(file);
+      }
+    }
+    if (files.length > 0) {
+      e.preventDefault();
+      addFiles(files);
+    }
+  }, [addFiles]);
+
+  const handleDragOver = useCallback((e: DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    setDragOver(true);
+  }, []);
+
+  const handleDragLeave = useCallback((e: DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    setDragOver(false);
+  }, []);
+
+  const handleDrop = useCallback((e: DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    setDragOver(false);
+    const files: File[] = [];
+    if (e.dataTransfer?.files) {
+      for (let i = 0; i < e.dataTransfer.files.length; i++) {
+        files.push(e.dataTransfer.files[i]);
+      }
+    }
+    if (files.length > 0) addFiles(files);
+  }, [addFiles]);
+
+  const removeImage = useCallback((index: number) => {
+    setPendingImages((prev) => prev.filter((_, i) => i !== index));
+  }, []);
+
+  const removeDoc = useCallback((index: number) => {
+    setPendingDocs((prev) => prev.filter((_, i) => i !== index));
+  }, []);
+
+  const removeTextFile = useCallback((index: number) => {
+    setPendingTextFiles((prev) => prev.filter((_, i) => i !== index));
+  }, []);
+
+  const handleFilePick = useCallback(() => {
+    fileInputRef.current?.click();
+  }, []);
+
+  const handleFileInputChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+    addFiles(Array.from(files));
+    e.target.value = "";
+  }, [addFiles]);
+
   return (
-    <div className="border-t bg-background px-1 py-1">
+    <div
+      className={`border-t bg-background px-1 py-1 ${dragOver ? "ring-2 ring-primary ring-inset" : ""}`}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+    >
       <div className="mx-auto max-w-3xl">
         {optionsOpen && (
           <div className="mb-2 rounded-md border border-input bg-muted/50 p-2 space-y-1">
@@ -225,6 +421,49 @@ export function InputArea({ onSend, onInterrupt, isResponding, bypassActive, onS
             </div>
           </div>
         )}
+        {hasAttachments && (
+          <div className="mb-1 flex gap-2 flex-wrap px-9">
+            {pendingImages.map((img, i) => (
+              <div key={`img-${i}`} className="relative group">
+                <img
+                  src={`data:${img.mediaType};base64,${img.data}`}
+                  className="h-16 rounded border object-contain"
+                  alt=""
+                />
+                <button
+                  onClick={() => removeImage(i)}
+                  className="absolute -top-1.5 -right-1.5 h-4 w-4 rounded-full bg-destructive text-destructive-foreground flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </div>
+            ))}
+            {pendingDocs.map((doc, i) => (
+              <div key={`doc-${i}`} className="relative group flex items-center gap-1.5 rounded border px-2 py-1 text-xs bg-muted h-16">
+                <FileText className="h-4 w-4 text-red-500 shrink-0" />
+                <span className="truncate max-w-[120px]">{doc.name}</span>
+                <button
+                  onClick={() => removeDoc(i)}
+                  className="absolute -top-1.5 -right-1.5 h-4 w-4 rounded-full bg-destructive text-destructive-foreground flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </div>
+            ))}
+            {pendingTextFiles.map((file, i) => (
+              <div key={`txt-${i}`} className="relative group flex items-center gap-1.5 rounded border px-2 py-1 text-xs bg-muted h-16">
+                <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
+                <span className="truncate max-w-[120px]">{file.name}</span>
+                <button
+                  onClick={() => removeTextFile(i)}
+                  className="absolute -top-1.5 -right-1.5 h-4 w-4 rounded-full bg-destructive text-destructive-foreground flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
         <div className="relative flex items-stretch gap-1">
           {showMenu && (
             <SlashCommandMenu
@@ -244,6 +483,14 @@ export function InputArea({ onSend, onInterrupt, isResponding, bypassActive, onS
               onItemsChange={(items) => { mentionItemsRef.current = items; }}
             />
           )}
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept={FILE_ACCEPT}
+            multiple
+            onChange={handleFileInputChange}
+            className="hidden"
+          />
           <div className="flex flex-col items-center justify-evenly w-8 shrink-0">
             {contextUsage && <ContextIndicator usage={contextUsage} onCompact={onCompact} />}
             <Button
@@ -255,17 +502,28 @@ export function InputArea({ onSend, onInterrupt, isResponding, bypassActive, onS
               <Settings2 className="h-4 w-4" />
             </Button>
           </div>
-          <textarea
-            ref={textareaRef}
-            value={text}
-            onChange={handleChange}
-            onKeyDown={handleKeyDown}
-            onInput={handleInput}
-            placeholder="Send a message..."
-            rows={3}
-            className="flex-1 resize-none rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            disabled={isResponding}
-          />
+          <div className="relative flex-1">
+            <textarea
+              ref={textareaRef}
+              value={text}
+              onChange={handleChange}
+              onKeyDown={handleKeyDown}
+              onInput={handleInput}
+              onPaste={handlePaste}
+              placeholder="Send a message..."
+              rows={2}
+              className="w-full resize-none rounded-md border border-input bg-background px-3 py-2 pb-7 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              disabled={isResponding}
+            />
+            <button
+              onClick={handleFilePick}
+              disabled={isResponding}
+              title="Attach file"
+              className="absolute bottom-2.5 right-1.5 rounded p-1 text-muted-foreground hover:text-foreground hover:bg-muted transition-colors disabled:opacity-50"
+            >
+              <Paperclip className="h-4 w-4" />
+            </button>
+          </div>
           <div className="flex flex-col items-center justify-center w-8 shrink-0">
             {isResponding ? (
               <Button size="icon" variant="destructive" className="h-8 w-8" onClick={onInterrupt}>
@@ -276,7 +534,7 @@ export function InputArea({ onSend, onInterrupt, isResponding, bypassActive, onS
                 <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
               </Button>
             ) : (
-              <Button size="icon" className="h-8 w-8" onClick={handleSend} disabled={!text.trim()}>
+              <Button size="icon" className="h-8 w-8" onClick={handleSend} disabled={!text.trim() && !hasAttachments}>
                 <Send className="h-4 w-4" />
               </Button>
             )}

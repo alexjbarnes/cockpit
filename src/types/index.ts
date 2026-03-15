@@ -24,6 +24,22 @@ export interface ToolUse {
   children?: ToolUse[];
 }
 
+export interface ImageAttachment {
+  mediaType: "image/png" | "image/jpeg" | "image/gif" | "image/webp";
+  data: string; // base64
+}
+
+export interface DocumentAttachment {
+  mediaType: "application/pdf";
+  data: string; // base64
+  name: string;
+}
+
+export interface TextFileAttachment {
+  name: string;
+  content: string;
+}
+
 export type ContentBlock =
   | { type: "text"; text: string }
   | { type: "thinking"; text: string }
@@ -36,6 +52,9 @@ export interface ChatMessage {
   toolUses: ToolUse[];
   blocks: ContentBlock[];
   timestamp: number;
+  images?: ImageAttachment[];
+  documents?: DocumentAttachment[];
+  textFiles?: TextFileAttachment[];
 }
 
 export interface ContextUsage {
@@ -82,7 +101,7 @@ export interface UsageLimits {
 // Client -> Server messages
 export type ClientMessage =
   | { type: "session:connect"; sessionId: string; cwd?: string }
-  | { type: "message:send"; sessionId: string; text: string }
+  | { type: "message:send"; sessionId: string; text: string; images?: ImageAttachment[]; documents?: DocumentAttachment[] }
   | { type: "session:interrupt"; sessionId: string }
   | { type: "permission:response"; sessionId: string; requestId: string; allowed: boolean; permissionMode?: PermissionMode }
   | { type: "permission:set_bypass"; sessionId: string; enabled: boolean }

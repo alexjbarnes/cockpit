@@ -106,9 +106,9 @@ export function ChatView({ sessionId, cwd }: { sessionId: string; cwd?: string }
     return () => vv.removeEventListener("resize", handler);
   }, [scrollToBottom]);
 
-  const handleSend = useCallback((text: string) => {
+  const handleSend = useCallback((text: string, images?: import("@/types").ImageAttachment[], documents?: import("@/types").DocumentAttachment[], textFiles?: import("@/types").TextFileAttachment[]) => {
     stickToBottom.current = true;
-    sendMessage(text);
+    sendMessage(text, images, documents, textFiles);
   }, [sendMessage]);
 
   const handleCompact = useCallback(() => {

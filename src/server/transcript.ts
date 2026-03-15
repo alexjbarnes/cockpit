@@ -3,7 +3,7 @@ import { existsSync, createReadStream } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline";
-import type { ChatMessage, SessionInfo, SessionGroup, ToolUse, ContentBlock } from "@/types";
+import type { ChatMessage, SessionInfo, SessionGroup, ToolUse, ContentBlock, ImageAttachment, DocumentAttachment, TextFileAttachment } from "@/types";
 import { v4 as uuidv4 } from "uuid";
 
 interface TranscriptBlock {
@@ -15,6 +15,7 @@ interface TranscriptBlock {
   input?: Record<string, unknown>;
   tool_use_id?: string;
   content?: string | TranscriptBlock[];
+  source?: { type: string; media_type?: string; data?: string };
 }
 
 interface TranscriptEntry {
@@ -51,6 +52,17 @@ export function transcriptExists(sessionId: string, cwd: string): boolean {
 }
 
 const CLI_XML_RE = /<(?:task-notification|local-command-caveat|local-command-stdout|system-reminder)[^>]*>[\s\S]*?<\/(?:task-notification|local-command-caveat|local-command-stdout|system-reminder)>[\s\S]*/g;
+
+const FILE_TAG_RE = /<file\s+path="([^"]+)">\n([\s\S]*?)\n<\/file>/g;
+
+function extractTextFiles(text: string): { cleaned: string; textFiles: TextFileAttachment[] } {
+  const textFiles: TextFileAttachment[] = [];
+  const cleaned = text.replace(FILE_TAG_RE, (_match, name: string, content: string) => {
+    textFiles.push({ name, content });
+    return "";
+  }).replace(/\n{3,}/g, "\n\n").trim();
+  return { cleaned, textFiles };
+}
 
 function stripCommandXml(text: string): string {
   const trimmed = text.trimStart();
@@ -172,21 +184,25 @@ export async function loadTranscript(sessionId: string, cwd: string): Promise<Ch
 
       // Simple text user message
       if (typeof content === "string") {
-        const cleaned = stripCommandXml(content);
-        if (cleaned) {
-          messages.push({
-            id: entry.message.id || uuidv4(),
-            role: "user",
-            content: cleaned,
-            toolUses: [],
-            blocks: [],
-            timestamp: Date.now(),
-          });
+        const stripped = stripCommandXml(content);
+        if (stripped) {
+          const { cleaned, textFiles } = extractTextFiles(stripped);
+          if (cleaned || textFiles.length > 0) {
+            messages.push({
+              id: entry.message.id || uuidv4(),
+              role: "user",
+              content: cleaned,
+              toolUses: [],
+              blocks: [],
+              timestamp: Date.now(),
+              textFiles: textFiles.length > 0 ? textFiles : undefined,
+            });
+          }
         }
         continue;
       }
 
-      // Array content - contains tool_results (skip these as standalone messages)
+      // Array content - contains tool_results, images, and text blocks
       if (Array.isArray(content)) {
         const toolResults = content.filter((b) => b.type === "tool_result");
         for (const tr of toolResults) {
@@ -195,6 +211,47 @@ export async function loadTranscript(sessionId: string, cwd: string): Promise<Ch
           if (tool) {
             tool.output = extractOutput(tr);
             tool.status = "done";
+          }
+        }
+
+        // Extract images from user messages
+        const imageBlocks = content.filter(
+          (b) => b.type === "image" && b.source?.type === "base64" && b.source.media_type && b.source.data
+        );
+        const images: ImageAttachment[] = imageBlocks.map((b) => ({
+          mediaType: b.source!.media_type as ImageAttachment["mediaType"],
+          data: b.source!.data as string,
+        }));
+
+        // Extract document (PDF) blocks from user messages
+        const docBlocks = content.filter(
+          (b) => b.type === "document" && b.source?.type === "base64" && b.source.media_type === "application/pdf" && b.source.data
+        );
+        const documents: DocumentAttachment[] = docBlocks.map((b) => ({
+          mediaType: "application/pdf" as const,
+          data: b.source!.data as string,
+          name: "document.pdf",
+        }));
+
+        // Extract text from user array messages (when attachments are present)
+        const textParts = content.filter((b) => b.type === "text" && b.text).map((b) => b.text!);
+        const userText = textParts.join("\n");
+
+        if (images.length > 0 || documents.length > 0 || (userText && toolResults.length === 0)) {
+          const stripped = userText ? stripCommandXml(userText) : "";
+          const { cleaned, textFiles } = extractTextFiles(stripped);
+          if (images.length > 0 || documents.length > 0 || cleaned || textFiles.length > 0) {
+            messages.push({
+              id: entry.message.id || uuidv4(),
+              role: "user",
+              content: cleaned,
+              toolUses: [],
+              blocks: [],
+              timestamp: Date.now(),
+              images: images.length > 0 ? images : undefined,
+              documents: documents.length > 0 ? documents : undefined,
+              textFiles: textFiles.length > 0 ? textFiles : undefined,
+            });
           }
         }
       }

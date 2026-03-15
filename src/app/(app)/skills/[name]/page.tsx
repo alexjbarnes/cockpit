@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { CodeEditor } from "@/components/code-editor";
-import { Save } from "lucide-react";
+import { Save, Copy, Check } from "lucide-react";
 
 const TEMPLATE = `---
 description: What this skill does
@@ -37,6 +37,7 @@ export default function SkillEditorPage({
   const [loading, setLoading] = useState(!isNew);
   const [saving, setSaving] = useState(false);
   const [feedback, setFeedback] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
 
   const dirty = content !== savedContent;
 
@@ -125,6 +126,10 @@ export default function SkillEditorPage({
             </div>
           )}
         </div>
+        <Button size="sm" variant="outline" onClick={() => { const ta = document.createElement("textarea"); ta.value = content; ta.style.position = "fixed"; ta.style.opacity = "0"; document.body.appendChild(ta); ta.select(); document.execCommand("copy"); document.body.removeChild(ta); setCopied(true); setTimeout(() => setCopied(false), 1500); }}>
+          {copied ? <Check className="h-4 w-4 mr-1" /> : <Copy className="h-4 w-4 mr-1" />}
+          {copied ? "Copied" : "Copy"}
+        </Button>
         <Button size="sm" onClick={save} disabled={saving || (!isNew && !dirty)}>
           <Save className="h-4 w-4 mr-1" />
           {saving ? "Saving..." : "Save"}

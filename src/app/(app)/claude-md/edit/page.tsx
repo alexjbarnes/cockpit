@@ -6,7 +6,7 @@ import { usePageHeader } from "@/components/app-shell";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { CodeEditor } from "@/components/code-editor";
-import { Save } from "lucide-react";
+import { Save, Copy, Check } from "lucide-react";
 
 type Scope = "user" | "project" | "project-hidden";
 
@@ -29,6 +29,7 @@ export default function ClaudeMdEditPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [feedback, setFeedback] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
 
   const dirty = content !== savedContent;
 
@@ -76,16 +77,20 @@ export default function ClaudeMdEditPage() {
   return (
     <div className="flex-1 min-h-0 flex flex-col p-4 gap-3">
       <div className="flex items-center gap-3">
-        <div className="flex items-center gap-2">
-          <span className="font-mono font-bold text-lg">{meta.title}</span>
-          <Badge variant="secondary">{meta.badge}</Badge>
+        <div className="flex items-center gap-2 min-w-0 flex-1">
+          <span className="font-mono font-bold text-sm truncate">{meta.title}</span>
+          <Badge variant="secondary" className="shrink-0">{meta.badge}</Badge>
         </div>
-        <div className="ml-auto flex items-center gap-2">
+        <div className="flex items-center gap-2 shrink-0">
           {feedback && (
             <p className={`text-sm ${feedback === "Saved" ? "text-green-600" : "text-destructive"}`}>
               {feedback}
             </p>
           )}
+          <Button size="sm" variant="outline" onClick={() => { const ta = document.createElement("textarea"); ta.value = content; ta.style.position = "fixed"; ta.style.opacity = "0"; document.body.appendChild(ta); ta.select(); document.execCommand("copy"); document.body.removeChild(ta); setCopied(true); setTimeout(() => setCopied(false), 1500); }}>
+            {copied ? <Check className="h-4 w-4 mr-1" /> : <Copy className="h-4 w-4 mr-1" />}
+            {copied ? "Copied" : "Copy"}
+          </Button>
           <Button size="sm" onClick={save} disabled={saving || !dirty}>
             <Save className="h-4 w-4 mr-1" />
             {saving ? "Saving..." : "Save"}
