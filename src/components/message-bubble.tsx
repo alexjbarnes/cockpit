@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, memo } from "react";
 import type { ChatMessage } from "@/types";
 import { ToolCard } from "./tool-card";
 import ReactMarkdown from "react-markdown";
@@ -9,11 +9,12 @@ import rehypeHighlight from "rehype-highlight";
 import { cn } from "@/lib/utils";
 import { Loader2, Check, ChevronDown, ChevronRight, Brain } from "lucide-react";
 
-export function MessageBubble({ message, collapsedByDefault = false }: { message: ChatMessage; collapsedByDefault?: boolean }) {
+export const MessageBubble = memo(function MessageBubble({ message, collapsedByDefault = false }: { message: ChatMessage; collapsedByDefault?: boolean }) {
   const [collapsed, setCollapsed] = useState(collapsedByDefault);
   const isUser = message.role === "user";
   const isSystem = message.role === "system";
-  const hasBlocks = message.blocks && message.blocks.length > 0;
+  const visibleBlocks = message.blocks?.filter((b) => !(b.type === "tool_use" && b.toolUse.name === "AskUserQuestion")) || [];
+  const hasBlocks = visibleBlocks.length > 0;
 
   if (isSystem) {
     const isCompacting = message.content === "__compacting__";
@@ -41,6 +42,11 @@ export function MessageBubble({ message, collapsedByDefault = false }: { message
         </div>
       </div>
     );
+  }
+
+  // Skip empty assistant bubbles (e.g. message only had AskUserQuestion)
+  if (!isUser && !isSystem && !hasBlocks && !message.content && message.toolUses.every((t) => t.name === "AskUserQuestion")) {
+    return null;
   }
 
   if (collapsed) {
@@ -83,7 +89,7 @@ export function MessageBubble({ message, collapsedByDefault = false }: { message
           <p className="whitespace-pre-wrap text-sm">{message.content}</p>
         ) : hasBlocks ? (
           <div className="space-y-2">
-            {message.blocks.map((block, i) =>
+            {visibleBlocks.map((block, i) =>
               block.type === "tool_use" ? (
                 <ToolCard key={`tool-${i}`} tool={block.toolUse} />
               ) : block.type === "thinking" ? (
@@ -119,7 +125,7 @@ export function MessageBubble({ message, collapsedByDefault = false }: { message
       </div>
     </div>
   );
-}
+});
 
 function ThinkingBlock({ text }: { text: string }) {
   const [expanded, setExpanded] = useState(false);

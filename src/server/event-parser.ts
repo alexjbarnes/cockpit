@@ -2,7 +2,7 @@ import type { ChatMessage, ToolUse } from "@/types";
 import { v4 as uuidv4 } from "uuid";
 
 export interface ParsedEvent {
-  type: "text_delta" | "thinking" | "tool_use_start" | "tool_done" | "tool_result" | "message_done" | "permission_request" | "system_message";
+  type: "text_delta" | "thinking" | "tool_use_start" | "tool_done" | "tool_result" | "message_done" | "permission_request" | "system_message" | "tool_children";
   text?: string;
   toolName?: string;
   toolId?: string;
@@ -10,6 +10,8 @@ export interface ParsedEvent {
   toolOutput?: string;
   filePath?: string;
   message?: ChatMessage;
+  messageId?: string;
+  children?: ToolUse[];
   requestId?: string;
   rawToolInput?: Record<string, unknown>;
 }

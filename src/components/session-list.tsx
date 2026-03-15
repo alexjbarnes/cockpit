@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
 import type { SessionInfo, SessionGroup } from "@/types";
 import { useWebSocket } from "@/hooks/use-websocket";
@@ -8,6 +8,8 @@ import { SessionCard } from "./session-card";
 import { NewSessionDialog } from "./new-session-dialog";
 import { Button } from "@/components/ui/button";
 import { Plus, ChevronRight, Star, Folder } from "lucide-react";
+
+let cachedGroups: SessionGroup[] | null = null;
 
 const FAVORITES_KEY = "aperture_fav_dirs";
 
@@ -107,9 +109,10 @@ function DirectoryGroup({
 export function SessionList() {
   const router = useRouter();
   const { connected } = useWebSocket();
-  const [groups, setGroups] = useState<SessionGroup[]>([]);
+  const [groups, setGroups] = useState<SessionGroup[]>(cachedGroups || []);
   const [favorites, setFavorites] = useState<Set<string>>(new Set());
   const [dialogOpen, setDialogOpen] = useState(false);
+  const hasFetchedRef = useRef(false);
 
   useEffect(() => {
     setFavorites(loadFavorites());
@@ -119,12 +122,17 @@ export function SessionList() {
     const res = await fetch("/api/sessions");
     if (res.ok) {
       const data = await res.json();
-      setGroups(data.groups || []);
+      const fetched = data.groups || [];
+      cachedGroups = fetched;
+      setGroups(fetched);
     }
   }, []);
 
   useEffect(() => {
-    fetchSessions();
+    if (!hasFetchedRef.current) {
+      hasFetchedRef.current = true;
+      fetchSessions();
+    }
   }, [fetchSessions]);
 
   useEffect(() => {

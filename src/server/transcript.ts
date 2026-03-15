@@ -29,7 +29,16 @@ interface TranscriptEntry {
     role?: string;
     content?: string | TranscriptBlock[];
   };
-  parent_tool_use_id?: string | null;
+  parentToolUseID?: string;
+  data?: {
+    message?: {
+      type?: string;
+      message?: {
+        role?: string;
+        content?: string | TranscriptBlock[];
+      };
+    };
+  };
 }
 
 function getTranscriptPath(sessionId: string, cwd: string): string {
@@ -55,6 +64,30 @@ function stripCommandXml(text: string): string {
   return text;
 }
 
+export async function loadLastUsage(sessionId: string, cwd: string): Promise<{ used: number; total: number } | null> {
+  const fp = getTranscriptPath(sessionId, cwd);
+  if (!existsSync(fp)) return null;
+
+  const raw = await readFile(fp, "utf-8");
+  const lines = raw.split("\n").filter((l) => l.trim());
+
+  let lastUsage: { used: number; total: number } | null = null;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    try {
+      const entry = JSON.parse(lines[i]);
+      if (entry.type === "assistant" && entry.message?.usage) {
+        const u = entry.message.usage;
+        const used = (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.cache_read_input_tokens || 0);
+        lastUsage = { used, total: 200_000 };
+        break;
+      }
+    } catch {
+      continue;
+    }
+  }
+  return lastUsage;
+}
+
 export async function loadTranscript(sessionId: string, cwd: string): Promise<ChatMessage[]> {
   const fp = getTranscriptPath(sessionId, cwd);
   if (!existsSync(fp)) return [];
@@ -74,8 +107,43 @@ export async function loadTranscript(sessionId: string, cwd: string): Promise<Ch
       continue;
     }
 
-    // Skip sub-agent messages (they have a parent_tool_use_id)
-    if (entry.parent_tool_use_id) continue;
+    // Attach sub-agent tool calls as children of their parent Agent tool
+    if (entry.type === "progress" && entry.parentToolUseID) {
+      const parentTool = toolUseMap.get(entry.parentToolUseID);
+      if (!parentTool) continue;
+
+      const innerMsg = entry.data?.message;
+      const content = innerMsg?.message?.content;
+      if (!innerMsg || !Array.isArray(content)) continue;
+
+      if (innerMsg.type === "assistant") {
+        if (!parentTool.children) parentTool.children = [];
+        for (const block of content) {
+          if (block.type === "tool_use") {
+            const child: ToolUse = {
+              id: block.id || uuidv4(),
+              name: block.name || "unknown",
+              input: block.input ? JSON.stringify(block.input) : "",
+              output: "",
+              status: "done",
+            };
+            parentTool.children.push(child);
+            toolUseMap.set(child.id, child);
+          }
+        }
+      } else if (innerMsg.type === "user") {
+        for (const tr of content) {
+          if (tr.type !== "tool_result") continue;
+          const tool = toolUseMap.get(tr.tool_use_id || "");
+          if (tool) {
+            tool.output = extractOutput(tr);
+            tool.status = "done";
+          }
+        }
+      }
+
+      continue;
+    }
 
     // Skip meta messages (slash command caveats, etc.)
     if (entry.isMeta) continue;

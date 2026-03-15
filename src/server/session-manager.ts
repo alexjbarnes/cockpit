@@ -464,6 +464,19 @@ export class SessionManager {
       const lines = lineBuffer.split("\n");
       lineBuffer = lines.pop() || "";
 
+      // If the remaining buffer looks like a complete JSON object,
+      // process it immediately to avoid deadlocks when the CLI
+      // blocks waiting for a control_response after writing the last line.
+      if (lineBuffer.trimStart().startsWith("{") && lineBuffer.trimEnd().endsWith("}")) {
+        try {
+          JSON.parse(lineBuffer);
+          lines.push(lineBuffer);
+          lineBuffer = "";
+        } catch {
+          // incomplete JSON, keep buffering
+        }
+      }
+
       for (const line of lines) {
         this.extractUsage(session, sessionId, line);
         const events = parser.parseLine(line);
@@ -553,6 +566,13 @@ export class SessionManager {
             }
           }
           session.emitter.emit("event", sessionId, event);
+
+          if (event.type === "message_done" && event.message) {
+            const hasAgent = event.message.toolUses.some((t: ToolUse) => t.name === "Agent");
+            if (hasAgent) {
+              this.loadAgentChildren(session, sessionId, event.message.id, session.info.cwd);
+            }
+          }
         }
       }
     });
@@ -603,5 +623,24 @@ export class SessionManager {
       session.emitter.emit("status", sessionId, "idle");
       session.emitter.emit("error", sessionId, err.message);
     });
+  }
+
+  private async loadAgentChildren(session: Session, sessionId: string, messageId: string, cwd: string): Promise<void> {
+    try {
+      const messages = await loadTranscript(sessionId, cwd);
+      const msg = messages.find((m) => m.id === messageId);
+      if (!msg) return;
+      for (const tool of msg.toolUses) {
+        if (tool.name !== "Agent" || !tool.children || tool.children.length === 0) continue;
+        session.emitter.emit("event", sessionId, {
+          type: "tool_children",
+          messageId,
+          toolId: tool.id,
+          children: tool.children,
+        } as ParsedEvent);
+      }
+    } catch {
+      // Children will show on next session load
+    }
   }
 }

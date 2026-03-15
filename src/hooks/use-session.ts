@@ -10,11 +10,17 @@ export interface PendingPermission {
   input: string;
 }
 
+export interface PendingQuestion {
+  requestId: string;
+  questions: string;
+}
+
 interface UseSessionReturn {
   messages: ChatMessage[];
   historyLoaded: boolean;
   isResponding: boolean;
   pendingPermissions: PendingPermission[];
+  pendingQuestions: PendingQuestion[];
   modelPicker: string | null;
   bypassActive: boolean;
   thinkingLevel: ThinkingLevel;
@@ -22,6 +28,7 @@ interface UseSessionReturn {
   sendMessage: (text: string) => void;
   interrupt: () => void;
   respondToPermission: (requestId: string, allowed: boolean, permissionMode?: PermissionMode) => void;
+  respondToQuestion: (requestId: string, answers: Record<string, string>) => void;
   selectModel: (model: string) => void;
   setBypassAll: (enabled: boolean) => void;
   setThinkingLevel: (level: ThinkingLevel) => void;
@@ -32,6 +39,7 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isResponding, setIsResponding] = useState(false);
   const [pendingPermissions, setPendingPermissions] = useState<PendingPermission[]>([]);
+  const [pendingQuestions, setPendingQuestions] = useState<PendingQuestion[]>([]);
   const [modelPicker, setModelPicker] = useState<string | null>(null);
   const [bypassActive, setBypassActive] = useState(false);
   const [thinkingLevel, setThinkingLevelState] = useState<ThinkingLevel>("high");
@@ -266,6 +274,22 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
           break;
         }
 
+        case "assistant:tool_children": {
+          setMessages((prev) => prev.map((m) => {
+            if (m.id !== msg.messageId) return m;
+            const updatedToolUses = m.toolUses.map((t) =>
+              t.id === msg.toolId ? { ...t, children: msg.children } : t
+            );
+            const updatedBlocks = m.blocks.map((b) =>
+              b.type === "tool_use" && b.toolUse.id === msg.toolId
+                ? { ...b, toolUse: { ...b.toolUse, children: msg.children } }
+                : b
+            );
+            return { ...m, toolUses: updatedToolUses, blocks: updatedBlocks };
+          }));
+          break;
+        }
+
         case "session:status": {
           setIsResponding(msg.status === "running");
           if (msg.status === "idle") {
@@ -376,6 +400,15 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
           ]);
           break;
         }
+
+        case "question:request": {
+          setPendingQuestions((prev) => [
+            ...prev,
+            { requestId: msg.requestId, questions: msg.questions },
+          ]);
+          break;
+        }
+
       }
     });
 
@@ -410,6 +443,14 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
     [send, sessionId]
   );
 
+  const respondToQuestion = useCallback(
+    (requestId: string, answers: Record<string, string>) => {
+      send({ type: "question:response", sessionId, requestId, answers });
+      setPendingQuestions((prev) => prev.filter((q) => q.requestId !== requestId));
+    },
+    [send, sessionId]
+  );
+
   const selectModel = useCallback(
     (model: string) => {
       setModelPicker(null);
@@ -434,5 +475,5 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
     [send, sessionId]
   );
 
-  return { messages, historyLoaded, isResponding, pendingPermissions, modelPicker, bypassActive, thinkingLevel, contextUsage, sendMessage, interrupt, respondToPermission, selectModel, setBypassAll, setThinkingLevel };
+  return { messages, historyLoaded, isResponding, pendingPermissions, pendingQuestions, modelPicker, bypassActive, thinkingLevel, contextUsage, sendMessage, interrupt, respondToPermission, respondToQuestion, selectModel, setBypassAll, setThinkingLevel };
 }

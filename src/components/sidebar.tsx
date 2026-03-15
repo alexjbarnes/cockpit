@@ -285,27 +285,29 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
           )}
         </div>
 
-        <div className="border-t px-3 py-2 space-y-1">
+        <div className="border-t px-3 py-2 flex items-center gap-2">
           <button
             onClick={() => {
               close();
               router.push("/");
             }}
-            className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors w-full"
+            className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors flex-1 min-w-0"
           >
-            <Home className="h-4 w-4" />
+            <Home className="h-4 w-4 shrink-0" />
             All sessions
           </button>
-          <button
+          <Button
+            variant="ghost"
+            size="icon"
+            className="shrink-0 h-8 w-8 text-muted-foreground hover:text-foreground"
             onClick={() => {
               close();
               router.push("/settings");
             }}
-            className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors w-full"
+            title="Settings"
           >
             <Settings className="h-4 w-4" />
-            Settings
-          </button>
+          </Button>
         </div>
       </div>
 

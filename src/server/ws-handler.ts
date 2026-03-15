@@ -5,6 +5,7 @@ import type { ClientMessage, ServerMessage } from "@/types";
 import type { ParsedEvent } from "./event-parser";
 import { validateToken, extractTokenFromQuery } from "./auth";
 import { SessionManager } from "./session-manager";
+import { loadLastUsage } from "./transcript";
 
 export function createWebSocketHandler(
   server: HTTPServer,
@@ -115,6 +116,16 @@ export function createWebSocketHandler(
               sessionId: msg.sessionId,
               usage: currentUsage,
             });
+          } else if (session.info.cwd) {
+            loadLastUsage(msg.sessionId, session.info.cwd).then((usage) => {
+              if (usage) {
+                send(ws, {
+                  type: "session:usage",
+                  sessionId: msg.sessionId,
+                  usage,
+                });
+              }
+            });
           }
 
           const unsubEvent = sessionManager.subscribe(
@@ -220,6 +231,17 @@ export function createWebSocketHandler(
           }
 
           sessionManager.respondToPermission(msg.sessionId, msg.requestId, msg.allowed, pending?.toolInput);
+          break;
+        }
+
+        case "question:response": {
+          const pending = pendingPermissions.get(msg.requestId);
+          pendingPermissions.delete(msg.requestId);
+          const originalQuestions = (pending?.toolInput as Record<string, unknown>)?.questions;
+          sessionManager.respondToPermission(msg.sessionId, msg.requestId, true, {
+            questions: originalQuestions || [],
+            answers: msg.answers,
+          });
           break;
         }
 
@@ -334,9 +356,32 @@ function handleParsedEvent(
       }
       break;
 
+    case "tool_children":
+      send(ws, {
+        type: "assistant:tool_children",
+        sessionId,
+        messageId: event.messageId || "",
+        toolId: event.toolId || "",
+        children: event.children || [],
+      });
+      break;
+
     case "permission_request": {
       const toolName = event.toolName || "";
       const requestId = event.requestId || "";
+
+      if (toolName === "AskUserQuestion") {
+        if (requestId && event.rawToolInput) {
+          pendingPermissions.set(requestId, { toolName, toolInput: event.rawToolInput });
+        }
+        send(ws, {
+          type: "question:request",
+          sessionId,
+          requestId,
+          questions: event.toolInput || "",
+        });
+        return;
+      }
 
       if (sessionManager.shouldAutoAllow(sessionId, toolName)) {
         sessionManager.respondToPermission(sessionId, requestId, true, event.rawToolInput);
@@ -355,6 +400,7 @@ function handleParsedEvent(
       });
       break;
     }
+
   }
 }
 
