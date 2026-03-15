@@ -1,12 +1,13 @@
 "use client";
 
 import { useState } from "react";
-import { X } from "lucide-react";
+import { X, Shrink } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { ContextUsage } from "@/types";
 
 interface ContextIndicatorProps {
   usage: ContextUsage;
+  onCompact?: () => void;
 }
 
 function formatTokens(n: number): string {
@@ -14,7 +15,7 @@ function formatTokens(n: number): string {
   return String(n);
 }
 
-export function ContextIndicator({ usage }: ContextIndicatorProps) {
+export function ContextIndicator({ usage, onCompact }: ContextIndicatorProps) {
   const [open, setOpen] = useState(false);
 
   const pct = Math.round((usage.used / usage.total) * 100);
@@ -84,6 +85,17 @@ export function ContextIndicator({ usage }: ContextIndicatorProps) {
               <span>{formatTokens(usage.used)} used</span>
               <span>{formatTokens(usage.total)} total</span>
             </div>
+            {onCompact && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="w-full mt-4"
+                onClick={() => { onCompact(); setOpen(false); }}
+              >
+                <Shrink className="h-3.5 w-3.5 mr-2" />
+                Compact now
+              </Button>
+            )}
           </div>
         </div>
       )}

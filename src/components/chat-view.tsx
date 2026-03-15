@@ -111,6 +111,10 @@ export function ChatView({ sessionId, cwd }: { sessionId: string; cwd?: string }
     sendMessage(text);
   }, [sendMessage]);
 
+  const handleCompact = useCallback(() => {
+    sendMessage("/compact");
+  }, [sendMessage]);
+
   return (
     <>
       <div
@@ -232,6 +236,7 @@ export function ChatView({ sessionId, cwd }: { sessionId: string; cwd?: string }
           contextUsage={contextUsage}
           dismissKeyboard={settings.dismissKeyboardOnSend}
           cwd={cwd}
+          onCompact={handleCompact}
         />
       </div>
     </>

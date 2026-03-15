@@ -27,6 +27,7 @@ interface InputAreaProps {
   contextUsage: ContextUsage | null;
   dismissKeyboard: boolean;
   cwd?: string;
+  onCompact?: () => void;
 }
 
 function getMentionContext(text: string, cursorPos: number): { active: boolean; query: string; start: number } {
@@ -36,7 +37,7 @@ function getMentionContext(text: string, cursorPos: number): { active: boolean; 
   return { active: true, query: match[1], start: cursorPos - match[0].length };
 }
 
-export function InputArea({ onSend, onInterrupt, isResponding, bypassActive, onSetBypass, thinkingLevel, onSetThinking, contextUsage, dismissKeyboard, cwd }: InputAreaProps) {
+export function InputArea({ onSend, onInterrupt, isResponding, bypassActive, onSetBypass, thinkingLevel, onSetThinking, contextUsage, dismissKeyboard, cwd, onCompact }: InputAreaProps) {
   const { connected } = useWebSocket();
   const [text, setText] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -244,7 +245,7 @@ export function InputArea({ onSend, onInterrupt, isResponding, bypassActive, onS
             />
           )}
           <div className="flex flex-col items-center justify-evenly w-8 shrink-0">
-            {contextUsage && <ContextIndicator usage={contextUsage} />}
+            {contextUsage && <ContextIndicator usage={contextUsage} onCompact={onCompact} />}
             <Button
               size="icon"
               variant="ghost"
