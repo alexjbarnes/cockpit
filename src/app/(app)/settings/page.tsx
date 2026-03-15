@@ -41,6 +41,55 @@ function applyTheme(theme: Theme) {
   }
 }
 
+function Toggle({ enabled, color, onToggle }: { enabled: boolean; color?: string; onToggle: () => void }) {
+  const bg = enabled ? (color || "bg-green-500") : "bg-muted-foreground/30";
+  return (
+    <button onClick={onToggle} className="shrink-0">
+      <span className={`inline-flex h-7 w-12 items-center rounded-full transition-colors ${bg}`}>
+        <span className={`inline-block h-5 w-5 rounded-full bg-white shadow transition-transform ${enabled ? "translate-x-6" : "translate-x-1"}`} />
+      </span>
+    </button>
+  );
+}
+
+function SettingRow({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="flex items-center justify-between px-2 py-2 text-sm">
+      <span>{label}</span>
+      {children}
+    </div>
+  );
+}
+
+function NavRow({ label, onClick }: { label: string; onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      className="flex w-full items-center justify-between rounded px-2 py-2.5 text-sm hover:bg-muted transition-colors"
+    >
+      <span>{label}</span>
+      <ChevronRight className="h-4 w-4 text-muted-foreground" />
+    </button>
+  );
+}
+
+function ButtonGroup<T extends string>({ options, value, onChange }: { options: { value: T; label: string }[]; value: T; onChange: (v: T) => void }) {
+  return (
+    <div className="flex gap-1">
+      {options.map((opt) => (
+        <Button
+          key={opt.value}
+          variant={value === opt.value ? "default" : "outline"}
+          size="sm"
+          onClick={() => onChange(opt.value)}
+        >
+          {opt.label}
+        </Button>
+      ))}
+    </div>
+  );
+}
+
 interface VersionInfo {
   installed: string;
   latest: string;
@@ -106,7 +155,7 @@ export default function SettingsPage() {
       <Card>
         <CardHeader>
           <div className="flex items-center justify-between">
-            <CardTitle className="text-base">Claude Code Version</CardTitle>
+            <CardTitle className="text-base">Claude Code</CardTitle>
             <button
               onClick={fetchVersion}
               disabled={versionLoading}
@@ -129,31 +178,20 @@ export default function SettingsPage() {
             {version && version.installed !== "unknown" && version.latest !== "unknown" && version.installed !== version.latest && (
               <div className="space-y-2 px-2">
                 <div className="flex items-center justify-between">
-                  <p className="text-xs text-amber-500">
-                    Update available
-                  </p>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={triggerUpdate}
-                    disabled={updating}
-                  >
+                  <p className="text-xs text-amber-500">Update available</p>
+                  <Button size="sm" variant="outline" onClick={triggerUpdate} disabled={updating}>
                     <Download className="h-3.5 w-3.5 mr-1" />
                     {updating ? "Updating..." : "Update"}
                   </Button>
                 </div>
-                <p className="text-xs text-muted-foreground font-mono break-all">
-                  {version.updateCommand}
-                </p>
+                <p className="text-xs text-muted-foreground font-mono break-all">{version.updateCommand}</p>
               </div>
             )}
             {version && version.installed !== "unknown" && version.latest !== "unknown" && version.installed === version.latest && (
               <p className="text-xs text-green-500 px-2">Up to date</p>
             )}
             {updateResult && (
-              <p className={`text-xs px-2 ${updateResult.ok ? "text-green-500" : "text-destructive"}`}>
-                {updateResult.message}
-              </p>
+              <p className={`text-xs px-2 ${updateResult.ok ? "text-green-500" : "text-destructive"}`}>{updateResult.message}</p>
             )}
           </div>
         </CardContent>
@@ -162,180 +200,54 @@ export default function SettingsPage() {
         <CardHeader>
           <CardTitle className="text-base">Session defaults</CardTitle>
         </CardHeader>
-        <CardContent className="space-y-3">
-          <div className="flex items-center justify-between px-2 py-1">
-            <span className="text-sm">Thinking level</span>
-            <div className="flex gap-1">
-              {thinkingOptions.map((opt) => (
-                <Button
-                  key={opt.value}
-                  variant={settings.thinkingLevel === opt.value ? "default" : "outline"}
-                  size="sm"
-                  onClick={() => updateSetting("thinkingLevel", opt.value)}
-                >
-                  {opt.label}
-                </Button>
-              ))}
-            </div>
-          </div>
-          <button
-            onClick={() => updateSetting("bypassAllPermissions", !settings.bypassAllPermissions)}
-            className="flex w-full items-center justify-between rounded px-2 py-2 text-sm hover:bg-muted transition-colors"
-          >
-            <span>Bypass all permissions</span>
-            <span
-              className={`inline-flex h-7 w-12 items-center rounded-full transition-colors ${
-                settings.bypassAllPermissions ? "bg-orange-500" : "bg-muted-foreground/30"
-              }`}
-            >
-              <span
-                className={`inline-block h-5 w-5 rounded-full bg-white shadow transition-transform ${
-                  settings.bypassAllPermissions ? "translate-x-6" : "translate-x-1"
-                }`}
-              />
-            </span>
-          </button>
+        <CardContent className="space-y-1">
+          <SettingRow label="Thinking level">
+            <ButtonGroup options={thinkingOptions} value={settings.thinkingLevel} onChange={(v) => updateSetting("thinkingLevel", v)} />
+          </SettingRow>
+          <SettingRow label="Bypass all permissions">
+            <Toggle enabled={settings.bypassAllPermissions} color="bg-orange-500" onToggle={() => updateSetting("bypassAllPermissions", !settings.bypassAllPermissions)} />
+          </SettingRow>
         </CardContent>
       </Card>
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Theme</CardTitle>
+          <CardTitle className="text-base">Display</CardTitle>
         </CardHeader>
-        <CardContent>
-          <div className="flex gap-2">
-            {themeOptions.map((opt) => (
-              <Button
-                key={opt.value}
-                variant={theme === opt.value ? "default" : "outline"}
-                size="sm"
-                onClick={() => selectTheme(opt.value)}
-              >
-                {opt.label}
-              </Button>
-            ))}
-          </div>
+        <CardContent className="space-y-1">
+          <SettingRow label="Theme">
+            <ButtonGroup options={themeOptions} value={theme} onChange={selectTheme} />
+          </SettingRow>
+          <SettingRow label="Diff style">
+            <ButtonGroup options={diffOptions} value={settings.diffStyle} onChange={(v) => updateSetting("diffStyle", v)} />
+          </SettingRow>
+          <SettingRow label="Thinking blocks">
+            <ButtonGroup
+              options={[{ value: "collapsed" as const, label: "Collapsed" }, { value: "expanded" as const, label: "Expanded" }]}
+              value={settings.thinkingExpanded ? "expanded" : "collapsed"}
+              onChange={(v) => updateSetting("thinkingExpanded", v === "expanded")}
+            />
+          </SettingRow>
         </CardContent>
       </Card>
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Diff display</CardTitle>
+          <CardTitle className="text-base">Input</CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="flex gap-2">
-            {diffOptions.map((opt) => (
-              <Button
-                key={opt.value}
-                variant={settings.diffStyle === opt.value ? "default" : "outline"}
-                size="sm"
-                onClick={() => updateSetting("diffStyle", opt.value)}
-              >
-                {opt.label}
-              </Button>
-            ))}
-          </div>
+          <SettingRow label="Dismiss keyboard on send">
+            <Toggle enabled={settings.dismissKeyboardOnSend} onToggle={() => updateSetting("dismissKeyboardOnSend", !settings.dismissKeyboardOnSend)} />
+          </SettingRow>
         </CardContent>
       </Card>
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Thinking blocks</CardTitle>
+          <CardTitle className="text-base">Customization</CardTitle>
         </CardHeader>
-        <CardContent>
-          <div className="flex gap-2">
-            <Button
-              variant={!settings.thinkingExpanded ? "default" : "outline"}
-              size="sm"
-              onClick={() => updateSetting("thinkingExpanded", false)}
-            >
-              Collapsed
-            </Button>
-            <Button
-              variant={settings.thinkingExpanded ? "default" : "outline"}
-              size="sm"
-              onClick={() => updateSetting("thinkingExpanded", true)}
-            >
-              Expanded
-            </Button>
-          </div>
-        </CardContent>
-      </Card>
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Keyboard</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <button
-            onClick={() => updateSetting("dismissKeyboardOnSend", !settings.dismissKeyboardOnSend)}
-            className="flex w-full items-center justify-between rounded px-2 py-2 text-sm hover:bg-muted transition-colors"
-          >
-            <span>Dismiss keyboard on send</span>
-            <span
-              className={`inline-flex h-7 w-12 items-center rounded-full transition-colors ${
-                settings.dismissKeyboardOnSend ? "bg-green-500" : "bg-muted-foreground/30"
-              }`}
-            >
-              <span
-                className={`inline-block h-5 w-5 rounded-full bg-white shadow transition-transform ${
-                  settings.dismissKeyboardOnSend ? "translate-x-6" : "translate-x-1"
-                }`}
-              />
-            </span>
-          </button>
-        </CardContent>
-      </Card>
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Agents</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <button
-            onClick={() => router.push("/agents")}
-            className="flex w-full items-center justify-between rounded px-2 py-2 text-sm hover:bg-muted transition-colors"
-          >
-            <span>Manage custom agents</span>
-            <ChevronRight className="h-4 w-4 text-muted-foreground" />
-          </button>
-        </CardContent>
-      </Card>
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Skills</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <button
-            onClick={() => router.push("/skills")}
-            className="flex w-full items-center justify-between rounded px-2 py-2 text-sm hover:bg-muted transition-colors"
-          >
-            <span>Manage skills</span>
-            <ChevronRight className="h-4 w-4 text-muted-foreground" />
-          </button>
-        </CardContent>
-      </Card>
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Commands</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <button
-            onClick={() => router.push("/commands")}
-            className="flex w-full items-center justify-between rounded px-2 py-2 text-sm hover:bg-muted transition-colors"
-          >
-            <span>Manage custom commands</span>
-            <ChevronRight className="h-4 w-4 text-muted-foreground" />
-          </button>
-        </CardContent>
-      </Card>
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">CLAUDE.md</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <button
-            onClick={() => router.push("/claude-md")}
-            className="flex w-full items-center justify-between rounded px-2 py-2 text-sm hover:bg-muted transition-colors"
-          >
-            <span>Edit instruction files</span>
-            <ChevronRight className="h-4 w-4 text-muted-foreground" />
-          </button>
+        <CardContent className="space-y-0.5">
+          <NavRow label="Agents" onClick={() => router.push("/agents")} />
+          <NavRow label="Skills" onClick={() => router.push("/skills")} />
+          <NavRow label="Commands" onClick={() => router.push("/commands")} />
+          <NavRow label="CLAUDE.md" onClick={() => router.push("/claude-md")} />
         </CardContent>
       </Card>
     </div>
