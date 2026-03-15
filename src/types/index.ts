@@ -93,5 +93,8 @@ export type ServerMessage =
   | { type: "session:system"; sessionId: string; text: string }
   | { type: "session:info_updated"; sessionId: string; info: SessionInfo }
   | { type: "session:usage"; sessionId: string; usage: ContextUsage }
+  | { type: "assistant:tool_progress"; sessionId: string; toolId: string; content: string }
+  | { type: "session:rate_limit"; sessionId: string; status: string; retryAfterMs?: number }
+  | { type: "session:suggestions"; sessionId: string; suggestions: string[] }
   | { type: "history"; sessionId: string; messages: ChatMessage[] }
   | { type: "pong" };

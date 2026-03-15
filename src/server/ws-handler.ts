@@ -6,6 +6,7 @@ import type { ParsedEvent } from "./event-parser";
 import { validateToken, extractTokenFromQuery } from "./auth";
 import { SessionManager } from "./session-manager";
 import { loadLastUsage } from "./transcript";
+import { logParsedEvent, logServerMessage, logClientMessage, logStatus } from "./debug-logger";
 
 export function createWebSocketHandler(
   server: HTTPServer,
@@ -46,6 +47,7 @@ export function createWebSocketHandler(
       } catch {
         return;
       }
+      logClientMessage(msg);
 
       switch (msg.type) {
         case "ping": {
@@ -131,6 +133,7 @@ export function createWebSocketHandler(
           const unsubEvent = sessionManager.subscribe(
             msg.sessionId,
             (event: ParsedEvent) => {
+              logParsedEvent(msg.sessionId, event);
               handleParsedEvent(ws, msg.sessionId, event, pendingPermissions, sessionManager);
             }
           );
@@ -139,6 +142,7 @@ export function createWebSocketHandler(
           const unsubStatus = sessionManager.onStatus(
             msg.sessionId,
             (status) => {
+              logStatus(msg.sessionId, status);
               send(ws, {
                 type: "session:status",
                 sessionId: msg.sessionId,
@@ -366,6 +370,36 @@ function handleParsedEvent(
       });
       break;
 
+    case "tool_progress":
+      send(ws, {
+        type: "assistant:tool_progress",
+        sessionId,
+        toolId: event.toolId || "",
+        content: event.text || "",
+      });
+      break;
+
+    case "rate_limit":
+      if (event.rateLimitInfo) {
+        send(ws, {
+          type: "session:rate_limit",
+          sessionId,
+          status: event.rateLimitInfo.status,
+          retryAfterMs: event.rateLimitInfo.retryAfterMs,
+        });
+      }
+      break;
+
+    case "prompt_suggestion":
+      if (event.suggestions) {
+        send(ws, {
+          type: "session:suggestions",
+          sessionId,
+          suggestions: event.suggestions,
+        });
+      }
+      break;
+
     case "permission_request": {
       const toolName = event.toolName || "";
       const requestId = event.requestId || "";
@@ -406,6 +440,7 @@ function handleParsedEvent(
 
 function send(ws: WebSocket, msg: ServerMessage): void {
   if (ws.readyState === WebSocket.OPEN) {
+    logServerMessage(msg);
     ws.send(JSON.stringify(msg));
   }
 }

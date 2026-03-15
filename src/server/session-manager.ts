@@ -5,6 +5,7 @@ import { v4 as uuidv4 } from "uuid";
 import type { SessionInfo, ChatMessage, ToolUse, ContentBlock, ThinkingLevel, ContextUsage } from "@/types";
 import { EventParser, type ParsedEvent } from "./event-parser";
 import { loadTranscript, transcriptExists } from "./transcript";
+import { logRawLine } from "./debug-logger";
 
 export interface SessionEvents {
   event: [sessionId: string, event: ParsedEvent];
@@ -478,6 +479,7 @@ export class SessionManager {
       }
 
       for (const line of lines) {
+        logRawLine(sessionId, line);
         this.extractUsage(session, sessionId, line);
         const events = parser.parseLine(line);
         for (const event of events) {
@@ -540,6 +542,18 @@ export class SessionManager {
                 if (event.filePath) tool.filePath = event.filePath;
                 tool.status = "done";
               }
+            }
+          } else if (event.type === "tool_progress" && event.toolId && event.text) {
+            const topAgent = agentStack[agentStack.length - 1];
+            if (topAgent && topAgent.id === event.toolId) {
+              topAgent.output += event.text;
+            } else if (agentStack.length > 0) {
+              const parent = agentStack[agentStack.length - 1];
+              const child = parent.children?.find((t) => t.id === event.toolId);
+              if (child) child.output += event.text;
+            } else {
+              const tool = pendingToolUses.find((t) => t.id === event.toolId);
+              if (tool) tool.output += event.text;
             }
           } else if (event.type === "system_message" && event.text) {
             this.emitSystem(session, sessionId, event.text);

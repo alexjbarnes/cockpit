@@ -2,7 +2,7 @@ import type { ChatMessage, ToolUse } from "@/types";
 import { v4 as uuidv4 } from "uuid";
 
 export interface ParsedEvent {
-  type: "text_delta" | "thinking" | "tool_use_start" | "tool_done" | "tool_result" | "message_done" | "permission_request" | "system_message" | "tool_children";
+  type: "text_delta" | "thinking" | "tool_use_start" | "tool_done" | "tool_result" | "message_done" | "permission_request" | "system_message" | "tool_children" | "tool_progress" | "rate_limit" | "prompt_suggestion";
   text?: string;
   toolName?: string;
   toolId?: string;
@@ -14,6 +14,8 @@ export interface ParsedEvent {
   children?: ToolUse[];
   requestId?: string;
   rawToolInput?: Record<string, unknown>;
+  rateLimitInfo?: { status: string; retryAfterMs?: number };
+  suggestions?: string[];
 }
 
 interface ContentBlock {
@@ -69,10 +71,77 @@ export class EventParser {
       return this.parseControlRequest(event);
     }
 
+    if (type === "tool_progress") {
+      const toolId = event.tool_use_id as string | undefined;
+      const content = event.content as string | undefined;
+      if (toolId && content) {
+        return [{ type: "tool_progress", toolId, text: content }];
+      }
+      return [];
+    }
+
+    if (type === "rate_limit_event") {
+      const info = event.rate_limit_info as { status?: string; retry_after_ms?: number } | undefined;
+      if (info) {
+        return [{ type: "rate_limit", rateLimitInfo: { status: info.status || "unknown", retryAfterMs: info.retry_after_ms } }];
+      }
+      return [];
+    }
+
+    if (type === "prompt_suggestion") {
+      const suggestions = (event.suggestions || event.prompt_suggestions) as string[] | undefined;
+      if (suggestions?.length) {
+        return [{ type: "prompt_suggestion", suggestions }];
+      }
+      return [];
+    }
+
+    if (type === "auth_status") {
+      return [{ type: "system_message", text: `__auth::${event.status || "unknown"}` }];
+    }
+
+    // tool_use_summary: dropped because tool_result already provides output
+    // stream_event: dropped because we use full assistant events
+    if (type === "tool_use_summary" || type === "stream_event") {
+      return [];
+    }
+
     if (type === "system") {
       const subtype = event.subtype as string | undefined;
       if (subtype === "compact_boundary") {
         return [{ type: "system_message", text: "__compact_boundary__" }];
+      }
+      if (subtype === "status" && event.status === "compacting") {
+        return [{ type: "system_message", text: "__compact::start" }];
+      }
+
+      // Refined hook subtypes
+      if (subtype === "hook_started") {
+        const hookName = (event.hook_name || event.name || "unknown") as string;
+        return [{ type: "system_message", text: `__hook::started::${hookName}` }];
+      }
+      if (subtype === "hook_progress") {
+        const content = (event.content || "") as string;
+        return [{ type: "system_message", text: `__hook::progress::${content}` }];
+      }
+      if (subtype === "hook_response") {
+        return [{ type: "system_message", text: "__hook::done" }];
+      }
+
+      // Refined task subtypes
+      if (subtype === "task_started") {
+        return [{ type: "system_message", text: "__task::started" }];
+      }
+      if (subtype === "task_progress") {
+        return [{ type: "system_message", text: "__task::progress" }];
+      }
+      if (subtype === "task_notification") {
+        return [{ type: "system_message", text: "__task::notification" }];
+      }
+
+      // Forward all other system events so the debug log captures them
+      if (subtype) {
+        return [{ type: "system_message", text: `__system::${subtype}` }];
       }
     }
 

@@ -13,6 +13,7 @@ export interface PendingPermission {
 export interface PendingQuestion {
   requestId: string;
   questions: string;
+  answered?: boolean;
 }
 
 interface UseSessionReturn {
@@ -25,6 +26,8 @@ interface UseSessionReturn {
   bypassActive: boolean;
   thinkingLevel: ThinkingLevel;
   contextUsage: ContextUsage | null;
+  rateLimitStatus: string | null;
+  suggestions: string[];
   sendMessage: (text: string) => void;
   interrupt: () => void;
   respondToPermission: (requestId: string, allowed: boolean, permissionMode?: PermissionMode) => void;
@@ -45,6 +48,8 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
   const [thinkingLevel, setThinkingLevelState] = useState<ThinkingLevel>("high");
   const [historyLoaded, setHistoryLoaded] = useState(false);
   const [contextUsage, setContextUsage] = useState<ContextUsage | null>(null);
+  const [rateLimitStatus, setRateLimitStatus] = useState<string | null>(null);
+  const [suggestions, setSuggestions] = useState<string[]>([]);
 
   // Track the in-progress assistant message being streamed
   const streamingRef = useRef<{
@@ -86,6 +91,7 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
         }
 
         case "assistant:thinking": {
+          setMessages((prev) => prev.filter((m) => m.id !== "compact-progress"));
           if (!streamingRef.current) {
             streamingRef.current = { content: "", toolUses: [], blocks: [] };
           }
@@ -117,6 +123,7 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
         }
 
         case "assistant:text": {
+          setMessages((prev) => prev.filter((m) => m.id !== "compact-progress"));
           if (!streamingRef.current) {
             streamingRef.current = { content: "", toolUses: [], blocks: [] };
           }
@@ -151,6 +158,7 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
         }
 
         case "assistant:tool_use": {
+          setMessages((prev) => prev.filter((m) => m.id !== "compact-progress"));
           if (!streamingRef.current) {
             streamingRef.current = { content: "", toolUses: [], blocks: [] };
           }
@@ -274,6 +282,58 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
           break;
         }
 
+        case "assistant:tool_progress": {
+          if (!streamingRef.current) break;
+
+          const stack = agentStackRef.current;
+          const topAgent = stack[stack.length - 1];
+
+          if (topAgent && topAgent.id === msg.toolId) {
+            topAgent.output += msg.content;
+          } else if (stack.length > 0) {
+            const parent = stack[stack.length - 1];
+            const child = parent.children?.find((t) => t.id === msg.toolId);
+            if (child) child.output += msg.content;
+          } else {
+            const tool = streamingRef.current.toolUses.find(
+              (t) => t.id === msg.toolId
+            );
+            if (tool) tool.output += msg.content;
+          }
+
+          const streaming = streamingRef.current;
+          setMessages((prev) => {
+            const streamMsg: ChatMessage = {
+              id: "streaming",
+              role: "assistant",
+              content: streaming.content,
+              toolUses: [...streaming.toolUses],
+              blocks: [...streaming.blocks],
+              timestamp: Date.now(),
+            };
+            const last = prev[prev.length - 1];
+            if (last?.id === "streaming") {
+              return [...prev.slice(0, -1), streamMsg];
+            }
+            return [...prev, streamMsg];
+          });
+          break;
+        }
+
+        case "session:rate_limit": {
+          if (msg.status === "rate_limited") {
+            setRateLimitStatus(msg.status);
+          } else {
+            setRateLimitStatus(null);
+          }
+          break;
+        }
+
+        case "session:suggestions": {
+          setSuggestions(msg.suggestions);
+          break;
+        }
+
         case "assistant:tool_children": {
           setMessages((prev) => prev.map((m) => {
             if (m.id !== msg.messageId) return m;
@@ -295,6 +355,8 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
           if (msg.status === "idle") {
             streamingRef.current = null;
             agentStackRef.current = [];
+            setPendingQuestions([]);
+            setRateLimitStatus(null);
           }
           break;
         }
@@ -341,30 +403,42 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
             break;
           }
           if (msg.text === "__compact_boundary__") {
-            const compactMsg: ChatMessage = {
-              id: "compact-done-" + Date.now(),
-              role: "system",
-              content: "__compacted__",
-              toolUses: [],
-              blocks: [],
-              timestamp: Date.now(),
-            };
-            setMessages((prev) => [...prev, compactMsg]);
+            setMessages((prev) => {
+              const doneId = "compact-done-" + Date.now();
+              const hasProgress = prev.some((m) => m.id === "compact-progress");
+              if (hasProgress) {
+                return prev.map((m) =>
+                  m.id === "compact-progress"
+                    ? { ...m, id: doneId, content: "__compacted__" }
+                    : m
+                );
+              }
+              return [...prev, {
+                id: doneId,
+                role: "system" as const,
+                content: "__compacted__",
+                toolUses: [],
+                blocks: [],
+                timestamp: Date.now(),
+              }];
+            });
             break;
           }
           const compactPrefix = "__compact::";
           if (msg.text.startsWith(compactPrefix)) {
             const state = msg.text.slice(compactPrefix.length);
             if (state === "start") {
-              const compactMsg: ChatMessage = {
-                id: "compact-progress",
-                role: "system",
-                content: "__compacting__",
-                toolUses: [],
-                blocks: [],
-                timestamp: Date.now(),
-              };
-              setMessages((prev) => [...prev, compactMsg]);
+              setMessages((prev) => {
+                if (prev.some((m) => m.id === "compact-progress")) return prev;
+                return [...prev, {
+                  id: "compact-progress",
+                  role: "system" as const,
+                  content: "__compacting__",
+                  toolUses: [],
+                  blocks: [],
+                  timestamp: Date.now(),
+                }];
+              });
             } else if (state === "done") {
               setMessages((prev) =>
                 prev.map((m) =>
@@ -376,6 +450,8 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
             }
             break;
           }
+          // Filter out internal system messages (debug-only events forwarded from event-parser)
+          if (msg.text.startsWith("__system::")) break;
           const sysMsg: ChatMessage = {
             id: "system-" + Date.now(),
             role: "system",
@@ -426,6 +502,7 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
         timestamp: Date.now(),
       };
       setMessages((prev) => [...prev, userMsg]);
+      setSuggestions([]);
       send({ type: "message:send", sessionId, text });
     },
     [send, sessionId]
@@ -446,7 +523,9 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
   const respondToQuestion = useCallback(
     (requestId: string, answers: Record<string, string>) => {
       send({ type: "question:response", sessionId, requestId, answers });
-      setPendingQuestions((prev) => prev.filter((q) => q.requestId !== requestId));
+      setPendingQuestions((prev) =>
+        prev.map((q) => q.requestId === requestId ? { ...q, answered: true } : q)
+      );
     },
     [send, sessionId]
   );
@@ -475,5 +554,5 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
     [send, sessionId]
   );
 
-  return { messages, historyLoaded, isResponding, pendingPermissions, pendingQuestions, modelPicker, bypassActive, thinkingLevel, contextUsage, sendMessage, interrupt, respondToPermission, respondToQuestion, selectModel, setBypassAll, setThinkingLevel };
+  return { messages, historyLoaded, isResponding, pendingPermissions, pendingQuestions, modelPicker, bypassActive, thinkingLevel, contextUsage, rateLimitStatus, suggestions, sendMessage, interrupt, respondToPermission, respondToQuestion, selectModel, setBypassAll, setThinkingLevel };
 }

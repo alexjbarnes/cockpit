@@ -65,7 +65,8 @@ export function ToolCard({ tool }: ToolCardProps) {
     }
   }, [isRunning]);
 
-  const hasContent = tool.input || tool.output;
+  const isStatusOnly = tool.name === "EnterPlanMode" || tool.name === "ExitPlanMode";
+  const hasContent = !isStatusOnly && (tool.input || tool.output);
 
   return (
     <div className="rounded border border-border bg-card text-card-foreground text-xs overflow-hidden">
@@ -158,6 +159,14 @@ function ToolSummary({
     return short ? (
       <span className="text-muted-foreground truncate">{short}</span>
     ) : null;
+  }
+
+  if (name === "EnterPlanMode") {
+    return <span className="text-muted-foreground">Entering plan mode</span>;
+  }
+
+  if (name === "ExitPlanMode") {
+    return <span className="text-muted-foreground">Exiting plan mode</span>;
   }
 
   return null;

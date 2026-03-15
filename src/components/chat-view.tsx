@@ -8,13 +8,14 @@ import { MessageBubble } from "./message-bubble";
 import { InputArea } from "./input-area";
 import { PermissionPrompt } from "./permission-prompt";
 import { QuestionCard, QuestionPrompt, parseQuestionsFromInput } from "./question-card";
+import { splitAtQuestion } from "@/lib/split-question-blocks";
 import { ModelPicker } from "./model-picker";
 
 const INITIAL_WINDOW = 50;
 const WINDOW_INCREMENT = 30;
 
 export function ChatView({ sessionId, cwd }: { sessionId: string; cwd?: string }) {
-  const { messages, historyLoaded, isResponding, pendingPermissions, pendingQuestions, modelPicker, bypassActive, thinkingLevel, contextUsage, sendMessage, interrupt, respondToPermission, respondToQuestion, selectModel, setBypassAll, setThinkingLevel } = useSession(sessionId, cwd);
+  const { messages, historyLoaded, isResponding, pendingPermissions, pendingQuestions, modelPicker, bypassActive, thinkingLevel, contextUsage, rateLimitStatus, sendMessage, interrupt, respondToPermission, respondToQuestion, selectModel, setBypassAll, setThinkingLevel } = useSession(sessionId, cwd);
   const { settings } = useSettings();
   const scrollRef = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);
@@ -122,30 +123,62 @@ export function ChatView({ sessionId, cwd }: { sessionId: string; cwd?: string }
             </div>
           )}
           {visibleMessages.map((msg, i) => {
-            const questionTools = msg.role === "assistant"
-              ? msg.toolUses.filter((t) => t.name === "AskUserQuestion" && t.output)
-              : [];
+            const collapsedByDefault = i > 0 && visibleMessages[i - 1].content === "__compacted__";
+
+            // Split any assistant message at AskUserQuestion so the question
+            // renders as a standalone element between content before and after it.
+            // Works for both streaming and finalized messages.
+            if (msg.role === "assistant") {
+              const { before, questionBlock, after } = splitAtQuestion(msg.blocks || []);
+
+              if (questionBlock) {
+                const pending = pendingQuestions.find(() => true);
+                const hasOutput = !!questionBlock.toolUse.output;
+
+                return (
+                  <div key={msg.id} className="space-y-4">
+                    {before.length > 0 && (
+                      <MessageBubble
+                        message={{ ...msg, blocks: before, content: "" }}
+                        collapsedByDefault={collapsedByDefault}
+                      />
+                    )}
+                    <div className="flex w-full justify-start">
+                      <div className="max-w-[85%]">
+                        {hasOutput ? (
+                          <QuestionCard tool={questionBlock.toolUse} />
+                        ) : pending ? (
+                          <QuestionPrompt
+                            questions={parseQuestionsFromInput(pending.questions)}
+                            onSubmit={respondToQuestion}
+                            requestId={pending.requestId}
+                          />
+                        ) : null}
+                      </div>
+                    </div>
+                    {after.length > 0 && (
+                      <MessageBubble
+                        message={{ ...msg, blocks: after, content: "" }}
+                        collapsedByDefault={false}
+                      />
+                    )}
+                  </div>
+                );
+              }
+            }
+
             return (
               <div key={msg.id} className="space-y-4">
-                <MessageBubble
-                  message={msg}
-                  collapsedByDefault={
-                    i > 0 && visibleMessages[i - 1].content === "__compacted__"
-                  }
-                />
-                {questionTools.map((tool) => (
-                  <div key={tool.id} className="flex w-full justify-start">
-                    <div className="max-w-[85%]">
-                      <QuestionCard tool={tool} />
-                    </div>
-                  </div>
-                ))}
+                <MessageBubble message={msg} collapsedByDefault={collapsedByDefault} />
               </div>
             );
           })}
-          {isResponding && pendingQuestions.length === 0 && pendingPermissions.length === 0 && (
-            <div className="flex items-center text-muted-foreground">
+          {isResponding && pendingPermissions.length === 0 && !pendingQuestions.some((q) => !q.answered) && (
+            <div className="flex items-center gap-2 text-muted-foreground">
               <Loader2 className="h-4 w-4 animate-spin" />
+              {rateLimitStatus && (
+                <span className="text-xs">Rate limited, retrying...</span>
+              )}
             </div>
           )}
           {pendingPermissions.map((p) => (
@@ -155,13 +188,20 @@ export function ChatView({ sessionId, cwd }: { sessionId: string; cwd?: string }
               onRespond={respondToPermission}
             />
           ))}
-          {pendingQuestions.map((q) => (
-            <QuestionPrompt
-              key={q.requestId}
-              questions={parseQuestionsFromInput(q.questions)}
-              onSubmit={respondToQuestion}
-              requestId={q.requestId}
-            />
+          {pendingQuestions.length > 0 && !visibleMessages.some((m) =>
+            m.role === "assistant" && (m.blocks || []).some(
+              (b) => b.type === "tool_use" && b.toolUse.name === "AskUserQuestion"
+            )
+          ) && pendingQuestions.map((q) => (
+            <div key={q.requestId} className="flex w-full justify-start">
+              <div className="max-w-[85%]">
+                <QuestionPrompt
+                  questions={parseQuestionsFromInput(q.questions)}
+                  onSubmit={respondToQuestion}
+                  requestId={q.requestId}
+                />
+              </div>
+            </div>
           ))}
           {modelPicker !== null && (
             <ModelPicker currentModel={modelPicker} onSelect={selectModel} />

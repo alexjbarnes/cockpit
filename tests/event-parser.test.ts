@@ -93,16 +93,19 @@ const RATE_LIMIT = JSON.stringify({
 });
 
 describe("EventParser", () => {
-  it("ignores system init events", () => {
+  it("forwards system init events as __system:: messages", () => {
     const parser = new EventParser();
     const events = parser.parseLine(SYSTEM_INIT);
-    expect(events).toEqual([]);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toEqual({ type: "system_message", text: "__system::init" });
   });
 
-  it("ignores rate limit events", () => {
+  it("parses rate_limit_event into rate_limit", () => {
     const parser = new EventParser();
     const events = parser.parseLine(RATE_LIMIT);
-    expect(events).toEqual([]);
+    expect(events).toHaveLength(1);
+    expect(events[0].type).toBe("rate_limit");
+    expect(events[0].rateLimitInfo).toEqual({ status: "allowed", retryAfterMs: undefined });
   });
 
   it("parses user tool_result events", () => {
@@ -183,11 +186,13 @@ describe("EventParser", () => {
       RESULT_SUCCESS,
     ].flatMap((line) => parser.parseLine(line));
 
-    expect(allEvents).toHaveLength(4);
-    expect(allEvents[0].type).toBe("tool_use_start");
-    expect(allEvents[1].type).toBe("tool_result");
-    expect(allEvents[2].type).toBe("text_delta");
-    expect(allEvents[3].type).toBe("message_done");
+    expect(allEvents).toHaveLength(6);
+    expect(allEvents[0].type).toBe("system_message");
+    expect(allEvents[1].type).toBe("tool_use_start");
+    expect(allEvents[2].type).toBe("rate_limit");
+    expect(allEvents[3].type).toBe("tool_result");
+    expect(allEvents[4].type).toBe("text_delta");
+    expect(allEvents[5].type).toBe("message_done");
   });
 
   it("handles result with empty content", () => {
@@ -204,6 +209,32 @@ describe("EventParser", () => {
     expect(events[0].message!.content).toBe("");
   });
 
+  it("emits __compact::start for system status compacting", () => {
+    const parser = new EventParser();
+    const line = JSON.stringify({
+      type: "system",
+      subtype: "status",
+      status: "compacting",
+      session_id: "abc-123",
+    });
+    const events = parser.parseLine(line);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toEqual({ type: "system_message", text: "__compact::start" });
+  });
+
+  it("forwards non-compacting status as __system::status", () => {
+    const parser = new EventParser();
+    const line = JSON.stringify({
+      type: "system",
+      subtype: "status",
+      status: null,
+      session_id: "abc-123",
+    });
+    const events = parser.parseLine(line);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toEqual({ type: "system_message", text: "__system::status" });
+  });
+
   it("handles assistant message with empty content array", () => {
     const parser = new EventParser();
     const line = JSON.stringify({
@@ -213,5 +244,139 @@ describe("EventParser", () => {
     });
     const events = parser.parseLine(line);
     expect(events).toEqual([]);
+  });
+
+  it("parses tool_progress events", () => {
+    const parser = new EventParser();
+    const line = JSON.stringify({
+      type: "tool_progress",
+      tool_use_id: "toolu_99",
+      content: "partial output...",
+    });
+    const events = parser.parseLine(line);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toEqual({
+      type: "tool_progress",
+      toolId: "toolu_99",
+      text: "partial output...",
+    });
+  });
+
+  it("returns empty for tool_progress without toolId or content", () => {
+    const parser = new EventParser();
+    expect(parser.parseLine(JSON.stringify({ type: "tool_progress" }))).toEqual([]);
+    expect(parser.parseLine(JSON.stringify({ type: "tool_progress", tool_use_id: "x" }))).toEqual([]);
+    expect(parser.parseLine(JSON.stringify({ type: "tool_progress", content: "y" }))).toEqual([]);
+  });
+
+  it("parses rate_limit_event with retry_after_ms", () => {
+    const parser = new EventParser();
+    const line = JSON.stringify({
+      type: "rate_limit_event",
+      rate_limit_info: { status: "rate_limited", retry_after_ms: 5000 },
+    });
+    const events = parser.parseLine(line);
+    expect(events).toHaveLength(1);
+    expect(events[0].type).toBe("rate_limit");
+    expect(events[0].rateLimitInfo).toEqual({ status: "rate_limited", retryAfterMs: 5000 });
+  });
+
+  it("returns empty for rate_limit_event without info", () => {
+    const parser = new EventParser();
+    const events = parser.parseLine(JSON.stringify({ type: "rate_limit_event" }));
+    expect(events).toEqual([]);
+  });
+
+  it("parses prompt_suggestion events", () => {
+    const parser = new EventParser();
+    const line = JSON.stringify({
+      type: "prompt_suggestion",
+      suggestions: ["fix the bug", "run tests"],
+    });
+    const events = parser.parseLine(line);
+    expect(events).toHaveLength(1);
+    expect(events[0].type).toBe("prompt_suggestion");
+    expect(events[0].suggestions).toEqual(["fix the bug", "run tests"]);
+  });
+
+  it("parses prompt_suggestion with prompt_suggestions key", () => {
+    const parser = new EventParser();
+    const line = JSON.stringify({
+      type: "prompt_suggestion",
+      prompt_suggestions: ["option a"],
+    });
+    const events = parser.parseLine(line);
+    expect(events).toHaveLength(1);
+    expect(events[0].suggestions).toEqual(["option a"]);
+  });
+
+  it("returns empty for prompt_suggestion with no suggestions", () => {
+    const parser = new EventParser();
+    expect(parser.parseLine(JSON.stringify({ type: "prompt_suggestion" }))).toEqual([]);
+    expect(parser.parseLine(JSON.stringify({ type: "prompt_suggestion", suggestions: [] }))).toEqual([]);
+  });
+
+  it("parses auth_status as system message", () => {
+    const parser = new EventParser();
+    const line = JSON.stringify({ type: "auth_status", status: "authenticated" });
+    const events = parser.parseLine(line);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toEqual({ type: "system_message", text: "__auth::authenticated" });
+  });
+
+  it("parses auth_status with missing status", () => {
+    const parser = new EventParser();
+    const events = parser.parseLine(JSON.stringify({ type: "auth_status" }));
+    expect(events).toHaveLength(1);
+    expect(events[0]).toEqual({ type: "system_message", text: "__auth::unknown" });
+  });
+
+  it("drops tool_use_summary events", () => {
+    const parser = new EventParser();
+    const events = parser.parseLine(JSON.stringify({ type: "tool_use_summary", summary: "did stuff" }));
+    expect(events).toEqual([]);
+  });
+
+  it("drops stream_event events", () => {
+    const parser = new EventParser();
+    const events = parser.parseLine(JSON.stringify({ type: "stream_event", data: {} }));
+    expect(events).toEqual([]);
+  });
+
+  it("refines hook_started subtype", () => {
+    const parser = new EventParser();
+    const line = JSON.stringify({ type: "system", subtype: "hook_started", hook_name: "pre-commit" });
+    const events = parser.parseLine(line);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toEqual({ type: "system_message", text: "__hook::started::pre-commit" });
+  });
+
+  it("refines hook_progress subtype", () => {
+    const parser = new EventParser();
+    const line = JSON.stringify({ type: "system", subtype: "hook_progress", content: "running checks" });
+    const events = parser.parseLine(line);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toEqual({ type: "system_message", text: "__hook::progress::running checks" });
+  });
+
+  it("refines hook_response subtype", () => {
+    const parser = new EventParser();
+    const line = JSON.stringify({ type: "system", subtype: "hook_response" });
+    const events = parser.parseLine(line);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toEqual({ type: "system_message", text: "__hook::done" });
+  });
+
+  it("refines task subtypes", () => {
+    const parser = new EventParser();
+    for (const [subtype, expected] of [
+      ["task_started", "__task::started"],
+      ["task_progress", "__task::progress"],
+      ["task_notification", "__task::notification"],
+    ] as const) {
+      const events = parser.parseLine(JSON.stringify({ type: "system", subtype }));
+      expect(events).toHaveLength(1);
+      expect(events[0]).toEqual({ type: "system_message", text: expected });
+    }
   });
 });
