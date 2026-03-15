@@ -1,7 +1,7 @@
 "use client";
 
-import { useMemo, useState, useCallback } from "react";
-import { MessageCircleQuestion, Check, Circle, CircleDot } from "lucide-react";
+import { useMemo, useState, useCallback, useRef, useEffect } from "react";
+import { MessageCircleQuestion, Check, Circle, Pencil } from "lucide-react";
 import type { ToolUse } from "@/types";
 
 interface QuestionOption {
@@ -46,6 +46,7 @@ export function QuestionCard({ tool }: { tool: ToolUse }) {
     <div className="rounded-lg border border-border bg-background/50 p-3 space-y-3">
       {questions.map((q, qi) => {
         const selected = answers.get(q.question);
+        const isOther = selected && !q.options.some((o) => o.label === selected);
         return (
           <div key={qi} className="space-y-2">
             <div className="text-sm font-medium flex items-center gap-2">
@@ -78,6 +79,14 @@ export function QuestionCard({ tool }: { tool: ToolUse }) {
                   </div>
                 );
               })}
+              {isOther && (
+                <div className="flex w-full items-start gap-2.5 rounded-md px-2.5 py-2 text-xs bg-primary/10">
+                  <Pencil className="h-3.5 w-3.5 shrink-0 mt-0.5 text-primary" />
+                  <div className="min-w-0">
+                    <div className="font-medium text-foreground">{selected}</div>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         );
@@ -93,9 +102,13 @@ interface QuestionPromptProps {
   onSubmit: (requestId: string, answers: Record<string, string>) => void;
 }
 
+const OTHER_LABEL = "__other__";
+
 export function QuestionPrompt({ questions, requestId, onSubmit }: QuestionPromptProps) {
   const [selections, setSelections] = useState<Record<string, string>>({});
+  const [otherTexts, setOtherTexts] = useState<Record<string, string>>({});
   const [submitted, setSubmitted] = useState(false);
+  const otherInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
 
   const toggleSelection = useCallback((questionText: string, label: string) => {
     if (submitted) return;
@@ -105,19 +118,39 @@ export function QuestionPrompt({ questions, requestId, onSubmit }: QuestionPromp
     }));
   }, [submitted]);
 
-  const allAnswered = questions.every((q) => selections[q.question]);
+  const selectOther = useCallback((questionText: string) => {
+    if (submitted) return;
+    setSelections((prev) => ({
+      ...prev,
+      [questionText]: OTHER_LABEL,
+    }));
+    setTimeout(() => otherInputRefs.current[questionText]?.focus(), 0);
+  }, [submitted]);
+
+  const allAnswered = questions.every((q) => {
+    const sel = selections[q.question];
+    if (!sel) return false;
+    if (sel === OTHER_LABEL) return !!otherTexts[q.question]?.trim();
+    return true;
+  });
 
   const handleSubmit = useCallback(() => {
     if (!allAnswered || submitted) return;
     setSubmitted(true);
-    onSubmit(requestId, selections);
-  }, [allAnswered, submitted, requestId, selections, onSubmit]);
+    const answers: Record<string, string> = {};
+    for (const q of questions) {
+      const sel = selections[q.question];
+      answers[q.question] = sel === OTHER_LABEL ? otherTexts[q.question] : sel;
+    }
+    onSubmit(requestId, answers);
+  }, [allAnswered, submitted, requestId, selections, otherTexts, questions, onSubmit]);
 
   return (
     <div className="rounded-lg border border-border bg-card p-4">
       <div className="space-y-3">
         {questions.map((q, qi) => {
           const selected = selections[q.question];
+          const isOtherSelected = selected === OTHER_LABEL;
           return (
             <div key={qi} className="space-y-2">
               {q.header && (
@@ -159,6 +192,48 @@ export function QuestionPrompt({ questions, requestId, onSubmit }: QuestionPromp
                     </El>
                   );
                 })}
+                {!submitted ? (
+                  <button
+                    onClick={() => selectOther(q.question)}
+                    className={`flex w-full items-start gap-2.5 rounded-md px-2.5 py-2 text-xs text-left transition-colors ${
+                      isOtherSelected
+                        ? "bg-primary/10"
+                        : "hover:bg-muted/50 cursor-pointer"
+                    }`}
+                  >
+                    {isOtherSelected ? (
+                      <Check className="h-3.5 w-3.5 shrink-0 mt-0.5 text-primary" />
+                    ) : (
+                      <Circle className="h-3.5 w-3.5 shrink-0 mt-0.5 text-muted-foreground/40" />
+                    )}
+                    <div className="min-w-0 flex-1">
+                      <div className={isOtherSelected ? "font-medium text-foreground" : "text-foreground"}>
+                        Other
+                      </div>
+                      {isOtherSelected && (
+                        <input
+                          ref={(el) => { otherInputRefs.current[q.question] = el; }}
+                          type="text"
+                          value={otherTexts[q.question] || ""}
+                          onChange={(e) => setOtherTexts((prev) => ({ ...prev, [q.question]: e.target.value }))}
+                          onKeyDown={(e) => { if (e.key === "Enter" && allAnswered) handleSubmit(); }}
+                          onClick={(e) => e.stopPropagation()}
+                          placeholder="Tell Claude what to do instead..."
+                          className="mt-1 w-full rounded border border-border bg-background px-2 py-1 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                        />
+                      )}
+                    </div>
+                  </button>
+                ) : isOtherSelected && (
+                  <div className="flex w-full items-start gap-2.5 rounded-md px-2.5 py-2 text-xs bg-primary/10">
+                    <Check className="h-3.5 w-3.5 shrink-0 mt-0.5 text-primary" />
+                    <div className="min-w-0">
+                      <div className="font-medium text-foreground">
+                        {otherTexts[q.question]}
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           );
