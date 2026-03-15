@@ -3,6 +3,7 @@
 import { useEffect, useLayoutEffect, useRef, useCallback, useMemo, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { useSession } from "@/hooks/use-session";
+import { useWebSocket } from "@/hooks/use-websocket";
 import { useSettings } from "@/hooks/use-settings";
 import { MessageBubble } from "./message-bubble";
 import { InputArea } from "./input-area";
@@ -15,10 +16,10 @@ import { useShell } from "./app-shell";
 const INITIAL_WINDOW = 50;
 const WINDOW_INCREMENT = 30;
 
-export function ChatView({ sessionId, cwd }: { sessionId: string; cwd?: string }) {
-  const { messages, historyLoaded, isResponding, pendingPermissions, pendingQuestions, modelPicker, bypassActive, thinkingLevel, contextUsage, rateLimitStatus, backgroundTasks, todos, sendMessage, interrupt, respondToPermission, respondToQuestion, selectModel, setBypassAll, setThinkingLevel } = useSession(sessionId, cwd);
+export function ChatView({ sessionId, cwd, initialName }: { sessionId: string; cwd?: string; initialName?: string }) {
+  const { messages, historyLoaded, isResponding, pendingPermissions, pendingQuestions, modelPicker, bypassActive, thinkingLevel, contextUsage, rateLimitStatus, sessionName, initData, hasQueuedMessage, backgroundTasks, todos, sendMessage, interrupt, respondToPermission, respondToQuestion, selectModel, setBypassAll, setThinkingLevel, cancelQueuedMessage } = useSession(sessionId, cwd);
   const { settings } = useSettings();
-  const { setBackgroundTasks, setTodos } = useShell();
+  const { setHeader, setBackgroundTasks, setTodos } = useShell();
   const scrollRef = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);
   const ignoreScrollUntil = useRef(0);
@@ -48,6 +49,17 @@ export function ChatView({ sessionId, cwd }: { sessionId: string; cwd?: string }
   useEffect(() => {
     setRenderWindow(INITIAL_WINDOW);
   }, [sessionId]);
+
+  // Update header with session name
+  const { send: wsSend } = useWebSocket();
+  const handleRename = useCallback((name: string) => {
+    wsSend({ type: "message:send", sessionId, text: `/rename ${name}` });
+  }, [wsSend, sessionId]);
+
+  useEffect(() => {
+    const title = sessionName || initialName || cwd?.split("/").pop() || "Session";
+    setHeader({ title, showBack: true, onRename: handleRename });
+  }, [sessionName, initialName, cwd, setHeader, handleRename]);
 
   // Sync background tasks and todos to shell header
   useEffect(() => {
@@ -237,6 +249,9 @@ export function ChatView({ sessionId, cwd }: { sessionId: string; cwd?: string }
           dismissKeyboard={settings.dismissKeyboardOnSend}
           cwd={cwd}
           onCompact={handleCompact}
+          initData={initData}
+          hasQueuedMessage={hasQueuedMessage}
+          onCancelQueued={cancelQueuedMessage}
         />
       </div>
     </>

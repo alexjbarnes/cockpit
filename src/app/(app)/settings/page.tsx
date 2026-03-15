@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { usePageHeader } from "@/components/app-shell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { useSettings, type DiffStyle } from "@/hooks/use-settings";
+import { useSettings, type DiffStyle, type ThinkingLevel } from "@/hooks/use-settings";
 import { ChevronRight, RefreshCw, Download } from "lucide-react";
 
 type Theme = "light" | "dark" | "system";
@@ -19,6 +19,12 @@ const themeOptions: { value: Theme; label: string }[] = [
   { value: "light", label: "Light" },
   { value: "dark", label: "Dark" },
   { value: "system", label: "System" },
+];
+
+const thinkingOptions: { value: ThinkingLevel; label: string }[] = [
+  { value: "low", label: "Low" },
+  { value: "medium", label: "Medium" },
+  { value: "high", label: "High" },
 ];
 
 function getSystemTheme(): "light" | "dark" {
@@ -154,6 +160,45 @@ export default function SettingsPage() {
       </Card>
       <Card>
         <CardHeader>
+          <CardTitle className="text-base">Session defaults</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="flex items-center justify-between px-2 py-1">
+            <span className="text-sm">Thinking level</span>
+            <div className="flex gap-1">
+              {thinkingOptions.map((opt) => (
+                <Button
+                  key={opt.value}
+                  variant={settings.thinkingLevel === opt.value ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => updateSetting("thinkingLevel", opt.value)}
+                >
+                  {opt.label}
+                </Button>
+              ))}
+            </div>
+          </div>
+          <button
+            onClick={() => updateSetting("bypassAllPermissions", !settings.bypassAllPermissions)}
+            className="flex w-full items-center justify-between rounded px-2 py-2 text-sm hover:bg-muted transition-colors"
+          >
+            <span>Bypass all permissions</span>
+            <span
+              className={`inline-flex h-7 w-12 items-center rounded-full transition-colors ${
+                settings.bypassAllPermissions ? "bg-orange-500" : "bg-muted-foreground/30"
+              }`}
+            >
+              <span
+                className={`inline-block h-5 w-5 rounded-full bg-white shadow transition-transform ${
+                  settings.bypassAllPermissions ? "translate-x-6" : "translate-x-1"
+                }`}
+              />
+            </span>
+          </button>
+        </CardContent>
+      </Card>
+      <Card>
+        <CardHeader>
           <CardTitle className="text-base">Theme</CardTitle>
         </CardHeader>
         <CardContent>
@@ -187,6 +232,29 @@ export default function SettingsPage() {
                 {opt.label}
               </Button>
             ))}
+          </div>
+        </CardContent>
+      </Card>
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Thinking blocks</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="flex gap-2">
+            <Button
+              variant={!settings.thinkingExpanded ? "default" : "outline"}
+              size="sm"
+              onClick={() => updateSetting("thinkingExpanded", false)}
+            >
+              Collapsed
+            </Button>
+            <Button
+              variant={settings.thinkingExpanded ? "default" : "outline"}
+              size="sm"
+              onClick={() => updateSetting("thinkingExpanded", true)}
+            >
+              Expanded
+            </Button>
           </div>
         </CardContent>
       </Card>

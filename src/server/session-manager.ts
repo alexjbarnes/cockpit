@@ -2,10 +2,12 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { type Writable } from "node:stream";
 import { EventEmitter } from "node:events";
 import { v4 as uuidv4 } from "uuid";
-import type { SessionInfo, ChatMessage, ToolUse, ContentBlock, ThinkingLevel, ContextUsage, TodoItem, ImageAttachment, DocumentAttachment } from "@/types";
+import type { SessionInfo, ChatMessage, ToolUse, ContentBlock, ThinkingLevel, ContextUsage, TodoItem, ImageAttachment, DocumentAttachment, InitData } from "@/types";
 import { EventParser, type ParsedEvent } from "./event-parser";
 import { loadTranscript, transcriptExists } from "./transcript";
 import { logRawLine } from "./debug-logger";
+import { getSessionPrefs, setSessionPrefs } from "./session-prefs";
+import { getDefaults } from "./defaults";
 
 export interface SessionEvents {
   event: [sessionId: string, event: ParsedEvent];
@@ -25,6 +27,7 @@ interface Session {
   thinkingLevel: ThinkingLevel;
   contextUsage: ContextUsage | null;
   todoItems: TodoItem[];
+  initData?: InitData;
 }
 
 export class SessionManager {
@@ -33,6 +36,7 @@ export class SessionManager {
   createSession(cwd: string, name?: string): SessionInfo {
     const id = uuidv4();
     const now = Date.now();
+    const defaults = getDefaults();
     const info: SessionInfo = {
       id,
       name: name || cwd.split("/").pop() || cwd,
@@ -49,9 +53,9 @@ export class SessionManager {
       emitter: new EventEmitter(),
       hasSpawnedBefore: false,
       allowedTools: new Set(),
-      bypassAllPermissions: false,
+      bypassAllPermissions: defaults.bypassAllPermissions,
       compacting: false,
-      thinkingLevel: "high",
+      thinkingLevel: defaults.thinkingLevel,
       contextUsage: null,
       todoItems: [],
     });
@@ -62,11 +66,13 @@ export class SessionManager {
   ensureSession(id: string, cwd: string): Session {
     let session = this.sessions.get(id);
     if (!session) {
+      const prefs = getSessionPrefs(id);
+      const defaults = getDefaults();
       const now = Date.now();
       session = {
         info: {
           id,
-          name: cwd.split("/").pop() || cwd,
+          name: prefs?.name || cwd.split("/").pop() || cwd,
           cwd,
           createdAt: now,
           lastActiveAt: now,
@@ -76,12 +82,12 @@ export class SessionManager {
         stdin: null,
         emitter: new EventEmitter(),
         hasSpawnedBefore: true,
-        allowedTools: new Set(),
-        bypassAllPermissions: false,
-      compacting: false,
-      thinkingLevel: "high",
-      contextUsage: null,
-      todoItems: [],
+        allowedTools: new Set(prefs?.allowedTools || []),
+        bypassAllPermissions: prefs?.bypassAllPermissions ?? defaults.bypassAllPermissions,
+        compacting: false,
+        thinkingLevel: prefs?.thinkingLevel || defaults.thinkingLevel,
+        contextUsage: null,
+        todoItems: [],
       };
       this.sessions.set(id, session);
     }
@@ -92,6 +98,13 @@ export class SessionManager {
     const session = this.sessions.get(id);
     if (!session) return null;
     const messages = await loadTranscript(id, session.info.cwd);
+    const defaultName = session.info.cwd.split("/").pop() || session.info.cwd;
+    if (session.info.name === defaultName && messages.length > 0) {
+      const firstUser = messages.find((m) => m.role === "user" && m.content && !m.content.startsWith("[") && !m.content.startsWith("<"));
+      if (firstUser) {
+        session.info.name = firstUser.content.slice(0, 120);
+      }
+    }
     return { info: session.info, messages };
   }
 
@@ -99,6 +112,14 @@ export class SessionManager {
     this.ensureSession(id, cwd);
     const messages = await loadTranscript(id, cwd);
     const session = this.sessions.get(id)!;
+    // Derive title from first user message if name is still the default
+    const defaultName = cwd.split("/").pop() || cwd;
+    if (session.info.name === defaultName && messages.length > 0) {
+      const firstUser = messages.find((m) => m.role === "user" && m.content && !m.content.startsWith("[") && !m.content.startsWith("<"));
+      if (firstUser) {
+        session.info.name = firstUser.content.slice(0, 120);
+      }
+    }
     return { info: session.info, messages };
   }
 
@@ -106,6 +127,10 @@ export class SessionManager {
     return Array.from(this.sessions.values())
       .filter((s) => s.process !== null)
       .map((s) => s.info);
+  }
+
+  listKnownSessions(): SessionInfo[] {
+    return Array.from(this.sessions.values()).map((s) => s.info);
   }
 
   destroySession(id: string): boolean {
@@ -192,13 +217,17 @@ export class SessionManager {
 
   allowToolAlways(sessionId: string, toolName: string): void {
     const session = this.sessions.get(sessionId);
-    if (session) session.allowedTools.add(toolName);
+    if (session) {
+      session.allowedTools.add(toolName);
+      setSessionPrefs(sessionId, { allowedTools: Array.from(session.allowedTools) });
+    }
   }
 
   setBypassAllPermissions(sessionId: string): void {
     const session = this.sessions.get(sessionId);
     if (!session || session.bypassAllPermissions) return;
     session.bypassAllPermissions = true;
+    setSessionPrefs(sessionId, { bypassAllPermissions: true });
     this.emitSystem(session, sessionId, "__bypass_state::on");
   }
 
@@ -206,6 +235,7 @@ export class SessionManager {
     const session = this.sessions.get(sessionId);
     if (!session || !session.bypassAllPermissions) return;
     session.bypassAllPermissions = false;
+    setSessionPrefs(sessionId, { bypassAllPermissions: false });
     this.emitSystem(session, sessionId, "__bypass_state::off");
   }
 
@@ -224,6 +254,7 @@ export class SessionManager {
     const session = this.sessions.get(sessionId);
     if (!session || session.thinkingLevel === level) return;
     session.thinkingLevel = level;
+    setSessionPrefs(sessionId, { thinkingLevel: level });
     // Kill current process so next message spawns with new env var
     this.killProcess(session);
     session.info.status = "idle";
@@ -263,6 +294,28 @@ export class SessionManager {
     const handler = (_sessionId: string, todos: TodoItem[]) => listener(todos);
     session.emitter.on("todos", handler);
     return () => session.emitter.off("todos", handler);
+  }
+
+  getInitData(sessionId: string): InitData | undefined {
+    return this.sessions.get(sessionId)?.initData;
+  }
+
+  setInitData(sessionId: string, data: InitData): void {
+    const session = this.sessions.get(sessionId);
+    if (!session) return;
+    session.initData = data;
+    session.emitter.emit("init", sessionId, data);
+  }
+
+  onInit(
+    id: string,
+    listener: (data: InitData) => void
+  ): (() => void) | null {
+    const session = this.sessions.get(id);
+    if (!session) return null;
+    const handler = (_sessionId: string, data: InitData) => listener(data);
+    session.emitter.on("init", handler);
+    return () => session.emitter.off("init", handler);
   }
 
   private handleTodoWrite(session: Session, sessionId: string, toolInput: string): void {
@@ -406,6 +459,7 @@ export class SessionManager {
           return true;
         }
         session.info.name = args;
+        setSessionPrefs(sessionId, { name: args });
         this.emitSystem(session, sessionId, `Session renamed to "${args}"`);
         this.emitInfoUpdated(session, sessionId);
         return true;
@@ -460,15 +514,21 @@ export class SessionManager {
       }
     }
 
+    const content = this.buildContent(text, images, documents);
+
+    // "btw" nudge: if already running and process has stdin, inject the message mid-stream
     if (session.info.status === "running") {
+      if (session.process && session.stdin) {
+        const userInput = { type: "user", message: { role: "user", content } };
+        session.stdin.write(JSON.stringify(userInput) + "\n");
+        return true;
+      }
       session.emitter.emit("error", sessionId, "A message is already being processed");
       return false;
     }
 
     session.info.status = "running";
     session.emitter.emit("status", sessionId, "running");
-
-    const content = this.buildContent(text, images, documents);
 
     if (session.process && session.stdin) {
       const userInput = { type: "user", message: { role: "user", content } };

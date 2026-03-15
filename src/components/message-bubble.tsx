@@ -3,6 +3,7 @@
 import { useState, memo } from "react";
 import type { ChatMessage } from "@/types";
 import { ToolCard } from "./tool-card";
+import { useSettings } from "@/hooks/use-settings";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
@@ -61,7 +62,7 @@ export const MessageBubble = memo(function MessageBubble({ message, collapsedByD
       <div className="flex w-full justify-start">
         <button
           onClick={() => setCollapsed(false)}
-          className="max-w-[85%] rounded-lg px-4 py-2 bg-muted text-foreground text-left"
+          className="max-w-[85%] rounded-lg px-4 py-2 bg-muted text-foreground text-left overflow-hidden"
         >
           <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
             <ChevronRight className="h-3 w-3" />
@@ -76,7 +77,7 @@ export const MessageBubble = memo(function MessageBubble({ message, collapsedByD
     <div className={cn("flex w-full", isUser && !collapsedByDefault ? "justify-end" : "justify-start")}>
       <div
         className={cn(
-          "max-w-[85%] rounded-lg px-4 py-2",
+          "max-w-[85%] rounded-lg px-4 py-2 overflow-hidden",
           isUser && !collapsedByDefault
             ? "bg-primary text-primary-foreground"
             : "bg-muted text-foreground"
@@ -134,7 +135,7 @@ export const MessageBubble = memo(function MessageBubble({ message, collapsedByD
               ) : (
                 <div
                   key={`text-${i}`}
-                  className="prose prose-sm max-w-none dark:prose-invert [&_pre]:overflow-x-auto [&_pre]:rounded [&_pre]:bg-black/10 [&_pre]:p-3 [&_code]:text-xs"
+                  className="prose prose-sm max-w-none dark:prose-invert [&_pre]:overflow-x-auto [&_pre]:rounded [&_pre]:bg-black/10 [&_pre]:p-3 [&_code]:text-xs [&_table]:block [&_table]:overflow-x-auto"
                 >
                   <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
                     {stripCliXml(block.text)}
@@ -195,12 +196,14 @@ function TextFileBlock({ name, content }: { name: string; content: string }) {
 }
 
 function ThinkingBlock({ text }: { text: string }) {
-  const [expanded, setExpanded] = useState(false);
+  const { settings } = useSettings();
+  const [expanded, setExpanded] = useState<boolean | null>(null);
+  const isExpanded = expanded ?? settings.thinkingExpanded;
 
   return (
     <div className="rounded border border-purple-500/20 bg-purple-500/5">
       <button
-        onClick={() => setExpanded(!expanded)}
+        onClick={() => setExpanded(!isExpanded)}
         className="flex w-full items-center gap-1.5 px-3 py-1.5 text-xs text-purple-400 hover:text-purple-300"
       >
         <Brain className="h-3 w-3" />
@@ -208,13 +211,13 @@ function ThinkingBlock({ text }: { text: string }) {
         <span className="text-muted-foreground ml-1">
           {text.length.toLocaleString()} chars
         </span>
-        {expanded ? (
+        {isExpanded ? (
           <ChevronDown className="h-3 w-3 ml-auto" />
         ) : (
           <ChevronRight className="h-3 w-3 ml-auto" />
         )}
       </button>
-      {expanded && (
+      {isExpanded && (
         <div className="border-t border-purple-500/20 px-3 py-2 text-xs text-muted-foreground whitespace-pre-wrap max-h-60 overflow-y-auto">
           {text}
         </div>

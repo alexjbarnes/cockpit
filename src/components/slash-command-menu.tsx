@@ -3,12 +3,18 @@
 import { useEffect, useRef, useState } from "react";
 import { slashCommands, type SlashCommand } from "@/lib/commands";
 
+// Commands handled client-side by Aperture, always included
+const apertureCommands: SlashCommand[] = [
+  { command: "/btw", description: "Nudge Claude while it's working" },
+];
+
 interface SlashCommandMenuProps {
   query: string;
   selectedIndex: number;
   onSelect: (command: SlashCommand) => void;
   cwd?: string;
   onItemsChange?: (items: SlashCommand[]) => void;
+  initCommands?: string[];
 }
 
 export function SlashCommandMenu({
@@ -17,11 +23,14 @@ export function SlashCommandMenu({
   onSelect,
   cwd,
   onItemsChange,
+  initCommands,
 }: SlashCommandMenuProps) {
   const listRef = useRef<HTMLDivElement>(null);
   const [custom, setCustom] = useState<SlashCommand[]>([]);
 
   useEffect(() => {
+    if (initCommands) return;
+
     const params = new URLSearchParams();
     if (cwd) params.set("cwd", cwd);
 
@@ -58,15 +67,29 @@ export function SlashCommandMenu({
       }
       setCustom(merged);
     });
-  }, [cwd]);
+  }, [cwd, initCommands]);
 
-  const builtinNames = new Set(slashCommands.map((c) => c.command));
-  const merged = [
-    ...slashCommands,
-    ...custom.filter((s) => !builtinNames.has(s.command)),
+  const cliCommands = initCommands
+    ? initCommands.map((name) => ({
+        command: name.startsWith("/") ? name : "/" + name,
+        description: "",
+      }))
+    : (() => {
+        const builtinNames = new Set(slashCommands.map((c) => c.command));
+        return [
+          ...slashCommands,
+          ...custom.filter((s) => !builtinNames.has(s.command)),
+        ];
+      })();
+
+  // Always include Aperture-local commands
+  const cliNames = new Set(cliCommands.map((c) => c.command));
+  const allCommands = [
+    ...cliCommands,
+    ...apertureCommands.filter((c) => !cliNames.has(c.command)),
   ];
 
-  const filtered = merged.filter((cmd) =>
+  const filtered = allCommands.filter((cmd) =>
     cmd.command.startsWith("/" + query)
   );
 

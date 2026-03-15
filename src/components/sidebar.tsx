@@ -191,7 +191,9 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
     clearUnreadSession(session.id);
     setUnread(getUnreadSessions());
     close();
-    router.push(`/sessions/${session.id}?cwd=${encodeURIComponent(session.cwd)}`);
+    const params = new URLSearchParams({ cwd: session.cwd });
+    if (session.name) params.set("name", session.name);
+    router.push(`/sessions/${session.id}?${params}`);
   };
 
   return (

@@ -89,6 +89,12 @@ export function createWebSocketHandler(
           });
 
           send(ws, {
+            type: "session:info_updated",
+            sessionId: msg.sessionId,
+            info: session.info,
+          });
+
+          send(ws, {
             type: "session:status",
             sessionId: msg.sessionId,
             status: session.info.status,
@@ -233,6 +239,27 @@ export function createWebSocketHandler(
               todos: currentTodos,
             });
           }
+
+          const initData = sessionManager.getInitData(msg.sessionId);
+          if (initData) {
+            send(ws, {
+              type: "session:init",
+              sessionId: msg.sessionId,
+              data: initData,
+            });
+          }
+
+          const unsubInit = sessionManager.onInit(
+            msg.sessionId,
+            (data) => {
+              send(ws, {
+                type: "session:init",
+                sessionId: msg.sessionId,
+                data,
+              });
+            }
+          );
+          if (unsubInit) cleanups.push(unsubInit);
           });
           break;
         }
@@ -419,6 +446,17 @@ function handleParsedEvent(
           type: "session:suggestions",
           sessionId,
           suggestions: event.suggestions,
+        });
+      }
+      break;
+
+    case "init":
+      if (event.initData) {
+        sessionManager.setInitData(sessionId, event.initData);
+        send(ws, {
+          type: "session:init",
+          sessionId,
+          data: event.initData,
         });
       }
       break;

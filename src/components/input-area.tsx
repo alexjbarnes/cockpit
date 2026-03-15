@@ -7,7 +7,7 @@ import { useWebSocket } from "@/hooks/use-websocket";
 import { SlashCommandMenu } from "@/components/slash-command-menu";
 import { MentionMenu, type MentionItem } from "@/components/mention-menu";
 import type { SlashCommand } from "@/lib/commands";
-import type { ThinkingLevel, ContextUsage, ImageAttachment, DocumentAttachment, TextFileAttachment } from "@/types";
+import type { ThinkingLevel, ContextUsage, ImageAttachment, DocumentAttachment, TextFileAttachment, InitData } from "@/types";
 import { ContextIndicator } from "./context-indicator";
 
 const thinkingLevels: { value: ThinkingLevel; label: string }[] = [
@@ -119,6 +119,9 @@ interface InputAreaProps {
   dismissKeyboard: boolean;
   cwd?: string;
   onCompact?: () => void;
+  initData?: InitData | null;
+  hasQueuedMessage?: boolean;
+  onCancelQueued?: () => string | null;
 }
 
 function getMentionContext(text: string, cursorPos: number): { active: boolean; query: string; start: number } {
@@ -128,7 +131,7 @@ function getMentionContext(text: string, cursorPos: number): { active: boolean; 
   return { active: true, query: match[1], start: cursorPos - match[0].length };
 }
 
-export function InputArea({ onSend, onInterrupt, isResponding, bypassActive, onSetBypass, thinkingLevel, onSetThinking, contextUsage, dismissKeyboard, cwd, onCompact }: InputAreaProps) {
+export function InputArea({ onSend, onInterrupt, isResponding, bypassActive, onSetBypass, thinkingLevel, onSetThinking, contextUsage, dismissKeyboard, cwd, onCompact, initData, hasQueuedMessage, onCancelQueued }: InputAreaProps) {
   const { connected } = useWebSocket();
   const [text, setText] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -261,12 +264,19 @@ export function InputArea({ onSend, onInterrupt, isResponding, bypassActive, onS
         }
       }
 
+      if (e.key === "Escape" && hasQueuedMessage && onCancelQueued) {
+        e.preventDefault();
+        const restored = onCancelQueued();
+        if (restored) setText(restored);
+        return;
+      }
+
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
         handleSend();
       }
     },
-    [showMenu, showMention, query, selectedIndex, mentionSelectedIndex, handleSend, handleSelectCommand, handleSelectMention, text, mention.start, cursorPos]
+    [showMenu, showMention, query, selectedIndex, mentionSelectedIndex, handleSend, handleSelectCommand, handleSelectMention, text, mention.start, cursorPos, hasQueuedMessage, onCancelQueued]
   );
 
   const handleInput = useCallback(() => {
@@ -464,6 +474,21 @@ export function InputArea({ onSend, onInterrupt, isResponding, bypassActive, onS
             ))}
           </div>
         )}
+        {hasQueuedMessage && onCancelQueued && (
+          <div className="mb-1 flex items-center gap-2 px-9">
+            <span className="text-xs text-muted-foreground">Message queued - will send when finished</span>
+            <button
+              onClick={() => {
+                const restored = onCancelQueued();
+                if (restored) setText(restored);
+                textareaRef.current?.focus();
+              }}
+              className="rounded p-0.5 text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+            >
+              <X className="h-3 w-3" />
+            </button>
+          </div>
+        )}
         <div className="relative flex items-stretch gap-1">
           {showMenu && (
             <SlashCommandMenu
@@ -472,6 +497,7 @@ export function InputArea({ onSend, onInterrupt, isResponding, bypassActive, onS
               onSelect={handleSelectCommand}
               cwd={cwd}
               onItemsChange={(items) => { slashItemsRef.current = items; }}
+              initCommands={initData?.slashCommands}
             />
           )}
           {showMention && cwd && (
@@ -510,14 +536,12 @@ export function InputArea({ onSend, onInterrupt, isResponding, bypassActive, onS
               onKeyDown={handleKeyDown}
               onInput={handleInput}
               onPaste={handlePaste}
-              placeholder="Send a message..."
+              placeholder={hasQueuedMessage ? "Message queued (Esc to cancel)" : isResponding ? "Use /btw to nudge, or type to queue..." : "Send a message..."}
               rows={2}
               className="w-full resize-none rounded-md border border-input bg-background px-3 py-2 pb-7 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              disabled={isResponding}
             />
             <button
               onClick={handleFilePick}
-              disabled={isResponding}
               title="Attach file"
               className="absolute bottom-2.5 right-1.5 rounded p-1 text-muted-foreground hover:text-foreground hover:bg-muted transition-colors disabled:opacity-50"
             >
@@ -525,13 +549,13 @@ export function InputArea({ onSend, onInterrupt, isResponding, bypassActive, onS
             </button>
           </div>
           <div className="flex flex-col items-center justify-center w-8 shrink-0">
-            {isResponding ? (
-              <Button size="icon" variant="destructive" className="h-8 w-8" onClick={onInterrupt}>
-                <Square className="h-4 w-4" />
-              </Button>
-            ) : !connected ? (
+            {!connected ? (
               <Button size="icon" variant="ghost" className="h-8 w-8" disabled title="Connecting...">
                 <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+              </Button>
+            ) : isResponding && !text.trim() && !hasAttachments ? (
+              <Button size="icon" variant="destructive" className="h-8 w-8" onClick={onInterrupt}>
+                <Square className="h-4 w-4" />
               </Button>
             ) : (
               <Button size="icon" className="h-8 w-8" onClick={handleSend} disabled={!text.trim() && !hasAttachments}>

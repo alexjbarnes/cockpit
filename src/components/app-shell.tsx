@@ -24,6 +24,7 @@ import type { BackgroundTask, TodoItem } from "@/types";
 interface HeaderConfig {
   title: string;
   showBack: boolean;
+  onRename?: (name: string) => void;
 }
 
 interface ShellContextValue {
@@ -63,6 +64,54 @@ export function useShellCwd(cwd: string | undefined) {
     setCwd(cwd);
     return () => setCwd(undefined);
   }, [cwd, setCwd]);
+}
+
+function EditableTitle({ title, onRename }: { title: string; onRename?: (name: string) => void }) {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(title);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => { setValue(title); }, [title]);
+
+  useEffect(() => {
+    if (editing) inputRef.current?.select();
+  }, [editing]);
+
+  if (!onRename) {
+    return <span className="text-sm font-bold truncate">{title}</span>;
+  }
+
+  if (!editing) {
+    return (
+      <button
+        onClick={() => setEditing(true)}
+        className="text-sm font-bold truncate hover:text-muted-foreground transition-colors text-left"
+        title="Click to rename"
+      >
+        {title}
+      </button>
+    );
+  }
+
+  const commit = () => {
+    const trimmed = value.trim();
+    if (trimmed && trimmed !== title) onRename(trimmed);
+    setEditing(false);
+  };
+
+  return (
+    <input
+      ref={inputRef}
+      value={value}
+      onChange={(e) => setValue(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") commit();
+        if (e.key === "Escape") { setValue(title); setEditing(false); }
+      }}
+      className="text-sm font-bold bg-transparent border-b border-primary outline-none w-40"
+    />
+  );
 }
 
 export function AppShell({ children }: { children: ReactNode }) {
@@ -110,7 +159,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                   <ArrowLeft className="h-4 w-4" />
                 </Button>
               )}
-              <span className="text-sm font-bold">{header.title}</span>
+              <EditableTitle title={header.title} onRename={header.onRename} />
               <div className="ml-auto flex items-center gap-2">
                 {cwd && <TodoIndicator todos={todos} />}
                 {cwd && <BackgroundTasksButton tasks={backgroundTasks} />}

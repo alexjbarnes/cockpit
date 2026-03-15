@@ -21,6 +21,7 @@ interface TranscriptBlock {
 interface TranscriptEntry {
   type: string;
   subtype?: string;
+  content?: string;
   cwd?: string;
   timestamp?: string;
   isMeta?: boolean;
@@ -166,6 +167,23 @@ export async function loadTranscript(sessionId: string, cwd: string): Promise<Ch
 
     // Skip meta messages (slash command caveats, etc.)
     if (entry.isMeta) continue;
+
+    if (entry.type === "system" && entry.subtype === "local_command" && entry.content) {
+      const raw = entry.content as string;
+      const match = raw.match(/<local-command-stdout>([\s\S]*?)<\/local-command-stdout>/);
+      const text = match ? match[1].trim() : raw;
+      if (text) {
+        messages.push({
+          id: entry.uuid || uuidv4(),
+          role: "assistant",
+          content: text,
+          toolUses: [],
+          blocks: [{ type: "text", text }],
+          timestamp: entry.timestamp ? new Date(entry.timestamp).getTime() : Date.now(),
+        });
+      }
+      continue;
+    }
 
     if (entry.type === "system" && entry.subtype === "compact_boundary") {
       messages.push({

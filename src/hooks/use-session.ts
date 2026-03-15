@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
-import type { ChatMessage, ServerMessage, ToolUse, ContentBlock, PermissionMode, ThinkingLevel, ContextUsage, BackgroundTask, TodoItem, ImageAttachment, DocumentAttachment, TextFileAttachment } from "@/types";
+import type { ChatMessage, ServerMessage, ToolUse, ContentBlock, PermissionMode, ThinkingLevel, ContextUsage, BackgroundTask, TodoItem, ImageAttachment, DocumentAttachment, TextFileAttachment, InitData } from "@/types";
 import { useWebSocket } from "./use-websocket";
 
 export interface PendingPermission {
@@ -28,6 +28,9 @@ interface UseSessionReturn {
   contextUsage: ContextUsage | null;
   rateLimitStatus: string | null;
   suggestions: string[];
+  sessionName: string | null;
+  initData: InitData | null;
+  hasQueuedMessage: boolean;
   backgroundTasks: BackgroundTask[];
   todos: TodoItem[];
   sendMessage: (text: string, images?: ImageAttachment[], documents?: DocumentAttachment[], textFiles?: TextFileAttachment[]) => void;
@@ -37,6 +40,7 @@ interface UseSessionReturn {
   selectModel: (model: string) => void;
   setBypassAll: (enabled: boolean) => void;
   setThinkingLevel: (level: ThinkingLevel) => void;
+  cancelQueuedMessage: () => string | null;
 }
 
 export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
@@ -52,8 +56,15 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
   const [contextUsage, setContextUsage] = useState<ContextUsage | null>(null);
   const [rateLimitStatus, setRateLimitStatus] = useState<string | null>(null);
   const [suggestions, setSuggestions] = useState<string[]>([]);
+  const [sessionName, setSessionName] = useState<string | null>(null);
+  const [initData, setInitData] = useState<InitData | null>(null);
   const [backgroundTasks, setBackgroundTasks] = useState<BackgroundTask[]>([]);
   const [todos, setTodos] = useState<TodoItem[]>([]);
+
+  // Queued message to send when Claude finishes responding
+  const queuedRef = useRef<{ text: string; images?: ImageAttachment[]; documents?: DocumentAttachment[] } | null>(null);
+  const [hasQueuedMessage, setHasQueuedMessage] = useState(false);
+  const isRespondingRef = useRef(false);
 
   // Track the in-progress assistant message being streamed
   const streamingRef = useRef<{
@@ -338,6 +349,11 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
           break;
         }
 
+        case "session:init": {
+          setInitData(msg.data);
+          break;
+        }
+
         case "session:todos": {
           setTodos(msg.todos);
           break;
@@ -386,12 +402,40 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
         }
 
         case "session:status": {
-          setIsResponding(msg.status === "running");
+          const nowRunning = msg.status === "running";
+          setIsResponding(nowRunning);
+          isRespondingRef.current = nowRunning;
           if (msg.status === "idle") {
             streamingRef.current = null;
             agentStackRef.current = [];
             setPendingQuestions([]);
             setRateLimitStatus(null);
+
+            // Flush queued message
+            const queued = queuedRef.current;
+            if (queued) {
+              queuedRef.current = null;
+              setHasQueuedMessage(false);
+              const userMsg: ChatMessage = {
+                id: "user-" + Date.now(),
+                role: "user",
+                content: queued.text,
+                toolUses: [],
+                blocks: [],
+                timestamp: Date.now(),
+                images: queued.images,
+                documents: queued.documents,
+              };
+              setMessages((prev) => [...prev, userMsg]);
+              setSuggestions([]);
+              send({
+                type: "message:send",
+                sessionId,
+                text: queued.text,
+                images: queued.images,
+                documents: queued.documents,
+              });
+            }
           }
           break;
         }
@@ -410,6 +454,8 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
           setBypassActive(false);
           setBackgroundTasks([]);
           setTodos([]);
+          queuedRef.current = null;
+          setHasQueuedMessage(false);
           break;
         }
 
@@ -501,6 +547,11 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
           break;
         }
 
+        case "session:info_updated": {
+          setSessionName(msg.info.name);
+          break;
+        }
+
         case "session:usage": {
           setContextUsage(msg.usage);
           break;
@@ -535,6 +586,36 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
       if (textFiles?.length) {
         const fileParts = textFiles.map((f) => `<file path="${f.name}">\n${f.content}\n</file>`);
         apiText = fileParts.join("\n\n") + (text ? "\n\n" + text : "");
+      }
+
+      const isBtw = isRespondingRef.current && /^\/btw\s/i.test(text.trim());
+
+      // /btw: strip prefix, send immediately mid-stream
+      if (isBtw) {
+        const btwText = text.trim().replace(/^\/btw\s+/i, "");
+        if (!btwText) return;
+        const userMsg: ChatMessage = {
+          id: "user-" + Date.now(),
+          role: "user",
+          content: btwText,
+          toolUses: [],
+          blocks: [],
+          timestamp: Date.now(),
+        };
+        setMessages((prev) => [...prev, userMsg]);
+        send({ type: "message:send", sessionId, text: btwText });
+        return;
+      }
+
+      // Queue non-btw messages while responding
+      if (isRespondingRef.current) {
+        queuedRef.current = {
+          text: apiText,
+          images: images?.length ? images : undefined,
+          documents: documents?.length ? documents : undefined,
+        };
+        setHasQueuedMessage(true);
+        return;
       }
 
       const userMsg: ChatMessage = {
@@ -607,5 +688,12 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
     [send, sessionId]
   );
 
-  return { messages, historyLoaded, isResponding, pendingPermissions, pendingQuestions, modelPicker, bypassActive, thinkingLevel, contextUsage, rateLimitStatus, suggestions, backgroundTasks, todos, sendMessage, interrupt, respondToPermission, respondToQuestion, selectModel, setBypassAll, setThinkingLevel };
+  const cancelQueuedMessage = useCallback((): string | null => {
+    const text = queuedRef.current?.text ?? null;
+    queuedRef.current = null;
+    setHasQueuedMessage(false);
+    return text;
+  }, []);
+
+  return { messages, historyLoaded, isResponding, pendingPermissions, pendingQuestions, modelPicker, bypassActive, thinkingLevel, contextUsage, rateLimitStatus, suggestions, sessionName, initData, hasQueuedMessage, backgroundTasks, todos, sendMessage, interrupt, respondToPermission, respondToQuestion, selectModel, setBypassAll, setThinkingLevel, cancelQueuedMessage };
 }

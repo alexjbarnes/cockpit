@@ -21,7 +21,7 @@ export function TodoIndicator({ todos }: TodoIndicatorProps) {
         size="icon"
         className="h-8 w-8 relative"
         onClick={() => setOpen(true)}
-        title={`${activeCount} task${activeCount !== 1 ? "s" : ""}`}
+        title={`${activeCount} todo${activeCount !== 1 ? "s" : ""}`}
       >
         <ListChecks className="h-4 w-4" />
         {activeCount > 0 && (
@@ -39,13 +39,13 @@ export function TodoIndicator({ todos }: TodoIndicatorProps) {
         >
           <div className="w-full max-w-md mx-4 rounded-lg border bg-background p-5 shadow-lg">
             <div className="flex items-center justify-between mb-4">
-              <h2 className="text-base font-semibold">Tasks</h2>
+              <h2 className="text-base font-semibold">Todo</h2>
               <Button variant="ghost" size="icon" onClick={() => setOpen(false)}>
                 <X className="h-4 w-4" />
               </Button>
             </div>
             {todos.length === 0 ? (
-              <p className="text-sm text-muted-foreground py-4 text-center">No tasks</p>
+              <p className="text-sm text-muted-foreground py-4 text-center">No todo items</p>
             ) : (
               <div className="space-y-1 max-h-80 overflow-y-auto">
                 {todos.map((todo, i) => (

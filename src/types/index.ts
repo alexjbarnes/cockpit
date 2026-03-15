@@ -77,6 +77,15 @@ export interface TodoItem {
   activeForm?: string;
 }
 
+export interface InitData {
+  slashCommands: string[];
+  skills: string[];
+  agents: string[];
+  version: string;
+  model: string;
+  mcpServers: { name: string; status: string }[];
+}
+
 export type PermissionMode = "allow" | "allow_always" | "allow_all" | "deny";
 
 export type ThinkingLevel = "low" | "medium" | "high";
@@ -132,5 +141,6 @@ export type ServerMessage =
   | { type: "session:suggestions"; sessionId: string; suggestions: string[] }
   | { type: "session:task_update"; sessionId: string; task: BackgroundTask }
   | { type: "session:todos"; sessionId: string; todos: TodoItem[] }
+  | { type: "session:init"; sessionId: string; data: InitData }
   | { type: "history"; sessionId: string; messages: ChatMessage[] }
   | { type: "pong" };

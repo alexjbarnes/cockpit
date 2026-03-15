@@ -1,8 +1,8 @@
-import type { ChatMessage, ToolUse } from "@/types";
+import type { ChatMessage, ToolUse, InitData } from "@/types";
 import { v4 as uuidv4 } from "uuid";
 
 export interface ParsedEvent {
-  type: "text_delta" | "thinking" | "tool_use_start" | "tool_done" | "tool_result" | "message_done" | "permission_request" | "system_message" | "tool_children" | "tool_progress" | "rate_limit" | "prompt_suggestion" | "task_update";
+  type: "text_delta" | "thinking" | "tool_use_start" | "tool_done" | "tool_result" | "message_done" | "permission_request" | "system_message" | "tool_children" | "tool_progress" | "rate_limit" | "prompt_suggestion" | "task_update" | "init";
   text?: string;
   toolName?: string;
   toolId?: string;
@@ -23,6 +23,7 @@ export interface ParsedEvent {
     description: string;
     summary?: string;
   };
+  initData?: InitData;
 }
 
 interface ContentBlock {
@@ -160,6 +161,20 @@ export class EventParser {
           description: (event.description || "") as string,
           summary: (event.summary || "") as string,
         } }];
+      }
+
+      if (subtype === "init") {
+        const slashCommands = (event.slash_commands || []) as string[];
+        const skills = (event.skills || []) as string[];
+        const agents = (event.agents || []) as string[];
+        const version = (event.claude_code_version || "") as string;
+        const model = (event.model || "") as string;
+        const rawServers = (event.mcp_servers || []) as Array<{ name?: string; status?: string }>;
+        const mcpServers = rawServers.map((s) => ({
+          name: (s.name || "") as string,
+          status: (s.status || "") as string,
+        }));
+        return [{ type: "init", initData: { slashCommands, skills, agents, version, model, mcpServers } }];
       }
 
       // Forward all other system events so the debug log captures them

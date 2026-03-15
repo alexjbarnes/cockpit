@@ -17,16 +17,22 @@ export async function GET(req: NextRequest) {
 
   const groups = await scanAllSessions();
 
-  // Merge running status from active sessions
+  // Merge status and name from in-memory sessions
   const manager = getSessionManager();
   const active = manager.listActiveSessions();
+  const known = manager.listKnownSessions();
   const activeMap = new Map(active.map((s) => [s.id, s]));
+  const knownMap = new Map(known.map((s) => [s.id, s]));
 
   for (const group of groups) {
     for (const session of group.sessions) {
       const running = activeMap.get(session.id);
       if (running) {
         session.status = running.status;
+      }
+      const mem = knownMap.get(session.id);
+      if (mem) {
+        session.name = mem.name;
       }
     }
   }
