@@ -159,6 +159,20 @@ export default function SettingsPage() {
           </button>
         </CardContent>
       </Card>
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">CLAUDE.md</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <button
+            onClick={() => router.push("/claude-md")}
+            className="flex w-full items-center justify-between rounded px-2 py-2 text-sm hover:bg-muted transition-colors"
+          >
+            <span>Edit instruction files</span>
+            <ChevronRight className="h-4 w-4 text-muted-foreground" />
+          </button>
+        </CardContent>
+      </Card>
     </div>
   );
 }
