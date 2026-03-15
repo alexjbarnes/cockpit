@@ -50,8 +50,11 @@ export function transcriptExists(sessionId: string, cwd: string): boolean {
   return existsSync(getTranscriptPath(sessionId, cwd));
 }
 
+const CLI_XML_RE = /<(?:task-notification|local-command-caveat|local-command-stdout|system-reminder)[^>]*>[\s\S]*?<\/(?:task-notification|local-command-caveat|local-command-stdout|system-reminder)>[\s\S]*/g;
+
 function stripCommandXml(text: string): string {
   const trimmed = text.trimStart();
+  if (trimmed.startsWith("<task-notification>")) return "";
   if (trimmed.startsWith("<local-command-caveat>")) return "";
   if (trimmed.startsWith("<local-command-stdout>")) return "";
   if (trimmed.startsWith("<command-name>")) {
@@ -62,6 +65,10 @@ function stripCommandXml(text: string): string {
     }
   }
   return text;
+}
+
+function stripCliXml(text: string): string {
+  return text.replace(CLI_XML_RE, "").trim();
 }
 
 export async function loadLastUsage(sessionId: string, cwd: string): Promise<{ used: number; total: number } | null> {
@@ -207,8 +214,11 @@ export async function loadTranscript(sessionId: string, cwd: string): Promise<Ch
         if (block.type === "thinking" && block.thinking) {
           blocks.push({ type: "thinking", text: block.thinking });
         } else if (block.type === "text" && block.text) {
-          textContent += block.text;
-          blocks.push({ type: "text", text: block.text });
+          const cleaned = stripCliXml(block.text);
+          if (cleaned) {
+            textContent += cleaned;
+            blocks.push({ type: "text", text: cleaned });
+          }
         } else if (block.type === "tool_use") {
           const tool: ToolUse = {
             id: block.id || uuidv4(),

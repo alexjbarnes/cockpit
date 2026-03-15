@@ -10,13 +10,15 @@ import { PermissionPrompt } from "./permission-prompt";
 import { QuestionCard, QuestionPrompt, parseQuestionsFromInput } from "./question-card";
 import { splitAtQuestion } from "@/lib/split-question-blocks";
 import { ModelPicker } from "./model-picker";
+import { useShell } from "./app-shell";
 
 const INITIAL_WINDOW = 50;
 const WINDOW_INCREMENT = 30;
 
 export function ChatView({ sessionId, cwd }: { sessionId: string; cwd?: string }) {
-  const { messages, historyLoaded, isResponding, pendingPermissions, pendingQuestions, modelPicker, bypassActive, thinkingLevel, contextUsage, rateLimitStatus, sendMessage, interrupt, respondToPermission, respondToQuestion, selectModel, setBypassAll, setThinkingLevel } = useSession(sessionId, cwd);
+  const { messages, historyLoaded, isResponding, pendingPermissions, pendingQuestions, modelPicker, bypassActive, thinkingLevel, contextUsage, rateLimitStatus, backgroundTasks, todos, sendMessage, interrupt, respondToPermission, respondToQuestion, selectModel, setBypassAll, setThinkingLevel } = useSession(sessionId, cwd);
   const { settings } = useSettings();
+  const { setBackgroundTasks, setTodos } = useShell();
   const scrollRef = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);
   const ignoreScrollUntil = useRef(0);
@@ -46,6 +48,15 @@ export function ChatView({ sessionId, cwd }: { sessionId: string; cwd?: string }
   useEffect(() => {
     setRenderWindow(INITIAL_WINDOW);
   }, [sessionId]);
+
+  // Sync background tasks and todos to shell header
+  useEffect(() => {
+    setBackgroundTasks(backgroundTasks);
+  }, [backgroundTasks, setBackgroundTasks]);
+
+  useEffect(() => {
+    setTodos(todos);
+  }, [todos, setTodos]);
 
   // Preserve scroll position after expanding the window
   useLayoutEffect(() => {

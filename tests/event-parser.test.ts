@@ -367,16 +367,61 @@ describe("EventParser", () => {
     expect(events[0]).toEqual({ type: "system_message", text: "__hook::done" });
   });
 
-  it("refines task subtypes", () => {
+  it("parses task_started into structured task_update", () => {
     const parser = new EventParser();
-    for (const [subtype, expected] of [
-      ["task_started", "__task::started"],
-      ["task_progress", "__task::progress"],
-      ["task_notification", "__task::notification"],
-    ] as const) {
-      const events = parser.parseLine(JSON.stringify({ type: "system", subtype }));
-      expect(events).toHaveLength(1);
-      expect(events[0]).toEqual({ type: "system_message", text: expected });
-    }
+    const line = JSON.stringify({
+      type: "system",
+      subtype: "task_started",
+      task_id: "abc123",
+      tool_use_id: "toolu_01",
+      description: "Count project files",
+    });
+    const events = parser.parseLine(line);
+    expect(events).toHaveLength(1);
+    expect(events[0].type).toBe("task_update");
+    expect(events[0].taskInfo).toEqual({
+      taskId: "abc123",
+      toolUseId: "toolu_01",
+      status: "running",
+      description: "Count project files",
+    });
+  });
+
+  it("parses task_progress into structured task_update", () => {
+    const parser = new EventParser();
+    const line = JSON.stringify({
+      type: "system",
+      subtype: "task_progress",
+      task_id: "abc123",
+      tool_use_id: "toolu_01",
+      description: "Running List top-level directories",
+    });
+    const events = parser.parseLine(line);
+    expect(events).toHaveLength(1);
+    expect(events[0].type).toBe("task_update");
+    expect(events[0].taskInfo!.status).toBe("progress");
+    expect(events[0].taskInfo!.description).toBe("Running List top-level directories");
+  });
+
+  it("parses task_notification into structured task_update with summary", () => {
+    const parser = new EventParser();
+    const line = JSON.stringify({
+      type: "system",
+      subtype: "task_notification",
+      task_id: "abc123",
+      tool_use_id: "toolu_01",
+      status: "completed",
+      summary: "Agent completed successfully",
+    });
+    const events = parser.parseLine(line);
+    expect(events).toHaveLength(1);
+    expect(events[0].type).toBe("task_update");
+    expect(events[0].taskInfo).toEqual({
+      taskId: "abc123",
+      toolUseId: "toolu_01",
+      status: "completed",
+      description: "",
+      summary: "Agent completed successfully",
+    });
   });
 });

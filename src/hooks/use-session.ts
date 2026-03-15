@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
-import type { ChatMessage, ServerMessage, ToolUse, ContentBlock, PermissionMode, ThinkingLevel, ContextUsage } from "@/types";
+import type { ChatMessage, ServerMessage, ToolUse, ContentBlock, PermissionMode, ThinkingLevel, ContextUsage, BackgroundTask, TodoItem } from "@/types";
 import { useWebSocket } from "./use-websocket";
 
 export interface PendingPermission {
@@ -28,6 +28,8 @@ interface UseSessionReturn {
   contextUsage: ContextUsage | null;
   rateLimitStatus: string | null;
   suggestions: string[];
+  backgroundTasks: BackgroundTask[];
+  todos: TodoItem[];
   sendMessage: (text: string) => void;
   interrupt: () => void;
   respondToPermission: (requestId: string, allowed: boolean, permissionMode?: PermissionMode) => void;
@@ -50,6 +52,8 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
   const [contextUsage, setContextUsage] = useState<ContextUsage | null>(null);
   const [rateLimitStatus, setRateLimitStatus] = useState<string | null>(null);
   const [suggestions, setSuggestions] = useState<string[]>([]);
+  const [backgroundTasks, setBackgroundTasks] = useState<BackgroundTask[]>([]);
+  const [todos, setTodos] = useState<TodoItem[]>([]);
 
   // Track the in-progress assistant message being streamed
   const streamingRef = useRef<{
@@ -334,6 +338,37 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
           break;
         }
 
+        case "session:todos": {
+          setTodos(msg.todos);
+          break;
+        }
+
+        case "session:task_update": {
+          setBackgroundTasks((prev) => {
+            const existing = prev.find((t) => t.taskId === msg.task.taskId);
+            if (existing) {
+              return prev.map((t) =>
+                t.taskId === msg.task.taskId
+                  ? {
+                      ...t,
+                      status: msg.task.status,
+                      description: msg.task.description || t.description,
+                      activity: msg.task.activity || t.activity,
+                      summary: msg.task.summary || t.summary,
+                    }
+                  : t
+              );
+            }
+            return [...prev, msg.task];
+          });
+          if (msg.task.status === "completed") {
+            setTimeout(() => {
+              setBackgroundTasks((prev) => prev.filter((t) => t.taskId !== msg.task.taskId));
+            }, 5000);
+          }
+          break;
+        }
+
         case "assistant:tool_children": {
           setMessages((prev) => prev.map((m) => {
             if (m.id !== msg.messageId) return m;
@@ -373,6 +408,8 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
           streamingRef.current = null;
           agentStackRef.current = [];
           setBypassActive(false);
+          setBackgroundTasks([]);
+          setTodos([]);
           break;
         }
 
@@ -554,5 +591,5 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
     [send, sessionId]
   );
 
-  return { messages, historyLoaded, isResponding, pendingPermissions, pendingQuestions, modelPicker, bypassActive, thinkingLevel, contextUsage, rateLimitStatus, suggestions, sendMessage, interrupt, respondToPermission, respondToQuestion, selectModel, setBypassAll, setThinkingLevel };
+  return { messages, historyLoaded, isResponding, pendingPermissions, pendingQuestions, modelPicker, bypassActive, thinkingLevel, contextUsage, rateLimitStatus, suggestions, backgroundTasks, todos, sendMessage, interrupt, respondToPermission, respondToQuestion, selectModel, setBypassAll, setThinkingLevel };
 }

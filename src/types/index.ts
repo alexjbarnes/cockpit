@@ -43,6 +43,21 @@ export interface ContextUsage {
   total: number;
 }
 
+export interface BackgroundTask {
+  taskId: string;
+  toolUseId: string;
+  status: "running" | "completed";
+  description: string;
+  activity?: string;
+  summary?: string;
+}
+
+export interface TodoItem {
+  content: string;
+  status: "pending" | "in_progress" | "completed";
+  activeForm?: string;
+}
+
 export type PermissionMode = "allow" | "allow_always" | "allow_all" | "deny";
 
 export type ThinkingLevel = "low" | "medium" | "high";
@@ -96,5 +111,7 @@ export type ServerMessage =
   | { type: "assistant:tool_progress"; sessionId: string; toolId: string; content: string }
   | { type: "session:rate_limit"; sessionId: string; status: string; retryAfterMs?: number }
   | { type: "session:suggestions"; sessionId: string; suggestions: string[] }
+  | { type: "session:task_update"; sessionId: string; task: BackgroundTask }
+  | { type: "session:todos"; sessionId: string; todos: TodoItem[] }
   | { type: "history"; sessionId: string; messages: ChatMessage[] }
   | { type: "pong" };

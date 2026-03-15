@@ -2,7 +2,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { type Writable } from "node:stream";
 import { EventEmitter } from "node:events";
 import { v4 as uuidv4 } from "uuid";
-import type { SessionInfo, ChatMessage, ToolUse, ContentBlock, ThinkingLevel, ContextUsage } from "@/types";
+import type { SessionInfo, ChatMessage, ToolUse, ContentBlock, ThinkingLevel, ContextUsage, TodoItem } from "@/types";
 import { EventParser, type ParsedEvent } from "./event-parser";
 import { loadTranscript, transcriptExists } from "./transcript";
 import { logRawLine } from "./debug-logger";
@@ -24,6 +24,7 @@ interface Session {
   compacting: boolean;
   thinkingLevel: ThinkingLevel;
   contextUsage: ContextUsage | null;
+  todoItems: TodoItem[];
 }
 
 export class SessionManager {
@@ -52,6 +53,7 @@ export class SessionManager {
       compacting: false,
       thinkingLevel: "high",
       contextUsage: null,
+      todoItems: [],
     });
 
     return info;
@@ -79,6 +81,7 @@ export class SessionManager {
       compacting: false,
       thinkingLevel: "high",
       contextUsage: null,
+      todoItems: [],
       };
       this.sessions.set(id, session);
     }
@@ -245,6 +248,54 @@ export class SessionManager {
     const handler = (_sessionId: string, usage: ContextUsage) => listener(usage);
     session.emitter.on("usage", handler);
     return () => session.emitter.off("usage", handler);
+  }
+
+  getTodos(sessionId: string): TodoItem[] {
+    return this.sessions.get(sessionId)?.todoItems ?? [];
+  }
+
+  onTodos(
+    id: string,
+    listener: (todos: TodoItem[]) => void
+  ): (() => void) | null {
+    const session = this.sessions.get(id);
+    if (!session) return null;
+    const handler = (_sessionId: string, todos: TodoItem[]) => listener(todos);
+    session.emitter.on("todos", handler);
+    return () => session.emitter.off("todos", handler);
+  }
+
+  private handleTodoWrite(session: Session, sessionId: string, toolInput: string): void {
+    try {
+      const input = JSON.parse(toolInput);
+      const todos = input.todos;
+      if (!Array.isArray(todos)) return;
+      session.todoItems = todos.filter((t: Record<string, unknown>) => t.content && t.status).map((t: Record<string, unknown>) => ({
+        content: t.content as string,
+        status: t.status as TodoItem["status"],
+        activeForm: (t.activeForm as string) || undefined,
+      }));
+      session.emitter.emit("todos", sessionId, [...session.todoItems]);
+    } catch {
+      // invalid input, ignore
+    }
+  }
+
+  rebuildTodosFromHistory(sessionId: string, messages: ChatMessage[]): void {
+    const session = this.sessions.get(sessionId);
+    if (!session) return;
+
+    // Find the last TodoWrite call in history to get current state
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const msg = messages[i];
+      if (msg.role !== "assistant") continue;
+      for (let j = msg.toolUses.length - 1; j >= 0; j--) {
+        if (msg.toolUses[j].name === "TodoWrite") {
+          this.handleTodoWrite(session, sessionId, msg.toolUses[j].input);
+          return;
+        }
+      }
+    }
   }
 
   private extractUsage(session: Session, sessionId: string, line: string): void {
@@ -507,6 +558,10 @@ export class SessionManager {
             };
 
             const isAgent = tool.name === "Agent";
+
+            if (tool.name === "TodoWrite") {
+              this.handleTodoWrite(session, sessionId, tool.input);
+            }
 
             if (agentStack.length > 0) {
               const parent = agentStack[agentStack.length - 1];

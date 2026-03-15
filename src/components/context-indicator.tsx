@@ -1,38 +1,25 @@
 "use client";
 
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState } from "react";
+import { X } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import type { ContextUsage } from "@/types";
 
 interface ContextIndicatorProps {
   usage: ContextUsage;
 }
 
+function formatTokens(n: number): string {
+  if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
+  return String(n);
+}
+
 export function ContextIndicator({ usage }: ContextIndicatorProps) {
   const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
 
   const pct = Math.round((usage.used / usage.total) * 100);
   const strokeColor = pct > 80 ? "#ef4444" : pct > 50 ? "#f97316" : "#22c55e";
 
-  const handleClickOutside = useCallback((e: MouseEvent) => {
-    if (ref.current && !ref.current.contains(e.target as Node)) {
-      setOpen(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (open) {
-      document.addEventListener("mousedown", handleClickOutside);
-      return () => document.removeEventListener("mousedown", handleClickOutside);
-    }
-  }, [open, handleClickOutside]);
-
-  const formatTokens = (n: number) => {
-    if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
-    return String(n);
-  };
-
-  // SVG arc parameters
   const size = 14;
   const strokeWidth = 2;
   const radius = (size - strokeWidth) / 2;
@@ -40,9 +27,9 @@ export function ContextIndicator({ usage }: ContextIndicatorProps) {
   const filled = (Math.min(pct, 100) / 100) * circumference;
 
   return (
-    <div ref={ref} className="relative flex items-center justify-center w-8 h-6">
+    <>
       <button
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => setOpen(true)}
         className="flex items-center justify-center w-8 h-6 rounded-md hover:bg-muted transition-colors"
         title={`Context: ${pct}%`}
       >
@@ -70,23 +57,36 @@ export function ContextIndicator({ usage }: ContextIndicatorProps) {
         </svg>
       </button>
       {open && (
-        <div className="absolute bottom-full mb-2 left-0 w-52 rounded-md border border-input bg-popover p-3 shadow-md text-xs z-50">
-          <div className="flex justify-between mb-1.5">
-            <span className="text-muted-foreground">Context usage</span>
-            <span className="font-medium">{pct}%</span>
-          </div>
-          <div className="h-2 rounded-full bg-muted overflow-hidden mb-2">
-            <div
-              className="h-full rounded-full transition-all"
-              style={{ width: `${Math.min(pct, 100)}%`, backgroundColor: strokeColor }}
-            />
-          </div>
-          <div className="flex justify-between text-muted-foreground">
-            <span>{formatTokens(usage.used)} used</span>
-            <span>{formatTokens(usage.total)} total</span>
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget) setOpen(false);
+          }}
+        >
+          <div className="w-full max-w-sm mx-4 rounded-lg border bg-background p-5 shadow-lg">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-base font-semibold">Context Usage</h2>
+              <Button variant="ghost" size="icon" onClick={() => setOpen(false)}>
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
+            <div className="flex justify-between text-sm mb-2">
+              <span>Tokens used</span>
+              <span className="text-muted-foreground">{pct}%</span>
+            </div>
+            <div className="h-2.5 rounded-full bg-muted overflow-hidden mb-2">
+              <div
+                className="h-full rounded-full transition-all"
+                style={{ width: `${Math.min(pct, 100)}%`, backgroundColor: strokeColor }}
+              />
+            </div>
+            <div className="flex justify-between text-xs text-muted-foreground">
+              <span>{formatTokens(usage.used)} used</span>
+              <span>{formatTokens(usage.total)} total</span>
+            </div>
           </div>
         </div>
       )}
-    </div>
+    </>
   );
 }

@@ -2,7 +2,7 @@ import type { ChatMessage, ToolUse } from "@/types";
 import { v4 as uuidv4 } from "uuid";
 
 export interface ParsedEvent {
-  type: "text_delta" | "thinking" | "tool_use_start" | "tool_done" | "tool_result" | "message_done" | "permission_request" | "system_message" | "tool_children" | "tool_progress" | "rate_limit" | "prompt_suggestion";
+  type: "text_delta" | "thinking" | "tool_use_start" | "tool_done" | "tool_result" | "message_done" | "permission_request" | "system_message" | "tool_children" | "tool_progress" | "rate_limit" | "prompt_suggestion" | "task_update";
   text?: string;
   toolName?: string;
   toolId?: string;
@@ -16,6 +16,13 @@ export interface ParsedEvent {
   rawToolInput?: Record<string, unknown>;
   rateLimitInfo?: { status: string; retryAfterMs?: number };
   suggestions?: string[];
+  taskInfo?: {
+    taskId: string;
+    toolUseId: string;
+    status: "running" | "progress" | "completed";
+    description: string;
+    summary?: string;
+  };
 }
 
 interface ContentBlock {
@@ -128,15 +135,31 @@ export class EventParser {
         return [{ type: "system_message", text: "__hook::done" }];
       }
 
-      // Refined task subtypes
+      // Structured task events
       if (subtype === "task_started") {
-        return [{ type: "system_message", text: "__task::started" }];
+        return [{ type: "task_update", taskInfo: {
+          taskId: (event.task_id || "") as string,
+          toolUseId: (event.tool_use_id || "") as string,
+          status: "running",
+          description: (event.description || "") as string,
+        } }];
       }
       if (subtype === "task_progress") {
-        return [{ type: "system_message", text: "__task::progress" }];
+        return [{ type: "task_update", taskInfo: {
+          taskId: (event.task_id || "") as string,
+          toolUseId: (event.tool_use_id || "") as string,
+          status: "progress",
+          description: (event.description || "") as string,
+        } }];
       }
       if (subtype === "task_notification") {
-        return [{ type: "system_message", text: "__task::notification" }];
+        return [{ type: "task_update", taskInfo: {
+          taskId: (event.task_id || "") as string,
+          toolUseId: (event.tool_use_id || "") as string,
+          status: "completed",
+          description: (event.description || "") as string,
+          summary: (event.summary || "") as string,
+        } }];
       }
 
       // Forward all other system events so the debug log captures them

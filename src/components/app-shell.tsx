@@ -12,12 +12,14 @@ import {
 import { useRouter } from "next/navigation";
 import { AuthGuard } from "@/components/auth-guard";
 import { WebSocketProvider } from "@/hooks/use-websocket";
-import { ConnectionStatus } from "@/components/connection-status";
 import { UsageButton } from "@/components/usage-modal";
 import { Sidebar, type SidebarHandle } from "@/components/sidebar";
 import { Button } from "@/components/ui/button";
 import { ArrowLeft, Menu } from "lucide-react";
 import { GitStatusButton } from "@/components/git-status-modal";
+import { BackgroundTasksButton } from "@/components/task-indicator";
+import { TodoIndicator } from "@/components/todo-indicator";
+import type { BackgroundTask, TodoItem } from "@/types";
 
 interface HeaderConfig {
   title: string;
@@ -28,12 +30,20 @@ interface ShellContextValue {
   setHeader: (config: HeaderConfig) => void;
   cwd: string | undefined;
   setCwd: (cwd: string | undefined) => void;
+  backgroundTasks: BackgroundTask[];
+  setBackgroundTasks: (tasks: BackgroundTask[]) => void;
+  todos: TodoItem[];
+  setTodos: (todos: TodoItem[]) => void;
 }
 
 const ShellContext = createContext<ShellContextValue>({
   setHeader: () => {},
   cwd: undefined,
   setCwd: () => {},
+  backgroundTasks: [],
+  setBackgroundTasks: () => {},
+  todos: [],
+  setTodos: () => {},
 });
 
 export function useShell() {
@@ -60,6 +70,8 @@ export function AppShell({ children }: { children: ReactNode }) {
   const sidebarRef = useRef<SidebarHandle>(null);
   const [header, setHeaderState] = useState<HeaderConfig>({ title: "Aperture", showBack: false });
   const [cwd, setCwdState] = useState<string | undefined>(undefined);
+  const [backgroundTasks, setBackgroundTasks] = useState<BackgroundTask[]>([]);
+  const [todos, setTodos] = useState<TodoItem[]>([]);
 
   const setHeader = useCallback((config: HeaderConfig) => {
     setHeaderState(config);
@@ -87,7 +99,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   return (
     <AuthGuard>
       <WebSocketProvider>
-        <ShellContext.Provider value={{ setHeader, cwd, setCwd }}>
+        <ShellContext.Provider value={{ setHeader, cwd, setCwd, backgroundTasks, setBackgroundTasks, todos, setTodos }}>
           <div className="fixed inset-0 flex flex-col">
             <header className="shrink-0 flex items-center gap-2 border-b px-4 py-2 bg-background">
               <Button variant="ghost" size="icon" onClick={toggleSidebar} title="Toggle sidebar (Ctrl+B)">
@@ -100,7 +112,8 @@ export function AppShell({ children }: { children: ReactNode }) {
               )}
               <span className="text-sm font-bold">{header.title}</span>
               <div className="ml-auto flex items-center gap-2">
-                <ConnectionStatus />
+                <TodoIndicator todos={todos} />
+                <BackgroundTasksButton tasks={backgroundTasks} />
                 <UsageButton />
                 <GitStatusButton cwd={cwd} />
               </div>

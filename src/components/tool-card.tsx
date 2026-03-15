@@ -65,7 +65,7 @@ export function ToolCard({ tool }: ToolCardProps) {
     }
   }, [isRunning]);
 
-  const isStatusOnly = tool.name === "EnterPlanMode" || tool.name === "ExitPlanMode";
+  const isStatusOnly = tool.name === "EnterPlanMode" || tool.name === "ExitPlanMode" || tool.name === "TaskCreate" || tool.name === "TaskUpdate" || tool.name === "TaskList" || tool.name === "TaskGet" || tool.name === "TodoWrite";
   const hasContent = !isStatusOnly && (tool.input || tool.output);
 
   return (
@@ -167,6 +167,32 @@ function ToolSummary({
 
   if (name === "ExitPlanMode") {
     return <span className="text-muted-foreground">Exiting plan mode</span>;
+  }
+
+  if (name === "TaskCreate") {
+    const subject = (input.subject as string) || (input.content as string) || "";
+    return subject ? (
+      <span className="text-muted-foreground truncate">{subject}</span>
+    ) : null;
+  }
+
+  if (name === "TaskUpdate") {
+    const taskId = (input.taskId as string) || "";
+    const status = (input.status as string) || "";
+    return taskId ? (
+      <span className="text-muted-foreground truncate">#{taskId} {status}</span>
+    ) : null;
+  }
+
+  if (name === "TaskList") {
+    return <span className="text-muted-foreground">Listing tasks</span>;
+  }
+
+  if (name === "TaskGet") {
+    const taskId = (input.taskId as string) || "";
+    return taskId ? (
+      <span className="text-muted-foreground">#{taskId}</span>
+    ) : null;
   }
 
   return null;

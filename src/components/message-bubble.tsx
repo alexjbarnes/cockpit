@@ -9,6 +9,12 @@ import rehypeHighlight from "rehype-highlight";
 import { cn } from "@/lib/utils";
 import { Loader2, Check, ChevronDown, ChevronRight, Brain } from "lucide-react";
 
+const CLI_XML_RE = /<(?:task-notification|local-command-caveat|local-command-stdout|command-name|system-reminder)[^>]*>[\s\S]*?<\/(?:task-notification|local-command-caveat|local-command-stdout|command-name|system-reminder)>[\s\S]*/g;
+
+function stripCliXml(text: string): string {
+  return text.replace(CLI_XML_RE, "").trim();
+}
+
 export const MessageBubble = memo(function MessageBubble({ message, collapsedByDefault = false }: { message: ChatMessage; collapsedByDefault?: boolean }) {
   const [collapsed, setCollapsed] = useState(collapsedByDefault);
   const isUser = message.role === "user";
@@ -100,7 +106,7 @@ export const MessageBubble = memo(function MessageBubble({ message, collapsedByD
                   className="prose prose-sm max-w-none dark:prose-invert [&_pre]:overflow-x-auto [&_pre]:rounded [&_pre]:bg-black/10 [&_pre]:p-3 [&_code]:text-xs"
                 >
                   <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
-                    {block.text}
+                    {stripCliXml(block.text)}
                   </ReactMarkdown>
                 </div>
               )
@@ -117,7 +123,7 @@ export const MessageBubble = memo(function MessageBubble({ message, collapsedByD
             )}
             <div className="prose prose-sm max-w-none dark:prose-invert [&_pre]:overflow-x-auto [&_pre]:rounded [&_pre]:bg-black/10 [&_pre]:p-3 [&_code]:text-xs">
               <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
-                {message.content}
+                {stripCliXml(message.content)}
               </ReactMarkdown>
             </div>
           </>

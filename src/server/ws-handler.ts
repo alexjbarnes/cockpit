@@ -210,6 +210,29 @@ export function createWebSocketHandler(
             }
           );
           if (unsubUsage) cleanups.push(unsubUsage);
+
+          const unsubTodos = sessionManager.onTodos(
+            msg.sessionId,
+            (todos) => {
+              send(ws, {
+                type: "session:todos",
+                sessionId: msg.sessionId,
+                todos,
+              });
+            }
+          );
+          if (unsubTodos) cleanups.push(unsubTodos);
+
+          // Rebuild todos from last TodoWrite in history
+          sessionManager.rebuildTodosFromHistory(msg.sessionId, session.messages);
+          const currentTodos = sessionManager.getTodos(msg.sessionId);
+          if (currentTodos.length > 0) {
+            send(ws, {
+              type: "session:todos",
+              sessionId: msg.sessionId,
+              todos: currentTodos,
+            });
+          }
           });
           break;
         }
@@ -396,6 +419,23 @@ function handleParsedEvent(
           type: "session:suggestions",
           sessionId,
           suggestions: event.suggestions,
+        });
+      }
+      break;
+
+    case "task_update":
+      if (event.taskInfo) {
+        send(ws, {
+          type: "session:task_update",
+          sessionId,
+          task: {
+            taskId: event.taskInfo.taskId,
+            toolUseId: event.taskInfo.toolUseId,
+            status: event.taskInfo.status === "progress" ? "running" : event.taskInfo.status,
+            description: event.taskInfo.description,
+            activity: event.taskInfo.status === "progress" ? event.taskInfo.description : undefined,
+            summary: event.taskInfo.summary,
+          },
         });
       }
       break;

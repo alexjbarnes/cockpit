@@ -2,7 +2,8 @@
 
 import { useState, useRef, useCallback, type KeyboardEvent } from "react";
 import { Button } from "@/components/ui/button";
-import { Send, Square, Settings2, ShieldOff, ShieldCheck, Brain } from "lucide-react";
+import { Send, Square, Settings2, ShieldOff, ShieldCheck, Brain, Loader2 } from "lucide-react";
+import { useWebSocket } from "@/hooks/use-websocket";
 import { SlashCommandMenu } from "@/components/slash-command-menu";
 import { MentionMenu, type MentionItem } from "@/components/mention-menu";
 import type { SlashCommand } from "@/lib/commands";
@@ -36,6 +37,7 @@ function getMentionContext(text: string, cursorPos: number): { active: boolean; 
 }
 
 export function InputArea({ onSend, onInterrupt, isResponding, bypassActive, onSetBypass, thinkingLevel, onSetThinking, contextUsage, dismissKeyboard, cwd }: InputAreaProps) {
+  const { connected } = useWebSocket();
   const [text, setText] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [optionsOpen, setOptionsOpen] = useState(false);
@@ -76,7 +78,7 @@ export function InputArea({ onSend, onInterrupt, isResponding, bypassActive, onS
 
   const handleSend = useCallback(() => {
     const trimmed = text.trim();
-    if (!trimmed) return;
+    if (!trimmed || !connected) return;
     onSend(trimmed);
     setText("");
     setSelectedIndex(0);
@@ -267,6 +269,10 @@ export function InputArea({ onSend, onInterrupt, isResponding, bypassActive, onS
             {isResponding ? (
               <Button size="icon" variant="destructive" className="h-8 w-8" onClick={onInterrupt}>
                 <Square className="h-4 w-4" />
+              </Button>
+            ) : !connected ? (
+              <Button size="icon" variant="ghost" className="h-8 w-8" disabled title="Connecting...">
+                <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
               </Button>
             ) : (
               <Button size="icon" className="h-8 w-8" onClick={handleSend} disabled={!text.trim()}>
