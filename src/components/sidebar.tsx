@@ -182,6 +182,7 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
     if (res.ok) {
       const data = await res.json();
       addActiveSession(data.sessionId);
+      await fetchSessions();
       close();
       router.push(`/sessions/${data.sessionId}?cwd=${encodeURIComponent(cwd)}`);
     }
@@ -321,3 +322,4 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
     </>
   );
 });
+

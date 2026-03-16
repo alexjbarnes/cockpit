@@ -24,8 +24,10 @@ export async function GET(req: NextRequest) {
   const activeMap = new Map(active.map((s) => [s.id, s]));
   const knownMap = new Map(known.map((s) => [s.id, s]));
 
+  const onDiskIds = new Set<string>();
   for (const group of groups) {
     for (const session of group.sessions) {
+      onDiskIds.add(session.id);
       const running = activeMap.get(session.id);
       if (running) {
         session.status = running.status;
@@ -34,6 +36,18 @@ export async function GET(req: NextRequest) {
       if (mem) {
         session.name = mem.name;
       }
+    }
+  }
+
+  // Include in-memory sessions that have no transcript file yet
+  for (const mem of known) {
+    if (onDiskIds.has(mem.id)) continue;
+    const group = groups.find((g) => g.cwd === mem.cwd);
+    if (group) {
+      group.sessions.push(mem);
+    } else {
+      const dirName = mem.cwd.split("/").pop() || mem.cwd;
+      groups.push({ cwd: mem.cwd, dirName, sessions: [mem] });
     }
   }
 
