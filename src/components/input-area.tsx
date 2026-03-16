@@ -196,8 +196,10 @@ export function InputArea({ onSend, onInterrupt, isResponding, bypassActive, onS
     setSelectedIndex(0);
     if (textareaRef.current) {
       textareaRef.current.style.height = "auto";
-      if (dismissKeyboard) {
+      if (dismissKeyboard && "ontouchstart" in window) {
         textareaRef.current.blur();
+      } else {
+        textareaRef.current.focus();
       }
     }
   }, [text, hasAttachments, pendingImages, pendingDocs, pendingTextFiles, onSend, dismissKeyboard, connected]);
