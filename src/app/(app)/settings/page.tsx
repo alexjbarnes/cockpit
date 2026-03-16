@@ -245,6 +245,7 @@ export default function SettingsPage() {
         </CardHeader>
         <CardContent className="space-y-0.5">
           <NavRow label="Agents" onClick={() => router.push("/agents")} />
+          <NavRow label="MCP Servers" onClick={() => router.push("/mcp-servers")} />
           <NavRow label="Skills" onClick={() => router.push("/skills")} />
           <NavRow label="Commands" onClick={() => router.push("/commands")} />
           <NavRow label="CLAUDE.md" onClick={() => router.push("/claude-md")} />
