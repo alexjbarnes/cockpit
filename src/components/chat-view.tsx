@@ -11,6 +11,8 @@ import { PermissionPrompt } from "./permission-prompt";
 import { QuestionCard, QuestionPrompt, parseQuestionsFromInput } from "./question-card";
 import { splitAtQuestion } from "@/lib/split-question-blocks";
 import { ModelPicker } from "./model-picker";
+import { SelectionToolbar } from "./selection-toolbar";
+import { useMessageSelection } from "@/hooks/use-message-selection";
 import { useShell } from "./app-shell";
 
 const INITIAL_WINDOW = 50;
@@ -27,6 +29,7 @@ export function ChatView({ sessionId, cwd, initialName }: { sessionId: string; c
   const [renderWindow, setRenderWindow] = useState(INITIAL_WINDOW);
   const expandThrottleRef = useRef(0);
   const prevScrollHeightRef = useRef(0);
+  const { selectedIds, selectionMode, enterSelection, toggleSelect, clearSelection, copySelected } = useMessageSelection();
 
   const uniqueMessages = useMemo(() => {
     const seen = new Set<string>();
@@ -127,6 +130,10 @@ export function ChatView({ sessionId, cwd, initialName }: { sessionId: string; c
     sendMessage("/compact");
   }, [sendMessage]);
 
+  const handleCopySelected = useCallback(() => {
+    copySelected(uniqueMessages);
+  }, [copySelected, uniqueMessages]);
+
   return (
     <>
       <div
@@ -168,6 +175,10 @@ export function ChatView({ sessionId, cwd, initialName }: { sessionId: string; c
                       <MessageBubble
                         message={{ ...msg, blocks: before, content: "" }}
                         collapsedByDefault={collapsedByDefault}
+                        selectionMode={selectionMode}
+                        selected={selectedIds.has(msg.id)}
+                        onEnterSelection={enterSelection}
+                        onToggleSelect={toggleSelect}
                       />
                     )}
                     <div className="flex w-full justify-start">
@@ -187,6 +198,10 @@ export function ChatView({ sessionId, cwd, initialName }: { sessionId: string; c
                       <MessageBubble
                         message={{ ...msg, blocks: after, content: "" }}
                         collapsedByDefault={false}
+                        selectionMode={selectionMode}
+                        selected={selectedIds.has(msg.id)}
+                        onEnterSelection={enterSelection}
+                        onToggleSelect={toggleSelect}
                       />
                     )}
                   </div>
@@ -196,7 +211,14 @@ export function ChatView({ sessionId, cwd, initialName }: { sessionId: string; c
 
             return (
               <div key={msg.id} className="space-y-4">
-                <MessageBubble message={msg} collapsedByDefault={collapsedByDefault} />
+                <MessageBubble
+                  message={msg}
+                  collapsedByDefault={collapsedByDefault}
+                  selectionMode={selectionMode}
+                  selected={selectedIds.has(msg.id)}
+                  onEnterSelection={enterSelection}
+                  onToggleSelect={toggleSelect}
+                />
               </div>
             );
           })}
@@ -236,6 +258,13 @@ export function ChatView({ sessionId, cwd, initialName }: { sessionId: string; c
           <div ref={bottomRef} />
         </div>
       </div>
+      {selectionMode && (
+        <SelectionToolbar
+          count={selectedIds.size}
+          onCopy={handleCopySelected}
+          onCancel={clearSelection}
+        />
+      )}
       <div className="shrink-0">
         <InputArea
           onSend={handleSend}

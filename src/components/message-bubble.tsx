@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, memo } from "react";
+import { useState, useCallback, useRef, memo } from "react";
 import type { ChatMessage } from "@/types";
 import { ToolCard } from "./tool-card";
 import { useSettings } from "@/hooks/use-settings";
@@ -16,12 +16,75 @@ function stripCliXml(text: string): string {
   return text.replace(CLI_XML_RE, "").trim();
 }
 
-export const MessageBubble = memo(function MessageBubble({ message, collapsedByDefault = false }: { message: ChatMessage; collapsedByDefault?: boolean }) {
+interface MessageBubbleProps {
+  message: ChatMessage;
+  collapsedByDefault?: boolean;
+  selectionMode?: boolean;
+  selected?: boolean;
+  onEnterSelection?: (messageId: string) => void;
+  onToggleSelect?: (messageId: string) => void;
+}
+
+export const MessageBubble = memo(function MessageBubble({
+  message,
+  collapsedByDefault = false,
+  selectionMode = false,
+  selected = false,
+  onEnterSelection,
+  onToggleSelect,
+}: MessageBubbleProps) {
   const [collapsed, setCollapsed] = useState(collapsedByDefault);
   const isUser = message.role === "user";
   const isSystem = message.role === "system";
+  const isSelectable = !isSystem;
   const visibleBlocks = message.blocks?.filter((b) => !(b.type === "tool_use" && b.toolUse.name === "AskUserQuestion")) || [];
   const hasBlocks = visibleBlocks.length > 0;
+
+  const lastInputWasTouch = useRef(false);
+  const lastTap = useRef<{ time: number; x: number; y: number } | null>(null);
+
+  // Desktop: right-click enters message selection
+  const handleContextMenu = useCallback((e: React.MouseEvent) => {
+    if (lastInputWasTouch.current) return; // let native long-press text selection work
+    if (!isSelectable) return;
+    e.preventDefault();
+    window.getSelection()?.removeAllRanges();
+    if (selectionMode) {
+      onToggleSelect?.(message.id);
+    } else {
+      onEnterSelection?.(message.id);
+    }
+  }, [isSelectable, selectionMode, message.id, onEnterSelection, onToggleSelect]);
+
+  const handleTouchStart = useCallback(() => {
+    lastInputWasTouch.current = true;
+  }, []);
+
+  const handleMouseDown = useCallback(() => {
+    lastInputWasTouch.current = false;
+  }, []);
+
+  // Double-tap/click enters message selection (touch + desktop)
+  const handleClick = useCallback((e: React.MouseEvent) => {
+    if (selectionMode) {
+      if (isSelectable) onToggleSelect?.(message.id);
+      return;
+    }
+    if (!isSelectable) return;
+    const now = Date.now();
+    const prev = lastTap.current;
+    if (prev && now - prev.time < 300) {
+      const dx = e.clientX - prev.x;
+      const dy = e.clientY - prev.y;
+      if (dx * dx + dy * dy < 400) {
+        lastTap.current = null;
+        window.getSelection()?.removeAllRanges();
+        onEnterSelection?.(message.id);
+        return;
+      }
+    }
+    lastTap.current = { time: now, x: e.clientX, y: e.clientY };
+  }, [selectionMode, isSelectable, message.id, onToggleSelect, onEnterSelection]);
 
   if (isSystem) {
     const isCompacting = message.content === "__compacting__";
@@ -74,13 +137,24 @@ export const MessageBubble = memo(function MessageBubble({ message, collapsedByD
   }
 
   return (
-    <div className={cn("flex w-full", isUser && !collapsedByDefault ? "justify-end" : "justify-start")}>
+    <div
+      className={cn(
+        "flex w-full",
+        isUser && !collapsedByDefault ? "justify-end" : "justify-start",
+        selectionMode && "cursor-pointer select-none"
+      )}
+      onContextMenu={handleContextMenu}
+      onTouchStart={handleTouchStart}
+      onMouseDown={handleMouseDown}
+      onClick={handleClick}
+    >
       <div
         className={cn(
-          "max-w-[85%] rounded-lg px-4 py-2 overflow-hidden",
+          "max-w-[85%] rounded-lg px-4 py-2 overflow-hidden transition-colors",
           isUser && !collapsedByDefault
             ? "bg-primary text-primary-foreground"
-            : "bg-muted text-foreground"
+            : "bg-muted text-foreground",
+          selected && "ring-2 ring-blue-500"
         )}
       >
         {collapsedByDefault && (
