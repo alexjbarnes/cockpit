@@ -6,16 +6,16 @@ kill:
     @sleep 0.5
 
 # Start dev server (Next.js dev mode with HMR)
-dev: kill
-    APERTURE_DEBUG=1 APERTURE_TOKEN=test npx tsx watch --env-file=.env server.ts
+dev:
+    APERTURE_DEBUG=1 APERTURE_TOKEN=test npx tsx watch --env-file=.env.development server.ts
 
 # Build for production
 build:
     npx next build && npx tsc -p tsconfig.server.json
 
 # Start production server with bun
-start: kill build
-    NODE_ENV=production APERTURE_TOKEN=test APERTURE_DEBUG=1 bun dist/server.js
+start: build
+    NODE_ENV=production APERTURE_DEBUG=1 bun --env-file=.env.production dist/server.js
 
 # Type check
 check:
