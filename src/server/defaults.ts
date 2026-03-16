@@ -11,6 +11,7 @@ export interface AppDefaults {
   diffStyle: DiffStyle;
   dismissKeyboardOnSend: boolean;
   thinkingExpanded: boolean;
+  model: string;
 }
 
 const PREFS_DIR = join(homedir(), ".aperture");
@@ -22,6 +23,7 @@ const fallback: AppDefaults = {
   diffStyle: "split",
   dismissKeyboardOnSend: true,
   thinkingExpanded: false,
+  model: "sonnet",
 };
 
 let cache: AppDefaults | null = null;

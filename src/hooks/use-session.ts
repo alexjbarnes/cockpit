@@ -23,6 +23,7 @@ interface UseSessionReturn {
   pendingPermissions: PendingPermission[];
   pendingQuestions: PendingQuestion[];
   modelPicker: string | null;
+  currentModel: string;
   bypassActive: boolean;
   thinkingLevel: ThinkingLevel;
   contextUsage: ContextUsage | null;
@@ -38,6 +39,7 @@ interface UseSessionReturn {
   respondToPermission: (requestId: string, allowed: boolean, permissionMode?: PermissionMode) => void;
   respondToQuestion: (requestId: string, answers: Record<string, string>) => void;
   selectModel: (model: string) => void;
+  setModel: (model: string) => void;
   setBypassAll: (enabled: boolean) => void;
   setThinkingLevel: (level: ThinkingLevel) => void;
   cancelQueuedMessage: () => string | null;
@@ -50,6 +52,7 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
   const [pendingPermissions, setPendingPermissions] = useState<PendingPermission[]>([]);
   const [pendingQuestions, setPendingQuestions] = useState<PendingQuestion[]>([]);
   const [modelPicker, setModelPicker] = useState<string | null>(null);
+  const [currentModel, setCurrentModel] = useState("sonnet");
   const [bypassActive, setBypassActive] = useState(false);
   const [thinkingLevel, setThinkingLevelState] = useState<ThinkingLevel>("high");
   const [historyLoaded, setHistoryLoaded] = useState(false);
@@ -462,7 +465,14 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
         case "session:system": {
           const pickerPrefix = "__model_picker::";
           if (msg.text.startsWith(pickerPrefix)) {
-            setModelPicker(msg.text.slice(pickerPrefix.length));
+            const model = msg.text.slice(pickerPrefix.length);
+            setModelPicker(model);
+            setCurrentModel(model);
+            break;
+          }
+          const modelPrefix = "__model::";
+          if (msg.text.startsWith(modelPrefix)) {
+            setCurrentModel(msg.text.slice(modelPrefix.length));
             break;
           }
           const bypassPrefix = "__bypass_state::";
@@ -549,6 +559,9 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
 
         case "session:info_updated": {
           setSessionName(msg.info.name);
+          if (msg.info.model) {
+            setCurrentModel(msg.info.model);
+          }
           break;
         }
 
@@ -667,7 +680,16 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
   const selectModel = useCallback(
     (model: string) => {
       setModelPicker(null);
+      setCurrentModel(model);
       send({ type: "message:send", sessionId, text: `/model ${model}` });
+    },
+    [send, sessionId]
+  );
+
+  const setModel = useCallback(
+    (model: string) => {
+      setCurrentModel(model);
+      send({ type: "session:set_model", sessionId, model });
     },
     [send, sessionId]
   );
@@ -695,5 +717,5 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
     return text;
   }, []);
 
-  return { messages, historyLoaded, isResponding, pendingPermissions, pendingQuestions, modelPicker, bypassActive, thinkingLevel, contextUsage, rateLimitStatus, suggestions, sessionName, initData, hasQueuedMessage, backgroundTasks, todos, sendMessage, interrupt, respondToPermission, respondToQuestion, selectModel, setBypassAll, setThinkingLevel, cancelQueuedMessage };
+  return { messages, historyLoaded, isResponding, pendingPermissions, pendingQuestions, modelPicker, currentModel, bypassActive, thinkingLevel, contextUsage, rateLimitStatus, suggestions, sessionName, initData, hasQueuedMessage, backgroundTasks, todos, sendMessage, interrupt, respondToPermission, respondToQuestion, selectModel, setModel, setBypassAll, setThinkingLevel, cancelQueuedMessage };
 }

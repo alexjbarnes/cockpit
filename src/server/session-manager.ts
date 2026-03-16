@@ -44,6 +44,7 @@ export class SessionManager {
       createdAt: now,
       lastActiveAt: now,
       status: "idle",
+      model: defaults.model || undefined,
     };
 
     this.sessions.set(id, {
@@ -77,6 +78,7 @@ export class SessionManager {
           createdAt: now,
           lastActiveAt: now,
           status: "idle",
+          model: prefs?.model || defaults.model || undefined,
         },
         process: null,
         stdin: null,
@@ -248,6 +250,21 @@ export class SessionManager {
     const session = this.sessions.get(sessionId);
     if (!session) return false;
     return session.bypassAllPermissions || session.allowedTools.has(toolName);
+  }
+
+  setModel(sessionId: string, model: string): void {
+    const session = this.sessions.get(sessionId);
+    if (!session || session.info.model === model) return;
+    session.info.model = model;
+    setSessionPrefs(sessionId, { model });
+    this.killProcess(session);
+    session.info.status = "idle";
+    session.emitter.emit("status", sessionId, "idle");
+    this.emitInfoUpdated(session, sessionId);
+  }
+
+  getModel(sessionId: string): string {
+    return this.sessions.get(sessionId)?.info.model || "sonnet";
   }
 
   setThinkingLevel(sessionId: string, level: ThinkingLevel): void {
@@ -448,6 +465,7 @@ export class SessionManager {
         session.info.model = args;
         session.info.status = "idle";
         session.emitter.emit("status", sessionId, "idle");
+        setSessionPrefs(sessionId, { model: args });
         this.emitSystem(session, sessionId, `Model switched to ${args}`);
         this.emitInfoUpdated(session, sessionId);
         return true;

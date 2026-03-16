@@ -21,6 +21,12 @@ const themeOptions: { value: Theme; label: string }[] = [
   { value: "system", label: "System" },
 ];
 
+const modelOptions: { value: string; label: string }[] = [
+  { value: "opus", label: "Opus" },
+  { value: "sonnet", label: "Sonnet" },
+  { value: "haiku", label: "Haiku" },
+];
+
 const thinkingOptions: { value: ThinkingLevel; label: string }[] = [
   { value: "low", label: "Low" },
   { value: "medium", label: "Medium" },
@@ -201,6 +207,9 @@ export default function SettingsPage() {
           <CardTitle className="text-base">Session defaults</CardTitle>
         </CardHeader>
         <CardContent className="space-y-1">
+          <SettingRow label="Model">
+            <ButtonGroup options={modelOptions} value={settings.model} onChange={(v) => updateSetting("model", v)} />
+          </SettingRow>
           <SettingRow label="Thinking level">
             <ButtonGroup options={thinkingOptions} value={settings.thinkingLevel} onChange={(v) => updateSetting("thinkingLevel", v)} />
           </SettingRow>

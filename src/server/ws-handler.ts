@@ -108,6 +108,15 @@ export function createWebSocketHandler(
             });
           }
 
+          const model = sessionManager.getModel(msg.sessionId);
+          if (model && model !== "sonnet") {
+            send(ws, {
+              type: "session:system",
+              sessionId: msg.sessionId,
+              text: `__model::${model}`,
+            });
+          }
+
           const thinkingLevel = sessionManager.getThinkingLevel(msg.sessionId);
           if (thinkingLevel !== "high") {
             send(ws, {
@@ -301,6 +310,11 @@ export function createWebSocketHandler(
 
         case "session:set_thinking": {
           sessionManager.setThinkingLevel(msg.sessionId, msg.level);
+          break;
+        }
+
+        case "session:set_model": {
+          sessionManager.setModel(msg.sessionId, msg.model);
           break;
         }
 

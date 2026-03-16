@@ -2,13 +2,19 @@
 
 import { useState, useRef, useCallback, type KeyboardEvent, type ClipboardEvent, type DragEvent } from "react";
 import { Button } from "@/components/ui/button";
-import { Send, Square, Settings2, ShieldOff, ShieldCheck, Brain, Loader2, X, Paperclip, FileText } from "lucide-react";
+import { Send, Square, Settings2, ShieldOff, ShieldCheck, Brain, Cpu, Loader2, X, Paperclip, FileText } from "lucide-react";
 import { useWebSocket } from "@/hooks/use-websocket";
 import { SlashCommandMenu } from "@/components/slash-command-menu";
 import { MentionMenu, type MentionItem } from "@/components/mention-menu";
 import type { SlashCommand } from "@/lib/commands";
 import type { ThinkingLevel, ContextUsage, ImageAttachment, DocumentAttachment, TextFileAttachment, InitData } from "@/types";
 import { ContextIndicator } from "./context-indicator";
+
+const models: { value: string; label: string }[] = [
+  { value: "opus", label: "Opus" },
+  { value: "sonnet", label: "Sonnet" },
+  { value: "haiku", label: "Haiku" },
+];
 
 const thinkingLevels: { value: ThinkingLevel; label: string }[] = [
   { value: "low", label: "Low" },
@@ -115,6 +121,8 @@ interface InputAreaProps {
   onSetBypass: (enabled: boolean) => void;
   thinkingLevel: ThinkingLevel;
   onSetThinking: (level: ThinkingLevel) => void;
+  currentModel: string;
+  onSetModel: (model: string) => void;
   contextUsage: ContextUsage | null;
   dismissKeyboard: boolean;
   cwd?: string;
@@ -131,7 +139,7 @@ function getMentionContext(text: string, cursorPos: number): { active: boolean; 
   return { active: true, query: match[1], start: cursorPos - match[0].length };
 }
 
-export function InputArea({ onSend, onInterrupt, isResponding, bypassActive, onSetBypass, thinkingLevel, onSetThinking, contextUsage, dismissKeyboard, cwd, onCompact, initData, hasQueuedMessage, onCancelQueued }: InputAreaProps) {
+export function InputArea({ onSend, onInterrupt, isResponding, bypassActive, onSetBypass, thinkingLevel, onSetThinking, currentModel, onSetModel, contextUsage, dismissKeyboard, cwd, onCompact, initData, hasQueuedMessage, onCancelQueued }: InputAreaProps) {
   const { connected } = useWebSocket();
   const [text, setText] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -388,6 +396,25 @@ export function InputArea({ onSend, onInterrupt, isResponding, bypassActive, onS
       <div className="mx-auto max-w-3xl">
         {optionsOpen && (
           <div className="mb-2 rounded-md border border-input bg-muted/50 p-2 space-y-1">
+            <div className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs">
+              <Cpu className="h-3.5 w-3.5 text-muted-foreground" />
+              <span className="text-muted-foreground">Model</span>
+              <div className="ml-auto flex gap-1">
+                {models.map((opt) => (
+                  <button
+                    key={opt.value}
+                    onClick={() => onSetModel(opt.value)}
+                    className={`rounded px-2 py-0.5 text-xs transition-colors ${
+                      currentModel === opt.value
+                        ? "bg-primary text-primary-foreground"
+                        : "bg-muted text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            </div>
             <button
               onClick={() => onSetBypass(!bypassActive)}
               className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs hover:bg-muted transition-colors"

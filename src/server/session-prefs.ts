@@ -8,6 +8,7 @@ export interface SessionPrefs {
   thinkingLevel?: ThinkingLevel;
   bypassAllPermissions?: boolean;
   allowedTools?: string[];
+  model?: string;
 }
 
 const PREFS_DIR = join(homedir(), ".aperture");

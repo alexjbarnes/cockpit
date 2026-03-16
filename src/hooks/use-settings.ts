@@ -11,6 +11,7 @@ export interface Settings {
   thinkingLevel: ThinkingLevel;
   bypassAllPermissions: boolean;
   thinkingExpanded: boolean;
+  model: string;
 }
 
 const defaultSettings: Settings = {
@@ -19,6 +20,7 @@ const defaultSettings: Settings = {
   thinkingLevel: "high",
   bypassAllPermissions: false,
   thinkingExpanded: false,
+  model: "sonnet",
 };
 
 export function useSettings() {
