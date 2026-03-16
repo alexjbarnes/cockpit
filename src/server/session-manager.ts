@@ -605,6 +605,7 @@ export class SessionManager {
     const pendingToolUses: ToolUse[] = [];
     const pendingBlocks: ContentBlock[] = [];
     const agentStack: ToolUse[] = [];
+    let currentAssistantMsgId: string | null = null;
 
     let lineBuffer = "";
     proc.stdout!.on("data", (chunk: Buffer) => {
@@ -630,6 +631,32 @@ export class SessionManager {
         this.extractUsage(session, sessionId, line);
         const events = parser.parseLine(line);
         for (const event of events) {
+          // Finalize the previous assistant message when a new one starts
+          if (event.assistantMessageId && event.assistantMessageId !== currentAssistantMsgId) {
+            if (currentAssistantMsgId && pendingBlocks.length > 0) {
+              const textContent = pendingBlocks
+                .filter((b) => b.type === "text")
+                .map((b) => b.text)
+                .join("");
+              const intermediateMsg: ChatMessage = {
+                id: currentAssistantMsgId,
+                role: "assistant",
+                content: textContent,
+                toolUses: [...pendingToolUses],
+                blocks: [...pendingBlocks],
+                timestamp: Date.now(),
+              };
+              session.emitter.emit("event", sessionId, { type: "message_done", message: intermediateMsg } as ParsedEvent);
+              if (intermediateMsg.toolUses.some((t: ToolUse) => t.name === "Agent")) {
+                this.loadAgentChildren(session, sessionId, intermediateMsg.id, session.info.cwd);
+              }
+              pendingToolUses.length = 0;
+              pendingBlocks.length = 0;
+              agentStack.length = 0;
+            }
+            currentAssistantMsgId = event.assistantMessageId;
+          }
+
           if (event.type === "thinking" && event.text) {
             const last = pendingBlocks[pendingBlocks.length - 1];
             if (last && last.type === "thinking") {
@@ -709,6 +736,22 @@ export class SessionManager {
           } else if (event.type === "system_message" && event.text) {
             this.emitSystem(session, sessionId, event.text);
           } else if (event.type === "message_done" && event.message) {
+            // If all messages were already finalized via intermediate emissions,
+            // skip the duplicate result message but still update status.
+            if (pendingBlocks.length === 0 && pendingToolUses.length === 0 && currentAssistantMsgId) {
+              currentAssistantMsgId = null;
+              session.info.status = "idle";
+              session.emitter.emit("status", sessionId, "idle");
+              if (session.compacting) {
+                session.compacting = false;
+                this.emitSystem(session, sessionId, "__compact::done");
+              }
+              continue;
+            }
+
+            if (currentAssistantMsgId) {
+              event.message.id = currentAssistantMsgId;
+            }
             const hasStreamedText = pendingBlocks.some((b) => b.type === "text");
             if (event.message.content && !hasStreamedText) {
               pendingBlocks.push({ type: "text", text: event.message.content });
@@ -721,6 +764,7 @@ export class SessionManager {
             pendingToolUses.length = 0;
             pendingBlocks.length = 0;
             agentStack.length = 0;
+            currentAssistantMsgId = null;
 
             session.info.status = "idle";
             session.emitter.emit("status", sessionId, "idle");

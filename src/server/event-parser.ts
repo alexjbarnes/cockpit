@@ -11,6 +11,7 @@ export interface ParsedEvent {
   filePath?: string;
   message?: ChatMessage;
   messageId?: string;
+  assistantMessageId?: string;
   children?: ToolUse[];
   requestId?: string;
   rawToolInput?: Record<string, unknown>;
@@ -190,19 +191,21 @@ export class EventParser {
     const msg = event.message as StreamMessage | undefined;
     if (!msg?.content) return [];
 
+    const assistantMessageId = msg.id || undefined;
     const events: ParsedEvent[] = [];
 
     for (const block of msg.content) {
       if (block.type === "thinking" && block.thinking) {
-        events.push({ type: "thinking", text: block.thinking });
+        events.push({ type: "thinking", text: block.thinking, assistantMessageId });
       } else if (block.type === "text" && block.text) {
-        events.push({ type: "text_delta", text: block.text });
+        events.push({ type: "text_delta", text: block.text, assistantMessageId });
       } else if (block.type === "tool_use") {
         events.push({
           type: "tool_use_start",
           toolName: block.name || "unknown",
           toolId: block.id,
           toolInput: block.input ? JSON.stringify(block.input) : "",
+          assistantMessageId,
         });
       }
     }
