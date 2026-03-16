@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "tsx watch --env-file=.env server.ts",
     "build": "next build && tsc -p tsconfig.server.json",
-    "start": "node dist/server.js"
+    "start": "bun dist/server.js"
   },
   "dependencies": {
     "@codemirror/lang-markdown": "^6.5.0",
