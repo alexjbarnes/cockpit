@@ -32,6 +32,8 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
   const mountedRef = useRef(true);
 
   const connectRef = useRef<() => void>(undefined);
+  const pongTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const awaitingPong = useRef(false);
 
   const scheduleReconnect = useCallback(() => {
     if (!mountedRef.current) return;
@@ -85,6 +87,10 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
 
     ws.onmessage = (event) => {
       const msg: ServerMessage = JSON.parse(event.data);
+      if (msg.type === "pong") {
+        clearTimeout(pongTimer.current);
+        awaitingPong.current = false;
+      }
       for (const handler of handlersRef.current) {
         handler(msg);
       }
@@ -120,17 +126,56 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
     };
   }, [connect]);
 
+  const tearDownAndReconnect = useCallback(() => {
+    const ws = wsRef.current;
+    if (ws) {
+      ws.onclose = null;
+      ws.onerror = null;
+      ws.close();
+      wsRef.current = null;
+    }
+    setConnected(false);
+    reconnectDelay.current = 1000;
+    connectRef.current?.();
+  }, []);
+
   useEffect(() => {
     const onVisible = () => {
-      if (document.visibilityState === "visible" && !wsRef.current && !connectingRef.current) {
+      if (document.visibilityState !== "visible") return;
+
+      // No existing connection - reconnect immediately
+      if (!wsRef.current && !connectingRef.current) {
         clearTimeout(reconnectTimer.current);
         reconnectDelay.current = 1000;
         connect();
+        return;
       }
+
+      // Existing connection - probe it with a ping
+      const ws = wsRef.current;
+      if (!ws || ws.readyState !== WebSocket.OPEN || awaitingPong.current) return;
+
+      awaitingPong.current = true;
+      try {
+        ws.send(JSON.stringify({ type: "ping" }));
+      } catch {
+        awaitingPong.current = false;
+        tearDownAndReconnect();
+        return;
+      }
+
+      clearTimeout(pongTimer.current);
+      pongTimer.current = setTimeout(() => {
+        awaitingPong.current = false;
+        tearDownAndReconnect();
+      }, 3000);
     };
     document.addEventListener("visibilitychange", onVisible);
-    return () => document.removeEventListener("visibilitychange", onVisible);
-  }, [connect]);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisible);
+      clearTimeout(pongTimer.current);
+    };
+  }, [connect, tearDownAndReconnect]);
 
   const send = useCallback((msg: ClientMessage) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
