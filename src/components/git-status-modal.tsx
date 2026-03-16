@@ -36,6 +36,7 @@ export function GitStatusButton({ cwd }: { cwd?: string }) {
     if (!cwd) return;
     setLoading(true);
     setError(null);
+    setStatus(null);
     fetch(`/api/git/status?cwd=${encodeURIComponent(cwd)}`)
       .then((res) => {
         if (!res.ok) throw new Error("Failed to fetch");
@@ -44,6 +45,11 @@ export function GitStatusButton({ cwd }: { cwd?: string }) {
       .then((data: GitStatus) => setStatus(data))
       .catch(() => setError("Not a git repository"))
       .finally(() => setLoading(false));
+  }, [cwd]);
+
+  useEffect(() => {
+    setStatus(null);
+    setError(null);
   }, [cwd]);
 
   useEffect(() => {
@@ -58,7 +64,7 @@ export function GitStatusButton({ cwd }: { cwd?: string }) {
       <Button
         variant="ghost"
         size="icon"
-        onClick={() => setOpen(true)}
+        onClick={() => { setStatus(null); setError(null); setOpen(true); }}
         title="Git status"
         disabled={!cwd}
       >
@@ -82,17 +88,17 @@ export function GitStatusButton({ cwd }: { cwd?: string }) {
               </Button>
             </div>
 
-            {loading && !status && (
+            {loading && (
               <div className="flex items-center justify-center py-8">
                 <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
               </div>
             )}
 
-            {error && (
+            {!loading && error && (
               <p className="text-sm text-muted-foreground py-4 text-center">{error}</p>
             )}
 
-            {status && (
+            {!loading && status && (
               <>
                 <div className="flex items-center gap-2 mb-3 px-1">
                   <span className="text-sm text-muted-foreground">Branch:</span>
