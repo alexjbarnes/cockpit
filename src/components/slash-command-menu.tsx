@@ -70,10 +70,18 @@ export function SlashCommandMenu({
   }, [cwd, initCommands]);
 
   const cliCommands = initCommands
-    ? initCommands.map((name) => ({
-        command: name.startsWith("/") ? name : "/" + name,
-        description: "",
-      }))
+    ? (() => {
+        const builtinMap = new Map(slashCommands.map((c) => [c.command, c]));
+        const fromInit = initCommands.map((name) => {
+          const cmd = name.startsWith("/") ? name : "/" + name;
+          return builtinMap.get(cmd) || { command: cmd, description: "" };
+        });
+        const initNames = new Set(fromInit.map((c) => c.command));
+        return [
+          ...fromInit,
+          ...slashCommands.filter((c) => !initNames.has(c.command)),
+        ];
+      })()
     : (() => {
         const builtinNames = new Set(slashCommands.map((c) => c.command));
         return [
