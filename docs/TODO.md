@@ -1,0 +1,2 @@
+- Display tool use details in chat: show file contents read, commands run, and tool output (data is available in stream-json output)
+- In-browser file editor using CodeMirror 6 (mobile-first, good touch/virtual keyboard support)
