@@ -137,6 +137,22 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
             streamingRef.current = null;
             agentStackRef.current = [];
           }
+
+          // Status is bundled with history so it arrives atomically,
+          // even if the WS drops before the separate status message.
+          if (msg.status) {
+            const nowRunning = msg.status === "running";
+            setIsResponding(nowRunning);
+            isRespondingRef.current = nowRunning;
+            if (msg.status === "idle") {
+              streamingRef.current = null;
+              agentStackRef.current = [];
+              setMessages((prev) => prev.filter((m) => m.id !== "streaming"));
+              setPendingQuestions([]);
+              setRateLimitStatus(null);
+            }
+          }
+
           setHistoryLoaded(true);
           loadedSessionRef.current = sessionId;
           break;

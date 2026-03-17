@@ -143,6 +143,6 @@ export type ServerMessage =
   | { type: "session:task_update"; sessionId: string; task: BackgroundTask }
   | { type: "session:todos"; sessionId: string; todos: TodoItem[] }
   | { type: "session:init"; sessionId: string; data: InitData }
-  | { type: "history"; sessionId: string; messages: ChatMessage[]; delta?: boolean }
+  | { type: "history"; sessionId: string; messages: ChatMessage[]; delta?: boolean; status?: "idle" | "running" }
   | { type: "session:streaming_snapshot"; sessionId: string; messageId: string; content: string; toolUses: ToolUse[]; blocks: ContentBlock[] }
   | { type: "pong" };

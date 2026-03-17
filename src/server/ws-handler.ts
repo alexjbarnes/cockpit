@@ -106,6 +106,16 @@ export function createWebSocketHandler(
           const cleanups: Array<() => void> = [];
           sessionCleanups.set(msg.sessionId, cleanups);
 
+          // Compute status early so it can be included in the history message.
+          // This ensures the client gets status atomically with history, even
+          // if the WebSocket drops before subsequent messages are delivered.
+          const correctedStatus = sessionManager.isProcessAlive(msg.sessionId)
+            ? session.info.status
+            : "idle";
+          if (correctedStatus !== session.info.status) {
+            sessionManager.fixStaleStatus(msg.sessionId);
+          }
+
           // If client already has messages, send only the delta to avoid
           // re-sending 1000+ messages on every mobile reconnect.
           const clientCount = msg.messageCount ?? 0;
@@ -117,12 +127,14 @@ export function createWebSocketHandler(
               sessionId: msg.sessionId,
               messages: delta,
               delta: true,
+              status: correctedStatus,
             });
           } else {
             send(ws, {
               type: "history",
               sessionId: msg.sessionId,
               messages: session.messages,
+              status: correctedStatus,
             });
           }
 
@@ -150,14 +162,6 @@ export function createWebSocketHandler(
             sessionId: msg.sessionId,
             info: session.info,
           });
-
-          // If status is "running" but process is dead, correct it
-          const correctedStatus = sessionManager.isProcessAlive(msg.sessionId)
-            ? session.info.status
-            : "idle";
-          if (correctedStatus !== session.info.status) {
-            sessionManager.fixStaleStatus(msg.sessionId);
-          }
 
           send(ws, {
             type: "session:status",
