@@ -676,6 +676,37 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
   // This covers the case where the "idle" status event was sent to a dead WS.
   const lastEventRef = useRef(0);
 
+  const checkSessionViaHttp = useCallback(async () => {
+    try {
+      const params = new URLSearchParams();
+      if (cwd) params.set("cwd", cwd);
+      const res = await fetch(`/api/sessions/${sessionId}?${params}`);
+      if (!res.ok) {
+        console.warn(`[fallback] HTTP check failed (${res.status})`);
+        return;
+      }
+      const data = await res.json();
+
+      if (data.session.status === "idle") {
+        console.log("[fallback] session is idle, recovering");
+        const seen = new Set<string>();
+        const deduped = (data.messages as ChatMessage[]).filter((m: ChatMessage) => {
+          if (seen.has(m.id)) return false;
+          seen.add(m.id);
+          return true;
+        });
+        setMessages(deduped);
+        messageCountRef.current = deduped.length;
+        setIsResponding(false);
+        isRespondingRef.current = false;
+        streamingRef.current = null;
+        agentStackRef.current = [];
+      }
+    } catch {
+      // Network error - will retry on next interval
+    }
+  }, [sessionId, cwd]);
+
   useEffect(() => {
     if (!isResponding) {
       lastEventRef.current = 0;
@@ -696,39 +727,27 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
     const unsub = subscribe(handler);
 
     const poll = setInterval(async () => {
-      // Only poll if no events received in the last 15 seconds
-      if (Date.now() - lastEventRef.current < 15000) return;
+      // Only poll if no events received in the last 10 seconds
+      if (Date.now() - lastEventRef.current < 10000) return;
+      console.log("[fallback] no events for 10s, checking session via HTTP");
+      await checkSessionViaHttp();
+    }, 5000);
 
-      try {
-        const params = new URLSearchParams({ cwd: cwd || "" });
-        const res = await fetch(`/api/sessions/${sessionId}?${params}`);
-        if (!res.ok) return;
-        const data = await res.json();
-
-        if (data.session.status === "idle") {
-          // Session finished while we were disconnected - reload state
-          const seen = new Set<string>();
-          const deduped = (data.messages as ChatMessage[]).filter((m) => {
-            if (seen.has(m.id)) return false;
-            seen.add(m.id);
-            return true;
-          });
-          setMessages(deduped);
-          setIsResponding(false);
-          isRespondingRef.current = false;
-          streamingRef.current = null;
-          agentStackRef.current = [];
-        }
-      } catch {
-        // Network error - will retry on next interval
+    // Also check when page becomes visible while we think we're responding
+    const onVisible = () => {
+      if (document.visibilityState === "visible" && isRespondingRef.current) {
+        console.log("[fallback] page visible while responding, checking session");
+        checkSessionViaHttp();
       }
-    }, 10000);
+    };
+    document.addEventListener("visibilitychange", onVisible);
 
     return () => {
       unsub();
       clearInterval(poll);
+      document.removeEventListener("visibilitychange", onVisible);
     };
-  }, [isResponding, sessionId, cwd, subscribe]);
+  }, [isResponding, sessionId, cwd, subscribe, checkSessionViaHttp]);
 
   const sendMessage = useCallback(
     (text: string, images?: ImageAttachment[], documents?: DocumentAttachment[], textFiles?: TextFileAttachment[]) => {

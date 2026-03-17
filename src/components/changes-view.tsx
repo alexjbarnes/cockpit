@@ -19,6 +19,7 @@ import {
   ChevronUp,
   ChevronDown,
   Sparkles,
+  ArrowUpFromLine,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -32,6 +33,7 @@ interface GitFileChange {
 interface GitStatus {
   branch: string;
   files: GitFileChange[];
+  ahead: number;
 }
 
 function statusIcon(status: string) {
@@ -143,6 +145,8 @@ export function ChangesView({ cwd }: { cwd: string }) {
   const [pushOnCommit, setPushOnCommit] = useState(false);
   const [commitPanelOpen, setCommitPanelOpen] = useState(false);
   const [generating, setGenerating] = useState(false);
+  const [pushing, setPushing] = useState(false);
+  const [pushResult, setPushResult] = useState<{ ok: boolean; message: string } | null>(null);
   const contextMenuRef = useRef<HTMLDivElement>(null);
 
   const fetchStatus = useCallback(() => {
@@ -261,6 +265,28 @@ export function ChangesView({ cwd }: { cwd: string }) {
     }
   }, [cwd, checkedFiles]);
 
+  const handlePush = useCallback(async () => {
+    setPushing(true);
+    setPushResult(null);
+    try {
+      const res = await fetch("/api/git/push", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cwd }),
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error || "Failed to push");
+      }
+      setPushResult({ ok: true, message: "Pushed" });
+      fetchStatus();
+    } catch (err) {
+      setPushResult({ ok: false, message: err instanceof Error ? err.message : "Failed" });
+    } finally {
+      setPushing(false);
+    }
+  }, [cwd, fetchStatus]);
+
   const toggleFile = useCallback((path: string) => {
     setCheckedFiles((prev) => {
       const next = new Set(prev);
@@ -340,7 +366,37 @@ export function ChangesView({ cwd }: { cwd: string }) {
         <span className="text-xs text-muted-foreground">
           {status.files.length} file{status.files.length !== 1 ? "s" : ""} changed
         </span>
+        {status.ahead > 0 && (
+          <span className="text-xs text-muted-foreground">
+            {status.ahead} unpushed
+          </span>
+        )}
+        {pushResult && (
+          <span className={cn(
+            "text-xs flex items-center gap-1",
+            pushResult.ok ? "text-green-500" : "text-red-500"
+          )}>
+            {pushResult.ok && <Check className="h-3 w-3" />}
+            {pushResult.message}
+          </span>
+        )}
         <div className="flex-1" />
+        {status.ahead > 0 && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handlePush}
+            disabled={pushing}
+            className="gap-1.5"
+          >
+            {pushing ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <ArrowUpFromLine className="h-3.5 w-3.5" />
+            )}
+            Push
+          </Button>
+        )}
         <Button variant="ghost" size="sm" onClick={fetchStatus}>
           Refresh
         </Button>

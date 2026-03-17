@@ -42,6 +42,7 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
     // Cap backoff at 5s when page is visible, 30s when hidden
     const maxDelay = document.visibilityState === "visible" ? 5000 : 30000;
     const delay = Math.min(reconnectDelay.current, maxDelay);
+    console.log(`[ws] reconnect scheduled in ${delay}ms`);
     reconnectTimer.current = setTimeout(() => {
       reconnectDelay.current = Math.min(reconnectDelay.current * 2, 30000);
       connectRef.current?.();
@@ -49,26 +50,33 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const connect = useCallback(async () => {
-    if (connectingRef.current || wsRef.current) return;
+    if (connectingRef.current || wsRef.current) {
+      console.log(`[ws] connect skipped (connecting=${connectingRef.current}, hasWs=${!!wsRef.current})`);
+      return;
+    }
     connectingRef.current = true;
+    console.log("[ws] connecting...");
 
     let token: string;
     try {
       const res = await fetch("/api/auth/ws-token");
       if (!res.ok) {
+        console.warn(`[ws] ws-token fetch failed (${res.status})`);
         connectingRef.current = false;
         scheduleReconnect();
         return;
       }
       const data = await res.json();
       token = data.token;
-    } catch {
+    } catch (err) {
+      console.warn("[ws] ws-token fetch error:", err);
       connectingRef.current = false;
       scheduleReconnect();
       return;
     }
 
     if (wsRef.current || !mountedRef.current) {
+      console.log(`[ws] connect aborted (hasWs=${!!wsRef.current}, mounted=${mountedRef.current})`);
       connectingRef.current = false;
       return;
     }
@@ -81,6 +89,7 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
     connectingRef.current = false;
 
     ws.onopen = () => {
+      console.log("[ws] connected");
       setConnected(true);
       reconnectDelay.current = 1000;
       for (const queued of queueRef.current) {
@@ -100,7 +109,8 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
       }
     };
 
-    ws.onclose = () => {
+    ws.onclose = (event) => {
+      console.log(`[ws] closed (code=${event.code}), scheduling reconnect`);
       setConnected(false);
       if (wsRef.current === ws) {
         wsRef.current = null;
@@ -156,6 +166,7 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
       healthTimer.current = setInterval(() => {
         // No connection and not connecting - reconnect now
         if (!wsRef.current && !connectingRef.current) {
+          console.log("[ws] health: no connection, forcing reconnect");
           clearTimeout(reconnectTimer.current);
           reconnectDelay.current = 1000;
           connectRef.current?.();
@@ -167,6 +178,7 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
 
         // Dead connection - tear down
         if (ws.readyState !== WebSocket.OPEN) {
+          console.log(`[ws] health: dead connection (readyState=${ws.readyState}), tearing down`);
           tearDownAndReconnect();
           return;
         }
@@ -192,10 +204,12 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
 
     const onVisibilityChange = () => {
       if (document.visibilityState === "visible") {
+        console.log(`[ws] page visible (hasWs=${!!wsRef.current}, connecting=${connectingRef.current})`);
         startHealthCheck();
 
         // Immediate check on becoming visible
         if (!wsRef.current && !connectingRef.current) {
+          console.log("[ws] no connection on visibility, reconnecting now");
           clearTimeout(reconnectTimer.current);
           reconnectDelay.current = 1000;
           connectRef.current?.();

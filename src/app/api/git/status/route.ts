@@ -28,6 +28,7 @@ export interface GitFileChange {
 export interface GitStatusResponse {
   branch: string;
   files: GitFileChange[];
+  ahead: number;
 }
 
 function parseStatusCode(xy: string): string {
@@ -55,6 +56,15 @@ export async function GET(req: NextRequest) {
   try {
     const branchOut = await run("git", ["rev-parse", "--abbrev-ref", "HEAD"], cwd);
     const branch = branchOut.trim();
+
+    // Count unpushed commits
+    let ahead = 0;
+    try {
+      const aheadOut = await run("git", ["rev-list", "--count", "@{u}..HEAD"], cwd);
+      ahead = parseInt(aheadOut.trim(), 10) || 0;
+    } catch {
+      // No upstream configured or no remote
+    }
 
     // Get list of changed files (staged + unstaged + untracked)
     const statusOut = await run("git", ["status", "--porcelain", "-uall"], cwd);
@@ -98,7 +108,7 @@ export async function GET(req: NextRequest) {
       deletions: statsMap.get(f.path)?.deletions ?? 0,
     }));
 
-    return NextResponse.json({ branch, files } satisfies GitStatusResponse);
+    return NextResponse.json({ branch, files, ahead } satisfies GitStatusResponse);
   } catch {
     return NextResponse.json({ error: "Not a git repository" }, { status: 400 });
   }
