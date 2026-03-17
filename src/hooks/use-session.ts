@@ -80,7 +80,7 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
   const agentStackRef = useRef<ToolUse[]>([]);
 
 
-  // Re-send session:connect whenever WS (re)connects
+  // Send session:connect whenever WS (re)connects
   useEffect(() => {
     if (connected) {
       // Clear stale client-side state before server re-sends current state
@@ -91,9 +91,6 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
   }, [connected, sessionId, cwd, send]);
 
   useEffect(() => {
-    // Queue session:connect for initial connection (before WS is open)
-    send({ type: "session:connect", sessionId, cwd: cwd || undefined });
-
     const unsub = subscribe((msg: ServerMessage) => {
       if ("sessionId" in msg && msg.sessionId !== sessionId) return;
 
@@ -135,6 +132,7 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
         }
 
         case "assistant:thinking": {
+          if (agentStackRef.current.length > 0) break;
           setMessages((prev) => prev.filter((m) => m.id !== "compact-progress"));
           if (!streamingRef.current) {
             streamingRef.current = { content: "", toolUses: [], blocks: [] };
@@ -167,6 +165,7 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
         }
 
         case "assistant:text": {
+          if (agentStackRef.current.length > 0) break;
           setMessages((prev) => prev.filter((m) => m.id !== "compact-progress"));
           if (!streamingRef.current) {
             streamingRef.current = { content: "", toolUses: [], blocks: [] };

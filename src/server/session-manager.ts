@@ -742,33 +742,40 @@ export class SessionManager {
         this.extractUsage(session, sessionId, line);
         const events = parser.parseLine(line);
         for (const event of events) {
-          // Finalize the previous assistant message when a new one starts
+          // Finalize the previous assistant message when a new one starts.
+          // When an Agent tool is active, sub-agent messages arrive with
+          // different assistantMessageIds. Don't finalize the parent message
+          // in that case - keep accumulating under the Agent.
           if (event.assistantMessageId && event.assistantMessageId !== currentAssistantMsgId) {
-            if (currentAssistantMsgId && pendingBlocks.length > 0) {
-              const textContent = pendingBlocks
-                .filter((b) => b.type === "text")
-                .map((b) => b.text)
-                .join("");
-              const intermediateMsg: ChatMessage = {
-                id: currentAssistantMsgId,
-                role: "assistant",
-                content: textContent,
-                toolUses: [...pendingToolUses],
-                blocks: [...pendingBlocks],
-                timestamp: Date.now(),
-              };
-              session.emitter.emit("event", sessionId, { type: "message_done", message: intermediateMsg } as ParsedEvent);
-              if (intermediateMsg.toolUses.some((t: ToolUse) => t.name === "Agent")) {
-                this.loadAgentChildren(session, sessionId, intermediateMsg.id, session.info.cwd);
+            if (agentStack.length === 0) {
+              if (currentAssistantMsgId && pendingBlocks.length > 0) {
+                const textContent = pendingBlocks
+                  .filter((b) => b.type === "text")
+                  .map((b) => b.text)
+                  .join("");
+                const intermediateMsg: ChatMessage = {
+                  id: currentAssistantMsgId,
+                  role: "assistant",
+                  content: textContent,
+                  toolUses: [...pendingToolUses],
+                  blocks: [...pendingBlocks],
+                  timestamp: Date.now(),
+                };
+                session.emitter.emit("event", sessionId, { type: "message_done", message: intermediateMsg } as ParsedEvent);
+                if (intermediateMsg.toolUses.some((t: ToolUse) => t.name === "Agent")) {
+                  this.loadAgentChildren(session, sessionId, intermediateMsg.id, session.info.cwd);
+                }
+                pendingToolUses.length = 0;
+                pendingBlocks.length = 0;
               }
-              pendingToolUses.length = 0;
-              pendingBlocks.length = 0;
-              agentStack.length = 0;
+              currentAssistantMsgId = event.assistantMessageId;
             }
-            currentAssistantMsgId = event.assistantMessageId;
           }
 
           if (event.type === "thinking" && event.text) {
+            // Sub-agent thinking is not useful to the client; the Agent
+            // tool's output is already streamed via tool_progress events.
+            if (agentStack.length > 0) continue;
             const last = pendingBlocks[pendingBlocks.length - 1];
             if (last && last.type === "thinking") {
               last.text += event.text;
@@ -776,6 +783,7 @@ export class SessionManager {
               pendingBlocks.push({ type: "thinking", text: event.text });
             }
           } else if (event.type === "text_delta" && event.text) {
+            if (agentStack.length > 0) continue;
             const last = pendingBlocks[pendingBlocks.length - 1];
             if (last && last.type === "text") {
               last.text += event.text;
