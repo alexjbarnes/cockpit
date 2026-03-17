@@ -79,6 +79,15 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
   // Track nested agent tool calls
   const agentStackRef = useRef<ToolUse[]>([]);
 
+  // Track message count for delta history on reconnect
+  const messageCountRef = useRef(0);
+  const loadedSessionRef = useRef<string | null>(null);
+
+  // Reset when switching sessions
+  if (loadedSessionRef.current !== null && loadedSessionRef.current !== sessionId) {
+    messageCountRef.current = 0;
+    loadedSessionRef.current = null;
+  }
 
   // Send session:connect whenever WS (re)connects
   useEffect(() => {
@@ -86,7 +95,13 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
       // Clear stale client-side state before server re-sends current state
       setPendingPermissions([]);
       setPendingQuestions([]);
-      send({ type: "session:connect", sessionId, cwd: cwd || undefined });
+      const isReconnect = loadedSessionRef.current === sessionId;
+      send({
+        type: "session:connect",
+        sessionId,
+        cwd: cwd || undefined,
+        messageCount: isReconnect ? messageCountRef.current : undefined,
+      });
     }
   }, [connected, sessionId, cwd, send]);
 
@@ -96,16 +111,34 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
 
       switch (msg.type) {
         case "history": {
-          const seen = new Set<string>();
-          const deduped = msg.messages.filter((m: ChatMessage) => {
-            if (seen.has(m.id)) return false;
-            seen.add(m.id);
-            return true;
-          });
-          setMessages(deduped);
+          if (msg.delta) {
+            // Delta: append only new messages, keep existing state
+            if (msg.messages.length > 0) {
+              setMessages((prev) => {
+                const existingIds = new Set(prev.map((m) => m.id));
+                const newMsgs = msg.messages.filter((m: ChatMessage) => !existingIds.has(m.id));
+                if (newMsgs.length === 0) return prev;
+                const filtered = prev.filter((m) => m.id !== "streaming");
+                const result = [...filtered, ...newMsgs];
+                messageCountRef.current = result.length;
+                return result;
+              });
+            }
+          } else {
+            // Full history: replace everything
+            const seen = new Set<string>();
+            const deduped = msg.messages.filter((m: ChatMessage) => {
+              if (seen.has(m.id)) return false;
+              seen.add(m.id);
+              return true;
+            });
+            setMessages(deduped);
+            messageCountRef.current = deduped.length;
+            streamingRef.current = null;
+            agentStackRef.current = [];
+          }
           setHistoryLoaded(true);
-          streamingRef.current = null;
-          agentStackRef.current = [];
+          loadedSessionRef.current = sessionId;
           break;
         }
 
@@ -320,7 +353,9 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
             if ((!finalMessage.blocks || finalMessage.blocks.length === 0) && streamedBlocks.length > 0) {
               finalMessage.blocks = streamedBlocks;
             }
-            return [...filtered, finalMessage];
+            const result = [...filtered, finalMessage];
+            messageCountRef.current = result.length;
+            return result;
           });
           break;
         }
@@ -477,6 +512,7 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
 
         case "session:clear": {
           setMessages([]);
+          messageCountRef.current = 0;
           streamingRef.current = null;
           agentStackRef.current = [];
           setBypassActive(false);

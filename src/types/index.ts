@@ -109,7 +109,7 @@ export interface UsageLimits {
 
 // Client -> Server messages
 export type ClientMessage =
-  | { type: "session:connect"; sessionId: string; cwd?: string }
+  | { type: "session:connect"; sessionId: string; cwd?: string; messageCount?: number }
   | { type: "message:send"; sessionId: string; text: string; images?: ImageAttachment[]; documents?: DocumentAttachment[] }
   | { type: "session:interrupt"; sessionId: string }
   | { type: "permission:response"; sessionId: string; requestId: string; allowed: boolean; permissionMode?: PermissionMode }
@@ -143,6 +143,6 @@ export type ServerMessage =
   | { type: "session:task_update"; sessionId: string; task: BackgroundTask }
   | { type: "session:todos"; sessionId: string; todos: TodoItem[] }
   | { type: "session:init"; sessionId: string; data: InitData }
-  | { type: "history"; sessionId: string; messages: ChatMessage[] }
+  | { type: "history"; sessionId: string; messages: ChatMessage[]; delta?: boolean }
   | { type: "session:streaming_snapshot"; sessionId: string; messageId: string; content: string; toolUses: ToolUse[]; blocks: ContentBlock[] }
   | { type: "pong" };

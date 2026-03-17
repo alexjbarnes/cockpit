@@ -106,11 +106,25 @@ export function createWebSocketHandler(
           const cleanups: Array<() => void> = [];
           sessionCleanups.set(msg.sessionId, cleanups);
 
-          send(ws, {
-            type: "history",
-            sessionId: msg.sessionId,
-            messages: session.messages,
-          });
+          // If client already has messages, send only the delta to avoid
+          // re-sending 1000+ messages on every mobile reconnect.
+          const clientCount = msg.messageCount ?? 0;
+          if (clientCount > 0 && clientCount <= session.messages.length) {
+            const delta = session.messages.slice(clientCount);
+            console.log(`[ws:${wsId}] session ${sid} sending delta (client=${clientCount}, server=${session.messages.length}, delta=${delta.length})`);
+            send(ws, {
+              type: "history",
+              sessionId: msg.sessionId,
+              messages: delta,
+              delta: true,
+            });
+          } else {
+            send(ws, {
+              type: "history",
+              sessionId: msg.sessionId,
+              messages: session.messages,
+            });
+          }
 
           // Send in-progress streaming message if the CLI is mid-response.
           // This restores tool calls and partial text that aren't yet in the transcript.

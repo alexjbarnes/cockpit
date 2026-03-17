@@ -186,7 +186,7 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
         pongTimer.current = setTimeout(() => {
           awaitingPong.current = false;
           tearDownAndReconnect();
-        }, 3000);
+        }, 10000);
       }, 10000);
     };
 
@@ -224,7 +224,7 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
         pongTimer.current = setTimeout(() => {
           awaitingPong.current = false;
           tearDownAndReconnect();
-        }, 3000);
+        }, 10000);
       } else {
         clearInterval(healthTimer.current);
       }
