@@ -34,14 +34,18 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
   const connectRef = useRef<() => void>(undefined);
   const pongTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const awaitingPong = useRef(false);
+  const healthTimer = useRef<ReturnType<typeof setInterval>>(undefined);
 
   const scheduleReconnect = useCallback(() => {
     if (!mountedRef.current) return;
     clearTimeout(reconnectTimer.current);
+    // Cap backoff at 5s when page is visible, 30s when hidden
+    const maxDelay = document.visibilityState === "visible" ? 5000 : 30000;
+    const delay = Math.min(reconnectDelay.current, maxDelay);
     reconnectTimer.current = setTimeout(() => {
       reconnectDelay.current = Math.min(reconnectDelay.current * 2, 30000);
       connectRef.current?.();
-    }, reconnectDelay.current);
+    }, delay);
   }, []);
 
   const connect = useCallback(async () => {
@@ -101,6 +105,8 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
       if (wsRef.current === ws) {
         wsRef.current = null;
       }
+      // Always reset delay on close so reconnection is fast
+      reconnectDelay.current = 1000;
       scheduleReconnect();
     };
 
@@ -117,6 +123,7 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
     return () => {
       mountedRef.current = false;
       clearTimeout(reconnectTimer.current);
+      clearInterval(healthTimer.current);
       if (wsRef.current) {
         wsRef.current.onclose = null;
         wsRef.current.close();
@@ -139,51 +146,99 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
     connectRef.current?.();
   }, []);
 
+  // Periodic health check: while page is visible, verify connection every 10s.
+  // Mobile browsers aggressively kill WebSockets even for visible pages.
   useEffect(() => {
-    const onVisible = () => {
+    const startHealthCheck = () => {
+      clearInterval(healthTimer.current);
       if (document.visibilityState !== "visible") return;
 
-      // No existing connection - reconnect immediately
-      if (!wsRef.current && !connectingRef.current) {
-        clearTimeout(reconnectTimer.current);
-        reconnectDelay.current = 1000;
-        connect();
-        return;
-      }
+      healthTimer.current = setInterval(() => {
+        // No connection and not connecting - reconnect now
+        if (!wsRef.current && !connectingRef.current) {
+          clearTimeout(reconnectTimer.current);
+          reconnectDelay.current = 1000;
+          connectRef.current?.();
+          return;
+        }
 
-      const ws = wsRef.current;
-      if (!ws) return;
+        const ws = wsRef.current;
+        if (!ws) return;
 
-      // Connection in a transitional state (CONNECTING/CLOSING) - tear down and start fresh
-      if (ws.readyState !== WebSocket.OPEN) {
-        tearDownAndReconnect();
-        return;
-      }
+        // Dead connection - tear down
+        if (ws.readyState !== WebSocket.OPEN) {
+          tearDownAndReconnect();
+          return;
+        }
 
-      // Connection looks open - probe it with a ping
-      if (awaitingPong.current) return;
+        // Probe with ping
+        if (awaitingPong.current) return;
+        awaitingPong.current = true;
+        try {
+          ws.send(JSON.stringify({ type: "ping" }));
+        } catch {
+          awaitingPong.current = false;
+          tearDownAndReconnect();
+          return;
+        }
 
-      awaitingPong.current = true;
-      try {
-        ws.send(JSON.stringify({ type: "ping" }));
-      } catch {
-        awaitingPong.current = false;
-        tearDownAndReconnect();
-        return;
-      }
-
-      clearTimeout(pongTimer.current);
-      pongTimer.current = setTimeout(() => {
-        awaitingPong.current = false;
-        tearDownAndReconnect();
-      }, 3000);
+        clearTimeout(pongTimer.current);
+        pongTimer.current = setTimeout(() => {
+          awaitingPong.current = false;
+          tearDownAndReconnect();
+        }, 3000);
+      }, 10000);
     };
-    document.addEventListener("visibilitychange", onVisible);
+
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        startHealthCheck();
+
+        // Immediate check on becoming visible
+        if (!wsRef.current && !connectingRef.current) {
+          clearTimeout(reconnectTimer.current);
+          reconnectDelay.current = 1000;
+          connectRef.current?.();
+          return;
+        }
+
+        const ws = wsRef.current;
+        if (!ws) return;
+
+        if (ws.readyState !== WebSocket.OPEN) {
+          tearDownAndReconnect();
+          return;
+        }
+
+        if (awaitingPong.current) return;
+        awaitingPong.current = true;
+        try {
+          ws.send(JSON.stringify({ type: "ping" }));
+        } catch {
+          awaitingPong.current = false;
+          tearDownAndReconnect();
+          return;
+        }
+
+        clearTimeout(pongTimer.current);
+        pongTimer.current = setTimeout(() => {
+          awaitingPong.current = false;
+          tearDownAndReconnect();
+        }, 3000);
+      } else {
+        clearInterval(healthTimer.current);
+      }
+    };
+
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    startHealthCheck();
+
     return () => {
-      document.removeEventListener("visibilitychange", onVisible);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      clearInterval(healthTimer.current);
       clearTimeout(pongTimer.current);
     };
-  }, [connect, tearDownAndReconnect]);
+  }, [tearDownAndReconnect]);
 
   const send = useCallback((msg: ClientMessage) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {

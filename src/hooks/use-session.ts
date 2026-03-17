@@ -595,6 +595,65 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
     return unsub;
   }, [sessionId, send, subscribe]);
 
+  // HTTP fallback: when session is "running" but WebSocket keeps dropping,
+  // poll the REST endpoint to detect if the CLI actually finished.
+  // This covers the case where the "idle" status event was sent to a dead WS.
+  const lastEventRef = useRef(0);
+
+  useEffect(() => {
+    if (!isResponding) {
+      lastEventRef.current = 0;
+      return;
+    }
+
+    // Track when we last received a streaming event
+    lastEventRef.current = Date.now();
+    const handler = (msg: ServerMessage) => {
+      if ("sessionId" in msg && msg.sessionId === sessionId) {
+        if (msg.type === "assistant:text" || msg.type === "assistant:thinking" ||
+            msg.type === "assistant:tool_use" || msg.type === "assistant:tool_result" ||
+            msg.type === "session:status") {
+          lastEventRef.current = Date.now();
+        }
+      }
+    };
+    const unsub = subscribe(handler);
+
+    const poll = setInterval(async () => {
+      // Only poll if no events received in the last 15 seconds
+      if (Date.now() - lastEventRef.current < 15000) return;
+
+      try {
+        const params = new URLSearchParams({ cwd: cwd || "" });
+        const res = await fetch(`/api/sessions/${sessionId}?${params}`);
+        if (!res.ok) return;
+        const data = await res.json();
+
+        if (data.session.status === "idle") {
+          // Session finished while we were disconnected - reload state
+          const seen = new Set<string>();
+          const deduped = (data.messages as ChatMessage[]).filter((m) => {
+            if (seen.has(m.id)) return false;
+            seen.add(m.id);
+            return true;
+          });
+          setMessages(deduped);
+          setIsResponding(false);
+          isRespondingRef.current = false;
+          streamingRef.current = null;
+          agentStackRef.current = [];
+        }
+      } catch {
+        // Network error - will retry on next interval
+      }
+    }, 10000);
+
+    return () => {
+      unsub();
+      clearInterval(poll);
+    };
+  }, [isResponding, sessionId, cwd, subscribe]);
+
   const sendMessage = useCallback(
     (text: string, images?: ImageAttachment[], documents?: DocumentAttachment[], textFiles?: TextFileAttachment[]) => {
       // Inline text file contents into the API text but keep structured data on the message for rendering
