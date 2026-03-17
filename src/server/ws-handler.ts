@@ -4,7 +4,7 @@ import type { Duplex } from "node:stream";
 import type { ClientMessage, ServerMessage } from "@/types";
 import type { ParsedEvent } from "./event-parser";
 import { validateToken, extractTokenFromQuery } from "./auth";
-import { SessionManager, type PendingRequest } from "./session-manager";
+import { SessionManager, type PendingRequest, type StreamingSnapshot } from "./session-manager";
 import { loadLastUsage } from "./transcript";
 import { logParsedEvent, logServerMessage, logClientMessage, logStatus } from "./debug-logger";
 
@@ -111,6 +111,20 @@ export function createWebSocketHandler(
             sessionId: msg.sessionId,
             messages: session.messages,
           });
+
+          // Send in-progress streaming message if the CLI is mid-response.
+          // This restores tool calls and partial text that aren't yet in the transcript.
+          const snapshot = sessionManager.getStreamingSnapshot(msg.sessionId);
+          if (snapshot) {
+            send(ws, {
+              type: "session:streaming_snapshot",
+              sessionId: msg.sessionId,
+              messageId: snapshot.messageId,
+              content: snapshot.content,
+              toolUses: snapshot.toolUses,
+              blocks: snapshot.blocks,
+            });
+          }
 
           send(ws, {
             type: "session:connected",

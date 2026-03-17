@@ -23,6 +23,13 @@ export interface PendingRequest {
   rawToolInput?: Record<string, unknown>;
 }
 
+export interface StreamingSnapshot {
+  messageId: string;
+  content: string;
+  toolUses: ToolUse[];
+  blocks: ContentBlock[];
+}
+
 interface Session {
   info: SessionInfo;
   process: ChildProcess | null;
@@ -37,6 +44,7 @@ interface Session {
   todoItems: TodoItem[];
   initData?: InitData;
   pendingRequests: Map<string, PendingRequest>;
+  streamingSnapshot: StreamingSnapshot | null;
 }
 
 export class SessionManager {
@@ -84,6 +92,7 @@ export class SessionManager {
       contextUsage: null,
       todoItems: [],
       pendingRequests: new Map(),
+      streamingSnapshot: null,
     });
 
     return info;
@@ -116,6 +125,7 @@ export class SessionManager {
         contextUsage: null,
         todoItems: [],
         pendingRequests: new Map(),
+        streamingSnapshot: null,
       };
       this.sessions.set(id, session);
     }
@@ -149,6 +159,10 @@ export class SessionManager {
       }
     }
     return { info: session.info, messages };
+  }
+
+  getStreamingSnapshot(id: string): StreamingSnapshot | null {
+    return this.sessions.get(id)?.streamingSnapshot ?? null;
   }
 
   listActiveSessions(): SessionInfo[] {
@@ -687,6 +701,23 @@ export class SessionManager {
     const agentStack: ToolUse[] = [];
     let currentAssistantMsgId: string | null = null;
 
+    const updateSnapshot = () => {
+      if (currentAssistantMsgId && pendingBlocks.length > 0) {
+        const textContent = pendingBlocks
+          .filter((b) => b.type === "text")
+          .map((b) => b.text)
+          .join("");
+        session.streamingSnapshot = {
+          messageId: currentAssistantMsgId,
+          content: textContent,
+          toolUses: pendingToolUses.map((t) => ({ ...t, children: t.children ? [...t.children] : undefined })),
+          blocks: pendingBlocks.map((b) => b.type === "tool_use" ? { ...b, toolUse: { ...b.toolUse } } : { ...b }),
+        };
+      } else {
+        session.streamingSnapshot = null;
+      }
+    };
+
     let lineBuffer = "";
     proc.stdout!.on("data", (chunk: Buffer) => {
       lineBuffer += chunk.toString();
@@ -855,6 +886,7 @@ export class SessionManager {
             }
           }
           session.emitter.emit("event", sessionId, event);
+          updateSnapshot();
 
           if (event.type === "message_done" && event.message) {
             const hasAgent = event.message.toolUses.some((t: ToolUse) => t.name === "Agent");
@@ -893,6 +925,7 @@ export class SessionManager {
 
       session.process = null;
       session.stdin = null;
+      session.streamingSnapshot = null;
       session.info.status = "idle";
       session.emitter.emit("status", sessionId, "idle");
 

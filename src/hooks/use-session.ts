@@ -108,6 +108,29 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
           setMessages(deduped);
           setHistoryLoaded(true);
           streamingRef.current = null;
+          agentStackRef.current = [];
+          break;
+        }
+
+        case "session:streaming_snapshot": {
+          // Restore in-progress message that wasn't in the transcript yet
+          streamingRef.current = {
+            content: msg.content,
+            toolUses: msg.toolUses,
+            blocks: msg.blocks,
+          };
+          const streamMsg: ChatMessage = {
+            id: "streaming",
+            role: "assistant",
+            content: msg.content,
+            toolUses: msg.toolUses,
+            blocks: msg.blocks,
+            timestamp: Date.now(),
+          };
+          setMessages((prev) => {
+            const filtered = prev.filter((m) => m.id !== "streaming");
+            return [...filtered, streamMsg];
+          });
           break;
         }
 
