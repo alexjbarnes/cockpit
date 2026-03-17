@@ -57,7 +57,7 @@ export async function GET(req: NextRequest) {
     const branch = branchOut.trim();
 
     // Get list of changed files (staged + unstaged + untracked)
-    const statusOut = await run("git", ["status", "--porcelain"], cwd);
+    const statusOut = await run("git", ["status", "--porcelain", "-uall"], cwd);
 
     const filePaths: { path: string; status: string }[] = [];
     for (const line of statusOut.split("\n")) {

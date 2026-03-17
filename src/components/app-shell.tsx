@@ -35,6 +35,9 @@ interface ShellContextValue {
   setBackgroundTasks: (tasks: BackgroundTask[]) => void;
   todos: TodoItem[];
   setTodos: (todos: TodoItem[]) => void;
+  sidebarContent: ReactNode | null;
+  setSidebarContent: (content: ReactNode | null) => void;
+  closeSidebar: () => void;
 }
 
 const ShellContext = createContext<ShellContextValue>({
@@ -45,6 +48,9 @@ const ShellContext = createContext<ShellContextValue>({
   setBackgroundTasks: () => {},
   todos: [],
   setTodos: () => {},
+  sidebarContent: null,
+  setSidebarContent: () => {},
+  closeSidebar: () => {},
 });
 
 export function useShell() {
@@ -121,6 +127,11 @@ export function AppShell({ children }: { children: ReactNode }) {
   const [cwd, setCwdState] = useState<string | undefined>(undefined);
   const [backgroundTasks, setBackgroundTasks] = useState<BackgroundTask[]>([]);
   const [todos, setTodos] = useState<TodoItem[]>([]);
+  const [sidebarContent, setSidebarContentState] = useState<ReactNode | null>(null);
+
+  const setSidebarContent = useCallback((content: ReactNode | null) => {
+    setSidebarContentState(content);
+  }, []);
 
   const setHeader = useCallback((config: HeaderConfig) => {
     setHeaderState(config);
@@ -132,6 +143,10 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   const toggleSidebar = useCallback(() => {
     sidebarRef.current?.toggle();
+  }, []);
+
+  const closeSidebar = useCallback(() => {
+    sidebarRef.current?.close();
   }, []);
 
   useEffect(() => {
@@ -148,7 +163,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   return (
     <AuthGuard>
       <WebSocketProvider>
-        <ShellContext.Provider value={{ setHeader, cwd, setCwd, backgroundTasks, setBackgroundTasks, todos, setTodos }}>
+        <ShellContext.Provider value={{ setHeader, cwd, setCwd, backgroundTasks, setBackgroundTasks, todos, setTodos, sidebarContent, setSidebarContent, closeSidebar }}>
           <div className="fixed inset-0 flex flex-col">
             <header className="shrink-0 flex items-center gap-2 border-b px-4 py-2 bg-background">
               <Button variant="ghost" size="icon" onClick={toggleSidebar} title="Toggle sidebar (Ctrl+B)">

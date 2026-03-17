@@ -1,7 +1,8 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { GitBranch, X, Loader2, Plus, Minus, FileQuestion, FilePlus, FileMinus, FileEdit, FileSymlink } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { GitBranch, X, Loader2, Plus, Minus, FileQuestion, FilePlus, FileMinus, FileEdit, FileSymlink, ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 interface GitFileChange {
@@ -27,6 +28,7 @@ function statusIcon(status: string) {
 }
 
 export function GitStatusButton({ cwd }: { cwd?: string }) {
+  const router = useRouter();
   const [open, setOpen] = useState(false);
   const [status, setStatus] = useState<GitStatus | null>(null);
   const [loading, setLoading] = useState(false);
@@ -145,6 +147,18 @@ export function GitStatusButton({ cwd }: { cwd?: string }) {
                         </div>
                       ))}
                     </div>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="mt-3 gap-1.5"
+                      onClick={() => {
+                        setOpen(false);
+                        router.push(`/changes?cwd=${encodeURIComponent(cwd!)}`);
+                      }}
+                    >
+                      <ExternalLink className="h-3.5 w-3.5" />
+                      View changes
+                    </Button>
                   </>
                 )}
               </>
