@@ -34,7 +34,7 @@
         "@types/uuid": "^10",
         "@types/ws": "^8",
         "tsx": "^4",
-        "typescript": "^5",
+        "typescript": "5.9.3",
         "vitest": "^4.1.0",
       },
     },

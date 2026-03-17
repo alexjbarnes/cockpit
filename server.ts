@@ -14,7 +14,7 @@ import { createWebSocketHandler } from "./src/server/ws-handler";
 import { getToken } from "./src/server/auth";
 
 const dev = process.env.NODE_ENV !== "production";
-const port = parseInt(process.env.PORT || "3000", 10);
+const port = parseInt(process.env.PORT || "3001", 10);
 const host = process.env.HOST || "0.0.0.0";
 
 const app = next({ dev });
