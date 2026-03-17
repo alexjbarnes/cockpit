@@ -18,6 +18,7 @@ import {
   Check,
   ChevronUp,
   ChevronDown,
+  Sparkles,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -141,6 +142,7 @@ export function ChangesView({ cwd }: { cwd: string }) {
   const [checkedFiles, setCheckedFiles] = useState<Set<string>>(new Set());
   const [pushOnCommit, setPushOnCommit] = useState(false);
   const [commitPanelOpen, setCommitPanelOpen] = useState(false);
+  const [generating, setGenerating] = useState(false);
   const contextMenuRef = useRef<HTMLDivElement>(null);
 
   const fetchStatus = useCallback(() => {
@@ -157,6 +159,8 @@ export function ChangesView({ cwd }: { cwd: string }) {
       .catch(() => setError("Not a git repository"))
       .finally(() => setLoading(false));
   }, [cwd]);
+
+
 
   useEffect(() => {
     fetchStatus();
@@ -237,6 +241,25 @@ export function ChangesView({ cwd }: { cwd: string }) {
       setCommitting(false);
     }
   }, [cwd, commitMsg, checkedFiles, pushOnCommit, fetchStatus]);
+
+  const handleGenerate = useCallback(async () => {
+    if (checkedFiles.size === 0) return;
+    setGenerating(true);
+    try {
+      const res = await fetch("/api/git/generate-message", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cwd, files: Array.from(checkedFiles) }),
+      });
+      if (!res.ok) throw new Error("Failed");
+      const data = await res.json();
+      if (data.message) setCommitMsg(data.message);
+    } catch {
+      // Could show error
+    } finally {
+      setGenerating(false);
+    }
+  }, [cwd, checkedFiles]);
 
   const toggleFile = useCallback((path: string) => {
     setCheckedFiles((prev) => {
@@ -391,6 +414,20 @@ export function ChangesView({ cwd }: { cwd: string }) {
                 rows={3}
               />
               <div className="flex items-center gap-3">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={handleGenerate}
+                  disabled={generating || checkedFiles.size === 0}
+                  className="gap-1.5"
+                >
+                  {generating ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Sparkles className="h-3.5 w-3.5" />
+                  )}
+                  {generating ? "Generating..." : "Generate"}
+                </Button>
                 <label className="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer">
                   <input
                     type="checkbox"
