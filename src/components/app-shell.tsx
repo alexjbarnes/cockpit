@@ -166,7 +166,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         <ShellContext.Provider value={{ setHeader, cwd, setCwd, backgroundTasks, setBackgroundTasks, todos, setTodos, sidebarContent, setSidebarContent, closeSidebar }}>
           <div className="fixed inset-0 flex flex-col">
             <header className="shrink-0 flex items-center gap-2 border-b px-4 py-2 bg-background">
-              <Button variant="ghost" size="icon" onClick={toggleSidebar} title="Toggle sidebar (Ctrl+B)">
+              <Button variant="ghost" size="icon" onClick={toggleSidebar} title="Toggle sidebar (Ctrl+B)" className="md:hidden">
                 <Menu className="h-4 w-4" />
               </Button>
               {header.showBack && (
@@ -182,9 +182,13 @@ export function AppShell({ children }: { children: ReactNode }) {
                 {cwd && <GitStatusButton cwd={cwd} />}
               </div>
             </header>
-            {children}
+            <div className="flex flex-1 min-h-0">
+              <Sidebar ref={sidebarRef} />
+              <main className="flex-1 min-h-0 flex flex-col">
+                {children}
+              </main>
+            </div>
           </div>
-          <Sidebar ref={sidebarRef} />
         </ShellContext.Provider>
       </WebSocketProvider>
     </AuthGuard>

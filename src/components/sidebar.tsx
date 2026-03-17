@@ -205,7 +205,7 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
     <>
       <div
         className={cn(
-          "fixed inset-0 z-40 bg-black/50 transition-opacity",
+          "fixed inset-0 z-40 bg-black/50 transition-opacity md:hidden",
           open ? "opacity-100" : "opacity-0 pointer-events-none"
         )}
         onMouseDown={close}
@@ -214,12 +214,13 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
       <div
         className={cn(
           "fixed inset-y-0 left-0 z-50 w-72 bg-background border-r flex flex-col transition-transform duration-200",
+          "md:static md:inset-auto md:z-auto md:translate-x-0 md:shrink-0 md:transition-none",
           open ? "translate-x-0" : "-translate-x-full"
         )}
       >
         {sidebarContent ? (
           <>
-            <div className="flex items-center justify-end px-3 py-2 border-b">
+            <div className="flex items-center justify-end px-3 py-2 border-b md:hidden">
               <Button variant="ghost" size="icon" onClick={close}>
                 <X className="h-4 w-4" />
               </Button>
@@ -241,7 +242,7 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
                 >
                   <Plus className="h-4 w-4" />
                 </Button>
-                <Button variant="ghost" size="icon" onClick={close}>
+                <Button variant="ghost" size="icon" onClick={close} className="md:hidden">
                   <X className="h-4 w-4" />
                 </Button>
               </div>

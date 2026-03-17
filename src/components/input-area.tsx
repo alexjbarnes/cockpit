@@ -439,25 +439,27 @@ export function InputArea({ onSend, onInterrupt, isResponding, bypassActive, onS
                 />
               </span>
             </button>
-            <div className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs">
-              <Brain className="h-3.5 w-3.5 text-muted-foreground" />
-              <span className="text-muted-foreground">Thinking</span>
-              <div className="ml-auto flex gap-1">
-                {thinkingLevels.map((opt) => (
-                  <button
-                    key={opt.value}
-                    onClick={() => onSetThinking(opt.value)}
-                    className={`rounded px-2 py-0.5 text-xs transition-colors ${
-                      thinkingLevel === opt.value
-                        ? "bg-primary text-primary-foreground"
-                        : "bg-muted text-muted-foreground hover:text-foreground"
-                    }`}
-                  >
-                    {opt.label}
-                  </button>
-                ))}
+            {currentModel !== "haiku" && (
+              <div className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs">
+                <Brain className="h-3.5 w-3.5 text-muted-foreground" />
+                <span className="text-muted-foreground">Thinking</span>
+                <div className="ml-auto flex gap-1">
+                  {thinkingLevels.map((opt) => (
+                    <button
+                      key={opt.value}
+                      onClick={() => onSetThinking(opt.value)}
+                      className={`rounded px-2 py-0.5 text-xs transition-colors ${
+                        thinkingLevel === opt.value
+                          ? "bg-primary text-primary-foreground"
+                          : "bg-muted text-muted-foreground hover:text-foreground"
+                      }`}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
               </div>
-            </div>
+            )}
           </div>
         )}
         {hasAttachments && (
