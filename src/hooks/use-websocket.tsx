@@ -151,9 +151,17 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
         return;
       }
 
-      // Existing connection - probe it with a ping
       const ws = wsRef.current;
-      if (!ws || ws.readyState !== WebSocket.OPEN || awaitingPong.current) return;
+      if (!ws) return;
+
+      // Connection in a transitional state (CONNECTING/CLOSING) - tear down and start fresh
+      if (ws.readyState !== WebSocket.OPEN) {
+        tearDownAndReconnect();
+        return;
+      }
+
+      // Connection looks open - probe it with a ping
+      if (awaitingPong.current) return;
 
       awaitingPong.current = true;
       try {

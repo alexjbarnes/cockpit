@@ -15,6 +15,14 @@ export interface SessionEvents {
   error: [sessionId: string, error: string];
 }
 
+export interface PendingRequest {
+  type: "permission" | "question";
+  requestId: string;
+  toolName: string;
+  toolInput: string;
+  rawToolInput?: Record<string, unknown>;
+}
+
 interface Session {
   info: SessionInfo;
   process: ChildProcess | null;
@@ -28,6 +36,7 @@ interface Session {
   contextUsage: ContextUsage | null;
   todoItems: TodoItem[];
   initData?: InitData;
+  pendingRequests: Map<string, PendingRequest>;
 }
 
 export class SessionManager {
@@ -59,6 +68,7 @@ export class SessionManager {
       thinkingLevel: defaults.thinkingLevel,
       contextUsage: null,
       todoItems: [],
+      pendingRequests: new Map(),
     });
 
     return info;
@@ -90,6 +100,7 @@ export class SessionManager {
         thinkingLevel: prefs?.thinkingLevel || defaults.thinkingLevel,
         contextUsage: null,
         todoItems: [],
+        pendingRequests: new Map(),
       };
       this.sessions.set(id, session);
     }
@@ -133,6 +144,19 @@ export class SessionManager {
 
   listKnownSessions(): SessionInfo[] {
     return Array.from(this.sessions.values()).map((s) => s.info);
+  }
+
+  isProcessAlive(id: string): boolean {
+    const session = this.sessions.get(id);
+    return !!session?.process;
+  }
+
+  fixStaleStatus(id: string): void {
+    const session = this.sessions.get(id);
+    if (session && session.info.status === "running" && !session.process) {
+      session.info.status = "idle";
+      session.pendingRequests.clear();
+    }
   }
 
   destroySession(id: string): boolean {
@@ -198,9 +222,31 @@ export class SessionManager {
     return true;
   }
 
+  addPendingRequest(sessionId: string, request: PendingRequest): void {
+    const session = this.sessions.get(sessionId);
+    if (session) {
+      session.pendingRequests.set(request.requestId, request);
+    }
+  }
+
+  removePendingRequest(sessionId: string, requestId: string): void {
+    const session = this.sessions.get(sessionId);
+    if (session) {
+      session.pendingRequests.delete(requestId);
+    }
+  }
+
+  getPendingRequests(sessionId: string): PendingRequest[] {
+    const session = this.sessions.get(sessionId);
+    if (!session) return [];
+    return Array.from(session.pendingRequests.values());
+  }
+
   respondToPermission(sessionId: string, requestId: string, allowed: boolean, toolInput?: Record<string, unknown>): boolean {
     const session = this.sessions.get(sessionId);
     if (!session?.stdin) return false;
+
+    session.pendingRequests.delete(requestId);
 
     const response = {
       type: "control_response",

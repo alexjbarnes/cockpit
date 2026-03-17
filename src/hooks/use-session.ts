@@ -83,6 +83,9 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
   // Re-send session:connect whenever WS (re)connects
   useEffect(() => {
     if (connected) {
+      // Clear stale client-side state before server re-sends current state
+      setPendingPermissions([]);
+      setPendingQuestions([]);
       send({ type: "session:connect", sessionId, cwd: cwd || undefined });
     }
   }, [connected, sessionId, cwd, send]);

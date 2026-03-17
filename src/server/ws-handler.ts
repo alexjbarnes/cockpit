@@ -4,7 +4,7 @@ import type { Duplex } from "node:stream";
 import type { ClientMessage, ServerMessage } from "@/types";
 import type { ParsedEvent } from "./event-parser";
 import { validateToken, extractTokenFromQuery } from "./auth";
-import { SessionManager } from "./session-manager";
+import { SessionManager, type PendingRequest } from "./session-manager";
 import { loadLastUsage } from "./transcript";
 import { logParsedEvent, logServerMessage, logClientMessage, logStatus } from "./debug-logger";
 
@@ -13,6 +13,26 @@ export function createWebSocketHandler(
   sessionManager: SessionManager
 ): WebSocketServer {
   const wss = new WebSocketServer({ noServer: true });
+
+  // Server-side heartbeat: detect dead connections every 30s.
+  // Without this, zombie connections persist for hours (TCP keepalive default)
+  // and can cause CLI process stdout backpressure when send() buffers data
+  // into a dead socket's TCP buffer.
+  const heartbeat = setInterval(() => {
+    for (const ws of wss.clients) {
+      const ext = ws as WebSocket & { isAlive?: boolean };
+      if (ext.isAlive === false) {
+        ws.terminate();
+        continue;
+      }
+      ext.isAlive = false;
+      ws.ping();
+    }
+  }, 30000);
+
+  wss.on("close", () => {
+    clearInterval(heartbeat);
+  });
 
   server.on("upgrade", (req: IncomingMessage, socket: Duplex, head: Buffer) => {
     const url = req.url || "";
@@ -33,6 +53,9 @@ export function createWebSocketHandler(
   });
 
   wss.on("connection", (ws: WebSocket) => {
+    const ext = ws as WebSocket & { isAlive?: boolean };
+    ext.isAlive = true;
+    ws.on("pong", () => { ext.isAlive = true; });
     // Track subscriptions per session so re-connects clean up old listeners
     const sessionCleanups = new Map<string, Array<() => void>>();
     // Track pending permission requests with tool name and raw input
@@ -94,10 +117,18 @@ export function createWebSocketHandler(
             info: session.info,
           });
 
+          // If status is "running" but process is dead, correct it
+          const correctedStatus = sessionManager.isProcessAlive(msg.sessionId)
+            ? session.info.status
+            : "idle";
+          if (correctedStatus !== session.info.status) {
+            sessionManager.fixStaleStatus(msg.sessionId);
+          }
+
           send(ws, {
             type: "session:status",
             sessionId: msg.sessionId,
-            status: session.info.status,
+            status: correctedStatus,
           });
 
           if (sessionManager.isBypassActive(msg.sessionId)) {
@@ -269,6 +300,28 @@ export function createWebSocketHandler(
             }
           );
           if (unsubInit) cleanups.push(unsubInit);
+
+          // Re-emit any pending permission/question requests that were
+          // sent to a previous (now dead) WebSocket connection
+          const pendingReqs = sessionManager.getPendingRequests(msg.sessionId);
+          for (const req of pendingReqs) {
+            if (req.type === "question") {
+              send(ws, {
+                type: "question:request",
+                sessionId: msg.sessionId,
+                requestId: req.requestId,
+                questions: req.toolInput,
+              });
+            } else {
+              send(ws, {
+                type: "permission:request",
+                sessionId: msg.sessionId,
+                requestId: req.requestId,
+                toolName: req.toolName,
+                input: req.toolInput,
+              });
+            }
+          }
           });
           break;
         }
@@ -286,6 +339,7 @@ export function createWebSocketHandler(
         case "permission:response": {
           const pending = pendingPermissions.get(msg.requestId);
           pendingPermissions.delete(msg.requestId);
+          sessionManager.removePendingRequest(msg.sessionId, msg.requestId);
 
           if (msg.permissionMode === "allow_always" && pending) {
             sessionManager.allowToolAlways(msg.sessionId, pending.toolName);
@@ -300,6 +354,7 @@ export function createWebSocketHandler(
         case "question:response": {
           const pending = pendingPermissions.get(msg.requestId);
           pendingPermissions.delete(msg.requestId);
+          sessionManager.removePendingRequest(msg.sessionId, msg.requestId);
           const originalQuestions = (pending?.toolInput as Record<string, unknown>)?.questions;
           sessionManager.respondToPermission(msg.sessionId, msg.requestId, true, {
             questions: originalQuestions || [],
@@ -500,6 +555,14 @@ function handleParsedEvent(
         if (requestId && event.rawToolInput) {
           pendingPermissions.set(requestId, { toolName, toolInput: event.rawToolInput });
         }
+        // Store in session so it survives WebSocket reconnection
+        sessionManager.addPendingRequest(sessionId, {
+          type: "question",
+          requestId,
+          toolName,
+          toolInput: event.toolInput || "",
+          rawToolInput: event.rawToolInput,
+        });
         send(ws, {
           type: "question:request",
           sessionId,
@@ -517,6 +580,14 @@ function handleParsedEvent(
       if (requestId && event.rawToolInput) {
         pendingPermissions.set(requestId, { toolName, toolInput: event.rawToolInput });
       }
+      // Store in session so it survives WebSocket reconnection
+      sessionManager.addPendingRequest(sessionId, {
+        type: "permission",
+        requestId,
+        toolName,
+        toolInput: event.toolInput || "",
+        rawToolInput: event.rawToolInput,
+      });
       send(ws, {
         type: "permission:request",
         sessionId,
