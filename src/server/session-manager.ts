@@ -300,11 +300,23 @@ export class SessionManager {
     }
   }
 
+  private sendPermissionMode(session: Session, sessionId: string, mode: string): void {
+    if (!session.stdin) return;
+    const request = {
+      type: "control_request",
+      request_id: `perm-${Date.now()}`,
+      request: { subtype: "set_permission_mode", mode },
+    };
+    this.log(sessionId, `sending set_permission_mode: ${mode}`);
+    session.stdin.write(JSON.stringify(request) + "\n");
+  }
+
   setBypassAllPermissions(sessionId: string): void {
     const session = this.sessions.get(sessionId);
     if (!session || session.bypassAllPermissions) return;
     session.bypassAllPermissions = true;
     setSessionPrefs(sessionId, { bypassAllPermissions: true });
+    this.sendPermissionMode(session, sessionId, "bypassPermissions");
     this.emitSystem(session, sessionId, "__bypass_state::on");
   }
 
@@ -313,6 +325,7 @@ export class SessionManager {
     if (!session || !session.bypassAllPermissions) return;
     session.bypassAllPermissions = false;
     setSessionPrefs(sessionId, { bypassAllPermissions: false });
+    this.sendPermissionMode(session, sessionId, "default");
     this.emitSystem(session, sessionId, "__bypass_state::off");
   }
 
@@ -648,9 +661,17 @@ export class SessionManager {
       "stream-json",
       "--input-format",
       "stream-json",
-      "--permission-prompt-tool",
-      "stdio",
     ];
+
+    // Always enable bypass as an option so it can be toggled mid-session
+    // via set_permission_mode control request. Permission prompts still go
+    // through stdio so the UI can surface them when bypass is off.
+    args.push("--allow-dangerously-skip-permissions");
+    args.push("--permission-prompt-tool", "stdio");
+
+    if (session.bypassAllPermissions) {
+      args.push("--permission-mode", "bypassPermissions");
+    }
 
     if (session.hasSpawnedBefore || transcriptExists(sessionId, session.info.cwd)) {
       args.push("--resume", session.info.id);
@@ -893,6 +914,20 @@ export class SessionManager {
               this.emitSystem(session, sessionId, "__compact::done");
             }
           }
+          // Store permission requests so they survive WS reconnections.
+          // The CLI handles bypass/auto-allow natively via set_permission_mode,
+          // so we only see requests that genuinely need user input.
+          if (event.type === "permission_request" && event.requestId) {
+            const toolName = event.toolName || "";
+            session.pendingRequests.set(event.requestId, {
+              type: toolName === "AskUserQuestion" ? "question" : "permission",
+              requestId: event.requestId,
+              toolName,
+              toolInput: event.toolInput || "",
+              rawToolInput: event.rawToolInput,
+            });
+          }
+
           session.emitter.emit("event", sessionId, event);
           updateSnapshot();
 

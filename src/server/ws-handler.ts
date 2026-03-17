@@ -588,53 +588,31 @@ function handleParsedEvent(
       break;
 
     case "permission_request": {
+      // Auto-allow and pending storage are handled in session-manager
+      // before this event reaches us. If we get here, it needs user input.
       const toolName = event.toolName || "";
       const requestId = event.requestId || "";
 
+      if (requestId && event.rawToolInput) {
+        pendingPermissions.set(requestId, { toolName, toolInput: event.rawToolInput });
+      }
+
       if (toolName === "AskUserQuestion") {
-        if (requestId && event.rawToolInput) {
-          pendingPermissions.set(requestId, { toolName, toolInput: event.rawToolInput });
-        }
-        // Store in session so it survives WebSocket reconnection
-        sessionManager.addPendingRequest(sessionId, {
-          type: "question",
-          requestId,
-          toolName,
-          toolInput: event.toolInput || "",
-          rawToolInput: event.rawToolInput,
-        });
         send(ws, {
           type: "question:request",
           sessionId,
           requestId,
           questions: event.toolInput || "",
         });
-        return;
+      } else {
+        send(ws, {
+          type: "permission:request",
+          sessionId,
+          requestId,
+          toolName,
+          input: event.toolInput || "",
+        });
       }
-
-      if (sessionManager.shouldAutoAllow(sessionId, toolName)) {
-        sessionManager.respondToPermission(sessionId, requestId, true, event.rawToolInput);
-        return;
-      }
-
-      if (requestId && event.rawToolInput) {
-        pendingPermissions.set(requestId, { toolName, toolInput: event.rawToolInput });
-      }
-      // Store in session so it survives WebSocket reconnection
-      sessionManager.addPendingRequest(sessionId, {
-        type: "permission",
-        requestId,
-        toolName,
-        toolInput: event.toolInput || "",
-        rawToolInput: event.rawToolInput,
-      });
-      send(ws, {
-        type: "permission:request",
-        sessionId,
-        requestId,
-        toolName,
-        input: event.toolInput || "",
-      });
       break;
     }
 
