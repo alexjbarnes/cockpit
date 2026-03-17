@@ -41,6 +41,21 @@ interface Session {
 
 export class SessionManager {
   private sessions = new Map<string, Session>();
+  private staleCheckInterval: ReturnType<typeof setInterval>;
+
+  constructor() {
+    // Periodically check for sessions stuck in "running" with a dead process
+    this.staleCheckInterval = setInterval(() => {
+      for (const [id, session] of this.sessions) {
+        if (session.info.status === "running" && !session.process) {
+          const short = id.slice(0, 8);
+          console.log(`[session:${short}] stale check: status=running but process=null, correcting to idle`);
+          session.info.status = "idle";
+          session.emitter.emit("status", id, "idle");
+        }
+      }
+    }, 15000);
+  }
 
   createSession(cwd: string, name?: string): SessionInfo {
     const id = uuidv4();
@@ -604,7 +619,14 @@ export class SessionManager {
     return true;
   }
 
+  private log(sessionId: string, msg: string): void {
+    const ts = new Date().toISOString().slice(11, 23);
+    const short = sessionId.slice(0, 8);
+    console.log(`[session:${short}] ${ts} ${msg}`);
+  }
+
   private spawnProcess(session: Session, sessionId: string, text: string, images?: ImageAttachment[], documents?: DocumentAttachment[]): void {
+    this.log(sessionId, `spawning CLI process (resume=${session.hasSpawnedBefore}, model=${session.info.model || "sonnet"})`);
     const args = [
       "-p",
       "--verbose",
@@ -641,10 +663,22 @@ export class SessionManager {
     session.process = proc;
     session.stdin = proc.stdin!;
     session.hasSpawnedBefore = true;
+    this.log(sessionId, `CLI process spawned (pid=${proc.pid})`);
 
     const content = this.buildContent(text, images, documents);
     const userInput = { type: "user", message: { role: "user", content } };
     proc.stdin!.write(JSON.stringify(userInput) + "\n");
+
+    // Handle pipe errors to prevent unhandled exceptions
+    proc.stdin!.on("error", (err) => {
+      this.log(sessionId, `stdin pipe error: ${err.message}`);
+    });
+    proc.stdout!.on("error", (err) => {
+      this.log(sessionId, `stdout pipe error: ${err.message}`);
+    });
+    proc.stderr!.on("error", (err) => {
+      this.log(sessionId, `stderr pipe error: ${err.message}`);
+    });
 
     const parser = new EventParser();
     let stderrBuffer = "";
@@ -836,7 +870,8 @@ export class SessionManager {
       stderrBuffer += chunk.toString();
     });
 
-    proc.on("close", (code) => {
+    proc.on("close", (code, signal) => {
+      this.log(sessionId, `CLI process exited (code=${code}, signal=${signal}, pid=${proc.pid})`);
       if (lineBuffer.trim()) {
         const events = parser.parseLine(lineBuffer);
         for (const event of events) {
@@ -872,6 +907,7 @@ export class SessionManager {
     });
 
     proc.on("error", (err) => {
+      this.log(sessionId, `CLI process error: ${err.message}`);
       session.process = null;
       session.stdin = null;
       session.info.status = "idle";

@@ -53,6 +53,8 @@ export function createWebSocketHandler(
   });
 
   wss.on("connection", (ws: WebSocket) => {
+    const wsId = Math.random().toString(36).slice(2, 8);
+    console.log(`[ws:${wsId}] connected (clients=${wss.clients.size})`);
     const ext = ws as WebSocket & { isAlive?: boolean };
     ext.isAlive = true;
     ws.on("pong", () => { ext.isAlive = true; });
@@ -79,11 +81,14 @@ export function createWebSocketHandler(
         }
 
         case "session:connect": {
+          const sid = msg.sessionId.slice(0, 8);
+          console.log(`[ws:${wsId}] session:connect ${sid} (cwd=${msg.cwd || "none"}, process=${sessionManager.isProcessAlive(msg.sessionId)})`);
           const sessionPromise = msg.cwd
             ? sessionManager.getSessionByCwd(msg.sessionId, msg.cwd)
             : sessionManager.getSession(msg.sessionId);
           sessionPromise.then((session) => {
           if (!session) {
+            console.log(`[ws:${wsId}] session ${sid} not found`);
             send(ws, {
               type: "session:error",
               sessionId: msg.sessionId,
@@ -91,6 +96,7 @@ export function createWebSocketHandler(
             });
             return;
           }
+          console.log(`[ws:${wsId}] session ${sid} loaded (status=${session.info.status}, messages=${session.messages.length}, process=${sessionManager.isProcessAlive(msg.sessionId)})`);
 
           // Clean up previous subscriptions for this session
           const prev = sessionCleanups.get(msg.sessionId);
@@ -402,7 +408,9 @@ export function createWebSocketHandler(
       }
     });
 
-    ws.on("close", () => {
+    ws.on("close", (code, reason) => {
+      const sessions = Array.from(sessionCleanups.keys()).map((s) => s.slice(0, 8));
+      console.log(`[ws:${wsId}] closed (code=${code}, sessions=[${sessions.join(",")}], clients=${wss.clients.size})`);
       for (const fns of sessionCleanups.values()) {
         for (const fn of fns) fn();
       }
