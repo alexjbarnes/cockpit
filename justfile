@@ -17,6 +17,10 @@ build:
 start: build
     NODE_ENV=production APERTURE_DEBUG=1 bun --env-file=.env.production dist/server.js
 
+# Start production server with node (for debugging bun-specific issues)
+start-node: build
+    @set -a && . ./.env.production && set +a && NODE_ENV=production APERTURE_DEBUG=1 node dist/server.js
+
 # Type check
 check:
     npx tsc --noEmit

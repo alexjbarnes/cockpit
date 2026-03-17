@@ -471,6 +471,8 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
           if (msg.status === "idle") {
             streamingRef.current = null;
             agentStackRef.current = [];
+            // Remove stale streaming message that may have survived a WS drop
+            setMessages((prev) => prev.filter((m) => m.id !== "streaming"));
             setPendingQuestions([]);
             setRateLimitStatus(null);
 

@@ -118,7 +118,7 @@ export async function POST(req: NextRequest) {
 
     const message = await runWithStdin(
       "claude",
-      ["-p", "--model", "haiku", "--no-session-persistence"],
+      ["-p", "--model", "haiku", "--no-session-persistence", "--mcp-disabled"],
       cwd,
       input
     );
