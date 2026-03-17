@@ -2,7 +2,8 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { Button } from "@/components/ui/button";
-import { Loader2, Folder, ChevronRight } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { Loader2, Folder, ChevronRight, FolderPlus } from "lucide-react";
 
 interface DirEntry {
   name: string;
@@ -19,6 +20,9 @@ export function DirectoryPicker({ onSelect, onCancel }: DirectoryPickerProps) {
   const [entries, setEntries] = useState<DirEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [creatingFolder, setCreatingFolder] = useState(false);
+  const [newFolderName, setNewFolderName] = useState("");
+  const [createError, setCreateError] = useState("");
 
   const fetchEntries = useCallback(async (dirPath?: string) => {
     setLoading(true);
@@ -48,6 +52,31 @@ export function DirectoryPicker({ onSelect, onCancel }: DirectoryPickerProps) {
   useEffect(() => {
     fetchEntries();
   }, [fetchEntries]);
+
+  const handleCreateFolder = async () => {
+    const name = newFolderName.trim();
+    if (!name) return;
+    setCreateError("");
+
+    try {
+      const res = await fetch("/api/filesystem/mkdir", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ parentPath: currentPath, name }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({ error: "Failed to create folder" }));
+        setCreateError(body.error || "Failed to create folder");
+        return;
+      }
+      const data = await res.json();
+      setCreatingFolder(false);
+      setNewFolderName("");
+      fetchEntries(data.path);
+    } catch {
+      setCreateError("Failed to connect");
+    }
+  };
 
   const segments = currentPath.split("/").filter(Boolean);
 
@@ -92,7 +121,7 @@ export function DirectoryPicker({ onSelect, onCancel }: DirectoryPickerProps) {
         {error && (
           <div className="px-3 py-4 text-sm text-destructive">{error}</div>
         )}
-        {!loading && !error && entries.length === 0 && (
+        {!loading && !error && entries.length === 0 && !creatingFolder && (
           <div className="px-3 py-4 text-sm text-muted-foreground">No subdirectories</div>
         )}
         {!loading && !error && entries.map((entry) => (
@@ -106,9 +135,44 @@ export function DirectoryPicker({ onSelect, onCancel }: DirectoryPickerProps) {
             <span className="truncate">{entry.name}</span>
           </button>
         ))}
+        {creatingFolder && (
+          <div className="px-3 py-1.5 space-y-1">
+            <div className="flex items-center gap-2">
+              <FolderPlus className="h-4 w-4 shrink-0 text-muted-foreground" />
+              <Input
+                value={newFolderName}
+                onChange={(e) => setNewFolderName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") { e.preventDefault(); handleCreateFolder(); }
+                  if (e.key === "Escape") { setCreatingFolder(false); setNewFolderName(""); setCreateError(""); }
+                }}
+                placeholder="Folder name"
+                className="h-7 text-sm"
+                autoFocus
+              />
+              <Button type="button" size="sm" variant="ghost" className="h-7 px-2 text-xs" onClick={handleCreateFolder}>
+                Create
+              </Button>
+            </div>
+            {createError && <p className="text-xs text-destructive pl-6">{createError}</p>}
+          </div>
+        )}
       </div>
 
       <div className="flex gap-2 justify-end">
+        {!creatingFolder && (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => { setCreatingFolder(true); setCreateError(""); }}
+            disabled={!currentPath}
+          >
+            <FolderPlus className="h-3.5 w-3.5 mr-1.5" />
+            New Folder
+          </Button>
+        )}
+        <div className="flex-1" />
         <Button type="button" variant="outline" size="sm" onClick={onCancel}>
           Cancel
         </Button>

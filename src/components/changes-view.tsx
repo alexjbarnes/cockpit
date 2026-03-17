@@ -281,7 +281,7 @@ export function ChangesView({ cwd }: { cwd: string }) {
     );
   }, [status]);
 
-  // Push file list into sidebar on mobile
+  // Push file list into sidebar
   useEffect(() => {
     if (!status || status.files.length === 0) {
       setSidebarContent(null);
@@ -348,19 +348,6 @@ export function ChangesView({ cwd }: { cwd: string }) {
 
       {/* Main content */}
       <div className="flex-1 min-h-0 flex flex-row">
-        {/* File list - hidden on mobile, shown via sidebar instead */}
-        <div className="hidden md:block w-72 lg:w-80 shrink-0 border-r overflow-y-auto">
-          <FileList
-            files={status.files}
-            selectedFile={selectedFile}
-            checkedFiles={checkedFiles}
-            onFileClick={handleFileClick}
-            onContextMenu={handleContextMenu}
-            onToggleFile={toggleFile}
-            onToggleAll={toggleAll}
-          />
-        </div>
-
         {/* Diff viewer */}
         <div className="flex-1 min-w-0 overflow-auto">
           {diffLoading ? (
@@ -383,12 +370,9 @@ export function ChangesView({ cwd }: { cwd: string }) {
             </div>
           ) : (
             <div className="flex items-center justify-center h-full text-sm text-muted-foreground text-center px-4">
-              {status.files.length > 0 ? (
-                <>
-                  <span className="hidden md:inline">Select a file to view changes</span>
-                  <span className="md:hidden">Open the sidebar to select a file</span>
-                </>
-              ) : "No changes"}
+              {status.files.length > 0
+                ? "Select a file from the sidebar to view changes"
+                : "No changes"}
             </div>
           )}
         </div>

@@ -184,7 +184,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             </header>
             <div className="flex flex-1 min-h-0">
               <Sidebar ref={sidebarRef} />
-              <main className="flex-1 min-h-0 flex flex-col">
+              <main className="flex-1 min-h-0 min-w-0 flex flex-col">
                 {children}
               </main>
             </div>

@@ -273,7 +273,7 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
                         <div className="h-2.5 w-2.5 rounded-full bg-yellow-500" title="Working" />
                       </>
                     ) : unread.has(session.id) ? (
-                      <div className="h-2.5 w-2.5 rounded-full bg-blue-500" title="New response" />
+                      <div className="h-2.5 w-2.5 rounded-full bg-green-500" title="New response" />
                     ) : (
                       <div className="h-2.5 w-2.5 rounded-full bg-muted-foreground/30" />
                     )}
