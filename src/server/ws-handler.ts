@@ -339,14 +339,11 @@ export function createWebSocketHandler(
           );
           if (unsubInit) cleanups.push(unsubInit);
 
-          const queuedCount = sessionManager.getQueuedCount(msg.sessionId);
-          if (queuedCount > 0) {
-            send(ws, {
-              type: "session:queued",
-              sessionId: msg.sessionId,
-              count: queuedCount,
-            });
-          }
+          send(ws, {
+            type: "session:queued",
+            sessionId: msg.sessionId,
+            count: sessionManager.getQueuedCount(msg.sessionId),
+          });
 
           const unsubQueued = sessionManager.onQueued(
             msg.sessionId,
@@ -391,7 +388,13 @@ export function createWebSocketHandler(
         }
 
         case "message:cancel_queued": {
-          sessionManager.cancelQueuedMessage(msg.sessionId);
+          const cancelledText = sessionManager.cancelQueuedMessage(msg.sessionId);
+          send(ws, {
+            type: "session:queued",
+            sessionId: msg.sessionId,
+            count: sessionManager.getQueuedCount(msg.sessionId),
+            cancelledText: cancelledText ?? undefined,
+          });
           break;
         }
 

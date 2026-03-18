@@ -130,7 +130,9 @@ interface InputAreaProps {
   onCompact?: () => void;
   initData?: InitData | null;
   hasQueuedMessage?: boolean;
-  onCancelQueued?: () => string | null;
+  onCancelQueued?: () => void;
+  restoredText?: string | null;
+  onClearRestoredText?: () => void;
 }
 
 const sessionDrafts = new Map<string, string>();
@@ -142,7 +144,7 @@ function getMentionContext(text: string, cursorPos: number): { active: boolean; 
   return { active: true, query: match[1], start: cursorPos - match[0].length };
 }
 
-export function InputArea({ sessionId, onSend, onInterrupt, isResponding, bypassActive, onSetBypass, thinkingLevel, onSetThinking, currentModel, onSetModel, contextUsage, dismissKeyboard, cwd, onCompact, initData, hasQueuedMessage, onCancelQueued }: InputAreaProps) {
+export function InputArea({ sessionId, onSend, onInterrupt, isResponding, bypassActive, onSetBypass, thinkingLevel, onSetThinking, currentModel, onSetModel, contextUsage, dismissKeyboard, cwd, onCompact, initData, hasQueuedMessage, onCancelQueued, restoredText, onClearRestoredText }: InputAreaProps) {
   const { connected } = useWebSocket();
   const [text, setText] = useState(() => sessionDrafts.get(sessionId) || "");
 
@@ -153,6 +155,15 @@ export function InputArea({ sessionId, onSend, onInterrupt, isResponding, bypass
   useEffect(() => {
     sessionDrafts.set(sessionId, text);
   }, [sessionId, text]);
+
+  useEffect(() => {
+    if (restoredText) {
+      setText(restoredText);
+      onClearRestoredText?.();
+      textareaRef.current?.focus();
+    }
+  }, [restoredText, onClearRestoredText]);
+
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [optionsOpen, setOptionsOpen] = useState(false);
   const [mentionSelectedIndex, setMentionSelectedIndex] = useState(0);
@@ -290,8 +301,7 @@ export function InputArea({ sessionId, onSend, onInterrupt, isResponding, bypass
       if (e.key === "Escape" && hasQueuedMessage && onCancelQueued) {
         e.preventDefault();
         e.stopPropagation();
-        const restored = onCancelQueued();
-        if (restored) setText(restored);
+        onCancelQueued();
         return;
       }
 
@@ -530,8 +540,7 @@ export function InputArea({ sessionId, onSend, onInterrupt, isResponding, bypass
             <span className="text-xs text-muted-foreground">Message queued - will send when finished</span>
             <button
               onClick={() => {
-                const restored = onCancelQueued();
-                if (restored) setText(restored);
+                onCancelQueued();
                 textareaRef.current?.focus();
               }}
               className="rounded p-0.5 text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
@@ -607,8 +616,7 @@ export function InputArea({ sessionId, onSend, onInterrupt, isResponding, bypass
             ) : isResponding && !text.trim() && !hasAttachments ? (
               <Button size="icon" variant="destructive" className="h-8 w-8" onClick={() => {
                 if (hasQueuedMessage && onCancelQueued) {
-                  const restored = onCancelQueued();
-                  if (restored) setText(restored);
+                  onCancelQueued();
                 } else {
                   onInterrupt();
                 }

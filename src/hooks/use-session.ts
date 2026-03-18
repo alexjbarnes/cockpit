@@ -51,7 +51,9 @@ interface UseSessionReturn {
   setModel: (model: string) => void;
   setBypassAll: (enabled: boolean) => void;
   setThinkingLevel: (level: ThinkingLevel) => void;
-  cancelQueuedMessage: () => string | null;
+  cancelQueuedMessage: () => void;
+  restoredText: string | null;
+  clearRestoredText: () => void;
   dismissBtw: () => void;
   retry: () => void;
 }
@@ -78,7 +80,7 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
   const [btw, setBtw] = useState<BtwState | null>(null);
 
   const [hasQueuedMessage, setHasQueuedMessage] = useState(false);
-  const queuedTextRef = useRef<string | null>(null);
+  const [restoredText, setRestoredText] = useState<string | null>(null);
   const isRespondingRef = useRef(false);
   const messagesRef = useRef<ChatMessage[]>([]);
   const currentModelRef = useRef(currentModel);
@@ -527,8 +529,8 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
 
         case "session:queued": {
           setHasQueuedMessage(msg.count > 0);
-          if (msg.count === 0) {
-            queuedTextRef.current = null;
+          if (msg.cancelledText) {
+            setRestoredText(msg.cancelledText);
           }
           break;
         }
@@ -796,7 +798,6 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
 
       // Queue message server-side when responding
       if (isRespondingRef.current) {
-        queuedTextRef.current = text;
         send({
           type: "message:send",
           sessionId,
@@ -886,13 +887,13 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
     [send, sessionId]
   );
 
-  const cancelQueuedMessage = useCallback((): string | null => {
-    const text = queuedTextRef.current;
-    queuedTextRef.current = null;
+  const cancelQueuedMessage = useCallback(() => {
     send({ type: "message:cancel_queued", sessionId });
-    setHasQueuedMessage(false);
-    return text;
   }, [send, sessionId]);
+
+  const clearRestoredText = useCallback(() => {
+    setRestoredText(null);
+  }, []);
 
   const dismissBtw = useCallback(() => {
     const current = btw;
@@ -912,5 +913,5 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
     send({ type: "message:send", sessionId, text: "Continue from where you left off." });
   }, [send, sessionId]);
 
-  return { messages, historyLoaded, isResponding, pendingPermissions, pendingQuestions, modelPicker, currentModel, bypassActive, thinkingLevel, contextUsage, rateLimitStatus, apiError, suggestions, sessionName, initData, hasQueuedMessage, backgroundTasks, todos, btw, sendMessage, interrupt, respondToPermission, respondToQuestion, selectModel, setModel, setBypassAll, setThinkingLevel, cancelQueuedMessage, dismissBtw, retry };
+  return { messages, historyLoaded, isResponding, pendingPermissions, pendingQuestions, modelPicker, currentModel, bypassActive, thinkingLevel, contextUsage, rateLimitStatus, apiError, suggestions, sessionName, initData, hasQueuedMessage, backgroundTasks, todos, btw, sendMessage, interrupt, respondToPermission, respondToQuestion, selectModel, setModel, setBypassAll, setThinkingLevel, cancelQueuedMessage, restoredText, clearRestoredText, dismissBtw, retry };
 }

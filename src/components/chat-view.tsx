@@ -20,7 +20,7 @@ const INITIAL_WINDOW = 50;
 const WINDOW_INCREMENT = 30;
 
 export function ChatView({ sessionId, cwd, initialName }: { sessionId: string; cwd?: string; initialName?: string }) {
-  const { messages, historyLoaded, isResponding, pendingPermissions, pendingQuestions, modelPicker, currentModel, bypassActive, thinkingLevel, contextUsage, rateLimitStatus, apiError, sessionName, initData, hasQueuedMessage, backgroundTasks, todos, btw, sendMessage, interrupt, respondToPermission, respondToQuestion, selectModel, setModel, setBypassAll, setThinkingLevel, cancelQueuedMessage, dismissBtw, retry } = useSession(sessionId, cwd);
+  const { messages, historyLoaded, isResponding, pendingPermissions, pendingQuestions, modelPicker, currentModel, bypassActive, thinkingLevel, contextUsage, rateLimitStatus, apiError, sessionName, initData, hasQueuedMessage, backgroundTasks, todos, btw, sendMessage, interrupt, respondToPermission, respondToQuestion, selectModel, setModel, setBypassAll, setThinkingLevel, cancelQueuedMessage, restoredText, clearRestoredText, dismissBtw, retry } = useSession(sessionId, cwd);
   const { settings } = useSettings();
   const { setHeader, setBackgroundTasks, setTodos } = useShell();
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -335,6 +335,8 @@ export function ChatView({ sessionId, cwd, initialName }: { sessionId: string; c
           initData={initData}
           hasQueuedMessage={hasQueuedMessage}
           onCancelQueued={cancelQueuedMessage}
+          restoredText={restoredText}
+          onClearRestoredText={clearRestoredText}
         />
       </div>
     </>
