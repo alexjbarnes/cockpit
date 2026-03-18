@@ -284,6 +284,12 @@ export function InputArea({ onSend, onInterrupt, isResponding, bypassActive, onS
         return;
       }
 
+      if (e.key === "Escape" && isResponding) {
+        e.preventDefault();
+        onInterrupt();
+        return;
+      }
+
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
         handleSend();
