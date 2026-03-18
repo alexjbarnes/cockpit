@@ -495,7 +495,6 @@ export class SessionManager {
       session.stdin = null;
     }
     session.allowedTools.clear();
-    session.bypassAllPermissions = false;
     session.compacting = false;
   }
 
