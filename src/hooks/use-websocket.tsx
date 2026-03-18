@@ -104,6 +104,10 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
         clearTimeout(pongTimer.current);
         awaitingPong.current = false;
       }
+      // Server acknowledged our message send
+      if (msg.type === "session:status" && inflightRef.current.length > 0) {
+        inflightRef.current = [];
+      }
       for (const handler of handlersRef.current) {
         handler(msg);
       }
@@ -114,6 +118,11 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
       setConnected(false);
       if (wsRef.current === ws) {
         wsRef.current = null;
+      }
+      // Re-queue any unacknowledged message sends for retry
+      if (inflightRef.current.length > 0) {
+        queueRef.current.push(...inflightRef.current);
+        inflightRef.current = [];
       }
       // Always reset delay on close so reconnection is fast
       reconnectDelay.current = 1000;
@@ -198,8 +207,8 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
         pongTimer.current = setTimeout(() => {
           awaitingPong.current = false;
           tearDownAndReconnect();
-        }, 10000);
-      }, 10000);
+        }, 5000);
+      }, 5000);
     };
 
     const onVisibilityChange = () => {
@@ -238,7 +247,7 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
         pongTimer.current = setTimeout(() => {
           awaitingPong.current = false;
           tearDownAndReconnect();
-        }, 3000);
+        }, 2000);
       } else {
         clearInterval(healthTimer.current);
       }
@@ -254,8 +263,14 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
     };
   }, [tearDownAndReconnect]);
 
+  // Track unacknowledged message sends for retry on reconnect
+  const inflightRef = useRef<ClientMessage[]>([]);
+
   const send = useCallback((msg: ClientMessage) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
+      if (msg.type === "message:send") {
+        inflightRef.current.push(msg);
+      }
       wsRef.current.send(JSON.stringify(msg));
     } else {
       queueRef.current.push(msg);
