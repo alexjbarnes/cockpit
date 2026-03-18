@@ -24,6 +24,7 @@ function runWithStdin(cmd: string, args: string[], cwd: string, input: string): 
     delete env.CLAUDECODE;
     delete env.CLAUDE_CODE_ENTRYPOINT;
     env.MAX_THINKING_TOKENS = "0";
+    env.CLAUDE_CODE_SIMPLE = "1";
 
     const proc = spawn(cmd, args, { cwd, env });
     let stdout = "";
@@ -118,7 +119,7 @@ export async function POST(req: NextRequest) {
 
     const message = await runWithStdin(
       "claude",
-      ["-p", "--model", "haiku", "--no-session-persistence", "--mcp-disabled"],
+      ["-p", "--model", "haiku", "--no-session-persistence", "--allowedTools", ""],
       cwd,
       input
     );

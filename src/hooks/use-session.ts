@@ -16,6 +16,13 @@ export interface PendingQuestion {
   answered?: boolean;
 }
 
+export interface BtwState {
+  question: string;
+  answer: string | null;
+  loading: boolean;
+  error: string | null;
+}
+
 interface UseSessionReturn {
   messages: ChatMessage[];
   historyLoaded: boolean;
@@ -28,12 +35,14 @@ interface UseSessionReturn {
   thinkingLevel: ThinkingLevel;
   contextUsage: ContextUsage | null;
   rateLimitStatus: string | null;
+  apiError: string | null;
   suggestions: string[];
   sessionName: string | null;
   initData: InitData | null;
   hasQueuedMessage: boolean;
   backgroundTasks: BackgroundTask[];
   todos: TodoItem[];
+  btw: BtwState | null;
   sendMessage: (text: string, images?: ImageAttachment[], documents?: DocumentAttachment[], textFiles?: TextFileAttachment[]) => void;
   interrupt: () => void;
   respondToPermission: (requestId: string, allowed: boolean, permissionMode?: PermissionMode) => void;
@@ -43,6 +52,8 @@ interface UseSessionReturn {
   setBypassAll: (enabled: boolean) => void;
   setThinkingLevel: (level: ThinkingLevel) => void;
   cancelQueuedMessage: () => string | null;
+  dismissBtw: () => void;
+  retry: () => void;
 }
 
 export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
@@ -58,16 +69,20 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
   const [historyLoaded, setHistoryLoaded] = useState(false);
   const [contextUsage, setContextUsage] = useState<ContextUsage | null>(null);
   const [rateLimitStatus, setRateLimitStatus] = useState<string | null>(null);
+  const [apiError, setApiError] = useState<string | null>(null);
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const [sessionName, setSessionName] = useState<string | null>(null);
   const [initData, setInitData] = useState<InitData | null>(null);
   const [backgroundTasks, setBackgroundTasks] = useState<BackgroundTask[]>([]);
   const [todos, setTodos] = useState<TodoItem[]>([]);
+  const [btw, setBtw] = useState<BtwState | null>(null);
 
   // Queued message to send when Claude finishes responding
   const queuedRef = useRef<{ text: string; images?: ImageAttachment[]; documents?: DocumentAttachment[] } | null>(null);
   const [hasQueuedMessage, setHasQueuedMessage] = useState(false);
   const isRespondingRef = useRef(false);
+  const messagesRef = useRef<ChatMessage[]>([]);
+  const currentModelRef = useRef(currentModel);
 
   // Track the in-progress assistant message being streamed
   const streamingRef = useRef<{
@@ -88,6 +103,10 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
     messageCountRef.current = 0;
     loadedSessionRef.current = null;
   }
+
+  // Keep refs in sync for use inside callbacks
+  useEffect(() => { messagesRef.current = messages; }, [messages]);
+  useEffect(() => { currentModelRef.current = currentModel; }, [currentModel]);
 
   // Send session:connect whenever WS (re)connects
   useEffect(() => {
@@ -484,6 +503,7 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
           const nowRunning = msg.status === "running";
           setIsResponding(nowRunning);
           isRespondingRef.current = nowRunning;
+          if (nowRunning) setApiError(null);
           if (msg.status === "idle") {
             streamingRef.current = null;
             agentStackRef.current = [];
@@ -525,6 +545,10 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
           console.error("Session error:", msg.error);
           streamingRef.current = null;
           agentStackRef.current = [];
+          const err = (msg.error as string) || "Unknown error";
+          // Extract the human-readable message from JSON if present
+          const match = err.match(/"message"\s*:\s*"([^"]+)"/);
+          setApiError(match ? match[1] : err.slice(0, 200));
           break;
         }
 
@@ -760,20 +784,33 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
 
       const isBtw = isRespondingRef.current && /^\/btw\s/i.test(text.trim());
 
-      // /btw: strip prefix, send immediately mid-stream
+      // /btw: side question via separate API call, shown in overlay
       if (isBtw) {
         const btwText = text.trim().replace(/^\/btw\s+/i, "");
         if (!btwText) return;
-        const userMsg: ChatMessage = {
-          id: "user-" + Date.now(),
-          role: "user",
-          content: btwText,
-          toolUses: [],
-          blocks: [],
-          timestamp: Date.now(),
-        };
-        setMessages((prev) => [...prev, userMsg]);
-        send({ type: "message:send", sessionId, text: btwText });
+        setBtw({ question: btwText, answer: null, loading: true, error: null });
+
+        const context = messagesRef.current
+          .filter((m) => m.role === "user" || m.role === "assistant")
+          .slice(-20)
+          .map((m) => ({ role: m.role, content: m.content.slice(0, 2000) }));
+
+        fetch("/api/btw", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ question: btwText, context, model: currentModelRef.current, cwd }),
+        })
+          .then((res) => res.json())
+          .then((data) => {
+            if (data.error) {
+              setBtw((prev) => prev ? { ...prev, loading: false, error: data.error } : null);
+            } else {
+              setBtw((prev) => prev ? { ...prev, loading: false, answer: data.answer } : null);
+            }
+          })
+          .catch((err) => {
+            setBtw((prev) => prev ? { ...prev, loading: false, error: err.message } : null);
+          });
         return;
       }
 
@@ -874,5 +911,23 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
     return text;
   }, []);
 
-  return { messages, historyLoaded, isResponding, pendingPermissions, pendingQuestions, modelPicker, currentModel, bypassActive, thinkingLevel, contextUsage, rateLimitStatus, suggestions, sessionName, initData, hasQueuedMessage, backgroundTasks, todos, sendMessage, interrupt, respondToPermission, respondToQuestion, selectModel, setModel, setBypassAll, setThinkingLevel, cancelQueuedMessage };
+  const dismissBtw = useCallback(() => {
+    const current = btw;
+    if (current?.answer) {
+      const ts = Date.now();
+      setMessages((prev) => [
+        ...prev,
+        { id: `btw-q-${ts}`, role: "user" as const, content: `[side question] ${current.question}`, toolUses: [], blocks: [], timestamp: ts },
+        { id: `btw-a-${ts}`, role: "assistant" as const, content: current.answer!, toolUses: [], blocks: [], timestamp: ts + 1 },
+      ]);
+    }
+    setBtw(null);
+  }, [btw]);
+
+  const retry = useCallback(() => {
+    setApiError(null);
+    send({ type: "message:send", sessionId, text: "Continue from where you left off." });
+  }, [send, sessionId]);
+
+  return { messages, historyLoaded, isResponding, pendingPermissions, pendingQuestions, modelPicker, currentModel, bypassActive, thinkingLevel, contextUsage, rateLimitStatus, apiError, suggestions, sessionName, initData, hasQueuedMessage, backgroundTasks, todos, btw, sendMessage, interrupt, respondToPermission, respondToQuestion, selectModel, setModel, setBypassAll, setThinkingLevel, cancelQueuedMessage, dismissBtw, retry };
 }

@@ -588,7 +588,14 @@ export function InputArea({ onSend, onInterrupt, isResponding, bypassActive, onS
                 <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
               </Button>
             ) : isResponding && !text.trim() && !hasAttachments ? (
-              <Button size="icon" variant="destructive" className="h-8 w-8" onClick={onInterrupt}>
+              <Button size="icon" variant="destructive" className="h-8 w-8" onClick={() => {
+                if (hasQueuedMessage && onCancelQueued) {
+                  const restored = onCancelQueued();
+                  if (restored) setText(restored);
+                } else {
+                  onInterrupt();
+                }
+              }}>
                 <Square className="h-4 w-4" />
               </Button>
             ) : (

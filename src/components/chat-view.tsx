@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useLayoutEffect, useRef, useCallback, useMemo, useState } from "react";
-import { Loader2 } from "lucide-react";
+import { Loader2, AlertTriangle, RotateCcw } from "lucide-react";
 import { useSession } from "@/hooks/use-session";
 import { useWebSocket } from "@/hooks/use-websocket";
 import { useSettings } from "@/hooks/use-settings";
@@ -12,6 +12,7 @@ import { QuestionCard, QuestionPrompt, parseQuestionsFromInput } from "./questio
 import { splitAtQuestion } from "@/lib/split-question-blocks";
 import { ModelPicker } from "./model-picker";
 import { SelectionToolbar } from "./selection-toolbar";
+import { BtwOverlay } from "./btw-overlay";
 import { useMessageSelection } from "@/hooks/use-message-selection";
 import { useShell } from "./app-shell";
 
@@ -19,7 +20,7 @@ const INITIAL_WINDOW = 50;
 const WINDOW_INCREMENT = 30;
 
 export function ChatView({ sessionId, cwd, initialName }: { sessionId: string; cwd?: string; initialName?: string }) {
-  const { messages, historyLoaded, isResponding, pendingPermissions, pendingQuestions, modelPicker, currentModel, bypassActive, thinkingLevel, contextUsage, rateLimitStatus, sessionName, initData, hasQueuedMessage, backgroundTasks, todos, sendMessage, interrupt, respondToPermission, respondToQuestion, selectModel, setModel, setBypassAll, setThinkingLevel, cancelQueuedMessage } = useSession(sessionId, cwd);
+  const { messages, historyLoaded, isResponding, pendingPermissions, pendingQuestions, modelPicker, currentModel, bypassActive, thinkingLevel, contextUsage, rateLimitStatus, apiError, sessionName, initData, hasQueuedMessage, backgroundTasks, todos, btw, sendMessage, interrupt, respondToPermission, respondToQuestion, selectModel, setModel, setBypassAll, setThinkingLevel, cancelQueuedMessage, dismissBtw, retry } = useSession(sessionId, cwd);
   const { settings } = useSettings();
   const { setHeader, setBackgroundTasks, setTodos } = useShell();
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -121,20 +122,26 @@ export function ChatView({ sessionId, cwd, initialName }: { sessionId: string; c
     return () => vv.removeEventListener("resize", handler);
   }, [scrollToBottom]);
 
-  // Escape key interrupts generation (desktop only).
-  // If a modal overlay (z-50) is open, skip so the modal closes first.
-  // Input area calls stopPropagation when it handles Escape itself
-  // (command menu, mention picker, queued message cancel).
+  // Escape key: modal → queued message → interrupt.
+  // Input area also handles Escape with stopPropagation when textarea has focus,
+  // so this only fires when focus is elsewhere.
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.key !== "Escape" || !isResponding) return;
       if (document.querySelector(".fixed.inset-0.z-50")) return;
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === "TEXTAREA" || tag === "INPUT") return;
+      if (hasQueuedMessage) {
+        e.preventDefault();
+        cancelQueuedMessage();
+        return;
+      }
       e.preventDefault();
       interrupt();
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [isResponding, interrupt]);
+  }, [isResponding, hasQueuedMessage, interrupt, cancelQueuedMessage]);
 
   const handleSend = useCallback((text: string, images?: import("@/types").ImageAttachment[], documents?: import("@/types").DocumentAttachment[], textFiles?: import("@/types").TextFileAttachment[]) => {
     stickToBottom.current = true;
@@ -245,6 +252,24 @@ export function ChatView({ sessionId, cwd, initialName }: { sessionId: string; c
               )}
             </div>
           )}
+          {apiError && !isResponding && (
+            <div className="flex w-full justify-start">
+              <div className="max-w-[85%] rounded-lg border border-red-500/30 bg-red-500/5 px-4 py-3">
+                <div className="flex items-center gap-2 text-red-500 mb-1">
+                  <AlertTriangle className="h-4 w-4 shrink-0" />
+                  <span className="text-sm font-medium">API Error</span>
+                </div>
+                <p className="text-xs text-muted-foreground mb-3">{apiError}</p>
+                <button
+                  onClick={retry}
+                  className="flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs hover:bg-muted transition-colors"
+                >
+                  <RotateCcw className="h-3 w-3" />
+                  Retry
+                </button>
+              </div>
+            </div>
+          )}
           {pendingPermissions.map((p) => (
             <PermissionPrompt
               key={p.requestId}
@@ -278,6 +303,15 @@ export function ChatView({ sessionId, cwd, initialName }: { sessionId: string; c
           count={selectedIds.size}
           onCopy={handleCopySelected}
           onCancel={clearSelection}
+        />
+      )}
+      {btw && (
+        <BtwOverlay
+          question={btw.question}
+          answer={btw.answer}
+          loading={btw.loading}
+          error={btw.error}
+          onDismiss={dismissBtw}
         />
       )}
       <div className="shrink-0">
