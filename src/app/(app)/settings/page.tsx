@@ -257,6 +257,7 @@ export default function SettingsPage() {
           <NavRow label="MCP Servers" onClick={() => router.push("/mcp-servers")} />
           <NavRow label="Skills" onClick={() => router.push("/skills")} />
           <NavRow label="Commands" onClick={() => router.push("/commands")} />
+          <NavRow label="Hooks" onClick={() => router.push("/hooks")} />
           <NavRow label="CLAUDE.md" onClick={() => router.push("/claude-md")} />
         </CardContent>
       </Card>
