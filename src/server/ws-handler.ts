@@ -339,6 +339,27 @@ export function createWebSocketHandler(
           );
           if (unsubInit) cleanups.push(unsubInit);
 
+          const queuedCount = sessionManager.getQueuedCount(msg.sessionId);
+          if (queuedCount > 0) {
+            send(ws, {
+              type: "session:queued",
+              sessionId: msg.sessionId,
+              count: queuedCount,
+            });
+          }
+
+          const unsubQueued = sessionManager.onQueued(
+            msg.sessionId,
+            (count) => {
+              send(ws, {
+                type: "session:queued",
+                sessionId: msg.sessionId,
+                count,
+              });
+            }
+          );
+          if (unsubQueued) cleanups.push(unsubQueued);
+
           // Re-emit any pending permission/question requests that were
           // sent to a previous (now dead) WebSocket connection
           const pendingReqs = sessionManager.getPendingRequests(msg.sessionId);
@@ -366,6 +387,11 @@ export function createWebSocketHandler(
 
         case "message:send": {
           sessionManager.sendMessage(msg.sessionId, msg.text, msg.images, msg.documents);
+          break;
+        }
+
+        case "message:cancel_queued": {
+          sessionManager.cancelQueuedMessage(msg.sessionId);
           break;
         }
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useCallback, type KeyboardEvent, type ClipboardEvent, type DragEvent } from "react";
+import { useState, useEffect, useRef, useCallback, type KeyboardEvent, type ClipboardEvent, type DragEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { Send, Square, Settings2, ShieldOff, ShieldCheck, Brain, Cpu, Loader2, X, Paperclip, FileText } from "lucide-react";
 import { useWebSocket } from "@/hooks/use-websocket";
@@ -114,6 +114,7 @@ const FILE_ACCEPT = [
 ].join(",");
 
 interface InputAreaProps {
+  sessionId: string;
   onSend: (text: string, images?: ImageAttachment[], documents?: DocumentAttachment[], textFiles?: TextFileAttachment[]) => void;
   onInterrupt: () => void;
   isResponding: boolean;
@@ -132,6 +133,8 @@ interface InputAreaProps {
   onCancelQueued?: () => string | null;
 }
 
+const sessionDrafts = new Map<string, string>();
+
 function getMentionContext(text: string, cursorPos: number): { active: boolean; query: string; start: number } {
   const before = text.slice(0, cursorPos);
   const match = before.match(/@([^\s]*)$/);
@@ -139,9 +142,17 @@ function getMentionContext(text: string, cursorPos: number): { active: boolean; 
   return { active: true, query: match[1], start: cursorPos - match[0].length };
 }
 
-export function InputArea({ onSend, onInterrupt, isResponding, bypassActive, onSetBypass, thinkingLevel, onSetThinking, currentModel, onSetModel, contextUsage, dismissKeyboard, cwd, onCompact, initData, hasQueuedMessage, onCancelQueued }: InputAreaProps) {
+export function InputArea({ sessionId, onSend, onInterrupt, isResponding, bypassActive, onSetBypass, thinkingLevel, onSetThinking, currentModel, onSetModel, contextUsage, dismissKeyboard, cwd, onCompact, initData, hasQueuedMessage, onCancelQueued }: InputAreaProps) {
   const { connected } = useWebSocket();
-  const [text, setText] = useState("");
+  const [text, setText] = useState(() => sessionDrafts.get(sessionId) || "");
+
+  useEffect(() => {
+    setText(sessionDrafts.get(sessionId) || "");
+  }, [sessionId]);
+
+  useEffect(() => {
+    sessionDrafts.set(sessionId, text);
+  }, [sessionId, text]);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [optionsOpen, setOptionsOpen] = useState(false);
   const [mentionSelectedIndex, setMentionSelectedIndex] = useState(0);

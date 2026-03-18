@@ -77,9 +77,8 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
   const [todos, setTodos] = useState<TodoItem[]>([]);
   const [btw, setBtw] = useState<BtwState | null>(null);
 
-  // Queued message to send when Claude finishes responding
-  const queuedRef = useRef<{ text: string; images?: ImageAttachment[]; documents?: DocumentAttachment[] } | null>(null);
   const [hasQueuedMessage, setHasQueuedMessage] = useState(false);
+  const queuedTextRef = useRef<string | null>(null);
   const isRespondingRef = useRef(false);
   const messagesRef = useRef<ChatMessage[]>([]);
   const currentModelRef = useRef(currentModel);
@@ -511,32 +510,6 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
             setMessages((prev) => prev.filter((m) => m.id !== "streaming"));
             setPendingQuestions([]);
             setRateLimitStatus(null);
-
-            // Flush queued message
-            const queued = queuedRef.current;
-            if (queued) {
-              queuedRef.current = null;
-              setHasQueuedMessage(false);
-              const userMsg: ChatMessage = {
-                id: "user-" + Date.now(),
-                role: "user",
-                content: queued.text,
-                toolUses: [],
-                blocks: [],
-                timestamp: Date.now(),
-                images: queued.images,
-                documents: queued.documents,
-              };
-              setMessages((prev) => [...prev, userMsg]);
-              setSuggestions([]);
-              send({
-                type: "message:send",
-                sessionId,
-                text: queued.text,
-                images: queued.images,
-                documents: queued.documents,
-              });
-            }
           }
           break;
         }
@@ -552,6 +525,14 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
           break;
         }
 
+        case "session:queued": {
+          setHasQueuedMessage(msg.count > 0);
+          if (msg.count === 0) {
+            queuedTextRef.current = null;
+          }
+          break;
+        }
+
         case "session:clear": {
           setMessages([]);
           messageCountRef.current = 0;
@@ -560,7 +541,6 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
           setBypassActive(false);
           setBackgroundTasks([]);
           setTodos([]);
-          queuedRef.current = null;
           setHasQueuedMessage(false);
           break;
         }
@@ -814,14 +794,16 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
         return;
       }
 
-      // Queue non-btw messages while responding
+      // Queue message server-side when responding
       if (isRespondingRef.current) {
-        queuedRef.current = {
+        queuedTextRef.current = text;
+        send({
+          type: "message:send",
+          sessionId,
           text: apiText,
           images: images?.length ? images : undefined,
           documents: documents?.length ? documents : undefined,
-        };
-        setHasQueuedMessage(true);
+        });
         return;
       }
 
@@ -905,11 +887,12 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
   );
 
   const cancelQueuedMessage = useCallback((): string | null => {
-    const text = queuedRef.current?.text ?? null;
-    queuedRef.current = null;
+    const text = queuedTextRef.current;
+    queuedTextRef.current = null;
+    send({ type: "message:cancel_queued", sessionId });
     setHasQueuedMessage(false);
     return text;
-  }, []);
+  }, [send, sessionId]);
 
   const dismissBtw = useCallback(() => {
     const current = btw;

@@ -30,6 +30,12 @@ export interface StreamingSnapshot {
   blocks: ContentBlock[];
 }
 
+interface QueuedMessage {
+  text: string;
+  images?: ImageAttachment[];
+  documents?: DocumentAttachment[];
+}
+
 interface Session {
   info: SessionInfo;
   process: ChildProcess | null;
@@ -46,6 +52,7 @@ interface Session {
   initData?: InitData;
   pendingRequests: Map<string, PendingRequest>;
   streamingSnapshot: StreamingSnapshot | null;
+  queuedMessages: QueuedMessage[];
 }
 
 export class SessionManager {
@@ -95,6 +102,7 @@ export class SessionManager {
       todoItems: [],
       pendingRequests: new Map(),
       streamingSnapshot: null,
+      queuedMessages: [],
     });
 
     return info;
@@ -129,6 +137,7 @@ export class SessionManager {
         todoItems: [],
         pendingRequests: new Map(),
         streamingSnapshot: null,
+        queuedMessages: [],
       };
       this.sessions.set(id, session);
     }
@@ -349,6 +358,7 @@ export class SessionManager {
     session.info.model = model;
     setSessionPrefs(sessionId, { model });
     this.killProcess(session);
+    session.queuedMessages.length = 0;
     session.info.status = "idle";
     session.emitter.emit("status", sessionId, "idle");
     this.emitInfoUpdated(session, sessionId);
@@ -365,6 +375,7 @@ export class SessionManager {
     setSessionPrefs(sessionId, { thinkingLevel: level });
     // Kill current process so next message spawns with new env var
     this.killProcess(session);
+    session.queuedMessages.length = 0;
     session.info.status = "idle";
     session.emitter.emit("status", sessionId, "idle");
     this.emitSystem(session, sessionId, `__thinking_level::${level}`);
@@ -376,6 +387,41 @@ export class SessionManager {
 
   getContextUsage(sessionId: string): ContextUsage | null {
     return this.sessions.get(sessionId)?.contextUsage ?? null;
+  }
+
+  hasQueuedMessage(sessionId: string): boolean {
+    const session = this.sessions.get(sessionId);
+    return session ? session.queuedMessages.length > 0 : false;
+  }
+
+  getQueuedCount(sessionId: string): number {
+    return this.sessions.get(sessionId)?.queuedMessages.length ?? 0;
+  }
+
+  cancelQueuedMessage(sessionId: string): string | null {
+    const session = this.sessions.get(sessionId);
+    if (!session || session.queuedMessages.length === 0) return null;
+    const last = session.queuedMessages.pop()!;
+    session.emitter.emit("queued", sessionId, session.queuedMessages.length);
+    return last.text;
+  }
+
+  onQueued(
+    id: string,
+    listener: (count: number) => void
+  ): (() => void) | null {
+    const session = this.sessions.get(id);
+    if (!session) return null;
+    const handler = (_sessionId: string, count: number) => listener(count);
+    session.emitter.on("queued", handler);
+    return () => session.emitter.off("queued", handler);
+  }
+
+  private flushQueuedMessage(session: Session, sessionId: string): void {
+    if (session.queuedMessages.length === 0) return;
+    const next = session.queuedMessages.shift()!;
+    session.emitter.emit("queued", sessionId, session.queuedMessages.length);
+    this.sendMessage(sessionId, next.text, next.images, next.documents);
   }
 
   onUsage(
@@ -553,6 +599,7 @@ export class SessionManager {
       case "/new": {
         this.killProcess(session);
         session.hasSpawnedBefore = false;
+        session.queuedMessages.length = 0;
         session.info.status = "idle";
         session.emitter.emit("clear", sessionId);
         session.emitter.emit("status", sessionId, "idle");
@@ -638,15 +685,11 @@ export class SessionManager {
 
     const content = this.buildContent(text, images, documents);
 
-    // "btw" nudge: if already running and process has stdin, inject the message mid-stream
+    // If already running, queue the message to send when the session goes idle
     if (session.info.status === "running") {
-      if (session.process && session.stdin) {
-        const userInput = { type: "user", message: { role: "user", content } };
-        session.stdin.write(JSON.stringify(userInput) + "\n");
-        return true;
-      }
-      session.emitter.emit("error", sessionId, "A message is already being processed");
-      return false;
+      session.queuedMessages.push({ text, images, documents });
+      session.emitter.emit("queued", sessionId, session.queuedMessages.length);
+      return true;
     }
 
     session.info.status = "running";
@@ -902,6 +945,7 @@ export class SessionManager {
                 session.compacting = false;
                 this.emitSystem(session, sessionId, "__compact::done");
               }
+              this.flushQueuedMessage(session, sessionId);
               continue;
             }
 
@@ -929,6 +973,7 @@ export class SessionManager {
               session.compacting = false;
               this.emitSystem(session, sessionId, "__compact::done");
             }
+            this.flushQueuedMessage(session, sessionId);
           }
           // Store permission requests so they survive WS reconnections.
           // The CLI handles bypass/auto-allow natively via set_permission_mode,
@@ -996,6 +1041,8 @@ export class SessionManager {
       if (code !== 0 && stderrBuffer.trim()) {
         session.emitter.emit("error", sessionId, stderrBuffer.trim());
       }
+
+      this.flushQueuedMessage(session, sessionId);
     });
 
     proc.on("error", (err) => {

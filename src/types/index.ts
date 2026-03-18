@@ -118,6 +118,7 @@ export type ClientMessage =
   | { type: "session:set_model"; sessionId: string; model: string }
   | { type: "session:subscribe"; sessionIds: string[] }
   | { type: "question:response"; sessionId: string; requestId: string; answers: Record<string, string> }
+  | { type: "message:cancel_queued"; sessionId: string }
   | { type: "ping" };
 
 // Server -> Client messages
@@ -145,4 +146,5 @@ export type ServerMessage =
   | { type: "session:init"; sessionId: string; data: InitData }
   | { type: "history"; sessionId: string; messages: ChatMessage[]; delta?: boolean; status?: "idle" | "running" }
   | { type: "session:streaming_snapshot"; sessionId: string; messageId: string; content: string; toolUses: ToolUse[]; blocks: ContentBlock[] }
+  | { type: "session:queued"; sessionId: string; count: number }
   | { type: "pong" };

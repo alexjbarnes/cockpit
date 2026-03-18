@@ -316,6 +316,7 @@ export function ChatView({ sessionId, cwd, initialName }: { sessionId: string; c
       )}
       <div className="shrink-0">
         <InputArea
+          sessionId={sessionId}
           onSend={handleSend}
           onInterrupt={interrupt}
           isResponding={isResponding}
