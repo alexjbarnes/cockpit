@@ -92,13 +92,33 @@ export async function loadLastUsage(sessionId: string, cwd: string): Promise<{ u
   const lines = raw.split("\n").filter((l) => l.trim());
 
   let lastUsage: { used: number; total: number } | null = null;
+  let contextWindowSize = 200_000;
+
+  // Scan backwards for the most recent result event with modelUsage to get contextWindow
+  for (let i = lines.length - 1; i >= 0; i--) {
+    try {
+      const entry = JSON.parse(lines[i]);
+      if (entry.type === "result" && entry.modelUsage) {
+        for (const model of Object.values(entry.modelUsage) as Record<string, number>[]) {
+          if (model.contextWindow && model.contextWindow > 0) {
+            contextWindowSize = model.contextWindow;
+            break;
+          }
+        }
+        break;
+      }
+    } catch {
+      continue;
+    }
+  }
+
   for (let i = lines.length - 1; i >= 0; i--) {
     try {
       const entry = JSON.parse(lines[i]);
       if (entry.type === "assistant" && entry.message?.usage) {
         const u = entry.message.usage;
         const used = (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.cache_read_input_tokens || 0);
-        lastUsage = { used, total: 200_000 };
+        lastUsage = { used, total: contextWindowSize };
         break;
       }
     } catch {

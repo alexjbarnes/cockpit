@@ -41,6 +41,7 @@ interface Session {
   compacting: boolean;
   thinkingLevel: ThinkingLevel;
   contextUsage: ContextUsage | null;
+  contextWindowSize: number;
   todoItems: TodoItem[];
   initData?: InitData;
   pendingRequests: Map<string, PendingRequest>;
@@ -90,6 +91,7 @@ export class SessionManager {
       compacting: false,
       thinkingLevel: defaults.thinkingLevel,
       contextUsage: null,
+      contextWindowSize: 200_000,
       todoItems: [],
       pendingRequests: new Map(),
       streamingSnapshot: null,
@@ -123,6 +125,7 @@ export class SessionManager {
         compacting: false,
         thinkingLevel: prefs?.thinkingLevel || defaults.thinkingLevel,
         contextUsage: null,
+        contextWindowSize: 200_000,
         todoItems: [],
         pendingRequests: new Map(),
         streamingSnapshot: null,
@@ -459,14 +462,28 @@ export class SessionManager {
   private extractUsage(session: Session, sessionId: string, line: string): void {
     try {
       const raw = JSON.parse(line.trim());
+
+      if (raw.type === "result" && raw.modelUsage) {
+        this.extractContextWindowSize(session, raw.modelUsage);
+      }
+
       if (raw.type !== "assistant" || !raw.message?.usage) return;
       const u = raw.message.usage;
       const used = (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.cache_read_input_tokens || 0);
-      const usage: ContextUsage = { used, total: 200_000 };
+      const usage: ContextUsage = { used, total: session.contextWindowSize };
       session.contextUsage = usage;
       session.emitter.emit("usage", sessionId, usage);
     } catch {
       // not valid JSON, ignore
+    }
+  }
+
+  private extractContextWindowSize(session: Session, modelUsage: Record<string, Record<string, number>>): void {
+    for (const model of Object.values(modelUsage)) {
+      if (model.contextWindow && model.contextWindow > 0) {
+        session.contextWindowSize = model.contextWindow;
+        return;
+      }
     }
   }
 
