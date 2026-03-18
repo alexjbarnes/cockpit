@@ -238,7 +238,7 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
         pongTimer.current = setTimeout(() => {
           awaitingPong.current = false;
           tearDownAndReconnect();
-        }, 10000);
+        }, 3000);
       } else {
         clearInterval(healthTimer.current);
       }
