@@ -26,7 +26,6 @@ export function ChatView({ sessionId, cwd, initialName }: { sessionId: string; c
   const scrollRef = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);
   const ignoreScrollUntil = useRef(0);
-  const bottomRef = useRef<HTMLDivElement>(null);
   const [renderWindow, setRenderWindow] = useState(INITIAL_WINDOW);
   const expandThrottleRef = useRef(0);
   const prevScrollHeightRef = useRef(0);
@@ -101,7 +100,10 @@ export function ChatView({ sessionId, cwd, initialName }: { sessionId: string; c
   }, [hasMoreAbove]);
 
   const scrollToBottom = useCallback(() => {
-    bottomRef.current?.scrollIntoView({ block: "end" });
+    const el = scrollRef.current;
+    if (el) {
+      el.scrollTop = el.scrollHeight;
+    }
     ignoreScrollUntil.current = Date.now() + 150;
   }, []);
 
@@ -295,7 +297,7 @@ export function ChatView({ sessionId, cwd, initialName }: { sessionId: string; c
           {modelPicker !== null && (
             <ModelPicker currentModel={modelPicker} onSelect={selectModel} />
           )}
-          <div ref={bottomRef} />
+          <div />
         </div>
       </div>
       {selectionMode && (

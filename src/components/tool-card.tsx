@@ -22,11 +22,6 @@ function shortPath(filePath: string): string {
   return ".../" + parts.slice(-2).join("/");
 }
 
-function truncate(text: string, max: number): string {
-  if (text.length <= max) return text;
-  return text.slice(0, max) + "\n... (truncated)";
-}
-
 function useIsDark(): boolean {
   const [dark, setDark] = useState(false);
 
@@ -275,11 +270,11 @@ function WriteContent({
         <div className="font-mono text-muted-foreground">{filePath}</div>
       )}
       {content && (
-        <CodeBlock code={truncate(content, 2000)} language={lang} dark={dark} />
+        <CodeBlock code={content} language={lang} dark={dark} />
       )}
       {tool.output && (
         <pre className="overflow-x-auto rounded bg-muted/50 p-2 text-[11px] leading-relaxed max-h-32 overflow-y-auto text-muted-foreground">
-          {truncate(tool.output, 500)}
+          {tool.output}
         </pre>
       )}
     </div>
@@ -304,7 +299,7 @@ function ReadContent({
         <div className="font-mono text-muted-foreground">{filePath}</div>
       )}
       {tool.output && (
-        <CodeBlock code={truncate(tool.output, 3000)} language={lang} dark={dark} />
+        <CodeBlock code={tool.output} language={lang} dark={dark} />
       )}
     </div>
   );
@@ -328,7 +323,7 @@ function BashContent({
       )}
       {tool.output && (
         <pre className="overflow-x-auto rounded bg-muted/50 p-2 text-[11px] leading-relaxed max-h-64 overflow-y-auto">
-          {truncate(tool.output, 3000)}
+          {tool.output}
         </pre>
       )}
     </div>
@@ -353,7 +348,7 @@ function SearchContent({
       </div>
       {tool.output && (
         <pre className="overflow-x-auto rounded bg-muted/50 p-2 text-[11px] leading-relaxed max-h-64 overflow-y-auto">
-          {truncate(tool.output, 3000)}
+          {tool.output}
         </pre>
       )}
     </div>
@@ -376,7 +371,7 @@ function AgentContent({
     <div className="space-y-2">
       {prompt && (
         <pre className="overflow-x-auto rounded bg-muted/50 p-2 text-[11px] leading-relaxed max-h-32 overflow-y-auto text-muted-foreground">
-          {truncate(prompt, 500)}
+          {prompt}
         </pre>
       )}
       {children.length > 0 && (
@@ -388,7 +383,7 @@ function AgentContent({
       )}
       {tool.output && (
         <pre className="overflow-x-auto rounded bg-muted/50 p-2 text-[11px] leading-relaxed max-h-48 overflow-y-auto text-muted-foreground">
-          {truncate(tool.output, 2000)}
+          {tool.output}
         </pre>
       )}
     </div>
@@ -408,12 +403,12 @@ function DefaultContent({
     <div className="space-y-1">
       {hasInput && (
         <pre className="overflow-x-auto rounded bg-muted/50 p-2 text-[11px] leading-relaxed max-h-48 overflow-y-auto">
-          {truncate(JSON.stringify(input, null, 2), 2000)}
+          {JSON.stringify(input, null, 2)}
         </pre>
       )}
       {tool.output && (
         <pre className="overflow-x-auto rounded bg-muted/50 p-2 text-[11px] leading-relaxed max-h-48 overflow-y-auto text-muted-foreground">
-          {truncate(tool.output, 2000)}
+          {tool.output}
         </pre>
       )}
     </div>

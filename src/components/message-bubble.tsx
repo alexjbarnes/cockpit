@@ -209,7 +209,7 @@ export const MessageBubble = memo(function MessageBubble({
               ) : (
                 <div
                   key={`text-${i}`}
-                  className="prose prose-sm max-w-none dark:prose-invert [&_pre]:overflow-x-auto [&_pre]:rounded [&_pre]:bg-black/10 [&_pre]:p-3 [&_code]:text-xs [&_table]:block [&_table]:overflow-x-auto"
+                  className="message-prose prose prose-sm max-w-none dark:prose-invert"
                 >
                   <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
                     {stripCliXml(block.text)}
@@ -227,7 +227,7 @@ export const MessageBubble = memo(function MessageBubble({
                 ))}
               </div>
             )}
-            <div className="prose prose-sm max-w-none dark:prose-invert [&_pre]:overflow-x-auto [&_pre]:rounded [&_pre]:bg-black/10 [&_pre]:p-3 [&_code]:text-xs">
+            <div className="message-prose prose prose-sm max-w-none dark:prose-invert">
               <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
                 {stripCliXml(message.content)}
               </ReactMarkdown>
