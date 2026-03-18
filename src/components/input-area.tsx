@@ -235,6 +235,7 @@ export function InputArea({ onSend, onInterrupt, isResponding, bypassActive, onS
         }
         if (e.key === "Escape") {
           e.preventDefault();
+          e.stopPropagation();
           setText("");
           return;
         }
@@ -259,6 +260,7 @@ export function InputArea({ onSend, onInterrupt, isResponding, bypassActive, onS
         }
         if (e.key === "Escape") {
           e.preventDefault();
+          e.stopPropagation();
           const before = text.slice(0, mention.start);
           const after = text.slice(cursorPos);
           setText(before + after);
@@ -276,6 +278,7 @@ export function InputArea({ onSend, onInterrupt, isResponding, bypassActive, onS
 
       if (e.key === "Escape" && hasQueuedMessage && onCancelQueued) {
         e.preventDefault();
+        e.stopPropagation();
         const restored = onCancelQueued();
         if (restored) setText(restored);
         return;

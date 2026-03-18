@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { X, Shrink } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { ContextUsage } from "@/types";
@@ -17,6 +17,13 @@ function formatTokens(n: number): string {
 
 export function ContextIndicator({ usage, onCompact }: ContextIndicatorProps) {
   const [open, setOpen] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    const h = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    window.addEventListener("keydown", h);
+    return () => window.removeEventListener("keydown", h);
+  }, [open]);
 
   const pct = Math.round((usage.used / usage.total) * 100);
   const strokeColor = pct > 80 ? "#ef4444" : pct > 50 ? "#f97316" : "#22c55e";

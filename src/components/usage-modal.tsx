@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { BarChart3, X, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useUsage } from "@/hooks/use-usage";
@@ -54,6 +54,13 @@ function LimitBar({ label, limit }: { label: string; limit: UsageLimit }) {
 export function UsageButton() {
   const [open, setOpen] = useState(false);
   const { usage, loading, error } = useUsage();
+
+  useEffect(() => {
+    if (!open) return;
+    const h = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    window.addEventListener("keydown", h);
+    return () => window.removeEventListener("keydown", h);
+  }, [open]);
 
   const worst = usage
     ? Math.max(

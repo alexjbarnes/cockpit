@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { ListChecks, X, Circle, Loader2, CheckCircle2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { TodoItem } from "@/types";
@@ -11,6 +11,13 @@ interface TodoIndicatorProps {
 
 export function TodoIndicator({ todos }: TodoIndicatorProps) {
   const [open, setOpen] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    const h = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    window.addEventListener("keydown", h);
+    return () => window.removeEventListener("keydown", h);
+  }, [open]);
 
   const activeCount = useMemo(() => todos.filter((t) => t.status !== "completed").length, [todos]);
 

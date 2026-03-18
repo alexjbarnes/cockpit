@@ -121,6 +121,21 @@ export function ChatView({ sessionId, cwd, initialName }: { sessionId: string; c
     return () => vv.removeEventListener("resize", handler);
   }, [scrollToBottom]);
 
+  // Escape key interrupts generation (desktop only).
+  // If a modal overlay (z-50) is open, skip so the modal closes first.
+  // Input area calls stopPropagation when it handles Escape itself
+  // (command menu, mention picker, queued message cancel).
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || !isResponding) return;
+      if (document.querySelector(".fixed.inset-0.z-50")) return;
+      e.preventDefault();
+      interrupt();
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [isResponding, interrupt]);
+
   const handleSend = useCallback((text: string, images?: import("@/types").ImageAttachment[], documents?: import("@/types").DocumentAttachment[], textFiles?: import("@/types").TextFileAttachment[]) => {
     stickToBottom.current = true;
     sendMessage(text, images, documents, textFiles);

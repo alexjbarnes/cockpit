@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Loader2, CheckCircle2, Activity, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { BackgroundTask } from "@/types";
@@ -11,6 +11,13 @@ interface BackgroundTasksButtonProps {
 
 export function BackgroundTasksButton({ tasks }: BackgroundTasksButtonProps) {
   const [open, setOpen] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    const h = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    window.addEventListener("keydown", h);
+    return () => window.removeEventListener("keydown", h);
+  }, [open]);
 
   const running = tasks.filter((t) => t.status === "running");
 
