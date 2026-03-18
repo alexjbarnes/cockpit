@@ -45,20 +45,35 @@ interface ToolCardProps {
   tool: ToolUse;
 }
 
+function useIsDesktop(): boolean {
+  const [desktop, setDesktop] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia("(min-width: 768px)");
+    setDesktop(mq.matches);
+    const handler = (e: MediaQueryListEvent) => setDesktop(e.matches);
+    mq.addEventListener("change", handler);
+    return () => mq.removeEventListener("change", handler);
+  }, []);
+  return desktop;
+}
+
+const ALWAYS_EXPAND_DESKTOP = new Set(["Edit", "edit"]);
+
 export function ToolCard({ tool }: ToolCardProps) {
-  const [expanded, setExpanded] = useState(tool.status === "running");
   const dark = useIsDark();
+  const isDesktop = useIsDesktop();
   const input = useMemo(() => parseInput(tool.input), [tool.input]);
   const isRunning = tool.status === "running";
+  const pinOpen = isDesktop && ALWAYS_EXPAND_DESKTOP.has(tool.name);
+  const [expanded, setExpanded] = useState(isRunning || pinOpen);
 
-  // Auto-expand while running, auto-collapse when done
   useEffect(() => {
     if (isRunning) {
       setExpanded(true);
     } else {
-      setExpanded(false);
+      setExpanded(pinOpen);
     }
-  }, [isRunning]);
+  }, [isRunning, pinOpen]);
 
   const isStatusOnly = tool.name === "EnterPlanMode" || tool.name === "ExitPlanMode" || tool.name === "TaskCreate" || tool.name === "TaskUpdate" || tool.name === "TaskList" || tool.name === "TaskGet" || tool.name === "TodoWrite";
   const hasContent = !isStatusOnly && (tool.input || tool.output);
