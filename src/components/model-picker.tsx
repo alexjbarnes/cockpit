@@ -4,7 +4,9 @@ import { Check } from "lucide-react";
 
 const MODELS = [
   { id: "opus", label: "Claude Opus 4.6", description: "Most capable" },
+  { id: "opus[1m]", label: "Claude Opus 4.6 (1M)", description: "Most capable, 1M context" },
   { id: "sonnet", label: "Claude Sonnet 4.6", description: "Balanced" },
+  { id: "sonnet[1m]", label: "Claude Sonnet 4.6 (1M)", description: "Balanced, 1M context" },
   { id: "haiku", label: "Claude Haiku 4.5", description: "Fastest" },
 ];
 

@@ -23,7 +23,9 @@ const themeOptions: { value: Theme; label: string }[] = [
 
 const modelOptions: { value: string; label: string }[] = [
   { value: "opus", label: "Opus" },
+  { value: "opus[1m]", label: "Opus (1M)" },
   { value: "sonnet", label: "Sonnet" },
+  { value: "sonnet[1m]", label: "Sonnet (1M)" },
   { value: "haiku", label: "Haiku" },
 ];
 
