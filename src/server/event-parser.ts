@@ -25,6 +25,7 @@ export interface ParsedEvent {
     summary?: string;
   };
   initData?: InitData;
+  isMainThread?: boolean;
 }
 
 interface ContentBlock {

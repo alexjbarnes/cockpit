@@ -126,7 +126,7 @@ export type ServerMessage =
   | { type: "session:connected"; sessionId: string }
   | { type: "assistant:text"; sessionId: string; text: string }
   | { type: "assistant:thinking"; sessionId: string; text: string }
-  | { type: "assistant:tool_use"; sessionId: string; name: string; input: string; toolId: string }
+  | { type: "assistant:tool_use"; sessionId: string; name: string; input: string; toolId: string; isMainThread?: boolean }
   | { type: "assistant:tool_result"; sessionId: string; toolId: string; output: string; filePath?: string }
   | { type: "assistant:message_done"; sessionId: string; message: ChatMessage }
   | { type: "assistant:tool_children"; sessionId: string; messageId: string; toolId: string; children: ToolUse[] }

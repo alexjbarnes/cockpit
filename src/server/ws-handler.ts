@@ -516,6 +516,7 @@ function handleParsedEvent(
         name: event.toolName || "",
         input: event.toolInput || "",
         toolId: event.toolId || "",
+        isMainThread: event.isMainThread,
       });
       break;
 
@@ -526,6 +527,7 @@ function handleParsedEvent(
         name: event.toolName || "",
         input: event.toolInput || "",
         toolId: event.toolId || "",
+        isMainThread: event.isMainThread,
       });
       break;
 

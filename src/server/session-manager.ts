@@ -819,7 +819,11 @@ export class SessionManager {
 
       for (const line of lines) {
         logRawLine(sessionId, line);
-        this.extractUsage(session, sessionId, line);
+        // Only extract usage from main thread messages, not sub-agents.
+        // Sub-agent usage causes the context indicator to flicker.
+        if (agentStack.length === 0) {
+          this.extractUsage(session, sessionId, line);
+        }
         const events = parser.parseLine(line);
         for (const event of events) {
           // Finalize the previous assistant message when a new one starts.
@@ -885,7 +889,14 @@ export class SessionManager {
               this.handleTodoWrite(session, sessionId, tool.input);
             }
 
-            if (agentStack.length > 0) {
+            // Tools from the main thread (same assistantMessageId) are
+            // top-level, even when agents are running in parallel.
+            // Only tools from sub-agents (different assistantMessageId)
+            // are children of an agent.
+            const isFromMainThread = event.assistantMessageId === currentAssistantMsgId;
+            event.isMainThread = isFromMainThread;
+
+            if (agentStack.length > 0 && !isFromMainThread) {
               const parent = agentStack[agentStack.length - 1];
               if (!parent.children) parent.children = [];
               parent.children.push(tool);
@@ -898,19 +909,24 @@ export class SessionManager {
               agentStack.push(tool);
             }
           } else if (event.type === "tool_result") {
-            const topAgent = agentStack[agentStack.length - 1];
-            if (topAgent && topAgent.id === event.toolId) {
-              topAgent.output = event.toolOutput || "";
-              if (event.filePath) topAgent.filePath = event.filePath;
-              topAgent.status = "done";
-              agentStack.pop();
+            // Find the agent anywhere in the stack, not just the top.
+            // Parallel agents complete in arbitrary order.
+            const agentIdx = agentStack.findIndex((a) => a.id === event.toolId);
+            if (agentIdx !== -1) {
+              agentStack[agentIdx].output = event.toolOutput || "";
+              if (event.filePath) agentStack[agentIdx].filePath = event.filePath;
+              agentStack[agentIdx].status = "done";
+              agentStack.splice(agentIdx, 1);
             } else if (agentStack.length > 0) {
-              const parent = agentStack[agentStack.length - 1];
-              const child = parent.children?.find((t) => t.id === event.toolId);
-              if (child) {
-                child.output = event.toolOutput || "";
-                if (event.filePath) child.filePath = event.filePath;
-                child.status = "done";
+              // Search all agents' children, not just the top agent
+              for (const agent of agentStack) {
+                const child = agent.children?.find((t) => t.id === event.toolId);
+                if (child) {
+                  child.output = event.toolOutput || "";
+                  if (event.filePath) child.filePath = event.filePath;
+                  child.status = "done";
+                  break;
+                }
               }
             } else {
               const tool = pendingToolUses.find((t) => t.id === event.toolId);
@@ -921,13 +937,24 @@ export class SessionManager {
               }
             }
           } else if (event.type === "tool_progress" && event.toolId && event.text) {
-            const topAgent = agentStack[agentStack.length - 1];
-            if (topAgent && topAgent.id === event.toolId) {
-              topAgent.output += event.text;
+            // Search all agents and their children for progress updates
+            const agent = agentStack.find((a) => a.id === event.toolId);
+            if (agent) {
+              agent.output += event.text;
             } else if (agentStack.length > 0) {
-              const parent = agentStack[agentStack.length - 1];
-              const child = parent.children?.find((t) => t.id === event.toolId);
-              if (child) child.output += event.text;
+              let found = false;
+              for (const a of agentStack) {
+                const child = a.children?.find((t) => t.id === event.toolId);
+                if (child) {
+                  child.output += event.text;
+                  found = true;
+                  break;
+                }
+              }
+              if (!found) {
+                const tool = pendingToolUses.find((t) => t.id === event.toolId);
+                if (tool) tool.output += event.text;
+              }
             } else {
               const tool = pendingToolUses.find((t) => t.id === event.toolId);
               if (tool) tool.output += event.text;

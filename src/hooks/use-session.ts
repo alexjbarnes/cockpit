@@ -291,8 +291,12 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
 
             const isAgent = tool.name === "Agent";
             const stack = agentStackRef.current;
+            const isMainThread = msg.isMainThread !== false;
 
-            if (stack.length > 0) {
+            // Tools from the main thread are top-level, even when
+            // agents are running in parallel. Only sub-agent tools
+            // (isMainThread=false) become children.
+            if (stack.length > 0 && !isMainThread) {
               const parent = stack[stack.length - 1];
               if (!parent.children) parent.children = [];
               parent.children.push(tool);
@@ -329,20 +333,24 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
           if (!streamingRef.current) break;
 
           const stack = agentStackRef.current;
-          const topAgent = stack[stack.length - 1];
-
-          if (topAgent && topAgent.id === msg.toolId) {
-            topAgent.output = msg.output;
-            if (msg.filePath) topAgent.filePath = msg.filePath;
-            topAgent.status = "done";
-            stack.pop();
+          // Find the agent anywhere in the stack, not just the top.
+          // Parallel agents complete in arbitrary order.
+          const agentIdx = stack.findIndex((a) => a.id === msg.toolId);
+          if (agentIdx !== -1) {
+            stack[agentIdx].output = msg.output;
+            if (msg.filePath) stack[agentIdx].filePath = msg.filePath;
+            stack[agentIdx].status = "done";
+            stack.splice(agentIdx, 1);
           } else if (stack.length > 0) {
-            const parent = stack[stack.length - 1];
-            const child = parent.children?.find((t) => t.id === msg.toolId);
-            if (child) {
-              child.output = msg.output;
-              if (msg.filePath) child.filePath = msg.filePath;
-              child.status = "done";
+            // Search all agents' children, not just the top agent
+            for (const agent of stack) {
+              const child = agent.children?.find((t) => t.id === msg.toolId);
+              if (child) {
+                child.output = msg.output;
+                if (msg.filePath) child.filePath = msg.filePath;
+                child.status = "done";
+                break;
+              }
             }
           } else {
             const tool = streamingRef.current.toolUses.find(
@@ -400,14 +408,26 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
           if (!streamingRef.current) break;
 
           const stack = agentStackRef.current;
-          const topAgent = stack[stack.length - 1];
-
-          if (topAgent && topAgent.id === msg.toolId) {
-            topAgent.output += msg.content;
+          // Search all agents and their children for progress updates
+          const progressAgent = stack.find((a) => a.id === msg.toolId);
+          if (progressAgent) {
+            progressAgent.output += msg.content;
           } else if (stack.length > 0) {
-            const parent = stack[stack.length - 1];
-            const child = parent.children?.find((t) => t.id === msg.toolId);
-            if (child) child.output += msg.content;
+            let progressFound = false;
+            for (const a of stack) {
+              const child = a.children?.find((t) => t.id === msg.toolId);
+              if (child) {
+                child.output += msg.content;
+                progressFound = true;
+                break;
+              }
+            }
+            if (!progressFound) {
+              const tool = streamingRef.current.toolUses.find(
+                (t) => t.id === msg.toolId
+              );
+              if (tool) tool.output += msg.content;
+            }
           } else {
             const tool = streamingRef.current.toolUses.find(
               (t) => t.id === msg.toolId
