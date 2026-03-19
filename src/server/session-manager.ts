@@ -638,7 +638,7 @@ export class SessionManager {
 
       case "/help": {
         const helpText = [
-          "Aperture commands:",
+          "Cockpit commands:",
           "  /clear, /reset, /new  - Clear conversation and start fresh",
           "  /model [name]         - Show or switch model",
           "  /rename <name>        - Rename this session",

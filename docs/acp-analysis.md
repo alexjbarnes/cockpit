@@ -1,6 +1,6 @@
 # ACP (Agent Client Protocol) Analysis
 
-Evaluation of whether Aperture should adopt ACP instead of directly spawning the Claude CLI.
+Evaluation of whether Cockpit should adopt ACP instead of directly spawning the Claude CLI.
 
 ## What ACP is
 
@@ -28,38 +28,38 @@ Anthropic
 
 The bridge translates ACP `session/prompt` into Agent SDK `query()` calls, and converts Claude streaming events back into ACP `session/update` notifications.
 
-## What Aperture currently does
+## What Cockpit currently does
 
 ```
 Browser (React)
   | WebSocket + HTTP
-Aperture server (Bun)
+Cockpit server (Bun)
   | stdio (JSON lines)
 claude CLI process (spawned with -p --input-format stream-json --output-format stream-json)
   | Claude API
 Anthropic
 ```
 
-Aperture spawns `claude` as a subprocess, writes JSON lines to stdin, reads JSON lines from stdout, and manages session lifecycle (spawn, resume, kill, respawn).
+Cockpit spawns `claude` as a subprocess, writes JSON lines to stdin, reads JSON lines from stdout, and manages session lifecycle (spawn, resume, kill, respawn).
 
 ## Three options for adopting ACP
 
 **Option A: Spawn `claude-agent-acp` instead of `claude` CLI**
 
 ```
-Browser -> Aperture server -> claude-agent-acp (via stdio JSON-RPC) -> Claude Agent SDK -> API
+Browser -> Cockpit server -> claude-agent-acp (via stdio JSON-RPC) -> Claude Agent SDK -> API
 ```
 
 **Option B: Talk to a remote ACP agent over HTTP/WS**
 
 ```
-Browser -> Aperture server -> ACP over HTTP/WS -> claude-agent-acp (remote) -> API
+Browser -> Cockpit server -> ACP over HTTP/WS -> claude-agent-acp (remote) -> API
 ```
 
 **Option C: Use the Agent SDK directly (no ACP, no CLI)**
 
 ```
-Browser -> Aperture server -> @anthropic-ai/claude-agent-sdk (in-process) -> API
+Browser -> Cockpit server -> @anthropic-ai/claude-agent-sdk (in-process) -> API
 ```
 
 ## What ACP gives you
@@ -82,7 +82,7 @@ Browser -> Aperture server -> @anthropic-ai/claude-agent-sdk (in-process) -> API
 
 1. **Structured permission model.** Typed permission options (allow_once, allow_always, reject_once, reject_always) as first-class protocol concepts. No more crafting control_response JSON.
 
-2. **Client-side file operations.** The agent asks Aperture to read/write files rather than doing it silently. Hook point for displaying changes, conflict detection, gating writes.
+2. **Client-side file operations.** The agent asks Cockpit to read/write files rather than doing it silently. Hook point for displaying changes, conflict detection, gating writes.
 
 3. **Client-side terminal.** Agent requests terminal access through the protocol. Show terminal output in UI with full lifecycle management.
 
@@ -104,7 +104,7 @@ Browser -> Aperture server -> @anthropic-ai/claude-agent-sdk (in-process) -> API
 
 5. **Feature parity gaps.** `--effort`, `--verbose`, `--debug`, hooks, worktrees, custom subagents via `--agents` may not have ACP equivalents. The bridge is at v0.22.0 with 11 versions; moving fast but not mature.
 
-6. **Double abstraction.** `Aperture -> ACP -> Agent SDK -> API` is one more hop than `Aperture -> CLI -> API`. Two translation layers where you currently have one.
+6. **Double abstraction.** `Cockpit -> ACP -> Agent SDK -> API` is one more hop than `Cockpit -> CLI -> API`. Two translation layers where you currently have one.
 
 ## Can you drop in any ACP agent?
 
@@ -112,7 +112,7 @@ At the protocol/transport layer: yes. Any ACP-compliant agent connects and commu
 
 At the UX layer: no, not without work. Each agent declares capabilities during the `initialize` handshake. The practical issues:
 
-- **Aperture's UI is Claude-specific.** Thinking blocks, tool use panels, streaming snapshots, bypass permissions. Other agents won't emit thinking blocks. Their tool patterns differ.
+- **Cockpit's UI is Claude-specific.** Thinking blocks, tool use panels, streaming snapshots, bypass permissions. Other agents won't emit thinking blocks. Their tool patterns differ.
 - **Capability gaps degrade UX.** If an agent doesn't declare `loadSession`, resume breaks. If it doesn't support images in prompts, image attachment fails silently.
 - **Quality varies.** The protocol is standardized but implementations aren't. A bad agent gives a bad experience regardless of protocol correctness.
 - **Capability-adaptive UI required.** Show/hide features based on what the agent declares. Real engineering work on top of implementing the ACP client.
@@ -132,12 +132,12 @@ Today:
 - Structure session-manager so CLI-specific bits (spawning, JSON line parsing, control requests) are behind an interface. If ACP is adopted later, swap the implementation without touching ws-handler or the React client.
 
 Watch for:
-- ACP remote transport stabilizing (enables Option B, which is the most interesting for Aperture)
+- ACP remote transport stabilizing (enables Option B, which is the most interesting for Cockpit)
 - `claude-agent-acp` reaching feature parity with the CLI
 - Anthropic adopting ACP natively in the CLI (would eliminate the Zed bridge dependency)
 - ACP spec settling (0.16.x SDK, still pre-1.0)
 
-The strongest argument for ACP: agent-agnosticism. If Aperture wants to support multiple AI backends, ACP gives you that.
+The strongest argument for ACP: agent-agnosticism. If Cockpit wants to support multiple AI backends, ACP gives you that.
 
 The strongest argument against ACP now: dependency chain. Going from `claude` CLI (Anthropic, 135 SDK versions) to `@zed-industries/claude-agent-acp` (Zed, 11 versions) is a riskier foundation.
 

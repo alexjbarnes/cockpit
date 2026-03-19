@@ -11,7 +11,7 @@ import { Plus, ChevronRight, Star, Folder } from "lucide-react";
 
 let cachedGroups: SessionGroup[] | null = null;
 
-const FAVORITES_KEY = "aperture_fav_dirs";
+const FAVORITES_KEY = "cockpit_fav_dirs";
 
 function loadFavorites(): Set<string> {
   try {

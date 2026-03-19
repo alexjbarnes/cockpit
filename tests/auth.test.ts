@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll } from "vitest";
 
 // Set token before importing auth module
 beforeAll(() => {
-  process.env.APERTURE_TOKEN = "test-token-abc123";
+  process.env.COCKPIT_TOKEN = "test-token-abc123";
 });
 
 describe("auth", () => {
@@ -52,7 +52,7 @@ describe("auth", () => {
   it("extracts token from cookie", async () => {
     const { extractTokenFromRequest } = await import("@/server/auth");
     const req = {
-      headers: { cookie: "aperture_token=cookie-token; other=val" },
+      headers: { cookie: "cockpit_token=cookie-token; other=val" },
     } as unknown as import("node:http").IncomingMessage;
     expect(extractTokenFromRequest(req)).toBe("cookie-token");
   });

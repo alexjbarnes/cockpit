@@ -3,8 +3,8 @@
 import { useEffect, useRef, useState } from "react";
 import { slashCommands, type SlashCommand } from "@/lib/commands";
 
-// Commands handled client-side by Aperture, always included
-const apertureCommands: SlashCommand[] = [
+// Commands handled client-side by Cockpit, always included
+const cockpitCommands: SlashCommand[] = [
   { command: "/btw", description: "Nudge Claude while it's working" },
 ];
 
@@ -90,11 +90,11 @@ export function SlashCommandMenu({
         ];
       })();
 
-  // Always include Aperture-local commands
+  // Always include Cockpit-local commands
   const cliNames = new Set(cliCommands.map((c) => c.command));
   const allCommands = [
     ...cliCommands,
-    ...apertureCommands.filter((c) => !cliNames.has(c.command)),
+    ...cockpitCommands.filter((c) => !cliNames.has(c.command)),
   ];
 
   const filtered = allCommands.filter((cmd) =>

@@ -4,8 +4,8 @@ import next from "next";
 import { parse } from "node:url";
 
 // Generate token before any other imports read it
-if (!process.env.APERTURE_TOKEN) {
-  process.env.APERTURE_TOKEN = crypto.randomBytes(32).toString("hex");
+if (!process.env.COCKPIT_TOKEN) {
+  process.env.COCKPIT_TOKEN = crypto.randomBytes(32).toString("hex");
 }
 
 import { SessionManager } from "./src/server/session-manager";
@@ -34,7 +34,7 @@ async function main() {
   createWebSocketHandler(server, sessionManager);
 
   server.listen(port, host, () => {
-    console.log(`Aperture running on http://${host}:${port}`);
+    console.log(`Cockpit running on http://${host}:${port}`);
     console.log(`Auth token: ${getToken()}`);
   });
 }

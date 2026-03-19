@@ -4,7 +4,7 @@ import path from "node:path";
 import type { ServerMessage, ClientMessage } from "@/types";
 import type { ParsedEvent } from "./event-parser";
 
-const enabled = process.env.APERTURE_DEBUG === "1";
+const enabled = process.env.COCKPIT_DEBUG === "1";
 const MAX_SIZE_BYTES = 50 * 1024 * 1024; // 50 MB
 const CHECK_INTERVAL = 500; // check size every N writes
 
@@ -16,7 +16,7 @@ let rotating = false;
 
 function init(): Promise<void> {
   if (ready) return ready;
-  const dir = path.join(homedir(), ".aperture");
+  const dir = path.join(homedir(), ".cockpit");
   logPath = path.join(dir, "debug.jsonl");
   prevPath = path.join(dir, "debug.prev.jsonl");
   ready = mkdir(dir, { recursive: true }).then(() => {});

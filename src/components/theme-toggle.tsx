@@ -24,14 +24,14 @@ export function ThemeToggle() {
   const [theme, setTheme] = useState<Theme>("system");
 
   useEffect(() => {
-    const stored = localStorage.getItem("aperture-theme") as Theme | null;
+    const stored = localStorage.getItem("cockpit-theme") as Theme | null;
     const initial = stored || "system";
     setTheme(initial);
     applyTheme(initial);
 
     const mq = window.matchMedia("(prefers-color-scheme: dark)");
     const handler = () => {
-      const current = localStorage.getItem("aperture-theme") as Theme | null;
+      const current = localStorage.getItem("cockpit-theme") as Theme | null;
       if (!current || current === "system") {
         applyTheme("system");
       }
@@ -43,7 +43,7 @@ export function ThemeToggle() {
   const cycle = useCallback(() => {
     setTheme((prev) => {
       const next: Theme = prev === "light" ? "dark" : prev === "dark" ? "system" : "light";
-      localStorage.setItem("aperture-theme", next);
+      localStorage.setItem("cockpit-theme", next);
       applyTheme(next);
       return next;
     });

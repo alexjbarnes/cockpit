@@ -2,14 +2,14 @@
 
 Commands handled by the Claude Code terminal UI, not sent to the CLI as skills/slash_commands. Extracted from the binary via `=== "command"` comparisons in `processSlashCommand`.
 
-## Implemented in Aperture
+## Implemented in Cockpit
 
 | Command | Implementation |
 |---------|---------------|
 | `/clear` | session-manager handleCommand (also `/reset`, `/new`) |
 | `/model` | session-manager handleCommand |
 | `/help` | session-manager handleCommand |
-| `/rename` | session-manager handleCommand (Aperture-only) |
+| `/rename` | session-manager handleCommand (Cockpit-only) |
 | `/btw` | client-side in use-session sendMessage, sends mid-stream nudge |
 | `/compact` | passes through to CLI |
 | `/cost` | passes through to CLI |
@@ -36,5 +36,5 @@ Commands handled by the Claude Code terminal UI, not sent to the CLI as skills/s
 
 - These commands do NOT appear in the CLI's `system/init` event `slash_commands` array
 - The init event contains skills and CLI-registered commands only
-- Aperture-local commands (like `/btw`) are injected via `apertureCommands` in `slash-command-menu.tsx`
+- Cockpit-local commands (like `/btw`) are injected via `cockpitCommands` in `slash-command-menu.tsx`
 - The hardcoded fallback list in `src/lib/commands.ts` is used before init data arrives

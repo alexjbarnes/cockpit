@@ -10,7 +10,7 @@ export async function POST(req: NextRequest) {
   }
 
   const res = NextResponse.json({ ok: true });
-  res.cookies.set("aperture_token", token, {
+  res.cookies.set("cockpit_token", token, {
     httpOnly: true,
     path: "/",
     sameSite: "strict",

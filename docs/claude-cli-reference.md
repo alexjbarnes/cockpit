@@ -1,6 +1,6 @@
 # Claude CLI Reference
 
-Notes on Claude Code CLI behavior, flags, and quirks discovered while building Aperture.
+Notes on Claude Code CLI behavior, flags, and quirks discovered while building Cockpit.
 
 ## Print mode (-p)
 
@@ -85,11 +85,11 @@ No speed difference between alias and full ID.
 
 ## Slash commands
 
-Slash commands are a REPL-layer feature. They are not available through the stream-json protocol used by Aperture. See [slash-commands.md](./slash-commands.md) for the full analysis and implementation plan.
+Slash commands are a REPL-layer feature. They are not available through the stream-json protocol used by Cockpit. See [slash-commands.md](./slash-commands.md) for the full analysis and implementation plan.
 
 ## Interactive mode (stream-json)
 
-Aperture communicates with the CLI via `--input-format stream-json --output-format stream-json`. Messages are sent as JSON lines on stdin:
+Cockpit communicates with the CLI via `--input-format stream-json --output-format stream-json`. Messages are sent as JSON lines on stdin:
 
 ```json
 {"type": "user", "message": {"role": "user", "content": "hello"}}
@@ -163,22 +163,22 @@ The CLI supports these permission modes via `--permission-mode` or `set_permissi
 
 ### Key flags
 
-**`--allow-dangerously-skip-permissions`**: Unlocks `bypassPermissions` as a valid mode. Without this flag, the CLI rejects attempts to set `bypassPermissions`. Aperture always passes this flag so bypass can be toggled on/off mid-session.
+**`--allow-dangerously-skip-permissions`**: Unlocks `bypassPermissions` as a valid mode. Without this flag, the CLI rejects attempts to set `bypassPermissions`. Cockpit always passes this flag so bypass can be toggled on/off mid-session.
 
-**`--permission-prompt-tool stdio`**: Routes permission prompts through the stream-json protocol as `permission_request` events instead of the interactive TUI. Required for Aperture to surface permission dialogs in the browser.
+**`--permission-prompt-tool stdio`**: Routes permission prompts through the stream-json protocol as `permission_request` events instead of the interactive TUI. Required for Cockpit to surface permission dialogs in the browser.
 
 **`--permission-mode <mode>`**: Sets the initial permission mode at spawn time.
 
 ### Architecture
 
-Aperture spawns the CLI with:
+Cockpit spawns the CLI with:
 ```bash
 claude --allow-dangerously-skip-permissions --permission-prompt-tool stdio [--permission-mode bypassPermissions]
 ```
 
 The `--permission-mode bypassPermissions` flag is included only if the user has bypass enabled for that session.
 
-To toggle bypass mid-session, Aperture sends a control request on stdin:
+To toggle bypass mid-session, Cockpit sends a control request on stdin:
 ```json
 {"type": "control_request", "request_id": "perm-12345", "request": {"subtype": "set_permission_mode", "mode": "bypassPermissions"}}
 ```
@@ -208,13 +208,13 @@ For `AskUserQuestion` tool calls, the response uses `user_response` instead:
 {"type": "control_response", "request_id": "req-123", "user_response": "the user's answer"}
 ```
 
-## Flags relevant to Aperture
+## Flags relevant to Cockpit
 
-Flags Aperture currently uses are documented above. These additional flags are worth knowing about for future features or debugging.
+Flags Cockpit currently uses are documented above. These additional flags are worth knowing about for future features or debugging.
 
 ### Session management
 
-**`--name <name>`**: Set a display name for the session. Named sessions can be resumed with `claude --resume <name>`. Aperture could use this to give sessions human-readable names.
+**`--name <name>`**: Set a display name for the session. Named sessions can be resumed with `claude --resume <name>`. Cockpit could use this to give sessions human-readable names.
 
 **`--fork-session`**: When used with `--resume` or `--continue`, creates a new session ID instead of reusing the original. Useful for branching conversations.
 
@@ -240,9 +240,9 @@ The distinction matters: `--tools` controls what exists, `--allowedTools` contro
 
 ### Output control
 
-**`--replay-user-messages`**: In stream-json mode, re-emits user messages on stdout for acknowledgment. Could help Aperture confirm message delivery.
+**`--replay-user-messages`**: In stream-json mode, re-emits user messages on stdout for acknowledgment. Could help Cockpit confirm message delivery.
 
-**`--include-partial-messages`**: Emits partial streaming events (token-by-token). Requires `--output-format stream-json`. Aperture likely already gets these via the stream-json protocol.
+**`--include-partial-messages`**: Emits partial streaming events (token-by-token). Requires `--output-format stream-json`. Cockpit likely already gets these via the stream-json protocol.
 
 **`--verbose`**: Enables verbose logging with full turn-by-turn output.
 
@@ -374,9 +374,9 @@ No API call. No LLM summarization. The plan file at `~/.claude/plans/` persists 
 
 The CLI also **rejects** (not approves) the ExitPlanMode tool call when clearing context. This prevents the agent from continuing in the old context. After the clear, a fresh turn starts.
 
-### Aperture implementation
+### Cockpit implementation
 
-Aperture renders a `PlanApprovalPrompt` component (instead of the generic `PermissionPrompt`) when `permission.toolName === "ExitPlanMode"`. It replicates the 5 CLI options:
+Cockpit renders a `PlanApprovalPrompt` component (instead of the generic `PermissionPrompt`) when `permission.toolName === "ExitPlanMode"`. It replicates the 5 CLI options:
 
 - Options 1-2 (clear context): deny the permission (matches CLI's reject behavior), send `/clear` to kill the process and wipe state, then send "Implement the plan" to start a fresh turn
 - Options 3-4 (keep context): approve the permission normally
@@ -389,7 +389,7 @@ Keyboard navigation (arrow keys, j/k, Enter) mirrors the CLI's list selector.
 
 The CLI supports hooks that fire at various points in the agent lifecycle. Hooks are configured in settings JSON files and can run shell commands, HTTP requests, LLM prompts, or sub-agents.
 
-This is relevant to Aperture because hooks fire regardless of whether the CLI is in interactive or stream-json mode. Aperture users' hooks will still execute.
+This is relevant to Cockpit because hooks fire regardless of whether the CLI is in interactive or stream-json mode. Cockpit users' hooks will still execute.
 
 ### Hook events
 
@@ -408,7 +408,7 @@ This is relevant to Aperture because hooks fire regardless of whether the CLI is
 | `PostCompact` | After compaction | No |
 | `SessionEnd` | Session terminates | No |
 
-Blocking hooks (exit code 2) can prevent tool execution, deny permissions, block prompts, or prevent the agent from stopping. This means a user's hook could cause behavior that looks like a stuck session from Aperture's perspective.
+Blocking hooks (exit code 2) can prevent tool execution, deny permissions, block prompts, or prevent the agent from stopping. This means a user's hook could cause behavior that looks like a stuck session from Cockpit's perspective.
 
 ### Hook types
 
@@ -419,9 +419,9 @@ Blocking hooks (exit code 2) can prevent tool execution, deny permissions, block
 | `prompt` | Sends input to an LLM, gets structured decision back |
 | `agent` | Like prompt but can use tools (Read, Grep, etc.) |
 
-### Implications for Aperture
+### Implications for Cockpit
 
-- Hooks fire inside the CLI process, invisible to Aperture's event stream
+- Hooks fire inside the CLI process, invisible to Cockpit's event stream
 - A blocking `PreToolUse` hook that hangs will look like a stuck session
 - `PermissionRequest` hooks can override permission decisions
 - `Stop` hooks can prevent the agent from finishing (keeps running)
@@ -457,9 +457,9 @@ for await (const message of query({
 | `ResultMessage` | Final result when agent finishes |
 | `CompactBoundaryMessage` | Indicates conversation history was compacted |
 
-### SDK vs CLI for Aperture
+### SDK vs CLI for Cockpit
 
-Aperture currently spawns the CLI with `--input-format stream-json --output-format stream-json`. The SDK alternative would mean importing `@anthropic-ai/claude-agent-sdk` and calling `query()` directly from the Node.js server process.
+Cockpit currently spawns the CLI with `--input-format stream-json --output-format stream-json`. The SDK alternative would mean importing `@anthropic-ai/claude-agent-sdk` and calling `query()` directly from the Node.js server process.
 
 Tradeoffs:
 - SDK gives typed objects instead of parsing JSON lines
@@ -467,7 +467,7 @@ Tradeoffs:
 - SDK handles the agent loop internally
 - CLI spawning gives process isolation (crash doesn't take down server)
 - CLI spawning allows different Node/Bun runtimes
-- CLI is what Aperture has been built around; switching would be a major refactor
+- CLI is what Cockpit has been built around; switching would be a major refactor
 
 ### SDK streaming events
 
@@ -482,14 +482,14 @@ When `includePartialMessages` is enabled, `StreamEvent` wraps raw Claude API eve
 | `message_delta` | Message-level updates (stop reason, usage) |
 | `message_stop` | End of the message |
 
-This matches what Aperture's event-parser.ts already handles from the CLI's stream-json output.
+This matches what Cockpit's event-parser.ts already handles from the CLI's stream-json output.
 
 ## Process signals
 
 - `SIGINT` interrupts the current generation (equivalent to pressing Escape in the terminal). The process stays alive and accepts new input.
 - `SIGTERM` / `SIGKILL` terminates the process entirely.
 
-The stop button in Aperture sends `SIGINT` to interrupt, not kill.
+The stop button in Cockpit sends `SIGINT` to interrupt, not kill.
 
 ## Key environment variables
 

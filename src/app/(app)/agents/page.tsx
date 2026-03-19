@@ -14,7 +14,7 @@ export default function AgentsPage() {
   usePageHeader("Agents");
 
   const cwd = typeof localStorage !== "undefined"
-    ? localStorage.getItem("aperture-agents-cwd") || undefined
+    ? localStorage.getItem("cockpit-agents-cwd") || undefined
     : undefined;
 
   const { agents, loading, deleteAgent } = useAgents(cwd);

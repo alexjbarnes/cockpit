@@ -1,6 +1,6 @@
 {
-  "name": "Aperture",
-  "short_name": "Aperture",
+  "name": "Cockpit",
+  "short_name": "Cockpit",
   "description": "Claude Code Web UI",
   "start_url": "/",
   "display": "standalone",

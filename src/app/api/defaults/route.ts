@@ -4,7 +4,7 @@ import { getDefaults, setDefaults } from "@/server/defaults";
 
 function authenticate(req: NextRequest): boolean {
   const token =
-    req.cookies.get("aperture_token")?.value ||
+    req.cookies.get("cockpit_token")?.value ||
     req.headers.get("authorization")?.replace("Bearer ", "");
   return !!token && validateToken(token);
 }

@@ -5,7 +5,7 @@ import { createWebSocketHandler } from "@/server/ws-handler";
 import { SessionManager } from "@/server/session-manager";
 
 beforeAll(() => {
-  process.env.APERTURE_TOKEN = "ws-test-token";
+  process.env.COCKPIT_TOKEN = "ws-test-token";
 });
 
 describe("WebSocket handler", () => {

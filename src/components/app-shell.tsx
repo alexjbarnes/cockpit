@@ -135,7 +135,7 @@ function EditableTitle({ title, onRename }: { title: string; onRename?: (name: s
 
 export function AppShell({ children }: { children: ReactNode }) {
   const sidebarRef = useRef<SidebarHandle>(null);
-  const [header, setHeaderState] = useState<HeaderConfig>({ title: "Aperture" });
+  const [header, setHeaderState] = useState<HeaderConfig>({ title: "Cockpit" });
   const [cwd, setCwdState] = useState<string | undefined>(undefined);
   const [backgroundTasks, setBackgroundTasks] = useState<BackgroundTask[]>([]);
   const [todos, setTodos] = useState<TodoItem[]>([]);

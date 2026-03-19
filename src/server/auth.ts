@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 
 export function getToken(): string {
-  return process.env.APERTURE_TOKEN || "";
+  return process.env.COCKPIT_TOKEN || "";
 }
 
 export function validateToken(candidate: string): boolean {
@@ -25,7 +25,7 @@ export function extractTokenFromRequest(req: IncomingMessage): string | null {
   // Check cookie
   const cookie = req.headers.cookie;
   if (cookie) {
-    const match = cookie.match(/(?:^|;\s*)aperture_token=([^;]+)/);
+    const match = cookie.match(/(?:^|;\s*)cockpit_token=([^;]+)/);
     if (match) return match[1];
   }
 
@@ -49,13 +49,13 @@ export function isAuthenticated(req: IncomingMessage): boolean {
 export function setTokenCookie(res: ServerResponse, tokenValue: string): void {
   res.setHeader(
     "Set-Cookie",
-    `aperture_token=${tokenValue}; HttpOnly; Path=/; SameSite=Strict; Max-Age=31536000`
+    `cockpit_token=${tokenValue}; HttpOnly; Path=/; SameSite=Strict; Max-Age=31536000`
   );
 }
 
 export function clearTokenCookie(res: ServerResponse): void {
   res.setHeader(
     "Set-Cookie",
-    `aperture_token=; HttpOnly; Path=/; SameSite=Strict; Max-Age=0`
+    `cockpit_token=; HttpOnly; Path=/; SameSite=Strict; Max-Age=0`
   );
 }

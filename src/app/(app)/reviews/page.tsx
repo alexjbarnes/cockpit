@@ -7,7 +7,7 @@ import { Loader2, Search, Lock, Globe, Building2, RefreshCw } from "lucide-react
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
-const SELECTED_ORG_KEY = "aperture_review_org";
+const SELECTED_ORG_KEY = "cockpit_review_org";
 
 interface Repo {
   name: string;

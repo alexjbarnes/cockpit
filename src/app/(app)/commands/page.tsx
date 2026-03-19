@@ -14,7 +14,7 @@ export default function CommandsPage() {
   usePageHeader("Commands");
 
   const cwd = typeof localStorage !== "undefined"
-    ? localStorage.getItem("aperture-agents-cwd") || undefined
+    ? localStorage.getItem("cockpit-agents-cwd") || undefined
     : undefined;
 
   const { commands, loading, deleteCommand } = useCommands(cwd);

@@ -15,7 +15,7 @@ export default function McpServersPage() {
   usePageHeader("MCP Servers");
 
   const cwd = typeof localStorage !== "undefined"
-    ? localStorage.getItem("aperture-agents-cwd") || undefined
+    ? localStorage.getItem("cockpit-agents-cwd") || undefined
     : undefined;
 
   const { servers, loading, deleteServer } = useMcpServers(cwd);

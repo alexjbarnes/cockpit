@@ -14,7 +14,7 @@ export default function SkillsPage() {
   usePageHeader("Skills");
 
   const cwd = typeof localStorage !== "undefined"
-    ? localStorage.getItem("aperture-agents-cwd") || undefined
+    ? localStorage.getItem("cockpit-agents-cwd") || undefined
     : undefined;
 
   const { skills, loading, deleteSkill } = useSkills(cwd);

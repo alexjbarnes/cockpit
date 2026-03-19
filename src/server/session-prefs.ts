@@ -11,7 +11,7 @@ export interface SessionPrefs {
   model?: string;
 }
 
-const PREFS_DIR = join(homedir(), ".aperture");
+const PREFS_DIR = join(homedir(), ".cockpit");
 const PREFS_FILE = join(PREFS_DIR, "session-prefs.json");
 
 let cache: Record<string, SessionPrefs> | null = null;

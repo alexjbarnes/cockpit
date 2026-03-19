@@ -5,7 +5,7 @@ import { validateToken } from "@/server/auth";
 // Authenticated via httpOnly cookie, returns the token so the client
 // can pass it as a query param on the WS upgrade request.
 export function GET(req: NextRequest) {
-  const token = req.cookies.get("aperture_token")?.value;
+  const token = req.cookies.get("cockpit_token")?.value;
   if (!token || !validateToken(token)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }

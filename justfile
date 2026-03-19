@@ -1,4 +1,4 @@
-# Kill any running aperture servers
+# Kill any running cockpit servers
 kill:
     @-pkill -f "tsx watch.*server.ts" 2>/dev/null
     @-pkill -f "bun dist/server.js" 2>/dev/null
@@ -7,7 +7,7 @@ kill:
 
 # Start dev server (Next.js dev mode with HMR)
 dev:
-    APERTURE_DEBUG=1 APERTURE_TOKEN=test npx tsx watch --env-file=.env.development server.ts
+    COCKPIT_DEBUG=1 COCKPIT_TOKEN=test npx tsx watch --env-file=.env.development server.ts
 
 # Build for production
 build:
@@ -15,11 +15,11 @@ build:
 
 # Start production server with bun
 start: build
-    NODE_ENV=production APERTURE_DEBUG=1 bun --env-file=.env.production dist/server.js
+    NODE_ENV=production COCKPIT_DEBUG=1 bun --env-file=.env.production dist/server.js
 
 # Start production server with node (for debugging bun-specific issues)
 start-node: build
-    @set -a && . ./.env.production && set +a && NODE_ENV=production APERTURE_DEBUG=1 node dist/server.js
+    @set -a && . ./.env.production && set +a && NODE_ENV=production COCKPIT_DEBUG=1 node dist/server.js
 
 # Type check
 check:
@@ -35,9 +35,9 @@ install:
 
 # Tail the debug log
 debug-log:
-    tail -f ~/.aperture/debug.jsonl | jq .
+    tail -f ~/.cockpit/debug.jsonl | jq .
 
 # Clear the debug log
 debug-clear:
-    @truncate -s 0 ~/.aperture/debug.jsonl 2>/dev/null || true
+    @truncate -s 0 ~/.cockpit/debug.jsonl 2>/dev/null || true
     @echo "Debug log cleared"

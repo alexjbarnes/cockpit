@@ -14,7 +14,7 @@ export interface AppDefaults {
   model: string;
 }
 
-const PREFS_DIR = join(homedir(), ".aperture");
+const PREFS_DIR = join(homedir(), ".cockpit");
 const DEFAULTS_FILE = join(PREFS_DIR, "defaults.json");
 
 const fallback: AppDefaults = {

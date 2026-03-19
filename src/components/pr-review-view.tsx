@@ -117,8 +117,8 @@ function ResizeHandle({ onResize }: { onResize: (delta: number) => void }) {
 
 // --- Session Storage ---
 
-const SESSIONS_KEY = "aperture_review_sessions";
-const VIEWED_KEY_PREFIX = "aperture_review_viewed:";
+const SESSIONS_KEY = "cockpit_review_sessions";
+const VIEWED_KEY_PREFIX = "cockpit_review_viewed:";
 
 function getSessionMapping(): Record<string, string> {
   try {

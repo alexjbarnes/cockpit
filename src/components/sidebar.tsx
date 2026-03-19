@@ -10,8 +10,8 @@ import { Plus, Home, X, Settings, GitPullRequest } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useShell } from "@/components/app-shell";
 
-const ACTIVE_KEY = "aperture_active_sessions";
-const UNREAD_KEY = "aperture_unread_sessions";
+const ACTIVE_KEY = "cockpit_active_sessions";
+const UNREAD_KEY = "cockpit_unread_sessions";
 
 export function getActiveSessions(): Set<string> {
   try {
@@ -134,7 +134,7 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
     const groups: SessionGroup[] = data.groups || [];
     const flat = groups
       .flatMap((g) => g.sessions)
-      .filter((s) => activeIds.has(s.id) && !s.cwd.endsWith(".aperture/reviews"))
+      .filter((s) => activeIds.has(s.id) && !s.cwd.endsWith(".cockpit/reviews"))
       .sort((a, b) => b.lastActiveAt - a.lastActiveAt);
     for (const s of flat) {
       if (!prevStatusRef.current.has(s.id)) {

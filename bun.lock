@@ -3,7 +3,7 @@
   "configVersion": 0,
   "workspaces": {
     "": {
-      "name": "aperture",
+      "name": "cockpit",
       "dependencies": {
         "@codemirror/lang-markdown": "^6.5.0",
         "@codemirror/lang-yaml": "^6.1.2",

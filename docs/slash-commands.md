@@ -16,7 +16,7 @@ Claude treats this as a normal chat message. Slash commands are a REPL-layer fea
 
 Source: https://code.claude.com/docs/en/interactive-mode
 
-### Commands relevant to Aperture
+### Commands relevant to Cockpit
 
 | Command | Priority | Handling | Notes |
 |---------|----------|----------|-------|
@@ -35,21 +35,21 @@ Source: https://code.claude.com/docs/en/interactive-mode
 | `/permissions` | Low | Frontend | View current permission settings. Alias: `/allowed-tools` |
 | `/memory` | Low | Backend | Edit CLAUDE.md files. |
 
-### Commands NOT relevant to Aperture (skip)
+### Commands NOT relevant to Cockpit (skip)
 
 | Command | Reason |
 |---------|--------|
-| `/exit`, `/quit` | Aperture manages session lifecycle |
+| `/exit`, `/quit` | Cockpit manages session lifecycle |
 | `/config`, `/settings` | Terminal UI settings |
 | `/vim` | Terminal editing mode |
 | `/theme` | Terminal color theme |
 | `/terminal-setup` | Terminal keybindings |
 | `/desktop`, `/app` | macOS/Windows desktop app |
-| `/login`, `/logout` | Auth managed by Aperture |
+| `/login`, `/logout` | Auth managed by Cockpit |
 | `/doctor` | CLI health check |
 | `/feedback`, `/bug` | CLI feedback |
-| `/resume`, `/continue` | Aperture manages sessions |
-| `/fork` | Session forking, Aperture could support later |
+| `/resume`, `/continue` | Cockpit manages sessions |
+| `/fork` | Session forking, Cockpit could support later |
 | `/chrome` | Chrome integration |
 | `/ide` | IDE integration |
 | `/mcp` | MCP server management |

@@ -1,4 +1,4 @@
-const CACHE_NAME = "aperture-shell-v1";
+const CACHE_NAME = "cockpit-shell-v1";
 const SHELL_URLS = ["/"];
 
 self.addEventListener("install", (event) => {

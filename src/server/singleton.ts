@@ -1,6 +1,6 @@
 import { SessionManager } from "./session-manager";
 
-const key = "__aperture_session_manager__";
+const key = "__cockpit_session_manager__";
 
 export function getSessionManager(): SessionManager {
   const g = globalThis as Record<string, unknown>;

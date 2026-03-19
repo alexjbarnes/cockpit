@@ -143,7 +143,7 @@ export default function SettingsPage() {
   }, []);
 
   useEffect(() => {
-    const stored = localStorage.getItem("aperture-theme") as Theme | null;
+    const stored = localStorage.getItem("cockpit-theme") as Theme | null;
     setTheme(stored || "system");
   }, []);
 
@@ -172,7 +172,7 @@ export default function SettingsPage() {
 
   const selectTheme = useCallback((t: Theme) => {
     setTheme(t);
-    localStorage.setItem("aperture-theme", t);
+    localStorage.setItem("cockpit-theme", t);
     applyTheme(t);
   }, []);
 
