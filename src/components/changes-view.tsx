@@ -22,6 +22,26 @@ import {
   ArrowUpFromLine,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Check as CheckIcon } from "lucide-react";
+
+function Checkbox({ checked, onChange, onClick }: { checked: boolean; onChange: () => void; onClick?: (e: React.MouseEvent) => void }) {
+  return (
+    <button
+      type="button"
+      role="checkbox"
+      aria-checked={checked}
+      onClick={(e) => { onClick?.(e); onChange(); }}
+      className={cn(
+        "h-4 w-4 shrink-0 rounded border flex items-center justify-center transition-colors",
+        checked
+          ? "border-primary bg-primary text-primary-foreground"
+          : "border-muted-foreground/40 bg-transparent hover:border-muted-foreground/60"
+      )}
+    >
+      {checked && <CheckIcon className="h-3 w-3" strokeWidth={3} />}
+    </button>
+  );
+}
 
 interface GitFileChange {
   path: string;
@@ -83,12 +103,7 @@ function FileList({ files, selectedFile, checkedFiles, onFileClick, onContextMen
   return (
     <>
       <div className="px-3 py-1.5 border-b flex items-center gap-2">
-        <input
-          type="checkbox"
-          checked={checkedFiles.size === files.length}
-          onChange={onToggleAll}
-          className="rounded"
-        />
+        <Checkbox checked={checkedFiles.size === files.length} onChange={onToggleAll} />
         <span className="text-xs text-muted-foreground">Select all</span>
       </div>
       {files.map((file) => (
@@ -101,15 +116,10 @@ function FileList({ files, selectedFile, checkedFiles, onFileClick, onContextMen
           onClick={() => onFileClick(file)}
           onContextMenu={(e) => onContextMenu(e, file)}
         >
-          <input
-            type="checkbox"
+          <Checkbox
             checked={checkedFiles.has(file.path)}
-            onChange={(e) => {
-              e.stopPropagation();
-              onToggleFile(file.path);
-            }}
+            onChange={() => onToggleFile(file.path)}
             onClick={(e) => e.stopPropagation()}
-            className="rounded"
           />
           {statusIcon(file.status)}
           <span className="font-mono text-xs truncate flex-1 min-w-0">
@@ -128,26 +138,57 @@ function FileList({ files, selectedFile, checkedFiles, onFileClick, onContextMen
   );
 }
 
+interface ChangesState {
+  selectedFile: string | null;
+  checkedFiles: Set<string>;
+  commitMsg: string;
+  commitPanelOpen: boolean;
+  pushOnCommit: boolean;
+}
+
+const stateCache = new Map<string, ChangesState>();
+
+function isDesktop(): boolean {
+  if (typeof window === "undefined") return false;
+  return window.matchMedia("(min-width: 768px)").matches;
+}
+
+function getCachedState(cwd: string): ChangesState {
+  return stateCache.get(cwd) || {
+    selectedFile: null,
+    checkedFiles: new Set(),
+    commitMsg: "",
+    commitPanelOpen: isDesktop(),
+    pushOnCommit: false,
+  };
+}
+
 export function ChangesView({ cwd }: { cwd: string }) {
   const { settings } = useSettings();
   const { setSidebarContent, closeSidebar } = useShell();
   const [status, setStatus] = useState<GitStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [selectedFile, setSelectedFile] = useState<string | null>(null);
+  const cached = getCachedState(cwd);
+  const [selectedFile, setSelectedFile] = useState<string | null>(cached.selectedFile);
   const [diff, setDiff] = useState<string | null>(null);
   const [diffLoading, setDiffLoading] = useState(false);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; file: GitFileChange } | null>(null);
-  const [commitMsg, setCommitMsg] = useState("");
+  const [commitMsg, setCommitMsg] = useState(cached.commitMsg);
   const [committing, setCommitting] = useState(false);
   const [commitResult, setCommitResult] = useState<{ ok: boolean; message: string } | null>(null);
-  const [checkedFiles, setCheckedFiles] = useState<Set<string>>(new Set());
-  const [pushOnCommit, setPushOnCommit] = useState(false);
-  const [commitPanelOpen, setCommitPanelOpen] = useState(false);
+  const [checkedFiles, setCheckedFiles] = useState<Set<string>>(cached.checkedFiles);
+  const [pushOnCommit, setPushOnCommit] = useState(cached.pushOnCommit);
+  const [commitPanelOpen, setCommitPanelOpen] = useState(cached.commitPanelOpen);
   const [generating, setGenerating] = useState(false);
   const [pushing, setPushing] = useState(false);
   const [pushResult, setPushResult] = useState<{ ok: boolean; message: string } | null>(null);
   const contextMenuRef = useRef<HTMLDivElement>(null);
+
+  // Persist state changes to cache
+  useEffect(() => {
+    stateCache.set(cwd, { selectedFile, checkedFiles, commitMsg, commitPanelOpen, pushOnCommit });
+  }, [cwd, selectedFile, checkedFiles, commitMsg, commitPanelOpen, pushOnCommit]);
 
   const fetchStatus = useCallback(() => {
     setLoading(true);
@@ -182,6 +223,14 @@ export function ChangesView({ cwd }: { cwd: string }) {
       .catch(() => setDiff(null))
       .finally(() => setDiffLoading(false));
   }, [cwd]);
+
+  // Re-fetch diff for previously selected file on mount
+  useEffect(() => {
+    if (selectedFile) {
+      fetchDiff(selectedFile);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleFileClick = useCallback((file: GitFileChange) => {
     setSelectedFile(file.path);
@@ -469,12 +518,7 @@ export function ChangesView({ cwd }: { cwd: string }) {
                   {generating ? "Generating..." : "Generate"}
                 </Button>
                 <label className="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={pushOnCommit}
-                    onChange={(e) => setPushOnCommit(e.target.checked)}
-                    className="rounded"
-                  />
+                  <Checkbox checked={pushOnCommit} onChange={() => setPushOnCommit(!pushOnCommit)} />
                   Push after commit
                 </label>
                 <div className="flex-1" />
