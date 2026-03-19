@@ -197,7 +197,7 @@ export const MessageBubble = memo(function MessageBubble({
                 ))}
               </div>
             )}
-            {message.content && <p className="whitespace-pre-wrap text-sm">{message.content}</p>}
+            {message.content && <p className="whitespace-pre-wrap text-base leading-relaxed">{message.content}</p>}
           </>
         ) : hasBlocks ? (
           <div className="space-y-2">
