@@ -43,18 +43,13 @@ export const MessageBubble = memo(function MessageBubble({
   const lastInputWasTouch = useRef(false);
   const lastTap = useRef<{ time: number; x: number; y: number } | null>(null);
 
-  // Desktop: right-click enters message selection
+  // Right-click: only toggle selection when already in selection mode
   const handleContextMenu = useCallback((e: React.MouseEvent) => {
-    if (lastInputWasTouch.current) return; // let native long-press text selection work
-    if (!isSelectable) return;
+    if (lastInputWasTouch.current) return;
+    if (!selectionMode) return;
     e.preventDefault();
-    window.getSelection()?.removeAllRanges();
-    if (selectionMode) {
-      onToggleSelect?.(message.id);
-    } else {
-      onEnterSelection?.(message.id);
-    }
-  }, [isSelectable, selectionMode, message.id, onEnterSelection, onToggleSelect]);
+    if (isSelectable) onToggleSelect?.(message.id);
+  }, [isSelectable, selectionMode, message.id, onToggleSelect]);
 
   const handleTouchStart = useCallback(() => {
     lastInputWasTouch.current = true;
