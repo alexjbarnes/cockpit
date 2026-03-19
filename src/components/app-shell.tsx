@@ -176,24 +176,24 @@ export function AppShell({ children }: { children: ReactNode }) {
     <AuthGuard>
       <WebSocketProvider>
         <ShellContext.Provider value={{ setHeader, cwd, setCwd, backgroundTasks, setBackgroundTasks, todos, setTodos, sidebarContent, setSidebarContent, closeSidebar }}>
-          <div className="fixed inset-0 flex flex-col">
-            <header className="shrink-0 flex items-center gap-2 border-b px-4 py-2 bg-background">
-              <Button variant="ghost" size="icon" onClick={toggleSidebar} title="Toggle sidebar (Ctrl+B)" className="md:hidden">
-                <Menu className="h-4 w-4" />
-              </Button>
-              <div className="hidden md:block min-w-0">
-                <EditableTitle title={header.title} onRename={header.onRename} />
-              </div>
-              <div className="ml-auto flex items-center gap-2">
-                {cwd && <TodoIndicator todos={todos} />}
-                {cwd && <BackgroundTasksButton tasks={backgroundTasks} />}
-                {cwd && <UsageButton />}
-                {cwd && <GitStatusButton cwd={cwd} />}
-                {cwd && <FileBrowserButton cwd={cwd} />}
-              </div>
-            </header>
-            <div className="flex flex-1 min-h-0">
-              <Sidebar ref={sidebarRef} />
+          <div className="fixed inset-0 flex">
+            <Sidebar ref={sidebarRef} />
+            <div className="flex-1 min-h-0 min-w-0 flex flex-col">
+              <header className="shrink-0 flex items-center gap-2 border-b px-4 py-2 bg-background">
+                <Button variant="ghost" size="icon" onClick={toggleSidebar} title="Toggle sidebar (Ctrl+B)" className="md:hidden">
+                  <Menu className="h-4 w-4" />
+                </Button>
+                <div className="hidden md:block min-w-0">
+                  <EditableTitle title={header.title} onRename={header.onRename} />
+                </div>
+                <div className="ml-auto flex items-center gap-2">
+                  {cwd && <TodoIndicator todos={todos} />}
+                  {cwd && <BackgroundTasksButton tasks={backgroundTasks} />}
+                  {cwd && <UsageButton />}
+                  {cwd && <GitStatusButton cwd={cwd} />}
+                  {cwd && <FileBrowserButton cwd={cwd} />}
+                </div>
+              </header>
               <main className="flex-1 min-h-0 min-w-0 flex flex-col">
                 {children}
               </main>
