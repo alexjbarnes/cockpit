@@ -305,6 +305,86 @@ The CLI exposes these tools. Tool names are used in permission rules, `--allowed
 | `ListMcpResourcesTool` | List MCP resources | No |
 | `ReadMcpResourceTool` | Read MCP resource by URI | No |
 
+## Plan mode
+
+Plan mode lets the agent explore the codebase and design an implementation approach before writing code. The agent enters plan mode via `EnterPlanMode` (no permission required) and exits via `ExitPlanMode` (requires permission).
+
+### Flow
+
+1. Agent calls `EnterPlanMode` -- switches to plan mode
+2. Agent explores the codebase using read-only tools (Glob, Grep, Read, Agent)
+3. Agent writes a plan to a file at `~/.claude/plans/<slug>.md`
+4. Agent calls `ExitPlanMode` -- triggers the approval prompt
+
+### ExitPlanMode tool input
+
+```json
+{
+  "allowedPrompts": [
+    { "tool": "Bash", "prompt": "run tests" },
+    { "tool": "Bash", "prompt": "install dependencies" }
+  ]
+}
+```
+
+`allowedPrompts` is optional. It describes prompt-based permissions the agent requests for implementation. Only the `Bash` tool uses this.
+
+### CLI exit options
+
+When `ExitPlanMode` fires, the CLI presents a numbered menu:
+
+```
+Would you like to proceed?
+
+> 1. Yes, clear context and auto-accept edits    (shift+tab)
+  2. Yes, clear context and manually approve edits
+  3. Yes, auto-accept edits
+  4. Yes, manually approve edits
+  5. Type here to tell Claude what to change
+```
+
+| # | Effect |
+|---|--------|
+| 1 | Default. Clears conversation history (plan file persists on disk), auto-accepts file edits and granted `allowedPrompts` during implementation. Session is renamed from the plan content. |
+| 2 | Clears conversation history, requires manual approval of each tool use. |
+| 3 | Preserves conversation context, auto-accepts file edits and granted `allowedPrompts`. |
+| 4 | Preserves conversation context, requires manual approval of each tool use. |
+| 5 | Free-text input. Denies the plan exit and sends the user's feedback back to the agent so it can revise the plan while staying in plan mode. |
+
+Options 1 and 2 clear context to free up the context window. The plan file at `~/.claude/plans/` survives the clear and is referenced in the system prompt, so the agent picks it up on the next turn.
+
+When the session was started with `--dangerously-skip-permissions`, "auto-accept edits" is replaced with "bypass permissions" in options 1 and 3.
+
+### Additional exit mechanisms
+
+- `Shift+Tab` in the main prompt cycles permission modes and can exit plan mode directly
+- `/plan` slash command toggles plan mode on/off
+- Rejecting the `ExitPlanMode` tool call sends the agent back to continue planning
+
+### How clear context works internally
+
+The CLI performs a hard wipe, not a summarization. `clearConversation` does:
+- `setMessages(() => [])` -- zeros out the message array
+- Generates a new conversation UUID
+- Clears file-read state caches
+- Kills running shell commands and aborts controllers
+- Fires PreCompact/PostCompact hook events
+
+No API call. No LLM summarization. The plan file at `~/.claude/plans/` persists on disk and is referenced in the system prompt, so the agent picks it up on the next turn despite having zero conversation history.
+
+The CLI also **rejects** (not approves) the ExitPlanMode tool call when clearing context. This prevents the agent from continuing in the old context. After the clear, a fresh turn starts.
+
+### Aperture implementation
+
+Aperture renders a `PlanApprovalPrompt` component (instead of the generic `PermissionPrompt`) when `permission.toolName === "ExitPlanMode"`. It replicates the 5 CLI options:
+
+- Options 1-2 (clear context): deny the permission (matches CLI's reject behavior), send `/clear` to kill the process and wipe state, then send "Implement the plan" to start a fresh turn
+- Options 3-4 (keep context): approve the permission normally
+- Options 1, 3 (auto-accept): enable bypass mode via `permission:set_bypass`
+- Option 5 (feedback): deny the permission, then send the user's text as a new message
+
+Keyboard navigation (arrow keys, j/k, Enter) mirrors the CLI's list selector.
+
 ## Hooks system
 
 The CLI supports hooks that fire at various points in the agent lifecycle. Hooks are configured in settings JSON files and can run shell commands, HTTP requests, LLM prompts, or sub-agents.

@@ -8,6 +8,7 @@ import { useSettings } from "@/hooks/use-settings";
 import { MessageBubble } from "./message-bubble";
 import { InputArea } from "./input-area";
 import { PermissionPrompt } from "./permission-prompt";
+import { PlanApprovalPrompt } from "./plan-approval-prompt";
 import { QuestionCard, QuestionPrompt, parseQuestionsFromInput } from "./question-card";
 import { splitAtQuestion } from "@/lib/split-question-blocks";
 import { ModelPicker } from "./model-picker";
@@ -293,13 +294,23 @@ export function ChatView({ sessionId, cwd, initialName }: { sessionId: string; c
               </div>
             </div>
           )}
-          {pendingPermissions.map((p) => (
-            <PermissionPrompt
-              key={p.requestId}
-              permission={p}
-              onRespond={respondToPermission}
-            />
-          ))}
+          {pendingPermissions.map((p) =>
+            p.toolName === "ExitPlanMode" ? (
+              <PlanApprovalPrompt
+                key={p.requestId}
+                permission={p}
+                onRespond={respondToPermission}
+                onSendMessage={sendMessage}
+                onSetBypass={setBypassAll}
+              />
+            ) : (
+              <PermissionPrompt
+                key={p.requestId}
+                permission={p}
+                onRespond={respondToPermission}
+              />
+            )
+          )}
           {pendingQuestions.length > 0 && !visibleMessages.some((m) =>
             m.role === "assistant" && (m.blocks || []).some(
               (b) => b.type === "tool_use" && b.toolUse.name === "AskUserQuestion"

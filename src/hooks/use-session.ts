@@ -556,6 +556,8 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
           setBackgroundTasks([]);
           setTodos([]);
           setHasQueuedMessage(false);
+          setPendingPermissions([]);
+          setPendingQuestions([]);
           break;
         }
 
