@@ -148,11 +148,10 @@ function FileList({ files, selectedFile, checkedFiles, onFileClick, onContextMen
 interface FileDiffState {
   diff: string | null;
   loading: boolean;
-  contextLines: number;
-  expanded: boolean;
 }
 
-const EXPANDED_CONTEXT = 100;
+// Fetch with large context so Pierre Diffs can fold/unfold inline
+const STACKED_CONTEXT = 500;
 
 interface StackedDiffsProps {
   files: GitFileChange[];
@@ -167,15 +166,13 @@ function StackedDiffs({ files, cwd, diffStyle, scrollToFile, onScrolled }: Stack
   const sectionRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const fetchedRef = useRef<Set<string>>(new Set());
 
-  const fetchDiff = useCallback((file: string, contextLines: number = 3) => {
+  const fetchDiff = useCallback((file: string) => {
     setDiffs((prev) => {
       const next = new Map(prev);
-      const existing = next.get(file);
-      next.set(file, { diff: existing?.diff || null, loading: true, contextLines, expanded: existing?.expanded || false });
+      next.set(file, { diff: prev.get(file)?.diff || null, loading: true });
       return next;
     });
-    const contextParam = contextLines !== 3 ? `&context=${contextLines}` : "";
-    fetch(`/api/git/diff?cwd=${encodeURIComponent(cwd)}&file=${encodeURIComponent(file)}${contextParam}`)
+    fetch(`/api/git/diff?cwd=${encodeURIComponent(cwd)}&file=${encodeURIComponent(file)}&context=${STACKED_CONTEXT}`)
       .then((res) => {
         if (!res.ok) throw new Error("Failed");
         return res.json();
@@ -183,16 +180,14 @@ function StackedDiffs({ files, cwd, diffStyle, scrollToFile, onScrolled }: Stack
       .then((data) => {
         setDiffs((prev) => {
           const next = new Map(prev);
-          const existing = next.get(file);
-          if (existing) next.set(file, { ...existing, diff: data.diff, loading: false });
+          next.set(file, { diff: data.diff, loading: false });
           return next;
         });
       })
       .catch(() => {
         setDiffs((prev) => {
           const next = new Map(prev);
-          const existing = next.get(file);
-          if (existing) next.set(file, { ...existing, diff: null, loading: false });
+          next.set(file, { diff: null, loading: false });
           return next;
         });
       });
@@ -219,19 +214,6 @@ function StackedDiffs({ files, cwd, diffStyle, scrollToFile, onScrolled }: Stack
     onScrolled();
   }, [scrollToFile, onScrolled]);
 
-  const toggleExpanded = useCallback((path: string) => {
-    setDiffs((prev) => {
-      const existing = prev.get(path);
-      if (!existing) return prev;
-      const next = new Map(prev);
-      const newExpanded = !existing.expanded;
-      const newContext = newExpanded ? EXPANDED_CONTEXT : 3;
-      next.set(path, { ...existing, expanded: newExpanded, contextLines: newContext });
-      fetchDiff(path, newContext);
-      return next;
-    });
-  }, [fetchDiff]);
-
   if (files.length === 0) {
     return (
       <div className="flex items-center justify-center h-full text-sm text-muted-foreground">
@@ -256,26 +238,19 @@ function StackedDiffs({ files, cwd, diffStyle, scrollToFile, onScrolled }: Stack
                 <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
               </div>
             ) : state?.diff ? (
-              <>
-                <DiffErrorBoundary fallback={<pre className="p-4 text-xs text-muted-foreground whitespace-pre-wrap">{state.diff}</pre>}>
-                  <PatchDiff
-                    patch={state.diff}
-                    options={{
-                      theme: { dark: "pierre-dark", light: "pierre-light" },
-                      themeType: isDark() ? "dark" : "light",
-                      overflow: "wrap",
-                      diffStyle,
-                    }}
-                  />
-                </DiffErrorBoundary>
-                <div className="flex items-center gap-2 px-3 py-1 border-t bg-muted/30">
-                  <label className="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer">
-                    <Checkbox checked={state.expanded} onChange={() => toggleExpanded(file.path)} />
-                    More context
-                  </label>
-                  {state.loading && <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />}
-                </div>
-              </>
+              <DiffErrorBoundary fallback={<pre className="p-4 text-xs text-muted-foreground whitespace-pre-wrap">{state.diff}</pre>}>
+                <PatchDiff
+                  patch={state.diff}
+                  options={{
+                    theme: { dark: "pierre-dark", light: "pierre-light" },
+                    themeType: isDark() ? "dark" : "light",
+                    overflow: "wrap",
+                    diffStyle,
+                    hunkSeparators: "line-info",
+                    expansionLineCount: 20,
+                  }}
+                />
+              </DiffErrorBoundary>
             ) : (
               <div className="px-4 py-3 text-xs text-muted-foreground">No diff available</div>
             )}
@@ -734,6 +709,8 @@ export function ChangesView({ cwd, sessionId }: { cwd: string; sessionId?: strin
                             themeType: isDark() ? "dark" : "light",
                             overflow: "wrap",
                             diffStyle: settings.diffStyle,
+                            hunkSeparators: "line-info",
+                            expansionLineCount: 20,
                           }}
                         />
                       </DiffErrorBoundary>
