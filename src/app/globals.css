@@ -192,6 +192,25 @@ pre::-webkit-scrollbar-corner,
   color: oklch(0.6 0 0);
 }
 
+/* Links */
+.message-prose :where(a) {
+  color: oklch(0.55 0.15 250);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.message-prose :where(a):hover {
+  color: oklch(0.65 0.15 250);
+}
+
+.dark .message-prose :where(a) {
+  color: oklch(0.7 0.15 250);
+}
+
+.dark .message-prose :where(a):hover {
+  color: oklch(0.8 0.15 250);
+}
+
 .dark {
   --color-background: oklch(0.145 0 0);
   --color-foreground: oklch(0.985 0 0);

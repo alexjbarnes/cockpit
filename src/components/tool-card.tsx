@@ -5,7 +5,7 @@ import type { ToolUse } from "@/types";
 import { cn } from "@/lib/utils";
 import { ChevronRight, Loader2 } from "lucide-react";
 import { DiffViewer } from "./diff-viewer";
-import { CodeBlock, languageFromPath } from "./code-block";
+import { CodeBlock, languageFromPath, prehighlight } from "./code-block";
 
 function parseInput(input: string): Record<string, unknown> {
   if (!input) return {};
@@ -74,6 +74,20 @@ export function ToolCard({ tool }: ToolCardProps) {
       setExpanded(pinOpen);
     }
   }, [isRunning, pinOpen]);
+
+  // Pre-highlight code for Read/Write tools so expanding is instant
+  useEffect(() => {
+    const name = tool.name;
+    if ((name === "Read" || name === "read") && tool.output) {
+      const fp = (input.file_path as string) || tool.filePath || "";
+      const lang = fp ? languageFromPath(fp) : undefined;
+      if (lang) prehighlight(tool.output, lang, dark);
+    } else if ((name === "Write" || name === "write") && input.content) {
+      const fp = (input.file_path as string) || tool.filePath || "";
+      const lang = fp ? languageFromPath(fp) : undefined;
+      if (lang) prehighlight(input.content as string, lang, dark);
+    }
+  }, [tool.name, tool.output, tool.filePath, input, dark]);
 
   const isStatusOnly = tool.name === "EnterPlanMode" || tool.name === "ExitPlanMode" || tool.name === "TaskCreate" || tool.name === "TaskUpdate" || tool.name === "TaskList" || tool.name === "TaskGet" || tool.name === "TodoWrite";
   const hasContent = !isStatusOnly && (tool.input || tool.output);

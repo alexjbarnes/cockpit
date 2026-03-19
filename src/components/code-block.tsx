@@ -5,6 +5,22 @@ import { stripLineNumbers, highlightCode } from "@/lib/code-highlight";
 
 export { languageFromPath } from "@/lib/code-highlight";
 
+const htmlCache = new Map<string, string>();
+
+function cacheKey(code: string, lang: string, theme: string): string {
+  return `${theme}:${lang}:${code}`;
+}
+
+export function prehighlight(code: string, language: string, dark: boolean): void {
+  const { code: stripped } = stripLineNumbers(code);
+  const theme = dark ? "github-dark" : "github-light";
+  const key = cacheKey(stripped, language, theme);
+  if (htmlCache.has(key)) return;
+  highlightCode(stripped, language, theme).then((result) => {
+    if (result) htmlCache.set(key, result);
+  });
+}
+
 interface CodeBlockProps {
   code: string;
   language?: string;
@@ -12,9 +28,10 @@ interface CodeBlockProps {
 }
 
 export function CodeBlock({ code, language, dark }: CodeBlockProps) {
-  const [html, setHtml] = useState<string | null>(null);
   const { code: strippedCode, startLine } = stripLineNumbers(code);
   const theme = dark ? "github-dark" : "github-light";
+  const key = language ? cacheKey(strippedCode, language, theme) : "";
+  const [html, setHtml] = useState<string | null>(language ? htmlCache.get(key) ?? null : null);
 
   useEffect(() => {
     if (!language) {
@@ -22,16 +39,25 @@ export function CodeBlock({ code, language, dark }: CodeBlockProps) {
       return;
     }
 
+    const cached = htmlCache.get(key);
+    if (cached) {
+      setHtml(cached);
+      return;
+    }
+
     let cancelled = false;
 
     highlightCode(strippedCode, language, theme).then((result) => {
+      if (result) {
+        htmlCache.set(key, result);
+      }
       if (!cancelled) setHtml(result);
     });
 
     return () => {
       cancelled = true;
     };
-  }, [strippedCode, language, theme]);
+  }, [strippedCode, language, theme, key]);
 
   const lineNumberStyles = `
     .code-block-lines code {
