@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { useRouter, usePathname } from "next/navigation";
-import { GitBranch, X, Loader2, Plus, Minus, FileQuestion, FilePlus, FileMinus, FileEdit, FileSymlink, ExternalLink } from "lucide-react";
+import { GitBranch, X, Loader2, Plus, Minus, FilePlus, FileMinus, FileEdit, FileSymlink, ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 interface GitFileChange {
@@ -22,7 +22,7 @@ function statusIcon(status: string) {
     case "added": return <FilePlus className="h-3.5 w-3.5 text-green-500" />;
     case "deleted": return <FileMinus className="h-3.5 w-3.5 text-red-500" />;
     case "renamed": return <FileSymlink className="h-3.5 w-3.5 text-blue-500" />;
-    case "untracked": return <FileQuestion className="h-3.5 w-3.5 text-muted-foreground" />;
+    case "untracked": return <FilePlus className="h-3.5 w-3.5 text-green-500" />;
     default: return <FileEdit className="h-3.5 w-3.5 text-yellow-500" />;
   }
 }

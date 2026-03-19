@@ -169,6 +169,123 @@ function getCachedState(prKey: string): ReviewState {
   };
 }
 
+// --- Lazy Diff ---
+
+function LazyDiff({
+  file,
+  pr,
+  settings,
+  viewed,
+  collapsed,
+  onToggleViewed,
+  onToggleCollapse,
+  sectionRef,
+}: {
+  file: FileDiff;
+  pr: PRDetails | null;
+  settings: { diffStyle: string };
+  viewed: boolean;
+  collapsed: boolean;
+  onToggleViewed: () => void;
+  onToggleCollapse: () => void;
+  sectionRef: (el: HTMLDivElement | null) => void;
+}) {
+  const [visible, setVisible] = useState(false);
+  const sentinelRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const el = sentinelRef.current;
+    if (!el) return;
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting) {
+          setVisible(true);
+          observer.disconnect();
+        }
+      },
+      { rootMargin: "200px" },
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
+  const handleMarkViewed = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    onToggleViewed();
+    if (!collapsed) onToggleCollapse();
+  };
+
+  return (
+    <div
+      ref={(el) => { sentinelRef.current = el; sectionRef(el); }}
+      className={cn("rounded border overflow-hidden", viewed && "opacity-60")}
+    >
+      {collapsed ? (
+        <button
+          onClick={onToggleCollapse}
+          className="flex items-center gap-2 w-full px-4 py-2 text-sm text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
+        >
+          <ChevronDown className="h-3.5 w-3.5 shrink-0" />
+          {viewed && <Check className="h-3 w-3 text-green-500 shrink-0" />}
+          <span className="font-mono text-xs truncate">{file.path}</span>
+        </button>
+      ) : !visible ? (
+        <div className="flex items-center justify-center py-8">
+          <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+        </div>
+      ) : (
+        <DiffErrorBoundary fallback={<pre className="p-4 text-xs text-muted-foreground whitespace-pre-wrap">{file.patch}</pre>}>
+          <PatchDiff
+            patch={file.patch}
+            options={{
+              theme: { dark: "pierre-dark", light: "pierre-light" },
+              themeType: isDark() ? "dark" : "light",
+              overflow: "wrap",
+              diffStyle: settings.diffStyle as "split" | "unified",
+              hunkSeparators: "line-info",
+              expansionLineCount: 20,
+            }}
+            renderHeaderMetadata={({ newFile }) => {
+              const name = newFile?.name?.replace(/^b\//, "") || file.path;
+              return (
+                <div className="flex items-center gap-2 ml-2">
+                  <button
+                    onClick={handleMarkViewed}
+                    className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+                    title="Mark as viewed and collapse"
+                  >
+                    <Eye className="h-3 w-3" />
+                    Viewed
+                  </button>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); onToggleCollapse(); }}
+                    className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+                    title="Collapse"
+                  >
+                    <ChevronUp className="h-3 w-3" />
+                  </button>
+                  {pr && (
+                    <a
+                      href={`${pr.url}/files#diff-${name}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <ExternalLink className="h-3 w-3" />
+                      GitHub
+                    </a>
+                  )}
+                </div>
+              );
+            }}
+          />
+        </DiffErrorBoundary>
+      )}
+    </div>
+  );
+}
+
 // --- Main Component ---
 
 export function PRReviewView({ owner, repo, number }: { owner: string; repo: string; number: number }) {
@@ -190,6 +307,8 @@ export function PRReviewView({ owner, repo, number }: { owner: string; repo: str
   const [descriptionOpen, setDescriptionOpen] = useState(cached.descriptionOpen);
   const [scrollToFile, setScrollToFile] = useState<string | null>(null);
   const [viewedFiles, setViewedFilesState] = useState<Set<string>>(() => getViewedFiles(prKey));
+
+  const [collapsedFiles, setCollapsedFiles] = useState<Set<string>>(new Set());
 
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [reviewsCwd, setReviewsCwd] = useState<string | null>(null);
@@ -295,6 +414,27 @@ export function PRReviewView({ owner, repo, number }: { owner: string; repo: str
     });
   }, [prKey]);
 
+  // Mark as viewed (always adds, never removes)
+  const markViewed = useCallback((path: string) => {
+    setViewedFilesState((prev) => {
+      if (prev.has(path)) return prev;
+      const next = new Set(prev);
+      next.add(path);
+      setViewedFiles(prKey, next);
+      return next;
+    });
+  }, [prKey]);
+
+  // Toggle collapse
+  const toggleCollapse = useCallback((path: string) => {
+    setCollapsedFiles((prev) => {
+      const next = new Set(prev);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
+  }, []);
+
   // Resize handler
   const handleResize = useCallback((delta: number) => {
     setChatWidth((prev) => Math.max(MIN_CHAT_WIDTH, Math.min(maxChatWidth(), prev + delta)));
@@ -316,10 +456,19 @@ export function PRReviewView({ owner, repo, number }: { owner: string; repo: str
               "flex items-center gap-2 px-3 py-1.5 text-sm cursor-pointer border-b last:border-b-0 hover:bg-muted/50",
               viewedFiles.has(file.path) && "opacity-50",
             )}
-            onClick={() => setScrollToFile(file.path)}
+            onClick={() => {
+              if (collapsedFiles.has(file.path)) toggleCollapse(file.path);
+              setScrollToFile(file.path);
+            }}
           >
             <button
-              onClick={(e) => { e.stopPropagation(); toggleViewed(file.path); }}
+              onClick={(e) => {
+                e.stopPropagation();
+                toggleViewed(file.path);
+                if (!viewedFiles.has(file.path) && !collapsedFiles.has(file.path)) {
+                  toggleCollapse(file.path);
+                }
+              }}
               className={cn(
                 "h-4 w-4 shrink-0 rounded border flex items-center justify-center transition-colors",
                 viewedFiles.has(file.path)
@@ -327,7 +476,7 @@ export function PRReviewView({ owner, repo, number }: { owner: string; repo: str
                   : "border-muted-foreground/40 bg-transparent hover:border-muted-foreground/60",
               )}
             >
-              {viewedFiles.has(file.path) && <Eye className="h-3 w-3" strokeWidth={3} />}
+              {viewedFiles.has(file.path) && <Check className="h-3 w-3" strokeWidth={3} />}
             </button>
             {fileStatusIcon(file.path, pr?.files || [])}
             <span className="font-mono text-xs truncate flex-1 min-w-0">{file.path}</span>
@@ -347,7 +496,7 @@ export function PRReviewView({ owner, repo, number }: { owner: string; repo: str
     );
 
     return () => closeSidebar();
-  }, [fileDiffs, pr, viewedFiles, setSidebarContent, closeSidebar, toggleViewed]);
+  }, [fileDiffs, pr, viewedFiles, collapsedFiles, setSidebarContent, closeSidebar, toggleViewed, toggleCollapse]);
 
   if (loading) {
     return (
@@ -453,47 +602,17 @@ export function PRReviewView({ owner, repo, number }: { owner: string; repo: str
               <div className="text-center py-12 text-sm text-muted-foreground">No changes</div>
             )}
             {fileDiffs.map((file) => (
-              <div
+              <LazyDiff
                 key={file.path}
-                ref={(el) => { if (el) sectionRefs.current.set(file.path, el); }}
-                className="rounded border overflow-hidden"
-              >
-                <DiffErrorBoundary fallback={<pre className="p-4 text-xs text-muted-foreground whitespace-pre-wrap">{file.patch}</pre>}>
-                  <PatchDiff
-                    patch={file.patch}
-                    options={{
-                      theme: { dark: "pierre-dark", light: "pierre-light" },
-                      themeType: isDark() ? "dark" : "light",
-                      overflow: "wrap",
-                      diffStyle: settings.diffStyle,
-                      hunkSeparators: "line-info",
-                      expansionLineCount: 20,
-                    }}
-                    renderHeaderMetadata={({ newFile }) => {
-                      const name = newFile?.name?.replace(/^b\//, "") || file.path;
-                      return (
-                        <div className="flex items-center gap-2 ml-2">
-                          {viewedFiles.has(name) && (
-                            <Check className="h-3 w-3 text-green-500" />
-                          )}
-                          {pr && (
-                            <a
-                              href={`${pr.url}/files#diff-${name}`}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
-                              onClick={(e) => e.stopPropagation()}
-                            >
-                              <ExternalLink className="h-3 w-3" />
-                              GitHub
-                            </a>
-                          )}
-                        </div>
-                      );
-                    }}
-                  />
-                </DiffErrorBoundary>
-              </div>
+                file={file}
+                pr={pr}
+                settings={settings}
+                viewed={viewedFiles.has(file.path)}
+                collapsed={collapsedFiles.has(file.path)}
+                onToggleViewed={() => markViewed(file.path)}
+                onToggleCollapse={() => toggleCollapse(file.path)}
+                sectionRef={(el) => { if (el) sectionRefs.current.set(file.path, el); }}
+              />
             ))}
           </div>
         </div>
@@ -503,7 +622,11 @@ export function PRReviewView({ owner, repo, number }: { owner: string; repo: str
           <>
             <ResizeHandle onResize={handleResize} />
             <div className="flex flex-col shrink-0 border-l min-h-0" style={{ width: chatWidth }}>
-              <ChatView sessionId={sessionId} cwd={reviewsCwd} />
+              <ChatView
+                sessionId={sessionId}
+                cwd={reviewsCwd}
+                initialContext={`Reviewing PR #${number}: ${pr.title}\nRepo: ${fullRepo}\nAuthor: ${pr.author.login}\nBranch: ${pr.headRefName} into ${pr.baseRefName}\nFiles changed: ${pr.changedFiles} (+${pr.additions} -${pr.deletions})${pr.body ? `\n\nDescription:\n${pr.body.slice(0, 2000)}` : ""}`}
+              />
             </div>
           </>
         )}

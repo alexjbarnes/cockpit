@@ -19,7 +19,7 @@ import { useShell } from "./app-shell";
 const INITIAL_WINDOW = 50;
 const WINDOW_INCREMENT = 30;
 
-export function ChatView({ sessionId, cwd, initialName }: { sessionId: string; cwd?: string; initialName?: string }) {
+export function ChatView({ sessionId, cwd, initialName, initialContext }: { sessionId: string; cwd?: string; initialName?: string; initialContext?: string }) {
   const { messages, historyLoaded, isResponding, pendingPermissions, pendingQuestions, modelPicker, currentModel, bypassActive, thinkingLevel, contextUsage, rateLimitStatus, apiError, sessionName, initData, hasQueuedMessage, backgroundTasks, todos, btw, sendMessage, interrupt, respondToPermission, respondToQuestion, selectModel, setModel, setBypassAll, setThinkingLevel, cancelQueuedMessage, restoredText, clearRestoredText, dismissBtw, retry } = useSession(sessionId, cwd);
   const { settings } = useSettings();
   const { setHeader, setBackgroundTasks, setTodos } = useShell();
@@ -179,10 +179,16 @@ export function ChatView({ sessionId, cwd, initialName }: { sessionId: string; c
     return () => window.removeEventListener("keydown", handler);
   }, [isResponding, hasQueuedMessage, interrupt, cancelQueuedMessage]);
 
+  const contextInjected = useRef(false);
   const handleSend = useCallback((text: string, images?: import("@/types").ImageAttachment[], documents?: import("@/types").DocumentAttachment[], textFiles?: import("@/types").TextFileAttachment[]) => {
     stickToBottom.current = true;
-    sendMessage(text, images, documents, textFiles);
-  }, [sendMessage]);
+    if (initialContext && !contextInjected.current && messages.length === 0) {
+      contextInjected.current = true;
+      sendMessage(`${text}\n\n---\n${initialContext}`, images, documents, textFiles);
+    } else {
+      sendMessage(text, images, documents, textFiles);
+    }
+  }, [sendMessage, initialContext, messages.length]);
 
   const handleCompact = useCallback(() => {
     sendMessage("/compact");

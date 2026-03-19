@@ -15,7 +15,6 @@ import {
   FilePlus,
   FileMinus,
   FileEdit,
-  FileQuestion,
   FileSymlink,
   Trash2,
   Send,
@@ -68,7 +67,7 @@ function statusIcon(status: string) {
     case "added": return <FilePlus className="h-3.5 w-3.5 text-green-500 shrink-0" />;
     case "deleted": return <FileMinus className="h-3.5 w-3.5 text-red-500 shrink-0" />;
     case "renamed": return <FileSymlink className="h-3.5 w-3.5 text-blue-500 shrink-0" />;
-    case "untracked": return <FileQuestion className="h-3.5 w-3.5 text-muted-foreground shrink-0" />;
+    case "untracked": return <FilePlus className="h-3.5 w-3.5 text-green-500 shrink-0" />;
     default: return <FileEdit className="h-3.5 w-3.5 text-yellow-500 shrink-0" />;
   }
 }
