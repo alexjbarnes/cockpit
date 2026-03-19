@@ -131,19 +131,32 @@ export function ChatView({ sessionId, cwd, initialName }: { sessionId: string; c
   // pointermove fires on Mac even when the window is frontmost but lacks keyboard
   // focus. visibilitychange only fires on tab switches, not app switches. The
   // window focus event may not fire until a click on Mac.
+  //
+  // Also re-scroll to bottom when returning. Browsers throttle layout for
+  // background apps, so scrollTop assignments may not stick. When focus returns,
+  // the reconciled scrollHeight can be larger than scrollTop, making the scroll
+  // handler think the user scrolled up (stickToBottom = false).
   useEffect(() => {
     const handler = () => {
       if (document.hasFocus()) return;
       if (document.activeElement?.closest("textarea, input")) return;
       scrollRef.current?.focus({ preventScroll: true });
+      if (stickToBottom.current) scrollToBottom();
+    };
+    const visHandler = () => {
+      if (document.visibilityState === "visible" && stickToBottom.current) {
+        scrollToBottom();
+      }
     };
     document.addEventListener("pointermove", handler);
     window.addEventListener("focus", handler);
+    document.addEventListener("visibilitychange", visHandler);
     return () => {
       document.removeEventListener("pointermove", handler);
       window.removeEventListener("focus", handler);
+      document.removeEventListener("visibilitychange", visHandler);
     };
-  }, []);
+  }, [scrollToBottom]);
 
   // Escape key: modal → queued message → interrupt.
   // Input area also handles Escape with stopPropagation when textarea has focus,
