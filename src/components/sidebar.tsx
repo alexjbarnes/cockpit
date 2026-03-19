@@ -6,7 +6,7 @@ import type { SessionInfo, SessionGroup } from "@/types";
 import { useWebSocket } from "@/hooks/use-websocket";
 import { NewSessionDialog } from "./new-session-dialog";
 import { cn } from "@/lib/utils";
-import { Plus, Home, X, Settings } from "lucide-react";
+import { Plus, Home, X, Settings, GitPullRequest } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useShell } from "@/components/app-shell";
 
@@ -317,6 +317,18 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
                 <Home className="h-4 w-4 shrink-0" />
                 All sessions
               </button>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="shrink-0 h-8 w-8 text-muted-foreground hover:text-foreground"
+                onClick={() => {
+                  close();
+                  router.push("/reviews");
+                }}
+                title="Reviews"
+              >
+                <GitPullRequest className="h-4 w-4" />
+              </Button>
               <Button
                 variant="ghost"
                 size="icon"

@@ -1,0 +1,513 @@
+"use client";
+
+import { useState, useEffect, useCallback, useRef } from "react";
+import { useRouter } from "next/navigation";
+import { PatchDiff } from "@pierre/diffs/react";
+import { useSettings } from "@/hooks/use-settings";
+import { DiffErrorBoundary } from "@/components/diff-viewer";
+import { useShell } from "@/components/app-shell";
+import { usePageHeader } from "@/components/app-shell";
+import { useIsDesktop } from "@/hooks/use-is-desktop";
+import { ChatView } from "@/components/chat-view";
+import { Button } from "@/components/ui/button";
+import {
+  Loader2,
+  ArrowLeft,
+  ExternalLink,
+  GitBranch,
+  Check,
+  ChevronDown,
+  ChevronUp,
+  Eye,
+  FileEdit,
+  FilePlus,
+  FileMinus,
+  FileSymlink,
+} from "lucide-react";
+import { cn } from "@/lib/utils";
+import { addActiveSession } from "@/components/sidebar";
+
+// --- Types ---
+
+interface PRFile {
+  path: string;
+  additions: number;
+  deletions: number;
+}
+
+interface PRDetails {
+  title: string;
+  body: string;
+  author: { login: string };
+  number: number;
+  additions: number;
+  deletions: number;
+  files: PRFile[];
+  changedFiles: number;
+  headRefName: string;
+  baseRefName: string;
+  state: string;
+  isDraft: boolean;
+  labels: { name: string; color: string }[];
+  reviewDecision: string;
+  createdAt: string;
+  updatedAt: string;
+  url: string;
+}
+
+interface FileDiff {
+  path: string;
+  patch: string;
+}
+
+// --- Utilities ---
+
+function isDark(): boolean {
+  if (typeof document === "undefined") return false;
+  return document.documentElement.classList.contains("dark");
+}
+
+function fileStatusIcon(path: string, prFiles: PRFile[]) {
+  const f = prFiles.find((pf) => pf.path === path);
+  if (!f) return <FileEdit className="h-3.5 w-3.5 text-yellow-500 shrink-0" />;
+  if (f.deletions === 0 && f.additions > 0) return <FilePlus className="h-3.5 w-3.5 text-green-500 shrink-0" />;
+  if (f.additions === 0 && f.deletions > 0) return <FileMinus className="h-3.5 w-3.5 text-red-500 shrink-0" />;
+  return <FileEdit className="h-3.5 w-3.5 text-yellow-500 shrink-0" />;
+}
+
+// --- Resize Handle ---
+
+function ResizeHandle({ onResize }: { onResize: (delta: number) => void }) {
+  const dragging = useRef(false);
+  const lastX = useRef(0);
+
+  const onMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    dragging.current = true;
+    lastX.current = e.clientX;
+
+    const onMouseMove = (ev: MouseEvent) => {
+      if (!dragging.current) return;
+      const delta = lastX.current - ev.clientX;
+      lastX.current = ev.clientX;
+      onResize(delta);
+    };
+
+    const onMouseUp = () => {
+      dragging.current = false;
+      document.removeEventListener("mousemove", onMouseMove);
+      document.removeEventListener("mouseup", onMouseUp);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    };
+
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    document.addEventListener("mousemove", onMouseMove);
+    document.addEventListener("mouseup", onMouseUp);
+  }, [onResize]);
+
+  return (
+    <div
+      onMouseDown={onMouseDown}
+      className="w-1 shrink-0 cursor-col-resize bg-border hover:bg-primary/30 transition-colors"
+    />
+  );
+}
+
+// --- Session Storage ---
+
+const SESSIONS_KEY = "aperture_review_sessions";
+const VIEWED_KEY_PREFIX = "aperture_review_viewed:";
+
+function getSessionMapping(): Record<string, string> {
+  try {
+    const raw = localStorage.getItem(SESSIONS_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch {}
+  return {};
+}
+
+function setSessionMapping(key: string, sessionId: string) {
+  const mapping = getSessionMapping();
+  mapping[key] = sessionId;
+  localStorage.setItem(SESSIONS_KEY, JSON.stringify(mapping));
+}
+
+function getViewedFiles(prKey: string): Set<string> {
+  try {
+    const raw = localStorage.getItem(VIEWED_KEY_PREFIX + prKey);
+    if (raw) return new Set(JSON.parse(raw));
+  } catch {}
+  return new Set();
+}
+
+function setViewedFiles(prKey: string, files: Set<string>) {
+  localStorage.setItem(VIEWED_KEY_PREFIX + prKey, JSON.stringify([...files]));
+}
+
+// --- State Cache ---
+
+interface ReviewState {
+  chatWidth: number;
+  descriptionOpen: boolean;
+}
+
+const stateCache = new Map<string, ReviewState>();
+const DEFAULT_CHAT_WIDTH = 400;
+const MIN_CHAT_WIDTH = 280;
+
+function maxChatWidth(): number {
+  if (typeof window === "undefined") return 800;
+  return Math.floor(window.innerWidth * 0.5);
+}
+
+function getCachedState(prKey: string): ReviewState {
+  return stateCache.get(prKey) || {
+    chatWidth: DEFAULT_CHAT_WIDTH,
+    descriptionOpen: true,
+  };
+}
+
+// --- Main Component ---
+
+export function PRReviewView({ owner, repo, number }: { owner: string; repo: string; number: number }) {
+  const fullRepo = `${owner}/${repo}`;
+  const prKey = `${fullRepo}#${number}`;
+
+  const { settings } = useSettings();
+  const { setSidebarContent, closeSidebar } = useShell();
+  const router = useRouter();
+  const isDesktop = useIsDesktop();
+
+  const [pr, setPr] = useState<PRDetails | null>(null);
+  const [fileDiffs, setFileDiffs] = useState<FileDiff[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const cached = getCachedState(prKey);
+  const [chatWidth, setChatWidth] = useState(cached.chatWidth);
+  const [descriptionOpen, setDescriptionOpen] = useState(cached.descriptionOpen);
+  const [scrollToFile, setScrollToFile] = useState<string | null>(null);
+  const [viewedFiles, setViewedFilesState] = useState<Set<string>>(() => getViewedFiles(prKey));
+
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [reviewsCwd, setReviewsCwd] = useState<string | null>(null);
+  const [sessionLoading, setSessionLoading] = useState(true);
+
+  const sectionRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+
+  usePageHeader(pr ? `#${number} ${pr.title}` : `PR #${number}`);
+
+  // Persist state
+  useEffect(() => {
+    stateCache.set(prKey, { chatWidth, descriptionOpen });
+  }, [prKey, chatWidth, descriptionOpen]);
+
+  // Fetch PR details + diff in parallel
+  useEffect(() => {
+    setLoading(true);
+    setError(null);
+
+    const fetchDetails = fetch(`/api/github/prs/view?repo=${encodeURIComponent(fullRepo)}&number=${number}`)
+      .then((res) => {
+        if (!res.ok) return res.json().then((d) => Promise.reject(d.error));
+        return res.json();
+      });
+
+    const fetchDiff = fetch(`/api/github/prs/diff?repo=${encodeURIComponent(fullRepo)}&number=${number}`)
+      .then((res) => {
+        if (!res.ok) return res.json().then((d) => Promise.reject(d.error));
+        return res.json();
+      });
+
+    Promise.all([fetchDetails, fetchDiff])
+      .then(([details, diffData]) => {
+        setPr(details);
+        setFileDiffs(diffData.files || []);
+      })
+      .catch((err) => setError(String(err)))
+      .finally(() => setLoading(false));
+  }, [fullRepo, number]);
+
+  // Resolve or create session
+  useEffect(() => {
+    if (!pr) return;
+    const prTitle = pr.title;
+
+    async function resolveSession() {
+      setSessionLoading(true);
+      const mapping = getSessionMapping();
+      const existingId = mapping[prKey];
+
+      if (existingId) {
+        // Verify session still exists
+        try {
+          const res = await fetch(`/api/sessions/${existingId}`);
+          if (res.ok) {
+            setSessionId(existingId);
+            const data = await res.json();
+            setReviewsCwd(data.cwd || null);
+            addActiveSession(existingId);
+            setSessionLoading(false);
+            return;
+          }
+        } catch {}
+      }
+
+      // Create new session
+      try {
+        const res = await fetch("/api/github/review-session", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ repo: fullRepo, prNumber: number, prTitle }),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setSessionId(data.sessionId);
+          setReviewsCwd(data.cwd);
+          setSessionMapping(prKey, data.sessionId);
+          addActiveSession(data.sessionId);
+        }
+      } catch {}
+      setSessionLoading(false);
+    }
+
+    resolveSession();
+  }, [pr, prKey, fullRepo, number]);
+
+  // Scroll to file
+  useEffect(() => {
+    if (!scrollToFile) return;
+    const el = sectionRefs.current.get(scrollToFile);
+    if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+    setScrollToFile(null);
+  }, [scrollToFile]);
+
+  // Toggle viewed
+  const toggleViewed = useCallback((path: string) => {
+    setViewedFilesState((prev) => {
+      const next = new Set(prev);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      setViewedFiles(prKey, next);
+      return next;
+    });
+  }, [prKey]);
+
+  // Resize handler
+  const handleResize = useCallback((delta: number) => {
+    setChatWidth((prev) => Math.max(MIN_CHAT_WIDTH, Math.min(maxChatWidth(), prev + delta)));
+  }, []);
+
+  // Sidebar file list
+  useEffect(() => {
+    if (fileDiffs.length === 0) {
+      closeSidebar();
+      return;
+    }
+
+    setSidebarContent(
+      <>
+        {fileDiffs.map((file) => (
+          <div
+            key={file.path}
+            className={cn(
+              "flex items-center gap-2 px-3 py-1.5 text-sm cursor-pointer border-b last:border-b-0 hover:bg-muted/50",
+              viewedFiles.has(file.path) && "opacity-50",
+            )}
+            onClick={() => setScrollToFile(file.path)}
+          >
+            <button
+              onClick={(e) => { e.stopPropagation(); toggleViewed(file.path); }}
+              className={cn(
+                "h-4 w-4 shrink-0 rounded border flex items-center justify-center transition-colors",
+                viewedFiles.has(file.path)
+                  ? "border-primary bg-primary text-primary-foreground"
+                  : "border-muted-foreground/40 bg-transparent hover:border-muted-foreground/60",
+              )}
+            >
+              {viewedFiles.has(file.path) && <Eye className="h-3 w-3" strokeWidth={3} />}
+            </button>
+            {fileStatusIcon(file.path, pr?.files || [])}
+            <span className="font-mono text-xs truncate flex-1 min-w-0">{file.path}</span>
+            {pr?.files && (() => {
+              const f = pr.files.find((pf) => pf.path === file.path);
+              if (!f) return null;
+              return (
+                <span className="text-xs font-mono shrink-0 flex gap-1">
+                  {f.additions > 0 && <span className="text-green-500">+{f.additions}</span>}
+                  {f.deletions > 0 && <span className="text-red-500">-{f.deletions}</span>}
+                </span>
+              );
+            })()}
+          </div>
+        ))}
+      </>,
+    );
+
+    return () => closeSidebar();
+  }, [fileDiffs, pr, viewedFiles, setSidebarContent, closeSidebar, toggleViewed]);
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center flex-1">
+        <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="flex-1 p-4">
+        <div className="rounded-md border border-destructive/50 bg-destructive/10 p-4 text-sm text-destructive">
+          {error}
+        </div>
+      </div>
+    );
+  }
+
+  if (!pr) return null;
+
+  const showChat = isDesktop && !!sessionId && !sessionLoading;
+
+  return (
+    <div className="flex flex-col flex-1 min-h-0">
+      {/* Header bar */}
+      <div className="shrink-0 border-b px-4 py-2 flex items-center gap-3 text-sm">
+        <Button variant="ghost" size="icon" className="shrink-0 h-7 w-7" onClick={() => router.push(`/reviews/${owner}/${repo}`)}>
+          <ArrowLeft className="h-4 w-4" />
+        </Button>
+        <span className="text-muted-foreground">{pr.author.login}</span>
+        <div className="flex items-center gap-1 text-xs text-muted-foreground">
+          <GitBranch className="h-3 w-3" />
+          <span>{pr.headRefName}</span>
+          <span className="mx-1">into</span>
+          <span>{pr.baseRefName}</span>
+        </div>
+        {pr.isDraft && (
+          <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-muted text-muted-foreground">Draft</span>
+        )}
+        {pr.reviewDecision === "APPROVED" && (
+          <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-green-500/15 text-green-500">Approved</span>
+        )}
+        {pr.reviewDecision === "CHANGES_REQUESTED" && (
+          <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-red-500/15 text-red-500">Changes requested</span>
+        )}
+        <div className="flex items-center gap-2 ml-auto text-xs text-muted-foreground">
+          <span className="text-green-500">+{pr.additions}</span>
+          <span className="text-red-500">-{pr.deletions}</span>
+          <span>{pr.changedFiles} files</span>
+          <a
+            href={pr.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-1 hover:text-foreground transition-colors"
+          >
+            <ExternalLink className="h-3 w-3" />
+            GitHub
+          </a>
+        </div>
+      </div>
+
+      {/* Main content */}
+      <div className="flex-1 min-h-0 flex flex-row">
+        {/* Diff column */}
+        <div className="flex-1 min-w-0 overflow-y-auto">
+          {/* PR description */}
+          {pr.body && (
+            <div className="border-b">
+              <button
+                onClick={() => setDescriptionOpen((v) => !v)}
+                className="flex items-center gap-2 w-full px-4 py-2 text-sm text-muted-foreground hover:text-foreground transition-colors"
+              >
+                {descriptionOpen ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+                Description
+              </button>
+              {descriptionOpen && (
+                <div className="px-4 pb-3 text-sm prose prose-sm dark:prose-invert max-w-none whitespace-pre-wrap">
+                  {pr.body}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Labels */}
+          {pr.labels.length > 0 && (
+            <div className="flex gap-1 px-4 py-2 flex-wrap border-b">
+              {pr.labels.map((label) => (
+                <span
+                  key={label.name}
+                  className="text-[10px] px-1.5 py-0.5 rounded-full border"
+                  style={{ borderColor: `#${label.color}`, color: `#${label.color}` }}
+                >
+                  {label.name}
+                </span>
+              ))}
+            </div>
+          )}
+
+          {/* Stacked diffs */}
+          <div className="p-4 space-y-3">
+            {fileDiffs.length === 0 && (
+              <div className="text-center py-12 text-sm text-muted-foreground">No changes</div>
+            )}
+            {fileDiffs.map((file) => (
+              <div
+                key={file.path}
+                ref={(el) => { if (el) sectionRefs.current.set(file.path, el); }}
+                className="rounded border overflow-hidden"
+              >
+                <DiffErrorBoundary fallback={<pre className="p-4 text-xs text-muted-foreground whitespace-pre-wrap">{file.patch}</pre>}>
+                  <PatchDiff
+                    patch={file.patch}
+                    options={{
+                      theme: { dark: "pierre-dark", light: "pierre-light" },
+                      themeType: isDark() ? "dark" : "light",
+                      overflow: "wrap",
+                      diffStyle: settings.diffStyle,
+                      hunkSeparators: "line-info",
+                      expansionLineCount: 20,
+                    }}
+                    renderHeaderMetadata={({ newFile }) => {
+                      const name = newFile?.name?.replace(/^b\//, "") || file.path;
+                      return (
+                        <div className="flex items-center gap-2 ml-2">
+                          {viewedFiles.has(name) && (
+                            <Check className="h-3 w-3 text-green-500" />
+                          )}
+                          {pr && (
+                            <a
+                              href={`${pr.url}/files#diff-${name}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <ExternalLink className="h-3 w-3" />
+                              GitHub
+                            </a>
+                          )}
+                        </div>
+                      );
+                    }}
+                  />
+                </DiffErrorBoundary>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Chat panel - desktop only */}
+        {showChat && reviewsCwd && (
+          <>
+            <ResizeHandle onResize={handleResize} />
+            <div className="flex flex-col shrink-0 border-l min-h-0" style={{ width: chatWidth }}>
+              <ChatView sessionId={sessionId} cwd={reviewsCwd} />
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
