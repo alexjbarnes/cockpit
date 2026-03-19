@@ -437,6 +437,16 @@ export function ChangesView({ cwd, sessionId }: { cwd: string; sessionId?: strin
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Auto-select first file when status loads and nothing is selected
+  useEffect(() => {
+    if (!status || status.files.length === 0) return;
+    if (selectedFile) return;
+    if (isDesktop && stackedMode) return;
+    const first = status.files[0];
+    setSelectedFile(first.path);
+    fetchDiff(first.path);
+  }, [status, selectedFile, isDesktop, stackedMode, fetchDiff]);
+
   const handleFileClick = useCallback((file: GitFileChange) => {
     if (isDesktop && stackedMode) {
       setScrollToFile(file.path);
