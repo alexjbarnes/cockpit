@@ -1,8 +1,23 @@
 "use client";
 
-import { useMemo } from "react";
+import { Component, useMemo, type ReactNode } from "react";
 import { PatchDiff } from "@pierre/diffs/react";
 import { useSettings } from "@/hooks/use-settings";
+
+class DiffErrorBoundary extends Component<{ children: ReactNode; fallback?: ReactNode }, { error: boolean }> {
+  state = { error: false };
+  static getDerivedStateFromError() { return { error: true }; }
+  render() {
+    if (this.state.error) {
+      return this.props.fallback || (
+        <pre className="p-3 text-xs text-muted-foreground">Unable to render diff</pre>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+export { DiffErrorBoundary };
 
 function buildUnifiedDiff(
   filePath: string,
@@ -40,16 +55,18 @@ export function DiffViewer({ filePath, oldString, newString, dark }: DiffViewerP
 
   return (
     <div className="overflow-x-auto rounded text-xs">
-      <PatchDiff
-        patch={patch}
-        options={{
-          theme: { dark: "pierre-dark", light: "pierre-light" },
-          themeType: dark ? "dark" : "light",
-          disableFileHeader: true,
-          overflow: "wrap",
-          diffStyle: settings.diffStyle,
-        }}
-      />
+      <DiffErrorBoundary>
+        <PatchDiff
+          patch={patch}
+          options={{
+            theme: { dark: "pierre-dark", light: "pierre-light" },
+            themeType: dark ? "dark" : "light",
+            disableFileHeader: true,
+            overflow: "wrap",
+            diffStyle: settings.diffStyle,
+          }}
+        />
+      </DiffErrorBoundary>
     </div>
   );
 }

@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { PatchDiff } from "@pierre/diffs/react";
 import { useSettings } from "@/hooks/use-settings";
+import { DiffErrorBoundary } from "@/components/diff-viewer";
 import { useShell } from "@/components/app-shell";
 import { Button } from "@/components/ui/button";
 import {
@@ -462,15 +463,17 @@ export function ChangesView({ cwd }: { cwd: string }) {
           ) : selectedFile && diff ? (
             <div className="p-4">
               <div className="rounded border overflow-hidden">
-                <PatchDiff
-                  patch={diff}
-                  options={{
-                    theme: { dark: "pierre-dark", light: "pierre-light" },
-                    themeType: isDark() ? "dark" : "light",
-                    overflow: "wrap",
-                    diffStyle: settings.diffStyle,
-                  }}
-                />
+                <DiffErrorBoundary fallback={<pre className="p-4 text-xs text-muted-foreground whitespace-pre-wrap">{diff}</pre>}>
+                  <PatchDiff
+                    patch={diff}
+                    options={{
+                      theme: { dark: "pierre-dark", light: "pierre-light" },
+                      themeType: isDark() ? "dark" : "light",
+                      overflow: "wrap",
+                      diffStyle: settings.diffStyle,
+                    }}
+                  />
+                </DiffErrorBoundary>
               </div>
             </div>
           ) : (

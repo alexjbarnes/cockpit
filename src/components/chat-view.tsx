@@ -123,6 +123,22 @@ export function ChatView({ sessionId, cwd, initialName }: { sessionId: string; c
     return () => vv.removeEventListener("resize", handler);
   }, [scrollToBottom]);
 
+  // On Mac, switching back to the window doesn't give focus to any DOM element,
+  // so keydown events don't fire until the user clicks. Fix by focusing on return.
+  useEffect(() => {
+    const handler = () => {
+      if (!document.hidden && !document.activeElement?.closest("textarea, input")) {
+        document.body.focus();
+      }
+    };
+    document.addEventListener("visibilitychange", handler);
+    window.addEventListener("focus", handler);
+    return () => {
+      document.removeEventListener("visibilitychange", handler);
+      window.removeEventListener("focus", handler);
+    };
+  }, []);
+
   // Escape key: modal → queued message → interrupt.
   // Input area also handles Escape with stopPropagation when textarea has focus,
   // so this only fires when focus is elsewhere.
