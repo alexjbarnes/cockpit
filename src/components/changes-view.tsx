@@ -7,7 +7,6 @@ import { DiffErrorBoundary } from "@/components/diff-viewer";
 import { useShell } from "@/components/app-shell";
 import { useIsDesktop } from "@/hooks/use-is-desktop";
 import { ChatView } from "@/components/chat-view";
-import { CodeBlock } from "@/components/code-block";
 import { Button } from "@/components/ui/button";
 import {
   Loader2,
@@ -22,15 +21,10 @@ import {
   Check,
   ChevronUp,
   ChevronDown,
-  ChevronRight,
   Sparkles,
   ArrowUpFromLine,
   Layers,
   List,
-  Plus,
-  Minus,
-  Eye,
-  X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Check as CheckIcon } from "lucide-react";
@@ -90,25 +84,6 @@ function statusLabel(status: string) {
 function isDark(): boolean {
   if (typeof document === "undefined") return false;
   return document.documentElement.classList.contains("dark");
-}
-
-function languageFromPath(path: string): string {
-  const ext = path.split(".").pop()?.toLowerCase() || "";
-  const map: Record<string, string> = {
-    ts: "typescript", tsx: "tsx", js: "javascript", jsx: "jsx",
-    py: "python", rb: "ruby", go: "go", rs: "rust", java: "java",
-    c: "c", cpp: "cpp", h: "c", hpp: "cpp", cs: "csharp",
-    swift: "swift", kt: "kotlin", sh: "bash", bash: "bash",
-    zsh: "bash", fish: "fish", ps1: "powershell",
-    html: "html", css: "css", scss: "scss", less: "less",
-    json: "json", yaml: "yaml", yml: "yaml", toml: "toml",
-    xml: "xml", sql: "sql", md: "markdown", mdx: "mdx",
-    graphql: "graphql", gql: "graphql", dockerfile: "dockerfile",
-    lua: "lua", r: "r", php: "php", pl: "perl", ex: "elixir",
-    exs: "elixir", erl: "erlang", hs: "haskell", ml: "ocaml",
-    vim: "vim", makefile: "makefile", cmake: "cmake",
-  };
-  return map[ext] || "text";
 }
 
 interface FileListProps {
@@ -174,13 +149,10 @@ interface FileDiffState {
   diff: string | null;
   loading: boolean;
   contextLines: number;
-  collapsed: boolean;
-  viewingFile: boolean;
-  fileContent: string | null;
-  fileLoading: boolean;
+  expanded: boolean;
 }
 
-const CONTEXT_STEPS = [3, 10, 30, 100, 500];
+const EXPANDED_CONTEXT = 100;
 
 interface StackedDiffsProps {
   files: GitFileChange[];
@@ -199,7 +171,7 @@ function StackedDiffs({ files, cwd, diffStyle, scrollToFile, onScrolled }: Stack
     setDiffs((prev) => {
       const next = new Map(prev);
       const existing = next.get(file);
-      next.set(file, { diff: existing?.diff || null, loading: true, contextLines, collapsed: existing?.collapsed || false, viewingFile: false, fileContent: null, fileLoading: false });
+      next.set(file, { diff: existing?.diff || null, loading: true, contextLines, expanded: existing?.expanded || false });
       return next;
     });
     const contextParam = contextLines !== 3 ? `&context=${contextLines}` : "";
@@ -212,7 +184,7 @@ function StackedDiffs({ files, cwd, diffStyle, scrollToFile, onScrolled }: Stack
         setDiffs((prev) => {
           const next = new Map(prev);
           const existing = next.get(file);
-          next.set(file, { ...existing!, diff: data.diff, loading: false });
+          if (existing) next.set(file, { ...existing, diff: data.diff, loading: false });
           return next;
         });
       })
@@ -220,7 +192,7 @@ function StackedDiffs({ files, cwd, diffStyle, scrollToFile, onScrolled }: Stack
         setDiffs((prev) => {
           const next = new Map(prev);
           const existing = next.get(file);
-          next.set(file, { ...existing!, diff: null, loading: false });
+          if (existing) next.set(file, { ...existing, diff: null, loading: false });
           return next;
         });
       });
@@ -230,16 +202,12 @@ function StackedDiffs({ files, cwd, diffStyle, scrollToFile, onScrolled }: Stack
   useEffect(() => {
     const currentPaths = new Set(files.map((f) => f.path));
     const toFetch = files.filter((f) => !fetchedRef.current.has(f.path));
-    if (toFetch.length === 0) return;
     for (const f of toFetch) {
       fetchedRef.current.add(f.path);
       fetchDiff(f.path);
     }
-    // Clean up removed files
     for (const path of fetchedRef.current) {
-      if (!currentPaths.has(path)) {
-        fetchedRef.current.delete(path);
-      }
+      if (!currentPaths.has(path)) fetchedRef.current.delete(path);
     }
   }, [files, fetchDiff]);
 
@@ -247,94 +215,22 @@ function StackedDiffs({ files, cwd, diffStyle, scrollToFile, onScrolled }: Stack
   useEffect(() => {
     if (!scrollToFile) return;
     const el = sectionRefs.current.get(scrollToFile);
-    if (el) {
-      el.scrollIntoView({ behavior: "smooth", block: "start" });
-      // Expand if collapsed
-      setDiffs((prev) => {
-        const next = new Map(prev);
-        const existing = next.get(scrollToFile);
-        if (existing?.collapsed) {
-          next.set(scrollToFile, { ...existing, collapsed: false });
-        }
-        return next;
-      });
-    }
+    if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
     onScrolled();
   }, [scrollToFile, onScrolled]);
 
-  const toggleCollapse = useCallback((path: string) => {
-    setDiffs((prev) => {
-      const next = new Map(prev);
-      const existing = next.get(path);
-      if (existing) {
-        next.set(path, { ...existing, collapsed: !existing.collapsed });
-      }
-      return next;
-    });
-  }, []);
-
-  const expandContext = useCallback((path: string) => {
+  const toggleExpanded = useCallback((path: string) => {
     setDiffs((prev) => {
       const existing = prev.get(path);
       if (!existing) return prev;
-      const currentIdx = CONTEXT_STEPS.indexOf(existing.contextLines);
-      const nextLines = CONTEXT_STEPS[Math.min(currentIdx + 1, CONTEXT_STEPS.length - 1)];
-      if (nextLines === existing.contextLines) return prev;
-      fetchDiff(path, nextLines);
-      return prev;
-    });
-  }, [fetchDiff]);
-
-  const shrinkContext = useCallback((path: string) => {
-    setDiffs((prev) => {
-      const existing = prev.get(path);
-      if (!existing) return prev;
-      const currentIdx = CONTEXT_STEPS.indexOf(existing.contextLines);
-      const prevLines = CONTEXT_STEPS[Math.max(currentIdx - 1, 0)];
-      if (prevLines === existing.contextLines) return prev;
-      fetchDiff(path, prevLines);
-      return prev;
-    });
-  }, [fetchDiff]);
-
-  const viewFile = useCallback((path: string) => {
-    setDiffs((prev) => {
       const next = new Map(prev);
-      const existing = next.get(path);
-      if (!existing) return prev;
-      if (existing.viewingFile) {
-        next.set(path, { ...existing, viewingFile: false });
-        return next;
-      }
-      next.set(path, { ...existing, viewingFile: true, fileLoading: true });
+      const newExpanded = !existing.expanded;
+      const newContext = newExpanded ? EXPANDED_CONTEXT : 3;
+      next.set(path, { ...existing, expanded: newExpanded, contextLines: newContext });
+      fetchDiff(path, newContext);
       return next;
     });
-    fetch(`/api/filesystem/read?path=${encodeURIComponent(cwd + "/" + path)}`)
-      .then((res) => {
-        if (!res.ok) throw new Error("Failed");
-        return res.json();
-      })
-      .then((data) => {
-        setDiffs((prev) => {
-          const next = new Map(prev);
-          const existing = next.get(path);
-          if (existing) {
-            next.set(path, { ...existing, fileContent: data.binary ? "Binary file" : data.content, fileLoading: false });
-          }
-          return next;
-        });
-      })
-      .catch(() => {
-        setDiffs((prev) => {
-          const next = new Map(prev);
-          const existing = next.get(path);
-          if (existing) {
-            next.set(path, { ...existing, fileContent: null, fileLoading: false, viewingFile: false });
-          }
-          return next;
-        });
-      });
-  }, [cwd]);
+  }, [fetchDiff]);
 
   if (files.length === 0) {
     return (
@@ -348,7 +244,6 @@ function StackedDiffs({ files, cwd, diffStyle, scrollToFile, onScrolled }: Stack
     <div className="p-4 space-y-3">
       {files.map((file) => {
         const state = diffs.get(file.path);
-        const collapsed = state?.collapsed || false;
 
         return (
           <div
@@ -356,76 +251,33 @@ function StackedDiffs({ files, cwd, diffStyle, scrollToFile, onScrolled }: Stack
             ref={(el) => { if (el) sectionRefs.current.set(file.path, el); }}
             className="rounded border overflow-hidden"
           >
-            {/* File header */}
-            <div className="flex items-center gap-2 px-3 py-1.5 bg-muted/50 border-b text-sm sticky top-0 z-10">
-              <button onClick={() => toggleCollapse(file.path)} className="shrink-0">
-                {collapsed ? <ChevronRight className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
-              </button>
-              {statusIcon(file.status)}
-              <span className="font-mono text-xs truncate flex-1 min-w-0">{file.path}</span>
-              {file.additions > 0 && <span className="text-xs text-green-500">+{file.additions}</span>}
-              {file.deletions > 0 && <span className="text-xs text-red-500">-{file.deletions}</span>}
-              <div className="flex items-center gap-1 shrink-0">
-                <button
-                  onClick={() => shrinkContext(file.path)}
-                  className="rounded p-0.5 text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
-                  title="Less context"
-                >
-                  <Minus className="h-3 w-3" />
-                </button>
-                <span className="text-[10px] text-muted-foreground w-4 text-center">{state?.contextLines || 3}</span>
-                <button
-                  onClick={() => expandContext(file.path)}
-                  className="rounded p-0.5 text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
-                  title="More context"
-                >
-                  <Plus className="h-3 w-3" />
-                </button>
-                <button
-                  onClick={() => viewFile(file.path)}
-                  className={cn(
-                    "rounded p-0.5 transition-colors ml-1",
-                    state?.viewingFile
-                      ? "text-primary bg-primary/10"
-                      : "text-muted-foreground hover:text-foreground hover:bg-muted"
-                  )}
-                  title={state?.viewingFile ? "Back to diff" : "View file"}
-                >
-                  {state?.viewingFile ? <X className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
-                </button>
+            {state?.loading && !state.diff ? (
+              <div className="flex items-center justify-center py-8">
+                <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
               </div>
-            </div>
-            {/* Content */}
-            {!collapsed && (
-              <div>
-                {state?.viewingFile ? (
-                  state.fileLoading ? (
-                    <div className="flex items-center justify-center py-8">
-                      <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-                    </div>
-                  ) : state.fileContent !== null ? (
-                    <CodeBlock code={state.fileContent} language={languageFromPath(file.path)} fullHeight />
-                  ) : null
-                ) : state?.loading ? (
-                  <div className="flex items-center justify-center py-8">
-                    <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-                  </div>
-                ) : state?.diff ? (
-                  <DiffErrorBoundary fallback={<pre className="p-4 text-xs text-muted-foreground whitespace-pre-wrap">{state.diff}</pre>}>
-                    <PatchDiff
-                      patch={state.diff}
-                      options={{
-                        theme: { dark: "pierre-dark", light: "pierre-light" },
-                        themeType: isDark() ? "dark" : "light",
-                        overflow: "wrap",
-                        diffStyle,
-                      }}
-                    />
-                  </DiffErrorBoundary>
-                ) : (
-                  <div className="px-4 py-3 text-xs text-muted-foreground">No diff available</div>
-                )}
-              </div>
+            ) : state?.diff ? (
+              <>
+                <DiffErrorBoundary fallback={<pre className="p-4 text-xs text-muted-foreground whitespace-pre-wrap">{state.diff}</pre>}>
+                  <PatchDiff
+                    patch={state.diff}
+                    options={{
+                      theme: { dark: "pierre-dark", light: "pierre-light" },
+                      themeType: isDark() ? "dark" : "light",
+                      overflow: "wrap",
+                      diffStyle,
+                    }}
+                  />
+                </DiffErrorBoundary>
+                <div className="flex items-center gap-2 px-3 py-1 border-t bg-muted/30">
+                  <label className="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer">
+                    <Checkbox checked={state.expanded} onChange={() => toggleExpanded(file.path)} />
+                    More context
+                  </label>
+                  {state.loading && <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />}
+                </div>
+              </>
+            ) : (
+              <div className="px-4 py-3 text-xs text-muted-foreground">No diff available</div>
             )}
           </div>
         );
@@ -489,7 +341,11 @@ interface ChangesState {
 const stateCache = new Map<string, ChangesState>();
 const DEFAULT_CHAT_WIDTH = 400;
 const MIN_CHAT_WIDTH = 280;
-const MAX_CHAT_WIDTH = 600;
+
+function maxChatWidth(): number {
+  if (typeof window === "undefined") return 800;
+  return Math.floor(window.innerWidth * 0.5);
+}
 
 function isDesktopStatic(): boolean {
   if (typeof window === "undefined") return false;
@@ -709,7 +565,7 @@ export function ChangesView({ cwd, sessionId }: { cwd: string; sessionId?: strin
   }, [status]);
 
   const handleResize = useCallback((delta: number) => {
-    setChatWidth((w) => Math.max(MIN_CHAT_WIDTH, Math.min(MAX_CHAT_WIDTH, w + delta)));
+    setChatWidth((w) => Math.max(MIN_CHAT_WIDTH, Math.min(maxChatWidth(), w + delta)));
   }, []);
 
   const handleScrolled = useCallback(() => {
@@ -842,7 +698,7 @@ export function ChangesView({ cwd, sessionId }: { cwd: string; sessionId?: strin
       <div className="flex-1 min-h-0 flex flex-row">
         {/* Diff column */}
         <div className="flex-1 min-w-0 flex flex-col">
-          <div className="flex-1 min-h-0 overflow-auto">
+          <div className="flex-1 min-h-0 overflow-y-auto">
             {isDesktop && stackedMode ? (
               <StackedDiffs
                 files={status.files}
