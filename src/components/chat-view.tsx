@@ -123,18 +123,23 @@ export function ChatView({ sessionId, cwd, initialName }: { sessionId: string; c
     return () => vv.removeEventListener("resize", handler);
   }, [scrollToBottom]);
 
-  // On Mac, switching back to the window doesn't give focus to any DOM element,
-  // so keydown events don't fire until the user clicks. Fix by focusing on return.
+  // On Mac, switching back to the window doesn't give keyboard focus to the
+  // document, so keydown events (like Escape to interrupt) don't fire until the
+  // user clicks. Fix: when pointer moves over the page and the document doesn't
+  // have focus, focus the scroll container (which has tabIndex={-1}).
+  // pointermove fires on Mac even when the window is frontmost but lacks keyboard
+  // focus. visibilitychange only fires on tab switches, not app switches. The
+  // window focus event may not fire until a click on Mac.
   useEffect(() => {
     const handler = () => {
-      if (!document.hidden && !document.activeElement?.closest("textarea, input")) {
-        document.body.focus();
-      }
+      if (document.hasFocus()) return;
+      if (document.activeElement?.closest("textarea, input")) return;
+      scrollRef.current?.focus({ preventScroll: true });
     };
-    document.addEventListener("visibilitychange", handler);
+    document.addEventListener("pointermove", handler);
     window.addEventListener("focus", handler);
     return () => {
-      document.removeEventListener("visibilitychange", handler);
+      document.removeEventListener("pointermove", handler);
       window.removeEventListener("focus", handler);
     };
   }, []);
@@ -177,7 +182,8 @@ export function ChatView({ sessionId, cwd, initialName }: { sessionId: string; c
     <>
       <div
         ref={scrollRef}
-        className="flex-1 min-h-0 overflow-y-auto p-4"
+        tabIndex={-1}
+        className="flex-1 min-h-0 overflow-y-auto p-4 outline-none"
         onScroll={handleScroll}
       >
         <div className="mx-auto max-w-3xl space-y-4">
