@@ -14,7 +14,7 @@ import { WebSocketProvider } from "@/hooks/use-websocket";
 import { UsageButton } from "@/components/usage-modal";
 import { Sidebar, type SidebarHandle } from "@/components/sidebar";
 import { Button } from "@/components/ui/button";
-import { useRouter } from "next/navigation";
+import { useRouter, usePathname } from "next/navigation";
 import { FolderOpen, Menu } from "lucide-react";
 import { GitStatusButton } from "@/components/git-status-modal";
 import { BackgroundTasksButton } from "@/components/task-indicator";
@@ -160,6 +160,11 @@ export function AppShell({ children }: { children: ReactNode }) {
   const closeSidebar = useCallback(() => {
     sidebarRef.current?.close();
   }, []);
+
+  const pathname = usePathname();
+  useEffect(() => {
+    setSidebarContentState(null);
+  }, [pathname]);
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {

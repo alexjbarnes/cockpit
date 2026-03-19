@@ -366,7 +366,7 @@ export function PRReviewView({ owner, repo, number }: { owner: string; repo: str
           if (res.ok) {
             setSessionId(existingId);
             const data = await res.json();
-            setReviewsCwd(data.cwd || null);
+            setReviewsCwd(data.session?.cwd || null);
             addActiveSession(existingId);
             setSessionLoading(false);
             return;
