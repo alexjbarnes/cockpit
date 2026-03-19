@@ -2,7 +2,9 @@
 
 import { useState, useEffect, useRef, useCallback, type KeyboardEvent, type ClipboardEvent, type DragEvent } from "react";
 import { Button } from "@/components/ui/button";
-import { Send, Square, Settings2, ShieldOff, ShieldCheck, Brain, Cpu, Loader2, X, Paperclip, FileText } from "lucide-react";
+import { Send, Square, Settings2, ShieldOff, ShieldCheck, Brain, Cpu, Loader2, X, Paperclip, FileText, Maximize2, MessageSquare } from "lucide-react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { useWebSocket } from "@/hooks/use-websocket";
 import { SlashCommandMenu } from "@/components/slash-command-menu";
 import { MentionMenu, type MentionItem } from "@/components/mention-menu";
@@ -15,6 +17,26 @@ const models: { value: string; label: string }[] = [
   { value: "sonnet", label: "Sonnet" },
   { value: "haiku", label: "Haiku" },
 ];
+
+const contextSizes: { value: string; label: string }[] = [
+  { value: "default", label: "200K" },
+  { value: "1m", label: "1M" },
+];
+
+function baseModel(model: string): string {
+  return model.replace(/\[.*\]$/, "");
+}
+
+function hasExtendedContext(model: string): boolean {
+  return model.includes("[1m]");
+}
+
+function buildModelId(base: string, extended: boolean): string {
+  if (extended && (base === "opus" || base === "sonnet")) {
+    return `${base}[1m]`;
+  }
+  return base;
+}
 
 const thinkingLevels: { value: ThinkingLevel; label: string }[] = [
   { value: "low", label: "Low" },
@@ -133,6 +155,8 @@ interface InputAreaProps {
   onCancelQueued?: () => void;
   restoredText?: string | null;
   onClearRestoredText?: () => void;
+  btw?: { question: string; answer: string | null; loading: boolean; error: string | null } | null;
+  onDismissBtw?: () => void;
 }
 
 const sessionDrafts = new Map<string, string>();
@@ -144,7 +168,7 @@ function getMentionContext(text: string, cursorPos: number): { active: boolean; 
   return { active: true, query: match[1], start: cursorPos - match[0].length };
 }
 
-export function InputArea({ sessionId, onSend, onInterrupt, isResponding, bypassActive, onSetBypass, thinkingLevel, onSetThinking, currentModel, onSetModel, contextUsage, dismissKeyboard, cwd, onCompact, initData, hasQueuedMessage, onCancelQueued, restoredText, onClearRestoredText }: InputAreaProps) {
+export function InputArea({ sessionId, onSend, onInterrupt, isResponding, bypassActive, onSetBypass, thinkingLevel, onSetThinking, currentModel, onSetModel, contextUsage, dismissKeyboard, cwd, onCompact, initData, hasQueuedMessage, onCancelQueued, restoredText, onClearRestoredText, btw, onDismissBtw }: InputAreaProps) {
   const { connected } = useWebSocket();
   const [text, setText] = useState(() => sessionDrafts.get(sessionId) || "");
 
@@ -424,6 +448,34 @@ export function InputArea({ sessionId, onSend, onInterrupt, isResponding, bypass
       onDrop={handleDrop}
     >
       <div className="mx-auto max-w-3xl">
+        {btw && (
+          <div className="mb-2 rounded-md border border-input bg-muted/50 p-2">
+            <div className="flex items-center justify-between mb-1">
+              <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                <MessageSquare className="h-3.5 w-3.5" />
+                <span>Side question</span>
+              </div>
+              <button onClick={onDismissBtw} className="text-muted-foreground hover:text-foreground">
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+            <p className="text-sm font-medium px-1 mb-1">{btw.question}</p>
+            {btw.loading && (
+              <div className="flex items-center gap-2 text-xs text-muted-foreground px-1 py-1">
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                <span>Thinking...</span>
+              </div>
+            )}
+            {btw.error && (
+              <p className="text-xs text-destructive px-1">{btw.error}</p>
+            )}
+            {btw.answer && (
+              <div className="text-xs prose prose-sm dark:prose-invert max-w-none px-1 border-t pt-1 max-h-48 overflow-y-auto">
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>{btw.answer}</ReactMarkdown>
+              </div>
+            )}
+          </div>
+        )}
         {optionsOpen && (
           <div className="mb-2 rounded-md border border-input bg-muted/50 p-2 space-y-1">
             <div className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs">
@@ -433,9 +485,9 @@ export function InputArea({ sessionId, onSend, onInterrupt, isResponding, bypass
                 {models.map((opt) => (
                   <button
                     key={opt.value}
-                    onClick={() => onSetModel(opt.value)}
+                    onClick={() => onSetModel(buildModelId(opt.value, hasExtendedContext(currentModel) && opt.value !== "haiku"))}
                     className={`rounded px-2 py-0.5 text-xs transition-colors ${
-                      currentModel === opt.value
+                      baseModel(currentModel) === opt.value
                         ? "bg-primary text-primary-foreground"
                         : "bg-muted text-muted-foreground hover:text-foreground"
                     }`}
@@ -445,6 +497,27 @@ export function InputArea({ sessionId, onSend, onInterrupt, isResponding, bypass
                 ))}
               </div>
             </div>
+            {(baseModel(currentModel) === "opus" || baseModel(currentModel) === "sonnet") && (
+              <div className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs">
+                <Maximize2 className="h-3.5 w-3.5 text-muted-foreground" />
+                <span className="text-muted-foreground">Context</span>
+                <div className="ml-auto flex gap-1">
+                  {contextSizes.map((opt) => (
+                    <button
+                      key={opt.value}
+                      onClick={() => onSetModel(buildModelId(baseModel(currentModel), opt.value === "1m"))}
+                      className={`rounded px-2 py-0.5 text-xs transition-colors ${
+                        (opt.value === "1m") === hasExtendedContext(currentModel)
+                          ? "bg-primary text-primary-foreground"
+                          : "bg-muted text-muted-foreground hover:text-foreground"
+                      }`}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
             <button
               onClick={() => onSetBypass(!bypassActive)}
               className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs hover:bg-muted transition-colors"

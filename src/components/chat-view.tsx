@@ -12,7 +12,6 @@ import { QuestionCard, QuestionPrompt, parseQuestionsFromInput } from "./questio
 import { splitAtQuestion } from "@/lib/split-question-blocks";
 import { ModelPicker } from "./model-picker";
 import { SelectionToolbar } from "./selection-toolbar";
-import { BtwOverlay } from "./btw-overlay";
 import { useMessageSelection } from "@/hooks/use-message-selection";
 import { useShell } from "./app-shell";
 
@@ -307,15 +306,6 @@ export function ChatView({ sessionId, cwd, initialName }: { sessionId: string; c
           onCancel={clearSelection}
         />
       )}
-      {btw && (
-        <BtwOverlay
-          question={btw.question}
-          answer={btw.answer}
-          loading={btw.loading}
-          error={btw.error}
-          onDismiss={dismissBtw}
-        />
-      )}
       <div className="shrink-0">
         <InputArea
           sessionId={sessionId}
@@ -337,6 +327,8 @@ export function ChatView({ sessionId, cwd, initialName }: { sessionId: string; c
           onCancelQueued={cancelQueuedMessage}
           restoredText={restoredText}
           onClearRestoredText={clearRestoredText}
+          btw={btw}
+          onDismissBtw={dismissBtw}
         />
       </div>
     </>

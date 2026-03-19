@@ -21,13 +21,31 @@ const themeOptions: { value: Theme; label: string }[] = [
   { value: "system", label: "System" },
 ];
 
-const modelOptions: { value: string; label: string }[] = [
+const baseModelOptions: { value: string; label: string }[] = [
   { value: "opus", label: "Opus" },
-  { value: "opus[1m]", label: "Opus (1M)" },
   { value: "sonnet", label: "Sonnet" },
-  { value: "sonnet[1m]", label: "Sonnet (1M)" },
   { value: "haiku", label: "Haiku" },
 ];
+
+const contextOptions: { value: string; label: string }[] = [
+  { value: "default", label: "200K" },
+  { value: "1m", label: "1M" },
+];
+
+function baseModel(model: string): string {
+  return model.replace(/\[.*\]$/, "");
+}
+
+function hasExtendedContext(model: string): boolean {
+  return model.includes("[1m]");
+}
+
+function buildModelId(base: string, extended: boolean): string {
+  if (extended && (base === "opus" || base === "sonnet")) {
+    return `${base}[1m]`;
+  }
+  return base;
+}
 
 const thinkingOptions: { value: ThinkingLevel; label: string }[] = [
   { value: "low", label: "Low" },
@@ -210,8 +228,21 @@ export default function SettingsPage() {
         </CardHeader>
         <CardContent className="space-y-1">
           <SettingRow label="Model">
-            <ButtonGroup options={modelOptions} value={settings.model} onChange={(v) => updateSetting("model", v)} />
+            <ButtonGroup
+              options={baseModelOptions}
+              value={baseModel(settings.model)}
+              onChange={(v) => updateSetting("model", buildModelId(v, hasExtendedContext(settings.model) && v !== "haiku"))}
+            />
           </SettingRow>
+          {(baseModel(settings.model) === "opus" || baseModel(settings.model) === "sonnet") && (
+            <SettingRow label="Context">
+              <ButtonGroup
+                options={contextOptions}
+                value={hasExtendedContext(settings.model) ? "1m" : "default"}
+                onChange={(v) => updateSetting("model", buildModelId(baseModel(settings.model), v === "1m"))}
+              />
+            </SettingRow>
+          )}
           <SettingRow label="Thinking level">
             <ButtonGroup options={thinkingOptions} value={settings.thinkingLevel} onChange={(v) => updateSetting("thinkingLevel", v)} />
           </SettingRow>
