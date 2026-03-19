@@ -409,13 +409,12 @@ export function createWebSocketHandler(
           pendingPermissions.delete(msg.requestId);
           sessionManager.removePendingRequest(msg.sessionId, msg.requestId);
 
-          if (msg.permissionMode === "allow_always" && pending) {
-            sessionManager.allowToolAlways(msg.sessionId, pending.toolName);
-          } else if (msg.permissionMode === "allow_all") {
+          if (msg.permissionMode === "allow_all") {
             sessionManager.setBypassAllPermissions(msg.sessionId);
           }
 
-          sessionManager.respondToPermission(msg.sessionId, msg.requestId, msg.allowed, pending?.toolInput);
+          const alwaysAllow = msg.permissionMode === "allow_always";
+          sessionManager.respondToPermission(msg.sessionId, msg.requestId, msg.allowed, pending?.toolInput, alwaysAllow);
           break;
         }
 

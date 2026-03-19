@@ -7,7 +7,6 @@ export interface SessionPrefs {
   name?: string;
   thinkingLevel?: ThinkingLevel;
   bypassAllPermissions?: boolean;
-  allowedTools?: string[];
   model?: string;
 }
 

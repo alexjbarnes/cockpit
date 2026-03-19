@@ -42,7 +42,6 @@ interface Session {
   stdin: Writable | null;
   emitter: EventEmitter;
   hasSpawnedBefore: boolean;
-  allowedTools: Set<string>;
   bypassAllPermissions: boolean;
   compacting: boolean;
   thinkingLevel: ThinkingLevel;
@@ -93,7 +92,6 @@ export class SessionManager {
       stdin: null,
       emitter: new EventEmitter(),
       hasSpawnedBefore: false,
-      allowedTools: new Set(),
       bypassAllPermissions: defaults.bypassAllPermissions,
       compacting: false,
       thinkingLevel: defaults.thinkingLevel,
@@ -128,7 +126,6 @@ export class SessionManager {
         stdin: null,
         emitter: new EventEmitter(),
         hasSpawnedBefore: true,
-        allowedTools: new Set(prefs?.allowedTools || []),
         bypassAllPermissions: prefs?.bypassAllPermissions ?? defaults.bypassAllPermissions,
         compacting: false,
         thinkingLevel: prefs?.thinkingLevel || defaults.thinkingLevel,
@@ -283,33 +280,31 @@ export class SessionManager {
     return Array.from(session.pendingRequests.values());
   }
 
-  respondToPermission(sessionId: string, requestId: string, allowed: boolean, toolInput?: Record<string, unknown>): boolean {
+  respondToPermission(sessionId: string, requestId: string, allowed: boolean, toolInput?: Record<string, unknown>, alwaysAllow?: boolean): boolean {
     const session = this.sessions.get(sessionId);
     if (!session?.stdin) return false;
 
     session.pendingRequests.delete(requestId);
+
+    const behavior = !allowed
+      ? ("deny" as const)
+      : alwaysAllow
+        ? ("alwaysAllow" as const)
+        : ("allow" as const);
 
     const response = {
       type: "control_response",
       response: {
         subtype: "success",
         request_id: requestId,
-        response: allowed
-          ? { behavior: "allow" as const, updatedInput: toolInput || {} }
-          : { behavior: "deny" as const, message: "User denied" },
+        response: behavior === "deny"
+          ? { behavior, message: "User denied" }
+          : { behavior, updatedInput: toolInput || {} },
       },
     };
 
     session.stdin.write(JSON.stringify(response) + "\n");
     return true;
-  }
-
-  allowToolAlways(sessionId: string, toolName: string): void {
-    const session = this.sessions.get(sessionId);
-    if (session) {
-      session.allowedTools.add(toolName);
-      setSessionPrefs(sessionId, { allowedTools: Array.from(session.allowedTools) });
-    }
   }
 
   private sendPermissionMode(session: Session, sessionId: string, mode: string): void {
@@ -344,12 +339,6 @@ export class SessionManager {
   isBypassActive(sessionId: string): boolean {
     const session = this.sessions.get(sessionId);
     return session?.bypassAllPermissions ?? false;
-  }
-
-  shouldAutoAllow(sessionId: string, toolName: string): boolean {
-    const session = this.sessions.get(sessionId);
-    if (!session) return false;
-    return session.bypassAllPermissions || session.allowedTools.has(toolName);
   }
 
   setModel(sessionId: string, model: string): void {
@@ -542,7 +531,6 @@ export class SessionManager {
       session.process = null;
       session.stdin = null;
     }
-    session.allowedTools.clear();
     session.compacting = false;
   }
 
