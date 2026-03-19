@@ -7,6 +7,7 @@ import { FilesView } from "@/components/files-view";
 export default function FilesPage() {
   const searchParams = useSearchParams();
   const cwd = searchParams.get("cwd") || "";
+  const file = searchParams.get("file");
 
   usePageHeader("Files");
   useShellCwd(cwd || undefined);
@@ -19,5 +20,5 @@ export default function FilesPage() {
     );
   }
 
-  return <FilesView cwd={cwd} />;
+  return <FilesView cwd={cwd} initialFile={file} />;
 }

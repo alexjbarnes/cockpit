@@ -31,10 +31,10 @@ function relativePath(cwd: string, filePath: string): string {
   return filePath;
 }
 
-export function FilesView({ cwd }: { cwd: string }) {
+export function FilesView({ cwd, initialFile }: { cwd: string; initialFile?: string | null }) {
   const { setSidebarContent, closeSidebar } = useShell();
   const [selectedFile, setSelectedFile] = useState<string | null>(
-    () => selectedFileCache.get(cwd) || null
+    () => initialFile || selectedFileCache.get(cwd) || null
   );
   const [fileData, setFileData] = useState<FileContent | null>(null);
   const [loading, setLoading] = useState(false);

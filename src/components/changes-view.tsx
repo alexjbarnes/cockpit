@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
+import { useRouter } from "next/navigation";
 import { PatchDiff } from "@pierre/diffs/react";
 import { useSettings } from "@/hooks/use-settings";
 import { DiffErrorBoundary } from "@/components/diff-viewer";
@@ -25,6 +26,7 @@ import {
   ArrowUpFromLine,
   Layers,
   List,
+  ExternalLink,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Check as CheckIcon } from "lucide-react";
@@ -159,9 +161,10 @@ interface StackedDiffsProps {
   diffStyle: "split" | "unified";
   scrollToFile: string | null;
   onScrolled: () => void;
+  onViewFile: (filePath: string) => void;
 }
 
-function StackedDiffs({ files, cwd, diffStyle, scrollToFile, onScrolled }: StackedDiffsProps) {
+function StackedDiffs({ files, cwd, diffStyle, scrollToFile, onScrolled, onViewFile }: StackedDiffsProps) {
   const [diffs, setDiffs] = useState<Map<string, FileDiffState>>(new Map());
   const sectionRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const fetchedRef = useRef<Set<string>>(new Set());
@@ -248,6 +251,18 @@ function StackedDiffs({ files, cwd, diffStyle, scrollToFile, onScrolled }: Stack
                     diffStyle,
                     hunkSeparators: "line-info",
                     expansionLineCount: 20,
+                  }}
+                  renderHeaderMetadata={({ newFile }) => {
+                    const name = newFile?.name?.replace(/^b\//, "") || file.path;
+                    return (
+                      <button
+                        onClick={() => onViewFile(name)}
+                        className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors ml-2"
+                      >
+                        <ExternalLink className="h-3 w-3" />
+                        View file
+                      </button>
+                    );
                   }}
                 />
               </DiffErrorBoundary>
@@ -344,6 +359,7 @@ function getCachedState(cwd: string): ChangesState {
 export function ChangesView({ cwd, sessionId }: { cwd: string; sessionId?: string | null }) {
   const { settings } = useSettings();
   const { setSidebarContent, closeSidebar } = useShell();
+  const router = useRouter();
   const isDesktop = useIsDesktop();
   const [status, setStatus] = useState<GitStatus | null>(null);
   const [loading, setLoading] = useState(true);
@@ -557,6 +573,11 @@ export function ChangesView({ cwd, sessionId }: { cwd: string; sessionId?: strin
     setScrollToFile(null);
   }, []);
 
+  const handleViewFile = useCallback((filePath: string) => {
+    const fullPath = filePath.startsWith("/") ? filePath : `${cwd}/${filePath}`;
+    router.push(`/files?cwd=${encodeURIComponent(cwd)}&file=${encodeURIComponent(fullPath)}`);
+  }, [cwd, router]);
+
   // Push file list into sidebar
   useEffect(() => {
     if (!status || status.files.length === 0) {
@@ -691,6 +712,7 @@ export function ChangesView({ cwd, sessionId }: { cwd: string; sessionId?: strin
                 diffStyle={settings.diffStyle}
                 scrollToFile={scrollToFile}
                 onScrolled={handleScrolled}
+                onViewFile={handleViewFile}
               />
             ) : (
               <>
@@ -711,6 +733,18 @@ export function ChangesView({ cwd, sessionId }: { cwd: string; sessionId?: strin
                             diffStyle: settings.diffStyle,
                             hunkSeparators: "line-info",
                             expansionLineCount: 20,
+                          }}
+                          renderHeaderMetadata={({ newFile }) => {
+                            const name = newFile?.name?.replace(/^b\//, "") || selectedFile || "";
+                            return (
+                              <button
+                                onClick={() => handleViewFile(name)}
+                                className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors ml-2"
+                              >
+                                <ExternalLink className="h-3 w-3" />
+                                View file
+                              </button>
+                            );
                           }}
                         />
                       </DiffErrorBoundary>
