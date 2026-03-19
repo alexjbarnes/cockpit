@@ -18,7 +18,6 @@ import {
   Check,
   ChevronDown,
   ChevronUp,
-  Eye,
   FileEdit,
   FilePlus,
   FileMinus,
@@ -251,11 +250,15 @@ function LazyDiff({
                 <div className="flex items-center gap-2 ml-2">
                   <button
                     onClick={handleMarkViewed}
-                    className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+                    className={cn(
+                      "h-4 w-4 shrink-0 rounded border flex items-center justify-center transition-colors",
+                      viewed
+                        ? "border-primary bg-primary text-primary-foreground"
+                        : "border-muted-foreground/40 bg-transparent hover:border-muted-foreground/60",
+                    )}
                     title="Mark as viewed and collapse"
                   >
-                    <Eye className="h-3 w-3" />
-                    Viewed
+                    {viewed && <Check className="h-3 w-3" strokeWidth={3} />}
                   </button>
                   <button
                     onClick={(e) => { e.stopPropagation(); onToggleCollapse(); }}
@@ -273,7 +276,6 @@ function LazyDiff({
                       onClick={(e) => e.stopPropagation()}
                     >
                       <ExternalLink className="h-3 w-3" />
-                      GitHub
                     </a>
                   )}
                 </div>
@@ -558,7 +560,6 @@ export function PRReviewView({ owner, repo, number }: { owner: string; repo: str
             className="flex items-center gap-1 hover:text-foreground transition-colors"
           >
             <ExternalLink className="h-3 w-3" />
-            GitHub
           </a>
         </div>
       </div>
