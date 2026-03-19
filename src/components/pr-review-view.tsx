@@ -293,7 +293,7 @@ export function PRReviewView({ owner, repo, number }: { owner: string; repo: str
   const prKey = `${fullRepo}#${number}`;
 
   const { settings } = useSettings();
-  const { setSidebarContent, closeSidebar } = useShell();
+  const { setSidebarContent } = useShell();
   const router = useRouter();
   const isDesktop = useIsDesktop();
 
@@ -443,12 +443,16 @@ export function PRReviewView({ owner, repo, number }: { owner: string; repo: str
   // Sidebar file list
   useEffect(() => {
     if (fileDiffs.length === 0) {
-      closeSidebar();
+      setSidebarContent(null);
       return;
     }
 
     setSidebarContent(
       <>
+        <div className="sticky top-0 bg-background flex items-center justify-between px-3 py-2 border-b z-10">
+          <span className="text-sm font-bold">Files</span>
+          <span className="text-xs text-muted-foreground">{fileDiffs.length} changed</span>
+        </div>
         {fileDiffs.map((file) => (
           <div
             key={file.path}
@@ -495,8 +499,8 @@ export function PRReviewView({ owner, repo, number }: { owner: string; repo: str
       </>,
     );
 
-    return () => closeSidebar();
-  }, [fileDiffs, pr, viewedFiles, collapsedFiles, setSidebarContent, closeSidebar, toggleViewed, toggleCollapse]);
+    return () => setSidebarContent(null);
+  }, [fileDiffs, pr, viewedFiles, collapsedFiles, setSidebarContent, toggleViewed, toggleCollapse]);
 
   if (loading) {
     return (
