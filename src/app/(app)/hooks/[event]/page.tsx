@@ -50,7 +50,7 @@ export default function HookEditorPage({
   const filePath = searchParams.get("filePath") || "";
   const cwd = searchParams.get("cwd") || undefined;
 
-  usePageHeader(isNew ? "New Hook" : event, true);
+  usePageHeader(isNew ? "New Hook" : event);
 
   const [selectedEvent, setSelectedEvent] = useState(event);
   const [selectedScope, setSelectedScope] = useState(scope);

@@ -113,7 +113,7 @@ export default function SettingsPage() {
   const [updateResult, setUpdateResult] = useState<{ ok: boolean; message: string } | null>(null);
   const router = useRouter();
 
-  usePageHeader("Settings", true);
+  usePageHeader("Settings");
 
   const fetchVersion = useCallback(() => {
     setVersionLoading(true);

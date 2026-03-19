@@ -25,9 +25,10 @@ interface CodeBlockProps {
   code: string;
   language?: string;
   dark?: boolean;
+  fullHeight?: boolean;
 }
 
-export function CodeBlock({ code, language, dark }: CodeBlockProps) {
+export function CodeBlock({ code, language, dark, fullHeight }: CodeBlockProps) {
   const { code: strippedCode, startLine } = stripLineNumbers(code);
   const theme = dark ? "github-dark" : "github-light";
   const key = language ? cacheKey(strippedCode, language, theme) : "";
@@ -78,7 +79,7 @@ export function CodeBlock({ code, language, dark }: CodeBlockProps) {
   if (html) {
     return (
       <div
-        className="code-block-lines overflow-x-auto rounded text-[11px] leading-relaxed max-h-64 overflow-y-auto [&_pre]:!bg-transparent [&_pre]:p-2 [&_pre]:m-0"
+        className={`code-block-lines overflow-x-auto rounded text-[11px] leading-relaxed overflow-y-auto [&_pre]:!bg-transparent [&_pre]:p-2 [&_pre]:m-0${fullHeight ? "" : " max-h-64"}`}
       >
         <style>{lineNumberStyles}</style>
         <div dangerouslySetInnerHTML={{ __html: html }} />
@@ -87,7 +88,7 @@ export function CodeBlock({ code, language, dark }: CodeBlockProps) {
   }
 
   return (
-    <pre className="overflow-x-auto rounded bg-muted/50 p-2 text-[11px] leading-relaxed max-h-64 overflow-y-auto">
+    <pre className={`overflow-x-auto rounded bg-muted/50 p-2 text-[11px] leading-relaxed overflow-y-auto${fullHeight ? "" : " max-h-64"}`}>
       {strippedCode}
     </pre>
   );

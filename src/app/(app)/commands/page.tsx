@@ -11,7 +11,7 @@ import { useCommands } from "@/hooks/use-commands";
 import { Plus, Trash2 } from "lucide-react";
 
 export default function CommandsPage() {
-  usePageHeader("Commands", true);
+  usePageHeader("Commands");
 
   const cwd = typeof localStorage !== "undefined"
     ? localStorage.getItem("aperture-agents-cwd") || undefined

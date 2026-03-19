@@ -30,15 +30,25 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "Path is not a directory" }, { status: 400 });
   }
 
+  const includeFiles = url.searchParams.get("includeFiles") === "true";
+
   const dirents = await readdir(resolved, { withFileTypes: true }).catch(() => []);
-  const entries = dirents
+  const filtered = dirents
+    .filter((d) => d.isDirectory() || (includeFiles && d.isFile()))
+    .filter((d) => showHidden || !d.name.startsWith("."));
+
+  const dirs = filtered
     .filter((d) => d.isDirectory())
-    .filter((d) => showHidden || !d.name.startsWith("."))
-    .sort((a, b) => a.name.localeCompare(b.name))
-    .map((d) => ({
-      name: d.name,
-      path: path.join(resolved, d.name),
-    }));
+    .sort((a, b) => a.name.localeCompare(b.name));
+  const files = filtered
+    .filter((d) => d.isFile())
+    .sort((a, b) => a.name.localeCompare(b.name));
+
+  const entries = [...dirs, ...files].map((d) => ({
+    name: d.name,
+    path: path.join(resolved, d.name),
+    type: d.isDirectory() ? "directory" as const : "file" as const,
+  }));
 
   return NextResponse.json({ path: resolved, entries });
 }

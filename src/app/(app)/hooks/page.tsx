@@ -21,7 +21,7 @@ const BLOCKING_EVENTS = new Set([
 ]);
 
 export default function HooksPage() {
-  usePageHeader("Hooks", true);
+  usePageHeader("Hooks");
 
   const cwd = typeof localStorage !== "undefined"
     ? localStorage.getItem("aperture-agents-cwd") || undefined

@@ -28,7 +28,7 @@ function scopeLabel(scope: ClaudeMdFile["scope"]): string {
 }
 
 export default function ClaudeMdPage() {
-  usePageHeader("CLAUDE.md", true);
+  usePageHeader("CLAUDE.md");
 
   const { files, cwds, loading } = useClaudeMd();
   const router = useRouter();

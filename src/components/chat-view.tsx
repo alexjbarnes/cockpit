@@ -61,7 +61,7 @@ export function ChatView({ sessionId, cwd, initialName }: { sessionId: string; c
 
   useEffect(() => {
     const title = sessionName || initialName || cwd?.split("/").pop() || "Session";
-    setHeader({ title, showBack: true, onRename: handleRename });
+    setHeader({ title, onRename: handleRename });
   }, [sessionName, initialName, cwd, setHeader, handleRename]);
 
   // Sync background tasks and todos to shell header

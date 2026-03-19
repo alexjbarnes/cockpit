@@ -29,7 +29,7 @@ export default function CommandEditorPage({
   const scope = (searchParams.get("scope") || "user") as "user" | "project";
   const cwd = searchParams.get("cwd") || undefined;
 
-  usePageHeader(isNew ? "New Command" : "Edit Command", true);
+  usePageHeader(isNew ? "New Command" : "Edit Command");
 
   const [commandName, setCommandName] = useState(isNew ? "" : decodeURIComponent(rawName));
   const [content, setContent] = useState(isNew ? TEMPLATE : "");

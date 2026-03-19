@@ -31,7 +31,7 @@ export default function AgentEditorPage({
   const scope = (searchParams.get("scope") || "user") as "user" | "project";
   const cwd = searchParams.get("cwd") || undefined;
 
-  usePageHeader(isNew ? "New Agent" : "Edit Agent", true);
+  usePageHeader(isNew ? "New Agent" : "Edit Agent");
 
   const [agentName, setAgentName] = useState(isNew ? "" : decodeURIComponent(rawName));
   const [content, setContent] = useState(isNew ? TEMPLATE : "");

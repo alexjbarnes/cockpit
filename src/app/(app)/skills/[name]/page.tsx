@@ -29,7 +29,7 @@ export default function SkillEditorPage({
   const scope = (searchParams.get("scope") || "user") as "user" | "project";
   const cwd = searchParams.get("cwd") || undefined;
 
-  usePageHeader(isNew ? "New Skill" : "Edit Skill", true);
+  usePageHeader(isNew ? "New Skill" : "Edit Skill");
 
   const [skillName, setSkillName] = useState(isNew ? "" : decodeURIComponent(rawName));
   const [content, setContent] = useState(isNew ? TEMPLATE : "");

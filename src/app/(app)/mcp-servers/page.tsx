@@ -12,7 +12,7 @@ import { useMcpServers } from "@/hooks/use-mcp-servers";
 import { Plus, Trash2 } from "lucide-react";
 
 export default function McpServersPage() {
-  usePageHeader("MCP Servers", true);
+  usePageHeader("MCP Servers");
 
   const cwd = typeof localStorage !== "undefined"
     ? localStorage.getItem("aperture-agents-cwd") || undefined

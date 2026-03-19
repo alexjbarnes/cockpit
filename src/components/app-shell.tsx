@@ -9,13 +9,13 @@ import {
   useRef,
   type ReactNode,
 } from "react";
-import { useRouter } from "next/navigation";
 import { AuthGuard } from "@/components/auth-guard";
 import { WebSocketProvider } from "@/hooks/use-websocket";
 import { UsageButton } from "@/components/usage-modal";
 import { Sidebar, type SidebarHandle } from "@/components/sidebar";
 import { Button } from "@/components/ui/button";
-import { ArrowLeft, Menu } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { FolderOpen, Menu } from "lucide-react";
 import { GitStatusButton } from "@/components/git-status-modal";
 import { BackgroundTasksButton } from "@/components/task-indicator";
 import { TodoIndicator } from "@/components/todo-indicator";
@@ -23,7 +23,6 @@ import type { BackgroundTask, TodoItem } from "@/types";
 
 interface HeaderConfig {
   title: string;
-  showBack: boolean;
   onRename?: (name: string) => void;
 }
 
@@ -57,11 +56,11 @@ export function useShell() {
   return useContext(ShellContext);
 }
 
-export function usePageHeader(title: string, showBack = false) {
+export function usePageHeader(title: string) {
   const { setHeader } = useShell();
   useEffect(() => {
-    setHeader({ title, showBack });
-  }, [title, showBack, setHeader]);
+    setHeader({ title });
+  }, [title, setHeader]);
 }
 
 export function useShellCwd(cwd: string | undefined) {
@@ -70,6 +69,20 @@ export function useShellCwd(cwd: string | undefined) {
     setCwd(cwd);
     return () => setCwd(undefined);
   }, [cwd, setCwd]);
+}
+
+function FileBrowserButton({ cwd }: { cwd: string }) {
+  const router = useRouter();
+  return (
+    <Button
+      variant="ghost"
+      size="icon"
+      onClick={() => router.push(`/files?cwd=${encodeURIComponent(cwd)}`)}
+      title="Browse files"
+    >
+      <FolderOpen className="h-4 w-4" />
+    </Button>
+  );
 }
 
 function EditableTitle({ title, onRename }: { title: string; onRename?: (name: string) => void }) {
@@ -121,9 +134,8 @@ function EditableTitle({ title, onRename }: { title: string; onRename?: (name: s
 }
 
 export function AppShell({ children }: { children: ReactNode }) {
-  const router = useRouter();
   const sidebarRef = useRef<SidebarHandle>(null);
-  const [header, setHeaderState] = useState<HeaderConfig>({ title: "Aperture", showBack: false });
+  const [header, setHeaderState] = useState<HeaderConfig>({ title: "Aperture" });
   const [cwd, setCwdState] = useState<string | undefined>(undefined);
   const [backgroundTasks, setBackgroundTasks] = useState<BackgroundTask[]>([]);
   const [todos, setTodos] = useState<TodoItem[]>([]);
@@ -169,17 +181,15 @@ export function AppShell({ children }: { children: ReactNode }) {
               <Button variant="ghost" size="icon" onClick={toggleSidebar} title="Toggle sidebar (Ctrl+B)" className="md:hidden">
                 <Menu className="h-4 w-4" />
               </Button>
-              {header.showBack && (
-                <Button variant="ghost" size="icon" onClick={() => router.back()}>
-                  <ArrowLeft className="h-4 w-4" />
-                </Button>
-              )}
-              <EditableTitle title={header.title} onRename={header.onRename} />
+              <div className="hidden md:block min-w-0">
+                <EditableTitle title={header.title} onRename={header.onRename} />
+              </div>
               <div className="ml-auto flex items-center gap-2">
                 {cwd && <TodoIndicator todos={todos} />}
                 {cwd && <BackgroundTasksButton tasks={backgroundTasks} />}
                 {cwd && <UsageButton />}
                 {cwd && <GitStatusButton cwd={cwd} />}
+                {cwd && <FileBrowserButton cwd={cwd} />}
               </div>
             </header>
             <div className="flex flex-1 min-h-0">

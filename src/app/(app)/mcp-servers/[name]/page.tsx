@@ -78,7 +78,7 @@ export default function McpServerEditorPage({
   const scope = (searchParams.get("scope") || "user") as "user" | "project";
   const cwd = searchParams.get("cwd") || undefined;
 
-  usePageHeader(isNew ? "New MCP Server" : "Edit MCP Server", true);
+  usePageHeader(isNew ? "New MCP Server" : "Edit MCP Server");
 
   const [serverName, setServerName] = useState(isNew ? "" : decodeURIComponent(rawName));
   const [form, setForm] = useState<McpServerFormState>(EMPTY_FORM);

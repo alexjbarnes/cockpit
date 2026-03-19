@@ -11,7 +11,7 @@ import { useSkills } from "@/hooks/use-skills";
 import { Plus, Trash2 } from "lucide-react";
 
 export default function SkillsPage() {
-  usePageHeader("Skills", true);
+  usePageHeader("Skills");
 
   const cwd = typeof localStorage !== "undefined"
     ? localStorage.getItem("aperture-agents-cwd") || undefined

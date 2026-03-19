@@ -22,7 +22,7 @@ export default function ClaudeMdEditPage() {
   const cwd = searchParams.get("cwd") || undefined;
   const meta = SCOPE_LABELS[scope];
 
-  usePageHeader("Edit CLAUDE.md", true);
+  usePageHeader("Edit CLAUDE.md");
 
   const [content, setContent] = useState("");
   const [savedContent, setSavedContent] = useState("");
