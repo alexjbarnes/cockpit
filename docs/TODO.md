@@ -1,2 +1,3 @@
 - Display tool use details in chat: show file contents read, commands run, and tool output (data is available in stream-json output)
 - In-browser file editor using CodeMirror 6 (mobile-first, good touch/virtual keyboard support)
+- PR review: "View full file" button in diff headers - fetch file at head ref via GitHub API and show full syntax-highlighted content as an alternative to expanding context

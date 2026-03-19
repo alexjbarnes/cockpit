@@ -134,7 +134,7 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
     const groups: SessionGroup[] = data.groups || [];
     const flat = groups
       .flatMap((g) => g.sessions)
-      .filter((s) => activeIds.has(s.id))
+      .filter((s) => activeIds.has(s.id) && !s.cwd.endsWith(".aperture/reviews"))
       .sort((a, b) => b.lastActiveAt - a.lastActiveAt);
     for (const s of flat) {
       if (!prevStatusRef.current.has(s.id)) {
@@ -306,44 +306,45 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
               )}
             </div>
 
-            <div className="border-t px-3 py-2 flex items-center gap-2">
-              <button
-                onClick={() => {
-                  close();
-                  router.push("/");
-                }}
-                className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors flex-1 min-w-0"
-              >
-                <Home className="h-4 w-4 shrink-0" />
-                All sessions
-              </button>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="shrink-0 h-8 w-8 text-muted-foreground hover:text-foreground"
-                onClick={() => {
-                  close();
-                  router.push("/reviews");
-                }}
-                title="Reviews"
-              >
-                <GitPullRequest className="h-4 w-4" />
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="shrink-0 h-8 w-8 text-muted-foreground hover:text-foreground"
-                onClick={() => {
-                  close();
-                  router.push("/settings");
-                }}
-                title="Settings"
-              >
-                <Settings className="h-4 w-4" />
-              </Button>
-            </div>
           </>
         )}
+
+        <div className="border-t px-3 py-2 flex items-center gap-2">
+          <button
+            onClick={() => {
+              close();
+              router.push("/");
+            }}
+            className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors flex-1 min-w-0"
+          >
+            <Home className="h-4 w-4 shrink-0" />
+            All sessions
+          </button>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="shrink-0 h-8 w-8 text-muted-foreground hover:text-foreground"
+            onClick={() => {
+              close();
+              router.push("/reviews");
+            }}
+            title="Reviews"
+          >
+            <GitPullRequest className="h-4 w-4" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="shrink-0 h-8 w-8 text-muted-foreground hover:text-foreground"
+            onClick={() => {
+              close();
+              router.push("/settings");
+            }}
+            title="Settings"
+          >
+            <Settings className="h-4 w-4" />
+          </Button>
+        </div>
       </div>
 
       <NewSessionDialog
