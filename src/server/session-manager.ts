@@ -408,11 +408,11 @@ export class SessionManager {
 
   onQueued(
     id: string,
-    listener: (count: number) => void
+    listener: (count: number, sentText?: string) => void
   ): (() => void) | null {
     const session = this.sessions.get(id);
     if (!session) return null;
-    const handler = (_sessionId: string, count: number) => listener(count);
+    const handler = (_sessionId: string, count: number, sentText?: string) => listener(count, sentText);
     session.emitter.on("queued", handler);
     return () => session.emitter.off("queued", handler);
   }
@@ -420,7 +420,7 @@ export class SessionManager {
   private flushQueuedMessage(session: Session, sessionId: string): void {
     if (session.queuedMessages.length === 0) return;
     const next = session.queuedMessages.shift()!;
-    session.emitter.emit("queued", sessionId, session.queuedMessages.length);
+    session.emitter.emit("queued", sessionId, session.queuedMessages.length, next.text);
     this.sendMessage(sessionId, next.text, next.images, next.documents);
   }
 

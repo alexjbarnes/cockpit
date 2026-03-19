@@ -532,6 +532,18 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
           if (msg.cancelledText) {
             setRestoredText(msg.cancelledText);
           }
+          if (msg.sentText) {
+            const userMsg: ChatMessage = {
+              id: crypto.randomUUID(),
+              role: "user",
+              content: msg.sentText,
+              toolUses: [],
+              blocks: [],
+              timestamp: Date.now(),
+            };
+            setMessages((prev) => [...prev, userMsg]);
+            messageCountRef.current += 1;
+          }
           break;
         }
 

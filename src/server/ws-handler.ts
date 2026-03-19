@@ -347,11 +347,12 @@ export function createWebSocketHandler(
 
           const unsubQueued = sessionManager.onQueued(
             msg.sessionId,
-            (count) => {
+            (count, sentText) => {
               send(ws, {
                 type: "session:queued",
                 sessionId: msg.sessionId,
                 count,
+                sentText: sentText ?? undefined,
               });
             }
           );
