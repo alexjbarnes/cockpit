@@ -15,6 +15,7 @@ export interface ParsedEvent {
   children?: ToolUse[];
   requestId?: string;
   rawToolInput?: Record<string, unknown>;
+  permissionSuggestions?: Record<string, unknown>[];
   rateLimitInfo?: { status: string; retryAfterMs?: number };
   suggestions?: string[];
   taskInfo?: {
@@ -279,6 +280,7 @@ export class EventParser {
       subtype?: string;
       tool_name?: string;
       input?: Record<string, unknown>;
+      permission_suggestions?: Record<string, unknown>[];
     } | undefined;
 
     if (request?.subtype === "can_use_tool") {
@@ -288,6 +290,7 @@ export class EventParser {
         toolName: request.tool_name || "unknown",
         toolInput: request.input ? JSON.stringify(request.input) : "",
         rawToolInput: request.input,
+        permissionSuggestions: request.permission_suggestions,
       }];
     }
 

@@ -61,7 +61,7 @@ export function createWebSocketHandler(
     // Track subscriptions per session so re-connects clean up old listeners
     const sessionCleanups = new Map<string, Array<() => void>>();
     // Track pending permission requests with tool name and raw input
-    const pendingPermissions = new Map<string, { toolName: string; toolInput: Record<string, unknown> }>();
+    const pendingPermissions = new Map<string, { toolName: string; toolInput: Record<string, unknown>; permissionSuggestions?: Record<string, unknown>[] }>();
     // Lightweight status-only subscriptions for sidebar
     let watchCleanups: Array<() => void> = [];
 
@@ -413,8 +413,8 @@ export function createWebSocketHandler(
             sessionManager.setBypassAllPermissions(msg.sessionId);
           }
 
-          const alwaysAllow = msg.permissionMode === "allow_always";
-          sessionManager.respondToPermission(msg.sessionId, msg.requestId, msg.allowed, pending?.toolInput, alwaysAllow);
+          const suggestions = msg.permissionMode === "allow_always" ? pending?.permissionSuggestions : undefined;
+          sessionManager.respondToPermission(msg.sessionId, msg.requestId, msg.allowed, pending?.toolInput, suggestions);
           break;
         }
 
@@ -488,7 +488,7 @@ function handleParsedEvent(
   ws: WebSocket,
   sessionId: string,
   event: ParsedEvent,
-  pendingPermissions: Map<string, { toolName: string; toolInput: Record<string, unknown> }>,
+  pendingPermissions: Map<string, { toolName: string; toolInput: Record<string, unknown>; permissionSuggestions?: Record<string, unknown>[] }>,
   sessionManager: SessionManager
 ): void {
   switch (event.type) {
@@ -625,7 +625,7 @@ function handleParsedEvent(
       const requestId = event.requestId || "";
 
       if (requestId && event.rawToolInput) {
-        pendingPermissions.set(requestId, { toolName, toolInput: event.rawToolInput });
+        pendingPermissions.set(requestId, { toolName, toolInput: event.rawToolInput, permissionSuggestions: event.permissionSuggestions });
       }
 
       if (toolName === "AskUserQuestion") {

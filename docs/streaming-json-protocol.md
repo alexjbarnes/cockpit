@@ -246,7 +246,82 @@ Only emitted with `--include-partial-messages` flag.
     subtype: "can_use_tool";
     tool_name: string;
     input: Record<string, unknown>;
+    tool_use_id?: string;
+    permission_suggestions?: PermissionSuggestion[];
+    blocked_path?: string;
+    decision_reason?: string;
+    agent_id?: string;
+    description?: string;
   };
+}
+```
+
+The `permission_suggestions` array contains pre-built rules that can be passed back as `updatedPermissions` in the control response to persist "always allow" for the tool. See the Permission handling section in [claude-cli-reference.md](./claude-cli-reference.md) for the full response schema.
+
+### `control_response` - Permission response (stdin to CLI)
+
+```typescript
+// Success
+{
+  type: "control_response";
+  response: {
+    subtype: "success";
+    request_id: string;
+    response: PermissionResponse;
+  };
+}
+
+// Error
+{
+  type: "control_response";
+  response: {
+    subtype: "error";
+    request_id: string;
+    error: string;
+    pending_permission_requests?: SDKControlRequest[];
+  };
+}
+
+// Allow
+type PermissionResponse = {
+  behavior: "allow";
+  updatedInput: Record<string, unknown>;
+  updatedPermissions?: PermissionUpdate[];
+  toolUseID?: string;
+}
+
+// Deny
+type PermissionResponse = {
+  behavior: "deny";
+  message: string;
+  interrupt?: boolean;
+  toolUseID?: string;
+}
+```
+
+### `control_cancel_request` - Cancel pending permission (CLI to server)
+
+```typescript
+{
+  type: "control_cancel_request";
+  request_id: string;
+}
+```
+
+### `keep_alive` - Keepalive (bidirectional)
+
+```typescript
+{ type: "keep_alive" }
+```
+
+Silently consumed by the SDK. Present on the wire but filtered out before reaching consumers.
+
+### `update_environment_variables` - Set env vars (stdin to CLI)
+
+```typescript
+{
+  type: "update_environment_variables";
+  variables: Record<string, string>;
 }
 ```
 

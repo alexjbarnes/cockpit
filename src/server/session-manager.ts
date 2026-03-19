@@ -201,7 +201,7 @@ export class SessionManager {
     const session = this.sessions.get(id);
     if (!session) return false;
     if (session.process) {
-      session.process.kill("SIGINT");
+      this.killProcessGroup(session.process);
     }
     session.emitter.removeAllListeners();
     this.sessions.delete(id);
@@ -280,26 +280,24 @@ export class SessionManager {
     return Array.from(session.pendingRequests.values());
   }
 
-  respondToPermission(sessionId: string, requestId: string, allowed: boolean, toolInput?: Record<string, unknown>, alwaysAllow?: boolean): boolean {
+  respondToPermission(sessionId: string, requestId: string, allowed: boolean, toolInput?: Record<string, unknown>, permissionSuggestions?: Record<string, unknown>[]): boolean {
     const session = this.sessions.get(sessionId);
     if (!session?.stdin) return false;
 
     session.pendingRequests.delete(requestId);
-
-    const behavior = !allowed
-      ? ("deny" as const)
-      : alwaysAllow
-        ? ("alwaysAllow" as const)
-        : ("allow" as const);
 
     const response = {
       type: "control_response",
       response: {
         subtype: "success",
         request_id: requestId,
-        response: behavior === "deny"
-          ? { behavior, message: "User denied" }
-          : { behavior, updatedInput: toolInput || {} },
+        response: allowed
+          ? {
+              behavior: "allow" as const,
+              updatedInput: toolInput || {},
+              ...(permissionSuggestions?.length ? { updatedPermissions: permissionSuggestions } : {}),
+            }
+          : { behavior: "deny" as const, message: "User denied" },
       },
     };
 
@@ -524,10 +522,20 @@ export class SessionManager {
     }
   }
 
+  private killProcessGroup(proc: ChildProcess): void {
+    if (proc.pid) {
+      try {
+        process.kill(-proc.pid, "SIGTERM");
+      } catch {
+        // Process group already dead
+      }
+    }
+  }
+
   private killProcess(session: Session): void {
     if (session.process) {
       session.process.on("close", () => {});
-      session.process.kill("SIGINT");
+      this.killProcessGroup(session.process);
       session.process = null;
       session.stdin = null;
     }
@@ -742,6 +750,7 @@ export class SessionManager {
       cwd: session.info.cwd,
       env,
       stdio: ["pipe", "pipe", "pipe"],
+      detached: true,
     });
 
     session.process = proc;
