@@ -402,7 +402,9 @@ export class SessionManager {
     const session = this.sessions.get(sessionId);
     if (!session || session.queuedMessages.length === 0) return null;
     const last = session.queuedMessages.pop()!;
-    session.emitter.emit("queued", sessionId, session.queuedMessages.length);
+    // Don't emit here — the ws-handler sends the response with cancelledText.
+    // Emitting would cause a duplicate session:queued without cancelledText,
+    // which can race and prevent the text from being restored to the input.
     return last.text;
   }
 
