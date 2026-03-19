@@ -4,7 +4,11 @@ import { use, useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { usePageHeader } from "@/components/app-shell";
 import { Button } from "@/components/ui/button";
-import { Loader2, Search, ArrowLeft, GitPullRequest, CircleDot, GitMerge, CircleX } from "lucide-react";
+import { Loader2, Search, ArrowLeft, GitPullRequest, CircleDot, GitMerge, CircleX, RefreshCw } from "lucide-react";
+import { cn } from "@/lib/utils";
+
+// Module-level cache: "owner/repo:state" -> PullRequest[]
+const prCache = new Map<string, PullRequest[]>();
 
 interface PullRequest {
   number: number;
@@ -72,13 +76,19 @@ export default function PRListPage({
   usePageHeader(fullRepo);
 
   const router = useRouter();
-  const [prs, setPrs] = useState<PullRequest[]>([]);
   const [state, setState] = useState<"open" | "closed">("open");
+  const [prs, setPrs] = useState<PullRequest[]>(() => prCache.get(`${fullRepo}:open`) || []);
   const [search, setSearch] = useState("");
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(!prCache.has(`${fullRepo}:open`));
   const [error, setError] = useState<string | null>(null);
 
-  const fetchPRs = useCallback(() => {
+  const fetchPRs = useCallback((force = false) => {
+    const key = `${fullRepo}:${state}`;
+    if (!force && prCache.has(key)) {
+      setPrs(prCache.get(key)!);
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     setError(null);
     fetch(`/api/github/prs?repo=${encodeURIComponent(fullRepo)}&state=${state}`)
@@ -86,7 +96,10 @@ export default function PRListPage({
         if (!res.ok) return res.json().then((d) => Promise.reject(d.error));
         return res.json();
       })
-      .then((data: PullRequest[]) => setPrs(data))
+      .then((data: PullRequest[]) => {
+        prCache.set(key, data);
+        setPrs(data);
+      })
       .catch((err) => setError(String(err)))
       .finally(() => setLoading(false));
   }, [fullRepo, state]);
@@ -131,6 +144,16 @@ export default function PRListPage({
             className="w-full rounded-md border bg-background px-3 py-2 pl-9 text-sm outline-none focus:ring-1 focus:ring-ring"
           />
         </div>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="shrink-0 h-8 w-8 text-muted-foreground hover:text-foreground"
+          onClick={() => fetchPRs(true)}
+          disabled={loading}
+          title="Refresh"
+        >
+          <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} />
+        </Button>
       </div>
 
       {loading && (
