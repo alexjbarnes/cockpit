@@ -206,7 +206,7 @@ export function ChatView({ sessionId, cwd, initialName, initialContext }: { sess
         className="flex-1 min-h-0 overflow-y-auto p-4 outline-none"
         onScroll={handleScroll}
       >
-        <div className="mx-auto max-w-3xl space-y-4">
+        <div className="mx-auto max-w-3xl lg:max-w-4xl xl:max-w-5xl 2xl:max-w-6xl space-y-4">
           {uniqueMessages.length === 0 && (
             <div className="flex flex-col items-center pt-20 text-sm text-muted-foreground">
               {historyLoaded ? (
