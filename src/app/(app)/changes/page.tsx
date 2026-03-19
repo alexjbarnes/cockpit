@@ -3,13 +3,17 @@
 import { useSearchParams } from "next/navigation";
 import { usePageHeader, useShellCwd } from "@/components/app-shell";
 import { ChangesView } from "@/components/changes-view";
+import { useSessionForCwd } from "@/hooks/use-session-for-cwd";
 
 export default function ChangesPage() {
   const searchParams = useSearchParams();
   const cwd = searchParams.get("cwd") || "";
+  const urlSessionId = searchParams.get("sessionId");
 
   usePageHeader("Changes");
   useShellCwd(cwd || undefined);
+
+  const { sessionId } = useSessionForCwd(cwd, urlSessionId);
 
   if (!cwd) {
     return (
@@ -19,5 +23,5 @@ export default function ChangesPage() {
     );
   }
 
-  return <ChangesView cwd={cwd} />;
+  return <ChangesView cwd={cwd} sessionId={sessionId} />;
 }

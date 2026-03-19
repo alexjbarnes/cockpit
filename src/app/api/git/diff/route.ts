@@ -36,15 +36,19 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "cwd and file are required" }, { status: 400 });
   }
 
+  const contextParam = url.searchParams.get("context");
+  const contextLines = contextParam ? Math.min(Math.max(parseInt(contextParam, 10) || 3, 0), 9999) : null;
+  const contextArgs = contextLines !== null ? [`-U${contextLines}`] : [];
+
   try {
     let diff = "";
     // Try tracked file diff first (staged + unstaged vs HEAD)
     try {
-      diff = await run("git", ["diff", "HEAD", "--", file], cwd);
+      diff = await run("git", ["diff", ...contextArgs, "HEAD", "--", file], cwd);
     } catch {
       // Might fail on initial commit
       try {
-        diff = await run("git", ["diff", "--cached", "--", file], cwd);
+        diff = await run("git", ["diff", ...contextArgs, "--cached", "--", file], cwd);
       } catch {
         // no diff available
       }

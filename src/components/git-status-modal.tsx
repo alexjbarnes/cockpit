@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, usePathname } from "next/navigation";
 import { GitBranch, X, Loader2, Plus, Minus, FileQuestion, FilePlus, FileMinus, FileEdit, FileSymlink, ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
@@ -29,6 +29,7 @@ function statusIcon(status: string) {
 
 export function GitStatusButton({ cwd }: { cwd?: string }) {
   const router = useRouter();
+  const pathname = usePathname();
   const [open, setOpen] = useState(false);
 
   useEffect(() => {
@@ -161,7 +162,9 @@ export function GitStatusButton({ cwd }: { cwd?: string }) {
                       className="mt-3 gap-1.5"
                       onClick={() => {
                         setOpen(false);
-                        router.push(`/changes?cwd=${encodeURIComponent(cwd!)}`);
+                        const sessionMatch = pathname.match(/^\/sessions\/([^/?]+)/);
+                        const sessionParam = sessionMatch ? `&sessionId=${encodeURIComponent(sessionMatch[1])}` : "";
+                        router.push(`/changes?cwd=${encodeURIComponent(cwd!)}${sessionParam}`);
                       }}
                     >
                       <ExternalLink className="h-3.5 w-3.5" />
