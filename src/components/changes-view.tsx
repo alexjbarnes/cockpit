@@ -152,8 +152,8 @@ interface FileDiffState {
   loading: boolean;
 }
 
-// Small context so diffs are compact; Pierre Diffs handles expand/collapse
-const STACKED_CONTEXT = 3;
+// Large context so Pierre Diffs has full content for fold/expand
+const STACKED_CONTEXT = 50000;
 
 interface StackedDiffsProps {
   files: GitFileChange[];
@@ -261,7 +261,7 @@ function StackedDiffs({ files, cwd, diffStyle, scrollToFile, onScrolled, onViewF
           <div
             key={file.path}
             ref={(el) => { if (el) sectionRefs.current.set(file.path, el); }}
-            className={cn("rounded border overflow-hidden", viewed && !collapsed && "opacity-60")}
+            className={cn("rounded border", viewed && !collapsed && "opacity-60")}
           >
             {collapsed ? (
               <button
@@ -804,7 +804,7 @@ export function ChangesView({ cwd, sessionId }: { cwd: string; sessionId?: strin
                   </div>
                 ) : selectedFile && diff ? (
                   <div className="p-4">
-                    <div className="rounded border overflow-hidden">
+                    <div className="rounded border">
                       <DiffErrorBoundary fallback={<pre className="p-4 text-xs text-muted-foreground whitespace-pre-wrap">{diff}</pre>}>
                         <PatchDiff
                           patch={diff}
