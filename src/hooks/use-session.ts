@@ -8,6 +8,7 @@ export interface PendingPermission {
   requestId: string;
   toolName: string;
   input: string;
+  suggestions?: import("@/types").PermissionSuggestion[];
 }
 
 export interface PendingQuestion {
@@ -45,7 +46,7 @@ interface UseSessionReturn {
   btw: BtwState | null;
   sendMessage: (text: string, images?: ImageAttachment[], documents?: DocumentAttachment[], textFiles?: TextFileAttachment[]) => void;
   interrupt: () => void;
-  respondToPermission: (requestId: string, allowed: boolean, permissionMode?: PermissionMode) => void;
+  respondToPermission: (requestId: string, allowed: boolean, permissionMode?: PermissionMode, suggestionIndex?: number) => void;
   respondToQuestion: (requestId: string, answers: Record<string, string>) => void;
   selectModel: (model: string) => void;
   setModel: (model: string) => void;
@@ -692,7 +693,7 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
         case "permission:request": {
           setPendingPermissions((prev) => [
             ...prev,
-            { requestId: msg.requestId, toolName: msg.toolName, input: msg.input },
+            { requestId: msg.requestId, toolName: msg.toolName, input: msg.input, suggestions: msg.suggestions },
           ]);
           break;
         }
@@ -871,8 +872,8 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
   }, [send, sessionId]);
 
   const respondToPermission = useCallback(
-    (requestId: string, allowed: boolean, permissionMode?: PermissionMode) => {
-      send({ type: "permission:response", sessionId, requestId, allowed, permissionMode });
+    (requestId: string, allowed: boolean, permissionMode?: PermissionMode, suggestionIndex?: number) => {
+      send({ type: "permission:response", sessionId, requestId, allowed, permissionMode, suggestionIndex });
       setPendingPermissions((prev) => prev.filter((p) => p.requestId !== requestId));
     },
     [send, sessionId]

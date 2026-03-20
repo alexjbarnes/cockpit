@@ -88,6 +88,15 @@ export interface InitData {
 
 export type PermissionMode = "allow" | "allow_always" | "allow_all" | "deny";
 
+export interface PermissionSuggestion {
+  type: string;
+  rules?: { toolName: string; ruleContent?: string }[];
+  behavior?: string;
+  mode?: string;
+  directories?: string[];
+  destination?: string;
+}
+
 export type ThinkingLevel = "low" | "medium" | "high";
 
 export interface UsageLimit {
@@ -112,7 +121,7 @@ export type ClientMessage =
   | { type: "session:connect"; sessionId: string; cwd?: string; messageCount?: number }
   | { type: "message:send"; sessionId: string; text: string; images?: ImageAttachment[]; documents?: DocumentAttachment[] }
   | { type: "session:interrupt"; sessionId: string }
-  | { type: "permission:response"; sessionId: string; requestId: string; allowed: boolean; permissionMode?: PermissionMode }
+  | { type: "permission:response"; sessionId: string; requestId: string; allowed: boolean; permissionMode?: PermissionMode; suggestionIndex?: number }
   | { type: "permission:set_bypass"; sessionId: string; enabled: boolean }
   | { type: "session:set_thinking"; sessionId: string; level: ThinkingLevel }
   | { type: "session:set_model"; sessionId: string; model: string }
@@ -132,7 +141,7 @@ export type ServerMessage =
   | { type: "assistant:tool_children"; sessionId: string; messageId: string; toolId: string; children: ToolUse[] }
   | { type: "session:status"; sessionId: string; status: "idle" | "running" }
   | { type: "session:error"; sessionId: string; error: string }
-  | { type: "permission:request"; sessionId: string; requestId: string; toolName: string; input: string }
+  | { type: "permission:request"; sessionId: string; requestId: string; toolName: string; input: string; suggestions?: PermissionSuggestion[] }
   | { type: "question:request"; sessionId: string; requestId: string; questions: string }
   | { type: "session:clear"; sessionId: string }
   | { type: "session:system"; sessionId: string; text: string }

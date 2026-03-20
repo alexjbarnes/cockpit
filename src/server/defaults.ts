@@ -26,27 +26,22 @@ const fallback: AppDefaults = {
   model: "sonnet",
 };
 
-let cache: AppDefaults | null = null;
-
 export function getDefaults(): AppDefaults {
-  if (cache) return cache;
   try {
-    cache = { ...fallback, ...JSON.parse(readFileSync(DEFAULTS_FILE, "utf-8")) };
-    return cache!;
+    return { ...fallback, ...JSON.parse(readFileSync(DEFAULTS_FILE, "utf-8")) };
   } catch {
-    cache = { ...fallback };
-    return cache;
+    return { ...fallback };
   }
 }
 
 export function setDefaults(partial: Partial<AppDefaults>): AppDefaults {
   const current = getDefaults();
-  cache = { ...current, ...partial };
+  const updated = { ...current, ...partial };
   try {
     mkdirSync(PREFS_DIR, { recursive: true });
-    writeFileSync(DEFAULTS_FILE, JSON.stringify(cache, null, 2) + "\n");
+    writeFileSync(DEFAULTS_FILE, JSON.stringify(updated, null, 2) + "\n");
   } catch {
     // best effort
   }
-  return cache;
+  return updated;
 }

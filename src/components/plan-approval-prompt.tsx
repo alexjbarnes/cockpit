@@ -12,7 +12,7 @@ interface AllowedPrompt {
 
 interface PlanApprovalPromptProps {
   permission: PendingPermission;
-  onRespond: (requestId: string, allowed: boolean, permissionMode?: PermissionMode) => void;
+  onRespond: (requestId: string, allowed: boolean, permissionMode?: PermissionMode, suggestionIndex?: number) => void;
   onSendMessage: (text: string) => void;
   onSetBypass: (enabled: boolean) => void;
 }

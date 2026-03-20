@@ -413,7 +413,14 @@ export function createWebSocketHandler(
             sessionManager.setBypassAllPermissions(msg.sessionId);
           }
 
-          const suggestions = msg.permissionMode === "allow_always" ? pending?.permissionSuggestions : undefined;
+          let suggestions: Record<string, unknown>[] | undefined;
+          if (msg.permissionMode === "allow_always" && pending?.permissionSuggestions) {
+            if (msg.suggestionIndex !== undefined && msg.suggestionIndex >= 0 && msg.suggestionIndex < pending.permissionSuggestions.length) {
+              suggestions = [pending.permissionSuggestions[msg.suggestionIndex]];
+            } else {
+              suggestions = pending.permissionSuggestions;
+            }
+          }
           sessionManager.respondToPermission(msg.sessionId, msg.requestId, msg.allowed, pending?.toolInput, suggestions);
           break;
         }
@@ -642,6 +649,7 @@ function handleParsedEvent(
           requestId,
           toolName,
           input: event.toolInput || "",
+          suggestions: event.permissionSuggestions as import("@/types").PermissionSuggestion[] | undefined,
         });
       }
       break;

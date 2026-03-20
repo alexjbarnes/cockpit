@@ -7,6 +7,7 @@ import { useSettings } from "@/hooks/use-settings";
 import { DiffErrorBoundary } from "@/components/diff-viewer";
 import { useShell } from "@/components/app-shell";
 import { useIsDesktop } from "@/hooks/use-is-desktop";
+import { useWebSocket } from "@/hooks/use-websocket";
 import { ChatView } from "@/components/chat-view";
 import { Button } from "@/components/ui/button";
 import {
@@ -151,8 +152,8 @@ interface FileDiffState {
   loading: boolean;
 }
 
-// Fetch with large context so Pierre Diffs can fold/unfold inline
-const STACKED_CONTEXT = 500;
+// Small context so diffs are compact; Pierre Diffs handles expand/collapse
+const STACKED_CONTEXT = 3;
 
 interface StackedDiffsProps {
   files: GitFileChange[];
@@ -161,12 +162,17 @@ interface StackedDiffsProps {
   scrollToFile: string | null;
   onScrolled: () => void;
   onViewFile: (filePath: string) => void;
+  viewedFiles: Set<string>;
+  onToggleViewed: (path: string) => void;
+  refreshKey: number;
 }
 
-function StackedDiffs({ files, cwd, diffStyle, scrollToFile, onScrolled, onViewFile }: StackedDiffsProps) {
+function StackedDiffs({ files, cwd, diffStyle, scrollToFile, onScrolled, onViewFile, viewedFiles, onToggleViewed, refreshKey }: StackedDiffsProps) {
   const [diffs, setDiffs] = useState<Map<string, FileDiffState>>(new Map());
   const sectionRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const fetchedRef = useRef<Set<string>>(new Set());
+  const lastRefreshKey = useRef(refreshKey);
+  const [collapsedFiles, setCollapsedFiles] = useState<Set<string>>(new Set());
 
   const fetchDiff = useCallback((file: string) => {
     setDiffs((prev) => {
@@ -195,8 +201,12 @@ function StackedDiffs({ files, cwd, diffStyle, scrollToFile, onScrolled, onViewF
       });
   }, [cwd]);
 
-  // Fetch all diffs on mount or when files change
+  // Fetch all diffs on mount, when files change, or when refreshKey bumps
   useEffect(() => {
+    const forceRefresh = refreshKey !== lastRefreshKey.current;
+    lastRefreshKey.current = refreshKey;
+    if (forceRefresh) fetchedRef.current.clear();
+
     const currentPaths = new Set(files.map((f) => f.path));
     const toFetch = files.filter((f) => !fetchedRef.current.has(f.path));
     for (const f of toFetch) {
@@ -206,7 +216,7 @@ function StackedDiffs({ files, cwd, diffStyle, scrollToFile, onScrolled, onViewF
     for (const path of fetchedRef.current) {
       if (!currentPaths.has(path)) fetchedRef.current.delete(path);
     }
-  }, [files, fetchDiff]);
+  }, [files, fetchDiff, refreshKey]);
 
   // Scroll to file when requested
   useEffect(() => {
@@ -224,18 +234,45 @@ function StackedDiffs({ files, cwd, diffStyle, scrollToFile, onScrolled, onViewF
     );
   }
 
+  const toggleCollapse = useCallback((path: string) => {
+    setCollapsedFiles((prev) => {
+      const next = new Set(prev);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
+  }, []);
+
+  const handleToggleViewed = useCallback((path: string) => {
+    onToggleViewed(path);
+    if (!viewedFiles.has(path)) {
+      setCollapsedFiles((prev) => new Set(prev).add(path));
+    }
+  }, [onToggleViewed, viewedFiles]);
+
   return (
     <div className="p-4 space-y-3">
       {files.map((file) => {
         const state = diffs.get(file.path);
+        const viewed = viewedFiles.has(file.path);
+        const collapsed = collapsedFiles.has(file.path);
 
         return (
           <div
             key={file.path}
             ref={(el) => { if (el) sectionRefs.current.set(file.path, el); }}
-            className="rounded border overflow-hidden"
+            className={cn("rounded border overflow-hidden", viewed && !collapsed && "opacity-60")}
           >
-            {state?.loading && !state.diff ? (
+            {collapsed ? (
+              <button
+                onClick={() => toggleCollapse(file.path)}
+                className="flex items-center gap-2 w-full px-4 py-2 text-sm text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
+              >
+                <ChevronDown className="h-3.5 w-3.5 shrink-0" />
+                {viewed && <Check className="h-3 w-3 text-green-500 shrink-0" />}
+                <span className="font-mono text-xs truncate">{file.path}</span>
+              </button>
+            ) : state?.loading && !state.diff ? (
               <div className="flex items-center justify-center py-8">
                 <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
               </div>
@@ -254,13 +291,26 @@ function StackedDiffs({ files, cwd, diffStyle, scrollToFile, onScrolled, onViewF
                   renderHeaderMetadata={({ newFile }) => {
                     const name = newFile?.name?.replace(/^b\//, "") || file.path;
                     return (
-                      <button
-                        onClick={() => onViewFile(name)}
-                        className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors ml-2"
-                      >
-                        <ExternalLink className="h-3 w-3" />
-                        View file
-                      </button>
+                      <div className="flex items-center gap-2 ml-2">
+                        <Checkbox
+                          checked={viewed}
+                          onChange={() => handleToggleViewed(file.path)}
+                          onClick={(e) => e.stopPropagation()}
+                        />
+                        <button
+                          onClick={(e) => { e.stopPropagation(); toggleCollapse(file.path); }}
+                          className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+                          title="Collapse"
+                        >
+                          <ChevronUp className="h-3 w-3" />
+                        </button>
+                        <button
+                          onClick={() => onViewFile(name)}
+                          className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+                        >
+                          <ExternalLink className="h-3 w-3" />
+                        </button>
+                      </div>
                     );
                   }}
                 />
@@ -358,6 +408,7 @@ function getCachedState(cwd: string): ChangesState {
 export function ChangesView({ cwd, sessionId }: { cwd: string; sessionId?: string | null }) {
   const { settings } = useSettings();
   const { setSidebarContent, closeSidebar } = useShell();
+  const { subscribe } = useWebSocket();
   const router = useRouter();
   const isDesktop = useIsDesktop();
   const [status, setStatus] = useState<GitStatus | null>(null);
@@ -380,6 +431,8 @@ export function ChangesView({ cwd, sessionId }: { cwd: string; sessionId?: strin
   const [stackedMode, setStackedMode] = useState(cached.stackedMode);
   const [chatWidth, setChatWidth] = useState(cached.chatWidth);
   const [scrollToFile, setScrollToFile] = useState<string | null>(null);
+  const [viewedFiles, setViewedFiles] = useState<Set<string>>(new Set());
+  const [refreshKey, setRefreshKey] = useState(0);
   const contextMenuRef = useRef<HTMLDivElement>(null);
 
   // Persist state changes to cache
@@ -405,6 +458,22 @@ export function ChangesView({ cwd, sessionId }: { cwd: string; sessionId?: strin
   useEffect(() => {
     fetchStatus();
   }, [fetchStatus]);
+
+  // Auto-refresh when the chat session finishes a turn
+  const prevStatusRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!sessionId) return;
+    const unsub = subscribe((msg) => {
+      if (msg.type !== "session:status" || !("sessionId" in msg) || msg.sessionId !== sessionId) return;
+      const prev = prevStatusRef.current;
+      prevStatusRef.current = msg.status;
+      if (prev === "running" && msg.status === "idle") {
+        fetchStatus();
+        setRefreshKey((k) => k + 1);
+      }
+    });
+    return unsub;
+  }, [sessionId, subscribe, fetchStatus]);
 
   const fetchDiff = useCallback((file: string) => {
     setDiffLoading(true);
@@ -493,6 +562,8 @@ export function ChangesView({ cwd, sessionId }: { cwd: string; sessionId?: strin
       }
       setCommitResult({ ok: true, message: pushOnCommit ? "Committed and pushed" : "Committed" });
       setCommitMsg("");
+      setCheckedFiles(new Set());
+      setViewedFiles(new Set());
       setSelectedFile(null);
       setDiff(null);
       fetchStatus();
@@ -570,6 +641,15 @@ export function ChangesView({ cwd, sessionId }: { cwd: string; sessionId?: strin
 
   const handleScrolled = useCallback(() => {
     setScrollToFile(null);
+  }, []);
+
+  const toggleViewed = useCallback((path: string) => {
+    setViewedFiles((prev) => {
+      const next = new Set(prev);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
   }, []);
 
   const handleViewFile = useCallback((filePath: string) => {
@@ -712,6 +792,9 @@ export function ChangesView({ cwd, sessionId }: { cwd: string; sessionId?: strin
                 scrollToFile={scrollToFile}
                 onScrolled={handleScrolled}
                 onViewFile={handleViewFile}
+                viewedFiles={viewedFiles}
+                onToggleViewed={toggleViewed}
+                refreshKey={refreshKey}
               />
             ) : (
               <>

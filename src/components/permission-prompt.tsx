@@ -3,7 +3,7 @@
 import { useEffect, useRef, useMemo } from "react";
 import { ShieldAlert } from "lucide-react";
 import type { PendingPermission } from "@/hooks/use-session";
-import type { PermissionMode } from "@/types";
+import type { PermissionMode, PermissionSuggestion } from "@/types";
 
 function shortPath(filePath: string): string {
   const parts = filePath.split("/");
@@ -32,9 +32,46 @@ function formatToolSummary(toolName: string, input: Record<string, unknown>): st
   }
 }
 
+const destinationLabels: Record<string, string> = {
+  session: "session",
+  localSettings: "project (local)",
+  projectSettings: "project",
+  userSettings: "global",
+  cliArg: "session",
+};
+
+function suggestionLabel(s: PermissionSuggestion): string {
+  const dest = destinationLabels[s.destination || ""] || s.destination || "session";
+
+  if (s.type === "setMode" && s.mode) {
+    return `${s.mode} mode (${dest})`;
+  }
+
+  if (s.type === "addDirectories" && s.directories?.length) {
+    const dir = s.directories[0];
+    const short = dir.split("/").pop() || dir;
+    return `Allow dir ${short} (${dest})`;
+  }
+
+  if (!s.rules?.length) {
+    return `Always allow (${dest})`;
+  }
+
+  const rule = s.rules[0];
+  const tool = rule.toolName;
+  const content = rule.ruleContent;
+
+  if (!content) {
+    return `Always ${tool} (${dest})`;
+  }
+
+  const shortContent = content.length > 30 ? content.slice(0, 30) + "..." : content;
+  return `${tool}(${shortContent}) (${dest})`;
+}
+
 interface PermissionPromptProps {
   permission: PendingPermission;
-  onRespond: (requestId: string, allowed: boolean, permissionMode?: PermissionMode) => void;
+  onRespond: (requestId: string, allowed: boolean, permissionMode?: PermissionMode, suggestionIndex?: number) => void;
 }
 
 export function PermissionPrompt({ permission, onRespond }: PermissionPromptProps) {
@@ -54,6 +91,8 @@ export function PermissionPrompt({ permission, onRespond }: PermissionPromptProp
   }, [permission.input]);
 
   const summary = formatToolSummary(permission.toolName, parsed);
+  const suggestions = permission.suggestions;
+  const hasSuggestions = suggestions && suggestions.length > 0;
 
   return (
     <div className="mx-auto max-w-3xl">
@@ -84,12 +123,25 @@ export function PermissionPrompt({ permission, onRespond }: PermissionPromptProp
               >
                 Allow
               </button>
-              <button
-                onClick={() => onRespond(permission.requestId, true, "allow_always")}
-                className="rounded bg-primary/70 px-3 py-1 text-xs font-medium text-primary-foreground hover:bg-primary/60"
-              >
-                Always for {permission.toolName}
-              </button>
+              {hasSuggestions ? (
+                suggestions.map((s, i) => (
+                  <button
+                    key={i}
+                    onClick={() => onRespond(permission.requestId, true, "allow_always", i)}
+                    className="rounded bg-primary/70 px-3 py-1 text-xs font-medium text-primary-foreground hover:bg-primary/60"
+                    title={JSON.stringify(s, null, 2)}
+                  >
+                    {suggestionLabel(s)}
+                  </button>
+                ))
+              ) : (
+                <button
+                  onClick={() => onRespond(permission.requestId, true, "allow_always")}
+                  className="rounded bg-primary/70 px-3 py-1 text-xs font-medium text-primary-foreground hover:bg-primary/60"
+                >
+                  Always for {permission.toolName}
+                </button>
+              )}
               <button
                 onClick={() => onRespond(permission.requestId, true, "allow_all")}
                 className="rounded bg-orange-600 px-3 py-1 text-xs font-medium text-white hover:bg-orange-700"

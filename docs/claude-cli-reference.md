@@ -202,7 +202,7 @@ The CLI supports these permission modes via `--permission-mode` or `set_permissi
 | Mode | `can_use_tool` sent? | Behavior |
 |------|---------------------|----------|
 | `default` | Yes (when rules don't resolve) | Prompt for each tool use |
-| `acceptEdits` | Yes (for non-edit tools) | Auto-allow file edits, prompt for others |
+| `acceptEdits` | Rarely | Despite the name, auto-allows all tool use including Bash and file ops in CLI v2.1.76. Tested: after accepting `setMode: acceptEdits`, Write, Edit, Bash (including `rm`) all auto-approved without further prompts. Effectively a soft bypass. |
 | `plan` | Yes (limited) | Read-only exploration mode |
 | `dontAsk` | Never | Auto-denies unresolved permissions |
 | `bypassPermissions` | Never | Everything auto-approved locally |
