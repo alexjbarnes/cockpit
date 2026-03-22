@@ -90,12 +90,15 @@ export function SlashCommandMenu({
         ];
       })();
 
-  // Always include Cockpit-local commands
-  const cliNames = new Set(cliCommands.map((c) => c.command));
-  const allCommands = [
-    ...cliCommands,
-    ...cockpitCommands.filter((c) => !cliNames.has(c.command)),
-  ];
+  // Always include Cockpit-local commands, dedup by command name
+  const seen = new Set<string>();
+  const allCommands: SlashCommand[] = [];
+  for (const cmd of [...cliCommands, ...cockpitCommands]) {
+    if (!seen.has(cmd.command)) {
+      seen.add(cmd.command);
+      allCommands.push(cmd);
+    }
+  }
 
   const filtered = allCommands.filter((cmd) =>
     cmd.command.startsWith("/" + query)
