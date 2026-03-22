@@ -296,17 +296,27 @@ The CLI responds with a `control_response` on stdout for subtypes that return da
 
 #### `interrupt`
 
-Aborts the current turn without killing the process. The CLI emits a `result` event with `subtype: "error_during_execution"` and stays alive for the next message.
+Aborts the current turn without killing the process. The CLI emits a `result` event with `subtype: "error_during_execution"` and stays alive for the next message. Partial streamed content should be discarded.
 
 ```typescript
 { subtype: "interrupt" }
 ```
 
+No response body. The interrupted turn ends with a `result` event.
+
+**Cockpit status:** Used. Replaced SIGINT which killed the process.
+
 #### `end_session`
+
+Graceful shutdown. The CLI aborts any in-flight API call, cleans up state, sends a success response, then exits. Not part of the Zod schema union -- handled specially in the main message loop alongside `interrupt` and `initialize`.
 
 ```typescript
 { subtype: "end_session", reason?: string }
 ```
+
+Response is a bare ack. Process exits after sending it (observed exit code 126).
+
+**Cockpit status:** Not used. Cockpit sends SIGTERM to the process group via `killProcessGroup()`. Could use `end_session` for graceful shutdown.
 
 #### `set_permission_mode`
 
@@ -314,11 +324,19 @@ Aborts the current turn without killing the process. The CLI emits a `result` ev
 { subtype: "set_permission_mode", mode: "default" | "acceptEdits" | "bypassPermissions" | "plan" | "dontAsk" }
 ```
 
+**Cockpit status:** Used.
+
 #### `set_model`
+
+Changes the model mid-session without restarting the process. The next turn uses the new model. Verified empirically: switching from opus to haiku shows the new model in the `assistant` event's `message.model` field.
 
 ```typescript
 { subtype: "set_model", model?: string }
 ```
+
+Response is a bare ack.
+
+**Cockpit status:** Used.
 
 #### `set_max_thinking_tokens`
 
@@ -326,98 +344,50 @@ Aborts the current turn without killing the process. The CLI emits a `result` ev
 { subtype: "set_max_thinking_tokens", max_thinking_tokens: number | null }
 ```
 
-#### `mcp_status`
-
-Returns `{ mcpServers: McpServerStatus[] }` in the control_response.
-
-```typescript
-{ subtype: "mcp_status" }
-```
-
-#### `mcp_message`
-
-Send a raw JSON-RPC message to a named MCP server.
-
-```typescript
-{ subtype: "mcp_message", server_name: string, message: unknown }
-```
-
-#### `mcp_set_servers`
-
-Replace dynamically managed MCP servers. Returns `{ added: string[], removed: string[], errors: Record<string,string> }`.
-
-```typescript
-{
-  subtype: "mcp_set_servers",
-  servers: Record<string, McpServerConfig>
-}
-
-// McpServerConfig variants:
-{ type?: "stdio", command: string, args?: string[], env?: Record<string,string> }
-{ type: "sse", url: string, headers?: Record<string,string> }
-{ type: "http", url: string, headers?: Record<string,string> }
-```
-
-#### `mcp_reconnect`
-
-```typescript
-{ subtype: "mcp_reconnect", serverName: string }
-```
-
-#### `mcp_toggle`
-
-```typescript
-{ subtype: "mcp_toggle", serverName: string, enabled: boolean }
-```
-
-#### `rewind_files`
-
-Rewind file changes since a given user message. Returns `{ canRewind: boolean, filesChanged?: string[], insertions?: number, deletions?: number, error?: string }`.
-
-```typescript
-{ subtype: "rewind_files", user_message_id: string, dry_run?: boolean }
-```
-
-#### `cancel_async_message`
-
-Cancel a pending async user message from the queue. Returns `{ cancelled: boolean }`.
-
-```typescript
-{ subtype: "cancel_async_message", message_uuid: string }
-```
-
-#### `stop_task`
-
-```typescript
-{ subtype: "stop_task", task_id: string }
-```
+**Cockpit status:** Not used. Cockpit uses `apply_flag_settings` with `effort` instead.
 
 #### `apply_flag_settings`
 
-Merge settings into the flag settings layer at runtime.
+Merge settings into the flag settings layer at runtime. Can set `effort`, env vars, and other config. Verified empirically with `{ effort: "high" }`.
 
 ```typescript
 { subtype: "apply_flag_settings", settings: Record<string, unknown> }
 ```
 
+Response is a bare ack.
+
+**Cockpit status:** Used for effort/thinking level changes.
+
 #### `get_settings`
 
-Returns effective merged settings and per-source breakdown.
+Returns effective merged settings, per-source breakdown, and applied runtime values. Can be sent at any time during a session (process does not need to be idle).
 
 ```typescript
 { subtype: "get_settings" }
+```
 
-// Response:
+Response:
+```typescript
 {
-  effective: Record<string, unknown>,
-  sources: { source: string, settings: Record<string, unknown> }[],
-  applied?: { model: string, effort: string | null }
+  effective: Record<string, unknown>,  // merged settings
+  sources: {
+    source: "userSettings" | "projectSettings" | "localSettings" | "flagSettings" | "policySettings",
+    settings: Record<string, unknown>
+  }[],
+  applied?: {
+    model: string,        // e.g. "claude-opus-4-6[1m]"
+    effort: "low" | "medium" | "high" | "max" | null
+  }
 }
 ```
 
+The `applied` field shows the runtime-resolved values that will actually be sent to the API.
+
+**Cockpit status:** Not used. Could power a settings inspector in the UI.
+
 #### `initialize`
 
-SDK initialization. Configures hooks, MCP servers, schemas.
+SDK initialization. Must be sent before the first user message. Calling it twice returns an error: `"Already initialized"`. Returns rich metadata about available models, commands, agents, and account info.
 
 ```typescript
 {
@@ -433,27 +403,261 @@ SDK initialization. Configures hooks, MCP servers, schemas.
 }
 ```
 
-#### `hook_callback`
+Response:
+```typescript
+{
+  commands: { name: string, description: string, argumentHint?: string }[],
+  agents: { name: string, description: string, model?: string }[],
+  output_style: string,
+  available_output_styles: string[],
+  models: {
+    value: string,
+    displayName: string,
+    description: string,
+    supportsEffort?: boolean,
+    supportedEffortLevels?: ("low" | "medium" | "high" | "max")[],
+    supportsAdaptiveThinking?: boolean,
+    supportsFastMode?: boolean,
+    supportsAutoMode?: boolean
+  }[],
+  account: {
+    email: string,
+    organization: string,
+    subscriptionType: string   // e.g. "Claude Max"
+  },
+  pid?: number,
+  fast_mode_state?: string
+}
+```
+
+Richer than the `system/init` event: includes model capabilities (effort levels, fast mode), account info, command argument hints, and available output styles.
+
+**Cockpit status:** Not used. Could provide model picker data, account info, and slash command metadata.
+
+#### `mcp_status`
+
+Returns full state of all MCP servers including tools, config, scope, and errors.
 
 ```typescript
-{ subtype: "hook_callback", callback_id: string, input: HookCallbackInput, tool_use_id?: string }
+{ subtype: "mcp_status" }
 ```
+
+Response:
+```typescript
+{
+  mcpServers: {
+    name: string,
+    status: "connected" | "disabled" | "failed",
+    serverInfo: { name: string, version: string },  // {} when disabled
+    config: {
+      type?: "stdio" | "sse" | "http",
+      command?: string,
+      args?: string[],
+      url?: string
+    },
+    scope: "user" | "claudeai" | "dynamic",
+    tools: { name: string, annotations?: Record<string, unknown> }[],  // [] when disabled
+    error?: string   // present when status="failed"
+  }[]
+}
+```
+
+Much richer than the `system/init` event which only has `{name, status}`.
+
+**Cockpit status:** Not used. Could power a live MCP server status panel.
+
+#### `mcp_message`
+
+Send a raw JSON-RPC message to an MCP server. Fire-and-forget: the CLI acks receipt but does NOT return the MCP server's response. Primarily useful for side-effect-only operations (notifications, pings). Even sending to a nonexistent server returns success.
+
+```typescript
+{ subtype: "mcp_message", serverName: string, message: unknown }
+```
+
+Note: uses `serverName` (camelCase), not `server_name`.
+
+**Cockpit status:** Not used.
+
+#### `mcp_set_servers`
+
+Add/replace dynamically managed MCP servers for the session. Accepts an object keyed by server name (not an array). Dynamic servers appear with `scope: "dynamic"` in `mcp_status`. Servers from the previous `mcp_set_servers` call that are missing from the new call are removed.
+
+```typescript
+{
+  subtype: "mcp_set_servers",
+  servers: Record<string, McpServerConfig>
+}
+
+// McpServerConfig variants:
+{ type?: "stdio", command: string, args?: string[], env?: Record<string, string> }
+{ type: "sse", url: string, headers?: Record<string, string> }
+{ type: "http", url: string, headers?: Record<string, string> }
+```
+
+Response:
+```typescript
+{
+  added: string[],
+  removed: string[],
+  errors: Record<string, string>  // server name -> error message
+}
+```
+
+**Cockpit status:** Not used. Could enable adding session-scoped MCP servers without editing config files.
+
+#### `mcp_reconnect`
+
+Disconnect and reconnect to an MCP server.
+
+```typescript
+{ subtype: "mcp_reconnect", serverName: string }
+```
+
+Note: uses `serverName` (camelCase). Using `server_name` returns `"Server not found: undefined"`.
+
+Response is a bare ack.
+
+**Cockpit status:** Not used.
+
+#### `mcp_toggle`
+
+Enable or disable an MCP server.
+
+```typescript
+{ subtype: "mcp_toggle", serverName: string, enabled: boolean }
+```
+
+Note: uses `serverName` (camelCase).
+
+Response is a bare ack. State change visible via `mcp_status`.
+
+**Cockpit status:** Not used.
+
+#### `rewind_files`
+
+Rewind file changes to the state before a given user message was processed. Requires `CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING=true` in the process environment (disabled by default in stream-json mode).
+
+```typescript
+{ subtype: "rewind_files", user_message_id: string, dry_run?: boolean }
+```
+
+The `user_message_id` must be the `uuid` sent on the *input* user message (not from output events or assistant messages). The CLI snapshots file state keyed to this UUID before processing.
+
+Dry run response (`dry_run: true`):
+```typescript
+// Always subtype: "success" with canRewind boolean
+{
+  canRewind: boolean,
+  filesChanged?: string[],   // paths that would change
+  insertions?: number,
+  deletions?: number,
+  error?: string             // present when canRewind=false
+}
+```
+
+Actual rewind response (`dry_run: false`):
+```typescript
+// Success:
+{ canRewind: true }
+
+// Failure uses subtype: "error" at the control_response level:
+// { subtype: "error", error: "No file checkpoint found for this message." }
+```
+
+Rewind restores files to their state at the moment the user message was received (before the assistant processed it). The process stays alive after rewind.
+
+**Cockpit status:** Not used. Cockpit does not send `uuid` on user messages, so checkpoints are not created. To enable rewind: (1) set `CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING=true` in the spawn env, (2) include `uuid` on every user message written to stdin.
+
+#### `cancel_async_message`
+
+Cancel a pending message from the CLI's internal priority queue. Only works if the message has not yet been dequeued for execution.
+
+```typescript
+{ subtype: "cancel_async_message", message_uuid: string }
+```
+
+Response (always success, never errors):
+```typescript
+{ cancelled: boolean }  // true if removed from queue, false if not found/already processing
+```
+
+**CLI internal queue:** The CLI maintains a priority queue with levels `now` (0), `next` (1), `later` (2). Lower number = dequeued first. When idle, messages are dequeued immediately, so the queue is only populated when the CLI is busy processing a turn.
+
+**User message priority field:** The `user` message type accepts an optional `priority` field:
+```typescript
+{
+  type: "user",
+  uuid?: string,
+  message: { role: "user", content: ... },
+  priority?: "now" | "next" | "later"  // defaults to "next"
+}
+```
+
+**Cockpit status:** Not used. Cockpit maintains its own FIFO queue in `session.queuedMessages` and serializes messages to stdin one at a time. The CLI's priority queue and `cancel_async_message` are bypassed. Cockpit's own `cancelQueuedMessage()` pops from the cockpit-side queue instead.
+
+#### `stop_task`
+
+Stop a running background task by ID. The CLI looks up the task, validates it is still running, then kills it based on task type (`local_bash`, `local_agent`, `remote_agent`). After stopping, the CLI emits a `task_notification` event with `status: "stopped"`.
+
+```typescript
+{ subtype: "stop_task", task_id: string }
+```
+
+Response:
+```typescript
+{ taskId: string, taskType: string, command: string }
+```
+
+Errors: `"not_found"` if task doesn't exist, `"not_running"` if already completed/failed/killed.
+
+**Cockpit status:** Not used. No `stopTask()` method exists on SessionManager. The task UI has no stop button. Also note: the event parser hardcodes `task_notification` status to `"completed"`, ignoring the `"stopped"` and `"failed"` values the CLI sends.
+
+#### `hook_callback`
+
+Direction: CLI sends this TO the consumer when a hook event fires and matches a registered hook's matcher. Hook matchers are registered via the `initialize` control request's `hooks` field.
+
+```typescript
+// CLI -> consumer (as a control_request):
+{
+  subtype: "hook_callback",
+  callback_id: string,      // format: "hook_0", "hook_1", etc. (sequential)
+  input: HookCallbackInput, // hook event data (tool name, input, etc.)
+  tool_use_id?: string
+}
+```
+
+The consumer responds with a `control_response` containing the hook's output.
+
+**Cockpit status:** Not used. Cockpit does not send hook configurations in `initialize`, so it never receives `hook_callback` requests.
 
 #### `elicitation`
 
-Handle MCP server elicitation (user input request from an MCP server).
+Direction: CLI sends this TO the consumer when an MCP server requests user input. Triggered by MCP error code -32042 (`UrlElicitationRequired`) for OAuth flows, or by the standard MCP elicitation protocol for form-based input.
 
 ```typescript
+// CLI -> consumer (as a control_request):
 {
   subtype: "elicitation",
   mcp_server_name: string,
   message: string,
   mode?: "form" | "url",
-  url?: string,
+  url?: string,                        // for URL/OAuth mode
   elicitation_id?: string,
-  requested_schema?: Record<string, unknown>
+  requested_schema?: Record<string, unknown>  // JSON schema for form fields
 }
 ```
+
+Expected response:
+```typescript
+{
+  action: "accept" | "decline" | "cancel",
+  content?: Record<string, unknown>  // user-provided form data
+}
+```
+
+If the consumer fails to respond, the CLI defaults to `{ action: "cancel" }`.
+
+**Cockpit status:** Not used. MCP servers that require OAuth would trigger this.
 
 ### `control_response` - Permission response (stdin to CLI)
 
