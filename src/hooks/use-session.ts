@@ -145,21 +145,10 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
                 messageCountRef.current = filtered.length;
                 return filtered;
               }
-              // Collect user message contents from the delta so we can
-              // remove locally-added "queued-" messages that the server
-              // transcript now has under its own IDs.
-              const deltaUserContents = new Set(
-                msg.messages
-                  .filter((m: ChatMessage) => m.role === "user")
-                  .map((m: ChatMessage) => m.content)
-              );
-              const withoutSuperseded = filtered.filter(
-                (m) => !(m.id.startsWith("queued-") && deltaUserContents.has(m.content))
-              );
-              const existingIds = new Set(withoutSuperseded.map((m) => m.id));
+              const existingIds = new Set(filtered.map((m) => m.id));
               const newMsgs = msg.messages.filter((m: ChatMessage) => !existingIds.has(m.id));
-              if (newMsgs.length === 0 && withoutSuperseded.length === prev.length) return prev;
-              const result = [...withoutSuperseded, ...newMsgs];
+              if (newMsgs.length === 0 && filtered.length === prev.length) return prev;
+              const result = [...filtered, ...newMsgs];
               messageCountRef.current = result.length;
               return result;
             });
@@ -584,15 +573,18 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
           setHasQueuedMessage(msg.count > 0);
           if (msg.cancelledText) {
             setRestoredText(msg.cancelledText);
-            // Remove the locally added queued message from chat
-            setMessages((prev) => {
-              for (let i = prev.length - 1; i >= 0; i--) {
-                if (prev[i].id.startsWith("queued-") && prev[i].content === msg.cancelledText) {
-                  return [...prev.slice(0, i), ...prev.slice(i + 1)];
-                }
-              }
-              return prev;
-            });
+          }
+          if (msg.sentText) {
+            const userMsg: ChatMessage = {
+              id: crypto.randomUUID(),
+              role: "user",
+              content: msg.sentText,
+              toolUses: [],
+              blocks: [],
+              timestamp: Date.now(),
+            };
+            setMessages((prev) => [...prev, userMsg]);
+            messageCountRef.current += 1;
           }
           break;
         }
@@ -860,21 +852,8 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
         return;
       }
 
-      // Queue message server-side when responding, but show it in
-      // chat immediately so the user gets visual feedback.
+      // Queue message server-side when responding
       if (isRespondingRef.current) {
-        const queuedMsg: ChatMessage = {
-          id: "queued-" + Date.now(),
-          role: "user",
-          content: text,
-          toolUses: [],
-          blocks: [],
-          timestamp: Date.now(),
-          images: images?.length ? images : undefined,
-          documents: documents?.length ? documents : undefined,
-          textFiles: textFiles?.length ? textFiles : undefined,
-        };
-        setMessages((prev) => [...prev, queuedMsg]);
         send({
           type: "message:send",
           sessionId,
