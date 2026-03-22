@@ -365,10 +365,20 @@ export class SessionManager {
     if (!session || session.info.model === model) return;
     session.info.model = model;
     setSessionPrefs(sessionId, { model });
-    this.killProcess(session);
-    session.queuedMessages.length = 0;
-    session.info.status = "idle";
-    session.emitter.emit("status", sessionId, "idle");
+
+    if (session.stdin) {
+      const request = {
+        type: "control_request",
+        request_id: `model-${Date.now()}`,
+        request: { subtype: "set_model", model },
+      };
+      session.stdin.write(JSON.stringify(request) + "\n");
+    } else {
+      this.killProcess(session);
+      session.queuedMessages.length = 0;
+      session.info.status = "idle";
+      session.emitter.emit("status", sessionId, "idle");
+    }
     this.emitInfoUpdated(session, sessionId);
   }
 
@@ -381,11 +391,20 @@ export class SessionManager {
     if (!session || session.thinkingLevel === level) return;
     session.thinkingLevel = level;
     setSessionPrefs(sessionId, { thinkingLevel: level });
-    // Kill current process so next message spawns with new env var
-    this.killProcess(session);
-    session.queuedMessages.length = 0;
-    session.info.status = "idle";
-    session.emitter.emit("status", sessionId, "idle");
+
+    if (session.stdin) {
+      const request = {
+        type: "control_request",
+        request_id: `effort-${Date.now()}`,
+        request: { subtype: "apply_flag_settings", settings: { effort: level } },
+      };
+      session.stdin.write(JSON.stringify(request) + "\n");
+    } else {
+      this.killProcess(session);
+      session.queuedMessages.length = 0;
+      session.info.status = "idle";
+      session.emitter.emit("status", sessionId, "idle");
+    }
     this.emitSystem(session, sessionId, `__thinking_level::${level}`);
   }
 
