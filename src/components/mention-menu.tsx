@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, useMemo } from "react";
+import type { InitAgentInfo } from "@/types";
 
 const DEFAULT_AGENTS = [
   { name: "Explore", description: "Fast codebase exploration" },
@@ -28,23 +29,26 @@ interface MentionMenuProps {
   selectedIndex: number;
   onSelect: (value: string) => void;
   onItemsChange?: (items: MentionItem[]) => void;
+  initAgents?: InitAgentInfo[];
 }
 
-export function MentionMenu({ query, cwd, selectedIndex, onSelect, onItemsChange }: MentionMenuProps) {
+export function MentionMenu({ query, cwd, selectedIndex, onSelect, onItemsChange, initAgents }: MentionMenuProps) {
   const listRef = useRef<HTMLDivElement>(null);
   const [files, setFiles] = useState<string[]>([]);
   const [customAgents, setCustomAgents] = useState<CustomAgent[]>([]);
   const debounceRef = useRef<ReturnType<typeof setTimeout>>(null);
 
-  // Fetch custom agents once on mount
+  // Fetch custom agents from filesystem only when initAgents not available
   useEffect(() => {
+    if (initAgents) return;
+
     const params = new URLSearchParams();
     if (cwd) params.set("cwd", cwd);
     fetch(`/api/agents?${params}`)
       .then((res) => res.json())
       .then((data: { agents: CustomAgent[] }) => setCustomAgents(data.agents))
       .catch(() => {});
-  }, [cwd]);
+  }, [cwd, initAgents]);
 
   useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
@@ -67,13 +71,17 @@ export function MentionMenu({ query, cwd, selectedIndex, onSelect, onItemsChange
   const lowerQuery = query.toLowerCase();
 
   const allAgents = useMemo(() => {
+    if (initAgents && initAgents.length > 0) {
+      return initAgents.map((a) => ({ name: a.name, description: a.description }));
+    }
+    // Fallback: merge hardcoded defaults with filesystem custom agents
     const customNames = new Set(customAgents.map((a) => a.name));
     const builtins = DEFAULT_AGENTS.filter((a) => !customNames.has(a.name));
     return [
       ...builtins.map((a) => ({ name: a.name, description: a.description })),
       ...customAgents.map((a) => ({ name: a.name, description: a.description })),
     ];
-  }, [customAgents]);
+  }, [initAgents, customAgents]);
 
   const matchedAgents: MentionItem[] = useMemo(
     () =>

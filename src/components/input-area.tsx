@@ -640,6 +640,7 @@ export function InputArea({ sessionId, onSend, onInterrupt, isResponding, bypass
               selectedIndex={mentionSelectedIndex}
               onSelect={handleSelectMention}
               onItemsChange={(items) => { mentionItemsRef.current = items; }}
+              initAgents={initData?.agents}
             />
           )}
           <input

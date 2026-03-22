@@ -100,10 +100,15 @@ export interface CommandInfo {
   argumentHint?: string;
 }
 
+export interface InitAgentInfo {
+  name: string;
+  description?: string;
+}
+
 export interface InitData {
   slashCommands: string[];
   skills: string[];
-  agents: string[];
+  agents: InitAgentInfo[];
   version: string;
   model: string;
   mcpServers: { name: string; status: string }[];

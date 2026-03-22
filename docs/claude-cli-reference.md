@@ -189,7 +189,7 @@ The `initialize` request can be sent before the first user message to register h
 
 Sending `initialize` twice returns error: `"Already initialized"`.
 
-Cockpit does not currently use `initialize`. It could be useful for registering hooks or injecting system prompt additions without `--append-system-prompt`.
+Cockpit sends `initialize` before the first user message in `spawnProcess()`. The response is parsed as a `control_response` in `event-parser.ts` and merged with `system/init` data. Currently used for: commands (slash command descriptions), models (capability flags for model picker), account info. Not yet used: agents, output styles, argument hints.
 
 ## Permission handling
 
@@ -694,9 +694,9 @@ This matches what Cockpit's event-parser.ts already handles from the CLI's strea
 - `SIGINT` interrupts the current generation (equivalent to pressing Escape in the terminal). The process stays alive and accepts new input.
 - `SIGTERM` / `SIGKILL` terminates the process entirely.
 
-The stop button in Cockpit sends `SIGINT` to interrupt, not kill.
+The stop button in Cockpit sends an `interrupt` control request to abort the current turn without killing the process.
 
-When killing a CLI process, kill the process group (`kill(-pid, 'SIGTERM')`) not just the process. The CLI spawns child processes for bash commands, and killing only the parent leaves orphaned shells running. On Windows use `taskkill /pid X /t /f`.
+Cockpit uses `end_session` for graceful shutdown (in `destroySession()` and `killProcess()`), with a 3-second fallback to `killProcessGroup()` if the process does not exit. When killing a CLI process directly, kill the process group (`kill(-pid, 'SIGTERM')`) not just the process. The CLI spawns child processes for bash commands, and killing only the parent leaves orphaned shells running.
 
 ## File rewind
 

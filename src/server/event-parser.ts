@@ -130,13 +130,17 @@ export class EventParser {
       const models = (data.models || []) as Array<Record<string, unknown>>;
       const account = data.account as Record<string, unknown> | undefined;
       const commands = (data.commands || []) as Array<Record<string, unknown>>;
+      const agents = (data.agents || []) as Array<Record<string, unknown>>;
 
       return [{
         type: "init",
         initData: {
           slashCommands: commands.map((c) => (c.name || "") as string),
           skills: [],
-          agents: [],
+          agents: agents.map((a) => ({
+            name: (a.name || "") as string,
+            description: (a.description || undefined) as string | undefined,
+          })),
           version: "",
           model: "",
           mcpServers: [],
@@ -216,7 +220,10 @@ export class EventParser {
       if (subtype === "init") {
         const slashCommands = (event.slash_commands || []) as string[];
         const skills = (event.skills || []) as string[];
-        const agents = (event.agents || []) as string[];
+        const rawAgents = (event.agents || []) as Array<string | Record<string, unknown>>;
+        const agents = rawAgents.map((a) =>
+          typeof a === "string" ? { name: a } : { name: (a.name || "") as string, description: a.description as string | undefined }
+        );
         const version = (event.claude_code_version || "") as string;
         const model = (event.model || "") as string;
         const rawServers = (event.mcp_servers || []) as Array<{ name?: string; status?: string }>;

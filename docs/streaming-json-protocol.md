@@ -316,7 +316,7 @@ Graceful shutdown. The CLI aborts any in-flight API call, cleans up state, sends
 
 Response is a bare ack. Process exits after sending it (observed exit code 126).
 
-**Cockpit status:** Not used. Cockpit sends SIGTERM to the process group via `killProcessGroup()`. Could use `end_session` for graceful shutdown.
+**Cockpit status:** Used. Cockpit sends `end_session` in `destroySession()` and `killProcess()` with a 3-second fallback to `killProcessGroup()` if the process does not exit.
 
 #### `set_permission_mode`
 
@@ -432,7 +432,12 @@ Response:
 
 Richer than the `system/init` event: includes model capabilities (effort levels, fast mode), account info, command argument hints, and available output styles.
 
-**Cockpit status:** Not used. Could provide model picker data, account info, and slash command metadata.
+**Cockpit status:** Used. Sent before the first user message in `spawnProcess()`. The `control_response` is parsed in `event-parser.ts` and merged with `system/init` data via `setInitData()`. Currently consumed fields: `commands` (slash command menu with descriptions), `models` (model selector with capability flags), `account` (email, org, subscription type), `agents` (name + description for the `@` mention menu, replaces hardcoded defaults and `/api/agents` API call).
+
+**Not yet consumed from the response:**
+- `output_style` / `available_output_styles` (e.g. "default", "Explanatory", "Learning") - could expose a style switcher
+- `argumentHint` on commands - could show as placeholder text after selecting a slash command
+- `pid` - CLI process PID, useful for diagnostics but we already track the spawned process
 
 #### `mcp_status`
 
