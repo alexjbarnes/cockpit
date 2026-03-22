@@ -24,22 +24,22 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    const stdout = await run("gh", [
-      "api",
-      "user/orgs",
-      "--jq",
-      ".[].login",
-    ]);
-    const orgs = stdout.trim().split("\n").filter(Boolean);
-    return NextResponse.json(orgs);
-  } catch (err) {
-    const msg = String(err);
-    if (msg.includes("read:org") || msg.includes("403")) {
-      return NextResponse.json(
-        { error: "Missing read:org scope. Run 'gh auth refresh -s read:org' in your terminal." },
-        { status: 403 },
-      );
+    // Always include the authenticated user's personal account
+    const userOut = await run("gh", ["api", "user", "--jq", ".login"]);
+    const username = userOut.trim();
+
+    let orgs: string[] = [];
+    try {
+      const stdout = await run("gh", ["api", "user/orgs", "--jq", ".[].login"]);
+      orgs = stdout.trim().split("\n").filter(Boolean);
+    } catch {
+      // read:org scope may be missing, continue with just the personal account
     }
-    return NextResponse.json({ error: msg }, { status: 500 });
+
+    // Personal account first, then orgs
+    const result = [username, ...orgs.filter((o) => o !== username)];
+    return NextResponse.json(result);
+  } catch (err) {
+    return NextResponse.json({ error: String(err) }, { status: 500 });
   }
 }

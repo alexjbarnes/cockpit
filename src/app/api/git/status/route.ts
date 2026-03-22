@@ -54,6 +54,15 @@ export async function GET(req: NextRequest) {
   }
 
   try {
+    // Optionally fetch from remote first
+    if (url.searchParams.get("fetch") === "1") {
+      try {
+        await run("git", ["fetch"], cwd);
+      } catch {
+        // No remote configured or network unavailable
+      }
+    }
+
     const branchOut = await run("git", ["rev-parse", "--abbrev-ref", "HEAD"], cwd);
     const branch = branchOut.trim();
 

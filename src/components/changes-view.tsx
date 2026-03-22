@@ -134,6 +134,12 @@ function FileList({ files, selectedFile, checkedFiles, onFileClick, onContextMen
           <span className="font-mono text-xs truncate flex-1 min-w-0">
             {file.path}
           </span>
+          {(file.additions > 0 || file.deletions > 0) && (
+            <span className="text-xs font-mono shrink-0 flex items-center gap-1">
+              {file.additions > 0 && <span className="text-green-500">+{file.additions}</span>}
+              {file.deletions > 0 && <span className="text-red-500">-{file.deletions}</span>}
+            </span>
+          )}
           <span className={cn(
             "text-xs font-mono shrink-0",
             file.status === "added" || file.status === "untracked" ? "text-green-500" :
@@ -162,12 +168,12 @@ interface StackedDiffsProps {
   scrollToFile: string | null;
   onScrolled: () => void;
   onViewFile: (filePath: string) => void;
-  viewedFiles: Set<string>;
-  onToggleViewed: (path: string) => void;
+  checkedFiles: Set<string>;
+  onToggleFile: (path: string) => void;
   refreshKey: number;
 }
 
-function StackedDiffs({ files, cwd, diffStyle, scrollToFile, onScrolled, onViewFile, viewedFiles, onToggleViewed, refreshKey }: StackedDiffsProps) {
+function StackedDiffs({ files, cwd, diffStyle, scrollToFile, onScrolled, onViewFile, checkedFiles, onToggleFile, refreshKey }: StackedDiffsProps) {
   const [diffs, setDiffs] = useState<Map<string, FileDiffState>>(new Map());
   const sectionRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const fetchedRef = useRef<Set<string>>(new Set());
@@ -258,35 +264,44 @@ function StackedDiffs({ files, cwd, diffStyle, scrollToFile, onScrolled, onViewF
     });
   }, []);
 
-  const handleToggleViewed = useCallback((path: string) => {
-    onToggleViewed(path);
-    if (!viewedFiles.has(path)) {
+  const handleToggleChecked = useCallback((path: string) => {
+    onToggleFile(path);
+    if (!checkedFiles.has(path)) {
       setCollapsedFiles((prev) => new Set(prev).add(path));
     }
-  }, [onToggleViewed, viewedFiles]);
+  }, [onToggleFile, checkedFiles]);
 
   return (
     <div className="p-4 space-y-3">
       {files.map((file) => {
         const state = diffs.get(file.path);
-        const viewed = viewedFiles.has(file.path);
+        const checked = checkedFiles.has(file.path);
         const collapsed = collapsedFiles.has(file.path);
 
         return (
           <div
             key={file.path}
             ref={(el) => { if (el) sectionRefs.current.set(file.path, el); }}
-            className={cn("rounded border", viewed && !collapsed && "opacity-60")}
+            className={cn("rounded border", checked && !collapsed && "opacity-60")}
           >
             {collapsed ? (
-              <button
-                onClick={() => toggleCollapse(file.path)}
-                className="flex items-center gap-2 w-full px-4 py-2 text-sm text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
-              >
-                <ChevronDown className="h-3.5 w-3.5 shrink-0" />
-                {viewed && <Check className="h-3 w-3 text-green-500 shrink-0" />}
-                <span className="font-mono text-xs truncate">{file.path}</span>
-              </button>
+              <div className="flex items-center gap-2 w-full px-4 py-2 text-sm text-muted-foreground">
+                <Checkbox
+                  checked={checked}
+                  onChange={() => {
+                    onToggleFile(file.path);
+                    if (checked) setCollapsedFiles((prev) => { const next = new Set(prev); next.delete(file.path); return next; });
+                  }}
+                  onClick={(e) => e.stopPropagation()}
+                />
+                <button
+                  onClick={() => toggleCollapse(file.path)}
+                  className="flex items-center gap-2 flex-1 min-w-0 hover:text-foreground transition-colors"
+                >
+                  <ChevronDown className="h-3.5 w-3.5 shrink-0" />
+                  <span className="font-mono text-xs truncate">{file.path}</span>
+                </button>
+              </div>
             ) : state?.loading && !state.diff ? (
               <div className="flex items-center justify-center py-8">
                 <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
@@ -294,14 +309,14 @@ function StackedDiffs({ files, cwd, diffStyle, scrollToFile, onScrolled, onViewF
             ) : state?.diff ? (
               <>
                 <div
-                  className="sticky top-0 z-10 flex items-center gap-2 px-4 py-1.5 text-sm border-b bg-muted/80 backdrop-blur-sm"
+                  className="sticky top-0 z-10 flex items-center gap-2 px-4 py-1.5 text-sm border-b bg-muted/80 backdrop-blur-sm rounded-t-lg"
                   data-testid="sticky-diff-header"
                 >
                   {statusIcon(file.status)}
                   <span className="font-mono text-xs truncate flex-1 min-w-0">{file.path}</span>
                   <Checkbox
-                    checked={viewed}
-                    onChange={() => handleToggleViewed(file.path)}
+                    checked={checked}
+                    onChange={() => handleToggleChecked(file.path)}
                     onClick={(e) => e.stopPropagation()}
                   />
                   <button
@@ -396,17 +411,13 @@ interface ChangesState {
   commitPanelOpen: boolean;
   pushOnCommit: boolean;
   stackedMode: boolean;
-  chatWidth: number;
+  chatRatio: number;
 }
 
 const stateCache = new Map<string, ChangesState>();
-const DEFAULT_CHAT_WIDTH = 400;
-const MIN_CHAT_WIDTH = 280;
-
-function maxChatWidth(): number {
-  if (typeof window === "undefined") return 800;
-  return Math.floor(window.innerWidth * 0.5);
-}
+const DEFAULT_CHAT_RATIO = 0.3;
+const MIN_CHAT_RATIO = 0.15;
+const MAX_CHAT_RATIO = 0.5;
 
 function isDesktopStatic(): boolean {
   if (typeof window === "undefined") return false;
@@ -421,7 +432,7 @@ function getCachedState(cwd: string): ChangesState {
     commitPanelOpen: isDesktopStatic(),
     pushOnCommit: false,
     stackedMode: true,
-    chatWidth: DEFAULT_CHAT_WIDTH,
+    chatRatio: DEFAULT_CHAT_RATIO,
   };
 }
 
@@ -452,21 +463,22 @@ export function ChangesView({ cwd, sessionId }: { cwd: string; sessionId?: strin
   const [pushing, setPushing] = useState(false);
   const [pushResult, setPushResult] = useState<{ ok: boolean; message: string } | null>(null);
   const [stackedMode, setStackedMode] = useState(cached.stackedMode);
-  const [chatWidth, setChatWidth] = useState(cached.chatWidth);
+  const [chatRatio, setChatRatio] = useState(cached.chatRatio);
   const [scrollToFile, setScrollToFile] = useState<string | null>(null);
-  const [viewedFiles, setViewedFiles] = useState<Set<string>>(new Set());
   const [refreshKey, setRefreshKey] = useState(0);
   const contextMenuRef = useRef<HTMLDivElement>(null);
 
   // Persist state changes to cache
   useEffect(() => {
-    stateCache.set(cwd, { selectedFile, checkedFiles, commitMsg, commitPanelOpen, pushOnCommit, stackedMode, chatWidth });
-  }, [cwd, selectedFile, checkedFiles, commitMsg, commitPanelOpen, pushOnCommit, stackedMode, chatWidth]);
+    stateCache.set(cwd, { selectedFile, checkedFiles, commitMsg, commitPanelOpen, pushOnCommit, stackedMode, chatRatio });
+  }, [cwd, selectedFile, checkedFiles, commitMsg, commitPanelOpen, pushOnCommit, stackedMode, chatRatio]);
 
-  const fetchStatus = useCallback(() => {
+  const fetchStatus = useCallback((opts?: { gitFetch?: boolean }) => {
     setLoading(true);
     setError(null);
-    fetch(`/api/git/status?cwd=${encodeURIComponent(cwd)}`)
+    const params = new URLSearchParams({ cwd });
+    if (opts?.gitFetch) params.set("fetch", "1");
+    fetch(`/api/git/status?${params}`)
       .then((res) => {
         if (!res.ok) throw new Error("Failed");
         return res.json();
@@ -600,7 +612,6 @@ export function ChangesView({ cwd, sessionId }: { cwd: string; sessionId?: strin
       setCommitResult({ ok: true, message: pushOnCommit ? "Committed and pushed" : "Committed" });
       setCommitMsg("");
       setCheckedFiles(new Set());
-      setViewedFiles(new Set());
       setSelectedFile(null);
       setDiff(null);
       fetchStatus();
@@ -673,21 +684,14 @@ export function ChangesView({ cwd, sessionId }: { cwd: string; sessionId?: strin
   }, [status]);
 
   const handleResize = useCallback((delta: number) => {
-    setChatWidth((w) => Math.max(MIN_CHAT_WIDTH, Math.min(maxChatWidth(), w + delta)));
+    const width = window.innerWidth || 1;
+    setChatRatio((r) => Math.max(MIN_CHAT_RATIO, Math.min(MAX_CHAT_RATIO, r + delta / width)));
   }, []);
 
   const handleScrolled = useCallback(() => {
     setScrollToFile(null);
   }, []);
 
-  const toggleViewed = useCallback((path: string) => {
-    setViewedFiles((prev) => {
-      const next = new Set(prev);
-      if (next.has(path)) next.delete(path);
-      else next.add(path);
-      return next;
-    });
-  }, []);
 
   const handleViewFile = useCallback((filePath: string) => {
     const fullPath = filePath.startsWith("/") ? filePath : `${cwd}/${filePath}`;
@@ -755,6 +759,16 @@ export function ChangesView({ cwd, sessionId }: { cwd: string; sessionId?: strin
         <span className="text-xs text-muted-foreground">
           {status.files.length} file{status.files.length !== 1 ? "s" : ""} changed
         </span>
+        {(() => {
+          const totalAdd = status.files.reduce((s, f) => s + f.additions, 0);
+          const totalDel = status.files.reduce((s, f) => s + f.deletions, 0);
+          return (totalAdd > 0 || totalDel > 0) ? (
+            <span className="text-xs font-mono flex items-center gap-1">
+              {totalAdd > 0 && <span className="text-green-500">+{totalAdd}</span>}
+              {totalDel > 0 && <span className="text-red-500">-{totalDel}</span>}
+            </span>
+          ) : null;
+        })()}
         {status.ahead > 0 && (
           <span className="text-xs text-muted-foreground">
             {status.ahead} unpushed
@@ -770,8 +784,8 @@ export function ChangesView({ cwd, sessionId }: { cwd: string; sessionId?: strin
           </span>
         )}
         <div className="flex-1" />
-        {/* Stacked/Single toggle - desktop only */}
-        {isDesktop && status.files.length > 0 && (
+        {/* Stacked/Single toggle */}
+        {status.files.length > 0 && (
           <div className="flex items-center gap-0.5 rounded-md border p-0.5">
             <button
               onClick={() => setStackedMode(true)}
@@ -811,7 +825,7 @@ export function ChangesView({ cwd, sessionId }: { cwd: string; sessionId?: strin
             Push
           </Button>
         )}
-        <Button variant="ghost" size="sm" onClick={fetchStatus}>
+        <Button variant="ghost" size="sm" onClick={() => fetchStatus({ gitFetch: true })}>
           Refresh
         </Button>
       </div>
@@ -829,8 +843,8 @@ export function ChangesView({ cwd, sessionId }: { cwd: string; sessionId?: strin
                 scrollToFile={scrollToFile}
                 onScrolled={handleScrolled}
                 onViewFile={handleViewFile}
-                viewedFiles={viewedFiles}
-                onToggleViewed={toggleViewed}
+                checkedFiles={checkedFiles}
+                onToggleFile={toggleFile}
                 refreshKey={refreshKey}
               />
             ) : (
@@ -841,7 +855,30 @@ export function ChangesView({ cwd, sessionId }: { cwd: string; sessionId?: strin
                   </div>
                 ) : selectedFile && diff ? (
                   <div className="p-4">
-                    <div className="rounded border">
+                    <div className="rounded-lg border overflow-hidden">
+                      {(() => {
+                        const file = status.files.find((f) => f.path === selectedFile);
+                        return file ? (
+                          <div
+                            className="sticky top-0 z-10 flex items-center gap-2 px-4 py-1.5 text-sm border-b bg-muted/80 backdrop-blur-sm rounded-t-lg"
+                          >
+                            {statusIcon(file.status)}
+                            <span className="font-mono text-xs truncate flex-1 min-w-0">{file.path}</span>
+                            <Checkbox
+                              checked={checkedFiles.has(file.path)}
+                              onChange={() => toggleFile(file.path)}
+                              onClick={(e) => e.stopPropagation()}
+                            />
+                            <button
+                              onClick={() => handleViewFile(file.path)}
+                              className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+                              title="Open in editor"
+                            >
+                              <ExternalLink className="h-3 w-3" />
+                            </button>
+                          </div>
+                        ) : null;
+                      })()}
                       <DiffErrorBoundary fallback={<pre className="p-4 text-xs text-muted-foreground whitespace-pre-wrap">{diff}</pre>}>
                         {singleFileDiff ? (
                           <FileDiff
@@ -851,20 +888,9 @@ export function ChangesView({ cwd, sessionId }: { cwd: string; sessionId?: strin
                               themeType: isDark() ? "dark" : "light",
                               overflow: "wrap",
                               diffStyle: settings.diffStyle,
+                              disableFileHeader: true,
                               hunkSeparators: "line-info",
                               expansionLineCount: 20,
-                            }}
-                            renderHeaderMetadata={({ newFile }) => {
-                              const name = newFile?.name?.replace(/^b\//, "") || selectedFile || "";
-                              return (
-                                <button
-                                  onClick={() => handleViewFile(name)}
-                                  className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors ml-2"
-                                >
-                                  <ExternalLink className="h-3 w-3" />
-                                  View file
-                                </button>
-                              );
                             }}
                           />
                         ) : (
@@ -958,7 +984,7 @@ export function ChangesView({ cwd, sessionId }: { cwd: string; sessionId?: strin
             <ResizeHandle onResize={handleResize} />
             <div
               className="flex flex-col shrink-0 border-l min-h-0"
-              style={{ width: chatWidth }}
+              style={{ width: `${chatRatio * 100}%` }}
             >
               <ChatView sessionId={sessionId} cwd={cwd} />
             </div>
