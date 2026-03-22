@@ -996,15 +996,27 @@ export class SessionManager {
               pendingBlocks.push({ type: "text", text: event.message.content });
             }
 
-            // Detect API errors that arrive as regular message text
-            // (e.g. "API Error: 500 {"type":"error",...}") and route them
-            // through the error path instead of rendering as chat messages.
+            // Filter out noise messages that shouldn't appear as chat bubbles
             if (pendingToolUses.length === 0) {
               const fullText = pendingBlocks
                 .filter((b) => b.type === "text")
                 .map((b) => b.text)
                 .join("")
                 .trim();
+
+              // "No response requested." is emitted by the CLI after SIGINT
+              if (fullText === "No response requested.") {
+                pendingBlocks.length = 0;
+                currentAssistantMsgId = null;
+                session.info.status = "idle";
+                session.emitter.emit("status", sessionId, "idle");
+                flushedOnMessageDone = true;
+                this.flushQueuedMessage(session, sessionId);
+                continue;
+              }
+
+              // Detect API errors (e.g. "API Error: 500 {"type":"error",...}")
+              // and route them through the error path instead of chat.
               const apiErrMatch = fullText.match(/^API Error: (\d+)\s/);
               if (apiErrMatch) {
                 const msgMatch = fullText.match(/"message"\s*:\s*"([^"]+)"/);

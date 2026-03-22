@@ -328,8 +328,9 @@ export async function loadTranscript(sessionId: string, cwd: string): Promise<Ch
         }
       }
 
-      // Skip API error messages - they are transient and already shown via the error banner
-      if (toolUses.length === 0 && /^API Error: \d+\s/.test(textContent.trim())) {
+      // Skip noise messages that shouldn't appear as chat bubbles
+      const trimmed = textContent.trim();
+      if (toolUses.length === 0 && (trimmed === "No response requested." || /^API Error: \d+\s/.test(trimmed))) {
         continue;
       }
 
