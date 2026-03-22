@@ -570,6 +570,7 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
         }
 
         case "session:queued": {
+          console.log(`[session:queued] count=${msg.count}, sentText=${msg.sentText ? msg.sentText.slice(0, 50) : "none"}, cancelledText=${msg.cancelledText ? "yes" : "no"}`);
           setHasQueuedMessage(msg.count > 0);
           if (msg.cancelledText) {
             setRestoredText(msg.cancelledText);
@@ -583,6 +584,7 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
               blocks: [],
               timestamp: Date.now(),
             };
+            console.log(`[session:queued] injecting user message: "${msg.sentText.slice(0, 50)}"`);
             setMessages((prev) => [...prev, userMsg]);
             messageCountRef.current += 1;
           }

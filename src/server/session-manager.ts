@@ -449,7 +449,11 @@ export class SessionManager {
   private flushQueuedMessage(session: Session, sessionId: string): void {
     if (session.queuedMessages.length === 0) return;
     const next = session.queuedMessages.shift()!;
-    session.emitter.emit("queued", sessionId, session.queuedMessages.length, next.text);
+    const remaining = session.queuedMessages.length;
+    const sid = sessionId.slice(0, 8);
+    const listeners = session.emitter.listenerCount("queued");
+    console.log(`[queue:${sid}] flushing queued message (remaining=${remaining}, text=${next.text.slice(0, 50)}, listeners=${listeners})`);
+    session.emitter.emit("queued", sessionId, remaining, next.text);
     this.sendMessage(sessionId, next.text, next.images, next.documents);
   }
 
