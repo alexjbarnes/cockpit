@@ -188,7 +188,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                 <Button variant="ghost" size="icon" onClick={toggleSidebar} title="Toggle sidebar (Ctrl+B)" className="md:hidden">
                   <Menu className="h-4 w-4" />
                 </Button>
-                <div className="hidden md:block min-w-0">
+                <div className="min-w-0">
                   <EditableTitle title={header.title} onRename={header.onRename} />
                 </div>
                 <div className="ml-auto flex items-center gap-2">
