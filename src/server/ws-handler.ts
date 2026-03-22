@@ -98,6 +98,10 @@ export function createWebSocketHandler(
           }
           console.log(`[ws:${wsId}] session ${sid} loaded (status=${session.info.status}, messages=${session.messages.length}, process=${sessionManager.isProcessAlive(msg.sessionId)})`);
 
+          // Eagerly spawn the CLI process so initialize data (agents, models,
+          // commands) is available before the user sends their first message.
+          sessionManager.ensureProcess(msg.sessionId);
+
           // Clean up previous subscriptions for this session
           const prev = sessionCleanups.get(msg.sessionId);
           if (prev) {

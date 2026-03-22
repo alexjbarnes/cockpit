@@ -794,7 +794,13 @@ export class SessionManager {
     console.log(`[session:${short}] ${ts} ${msg}`);
   }
 
-  private spawnProcess(session: Session, sessionId: string, text: string, images?: ImageAttachment[], documents?: DocumentAttachment[]): void {
+  ensureProcess(sessionId: string): void {
+    const session = this.sessions.get(sessionId);
+    if (!session || session.process) return;
+    this.spawnProcess(session, sessionId);
+  }
+
+  private spawnProcess(session: Session, sessionId: string, text?: string, images?: ImageAttachment[], documents?: DocumentAttachment[]): void {
     this.log(sessionId, `spawning CLI process (resume=${session.hasSpawnedBefore}, model=${session.info.model || "sonnet"})`);
     const args = [
       "-p",
@@ -852,9 +858,11 @@ export class SessionManager {
     };
     proc.stdin!.write(JSON.stringify(initRequest) + "\n");
 
-    const content = this.buildContent(text, images, documents);
-    const userInput = { type: "user", message: { role: "user", content } };
-    proc.stdin!.write(JSON.stringify(userInput) + "\n");
+    if (text) {
+      const content = this.buildContent(text, images, documents);
+      const userInput = { type: "user", message: { role: "user", content } };
+      proc.stdin!.write(JSON.stringify(userInput) + "\n");
+    }
 
     // Handle pipe errors to prevent unhandled exceptions
     proc.stdin!.on("error", (err) => {
