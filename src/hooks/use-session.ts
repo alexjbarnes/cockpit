@@ -533,6 +533,12 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
             setMessages((prev) => prev.filter((m) => m.id !== "streaming"));
             setPendingQuestions([]);
             setRateLimitStatus(null);
+            // Clear any background tasks still running - the process has exited
+            setBackgroundTasks((prev) => {
+              const stale = prev.filter((t) => t.status === "running");
+              if (stale.length === 0) return prev;
+              return prev.filter((t) => t.status !== "running");
+            });
           }
           break;
         }

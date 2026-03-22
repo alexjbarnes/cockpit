@@ -485,9 +485,15 @@ export class SessionManager {
     const session = this.sessions.get(sessionId);
     if (!session) return;
 
-    // Find the last TodoWrite call in history to get current state
+    // If there's already a live todo state (set during the current process),
+    // don't overwrite it from history.
+    if (session.todoItems.length > 0) return;
+
+    // Find the last TodoWrite call in history, but stop at compact boundaries
+    // (which mark /clear points) to avoid resurrecting pre-clear todos.
     for (let i = messages.length - 1; i >= 0; i--) {
       const msg = messages[i];
+      if (msg.role === "system" && msg.content === "__compacted__") break;
       if (msg.role !== "assistant") continue;
       for (let j = msg.toolUses.length - 1; j >= 0; j--) {
         if (msg.toolUses[j].name === "TodoWrite") {
@@ -602,6 +608,7 @@ export class SessionManager {
         this.killProcess(session);
         session.hasSpawnedBefore = false;
         session.queuedMessages.length = 0;
+        session.todoItems = [];
         session.info.status = "idle";
         session.emitter.emit("clear", sessionId);
         session.emitter.emit("status", sessionId, "idle");
@@ -1097,6 +1104,12 @@ export class SessionManager {
       if (session.compacting) {
         session.compacting = false;
         this.emitSystem(session, sessionId, "__compact::done");
+      }
+
+      // Auto-clear todos when the turn ends and all items are completed
+      if (session.todoItems.length > 0 && session.todoItems.every((t) => t.status === "completed")) {
+        session.todoItems = [];
+        session.emitter.emit("todos", sessionId, []);
       }
 
       if (code !== 0 && stderrBuffer.trim()) {
