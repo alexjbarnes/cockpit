@@ -133,18 +133,25 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
       switch (msg.type) {
         case "history": {
           if (msg.delta) {
-            // Delta: append only new messages, keep existing state
-            if (msg.messages.length > 0) {
-              setMessages((prev) => {
-                const existingIds = new Set(prev.map((m) => m.id));
-                const newMsgs = msg.messages.filter((m: ChatMessage) => !existingIds.has(m.id));
-                if (newMsgs.length === 0) return prev;
-                const filtered = prev.filter((m) => m.id !== "streaming");
-                const result = [...filtered, ...newMsgs];
-                messageCountRef.current = result.length;
-                return result;
-              });
-            }
+            // Delta: reconnect happened. Reset streaming state so the
+            // streaming_snapshot that follows starts fresh and doesn't
+            // duplicate content already present in the delta messages.
+            streamingRef.current = null;
+            agentStackRef.current = [];
+            setMessages((prev) => {
+              const filtered = prev.filter((m) => m.id !== "streaming");
+              if (msg.messages.length === 0) {
+                if (filtered.length === prev.length) return prev;
+                messageCountRef.current = filtered.length;
+                return filtered;
+              }
+              const existingIds = new Set(filtered.map((m) => m.id));
+              const newMsgs = msg.messages.filter((m: ChatMessage) => !existingIds.has(m.id));
+              if (newMsgs.length === 0 && filtered.length === prev.length) return prev;
+              const result = [...filtered, ...newMsgs];
+              messageCountRef.current = result.length;
+              return result;
+            });
           } else {
             // Full history: replace everything
             const seen = new Set<string>();
