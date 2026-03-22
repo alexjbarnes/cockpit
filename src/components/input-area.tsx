@@ -340,7 +340,7 @@ export function InputArea({ sessionId, onSend, onInterrupt, isResponding, bypass
         handleSend();
       }
     },
-    [showMenu, showMention, query, selectedIndex, mentionSelectedIndex, handleSend, handleSelectCommand, handleSelectMention, text, mention.start, cursorPos, hasQueuedMessage, onCancelQueued]
+    [showMenu, showMention, query, selectedIndex, mentionSelectedIndex, handleSend, handleSelectCommand, handleSelectMention, text, mention.start, cursorPos, hasQueuedMessage, onCancelQueued, isResponding, onInterrupt]
   );
 
   const handleInput = useCallback(() => {

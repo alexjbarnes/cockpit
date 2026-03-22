@@ -124,22 +124,23 @@ export function ChatView({ sessionId, cwd, initialName, initialContext }: { sess
     return () => vv.removeEventListener("resize", handler);
   }, [scrollToBottom]);
 
-  // On Mac, switching back to the window doesn't give keyboard focus to the
-  // document, so keydown events (like Escape to interrupt) don't fire until the
-  // user clicks. Fix: when pointer moves over the page and the document doesn't
-  // have focus, focus the scroll container (which has tabIndex={-1}).
-  // pointermove fires on Mac even when the window is frontmost but lacks keyboard
-  // focus. visibilitychange only fires on tab switches, not app switches. The
-  // window focus event may not fire until a click on Mac.
+  // On Mac (and some Linux WMs), switching back to the window doesn't give
+  // keyboard focus to the document, so keydown events (like Escape to
+  // interrupt) don't fire until the user clicks. Fix: on pointermove and
+  // window focus, ensure the scroll container (tabIndex={-1}) has focus so
+  // keyboard events reach window handlers. document.hasFocus() can return
+  // true even without real keyboard input, so we skip the hasFocus guard
+  // and instead check whether the scroll container already has focus to
+  // avoid redundant work on every mousemove.
   //
   // Also re-scroll to bottom when returning. Browsers throttle layout for
-  // background apps, so scrollTop assignments may not stick. When focus returns,
-  // the reconciled scrollHeight can be larger than scrollTop, making the scroll
-  // handler think the user scrolled up (stickToBottom = false).
+  // background apps, so scrollTop assignments may not stick. When focus
+  // returns, the reconciled scrollHeight can be larger than scrollTop,
+  // making the scroll handler think the user scrolled up.
   useEffect(() => {
     const handler = () => {
-      if (document.hasFocus()) return;
       if (document.activeElement?.closest("textarea, input")) return;
+      if (document.activeElement === scrollRef.current) return;
       scrollRef.current?.focus({ preventScroll: true });
       if (stickToBottom.current) scrollToBottom();
     };
