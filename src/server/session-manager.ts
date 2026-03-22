@@ -205,7 +205,7 @@ export class SessionManager {
     const session = this.sessions.get(id);
     if (!session) return false;
     if (session.process) {
-      this.killProcessGroup(session.process);
+      this.endProcess(session, "session_destroyed");
     }
     session.emitter.removeAllListeners();
     this.sessions.delete(id);
@@ -276,8 +276,8 @@ export class SessionManager {
       return true;
     }
 
-    // Fallback: if stdin is gone for some reason, kill the process
-    session.process.kill("SIGINT");
+    // Fallback: if stdin is gone, kill the process group
+    this.killProcessGroup(session.process);
     return true;
   }
 
@@ -578,10 +578,35 @@ export class SessionManager {
     }
   }
 
+  // Graceful shutdown: send end_session control request via stdin.
+  // The CLI aborts any in-flight API call, cleans up, acks, then exits.
+  // Falls back to SIGTERM if the process doesn't exit within the timeout.
+  private endProcess(session: Session, reason?: string): void {
+    if (!session.process) return;
+    const proc = session.process;
+
+    if (session.stdin) {
+      const request = {
+        type: "control_request",
+        request_id: `end-session-${Date.now()}`,
+        request: { subtype: "end_session", reason },
+      };
+      session.stdin.write(JSON.stringify(request) + "\n");
+
+      // Fallback: SIGTERM if the CLI doesn't exit within 3 seconds
+      const fallback = setTimeout(() => {
+        this.killProcessGroup(proc);
+      }, 3000);
+      proc.once("close", () => clearTimeout(fallback));
+    } else {
+      this.killProcessGroup(proc);
+    }
+  }
+
   private killProcess(session: Session): void {
     if (session.process) {
       session.process.on("close", () => {});
-      this.killProcessGroup(session.process);
+      this.endProcess(session, "session_reset");
       session.process = null;
       session.stdin = null;
     }
