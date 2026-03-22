@@ -16,6 +16,7 @@ export interface ParsedEvent {
   requestId?: string;
   rawToolInput?: Record<string, unknown>;
   permissionSuggestions?: Record<string, unknown>[];
+  interrupted?: boolean;
   rateLimitInfo?: { status: string; retryAfterMs?: number };
   suggestions?: string[];
   taskInfo?: {
@@ -113,7 +114,8 @@ export class EventParser {
 
     // tool_use_summary: dropped because tool_result already provides output
     // stream_event: dropped because we use full assistant events
-    if (type === "tool_use_summary" || type === "stream_event") {
+    // control_response: ack from CLI for control_request (e.g. interrupt)
+    if (type === "tool_use_summary" || type === "stream_event" || type === "control_response") {
       return [];
     }
 
@@ -300,6 +302,7 @@ export class EventParser {
   private parseResultEvent(event: Record<string, unknown>): ParsedEvent[] {
     const result = event.result as string | undefined;
     const uuid = event.uuid as string | undefined;
+    const subtype = event.subtype as string | undefined;
 
     const message: ChatMessage = {
       id: uuid || uuidv4(),
@@ -310,6 +313,6 @@ export class EventParser {
       timestamp: Date.now(),
     };
 
-    return [{ type: "message_done", message }];
+    return [{ type: "message_done", message, interrupted: subtype === "error_during_execution" }];
   }
 }

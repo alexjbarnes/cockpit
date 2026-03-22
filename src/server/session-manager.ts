@@ -260,6 +260,23 @@ export class SessionManager {
   interrupt(id: string): boolean {
     const session = this.sessions.get(id);
     if (!session?.process) return false;
+
+    // Send a control_request interrupt via stdin instead of SIGINT.
+    // SIGINT kills the process, forcing a full respawn + transcript reload
+    // on the next message. The control_request interrupt aborts the current
+    // turn but keeps the process alive so the next message can be sent
+    // directly to stdin with no respawn overhead.
+    if (session.stdin) {
+      const request = {
+        type: "control_request",
+        request_id: `interrupt-${Date.now()}`,
+        request: { subtype: "interrupt" },
+      };
+      session.stdin.write(JSON.stringify(request) + "\n");
+      return true;
+    }
+
+    // Fallback: if stdin is gone for some reason, kill the process
     session.process.kill("SIGINT");
     return true;
   }
@@ -973,6 +990,21 @@ export class SessionManager {
           } else if (event.type === "system_message" && event.text) {
             this.emitSystem(session, sessionId, event.text);
           } else if (event.type === "message_done" && event.message) {
+            // Interrupted turn (control_request interrupt): discard partial
+            // content and go idle without emitting a message.
+            if (event.interrupted) {
+              pendingBlocks.length = 0;
+              pendingToolUses.length = 0;
+              agentStack.length = 0;
+              currentAssistantMsgId = null;
+              session.streamingSnapshot = null;
+              session.info.status = "idle";
+              session.emitter.emit("status", sessionId, "idle");
+              flushedOnMessageDone = true;
+              this.flushQueuedMessage(session, sessionId);
+              continue;
+            }
+
             // If all messages were already finalized via intermediate emissions,
             // skip the duplicate result message but still update status.
             if (pendingBlocks.length === 0 && pendingToolUses.length === 0 && currentAssistantMsgId) {
@@ -1005,6 +1037,7 @@ export class SessionManager {
                 .trim();
 
               // "No response requested." is emitted by the CLI after SIGINT
+              // (fallback path if stdin is unavailable).
               if (fullText === "No response requested.") {
                 pendingBlocks.length = 0;
                 currentAssistantMsgId = null;
