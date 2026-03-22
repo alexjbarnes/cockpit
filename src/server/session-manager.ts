@@ -989,6 +989,34 @@ export class SessionManager {
               pendingBlocks.push({ type: "text", text: event.message.content });
             }
 
+            // Detect API errors that arrive as regular message text
+            // (e.g. "API Error: 500 {"type":"error",...}") and route them
+            // through the error path instead of rendering as chat messages.
+            if (pendingToolUses.length === 0) {
+              const fullText = pendingBlocks
+                .filter((b) => b.type === "text")
+                .map((b) => b.text)
+                .join("")
+                .trim();
+              const apiErrMatch = fullText.match(/^API Error: (\d+)\s/);
+              if (apiErrMatch) {
+                const msgMatch = fullText.match(/"message"\s*:\s*"([^"]+)"/);
+                const errMsg = msgMatch
+                  ? `${msgMatch[1]} (HTTP ${apiErrMatch[1]})`
+                  : fullText.slice(0, 200);
+                pendingBlocks.length = 0;
+                pendingToolUses.length = 0;
+                agentStack.length = 0;
+                currentAssistantMsgId = null;
+                session.info.status = "idle";
+                session.emitter.emit("status", sessionId, "idle");
+                session.emitter.emit("error", sessionId, errMsg);
+                flushedOnMessageDone = true;
+                this.flushQueuedMessage(session, sessionId);
+                continue;
+              }
+            }
+
             event.message.blocks = [...pendingBlocks];
             if (event.message.toolUses.length === 0 && pendingToolUses.length > 0) {
               event.message.toolUses = [...pendingToolUses];

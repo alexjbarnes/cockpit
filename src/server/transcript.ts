@@ -328,6 +328,11 @@ export async function loadTranscript(sessionId: string, cwd: string): Promise<Ch
         }
       }
 
+      // Skip API error messages - they are transient and already shown via the error banner
+      if (toolUses.length === 0 && /^API Error: \d+\s/.test(textContent.trim())) {
+        continue;
+      }
+
       const existing = entry.message.id ? messageById.get(msgId) : undefined;
       if (existing) {
         // Accumulate blocks across streaming entries for the same message

@@ -43,6 +43,79 @@ function splitDiff(raw: string): { path: string; patch: string }[] {
   return files.map((f) => ({ path: f.path, patch: f.lines.join("\n") }));
 }
 
+interface GHFile {
+  filename: string;
+  patch?: string;
+  status: string;
+  previous_filename?: string;
+}
+
+// Build a full git-style diff from the REST API per-file patch.
+// PatchDiff expects the diff --git header, --- / +++ lines, and hunks.
+function buildFullPatch(f: GHFile): string {
+  const prev = f.previous_filename || f.filename;
+  const lines: string[] = [];
+
+  lines.push(`diff --git a/${prev} b/${f.filename}`);
+
+  if (f.status === "added") {
+    lines.push("new file mode 100644");
+    lines.push("--- /dev/null");
+    lines.push(`+++ b/${f.filename}`);
+  } else if (f.status === "removed") {
+    lines.push("deleted file mode 100644");
+    lines.push(`--- a/${prev}`);
+    lines.push("+++ /dev/null");
+  } else {
+    lines.push(`--- a/${prev}`);
+    lines.push(`+++ b/${f.filename}`);
+  }
+
+  if (f.patch) lines.push(f.patch);
+  return lines.join("\n");
+}
+
+// Fallback: fetch per-file patches via GitHub REST API when the full
+// diff exceeds the 20K line limit (HTTP 406 from gh pr diff).
+async function fetchFileDiffs(repo: string, number: string): Promise<{ path: string; patch: string }[]> {
+  const stdout = await run("gh", [
+    "api",
+    `repos/${repo}/pulls/${number}/files?per_page=100`,
+    "--paginate",
+  ]);
+
+  // gh api --paginate concatenates JSON arrays back-to-back.
+  // Parse by finding top-level array boundaries.
+  const allFiles: GHFile[] = [];
+  try {
+    const parsed = JSON.parse(stdout);
+    if (Array.isArray(parsed)) allFiles.push(...parsed);
+  } catch {
+    // Multiple pages produce "][" at boundaries
+    const chunks = stdout.split(/\]\s*\[/).map((chunk, i, arr) => {
+      if (arr.length === 1) return chunk;
+      if (i === 0) return chunk + "]";
+      if (i === arr.length - 1) return "[" + chunk;
+      return "[" + chunk + "]";
+    });
+    for (const chunk of chunks) {
+      try {
+        const parsed = JSON.parse(chunk);
+        if (Array.isArray(parsed)) allFiles.push(...parsed);
+      } catch {
+        // skip unparseable chunks
+      }
+    }
+  }
+
+  return allFiles
+    .filter((f) => f.patch)
+    .map((f) => ({
+      path: f.filename,
+      patch: buildFullPatch(f),
+    }));
+}
+
 export async function GET(req: NextRequest) {
   if (!authenticate(req)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -72,8 +145,22 @@ export async function GET(req: NextRequest) {
     const files = splitDiff(stdout);
     return NextResponse.json({ files });
   } catch (err) {
+    const errStr = String(err);
+    // Diff too large for GitHub's unified diff endpoint - fall back to
+    // per-file patches from the REST API
+    if (errStr.includes("too_large") || errStr.includes("406")) {
+      try {
+        const files = await fetchFileDiffs(repo, number);
+        return NextResponse.json({ files, partial: true });
+      } catch (fallbackErr) {
+        return NextResponse.json(
+          { error: `Diff too large and per-file fallback failed: ${String(fallbackErr)}` },
+          { status: 500 },
+        );
+      }
+    }
     return NextResponse.json(
-      { error: String(err) },
+      { error: errStr },
       { status: 500 },
     );
   }
