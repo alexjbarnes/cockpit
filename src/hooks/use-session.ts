@@ -907,6 +907,7 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
         textFiles: textFiles?.length ? textFiles : undefined,
       };
       setMessages((prev) => [...prev, userMsg]);
+      messageCountRef.current += 1;
       setSuggestions([]);
       send({
         type: "message:send",
