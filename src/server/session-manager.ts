@@ -486,8 +486,21 @@ export class SessionManager {
   setInitData(sessionId: string, data: InitData): void {
     const session = this.sessions.get(sessionId);
     if (!session) return;
-    session.initData = data;
-    session.emitter.emit("init", sessionId, data);
+    // Merge with existing init data so system/init and initialize
+    // control_response complement each other
+    const prev = session.initData;
+    session.initData = {
+      slashCommands: data.slashCommands.length > 0 ? data.slashCommands : prev?.slashCommands || [],
+      skills: data.skills.length > 0 ? data.skills : prev?.skills || [],
+      agents: data.agents.length > 0 ? data.agents : prev?.agents || [],
+      version: data.version || prev?.version || "",
+      model: data.model || prev?.model || "",
+      mcpServers: data.mcpServers.length > 0 ? data.mcpServers : prev?.mcpServers || [],
+      models: data.models || prev?.models,
+      account: data.account || prev?.account,
+      commands: data.commands || prev?.commands,
+    };
+    session.emitter.emit("init", sessionId, session.initData);
   }
 
   onInit(
@@ -829,6 +842,15 @@ export class SessionManager {
     session.stdin = proc.stdin!;
     session.hasSpawnedBefore = true;
     this.log(sessionId, `CLI process spawned (pid=${proc.pid})`);
+
+    // Send initialize control request before the first user message to get
+    // model capabilities, account info, and command metadata from the CLI.
+    const initRequest = {
+      type: "control_request",
+      request_id: `init-${Date.now()}`,
+      request: { subtype: "initialize" },
+    };
+    proc.stdin!.write(JSON.stringify(initRequest) + "\n");
 
     const content = this.buildContent(text, images, documents);
     const userInput = { type: "user", message: { role: "user", content } };

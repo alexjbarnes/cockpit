@@ -77,6 +77,29 @@ export interface TodoItem {
   activeForm?: string;
 }
 
+export interface ModelInfo {
+  value: string;
+  displayName: string;
+  description: string;
+  supportsEffort?: boolean;
+  supportedEffortLevels?: string[];
+  supportsAdaptiveThinking?: boolean;
+  supportsFastMode?: boolean;
+  supportsAutoMode?: boolean;
+}
+
+export interface AccountInfo {
+  email: string;
+  organization: string;
+  subscriptionType: string;
+}
+
+export interface CommandInfo {
+  name: string;
+  description: string;
+  argumentHint?: string;
+}
+
 export interface InitData {
   slashCommands: string[];
   skills: string[];
@@ -84,6 +107,9 @@ export interface InitData {
   version: string;
   model: string;
   mcpServers: { name: string; status: string }[];
+  models?: ModelInfo[];
+  account?: AccountInfo;
+  commands?: CommandInfo[];
 }
 
 export type PermissionMode = "allow" | "allow_always" | "allow_all" | "deny";

@@ -114,9 +114,54 @@ export class EventParser {
 
     // tool_use_summary: dropped because tool_result already provides output
     // stream_event: dropped because we use full assistant events
-    // control_response: ack from CLI for control_request (e.g. interrupt)
-    if (type === "tool_use_summary" || type === "stream_event" || type === "control_response") {
+    if (type === "tool_use_summary" || type === "stream_event") {
       return [];
+    }
+
+    // Parse initialize control_response to extract model/account/command data
+    if (type === "control_response") {
+      const response = event.response as Record<string, unknown> | undefined;
+      if (!response) return [];
+      const subtype = response.subtype as string | undefined;
+      // The initialize response nests data under response.response
+      const data = (response.response || response) as Record<string, unknown>;
+      if (subtype !== "success" || !data.models) return [];
+
+      const models = (data.models || []) as Array<Record<string, unknown>>;
+      const account = data.account as Record<string, unknown> | undefined;
+      const commands = (data.commands || []) as Array<Record<string, unknown>>;
+
+      return [{
+        type: "init",
+        initData: {
+          slashCommands: commands.map((c) => (c.name || "") as string),
+          skills: [],
+          agents: [],
+          version: "",
+          model: "",
+          mcpServers: [],
+          models: models.map((m) => ({
+            value: (m.value || "") as string,
+            displayName: (m.displayName || "") as string,
+            description: (m.description || "") as string,
+            supportsEffort: m.supportsEffort as boolean | undefined,
+            supportedEffortLevels: m.supportedEffortLevels as string[] | undefined,
+            supportsAdaptiveThinking: m.supportsAdaptiveThinking as boolean | undefined,
+            supportsFastMode: m.supportsFastMode as boolean | undefined,
+            supportsAutoMode: m.supportsAutoMode as boolean | undefined,
+          })),
+          account: account ? {
+            email: (account.email || "") as string,
+            organization: (account.organization || "") as string,
+            subscriptionType: (account.subscriptionType || "") as string,
+          } : undefined,
+          commands: commands.map((c) => ({
+            name: (c.name || "") as string,
+            description: (c.description || "") as string,
+            argumentHint: c.argumentHint as string | undefined,
+          })),
+        },
+      }];
     }
 
     if (type === "system") {
