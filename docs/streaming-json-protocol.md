@@ -236,7 +236,7 @@ Only emitted with `--include-partial-messages` flag.
 }
 ```
 
-### `control_request` - Permission prompt
+### `control_request` - Permission prompt (CLI to server)
 
 ```typescript
 {
@@ -257,6 +257,203 @@ Only emitted with `--include-partial-messages` flag.
 ```
 
 The `permission_suggestions` array contains pre-built rules that can be passed back as `updatedPermissions` in the control response to persist "always allow" for the tool. See the Permission handling section in [claude-cli-reference.md](./claude-cli-reference.md) for the full response schema.
+
+### `control_request` subtypes (server to CLI via stdin)
+
+The server can send `control_request` messages to the CLI on stdin. All share this envelope:
+
+```typescript
+{
+  type: "control_request";
+  request_id: string;
+  request: { subtype: string; ... };
+}
+```
+
+The CLI responds with a `control_response` on stdout for subtypes that return data.
+
+| Subtype | Direction | Description |
+|---------|-----------|-------------|
+| `interrupt` | server to CLI | Abort the current turn. Process stays alive. |
+| `end_session` | server to CLI | End the session gracefully. |
+| `set_permission_mode` | server to CLI | Change permission mode mid-session. |
+| `set_model` | server to CLI | Change the model mid-session. |
+| `set_max_thinking_tokens` | server to CLI | Set max thinking tokens. |
+| `initialize` | server to CLI | Initialize an SDK session (hooks, MCP, schema). |
+| `mcp_status` | server to CLI | Query MCP server connection status. |
+| `mcp_message` | server to CLI | Send JSON-RPC to an MCP server. |
+| `mcp_set_servers` | server to CLI | Replace dynamically managed MCP servers. |
+| `mcp_reconnect` | server to CLI | Reconnect a disconnected MCP server. |
+| `mcp_toggle` | server to CLI | Enable/disable an MCP server. |
+| `rewind_files` | server to CLI | Rewind file changes since a message. |
+| `cancel_async_message` | server to CLI | Cancel a pending async user message. |
+| `stop_task` | server to CLI | Stop a running background task. |
+| `apply_flag_settings` | server to CLI | Merge settings into flag settings layer. |
+| `get_settings` | server to CLI | Get effective merged settings. |
+| `hook_callback` | server to CLI | Deliver a hook callback. |
+| `elicitation` | server to CLI | Handle MCP elicitation (user input request). |
+| `can_use_tool` | CLI to server | Permission prompt (see above). |
+
+#### `interrupt`
+
+Aborts the current turn without killing the process. The CLI emits a `result` event with `subtype: "error_during_execution"` and stays alive for the next message.
+
+```typescript
+{ subtype: "interrupt" }
+```
+
+#### `end_session`
+
+```typescript
+{ subtype: "end_session", reason?: string }
+```
+
+#### `set_permission_mode`
+
+```typescript
+{ subtype: "set_permission_mode", mode: "default" | "acceptEdits" | "bypassPermissions" | "plan" | "dontAsk" }
+```
+
+#### `set_model`
+
+```typescript
+{ subtype: "set_model", model?: string }
+```
+
+#### `set_max_thinking_tokens`
+
+```typescript
+{ subtype: "set_max_thinking_tokens", max_thinking_tokens: number | null }
+```
+
+#### `mcp_status`
+
+Returns `{ mcpServers: McpServerStatus[] }` in the control_response.
+
+```typescript
+{ subtype: "mcp_status" }
+```
+
+#### `mcp_message`
+
+Send a raw JSON-RPC message to a named MCP server.
+
+```typescript
+{ subtype: "mcp_message", server_name: string, message: unknown }
+```
+
+#### `mcp_set_servers`
+
+Replace dynamically managed MCP servers. Returns `{ added: string[], removed: string[], errors: Record<string,string> }`.
+
+```typescript
+{
+  subtype: "mcp_set_servers",
+  servers: Record<string, McpServerConfig>
+}
+
+// McpServerConfig variants:
+{ type?: "stdio", command: string, args?: string[], env?: Record<string,string> }
+{ type: "sse", url: string, headers?: Record<string,string> }
+{ type: "http", url: string, headers?: Record<string,string> }
+```
+
+#### `mcp_reconnect`
+
+```typescript
+{ subtype: "mcp_reconnect", serverName: string }
+```
+
+#### `mcp_toggle`
+
+```typescript
+{ subtype: "mcp_toggle", serverName: string, enabled: boolean }
+```
+
+#### `rewind_files`
+
+Rewind file changes since a given user message. Returns `{ canRewind: boolean, filesChanged?: string[], insertions?: number, deletions?: number, error?: string }`.
+
+```typescript
+{ subtype: "rewind_files", user_message_id: string, dry_run?: boolean }
+```
+
+#### `cancel_async_message`
+
+Cancel a pending async user message from the queue. Returns `{ cancelled: boolean }`.
+
+```typescript
+{ subtype: "cancel_async_message", message_uuid: string }
+```
+
+#### `stop_task`
+
+```typescript
+{ subtype: "stop_task", task_id: string }
+```
+
+#### `apply_flag_settings`
+
+Merge settings into the flag settings layer at runtime.
+
+```typescript
+{ subtype: "apply_flag_settings", settings: Record<string, unknown> }
+```
+
+#### `get_settings`
+
+Returns effective merged settings and per-source breakdown.
+
+```typescript
+{ subtype: "get_settings" }
+
+// Response:
+{
+  effective: Record<string, unknown>,
+  sources: { source: string, settings: Record<string, unknown> }[],
+  applied?: { model: string, effort: string | null }
+}
+```
+
+#### `initialize`
+
+SDK initialization. Configures hooks, MCP servers, schemas.
+
+```typescript
+{
+  subtype: "initialize",
+  hooks?: Record<string, HookConfig[]>,
+  sdkMcpServers?: string[],
+  jsonSchema?: Record<string, unknown>,
+  systemPrompt?: string,
+  appendSystemPrompt?: string,
+  agents?: Record<string, AgentDef>,
+  promptSuggestions?: boolean,
+  agentProgressSummaries?: boolean
+}
+```
+
+#### `hook_callback`
+
+```typescript
+{ subtype: "hook_callback", callback_id: string, input: HookCallbackInput, tool_use_id?: string }
+```
+
+#### `elicitation`
+
+Handle MCP server elicitation (user input request from an MCP server).
+
+```typescript
+{
+  subtype: "elicitation",
+  mcp_server_name: string,
+  message: string,
+  mode?: "form" | "url",
+  url?: string,
+  elicitation_id?: string,
+  requested_schema?: Record<string, unknown>
+}
+```
 
 ### `control_response` - Permission response (stdin to CLI)
 
