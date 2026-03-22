@@ -775,6 +775,38 @@ Silently consumed by the SDK. Present on the wire but filtered out before reachi
 }
 ```
 
+## `/btw` Side Questions
+
+The `/btw` slash command lets users ask a quick question while Claude is working without interrupting the current turn.
+
+### How it works in the CLI (TUI)
+
+The CLI handles `/btw` entirely inside its React TUI layer. It never reaches the stdin message pipeline or the priority queue.
+
+1. Input text is matched against `/^\/btw\b/gi`
+2. A separate lightweight API call is made via `AT()` with:
+   - `querySource: "side_question"`
+   - `forkLabel: "side_question"` (forks from the current conversation context)
+   - `maxTurns: 1`
+   - `skipCacheWrite: true`
+   - All tool use denied (`behavior: "deny"`)
+3. The main turn continues uninterrupted in the background
+4. The response is rendered in an overlay, then auto-dismissed into chat history
+5. Behind feature flag `tengu_marble_whisper2`
+
+The system prompt instructs the side agent that it is a separate instance, has no tools, and should answer directly from conversation context.
+
+### How Cockpit implements it
+
+Since `/btw` is not exposed through the stdin/SDK protocol, Cockpit spawns a separate `claude -p` process with `--no-session-persistence`, `--allowedTools ""`, and a similar system prompt. The last 20 messages are passed as text context.
+
+Key differences from the native CLI:
+- Cockpit spawns a new process (overhead) vs the CLI calling the API directly in-process
+- Cockpit passes a truncated text summary of 20 messages vs the CLI forking from the full conversation context
+- Cockpit's system prompt is simpler than the CLI's
+
+Potential improvement: call the Anthropic API directly instead of spawning a CLI process, and pass the full conversation context.
+
 ## CLI Flags Reference
 
 | Flag | Description |
