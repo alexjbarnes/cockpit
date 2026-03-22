@@ -31,13 +31,14 @@
     "ws": "^8"
   },
   "devDependencies": {
+    "@playwright/test": "^1.58.2",
     "@types/node": "^22",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "@types/uuid": "^10",
     "@types/ws": "^8",
     "tsx": "^4",
-    "typescript": "^5",
+    "typescript": "5.9.3",
     "vitest": "^4.1.0"
   }
 }

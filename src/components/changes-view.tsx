@@ -2,7 +2,9 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
-import { PatchDiff } from "@pierre/diffs/react";
+import { FileDiff } from "@pierre/diffs/react";
+import { parsePatchFiles } from "@pierre/diffs";
+import type { FileDiffMetadata } from "@pierre/diffs";
 import { useSettings } from "@/hooks/use-settings";
 import { DiffErrorBoundary } from "@/components/diff-viewer";
 import { useShell } from "@/components/app-shell";
@@ -149,11 +151,9 @@ function FileList({ files, selectedFile, checkedFiles, onFileClick, onContextMen
 
 interface FileDiffState {
   diff: string | null;
+  fileDiff: FileDiffMetadata | null;
   loading: boolean;
 }
-
-// Large context so Pierre Diffs has full content for fold/expand
-const STACKED_CONTEXT = 50000;
 
 interface StackedDiffsProps {
   files: GitFileChange[];
@@ -177,25 +177,40 @@ function StackedDiffs({ files, cwd, diffStyle, scrollToFile, onScrolled, onViewF
   const fetchDiff = useCallback((file: string) => {
     setDiffs((prev) => {
       const next = new Map(prev);
-      next.set(file, { diff: prev.get(file)?.diff || null, loading: true });
+      next.set(file, { diff: prev.get(file)?.diff || null, fileDiff: prev.get(file)?.fileDiff || null, loading: true });
       return next;
     });
-    fetch(`/api/git/diff?cwd=${encodeURIComponent(cwd)}&file=${encodeURIComponent(file)}&context=${STACKED_CONTEXT}`)
+    fetch(`/api/git/diff?cwd=${encodeURIComponent(cwd)}&file=${encodeURIComponent(file)}`)
       .then((res) => {
         if (!res.ok) throw new Error("Failed");
         return res.json();
       })
-      .then((data) => {
+      .then((data: { diff: string; oldContent?: string; newContent?: string }) => {
+        let fileDiffMeta: FileDiffMetadata | null = null;
+        try {
+          const parsed = parsePatchFiles(data.diff);
+          if (parsed.length > 0 && parsed[0].files.length > 0) {
+            fileDiffMeta = parsed[0].files[0];
+            if (data.oldContent != null) {
+              fileDiffMeta.oldLines = data.oldContent.split("\n").map((l) => l + "\n");
+            }
+            if (data.newContent != null) {
+              fileDiffMeta.newLines = data.newContent.split("\n").map((l) => l + "\n");
+            }
+          }
+        } catch {
+          // Fall back to raw diff string
+        }
         setDiffs((prev) => {
           const next = new Map(prev);
-          next.set(file, { diff: data.diff, loading: false });
+          next.set(file, { diff: data.diff, fileDiff: fileDiffMeta, loading: false });
           return next;
         });
       })
       .catch(() => {
         setDiffs((prev) => {
           const next = new Map(prev);
-          next.set(file, { diff: null, loading: false });
+          next.set(file, { diff: null, fileDiff: null, loading: false });
           return next;
         });
       });
@@ -277,44 +292,51 @@ function StackedDiffs({ files, cwd, diffStyle, scrollToFile, onScrolled, onViewF
                 <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
               </div>
             ) : state?.diff ? (
-              <DiffErrorBoundary fallback={<pre className="p-4 text-xs text-muted-foreground whitespace-pre-wrap">{state.diff}</pre>}>
-                <PatchDiff
-                  patch={state.diff}
-                  options={{
-                    theme: { dark: "pierre-dark", light: "pierre-light" },
-                    themeType: isDark() ? "dark" : "light",
-                    overflow: "wrap",
-                    diffStyle,
-                    hunkSeparators: "line-info",
-                    expansionLineCount: 20,
-                  }}
-                  renderHeaderMetadata={({ newFile }) => {
-                    const name = newFile?.name?.replace(/^b\//, "") || file.path;
-                    return (
-                      <div className="flex items-center gap-2 ml-2">
-                        <Checkbox
-                          checked={viewed}
-                          onChange={() => handleToggleViewed(file.path)}
-                          onClick={(e) => e.stopPropagation()}
-                        />
-                        <button
-                          onClick={(e) => { e.stopPropagation(); toggleCollapse(file.path); }}
-                          className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
-                          title="Collapse"
-                        >
-                          <ChevronUp className="h-3 w-3" />
-                        </button>
-                        <button
-                          onClick={() => onViewFile(name)}
-                          className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
-                        >
-                          <ExternalLink className="h-3 w-3" />
-                        </button>
-                      </div>
-                    );
-                  }}
-                />
-              </DiffErrorBoundary>
+              <>
+                <div
+                  className="sticky top-0 z-10 flex items-center gap-2 px-4 py-1.5 text-sm border-b bg-muted/80 backdrop-blur-sm"
+                  data-testid="sticky-diff-header"
+                >
+                  {statusIcon(file.status)}
+                  <span className="font-mono text-xs truncate flex-1 min-w-0">{file.path}</span>
+                  <Checkbox
+                    checked={viewed}
+                    onChange={() => handleToggleViewed(file.path)}
+                    onClick={(e) => e.stopPropagation()}
+                  />
+                  <button
+                    onClick={() => toggleCollapse(file.path)}
+                    className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+                    title="Collapse"
+                  >
+                    <ChevronUp className="h-3 w-3" />
+                  </button>
+                  <button
+                    onClick={() => onViewFile(file.path)}
+                    className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+                  >
+                    <ExternalLink className="h-3 w-3" />
+                  </button>
+                </div>
+                <DiffErrorBoundary fallback={<pre className="p-4 text-xs text-muted-foreground whitespace-pre-wrap">{state.diff}</pre>}>
+                  {state.fileDiff ? (
+                    <FileDiff
+                      fileDiff={state.fileDiff}
+                      options={{
+                        theme: { dark: "pierre-dark", light: "pierre-light" },
+                        themeType: isDark() ? "dark" : "light",
+                        overflow: "wrap",
+                        diffStyle,
+                        disableFileHeader: true,
+                        hunkSeparators: "line-info",
+                        expansionLineCount: 20,
+                      }}
+                    />
+                  ) : (
+                    <pre className="p-4 text-xs text-muted-foreground whitespace-pre-wrap">{state.diff}</pre>
+                  )}
+                </DiffErrorBoundary>
+              </>
             ) : (
               <div className="px-4 py-3 text-xs text-muted-foreground">No diff available</div>
             )}
@@ -417,6 +439,7 @@ export function ChangesView({ cwd, sessionId }: { cwd: string; sessionId?: strin
   const cached = getCachedState(cwd);
   const [selectedFile, setSelectedFile] = useState<string | null>(cached.selectedFile);
   const [diff, setDiff] = useState<string | null>(null);
+  const [singleFileDiff, setSingleFileDiff] = useState<FileDiffMetadata | null>(null);
   const [diffLoading, setDiffLoading] = useState(false);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; file: GitFileChange } | null>(null);
   const [commitMsg, setCommitMsg] = useState(cached.commitMsg);
@@ -478,12 +501,26 @@ export function ChangesView({ cwd, sessionId }: { cwd: string; sessionId?: strin
   const fetchDiff = useCallback((file: string) => {
     setDiffLoading(true);
     setDiff(null);
+    setSingleFileDiff(null);
     fetch(`/api/git/diff?cwd=${encodeURIComponent(cwd)}&file=${encodeURIComponent(file)}`)
       .then((res) => {
         if (!res.ok) throw new Error("Failed");
         return res.json();
       })
-      .then((data) => setDiff(data.diff))
+      .then((data: { diff: string; oldContent?: string; newContent?: string }) => {
+        setDiff(data.diff);
+        try {
+          const parsed = parsePatchFiles(data.diff);
+          if (parsed.length > 0 && parsed[0].files.length > 0) {
+            const meta = parsed[0].files[0];
+            if (data.oldContent != null) meta.oldLines = data.oldContent.split("\n").map((l) => l + "\n");
+            if (data.newContent != null) meta.newLines = data.newContent.split("\n").map((l) => l + "\n");
+            setSingleFileDiff(meta);
+          }
+        } catch {
+          // Fall back to raw diff
+        }
+      })
       .catch(() => setDiff(null))
       .finally(() => setDiffLoading(false));
   }, [cwd]);
@@ -500,14 +537,14 @@ export function ChangesView({ cwd, sessionId }: { cwd: string; sessionId?: strin
   useEffect(() => {
     if (!status || status.files.length === 0) return;
     if (selectedFile) return;
-    if (isDesktop && stackedMode) return;
+    if (stackedMode) return;
     const first = status.files[0];
     setSelectedFile(first.path);
     fetchDiff(first.path);
-  }, [status, selectedFile, isDesktop, stackedMode, fetchDiff]);
+  }, [status, selectedFile, stackedMode, fetchDiff]);
 
   const handleFileClick = useCallback((file: GitFileChange) => {
-    if (isDesktop && stackedMode) {
+    if (stackedMode) {
       setScrollToFile(file.path);
     } else {
       setSelectedFile(file.path);
@@ -515,7 +552,7 @@ export function ChangesView({ cwd, sessionId }: { cwd: string; sessionId?: strin
       setContextMenu(null);
       closeSidebar();
     }
-  }, [isDesktop, stackedMode, fetchDiff, closeSidebar]);
+  }, [stackedMode, fetchDiff, closeSidebar]);
 
   const handleContextMenu = useCallback((e: React.MouseEvent, file: GitFileChange) => {
     e.preventDefault();
@@ -666,7 +703,7 @@ export function ChangesView({ cwd, sessionId }: { cwd: string; sessionId?: strin
     setSidebarContent(
       <FileList
         files={status.files}
-        selectedFile={isDesktop && stackedMode ? null : selectedFile}
+        selectedFile={stackedMode ? null : selectedFile}
         checkedFiles={checkedFiles}
         onFileClick={handleFileClick}
         onContextMenu={handleContextMenu}
@@ -675,7 +712,7 @@ export function ChangesView({ cwd, sessionId }: { cwd: string; sessionId?: strin
       />
     );
     return () => setSidebarContent(null);
-  }, [status, selectedFile, checkedFiles, isDesktop, stackedMode, handleFileClick, handleContextMenu, toggleFile, toggleAll, setSidebarContent]);
+  }, [status, selectedFile, checkedFiles, stackedMode, handleFileClick, handleContextMenu, toggleFile, toggleAll, setSidebarContent]);
 
   // Close context menu on click outside
   useEffect(() => {
@@ -784,7 +821,7 @@ export function ChangesView({ cwd, sessionId }: { cwd: string; sessionId?: strin
         {/* Diff column */}
         <div className="flex-1 min-w-0 flex flex-col">
           <div className="flex-1 min-h-0 overflow-y-auto">
-            {isDesktop && stackedMode ? (
+            {stackedMode ? (
               <StackedDiffs
                 files={status.files}
                 cwd={cwd}
@@ -806,29 +843,33 @@ export function ChangesView({ cwd, sessionId }: { cwd: string; sessionId?: strin
                   <div className="p-4">
                     <div className="rounded border">
                       <DiffErrorBoundary fallback={<pre className="p-4 text-xs text-muted-foreground whitespace-pre-wrap">{diff}</pre>}>
-                        <PatchDiff
-                          patch={diff}
-                          options={{
-                            theme: { dark: "pierre-dark", light: "pierre-light" },
-                            themeType: isDark() ? "dark" : "light",
-                            overflow: "wrap",
-                            diffStyle: settings.diffStyle,
-                            hunkSeparators: "line-info",
-                            expansionLineCount: 20,
-                          }}
-                          renderHeaderMetadata={({ newFile }) => {
-                            const name = newFile?.name?.replace(/^b\//, "") || selectedFile || "";
-                            return (
-                              <button
-                                onClick={() => handleViewFile(name)}
-                                className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors ml-2"
-                              >
-                                <ExternalLink className="h-3 w-3" />
-                                View file
-                              </button>
-                            );
-                          }}
-                        />
+                        {singleFileDiff ? (
+                          <FileDiff
+                            fileDiff={singleFileDiff}
+                            options={{
+                              theme: { dark: "pierre-dark", light: "pierre-light" },
+                              themeType: isDark() ? "dark" : "light",
+                              overflow: "wrap",
+                              diffStyle: settings.diffStyle,
+                              hunkSeparators: "line-info",
+                              expansionLineCount: 20,
+                            }}
+                            renderHeaderMetadata={({ newFile }) => {
+                              const name = newFile?.name?.replace(/^b\//, "") || selectedFile || "";
+                              return (
+                                <button
+                                  onClick={() => handleViewFile(name)}
+                                  className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors ml-2"
+                                >
+                                  <ExternalLink className="h-3 w-3" />
+                                  View file
+                                </button>
+                              );
+                            }}
+                          />
+                        ) : (
+                          <pre className="p-4 text-xs text-muted-foreground whitespace-pre-wrap">{diff}</pre>
+                        )}
                       </DiffErrorBoundary>
                     </div>
                   </div>

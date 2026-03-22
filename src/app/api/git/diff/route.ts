@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { execFile } from "node:child_process";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { validateToken } from "@/server/auth";
 
 function authenticate(req: NextRequest): boolean {
@@ -24,6 +26,22 @@ function run(cmd: string, args: string[], cwd: string): Promise<string> {
   });
 }
 
+async function getOldContent(cwd: string, file: string): Promise<string | null> {
+  try {
+    return await run("git", ["show", `HEAD:${file}`], cwd);
+  } catch {
+    return null;
+  }
+}
+
+async function getNewContent(cwd: string, file: string): Promise<string | null> {
+  try {
+    return await readFile(join(cwd, file), "utf-8");
+  } catch {
+    return null;
+  }
+}
+
 export async function GET(req: NextRequest) {
   if (!authenticate(req)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -36,19 +54,14 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "cwd and file are required" }, { status: 400 });
   }
 
-  const contextParam = url.searchParams.get("context");
-  const contextLines = contextParam ? Math.min(Math.max(parseInt(contextParam, 10) || 3, 0), 9999) : null;
-  const contextArgs = contextLines !== null ? [`-U${contextLines}`] : [];
-
   try {
     let diff = "";
     // Try tracked file diff first (staged + unstaged vs HEAD)
     try {
-      diff = await run("git", ["diff", ...contextArgs, "HEAD", "--", file], cwd);
+      diff = await run("git", ["diff", "HEAD", "--", file], cwd);
     } catch {
-      // Might fail on initial commit
       try {
-        diff = await run("git", ["diff", ...contextArgs, "--cached", "--", file], cwd);
+        diff = await run("git", ["diff", "--cached", "--", file], cwd);
       } catch {
         // no diff available
       }
@@ -58,7 +71,6 @@ export async function GET(req: NextRequest) {
     if (!diff) {
       try {
         const content = await run("git", ["show", `:${file}`], cwd);
-        // File is staged but no HEAD to diff against
         const lines = content.split("\n");
         diff = [
           `--- /dev/null`,
@@ -67,9 +79,6 @@ export async function GET(req: NextRequest) {
           ...lines.map((l) => `+${l}`),
         ].join("\n");
       } catch {
-        // Truly untracked - read from filesystem
-        const { readFile } = await import("node:fs/promises");
-        const { join } = await import("node:path");
         try {
           const content = await readFile(join(cwd, file), "utf-8");
           const lines = content.split("\n");
@@ -85,7 +94,17 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    return NextResponse.json({ diff });
+    // Fetch full file contents for expand-context support
+    const [oldContent, newContent] = await Promise.all([
+      getOldContent(cwd, file),
+      getNewContent(cwd, file),
+    ]);
+
+    return NextResponse.json({
+      diff,
+      oldContent: oldContent ?? undefined,
+      newContent: newContent ?? undefined,
+    });
   } catch {
     return NextResponse.json({ error: "Failed to get diff" }, { status: 500 });
   }
