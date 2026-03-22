@@ -152,6 +152,15 @@ export function createWebSocketHandler(
             });
           }
 
+          // Restore compacting indicator if compaction is in progress
+          if (sessionManager.isCompacting(msg.sessionId)) {
+            send(ws, {
+              type: "session:system",
+              sessionId: msg.sessionId,
+              text: "__compact::start",
+            });
+          }
+
           send(ws, {
             type: "session:connected",
             sessionId: msg.sessionId,

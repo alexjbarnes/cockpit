@@ -174,6 +174,10 @@ export class SessionManager {
     return this.sessions.get(id)?.streamingSnapshot ?? null;
   }
 
+  isCompacting(id: string): boolean {
+    return this.sessions.get(id)?.compacting ?? false;
+  }
+
   listActiveSessions(): SessionInfo[] {
     return Array.from(this.sessions.values())
       .filter((s) => s.process !== null)
