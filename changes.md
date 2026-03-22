@@ -4,10 +4,8 @@ Playwright-driven UI review of the application on 2026-03-22.
 
 ## Fixes Applied
 
-### 1. Page title hidden on mobile (3e9b7f0)
-- **File:** `src/components/app-shell.tsx`
-- **Problem:** The header title (Settings, Reviews, Files, etc.) was hidden on mobile via `hidden md:block`. Only the hamburger menu icon showed, giving no context about which page you were on.
-- **Fix:** Removed `hidden md:block` so the title renders at all viewport sizes.
+### 1. ~~Page title hidden on mobile (3e9b7f0)~~ REVERTED (a1fea74)
+- This was a deliberate design decision. The title is hidden on mobile to save header space for session names.
 
 ### 2. Missing favicon (2ba0baf)
 - **File:** `src/app/layout.tsx`
@@ -18,6 +16,11 @@ Playwright-driven UI review of the application on 2026-03-22.
 - **File:** `src/app/login/page.tsx`
 - **Problem:** Chrome flagged the password input for missing `autocomplete` attribute.
 - **Fix:** Added `autoComplete="current-password"` to the input.
+
+### 4. Compacting indicator lost on navigation (59a7c8d)
+- **Files:** `src/server/session-manager.ts`, `src/server/ws-handler.ts`
+- **Problem:** When a session was mid-compaction and the user navigated away then returned, the compacting message disappeared. The indicator was only in client React state and never re-sent on reconnect.
+- **Fix:** Added `isCompacting()` method to session manager. The ws-handler now re-sends `__compact::start` system event when a client connects to a session that is mid-compaction.
 
 ## Pages Reviewed
 
