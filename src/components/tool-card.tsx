@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useCallback } from "react";
 import type { ToolUse } from "@/types";
 import { cn } from "@/lib/utils";
 import { ChevronRight, Loader2 } from "lucide-react";
@@ -92,10 +92,31 @@ export function ToolCard({ tool }: ToolCardProps) {
   const isStatusOnly = tool.name === "EnterPlanMode" || tool.name === "ExitPlanMode" || tool.name === "TaskCreate" || tool.name === "TaskUpdate" || tool.name === "TaskList" || tool.name === "TaskGet" || tool.name === "TodoWrite";
   const hasContent = !isStatusOnly && (tool.input || tool.output);
 
+  // Track whether this expansion was user-initiated (click) vs automatic
+  const userToggled = useMemo(() => ({ current: false }), []);
+
+  const contentRef = useCallback((el: HTMLDivElement | null) => {
+    if (!el || !userToggled.current) return;
+    userToggled.current = false;
+    requestAnimationFrame(() => {
+      const scrollParent = el.closest("[tabindex]");
+      if (!scrollParent) return;
+      const parentRect = scrollParent.getBoundingClientRect();
+      const elRect = el.getBoundingClientRect();
+      if (elRect.bottom > parentRect.bottom) {
+        el.scrollIntoView({ block: "nearest", behavior: "smooth" });
+      }
+    });
+  }, [userToggled]);
+
   return (
     <div className="rounded border border-border bg-card text-card-foreground text-xs overflow-hidden">
       <button
-        onClick={() => hasContent && setExpanded(!expanded)}
+        onClick={() => {
+          if (!hasContent) return;
+          userToggled.current = !expanded;
+          setExpanded(!expanded);
+        }}
         className={cn(
           "flex w-full items-center gap-2 px-3 py-1.5 text-left",
           hasContent && "cursor-pointer hover:bg-muted/50",
@@ -117,7 +138,7 @@ export function ToolCard({ tool }: ToolCardProps) {
       </button>
 
       {expanded && hasContent && (
-        <div className="border-t border-border px-3 py-2 space-y-2">
+        <div ref={contentRef} className="border-t border-border px-3 py-2 space-y-2">
           <ToolContent tool={tool} input={input} dark={dark} />
         </div>
       )}
