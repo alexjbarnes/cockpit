@@ -98,6 +98,11 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
 
   // Track message count for delta history on reconnect
   const messageCountRef = useRef(0);
+
+  // Store queued message text for client-side injection on idle.
+  // The server's sentText event is unreliable on mobile (WS dies before delivery),
+  // so we inject from local state when session:status idle arrives instead.
+  const queuedTextRef = useRef<{ text: string; images?: ImageAttachment[]; documents?: DocumentAttachment[]; textFiles?: TextFileAttachment[] } | null>(null);
   const loadedSessionRef = useRef<string | null>(null);
 
   // Reset when switching sessions
@@ -554,6 +559,27 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
               if (stale.length === 0) return prev;
               return prev.filter((t) => t.status !== "running");
             });
+            // Inject queued message from local state. The server also sends
+            // sentText via session:queued, but that WS message is unreliable
+            // on mobile (connection dies before delivery). This fires earlier
+            // (idle arrives before sentText) and uses locally stored text.
+            const queued = queuedTextRef.current;
+            if (queued) {
+              queuedTextRef.current = null;
+              const userMsg: ChatMessage = {
+                id: crypto.randomUUID(),
+                role: "user",
+                content: queued.text,
+                toolUses: [],
+                blocks: [],
+                timestamp: Date.now(),
+                images: queued.images,
+                documents: queued.documents,
+                textFiles: queued.textFiles,
+              };
+              setMessages((prev) => [...prev, userMsg]);
+              messageCountRef.current += 1;
+            }
           }
           break;
         }
@@ -570,12 +596,15 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
         }
 
         case "session:queued": {
-          console.log(`[session:queued] count=${msg.count}, sentText=${msg.sentText ? msg.sentText.slice(0, 50) : "none"}, cancelledText=${msg.cancelledText ? "yes" : "no"}`);
           setHasQueuedMessage(msg.count > 0);
           if (msg.cancelledText) {
             setRestoredText(msg.cancelledText);
+            queuedTextRef.current = null;
           }
-          if (msg.sentText) {
+          // sentText is a server-side fallback. Skip if idle handler already
+          // injected from local state (queuedTextRef was cleared).
+          if (msg.sentText && queuedTextRef.current) {
+            queuedTextRef.current = null;
             const userMsg: ChatMessage = {
               id: crypto.randomUUID(),
               role: "user",
@@ -584,7 +613,6 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
               blocks: [],
               timestamp: Date.now(),
             };
-            console.log(`[session:queued] injecting user message: "${msg.sentText.slice(0, 50)}"`);
             setMessages((prev) => [...prev, userMsg]);
             messageCountRef.current += 1;
           }
@@ -856,6 +884,7 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
 
       // Queue message server-side when responding
       if (isRespondingRef.current) {
+        queuedTextRef.current = { text, images, documents, textFiles };
         send({
           type: "message:send",
           sessionId,

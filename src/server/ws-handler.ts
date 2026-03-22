@@ -357,10 +357,6 @@ export function createWebSocketHandler(
           const unsubQueued = sessionManager.onQueued(
             msg.sessionId,
             (count, sentText) => {
-              const sid = msg.sessionId.slice(0, 8);
-              if (sentText) {
-                console.log(`[ws:${wsId}] forwarding session:queued to client (sid=${sid}, count=${count}, sentText=${sentText.slice(0, 50)})`);
-              }
               send(ws, {
                 type: "session:queued",
                 sessionId: msg.sessionId,
