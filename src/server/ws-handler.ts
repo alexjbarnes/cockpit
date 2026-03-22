@@ -384,6 +384,8 @@ export function createWebSocketHandler(
         }
 
         case "message:send": {
+          // Ack immediately so the client clears inflight before any WS drop
+          send(ws, { type: "message:ack", sessionId: msg.sessionId });
           sessionManager.sendMessage(msg.sessionId, msg.text, msg.images, msg.documents);
           break;
         }

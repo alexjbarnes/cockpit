@@ -104,8 +104,8 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
         clearTimeout(pongTimer.current);
         awaitingPong.current = false;
       }
-      // Server acknowledged our message send
-      if (msg.type === "session:status" && inflightRef.current.length > 0) {
+      // Server acknowledged receipt of our message
+      if (msg.type === "message:ack" && inflightRef.current.length > 0) {
         inflightRef.current = [];
       }
       for (const handler of handlersRef.current) {

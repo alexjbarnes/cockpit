@@ -779,6 +779,7 @@ export class SessionManager {
     const pendingBlocks: ContentBlock[] = [];
     const agentStack: ToolUse[] = [];
     let currentAssistantMsgId: string | null = null;
+    let flushedOnMessageDone = false;
 
     const updateSnapshot = () => {
       if (currentAssistantMsgId && pendingBlocks.length > 0) {
@@ -971,6 +972,7 @@ export class SessionManager {
                 session.compacting = false;
                 this.emitSystem(session, sessionId, "__compact::done");
               }
+              flushedOnMessageDone = true;
               this.flushQueuedMessage(session, sessionId);
               continue;
             }
@@ -999,6 +1001,7 @@ export class SessionManager {
               session.compacting = false;
               this.emitSystem(session, sessionId, "__compact::done");
             }
+            flushedOnMessageDone = true;
             this.flushQueuedMessage(session, sessionId);
           }
           // Store permission requests so they survive WS reconnections.
@@ -1068,7 +1071,13 @@ export class SessionManager {
         session.emitter.emit("error", sessionId, stderrBuffer.trim());
       }
 
-      this.flushQueuedMessage(session, sessionId);
+      // Only flush if message_done didn't already handle it.
+      // message_done flushes and sends the queued message to the still-alive
+      // process via stdin. If we flush again here, we'd send a second message
+      // before the first one gets a response.
+      if (!flushedOnMessageDone) {
+        this.flushQueuedMessage(session, sessionId);
+      }
     });
 
     proc.on("error", (err) => {

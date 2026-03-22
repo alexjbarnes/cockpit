@@ -156,4 +156,5 @@ export type ServerMessage =
   | { type: "history"; sessionId: string; messages: ChatMessage[]; delta?: boolean; status?: "idle" | "running" }
   | { type: "session:streaming_snapshot"; sessionId: string; messageId: string; content: string; toolUses: ToolUse[]; blocks: ContentBlock[] }
   | { type: "session:queued"; sessionId: string; count: number; cancelledText?: string; sentText?: string }
+  | { type: "message:ack"; sessionId: string }
   | { type: "pong" };
