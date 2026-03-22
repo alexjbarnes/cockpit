@@ -96,8 +96,11 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
   // Track nested agent tool calls
   const agentStackRef = useRef<ToolUse[]>([]);
 
-  // Track message count for delta history on reconnect
-  const messageCountRef = useRef(0);
+  // Track the last server-assigned message ID for delta history on reconnect.
+  // Using IDs instead of counts avoids drift when locally-generated messages
+  // (optimistic user messages, queued injections) have different IDs than
+  // what the server stores.
+  const lastServerMsgIdRef = useRef<string | null>(null);
 
   // Store queued message text for client-side injection on idle.
   // The server's sentText event is unreliable on mobile (WS dies before delivery),
@@ -107,7 +110,7 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
 
   // Reset when switching sessions
   if (loadedSessionRef.current !== null && loadedSessionRef.current !== sessionId) {
-    messageCountRef.current = 0;
+    lastServerMsgIdRef.current = null;
     loadedSessionRef.current = null;
   }
 
@@ -126,7 +129,7 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
         type: "session:connect",
         sessionId,
         cwd: cwd || undefined,
-        messageCount: isReconnect ? messageCountRef.current : undefined,
+        lastMessageId: isReconnect ? lastServerMsgIdRef.current : undefined,
       });
     }
   }, [connected, sessionId, cwd, send]);
@@ -137,6 +140,12 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
 
       switch (msg.type) {
         case "history": {
+          // Update last known server message ID from the history payload
+          const serverMsgs = msg.messages as ChatMessage[];
+          if (serverMsgs.length > 0) {
+            lastServerMsgIdRef.current = serverMsgs[serverMsgs.length - 1].id;
+          }
+
           if (msg.delta) {
             // Delta: reconnect happened. Reset streaming state so the
             // streaming_snapshot that follows starts fresh and doesn't
@@ -145,28 +154,24 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
             agentStackRef.current = [];
             setMessages((prev) => {
               const filtered = prev.filter((m) => m.id !== "streaming");
-              if (msg.messages.length === 0) {
+              if (serverMsgs.length === 0) {
                 if (filtered.length === prev.length) return prev;
-                messageCountRef.current = filtered.length;
                 return filtered;
               }
               const existingIds = new Set(filtered.map((m) => m.id));
-              const newMsgs = msg.messages.filter((m: ChatMessage) => !existingIds.has(m.id));
+              const newMsgs = serverMsgs.filter((m) => !existingIds.has(m.id));
               if (newMsgs.length === 0 && filtered.length === prev.length) return prev;
-              const result = [...filtered, ...newMsgs];
-              messageCountRef.current = result.length;
-              return result;
+              return [...filtered, ...newMsgs];
             });
           } else {
             // Full history: replace everything
             const seen = new Set<string>();
-            const deduped = msg.messages.filter((m: ChatMessage) => {
+            const deduped = serverMsgs.filter((m) => {
               if (seen.has(m.id)) return false;
               seen.add(m.id);
               return true;
             });
             setMessages(deduped);
-            messageCountRef.current = deduped.length;
             streamingRef.current = null;
             agentStackRef.current = [];
           }
@@ -418,9 +423,8 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
             if ((!finalMessage.blocks || finalMessage.blocks.length === 0) && streamedBlocks.length > 0) {
               finalMessage.blocks = streamedBlocks;
             }
-            const result = [...filtered, finalMessage];
-            messageCountRef.current = result.length;
-            return result;
+            lastServerMsgIdRef.current = finalMessage.id;
+            return [...filtered, finalMessage];
           });
           break;
         }
@@ -578,7 +582,6 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
                 textFiles: queued.textFiles,
               };
               setMessages((prev) => [...prev, userMsg]);
-              messageCountRef.current += 1;
             }
           }
           break;
@@ -614,14 +617,13 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
               timestamp: Date.now(),
             };
             setMessages((prev) => [...prev, userMsg]);
-            messageCountRef.current += 1;
           }
           break;
         }
 
         case "session:clear": {
           setMessages([]);
-          messageCountRef.current = 0;
+          lastServerMsgIdRef.current = null;
           streamingRef.current = null;
           agentStackRef.current = [];
           setBypassActive(false);
@@ -788,7 +790,9 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
           return true;
         });
         setMessages(deduped);
-        messageCountRef.current = deduped.length;
+        if (deduped.length > 0) {
+          lastServerMsgIdRef.current = deduped[deduped.length - 1].id;
+        }
         setIsResponding(false);
         isRespondingRef.current = false;
         streamingRef.current = null;
@@ -907,7 +911,6 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
         textFiles: textFiles?.length ? textFiles : undefined,
       };
       setMessages((prev) => [...prev, userMsg]);
-      messageCountRef.current += 1;
       setSuggestions([]);
       send({
         type: "message:send",

@@ -122,17 +122,31 @@ export function createWebSocketHandler(
 
           // If client already has messages, send only the delta to avoid
           // re-sending 1000+ messages on every mobile reconnect.
-          const clientCount = msg.messageCount ?? 0;
-          if (clientCount > 0 && clientCount <= session.messages.length) {
-            const delta = session.messages.slice(clientCount);
-            console.log(`[ws:${wsId}] session ${sid} sending delta (client=${clientCount}, server=${session.messages.length}, delta=${delta.length})`);
-            send(ws, {
-              type: "history",
-              sessionId: msg.sessionId,
-              messages: delta,
-              delta: true,
-              status: correctedStatus,
-            });
+          // Uses the last known server message ID instead of a count, since
+          // the client may have locally-generated messages with different IDs.
+          const lastId = msg.lastMessageId as string | undefined;
+          if (lastId) {
+            const idx = session.messages.findIndex((m) => m.id === lastId);
+            if (idx !== -1) {
+              const delta = session.messages.slice(idx + 1);
+              console.log(`[ws:${wsId}] session ${sid} sending delta (lastId=${lastId}, idx=${idx}, server=${session.messages.length}, delta=${delta.length})`);
+              send(ws, {
+                type: "history",
+                sessionId: msg.sessionId,
+                messages: delta,
+                delta: true,
+                status: correctedStatus,
+              });
+            } else {
+              // ID not found - client has stale state, send full history
+              console.log(`[ws:${wsId}] session ${sid} lastMessageId not found, sending full history`);
+              send(ws, {
+                type: "history",
+                sessionId: msg.sessionId,
+                messages: session.messages,
+                status: correctedStatus,
+              });
+            }
           } else {
             send(ws, {
               type: "history",

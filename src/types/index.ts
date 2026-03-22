@@ -149,7 +149,7 @@ export interface UsageLimits {
 
 // Client -> Server messages
 export type ClientMessage =
-  | { type: "session:connect"; sessionId: string; cwd?: string; messageCount?: number }
+  | { type: "session:connect"; sessionId: string; cwd?: string; lastMessageId?: string | null }
   | { type: "message:send"; sessionId: string; text: string; images?: ImageAttachment[]; documents?: DocumentAttachment[] }
   | { type: "session:interrupt"; sessionId: string }
   | { type: "permission:response"; sessionId: string; requestId: string; allowed: boolean; permissionMode?: PermissionMode; suggestionIndex?: number }
