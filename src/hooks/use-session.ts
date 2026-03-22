@@ -193,6 +193,14 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
             toolUses: msg.toolUses,
             blocks: msg.blocks,
           };
+
+          // Rebuild the agent stack from running Agent tool uses in the
+          // snapshot. Without this, sub-agent events after reconnect leak
+          // into the main thread because agentStackRef is empty.
+          agentStackRef.current = msg.toolUses.filter(
+            (t: ToolUse) => t.name === "Agent" && t.status === "running"
+          );
+
           const streamMsg: ChatMessage = {
             id: "streaming",
             role: "assistant",
