@@ -217,7 +217,7 @@ function LazyDiff({
   return (
     <div
       ref={(el) => { sentinelRef.current = el; sectionRef(el); }}
-      className={cn("rounded border overflow-hidden", viewed && "opacity-60")}
+      className={cn("rounded border overflow-clip", viewed && "opacity-60")}
     >
       {collapsed ? (
         <button
@@ -233,56 +233,56 @@ function LazyDiff({
           <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
         </div>
       ) : (
-        <DiffErrorBoundary fallback={<pre className="p-4 text-xs text-muted-foreground whitespace-pre-wrap">{file.patch}</pre>}>
-          <PatchDiff
-            patch={file.patch}
-            options={{
-              theme: { dark: "pierre-dark", light: "pierre-light" },
-              themeType: isDark() ? "dark" : "light",
-              overflow: "wrap",
-              diffStyle: settings.diffStyle as "split" | "unified",
-              hunkSeparators: "line-info",
-              expansionLineCount: 20,
-            }}
-            renderHeaderMetadata={({ newFile }) => {
-              const name = newFile?.name?.replace(/^b\//, "") || file.path;
-              return (
-                <div className="flex items-center gap-2 ml-2">
-                  <button
-                    onClick={handleMarkViewed}
-                    className={cn(
-                      "h-4 w-4 shrink-0 rounded border flex items-center justify-center transition-colors",
-                      viewed
-                        ? "border-primary bg-primary text-primary-foreground"
-                        : "border-muted-foreground/40 bg-transparent hover:border-muted-foreground/60",
-                    )}
-                    title="Mark as viewed and collapse"
-                  >
-                    {viewed && <Check className="h-3 w-3" strokeWidth={3} />}
-                  </button>
-                  <button
-                    onClick={(e) => { e.stopPropagation(); onToggleCollapse(); }}
-                    className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
-                    title="Collapse"
-                  >
-                    <ChevronUp className="h-3 w-3" />
-                  </button>
-                  {pr && (
-                    <a
-                      href={`${pr.url}/files#diff-${name}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                      <ExternalLink className="h-3 w-3" />
-                    </a>
-                  )}
-                </div>
-              );
-            }}
-          />
-        </DiffErrorBoundary>
+        <>
+          <div className="sticky top-0 z-10 flex items-center gap-2 px-4 py-1.5 text-sm border-b bg-muted/80 backdrop-blur-sm">
+            {fileStatusIcon(file.path, pr?.files || [])}
+            <span className="font-mono text-xs truncate flex-1 min-w-0">{file.path}</span>
+            <button
+              onClick={handleMarkViewed}
+              className={cn(
+                "h-4 w-4 shrink-0 rounded border flex items-center justify-center transition-colors",
+                viewed
+                  ? "border-primary bg-primary text-primary-foreground"
+                  : "border-muted-foreground/40 bg-transparent hover:border-muted-foreground/60",
+              )}
+              title="Mark as viewed and collapse"
+            >
+              {viewed && <Check className="h-3 w-3" strokeWidth={3} />}
+            </button>
+            <button
+              onClick={(e) => { e.stopPropagation(); onToggleCollapse(); }}
+              className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+              title="Collapse"
+            >
+              <ChevronUp className="h-3 w-3" />
+            </button>
+            {pr && (
+              <a
+                href={`${pr.url}/files#diff-${file.path}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <ExternalLink className="h-3 w-3" />
+              </a>
+            )}
+          </div>
+          <DiffErrorBoundary fallback={<pre className="p-4 text-xs text-muted-foreground whitespace-pre-wrap">{file.patch}</pre>}>
+            <PatchDiff
+              patch={file.patch}
+              options={{
+                theme: { dark: "pierre-dark", light: "pierre-light" },
+                themeType: isDark() ? "dark" : "light",
+                overflow: "wrap",
+                diffStyle: settings.diffStyle as "split" | "unified",
+                hunkSeparators: "line-info",
+                expansionLineCount: 20,
+                disableFileHeader: true,
+              }}
+            />
+          </DiffErrorBoundary>
+        </>
       )}
     </div>
   );
