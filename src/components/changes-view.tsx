@@ -282,7 +282,7 @@ function StackedDiffs({ files, cwd, diffStyle, scrollToFile, onScrolled, onViewF
           <div
             key={file.path}
             ref={(el) => { if (el) sectionRefs.current.set(file.path, el); }}
-            className={cn("rounded border", checked && !collapsed && "opacity-60")}
+            className={cn("rounded border overflow-clip", checked && !collapsed && "opacity-60")}
           >
             {collapsed ? (
               <div className="flex items-center gap-2 w-full px-4 py-2 text-sm text-muted-foreground">
@@ -309,7 +309,7 @@ function StackedDiffs({ files, cwd, diffStyle, scrollToFile, onScrolled, onViewF
             ) : state?.diff ? (
               <>
                 <div
-                  className="sticky top-0 z-10 flex items-center gap-2 px-4 py-1.5 text-sm border-b bg-muted/80 backdrop-blur-sm rounded-t-lg"
+                  className="sticky top-0 z-10 flex items-center gap-2 px-4 py-1.5 text-sm border-b bg-muted/80 backdrop-blur-sm"
                   data-testid="sticky-diff-header"
                 >
                   {statusIcon(file.status)}
@@ -860,7 +860,7 @@ export function ChangesView({ cwd, sessionId }: { cwd: string; sessionId?: strin
                         const file = status.files.find((f) => f.path === selectedFile);
                         return file ? (
                           <div
-                            className="sticky top-0 z-10 flex items-center gap-2 px-4 py-1.5 text-sm border-b bg-muted/80 backdrop-blur-sm rounded-t-lg"
+                            className="sticky top-0 z-10 flex items-center gap-2 px-4 py-1.5 text-sm border-b bg-muted/80 backdrop-blur-sm"
                           >
                             {statusIcon(file.status)}
                             <span className="font-mono text-xs truncate flex-1 min-w-0">{file.path}</span>
