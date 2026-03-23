@@ -112,6 +112,7 @@ export function SessionList() {
   const [groups, setGroups] = useState<SessionGroup[]>(cachedGroups || []);
   const [favorites, setFavorites] = useState<Set<string>>(new Set());
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [loaded, setLoaded] = useState(!!cachedGroups);
   const hasFetchedRef = useRef(false);
 
   useEffect(() => {
@@ -126,6 +127,7 @@ export function SessionList() {
       cachedGroups = fetched;
       setGroups(fetched);
     }
+    setLoaded(true);
   }, []);
 
   useEffect(() => {
@@ -177,7 +179,7 @@ export function SessionList() {
     <div className="mx-auto max-w-lg p-4 space-y-3">
       <h1 className="text-2xl font-bold">Sessions</h1>
 
-      {groups.length === 0 && (
+      {groups.length === 0 && loaded && (
         <p className="text-sm text-muted-foreground">
           No sessions found. Create one to get started.
         </p>
