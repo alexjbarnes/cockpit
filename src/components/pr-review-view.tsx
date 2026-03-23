@@ -2,7 +2,9 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
-import { PatchDiff } from "@pierre/diffs/react";
+import { FileDiff as FileDiffComponent, PatchDiff } from "@pierre/diffs/react";
+import { parsePatchFiles } from "@pierre/diffs";
+import type { FileDiffMetadata } from "@pierre/diffs";
 import { useSettings } from "@/hooks/use-settings";
 import { DiffErrorBoundary } from "@/components/diff-viewer";
 import { useShell } from "@/components/app-shell";
@@ -170,9 +172,19 @@ function getCachedState(prKey: string): ReviewState {
 
 // --- Lazy Diff ---
 
+function fetchFileContent(repo: string, path: string, ref: string): Promise<string | null> {
+  return fetch(
+    `/api/github/file-content?repo=${encodeURIComponent(repo)}&path=${encodeURIComponent(path)}&ref=${encodeURIComponent(ref)}`,
+  )
+    .then((res) => (res.ok ? res.json() : null))
+    .then((data) => data?.content ?? null)
+    .catch(() => null);
+}
+
 function LazyDiff({
   file,
   pr,
+  repo,
   settings,
   viewed,
   collapsed,
@@ -182,6 +194,7 @@ function LazyDiff({
 }: {
   file: FileDiff;
   pr: PRDetails | null;
+  repo: string;
   settings: { diffStyle: string };
   viewed: boolean;
   collapsed: boolean;
@@ -190,6 +203,7 @@ function LazyDiff({
   sectionRef: (el: HTMLDivElement | null) => void;
 }) {
   const [visible, setVisible] = useState(false);
+  const [fileDiffMeta, setFileDiffMeta] = useState<FileDiffMetadata | null>(null);
   const sentinelRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -208,10 +222,57 @@ function LazyDiff({
     return () => observer.disconnect();
   }, []);
 
+  // When visible, parse patch and fetch full file contents for context expansion
+  useEffect(() => {
+    if (!visible || !pr) return;
+
+    let cancelled = false;
+
+    // Parse patch into FileDiffMetadata
+    let meta: FileDiffMetadata | null = null;
+    try {
+      const parsed = parsePatchFiles(file.patch);
+      if (parsed.length > 0 && parsed[0].files.length > 0) {
+        meta = parsed[0].files[0];
+      }
+    } catch {
+      // Fall back to PatchDiff rendering
+    }
+
+    if (!meta) return;
+
+    // Fetch old (base) and new (head) file contents in parallel
+    Promise.all([
+      fetchFileContent(repo, file.path, pr.baseRefName),
+      fetchFileContent(repo, file.path, pr.headRefName),
+    ]).then(([oldContent, newContent]) => {
+      if (cancelled) return;
+      if (oldContent != null) {
+        meta!.oldLines = oldContent.split("\n").map((l) => l + "\n");
+      }
+      if (newContent != null) {
+        meta!.newLines = newContent.split("\n").map((l) => l + "\n");
+      }
+      setFileDiffMeta(meta);
+    });
+
+    return () => { cancelled = true; };
+  }, [visible, pr, repo, file.patch, file.path]);
+
   const handleMarkViewed = (e: React.MouseEvent) => {
     e.stopPropagation();
     onToggleViewed();
     if (!collapsed) onToggleCollapse();
+  };
+
+  const diffOptions = {
+    theme: { dark: "pierre-dark", light: "pierre-light" },
+    themeType: isDark() ? ("dark" as const) : ("light" as const),
+    overflow: "wrap" as const,
+    diffStyle: settings.diffStyle as "split" | "unified",
+    hunkSeparators: "line-info" as const,
+    expansionLineCount: 20,
+    disableFileHeader: true,
   };
 
   return (
@@ -269,18 +330,17 @@ function LazyDiff({
             )}
           </div>
           <DiffErrorBoundary fallback={<pre className="p-4 text-xs text-muted-foreground whitespace-pre-wrap">{file.patch}</pre>}>
-            <PatchDiff
-              patch={file.patch}
-              options={{
-                theme: { dark: "pierre-dark", light: "pierre-light" },
-                themeType: isDark() ? "dark" : "light",
-                overflow: "wrap",
-                diffStyle: settings.diffStyle as "split" | "unified",
-                hunkSeparators: "line-info",
-                expansionLineCount: 20,
-                disableFileHeader: true,
-              }}
-            />
+            {fileDiffMeta ? (
+              <FileDiffComponent
+                fileDiff={fileDiffMeta}
+                options={diffOptions}
+              />
+            ) : (
+              <PatchDiff
+                patch={file.patch}
+                options={diffOptions}
+              />
+            )}
           </DiffErrorBoundary>
         </>
       )}
@@ -611,6 +671,7 @@ export function PRReviewView({ owner, repo, number }: { owner: string; repo: str
                 key={file.path}
                 file={file}
                 pr={pr}
+                repo={fullRepo}
                 settings={settings}
                 viewed={viewedFiles.has(file.path)}
                 collapsed={collapsedFiles.has(file.path)}
