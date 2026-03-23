@@ -24,7 +24,7 @@ import {
   FileSymlink,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { addActiveSession } from "@/components/sidebar";
+import { pinSession } from "@/components/sidebar";
 
 // --- Types ---
 
@@ -369,7 +369,7 @@ export function PRReviewView({ owner, repo, number }: { owner: string; repo: str
             setSessionId(existingId);
             const data = await res.json();
             setReviewsCwd(data.session?.cwd || null);
-            addActiveSession(existingId);
+            pinSession(existingId);
             setSessionLoading(false);
             return;
           }
@@ -388,7 +388,7 @@ export function PRReviewView({ owner, repo, number }: { owner: string; repo: str
           setSessionId(data.sessionId);
           setReviewsCwd(data.cwd);
           setSessionMapping(prKey, data.sessionId);
-          addActiveSession(data.sessionId);
+          pinSession(data.sessionId);
         }
       } catch {}
       setSessionLoading(false);

@@ -1,5 +1,4 @@
 import { useState, useEffect } from "react";
-import { getActiveSessions } from "@/components/sidebar";
 import type { SessionGroup } from "@/types";
 
 export function useSessionForCwd(cwd: string, urlSessionId?: string | null): {
@@ -19,22 +18,23 @@ export function useSessionForCwd(cwd: string, urlSessionId?: string | null): {
     let cancelled = false;
     setLoading(true);
 
-    fetch("/api/sessions")
-      .then((res) => {
-        if (!res.ok) throw new Error("Failed");
-        return res.json();
-      })
-      .then((data: { groups: SessionGroup[] }) => {
+    Promise.all([
+      fetch("/api/sessions").then((r) => r.ok ? r.json() : null),
+      fetch("/api/sessions/pinned").then((r) => r.ok ? r.json() : null),
+    ])
+      .then(([sessionsData, pinnedData]) => {
         if (cancelled) return;
-        const activeIds = getActiveSessions();
-        const group = data.groups.find((g) => g.cwd === cwd);
+        const groups: SessionGroup[] = sessionsData?.groups || [];
+        const pinnedIds = new Set<string>(pinnedData?.pinned || []);
+        const group = groups.find((g) => g.cwd === cwd);
         if (!group) {
           setSessionId(null);
           setLoading(false);
           return;
         }
+        // Prefer pinned sessions, fall back to any running session
         const candidates = group.sessions
-          .filter((s) => activeIds.has(s.id))
+          .filter((s) => pinnedIds.has(s.id) || s.status === "running")
           .sort((a, b) => b.lastActiveAt - a.lastActiveAt);
         setSessionId(candidates.length > 0 ? candidates[0].id : null);
         setLoading(false);

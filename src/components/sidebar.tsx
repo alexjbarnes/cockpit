@@ -10,27 +10,34 @@ import { Plus, Home, X, Settings, GitPullRequest } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useShell } from "@/components/app-shell";
 
-const ACTIVE_KEY = "cockpit_active_sessions";
 const UNREAD_KEY = "cockpit_unread_sessions";
 
-export function getActiveSessions(): Set<string> {
+// Server-side pinned sessions API helpers
+export async function pinSession(id: string): Promise<void> {
+  await fetch("/api/sessions/pinned", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ add: id }),
+  }).catch(() => {});
+}
+
+async function unpinSession(id: string): Promise<void> {
+  await fetch("/api/sessions/pinned", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ remove: id }),
+  }).catch(() => {});
+}
+
+async function fetchPinnedIds(): Promise<Set<string>> {
   try {
-    const raw = localStorage.getItem(ACTIVE_KEY);
-    if (raw) return new Set(JSON.parse(raw));
-  } catch {}
-  return new Set();
-}
-
-export function addActiveSession(id: string): void {
-  const set = getActiveSessions();
-  set.add(id);
-  localStorage.setItem(ACTIVE_KEY, JSON.stringify([...set]));
-}
-
-function removeActiveSession(id: string): void {
-  const set = getActiveSessions();
-  set.delete(id);
-  localStorage.setItem(ACTIVE_KEY, JSON.stringify([...set]));
+    const res = await fetch("/api/sessions/pinned");
+    if (!res.ok) return new Set();
+    const data = await res.json();
+    return new Set(data.pinned || []);
+  } catch {
+    return new Set();
+  }
 }
 
 function getUnreadSessions(): Set<string> {
@@ -74,6 +81,7 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
   const [dialogOpen, setDialogOpen] = useState(false);
 
   const prevStatusRef = useRef<Map<string, string>>(new Map());
+  const pinnedRef = useRef<Set<string>>(new Set());
 
   useImperativeHandle(ref, () => ({
     toggle: () => setOpen((prev) => !prev),
@@ -90,7 +98,9 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
     return subscribe((msg) => {
       if (msg.type === "session:status") {
         const { sessionId, status } = msg;
-        if (!getActiveSessions().has(sessionId)) return;
+        // Accept status updates for any session we're showing (pinned or running)
+        const known = new Set(sessions.map((s) => s.id));
+        if (!known.has(sessionId)) return;
 
         const prev = prevStatusRef.current.get(sessionId);
         prevStatusRef.current.set(sessionId, status);
@@ -114,41 +124,55 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
         );
       }
     });
-  }, [subscribe, currentSessionId]);
+  }, [subscribe, currentSessionId, sessions]);
 
   const fetchSessions = useCallback(async () => {
-    const activeIds = getActiveSessions();
     setUnread(getUnreadSessions());
-    if (activeIds.size === 0) {
-      setSessions([]);
-      return;
-    }
-    let res: Response;
-    try {
-      res = await fetch("/api/sessions");
-    } catch {
-      return;
-    }
-    if (!res.ok) return;
-    const data = await res.json();
-    const groups: SessionGroup[] = data.groups || [];
-    const flat = groups
+
+    // Fetch pinned IDs from server and all sessions in parallel
+    const [pinned, sessionsRes] = await Promise.all([
+      fetchPinnedIds(),
+      fetch("/api/sessions").then((r) => r.ok ? r.json() : null).catch(() => null),
+    ]);
+    pinnedRef.current = pinned;
+
+    if (!sessionsRes) return;
+    const groups: SessionGroup[] = sessionsRes.groups || [];
+    const allSessions = groups
       .flatMap((g) => g.sessions)
-      .filter((s) => activeIds.has(s.id) && !s.cwd.endsWith(".cockpit/reviews"))
+      .filter((s) => !s.cwd.endsWith(".cockpit/reviews"));
+
+    // Show union of pinned + running sessions
+    const visible = allSessions
+      .filter((s) => pinned.has(s.id) || s.status === "running")
       .sort((a, b) => b.lastActiveAt - a.lastActiveAt);
-    for (const s of flat) {
+
+    // Clean up pinned IDs that no longer exist on server
+    const serverIds = new Set(allSessions.map((s) => s.id));
+    let needsCleanup = false;
+    for (const id of pinned) {
+      if (!serverIds.has(id)) {
+        needsCleanup = true;
+        pinned.delete(id);
+      }
+    }
+    if (needsCleanup) {
+      fetch("/api/sessions/pinned", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pinned: [...pinned] }),
+      }).catch(() => {});
+    }
+
+    for (const s of visible) {
       if (!prevStatusRef.current.has(s.id)) {
         prevStatusRef.current.set(s.id, s.status);
       }
     }
-    const serverIds = new Set(flat.map((s) => s.id));
-    for (const id of activeIds) {
-      if (!serverIds.has(id)) removeActiveSession(id);
-    }
-    setSessions(flat);
+    setSessions(visible);
 
-    if (flat.length > 0) {
-      send({ type: "session:subscribe", sessionIds: flat.map((s) => s.id) });
+    if (visible.length > 0) {
+      send({ type: "session:subscribe", sessionIds: visible.map((s) => s.id) });
     }
   }, [send]);
 
@@ -162,16 +186,16 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
     e.stopPropagation();
     const res = await fetch(`/api/sessions/${id}`, { method: "DELETE" });
     if (res.ok) {
-      removeActiveSession(id);
+      await unpinSession(id);
       clearUnreadSession(id);
       setUnread(getUnreadSessions());
       setSessions((prev) => prev.filter((s) => s.id !== id));
     }
   };
 
-  const dismissSession = (e: React.MouseEvent, id: string) => {
+  const dismissSession = async (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
-    removeActiveSession(id);
+    await unpinSession(id);
     clearUnreadSession(id);
     setUnread(getUnreadSessions());
     setSessions((prev) => prev.filter((s) => s.id !== id));
@@ -185,7 +209,7 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
     });
     if (res.ok) {
       const data = await res.json();
-      addActiveSession(data.sessionId);
+      await pinSession(data.sessionId);
       await fetchSessions();
       close();
       router.push(`/sessions/${data.sessionId}?cwd=${encodeURIComponent(cwd)}`);
@@ -355,4 +379,3 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
     </>
   );
 });
-

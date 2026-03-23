@@ -4,7 +4,7 @@ import { use, useEffect } from "react";
 import { useSearchParams } from "next/navigation";
 import { useShellCwd } from "@/components/app-shell";
 import { ChatView } from "@/components/chat-view";
-import { addActiveSession, clearUnreadSession } from "@/components/sidebar";
+import { pinSession, clearUnreadSession } from "@/components/sidebar";
 
 export default function SessionPage({
   params,
@@ -19,7 +19,7 @@ export default function SessionPage({
   useShellCwd(cwd || undefined);
 
   useEffect(() => {
-    addActiveSession(id);
+    pinSession(id);
     clearUnreadSession(id);
   }, [id]);
 
