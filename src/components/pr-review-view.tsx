@@ -76,6 +76,10 @@ function fileStatusIcon(path: string, prFiles: PRFile[]) {
   return <FileEdit className="h-3.5 w-3.5 text-yellow-500 shrink-0" />;
 }
 
+function isDeletedFile(patch: string): boolean {
+  return /^deleted file mode/m.test(patch);
+}
+
 // --- Resize Handle ---
 
 function ResizeHandle({ onResize }: { onResize: (delta: number) => void }) {
@@ -202,11 +206,14 @@ function LazyDiff({
   onToggleCollapse: () => void;
   sectionRef: (el: HTMLDivElement | null) => void;
 }) {
+  const deleted = isDeletedFile(file.patch);
+  const [loadDeleted, setLoadDeleted] = useState(false);
   const [visible, setVisible] = useState(false);
   const [fileDiffMeta, setFileDiffMeta] = useState<FileDiffMetadata | null>(null);
   const sentinelRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
+    if (deleted && !loadDeleted) return;
     const el = sentinelRef.current;
     if (!el) return;
     const observer = new IntersectionObserver(
@@ -220,7 +227,7 @@ function LazyDiff({
     );
     observer.observe(el);
     return () => observer.disconnect();
-  }, []);
+  }, [deleted, loadDeleted]);
 
   // When visible, parse patch and fetch full file contents for context expansion
   useEffect(() => {
@@ -288,6 +295,15 @@ function LazyDiff({
           <ChevronDown className="h-3.5 w-3.5 shrink-0" />
           {viewed && <Check className="h-3 w-3 text-green-500 shrink-0" />}
           <span className="font-mono text-xs truncate">{file.path}</span>
+        </button>
+      ) : deleted && !loadDeleted ? (
+        <button
+          onClick={() => setLoadDeleted(true)}
+          className="flex items-center gap-2 w-full px-4 py-2 text-sm text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
+        >
+          <FileMinus className="h-3.5 w-3.5 text-red-500 shrink-0" />
+          <span className="font-mono text-xs truncate">{file.path}</span>
+          <span className="text-xs shrink-0">deleted &mdash; click to load</span>
         </button>
       ) : !visible ? (
         <div className="flex items-center justify-center py-8">
