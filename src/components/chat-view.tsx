@@ -30,6 +30,10 @@ export function ChatView({ sessionId, cwd, initialName, initialContext }: { sess
   const expandThrottleRef = useRef(0);
   const prevScrollHeightRef = useRef(0);
   const { selectedIds, selectionMode, enterSelection, toggleSelect, clearSelection, copySelected } = useMessageSelection();
+  const [isTouch, setIsTouch] = useState(false);
+  useEffect(() => {
+    setIsTouch(matchMedia("(pointer: coarse)").matches);
+  }, []);
 
   const uniqueMessages = useMemo(() => {
     const seen = new Set<string>();
@@ -128,18 +132,19 @@ export function ChatView({ sessionId, cwd, initialName, initialContext }: { sess
   // keyboard focus to the document, so keydown events (like Escape to
   // interrupt) don't fire until the user clicks. Fix: on pointermove and
   // window focus, ensure the scroll container (tabIndex={-1}) has focus so
-  // keyboard events reach window handlers. document.hasFocus() can return
-  // true even without real keyboard input, so we skip the hasFocus guard
-  // and instead check whether the scroll container already has focus to
-  // avoid redundant work on every mousemove.
+  // keyboard events reach window handlers. The scroll container only gets
+  // tabIndex on non-touch devices; on touch devices the entire mechanism is
+  // skipped since it interferes with native focus management (dictation,
+  // keyboard popups, etc).
   //
   // Also re-scroll to bottom when returning. Browsers throttle layout for
   // background apps, so scrollTop assignments may not stick. When focus
   // returns, the reconciled scrollHeight can be larger than scrollTop,
   // making the scroll handler think the user scrolled up.
   useEffect(() => {
+    if (isTouch) return;
     const handler = () => {
-      if (document.activeElement?.closest("textarea, input")) return;
+      if (document.activeElement?.closest("textarea, input, [contenteditable]")) return;
       if (document.activeElement === scrollRef.current) return;
       scrollRef.current?.focus({ preventScroll: true });
       if (stickToBottom.current) scrollToBottom();
@@ -157,7 +162,7 @@ export function ChatView({ sessionId, cwd, initialName, initialContext }: { sess
       window.removeEventListener("focus", handler);
       document.removeEventListener("visibilitychange", visHandler);
     };
-  }, [scrollToBottom]);
+  }, [isTouch, scrollToBottom]);
 
   // Escape key: modal → queued message → interrupt.
   // Input area also handles Escape with stopPropagation when textarea has focus,
@@ -203,7 +208,7 @@ export function ChatView({ sessionId, cwd, initialName, initialContext }: { sess
     <>
       <div
         ref={scrollRef}
-        tabIndex={-1}
+        tabIndex={isTouch ? undefined : -1}
         className="flex-1 min-h-0 overflow-y-auto p-4 outline-none"
         onScroll={handleScroll}
       >
