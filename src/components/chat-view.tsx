@@ -363,14 +363,14 @@ export function ChatView({ sessionId, cwd, initialName, initialContext }: { sess
         />
       )}
       {showScrollDown && (
-        <div className="flex justify-center -mt-2 mb-1">
+        <div className="relative z-10 flex justify-center pointer-events-none" style={{ marginTop: -44 }}>
           <button
             onClick={() => {
               scrollToBottom();
               stickToBottom.current = true;
               setShowScrollDown(false);
             }}
-            className="rounded-full border bg-background/90 backdrop-blur p-2 shadow-md text-muted-foreground hover:text-foreground transition-colors"
+            className="pointer-events-auto rounded-full border bg-background/90 backdrop-blur p-2 shadow-md text-muted-foreground hover:text-foreground transition-colors"
           >
             <ArrowDown className="h-4 w-4" />
           </button>
