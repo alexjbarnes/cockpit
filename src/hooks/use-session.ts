@@ -102,9 +102,8 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
   // what the server stores.
   const lastServerMsgIdRef = useRef<string | null>(null);
 
-  // Store queued message text for client-side injection on idle.
-  // The server's sentText event is unreliable on mobile (WS dies before delivery),
-  // so we inject from local state when session:status idle arrives instead.
+  // Track queued message for cancel support. The user message is shown
+  // optimistically at send time; this ref lets us remove it on cancel.
   const queuedTextRef = useRef<{ text: string; images?: ImageAttachment[]; documents?: DocumentAttachment[]; textFiles?: TextFileAttachment[] } | null>(null);
   const loadedSessionRef = useRef<string | null>(null);
 
@@ -563,26 +562,9 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
               if (stale.length === 0) return prev;
               return prev.filter((t) => t.status !== "running");
             });
-            // Inject queued message from local state. The server also sends
-            // sentText via session:queued, but that WS message is unreliable
-            // on mobile (connection dies before delivery). This fires earlier
-            // (idle arrives before sentText) and uses locally stored text.
-            const queued = queuedTextRef.current;
-            if (queued) {
-              queuedTextRef.current = null;
-              const userMsg: ChatMessage = {
-                id: crypto.randomUUID(),
-                role: "user",
-                content: queued.text,
-                toolUses: [],
-                blocks: [],
-                timestamp: Date.now(),
-                images: queued.images,
-                documents: queued.documents,
-                textFiles: queued.textFiles,
-              };
-              setMessages((prev) => [...prev, userMsg]);
-            }
+            // Queued message is already shown in UI (added optimistically at
+            // send time). Just clear the ref so cancel logic knows it's done.
+            queuedTextRef.current = null;
           }
           break;
         }
@@ -603,20 +585,19 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
           if (msg.cancelledText) {
             setRestoredText(msg.cancelledText);
             queuedTextRef.current = null;
+            // Remove the optimistic user message that was added at send time
+            setMessages((prev) => {
+              for (let i = prev.length - 1; i >= 0; i--) {
+                if (prev[i].id.startsWith("queued-") && prev[i].content === msg.cancelledText) {
+                  return [...prev.slice(0, i), ...prev.slice(i + 1)];
+                }
+              }
+              return prev;
+            });
           }
-          // sentText is a server-side fallback. Skip if idle handler already
-          // injected from local state (queuedTextRef was cleared).
+          // Message already shown optimistically at send time. Just clear ref.
           if (msg.sentText && queuedTextRef.current) {
             queuedTextRef.current = null;
-            const userMsg: ChatMessage = {
-              id: crypto.randomUUID(),
-              role: "user",
-              content: msg.sentText,
-              toolUses: [],
-              blocks: [],
-              timestamp: Date.now(),
-            };
-            setMessages((prev) => [...prev, userMsg]);
           }
           break;
         }
@@ -889,6 +870,20 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
       // Queue message server-side when responding
       if (isRespondingRef.current) {
         queuedTextRef.current = { text, images, documents, textFiles };
+        // Show user message immediately rather than deferring to idle.
+        // The idle-time injection was unreliable on mobile (WS dies).
+        const queuedMsg: ChatMessage = {
+          id: "queued-" + Date.now(),
+          role: "user",
+          content: text,
+          toolUses: [],
+          blocks: [],
+          timestamp: Date.now(),
+          images: images?.length ? images : undefined,
+          documents: documents?.length ? documents : undefined,
+          textFiles: textFiles?.length ? textFiles : undefined,
+        };
+        setMessages((prev) => [...prev, queuedMsg]);
         send({
           type: "message:send",
           sessionId,
