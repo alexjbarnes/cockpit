@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useRef, memo } from "react";
+import { useState, useCallback, useRef, memo, type HTMLAttributes } from "react";
 import type { ChatMessage } from "@/types";
 import { ToolCard } from "./tool-card";
 import { useSettings } from "@/hooks/use-settings";
@@ -8,13 +8,41 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
 import { cn } from "@/lib/utils";
-import { Loader2, Check, ChevronDown, ChevronRight, Brain, FileText, File } from "lucide-react";
+import { Loader2, Check, ChevronDown, ChevronRight, Brain, FileText, File, Copy } from "lucide-react";
 
 const CLI_XML_RE = /<(?:task-notification|local-command-caveat|local-command-stdout|command-name|system-reminder)[^>]*>[\s\S]*?<\/(?:task-notification|local-command-caveat|local-command-stdout|command-name|system-reminder)>[\s\S]*/g;
 
 function stripCliXml(text: string): string {
   return text.replace(CLI_XML_RE, "").trim();
 }
+
+function CodeBlock(props: HTMLAttributes<HTMLPreElement>) {
+  const [copied, setCopied] = useState(false);
+  const preRef = useRef<HTMLPreElement>(null);
+
+  const handleCopy = useCallback(() => {
+    const text = preRef.current?.textContent ?? "";
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
+  }, []);
+
+  return (
+    <div className="group/code relative">
+      <pre ref={preRef} {...props} />
+      <button
+        onClick={handleCopy}
+        className="absolute top-2 right-2 p-1.5 rounded bg-background/80 border border-border text-muted-foreground hover:text-foreground opacity-0 group-hover/code:opacity-100 transition-opacity"
+        title="Copy code"
+      >
+        {copied ? <Check className="h-3.5 w-3.5 text-green-500" /> : <Copy className="h-3.5 w-3.5" />}
+      </button>
+    </div>
+  );
+}
+
+const markdownComponents = { pre: CodeBlock };
 
 interface MessageBubbleProps {
   message: ChatMessage;
@@ -206,7 +234,7 @@ export const MessageBubble = memo(function MessageBubble({
                   key={`text-${i}`}
                   className="message-prose prose prose-sm max-w-none dark:prose-invert"
                 >
-                  <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
+                  <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]} components={markdownComponents}>
                     {stripCliXml(block.text)}
                   </ReactMarkdown>
                 </div>
@@ -223,7 +251,7 @@ export const MessageBubble = memo(function MessageBubble({
               </div>
             )}
             <div className="message-prose prose prose-sm max-w-none dark:prose-invert">
-              <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
+              <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]} components={markdownComponents}>
                 {stripCliXml(message.content)}
               </ReactMarkdown>
             </div>
