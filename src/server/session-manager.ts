@@ -1160,7 +1160,9 @@ export class SessionManager {
               this.emitSystem(session, sessionId, "__compact::done");
             }
             flushedOnMessageDone = true;
-            this.flushQueuedMessage(session, sessionId);
+            // Queue flush is deferred until after the message_done event
+            // is emitted to the client (below), so the assistant message
+            // appears before the queued user message.
           }
           // Store permission requests so they survive WS reconnections.
           // The CLI handles bypass/auto-allow natively via set_permission_mode,
@@ -1183,6 +1185,11 @@ export class SessionManager {
             const hasAgent = event.message.toolUses.some((t: ToolUse) => t.name === "Agent");
             if (hasAgent) {
               this.loadAgentChildren(session, sessionId, event.message.id, session.info.cwd);
+            }
+            // Flush queued messages AFTER message_done is emitted to client,
+            // so the assistant response appears before the queued user message.
+            if (flushedOnMessageDone) {
+              this.flushQueuedMessage(session, sessionId);
             }
           }
         }
