@@ -102,17 +102,17 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
   // what the server stores.
   const lastServerMsgIdRef = useRef<string | null>(null);
 
-  // Store queued message text for client-side injection on idle.
-  // When the session goes idle after the current response finishes,
-  // we inject the queued user message so it appears in the correct
-  // position (after the assistant response). On mobile WS drops,
-  // the reconnect delta-history handles showing the message instead.
-  const queuedTextRef = useRef<{ text: string; images?: ImageAttachment[]; documents?: DocumentAttachment[]; textFiles?: TextFileAttachment[] } | null>(null);
+  // Queue of messages sent while the session was responding.
+  // Each is injected into the UI when the server confirms delivery
+  // via session:queued sentText. Using an array (not a single ref)
+  // so rapid-fire messages don't overwrite each other.
+  const queuedTextsRef = useRef<Array<{ text: string; images?: ImageAttachment[]; documents?: DocumentAttachment[]; textFiles?: TextFileAttachment[] }>>([]);
   const loadedSessionRef = useRef<string | null>(null);
 
   // Reset when switching sessions
   if (loadedSessionRef.current !== null && loadedSessionRef.current !== sessionId) {
     lastServerMsgIdRef.current = null;
+    queuedTextsRef.current = [];
     loadedSessionRef.current = null;
   }
 
@@ -565,24 +565,8 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
               if (stale.length === 0) return prev;
               return prev.filter((t) => t.status !== "running");
             });
-            // Inject queued user message now that the assistant has finished.
-            // This ensures it appears after the assistant's response.
-            const queued = queuedTextRef.current;
-            if (queued) {
-              queuedTextRef.current = null;
-              const userMsg: ChatMessage = {
-                id: "user-queued-" + Date.now(),
-                role: "user",
-                content: queued.text,
-                toolUses: [],
-                blocks: [],
-                timestamp: Date.now(),
-                images: queued.images,
-                documents: queued.documents,
-                textFiles: queued.textFiles,
-              };
-              setMessages((prev) => [...prev, userMsg]);
-            }
+            // Queued messages are injected when the server confirms
+            // delivery via session:queued sentText, not here.
           }
           break;
         }
@@ -602,12 +586,18 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
           setHasQueuedMessage(msg.count > 0);
           if (msg.cancelledText) {
             setRestoredText(msg.cancelledText);
-            queuedTextRef.current = null;
+            // Remove cancelled message from queue
+            const q = queuedTextsRef.current;
+            const idx = q.findIndex((m) => m.text === msg.cancelledText);
+            if (idx !== -1) q.splice(idx, 1);
           }
-          // Fallback: if idle handler didn't fire (e.g. WS reconnect race),
-          // inject the user message now from the server's sentText.
-          if (msg.sentText && queuedTextRef.current) {
-            queuedTextRef.current = null;
+          // Server confirms it sent a queued message to Claude.
+          // Inject the user message bubble now (after the assistant
+          // response, before the next response starts streaming).
+          if (msg.sentText) {
+            const q = queuedTextsRef.current;
+            const idx = q.findIndex((m) => m.text === msg.sentText);
+            const matched = idx !== -1 ? q.splice(idx, 1)[0] : null;
             const userMsg: ChatMessage = {
               id: "user-queued-" + Date.now(),
               role: "user",
@@ -615,6 +605,9 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
               toolUses: [],
               blocks: [],
               timestamp: Date.now(),
+              images: matched?.images,
+              documents: matched?.documents,
+              textFiles: matched?.textFiles,
             };
             setMessages((prev) => [...prev, userMsg]);
           }
@@ -888,7 +881,7 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
 
       // Queue message server-side when responding
       if (isRespondingRef.current) {
-        queuedTextRef.current = { text, images, documents, textFiles };
+        queuedTextsRef.current.push({ text, images, documents, textFiles });
         send({
           type: "message:send",
           sessionId,
