@@ -617,6 +617,8 @@ export class SessionManager {
       }
 
       if (raw.type !== "assistant" || !raw.message?.usage) return;
+      // Skip synthetic responses (e.g. /context) that have all-zero usage
+      if (raw.message.model === "<synthetic>") return;
       const u = raw.message.usage;
       const used = (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.cache_read_input_tokens || 0);
       const usage: ContextUsage = { used, total: session.contextWindowSize };
