@@ -1268,6 +1268,14 @@ export class SessionManager {
 
     proc.on("close", (code, signal) => {
       this.log(sessionId, `CLI process exited (code=${code}, signal=${signal}, pid=${proc.pid})`);
+
+      // Guard: if a new process was already spawned (e.g. /clear followed
+      // by a quick message), don't clobber the new process reference.
+      if (session.process !== null && session.process !== proc) {
+        this.log(sessionId, `skipping close cleanup: newer process already running (pid=${session.process.pid})`);
+        return;
+      }
+
       if (lineBuffer.trim()) {
         const events = parser.parseLine(lineBuffer);
         for (const event of events) {
