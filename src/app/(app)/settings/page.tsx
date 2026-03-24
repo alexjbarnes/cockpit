@@ -123,7 +123,7 @@ interface VersionInfo {
 }
 
 export default function SettingsPage() {
-  const { settings, updateSetting } = useSettings();
+  const { settings, updateSetting, loaded: settingsLoaded } = useSettings();
   const [theme, setTheme] = useState<Theme>("system");
   const [version, setVersion] = useState<VersionInfo | null>(null);
   const [versionLoading, setVersionLoading] = useState(true);
@@ -177,7 +177,7 @@ export default function SettingsPage() {
   }, []);
 
   return (
-    <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-4">
+    <div className={`flex-1 min-h-0 overflow-y-auto p-4 space-y-4 transition-opacity duration-150 ${settingsLoaded ? "opacity-100" : "opacity-0"}`}>
       <Card>
         <CardHeader>
           <div className="flex items-center justify-between">
