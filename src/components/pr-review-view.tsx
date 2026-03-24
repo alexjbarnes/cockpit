@@ -80,6 +80,20 @@ function isDeletedFile(patch: string): boolean {
   return /^deleted file mode/m.test(patch);
 }
 
+const BINARY_EXTENSIONS = new Set([
+  "png", "jpg", "jpeg", "gif", "bmp", "ico", "webp", "avif",
+  "woff", "woff2", "ttf", "eot", "otf",
+  "zip", "gz", "tar", "bz2", "7z", "rar",
+  "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx",
+  "mp3", "mp4", "wav", "avi", "mov", "mkv", "webm",
+  "exe", "dll", "so", "dylib",
+]);
+
+function isBinaryFile(path: string): boolean {
+  const ext = path.split(".").pop()?.toLowerCase() ?? "";
+  return BINARY_EXTENSIONS.has(ext);
+}
+
 // --- Resize Handle ---
 
 function ResizeHandle({ onResize }: { onResize: (delta: number) => void }) {
@@ -207,13 +221,16 @@ function LazyDiff({
   sectionRef: (el: HTMLDivElement | null) => void;
 }) {
   const deleted = isDeletedFile(file.patch);
+  const binary = isBinaryFile(file.path);
   const [loadDeleted, setLoadDeleted] = useState(false);
+  const [loadBinary, setLoadBinary] = useState(false);
   const [visible, setVisible] = useState(false);
   const [fileDiffMeta, setFileDiffMeta] = useState<FileDiffMetadata | null>(null);
   const sentinelRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     if (deleted && !loadDeleted) return;
+    if (binary && !loadBinary) return;
     const el = sentinelRef.current;
     if (!el) return;
     const observer = new IntersectionObserver(
@@ -227,7 +244,7 @@ function LazyDiff({
     );
     observer.observe(el);
     return () => observer.disconnect();
-  }, [deleted, loadDeleted]);
+  }, [deleted, loadDeleted, binary, loadBinary]);
 
   // When visible, parse patch and fetch full file contents for context expansion
   useEffect(() => {
@@ -314,6 +331,15 @@ function LazyDiff({
           <FileMinus className="h-3.5 w-3.5 text-red-500 shrink-0" />
           <span className="font-mono text-xs truncate">{file.path}</span>
           <span className="text-xs shrink-0">deleted &mdash; click to load</span>
+        </button>
+      ) : binary && !loadBinary ? (
+        <button
+          onClick={() => setLoadBinary(true)}
+          className="flex items-center gap-2 w-full px-4 py-2 text-sm text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
+        >
+          {fileStatusIcon(file.path, pr?.files || [])}
+          <span className="font-mono text-xs truncate">{file.path}</span>
+          <span className="text-xs shrink-0">binary &mdash; click to load</span>
         </button>
       ) : !visible ? (
         <div className="flex items-center justify-center py-8">
