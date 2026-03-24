@@ -229,7 +229,14 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
             timestamp: Date.now(),
           };
           setMessages((prev) => {
-            const filtered = prev.filter((m) => m.id !== "streaming");
+            // Remove both the old streaming placeholder and any history
+            // message with the same ID as the snapshot. The transcript
+            // may contain a stale version of this message (from an
+            // intermediate emission) while the snapshot has the latest
+            // in-progress state including new tool calls.
+            const filtered = prev.filter(
+              (m) => m.id !== "streaming" && m.id !== msg.messageId
+            );
             return [...filtered, streamMsg];
           });
           break;
