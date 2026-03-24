@@ -242,11 +242,14 @@ function LazyDiff({
       if (parsed.length > 0 && parsed[0].files.length > 0) {
         meta = parsed[0].files[0];
       }
-    } catch {
-      // Fall back to PatchDiff rendering
+    } catch (e) {
+      console.warn(`[diff] parsePatchFiles failed for ${file.path}:`, e);
     }
 
-    if (!meta) return;
+    if (!meta) {
+      console.warn(`[diff] no meta for ${file.path}, falling back to PatchDiff`);
+      return;
+    }
 
     // Fetch old (base) and new (head) file contents in parallel
     Promise.all([
@@ -256,11 +259,18 @@ function LazyDiff({
       if (cancelled) return;
       if (oldContent != null) {
         meta!.oldLines = oldContent.split("\n").map((l) => l + "\n");
+      } else {
+        console.warn(`[diff] ${file.path}: oldContent is null (base=${pr.baseRefName})`);
       }
       if (newContent != null) {
         meta!.newLines = newContent.split("\n").map((l) => l + "\n");
+      } else {
+        console.warn(`[diff] ${file.path}: newContent is null (head=${pr.headRefName})`);
       }
+      console.info(`[diff] ${file.path}: oldLines=${!!meta!.oldLines} newLines=${!!meta!.newLines}`);
       setFileDiffMeta(meta);
+    }).catch((e) => {
+      console.error(`[diff] fetch failed for ${file.path}:`, e);
     });
 
     return () => { cancelled = true; };
