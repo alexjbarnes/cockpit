@@ -11,6 +11,7 @@ import { MentionMenu, type MentionItem } from "@/components/mention-menu";
 import type { SlashCommand } from "@/lib/commands";
 import type { ThinkingLevel, ContextUsage, ImageAttachment, DocumentAttachment, TextFileAttachment, InitData } from "@/types";
 import { ContextIndicator } from "./context-indicator";
+import { QueueModal } from "./queue-modal";
 
 const models: { value: string; label: string }[] = [
   { value: "opus", label: "Opus" },
@@ -152,7 +153,12 @@ interface InputAreaProps {
   onCompact?: () => void;
   initData?: InitData | null;
   hasQueuedMessage?: boolean;
+  queuedMessages?: Array<{ id: string; text: string }>;
+  queuePaused?: boolean;
   onCancelQueued?: () => void;
+  onDeleteQueued?: (id: string) => void;
+  onEditQueued?: (id: string) => void;
+  onResumeQueue?: () => void;
   restoredText?: string | null;
   onClearRestoredText?: () => void;
   btw?: { question: string; answer: string | null; loading: boolean; error: string | null } | null;
@@ -168,9 +174,10 @@ function getMentionContext(text: string, cursorPos: number): { active: boolean; 
   return { active: true, query: match[1], start: cursorPos - match[0].length };
 }
 
-export function InputArea({ sessionId, onSend, onInterrupt, isResponding, bypassActive, onSetBypass, thinkingLevel, onSetThinking, currentModel, onSetModel, contextUsage, dismissKeyboard, cwd, onCompact, initData, hasQueuedMessage, onCancelQueued, restoredText, onClearRestoredText, btw, onDismissBtw }: InputAreaProps) {
+export function InputArea({ sessionId, onSend, onInterrupt, isResponding, bypassActive, onSetBypass, thinkingLevel, onSetThinking, currentModel, onSetModel, contextUsage, dismissKeyboard, cwd, onCompact, initData, hasQueuedMessage, queuedMessages, queuePaused, onCancelQueued, onDeleteQueued, onEditQueued, onResumeQueue, restoredText, onClearRestoredText, btw, onDismissBtw }: InputAreaProps) {
   const { connected } = useWebSocket();
   const [text, setText] = useState(() => sessionDrafts.get(sessionId) || "");
+  const [queueModalOpen, setQueueModalOpen] = useState(false);
 
   useEffect(() => {
     setText(sessionDrafts.get(sessionId) || "");
@@ -322,13 +329,6 @@ export function InputArea({ sessionId, onSend, onInterrupt, isResponding, bypass
         }
       }
 
-      if (e.key === "Escape" && hasQueuedMessage && onCancelQueued) {
-        e.preventDefault();
-        e.stopPropagation();
-        onCancelQueued();
-        return;
-      }
-
       if (e.key === "Escape" && isResponding) {
         e.preventDefault();
         onInterrupt();
@@ -340,7 +340,7 @@ export function InputArea({ sessionId, onSend, onInterrupt, isResponding, bypass
         handleSend();
       }
     },
-    [showMenu, showMention, query, selectedIndex, mentionSelectedIndex, handleSend, handleSelectCommand, handleSelectMention, text, mention.start, cursorPos, hasQueuedMessage, onCancelQueued, isResponding, onInterrupt]
+    [showMenu, showMention, query, selectedIndex, mentionSelectedIndex, handleSend, handleSelectCommand, handleSelectMention, text, mention.start, cursorPos, isResponding, onInterrupt]
   );
 
   const handleInput = useCallback(() => {
@@ -608,17 +608,17 @@ export function InputArea({ sessionId, onSend, onInterrupt, isResponding, bypass
             ))}
           </div>
         )}
-        {hasQueuedMessage && onCancelQueued && (
+        {hasQueuedMessage && (
           <div className="mb-1 flex items-center gap-2 px-9">
-            <span className="text-xs text-muted-foreground">Message queued - will send when finished</span>
+            <span className={`text-xs ${queuePaused ? "text-yellow-500" : "text-muted-foreground"}`}>
+              {(queuedMessages?.length ?? 0)} message{(queuedMessages?.length ?? 0) !== 1 ? "s" : ""} {queuePaused ? "paused" : "queued"}
+            </span>
             <button
-              onClick={() => {
-                onCancelQueued();
-                textareaRef.current?.focus();
-              }}
+              onClick={() => setQueueModalOpen(true)}
               className="rounded p-0.5 text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+              title="Manage queued messages"
             >
-              <X className="h-3 w-3" />
+              <MessageSquare className="h-3 w-3" />
             </button>
           </div>
         )}
@@ -670,7 +670,7 @@ export function InputArea({ sessionId, onSend, onInterrupt, isResponding, bypass
               onKeyDown={handleKeyDown}
               onInput={handleInput}
               onPaste={handlePaste}
-              placeholder={hasQueuedMessage ? "Message queued (Esc to cancel)" : isResponding ? "Use /btw to nudge, or type to queue..." : "Send a message..."}
+              placeholder={hasQueuedMessage ? (queuePaused ? "Queue paused (send to discard, or manage in modal)" : "Message queued (Esc to interrupt)") : isResponding ? "Use /btw to nudge, or type to queue..." : "Send a message..."}
               rows={2}
               className="w-full resize-none rounded-md border border-input bg-background px-3 py-2 pb-7 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             />
@@ -688,13 +688,7 @@ export function InputArea({ sessionId, onSend, onInterrupt, isResponding, bypass
                 <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
               </Button>
             ) : isResponding && !text.trim() && !hasAttachments ? (
-              <Button size="icon" variant="destructive" className="h-8 w-8" onClick={() => {
-                if (hasQueuedMessage && onCancelQueued) {
-                  onCancelQueued();
-                } else {
-                  onInterrupt();
-                }
-              }}>
+              <Button size="icon" variant="destructive" className="h-8 w-8" onClick={() => onInterrupt()}>
                 <Square className="h-4 w-4" />
               </Button>
             ) : (
@@ -705,6 +699,15 @@ export function InputArea({ sessionId, onSend, onInterrupt, isResponding, bypass
           </div>
         </div>
       </div>
+      <QueueModal
+        open={queueModalOpen}
+        onOpenChange={setQueueModalOpen}
+        messages={queuedMessages ?? []}
+        paused={queuePaused ?? false}
+        onDelete={onDeleteQueued ?? (() => {})}
+        onEdit={onEditQueued ?? (() => {})}
+        onResume={onResumeQueue ?? (() => {})}
+      />
     </div>
   );
 }

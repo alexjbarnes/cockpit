@@ -370,6 +370,8 @@ export function createWebSocketHandler(
             type: "session:queued",
             sessionId: msg.sessionId,
             count: sessionManager.getQueuedCount(msg.sessionId),
+            messages: sessionManager.getQueuedMessages(msg.sessionId),
+            paused: sessionManager.isQueuePaused(msg.sessionId),
           });
 
           const unsubQueued = sessionManager.onQueued(
@@ -380,6 +382,8 @@ export function createWebSocketHandler(
                 sessionId: msg.sessionId,
                 count,
                 sentText: sentText ?? undefined,
+                messages: sessionManager.getQueuedMessages(msg.sessionId),
+                paused: sessionManager.isQueuePaused(msg.sessionId),
               });
             }
           );
@@ -424,12 +428,73 @@ export function createWebSocketHandler(
             sessionId: msg.sessionId,
             count: sessionManager.getQueuedCount(msg.sessionId),
             cancelledText: cancelledText ?? undefined,
+            messages: sessionManager.getQueuedMessages(msg.sessionId),
+            paused: sessionManager.isQueuePaused(msg.sessionId),
+          });
+          break;
+        }
+
+        case "message:pause_queue": {
+          sessionManager.pauseQueue(msg.sessionId);
+          send(ws, {
+            type: "session:queued",
+            sessionId: msg.sessionId,
+            count: sessionManager.getQueuedCount(msg.sessionId),
+            messages: sessionManager.getQueuedMessages(msg.sessionId),
+            paused: true,
+          });
+          break;
+        }
+
+        case "message:resume_queue": {
+          sessionManager.resumeQueue(msg.sessionId);
+          send(ws, {
+            type: "session:queued",
+            sessionId: msg.sessionId,
+            count: sessionManager.getQueuedCount(msg.sessionId),
+            messages: sessionManager.getQueuedMessages(msg.sessionId),
+            paused: false,
+          });
+          break;
+        }
+
+        case "message:delete_queued": {
+          sessionManager.deleteQueuedMessage(msg.sessionId, msg.messageId);
+          send(ws, {
+            type: "session:queued",
+            sessionId: msg.sessionId,
+            count: sessionManager.getQueuedCount(msg.sessionId),
+            messages: sessionManager.getQueuedMessages(msg.sessionId),
+            paused: sessionManager.isQueuePaused(msg.sessionId),
+          });
+          break;
+        }
+
+        case "message:edit_queued": {
+          const editText = sessionManager.editQueuedMessage(msg.sessionId, msg.messageId);
+          send(ws, {
+            type: "session:queued",
+            sessionId: msg.sessionId,
+            count: sessionManager.getQueuedCount(msg.sessionId),
+            messages: sessionManager.getQueuedMessages(msg.sessionId),
+            paused: sessionManager.isQueuePaused(msg.sessionId),
+            editText: editText ?? undefined,
           });
           break;
         }
 
         case "session:interrupt": {
           sessionManager.interrupt(msg.sessionId);
+          // Notify client of pause state change (interrupt auto-pauses queue)
+          if (sessionManager.isQueuePaused(msg.sessionId)) {
+            send(ws, {
+              type: "session:queued",
+              sessionId: msg.sessionId,
+              count: sessionManager.getQueuedCount(msg.sessionId),
+              messages: sessionManager.getQueuedMessages(msg.sessionId),
+              paused: true,
+            });
+          }
           break;
         }
 

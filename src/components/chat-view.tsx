@@ -20,7 +20,7 @@ const INITIAL_WINDOW = 50;
 const WINDOW_INCREMENT = 30;
 
 export function ChatView({ sessionId, cwd, initialName, initialContext }: { sessionId: string; cwd?: string; initialName?: string; initialContext?: string }) {
-  const { messages, historyLoaded, isResponding, pendingPermissions, pendingQuestions, modelPicker, currentModel, bypassActive, thinkingLevel, contextUsage, rateLimitStatus, apiError, sessionName, initData, hasQueuedMessage, backgroundTasks, todos, btw, sendMessage, interrupt, respondToPermission, respondToQuestion, selectModel, setModel, setBypassAll, setThinkingLevel, cancelQueuedMessage, restoredText, clearRestoredText, dismissBtw, retry } = useSession(sessionId, cwd);
+  const { messages, historyLoaded, isResponding, pendingPermissions, pendingQuestions, modelPicker, currentModel, bypassActive, thinkingLevel, contextUsage, rateLimitStatus, apiError, sessionName, initData, hasQueuedMessage, queuedMessages, queuePaused, backgroundTasks, todos, btw, sendMessage, interrupt, respondToPermission, respondToQuestion, selectModel, setModel, setBypassAll, setThinkingLevel, cancelQueuedMessage, deleteQueuedMessage, editQueuedMessage, resumeQueue, restoredText, clearRestoredText, dismissBtw, retry } = useSession(sessionId, cwd);
   const { settings } = useSettings();
   const { setHeader, setBackgroundTasks, setTodos } = useShell();
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -173,17 +173,12 @@ export function ChatView({ sessionId, cwd, initialName, initialContext }: { sess
       if (document.querySelector(".fixed.inset-0.z-50")) return;
       const tag = (e.target as HTMLElement)?.tagName;
       if (tag === "TEXTAREA" || tag === "INPUT") return;
-      if (hasQueuedMessage) {
-        e.preventDefault();
-        cancelQueuedMessage();
-        return;
-      }
       e.preventDefault();
       interrupt();
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [isResponding, hasQueuedMessage, interrupt, cancelQueuedMessage]);
+  }, [isResponding, interrupt]);
 
   const contextInjected = useRef(false);
   const handleSend = useCallback((text: string, images?: import("@/types").ImageAttachment[], documents?: import("@/types").DocumentAttachment[], textFiles?: import("@/types").TextFileAttachment[]) => {
@@ -382,7 +377,12 @@ export function ChatView({ sessionId, cwd, initialName, initialContext }: { sess
           onCompact={handleCompact}
           initData={initData}
           hasQueuedMessage={hasQueuedMessage}
+          queuedMessages={queuedMessages}
+          queuePaused={queuePaused}
           onCancelQueued={cancelQueuedMessage}
+          onDeleteQueued={deleteQueuedMessage}
+          onEditQueued={editQueuedMessage}
+          onResumeQueue={resumeQueue}
           restoredText={restoredText}
           onClearRestoredText={clearRestoredText}
           btw={btw}

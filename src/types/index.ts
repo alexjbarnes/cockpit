@@ -159,6 +159,10 @@ export type ClientMessage =
   | { type: "session:subscribe"; sessionIds: string[] }
   | { type: "question:response"; sessionId: string; requestId: string; answers: Record<string, string> }
   | { type: "message:cancel_queued"; sessionId: string }
+  | { type: "message:pause_queue"; sessionId: string }
+  | { type: "message:resume_queue"; sessionId: string }
+  | { type: "message:delete_queued"; sessionId: string; messageId: string }
+  | { type: "message:edit_queued"; sessionId: string; messageId: string }
   | { type: "ping" };
 
 // Server -> Client messages
@@ -186,6 +190,6 @@ export type ServerMessage =
   | { type: "session:init"; sessionId: string; data: InitData }
   | { type: "history"; sessionId: string; messages: ChatMessage[]; delta?: boolean; status?: "idle" | "running" }
   | { type: "session:streaming_snapshot"; sessionId: string; messageId: string; content: string; toolUses: ToolUse[]; blocks: ContentBlock[] }
-  | { type: "session:queued"; sessionId: string; count: number; cancelledText?: string; sentText?: string }
+  | { type: "session:queued"; sessionId: string; count: number; cancelledText?: string; sentText?: string; messages?: Array<{ id: string; text: string }>; paused?: boolean; editText?: string }
   | { type: "message:ack"; sessionId: string }
   | { type: "pong" };

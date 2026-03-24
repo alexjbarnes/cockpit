@@ -41,6 +41,8 @@ interface UseSessionReturn {
   sessionName: string | null;
   initData: InitData | null;
   hasQueuedMessage: boolean;
+  queuedMessages: Array<{ id: string; text: string }>;
+  queuePaused: boolean;
   backgroundTasks: BackgroundTask[];
   todos: TodoItem[];
   btw: BtwState | null;
@@ -53,6 +55,9 @@ interface UseSessionReturn {
   setBypassAll: (enabled: boolean) => void;
   setThinkingLevel: (level: ThinkingLevel) => void;
   cancelQueuedMessage: () => void;
+  deleteQueuedMessage: (id: string) => void;
+  editQueuedMessage: (id: string) => void;
+  resumeQueue: () => void;
   restoredText: string | null;
   clearRestoredText: () => void;
   dismissBtw: () => void;
@@ -81,6 +86,8 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
   const [btw, setBtw] = useState<BtwState | null>(null);
 
   const [hasQueuedMessage, setHasQueuedMessage] = useState(false);
+  const [queuedMessages, setQueuedMessages] = useState<Array<{ id: string; text: string }>>([]);
+  const [queuePaused, setQueuePaused] = useState(false);
   const [restoredText, setRestoredText] = useState<string | null>(null);
   const isRespondingRef = useRef(false);
   const messagesRef = useRef<ChatMessage[]>([]);
@@ -584,12 +591,16 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
 
         case "session:queued": {
           setHasQueuedMessage(msg.count > 0);
+          if (msg.messages) setQueuedMessages(msg.messages);
+          if (msg.paused !== undefined) setQueuePaused(msg.paused);
           if (msg.cancelledText) {
             setRestoredText(msg.cancelledText);
-            // Remove cancelled message from queue
             const q = queuedTextsRef.current;
             const idx = q.findIndex((m) => m.text === msg.cancelledText);
             if (idx !== -1) q.splice(idx, 1);
+          }
+          if (msg.editText) {
+            setRestoredText(msg.editText);
           }
           // Server confirms it sent a queued message to Claude.
           // Inject the user message bubble now (after the assistant
@@ -623,6 +634,8 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
           setBackgroundTasks([]);
           setTodos([]);
           setHasQueuedMessage(false);
+          setQueuedMessages([]);
+          setQueuePaused(false);
           setPendingPermissions([]);
           setPendingQuestions([]);
           break;
@@ -892,6 +905,15 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
         return;
       }
 
+      // If queue was paused and user sends a new message, clear local state.
+      // The server discards the paused queue when it receives the new message.
+      if (queuePaused) {
+        queuedTextsRef.current = [];
+        setQueuedMessages([]);
+        setQueuePaused(false);
+        setHasQueuedMessage(false);
+      }
+
       const userMsg: ChatMessage = {
         id: "user-" + Date.now(),
         role: "user",
@@ -913,7 +935,7 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
         documents: documents?.length ? documents : undefined,
       });
     },
-    [send, sessionId]
+    [send, sessionId, queuePaused]
   );
 
   const interrupt = useCallback(() => {
@@ -975,6 +997,18 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
     send({ type: "message:cancel_queued", sessionId });
   }, [send, sessionId]);
 
+  const deleteQueuedMessage = useCallback((id: string) => {
+    send({ type: "message:delete_queued", sessionId, messageId: id });
+  }, [send, sessionId]);
+
+  const editQueuedMessage = useCallback((id: string) => {
+    send({ type: "message:edit_queued", sessionId, messageId: id });
+  }, [send, sessionId]);
+
+  const resumeQueue = useCallback(() => {
+    send({ type: "message:resume_queue", sessionId });
+  }, [send, sessionId]);
+
   const clearRestoredText = useCallback(() => {
     setRestoredText(null);
   }, []);
@@ -997,5 +1031,5 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
     send({ type: "message:send", sessionId, text: "Continue from where you left off." });
   }, [send, sessionId]);
 
-  return { messages, historyLoaded, isResponding, pendingPermissions, pendingQuestions, modelPicker, currentModel, bypassActive, thinkingLevel, contextUsage, rateLimitStatus, apiError, suggestions, sessionName, initData, hasQueuedMessage, backgroundTasks, todos, btw, sendMessage, interrupt, respondToPermission, respondToQuestion, selectModel, setModel, setBypassAll, setThinkingLevel, cancelQueuedMessage, restoredText, clearRestoredText, dismissBtw, retry };
+  return { messages, historyLoaded, isResponding, pendingPermissions, pendingQuestions, modelPicker, currentModel, bypassActive, thinkingLevel, contextUsage, rateLimitStatus, apiError, suggestions, sessionName, initData, hasQueuedMessage, queuedMessages, queuePaused, backgroundTasks, todos, btw, sendMessage, interrupt, respondToPermission, respondToQuestion, selectModel, setModel, setBypassAll, setThinkingLevel, cancelQueuedMessage, deleteQueuedMessage, editQueuedMessage, resumeQueue, restoredText, clearRestoredText, dismissBtw, retry };
 }

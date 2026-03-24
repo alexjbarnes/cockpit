@@ -31,6 +31,7 @@ export interface StreamingSnapshot {
 }
 
 interface QueuedMessage {
+  id: string;
   text: string;
   images?: ImageAttachment[];
   documents?: DocumentAttachment[];
@@ -52,6 +53,7 @@ interface Session {
   pendingRequests: Map<string, PendingRequest>;
   streamingSnapshot: StreamingSnapshot | null;
   queuedMessages: QueuedMessage[];
+  queuePaused: boolean;
 }
 
 export class SessionManager {
@@ -101,6 +103,7 @@ export class SessionManager {
       pendingRequests: new Map(),
       streamingSnapshot: null,
       queuedMessages: [],
+      queuePaused: false,
     });
 
     return info;
@@ -135,6 +138,7 @@ export class SessionManager {
         pendingRequests: new Map(),
         streamingSnapshot: null,
         queuedMessages: [],
+        queuePaused: false,
       };
       this.sessions.set(id, session);
     }
@@ -261,6 +265,14 @@ export class SessionManager {
     const session = this.sessions.get(id);
     if (!session?.process) return false;
 
+    // Pause the queue atomically with the interrupt so
+    // flushQueuedMessage (called on message_done) becomes a no-op.
+    // This prevents a race where message_done fires before a
+    // separate pause_queue WS message can arrive.
+    if (session.queuedMessages.length > 0) {
+      session.queuePaused = true;
+    }
+
     // Send a control_request interrupt via stdin instead of SIGINT.
     // SIGINT kills the process, forcing a full respawn + transcript reload
     // on the next message. The control_request interrupt aborts the current
@@ -376,6 +388,7 @@ export class SessionManager {
     } else {
       this.killProcess(session);
       session.queuedMessages.length = 0;
+      session.queuePaused = false;
       session.info.status = "idle";
       session.emitter.emit("status", sessionId, "idle");
     }
@@ -402,6 +415,7 @@ export class SessionManager {
     } else {
       this.killProcess(session);
       session.queuedMessages.length = 0;
+      session.queuePaused = false;
       session.info.status = "idle";
       session.emitter.emit("status", sessionId, "idle");
     }
@@ -435,6 +449,46 @@ export class SessionManager {
     return last.text;
   }
 
+  deleteQueuedMessage(sessionId: string, messageId: string): boolean {
+    const session = this.sessions.get(sessionId);
+    if (!session) return false;
+    const idx = session.queuedMessages.findIndex((m) => m.id === messageId);
+    if (idx === -1) return false;
+    session.queuedMessages.splice(idx, 1);
+    return true;
+  }
+
+  editQueuedMessage(sessionId: string, messageId: string): string | null {
+    const session = this.sessions.get(sessionId);
+    if (!session) return null;
+    const idx = session.queuedMessages.findIndex((m) => m.id === messageId);
+    if (idx === -1) return null;
+    const removed = session.queuedMessages.splice(idx, 1)[0];
+    return removed.text;
+  }
+
+  pauseQueue(sessionId: string): void {
+    const session = this.sessions.get(sessionId);
+    if (session) session.queuePaused = true;
+  }
+
+  resumeQueue(sessionId: string): void {
+    const session = this.sessions.get(sessionId);
+    if (!session) return;
+    session.queuePaused = false;
+    this.flushQueuedMessage(session, sessionId);
+  }
+
+  getQueuedMessages(sessionId: string): Array<{ id: string; text: string }> {
+    const session = this.sessions.get(sessionId);
+    if (!session) return [];
+    return session.queuedMessages.map((m) => ({ id: m.id, text: m.text }));
+  }
+
+  isQueuePaused(sessionId: string): boolean {
+    return this.sessions.get(sessionId)?.queuePaused ?? false;
+  }
+
   onQueued(
     id: string,
     listener: (count: number, sentText?: string) => void
@@ -447,6 +501,7 @@ export class SessionManager {
   }
 
   private flushQueuedMessage(session: Session, sessionId: string): void {
+    if (session.queuePaused) return;
     if (session.queuedMessages.length === 0) return;
     const next = session.queuedMessages.shift()!;
     session.emitter.emit("queued", sessionId, session.queuedMessages.length, next.text);
@@ -682,6 +737,7 @@ export class SessionManager {
         this.killProcess(session);
         session.hasSpawnedBefore = false;
         session.queuedMessages.length = 0;
+        session.queuePaused = false;
         session.todoItems = [];
         session.info.status = "idle";
         session.emitter.emit("clear", sessionId);
@@ -768,9 +824,17 @@ export class SessionManager {
 
     const content = this.buildContent(text, images, documents);
 
+    // If queue was paused (user interrupted then sent a new message),
+    // discard the paused messages and reset the flag.
+    if (session.queuePaused) {
+      session.queuedMessages.length = 0;
+      session.queuePaused = false;
+      session.emitter.emit("queued", sessionId, 0);
+    }
+
     // If already running, queue the message to send when the session goes idle
     if (session.info.status === "running") {
-      session.queuedMessages.push({ text, images, documents });
+      session.queuedMessages.push({ id: `q-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, text, images, documents });
       session.emitter.emit("queued", sessionId, session.queuedMessages.length);
       return true;
     }
