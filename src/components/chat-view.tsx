@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useLayoutEffect, useRef, useCallback, useMemo, useState } from "react";
-import { Loader2, AlertTriangle, RotateCcw } from "lucide-react";
+import { Loader2, AlertTriangle, RotateCcw, ArrowDown } from "lucide-react";
 import { useSession } from "@/hooks/use-session";
 import { useWebSocket } from "@/hooks/use-websocket";
 import { useSettings } from "@/hooks/use-settings";
@@ -25,6 +25,7 @@ export function ChatView({ sessionId, cwd, initialName, initialContext }: { sess
   const { setHeader, setBackgroundTasks, setTodos } = useShell();
   const scrollRef = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);
+  const [showScrollDown, setShowScrollDown] = useState(false);
   const ignoreScrollUntil = useRef(0);
   const [renderWindow, setRenderWindow] = useState(INITIAL_WINDOW);
   const expandThrottleRef = useRef(0);
@@ -95,6 +96,7 @@ export function ChatView({ sessionId, cwd, initialName, initialContext }: { sess
     if (!el) return;
     const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
     stickToBottom.current = distanceFromBottom < 80;
+    setShowScrollDown(distanceFromBottom > 300);
 
     if (el.scrollTop < 800 && hasMoreAbove && Date.now() > expandThrottleRef.current) {
       expandThrottleRef.current = Date.now() + 100;
@@ -109,6 +111,7 @@ export function ChatView({ sessionId, cwd, initialName, initialContext }: { sess
       el.scrollTop = el.scrollHeight;
     }
     ignoreScrollUntil.current = Date.now() + 150;
+    setShowScrollDown(false);
   }, []);
 
   useEffect(() => {
@@ -358,6 +361,20 @@ export function ChatView({ sessionId, cwd, initialName, initialContext }: { sess
           onCopy={handleCopySelected}
           onCancel={clearSelection}
         />
+      )}
+      {showScrollDown && (
+        <div className="flex justify-center -mt-2 mb-1">
+          <button
+            onClick={() => {
+              scrollToBottom();
+              stickToBottom.current = true;
+              setShowScrollDown(false);
+            }}
+            className="rounded-full border bg-background/90 backdrop-blur p-2 shadow-md text-muted-foreground hover:text-foreground transition-colors"
+          >
+            <ArrowDown className="h-4 w-4" />
+          </button>
+        </div>
       )}
       <div className="shrink-0">
         <InputArea
