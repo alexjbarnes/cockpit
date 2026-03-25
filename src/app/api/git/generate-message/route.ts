@@ -24,8 +24,6 @@ function runWithStdin(cmd: string, args: string[], cwd: string, input: string): 
     const env = { ...process.env };
     delete env.CLAUDECODE;
     delete env.CLAUDE_CODE_ENTRYPOINT;
-    env.MAX_THINKING_TOKENS = "0";
-    env.CLAUDE_CODE_SIMPLE = "1";
 
     const proc = spawn(cmd, args, { cwd, env });
     let stdout = "";
@@ -35,8 +33,12 @@ function runWithStdin(cmd: string, args: string[], cwd: string, input: string): 
     proc.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
     proc.on("error", reject);
     proc.on("close", (code) => {
-      if (code !== 0) reject(new Error(stderr || `Process exited with code ${code}`));
-      else resolve(stdout);
+      if (code !== 0) {
+        console.error("[generate-message] CLI exit code:", code, "stderr:", stderr, "stdout:", stdout.slice(0, 500));
+        reject(new Error(stderr || stdout || `Process exited with code ${code}`));
+      } else {
+        resolve(stdout);
+      }
     });
 
     proc.stdin.write(input);
@@ -44,17 +46,28 @@ function runWithStdin(cmd: string, args: string[], cwd: string, input: string): 
   });
 }
 
-const PROMPT = `You are generating a git commit message. Based on the diff summary and changes below, write a concise commit message.
+const SYSTEM_PROMPT = `You generate git commit messages. Return only the commit message string, no explanations.`;
+
+const PROMPT = `Generate a git commit message for the changes below.
 
 Rules:
 - First line: short summary under 72 characters, imperative mood (e.g. "Add", "Fix", "Update")
 - If needed, add a blank line then a brief body with bullet points
 - Focus on the "why" not the "what" when possible
-- Do not wrap the message in quotes or markdown code blocks
-- Output only the commit message text, nothing else
 
 Changes:
 `;
+
+const COMMIT_SCHEMA = JSON.stringify({
+  type: "object",
+  properties: {
+    message: {
+      type: "string",
+      description: "The git commit message. First line is the summary, optionally followed by a blank line and body.",
+    },
+  },
+  required: ["message"],
+});
 
 export async function POST(req: NextRequest) {
   if (!authenticate(req)) {
@@ -118,16 +131,39 @@ export async function POST(req: NextRequest) {
 
     const input = PROMPT + (numstat ? `Summary:\n${numstat}\n` : "") + diffs.join("\n");
 
-    const message = await runWithStdin(
+    const raw = await runWithStdin(
       "claude",
-      ["-p", "--model", "haiku", "--no-session-persistence", "--allowedTools", ""],
+      [
+        "-p",
+        "--model", "haiku",
+        "--output-format", "json",
+        "--json-schema", COMMIT_SCHEMA,
+        "--system-prompt", SYSTEM_PROMPT,
+        "--no-session-persistence",
+        "--allowedTools", "",
+      ],
       cwd,
       input
     );
 
+    let message: string;
+    try {
+      const parsed = JSON.parse(raw);
+      message = parsed.structured_output?.message || parsed.result || "";
+    } catch {
+      // If JSON parse fails, the raw output might be plain text (fallback)
+      message = raw;
+    }
+
+    if (!message.trim()) {
+      console.error("[generate-message] empty result, raw output:", raw.slice(0, 500));
+      return NextResponse.json({ error: "Empty response from model" }, { status: 500 });
+    }
+
     return NextResponse.json({ message: message.trim() });
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Failed to generate message";
+    console.error("[generate-message] error:", msg);
     return NextResponse.json({ error: msg }, { status: 500 });
   }
 }

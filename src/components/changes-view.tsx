@@ -631,11 +631,11 @@ export function ChangesView({ cwd, sessionId }: { cwd: string; sessionId?: strin
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ cwd, files: Array.from(checkedFiles) }),
       });
-      if (!res.ok) throw new Error("Failed");
       const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed");
       if (data.message) setCommitMsg(data.message);
-    } catch {
-      // Could show error
+    } catch (err) {
+      console.error("[generate-message]", err);
     } finally {
       setGenerating(false);
     }
