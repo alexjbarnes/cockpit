@@ -127,12 +127,13 @@ export default function ReviewsPage() {
     fetchRepos(selectedOrg);
   }, [selectedOrg, fetchRepos]);
 
+  const sorted = [...repos].sort((a, b) => a.name.localeCompare(b.name));
   const filtered = search
-    ? repos.filter((r) =>
+    ? sorted.filter((r) =>
         r.name.toLowerCase().includes(search.toLowerCase()) ||
         r.description?.toLowerCase().includes(search.toLowerCase()),
       )
-    : repos;
+    : sorted;
 
   if (orgsLoading) {
     return (
