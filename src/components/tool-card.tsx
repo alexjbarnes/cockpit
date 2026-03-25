@@ -3,7 +3,7 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
 import type { ToolUse } from "@/types";
 import { cn } from "@/lib/utils";
-import { ChevronRight, Loader2 } from "lucide-react";
+import { ChevronRight } from "lucide-react";
 import { DiffViewer } from "./diff-viewer";
 import { CodeBlock, languageFromPath, prehighlight } from "./code-block";
 
@@ -63,17 +63,12 @@ export function ToolCard({ tool }: ToolCardProps) {
   const dark = useIsDark();
   const isDesktop = useIsDesktop();
   const input = useMemo(() => parseInput(tool.input), [tool.input]);
-  const isRunning = tool.status === "running";
   const pinOpen = isDesktop && ALWAYS_EXPAND_DESKTOP.has(tool.name);
-  const [expanded, setExpanded] = useState(isRunning || pinOpen);
+  const [expanded, setExpanded] = useState(pinOpen);
 
   useEffect(() => {
-    if (isRunning) {
-      setExpanded(true);
-    } else {
-      setExpanded(pinOpen);
-    }
-  }, [isRunning, pinOpen]);
+    setExpanded(pinOpen);
+  }, [pinOpen]);
 
   // Pre-highlight code for Read/Write tools so expanding is instant
   useEffect(() => {
@@ -123,16 +118,12 @@ export function ToolCard({ tool }: ToolCardProps) {
           !hasContent && "cursor-default"
         )}
       >
-        {isRunning ? (
-          <Loader2 className="h-3 w-3 shrink-0 animate-spin text-muted-foreground" />
-        ) : (
-          <ChevronRight
-            className={cn(
-              "h-3 w-3 shrink-0 text-muted-foreground transition-transform",
-              expanded && "rotate-90"
-            )}
-          />
-        )}
+        <ChevronRight
+          className={cn(
+            "h-3 w-3 shrink-0 text-muted-foreground transition-transform",
+            expanded && "rotate-90"
+          )}
+        />
         <span className="font-mono font-medium">{tool.name}</span>
         <ToolSummary tool={tool} input={input} />
       </button>

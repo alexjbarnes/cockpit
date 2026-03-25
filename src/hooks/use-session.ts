@@ -207,11 +207,6 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
 
         case "session:streaming_snapshot": {
           // Restore in-progress message that wasn't in the transcript yet
-          streamingRef.current = {
-            content: msg.content,
-            toolUses: msg.toolUses,
-            blocks: msg.blocks,
-          };
 
           // Rebuild the agent stack from running Agent tool uses in the
           // snapshot. Without this, sub-agent events after reconnect leak
@@ -219,6 +214,12 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
           agentStackRef.current = msg.toolUses.filter(
             (t: ToolUse) => t.name === "Agent" && t.status === "running"
           );
+
+          streamingRef.current = {
+            content: msg.content,
+            toolUses: msg.toolUses,
+            blocks: msg.blocks,
+          };
 
           const streamMsg: ChatMessage = {
             id: "streaming",
