@@ -2,14 +2,15 @@ import { NextRequest, NextResponse } from "next/server";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
-import { validateToken } from "@/server/auth";
+import { validateSession, isAuthDisabled } from "@/server/auth";
 import { getSessionManager } from "@/server/singleton";
 
 function authenticate(req: NextRequest): boolean {
+  if (isAuthDisabled()) return true;
   const token =
-    req.cookies.get("cockpit_token")?.value ||
+    req.cookies.get("cockpit_session")?.value ||
     req.headers.get("authorization")?.replace("Bearer ", "");
-  return !!token && validateToken(token);
+  return !!token && validateSession(token);
 }
 
 export async function POST(req: NextRequest) {

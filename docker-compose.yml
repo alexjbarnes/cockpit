@@ -4,8 +4,11 @@ services:
     ports:
       - "3000:3000"
     environment:
-      - COCKPIT_TOKEN=${COCKPIT_TOKEN}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
     volumes:
       - ${HOME}:/home/user
+      - cockpit-data:/root/.cockpit
     working_dir: /app
+
+volumes:
+  cockpit-data:

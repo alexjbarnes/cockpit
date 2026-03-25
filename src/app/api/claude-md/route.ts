@@ -5,13 +5,14 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import { createReadStream } from "node:fs";
-import { validateToken } from "@/server/auth";
+import { validateSession, isAuthDisabled } from "@/server/auth";
 
 function authenticate(req: NextRequest): boolean {
+  if (isAuthDisabled()) return true;
   const token =
-    req.cookies.get("cockpit_token")?.value ||
+    req.cookies.get("cockpit_session")?.value ||
     req.headers.get("authorization")?.replace("Bearer ", "");
-  return !!token && validateToken(token);
+  return !!token && validateSession(token);
 }
 
 type Scope = "user" | "project" | "project-hidden";

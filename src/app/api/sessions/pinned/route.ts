@@ -1,14 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
-import { validateToken } from "@/server/auth";
+import { validateSession, isAuthDisabled } from "@/server/auth";
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 
 function authenticate(req: NextRequest): boolean {
+  if (isAuthDisabled()) return true;
   const token =
-    req.cookies.get("cockpit_token")?.value ||
+    req.cookies.get("cockpit_session")?.value ||
     req.headers.get("authorization")?.replace("Bearer ", "");
-  return !!token && validateToken(token);
+  return !!token && validateSession(token);
 }
 
 const PINNED_FILE = path.join(homedir(), ".claude", "cockpit", "pinned_sessions.json");

@@ -1,33 +1,66 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
+import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
 
 export default function LoginPage() {
   const router = useRouter();
-  const [token, setToken] = useState("");
+  const [isSetup, setIsSetup] = useState(false);
+  const [checked, setChecked] = useState(false);
+  const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    fetch("/api/auth/check")
+      .then(async (res) => {
+        if (res.ok) {
+          router.replace("/");
+          return;
+        }
+        const data = await res.json().catch(() => ({}));
+        if (data.needsSetup) setIsSetup(true);
+        setChecked(true);
+      })
+      .catch(() => {
+        setChecked(true);
+      });
+  }, [router]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
+
+    if (isSetup) {
+      if (password.length < 4) {
+        setError("Password must be at least 4 characters");
+        return;
+      }
+      if (password !== confirm) {
+        setError("Passwords do not match");
+        return;
+      }
+    }
+
     setLoading(true);
 
     try {
-      const res = await fetch("/api/auth/login", {
+      const endpoint = isSetup ? "/api/auth/setup" : "/api/auth/login";
+      const res = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token }),
+        body: JSON.stringify({ password }),
       });
 
       if (res.ok) {
         router.replace("/");
       } else {
-        setError("Invalid token");
+        const data = await res.json().catch(() => ({}));
+        setError(data.error || "Invalid password");
       }
     } catch {
       setError("Connection failed");
@@ -36,27 +69,44 @@ export default function LoginPage() {
     }
   };
 
+  if (!checked) return null;
+
   return (
     <div className="flex min-h-screen items-center justify-center p-4">
       <Card className="w-full max-w-sm">
         <CardHeader>
           <CardTitle>Cockpit</CardTitle>
+          <CardDescription>
+            {isSetup
+              ? "Set a password to secure your instance"
+              : "Enter your password to continue"}
+          </CardDescription>
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSubmit} className="space-y-4">
-            <div>
+            <Input
+              type="password"
+              autoComplete={isSetup ? "new-password" : "current-password"}
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder={isSetup ? "Choose a password" : "Password"}
+              required
+            />
+            {isSetup && (
               <Input
                 type="password"
-                autoComplete="current-password"
-                value={token}
-                onChange={(e) => setToken(e.target.value)}
-                placeholder="Enter auth token"
+                autoComplete="new-password"
+                value={confirm}
+                onChange={(e) => setConfirm(e.target.value)}
+                placeholder="Confirm password"
                 required
               />
-            </div>
+            )}
             {error && <p className="text-sm text-destructive">{error}</p>}
             <Button type="submit" className="w-full" disabled={loading}>
-              {loading ? "Logging in..." : "Login"}
+              {loading
+                ? isSetup ? "Setting up..." : "Logging in..."
+                : isSetup ? "Set password" : "Login"}
             </Button>
           </form>
         </CardContent>

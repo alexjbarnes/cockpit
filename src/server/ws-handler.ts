@@ -3,7 +3,7 @@ import type { Server as HTTPServer, IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
 import type { ClientMessage, ServerMessage } from "@/types";
 import type { ParsedEvent } from "./event-parser";
-import { validateToken, extractTokenFromQuery } from "./auth";
+import { validateSession, extractTokenFromQuery, isAuthDisabled } from "./auth";
 import { SessionManager, type PendingRequest, type StreamingSnapshot } from "./session-manager";
 import { loadLastUsage } from "./transcript";
 import { logParsedEvent, logServerMessage, logClientMessage, logStatus } from "./debug-logger";
@@ -40,11 +40,13 @@ export function createWebSocketHandler(
       return; // Let Next.js handle other upgrades (e.g. HMR)
     }
 
-    const token = extractTokenFromQuery(url);
-    if (!token || !validateToken(token)) {
-      socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
-      socket.destroy();
-      return;
+    if (!isAuthDisabled()) {
+      const token = extractTokenFromQuery(url);
+      if (!token || !validateSession(token)) {
+        socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
+        socket.destroy();
+        return;
+      }
     }
 
     wss.handleUpgrade(req, socket, head, (ws) => {

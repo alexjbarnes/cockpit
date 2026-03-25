@@ -3,15 +3,17 @@ import { createServer, type Server } from "node:http";
 import { WebSocket } from "ws";
 import { createWebSocketHandler } from "@/server/ws-handler";
 import { SessionManager } from "@/server/session-manager";
+import { createSession as createAuthSession } from "@/server/auth";
 
 beforeAll(() => {
-  process.env.COCKPIT_TOKEN = "recon-test-token";
+  delete process.env.COCKPIT_DISABLE_AUTH;
 });
 
 describe("WebSocket reconnection", () => {
   let server: Server;
   let manager: SessionManager;
   let port: number;
+  let validToken: string;
 
   beforeEach(
     () =>
@@ -19,6 +21,7 @@ describe("WebSocket reconnection", () => {
         manager = new SessionManager();
         server = createServer();
         createWebSocketHandler(server, manager);
+        validToken = createAuthSession();
         server.listen(0, () => {
           const addr = server.address();
           port = typeof addr === "object" && addr ? addr.port : 0;
@@ -37,7 +40,7 @@ describe("WebSocket reconnection", () => {
   function connectWs(): Promise<WebSocket> {
     return new Promise((resolve, reject) => {
       const ws = new WebSocket(
-        `ws://localhost:${port}/ws?token=recon-test-token`
+        `ws://localhost:${port}/ws?token=${validToken}`
       );
       ws.on("open", () => resolve(ws));
       ws.on("error", reject);

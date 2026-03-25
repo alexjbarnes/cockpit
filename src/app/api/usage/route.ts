@@ -1,15 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
-import { validateToken } from "@/server/auth";
+import { validateSession, isAuthDisabled } from "@/server/auth";
 import { execSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 
 function authenticate(req: NextRequest): boolean {
+  if (isAuthDisabled()) return true;
   const token =
-    req.cookies.get("cockpit_token")?.value ||
+    req.cookies.get("cockpit_session")?.value ||
     req.headers.get("authorization")?.replace("Bearer ", "");
-  return !!token && validateToken(token);
+  return !!token && validateSession(token);
 }
 
 function readFromKeychain(): string | null {

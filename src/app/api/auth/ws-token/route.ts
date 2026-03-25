@@ -1,13 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
-import { validateToken } from "@/server/auth";
+import { validateSession, isAuthDisabled } from "@/server/auth";
 
-// Returns the token for WebSocket connections.
-// Authenticated via httpOnly cookie, returns the token so the client
-// can pass it as a query param on the WS upgrade request.
 export function GET(req: NextRequest) {
-  const token = req.cookies.get("cockpit_token")?.value;
-  if (!token || !validateToken(token)) {
+  if (isAuthDisabled()) {
+    return NextResponse.json({ token: "disabled" });
+  }
+
+  const token = req.cookies.get("cockpit_session")?.value;
+  if (!token || !validateSession(token)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
+
   return NextResponse.json({ token });
 }

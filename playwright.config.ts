@@ -9,13 +9,13 @@ export default defineConfig({
     headless: true,
   },
   webServer: {
-    command: "NODE_ENV=development COCKPIT_TOKEN=test-token PORT=3099 npx tsx server.ts",
+    command: "NODE_ENV=development COCKPIT_DISABLE_AUTH=true PORT=3099 npx tsx server.ts",
     port: 3099,
     timeout: 60_000,
     reuseExistingServer: !process.env.CI,
     env: {
       NODE_ENV: "development",
-      COCKPIT_TOKEN: "test-token",
+      COCKPIT_DISABLE_AUTH: "true",
       PORT: "3099",
     },
   },

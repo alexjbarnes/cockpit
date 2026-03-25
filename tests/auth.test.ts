@@ -1,34 +1,9 @@
-import { describe, it, expect, beforeAll } from "vitest";
-
-// Set token before importing auth module
-beforeAll(() => {
-  process.env.COCKPIT_TOKEN = "test-token-abc123";
-});
+import { describe, it, expect, beforeEach } from "vitest";
 
 describe("auth", () => {
-  it("validates correct token", async () => {
-    const { validateToken } = await import("@/server/auth");
-    expect(validateToken("test-token-abc123")).toBe(true);
-  });
-
-  it("rejects wrong token", async () => {
-    const { validateToken } = await import("@/server/auth");
-    expect(validateToken("wrong-token")).toBe(false);
-  });
-
-  it("rejects empty token", async () => {
-    const { validateToken } = await import("@/server/auth");
-    expect(validateToken("")).toBe(false);
-  });
-
-  it("rejects token with different length", async () => {
-    const { validateToken } = await import("@/server/auth");
-    expect(validateToken("short")).toBe(false);
-  });
-
-  it("returns the token from env", async () => {
-    const { getToken } = await import("@/server/auth");
-    expect(getToken()).toBe("test-token-abc123");
+  beforeEach(() => {
+    // Reset modules between tests so cached state is cleared
+    delete process.env.COCKPIT_DISABLE_AUTH;
   });
 
   it("extracts token from query string", async () => {
@@ -52,9 +27,9 @@ describe("auth", () => {
   it("extracts token from cookie", async () => {
     const { extractTokenFromRequest } = await import("@/server/auth");
     const req = {
-      headers: { cookie: "cockpit_token=cookie-token; other=val" },
+      headers: { cookie: "cockpit_session=session-token; other=val" },
     } as unknown as import("node:http").IncomingMessage;
-    expect(extractTokenFromRequest(req)).toBe("cookie-token");
+    expect(extractTokenFromRequest(req)).toBe("session-token");
   });
 
   it("returns null when no auth present", async () => {
@@ -63,5 +38,26 @@ describe("auth", () => {
       headers: {},
     } as unknown as import("node:http").IncomingMessage;
     expect(extractTokenFromRequest(req)).toBeNull();
+  });
+
+  it("creates and validates sessions", async () => {
+    const { createSession, validateSession } = await import("@/server/auth");
+    const token = createSession();
+    expect(validateSession(token)).toBe(true);
+    expect(validateSession("bogus")).toBe(false);
+  });
+
+  it("destroys sessions", async () => {
+    const { createSession, validateSession, destroySession } = await import("@/server/auth");
+    const token = createSession();
+    expect(validateSession(token)).toBe(true);
+    destroySession(token);
+    expect(validateSession(token)).toBe(false);
+  });
+
+  it("bypasses validation when auth disabled", async () => {
+    process.env.COCKPIT_DISABLE_AUTH = "true";
+    const { validateSession } = await import("@/server/auth");
+    expect(validateSession("anything")).toBe(true);
   });
 });

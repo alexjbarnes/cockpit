@@ -13,11 +13,11 @@ export function AuthGuard({ children }: { children: ReactNode }) {
     if (authVerified) return;
     fetch("/api/auth/check")
       .then((res) => {
-        if (!res.ok) {
-          router.replace("/login");
-        } else {
+        if (res.ok) {
           authVerified = true;
           setChecked(true);
+        } else {
+          router.replace("/login");
         }
       })
       .catch(() => {

@@ -1,17 +1,11 @@
-import crypto from "node:crypto";
 import { createServer } from "node:http";
 import next from "next";
 import { parse } from "node:url";
 
-// Generate token before any other imports read it
-if (!process.env.COCKPIT_TOKEN) {
-  process.env.COCKPIT_TOKEN = crypto.randomBytes(32).toString("hex");
-}
-
 import { SessionManager } from "./src/server/session-manager";
 import { setSessionManager } from "./src/server/singleton";
 import { createWebSocketHandler } from "./src/server/ws-handler";
-import { getToken } from "./src/server/auth";
+import { deletePasswordFile, isAuthDisabled, needsSetup } from "./src/server/auth";
 
 const dev = process.env.NODE_ENV !== "production";
 const port = parseInt(process.env.PORT || "3001", 10);
@@ -21,6 +15,12 @@ const app = next({ dev });
 const handle = app.getRequestHandler();
 
 async function main() {
+  // Handle password reset flag
+  if (process.env.COCKPIT_RESET_PASSWORD === "true") {
+    await deletePasswordFile();
+    console.log("Password has been reset. You will be prompted to set a new password.");
+  }
+
   await app.prepare();
 
   const sessionManager = new SessionManager();
@@ -35,7 +35,11 @@ async function main() {
 
   server.listen(port, host, () => {
     console.log(`Cockpit running on http://${host}:${port}`);
-    console.log(`Auth token: ${getToken()}`);
+    if (isAuthDisabled()) {
+      console.log("Authentication is disabled");
+    } else if (needsSetup()) {
+      console.log("No password set. Visit the UI to create one.");
+    }
   });
 }
 

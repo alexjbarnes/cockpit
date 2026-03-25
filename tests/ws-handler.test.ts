@@ -3,15 +3,18 @@ import { createServer, type Server } from "node:http";
 import { WebSocket } from "ws";
 import { createWebSocketHandler } from "@/server/ws-handler";
 import { SessionManager } from "@/server/session-manager";
+import { createSession as createAuthSession } from "@/server/auth";
 
+// Auth is enabled (default) so we can test rejection and acceptance
 beforeAll(() => {
-  process.env.COCKPIT_TOKEN = "ws-test-token";
+  delete process.env.COCKPIT_DISABLE_AUTH;
 });
 
 describe("WebSocket handler", () => {
   let server: Server;
   let manager: SessionManager;
   let port: number;
+  let validToken: string;
 
   beforeEach(
     () =>
@@ -19,6 +22,7 @@ describe("WebSocket handler", () => {
         manager = new SessionManager();
         server = createServer();
         createWebSocketHandler(server, manager);
+        validToken = createAuthSession();
         server.listen(0, () => {
           const addr = server.address();
           port = typeof addr === "object" && addr ? addr.port : 0;
@@ -37,7 +41,7 @@ describe("WebSocket handler", () => {
   function connectWs(): Promise<WebSocket> {
     return new Promise((resolve, reject) => {
       const ws = new WebSocket(
-        `ws://localhost:${port}/ws?token=ws-test-token`
+        `ws://localhost:${port}/ws?token=${validToken}`
       );
       ws.on("open", () => resolve(ws));
       ws.on("error", reject);
@@ -58,7 +62,6 @@ describe("WebSocket handler", () => {
       ws.on("close", (c) => resolve(c));
       ws.on("error", () => {});
     });
-    // Connection should be closed/rejected
     expect(ws.readyState).not.toBe(WebSocket.OPEN);
   });
 

@@ -1,21 +1,23 @@
 import { NextRequest, NextResponse } from "next/server";
-import { verifyPassword, createSession, needsSetup, isAuthDisabled } from "@/server/auth";
+import { needsSetup, setupPassword, createSession, isAuthDisabled } from "@/server/auth";
 
 export async function POST(req: NextRequest) {
   if (isAuthDisabled()) {
     return NextResponse.json({ ok: true });
   }
 
-  if (needsSetup()) {
-    return NextResponse.json({ error: "No password configured. Use /api/auth/setup first." }, { status: 400 });
+  if (!needsSetup()) {
+    return NextResponse.json({ error: "Password already configured" }, { status: 400 });
   }
 
   const body = await req.json();
   const password = body.password as string;
 
-  if (!password || !(await verifyPassword(password))) {
-    return NextResponse.json({ error: "Invalid password" }, { status: 401 });
+  if (!password || password.length < 4) {
+    return NextResponse.json({ error: "Password must be at least 4 characters" }, { status: 400 });
   }
+
+  await setupPassword(password);
 
   const session = createSession();
   const res = NextResponse.json({ ok: true });

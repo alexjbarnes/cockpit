@@ -4,19 +4,9 @@ import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-const TOKEN = "test-token";
-
 let repoDir: string;
 
-test.beforeEach(async ({ context }) => {
-  await context.addCookies([
-    {
-      name: "cockpit_token",
-      value: TOKEN,
-      domain: "localhost",
-      path: "/",
-    },
-  ]);
+test.beforeEach(async () => {
 
   repoDir = mkdtempSync(join(tmpdir(), "cockpit-test-"));
   execSync("git init", { cwd: repoDir });
