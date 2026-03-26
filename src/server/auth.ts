@@ -100,26 +100,45 @@ export async function deletePasswordFile(): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// Session tokens (in-memory, survives Next.js dev hot-reload)
+// Signed session tokens (stateless, survives server restarts)
+//
+// Token format: <timestamp_hex>.<hmac_hex>
+// The HMAC is computed over the timestamp using the stored password hash
+// as the key. Changing the password invalidates all existing tokens.
 // ---------------------------------------------------------------------------
 
-const g = globalThis as unknown as { __cockpitSessions?: Set<string> };
-if (!g.__cockpitSessions) g.__cockpitSessions = new Set<string>();
-const sessions = g.__cockpitSessions;
+function getSigningKey(): string | null {
+  const stored = getStoredPassword();
+  return stored?.hash ?? null;
+}
 
 export function createSession(): string {
-  const token = crypto.randomBytes(32).toString("hex");
-  sessions.add(token);
-  return token;
+  const key = getSigningKey();
+  if (!key) return "";
+  const timestamp = Date.now().toString(16);
+  const hmac = crypto.createHmac("sha256", key).update(timestamp).digest("hex");
+  return `${timestamp}.${hmac}`;
 }
 
 export function validateSession(token: string): boolean {
   if (isAuthDisabled()) return true;
-  return sessions.has(token);
+  const key = getSigningKey();
+  if (!key) return false;
+
+  const dot = token.indexOf(".");
+  if (dot === -1) return false;
+
+  const timestamp = token.slice(0, dot);
+  const signature = token.slice(dot + 1);
+
+  const expected = crypto.createHmac("sha256", key).update(timestamp).digest("hex");
+  if (signature.length !== expected.length) return false;
+  return crypto.timingSafeEqual(Buffer.from(signature, "hex"), Buffer.from(expected, "hex"));
 }
 
-export function destroySession(token: string): void {
-  sessions.delete(token);
+export function destroySession(_token: string): void {
+  // No-op: signed tokens are stateless.
+  // Token becomes invalid when the password changes.
 }
 
 // ---------------------------------------------------------------------------
