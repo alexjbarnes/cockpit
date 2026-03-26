@@ -46,6 +46,9 @@ interface UseSessionReturn {
   backgroundTasks: BackgroundTask[];
   todos: TodoItem[];
   btw: BtwState | null;
+  hasMoreHistory: boolean;
+  loadingMore: boolean;
+  requestMoreHistory: () => void;
   sendMessage: (text: string, images?: ImageAttachment[], documents?: DocumentAttachment[], textFiles?: TextFileAttachment[]) => void;
   interrupt: () => void;
   respondToPermission: (requestId: string, allowed: boolean, permissionMode?: PermissionMode, suggestionIndex?: number) => void;
@@ -84,6 +87,8 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
   const [backgroundTasks, setBackgroundTasks] = useState<BackgroundTask[]>([]);
   const [todos, setTodos] = useState<TodoItem[]>([]);
   const [btw, setBtw] = useState<BtwState | null>(null);
+  const [hasMoreHistory, setHasMoreHistory] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
 
   const [hasQueuedMessage, setHasQueuedMessage] = useState(false);
   const [queuedMessages, setQueuedMessages] = useState<Array<{ id: string; text: string }>>([]);
@@ -121,6 +126,8 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
     lastServerMsgIdRef.current = null;
     queuedTextsRef.current = [];
     loadedSessionRef.current = null;
+    setHasMoreHistory(false);
+    setLoadingMore(false);
   }
 
   // Keep refs in sync for use inside callbacks
@@ -134,6 +141,8 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
       setPendingPermissions([]);
       setPendingQuestions([]);
       const isReconnect = loadedSessionRef.current === sessionId;
+      console.log(`[session] sending session:connect for ${sessionId.slice(0, 8)}`);
+      (window as unknown as Record<string, unknown>).__sessionConnectTime = performance.now();
       send({
         type: "session:connect",
         sessionId,
@@ -200,8 +209,31 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
             }
           }
 
+          if (msg.hasMore !== undefined) {
+            setHasMoreHistory(msg.hasMore);
+          }
+
+          const connectTime = (window as unknown as Record<string, unknown>).__sessionConnectTime as number | undefined;
+          if (connectTime) {
+            console.log(`[session] history received for ${sessionId.slice(0, 8)} in ${(performance.now() - connectTime).toFixed(0)}ms (${serverMsgs.length} msgs, delta=${!!msg.delta}, hasMore=${!!msg.hasMore})`);
+          }
           setHistoryLoaded(true);
           loadedSessionRef.current = sessionId;
+          break;
+        }
+
+        case "history:more": {
+          const olderMsgs = msg.messages as ChatMessage[];
+          setHasMoreHistory(msg.hasMore);
+          setLoadingMore(false);
+          if (olderMsgs.length > 0) {
+            setMessages((prev) => {
+              const existingIds = new Set(prev.map((m) => m.id));
+              const deduped = olderMsgs.filter((m) => !existingIds.has(m.id));
+              if (deduped.length === 0) return prev;
+              return [...deduped, ...prev];
+            });
+          }
           break;
         }
 
@@ -779,6 +811,18 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
     return unsub;
   }, [sessionId, send, subscribe]);
 
+  const requestMoreHistory = useCallback(() => {
+    if (loadingMore || !hasMoreHistory) return;
+    const first = messagesRef.current[0];
+    if (!first) return;
+    setLoadingMore(true);
+    send({
+      type: "history:request_more",
+      sessionId,
+      beforeMessageId: first.id,
+    });
+  }, [loadingMore, hasMoreHistory, sessionId, send]);
+
   // HTTP fallback: when session is "running" but WebSocket keeps dropping,
   // poll the REST endpoint to detect if the CLI actually finished.
   // This covers the case where the "idle" status event was sent to a dead WS.
@@ -1039,5 +1083,5 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
     send({ type: "message:send", sessionId, text: "Continue from where you left off." });
   }, [send, sessionId]);
 
-  return { messages, historyLoaded, isResponding, pendingPermissions, pendingQuestions, modelPicker, currentModel, bypassActive, thinkingLevel, contextUsage, rateLimitStatus, apiError, suggestions, sessionName, initData, hasQueuedMessage, queuedMessages, queuePaused, backgroundTasks, todos, btw, sendMessage, interrupt, respondToPermission, respondToQuestion, selectModel, setModel, setBypassAll, setThinkingLevel, cancelQueuedMessage, deleteQueuedMessage, editQueuedMessage, resumeQueue, restoredText, clearRestoredText, dismissBtw, retry };
+  return { messages, historyLoaded, isResponding, pendingPermissions, pendingQuestions, modelPicker, currentModel, bypassActive, thinkingLevel, contextUsage, rateLimitStatus, apiError, suggestions, sessionName, initData, hasQueuedMessage, queuedMessages, queuePaused, backgroundTasks, todos, btw, hasMoreHistory, loadingMore, requestMoreHistory, sendMessage, interrupt, respondToPermission, respondToQuestion, selectModel, setModel, setBypassAll, setThinkingLevel, cancelQueuedMessage, deleteQueuedMessage, editQueuedMessage, resumeQueue, restoredText, clearRestoredText, dismissBtw, retry };
 }

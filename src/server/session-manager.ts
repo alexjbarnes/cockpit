@@ -4,7 +4,7 @@ import { EventEmitter } from "node:events";
 import { v4 as uuidv4 } from "uuid";
 import type { SessionInfo, ChatMessage, ToolUse, ContentBlock, ThinkingLevel, ContextUsage, TodoItem, ImageAttachment, DocumentAttachment, InitData } from "@/types";
 import { EventParser, type ParsedEvent } from "./event-parser";
-import { loadTranscript, transcriptExists } from "./transcript";
+import { loadTranscript, loadMoreMessages, transcriptExists } from "./transcript";
 import { logRawLine } from "./debug-logger";
 import { getSessionPrefs, setSessionPrefs } from "./session-prefs";
 import { getDefaults } from "./defaults";
@@ -55,6 +55,9 @@ interface Session {
   streamingSnapshot: StreamingSnapshot | null;
   queuedMessages: QueuedMessage[];
   queuePaused: boolean;
+  transcriptBuffer: ChatMessage[];
+  transcriptByteOffset: number;
+  transcriptTotalSize: number;
 }
 
 export class SessionManager {
@@ -106,6 +109,9 @@ export class SessionManager {
       streamingSnapshot: null,
       queuedMessages: [],
       queuePaused: false,
+      transcriptBuffer: [],
+      transcriptByteOffset: 0,
+      transcriptTotalSize: 0,
     });
 
     return info;
@@ -142,16 +148,31 @@ export class SessionManager {
         streamingSnapshot: null,
         queuedMessages: [],
         queuePaused: false,
+        transcriptBuffer: [],
+        transcriptByteOffset: 0,
+        transcriptTotalSize: 0,
       };
       this.sessions.set(id, session);
     }
     return session;
   }
 
-  async getSession(id: string): Promise<{ info: SessionInfo; messages: ChatMessage[] } | null> {
+  async getSession(id: string): Promise<{ info: SessionInfo; messages: ChatMessage[]; hasMore: boolean; lastUsage: { used: number; total: number } | null } | null> {
     const session = this.sessions.get(id);
     if (!session) return null;
-    const messages = await loadTranscript(id, session.info.cwd);
+    const result = await loadTranscript(id, session.info.cwd, { tailLines: 150 });
+    const { messages, byteOffset, totalSize, lastUsage } = result;
+
+    // Store buffer for backward pagination
+    session.transcriptBuffer = messages;
+    session.transcriptByteOffset = byteOffset;
+    session.transcriptTotalSize = totalSize;
+
+    // Send last 50 to client, keep rest in buffer
+    const PAGE = 50;
+    const clientMessages = messages.length > PAGE ? messages.slice(-PAGE) : messages;
+    const hasMore = messages.length > PAGE || byteOffset > 0;
+
     const defaultName = session.info.cwd.split("/").pop() || session.info.cwd;
     if (session.info.name === defaultName && messages.length > 0) {
       const firstUser = messages.find((m) => m.role === "user" && m.content && !m.content.startsWith("[") && !m.content.startsWith("<"));
@@ -159,13 +180,25 @@ export class SessionManager {
         session.info.name = firstUser.content.slice(0, 120);
       }
     }
-    return { info: session.info, messages };
+    return { info: session.info, messages: clientMessages, hasMore, lastUsage };
   }
 
-  async getSessionByCwd(id: string, cwd: string): Promise<{ info: SessionInfo; messages: ChatMessage[] } | null> {
+  async getSessionByCwd(id: string, cwd: string): Promise<{ info: SessionInfo; messages: ChatMessage[]; hasMore: boolean; lastUsage: { used: number; total: number } | null } | null> {
     this.ensureSession(id, cwd);
-    const messages = await loadTranscript(id, cwd);
+    const result = await loadTranscript(id, cwd, { tailLines: 150 });
     const session = this.sessions.get(id)!;
+    const { messages, byteOffset, totalSize, lastUsage } = result;
+
+    // Store buffer for backward pagination
+    session.transcriptBuffer = messages;
+    session.transcriptByteOffset = byteOffset;
+    session.transcriptTotalSize = totalSize;
+
+    // Send last 50 to client, keep rest in buffer
+    const PAGE = 50;
+    const clientMessages = messages.length > PAGE ? messages.slice(-PAGE) : messages;
+    const hasMore = messages.length > PAGE || byteOffset > 0;
+
     // Derive title from first user message if name is still the default
     const defaultName = cwd.split("/").pop() || cwd;
     if (session.info.name === defaultName && messages.length > 0) {
@@ -174,7 +207,56 @@ export class SessionManager {
         session.info.name = firstUser.content.slice(0, 120);
       }
     }
-    return { info: session.info, messages };
+    return { info: session.info, messages: clientMessages, hasMore, lastUsage };
+  }
+
+  async getMoreHistory(sessionId: string, beforeMessageId: string): Promise<{ messages: ChatMessage[]; hasMore: boolean }> {
+    const session = this.sessions.get(sessionId);
+    if (!session) return { messages: [], hasMore: false };
+
+    const PAGE = 50;
+    const buf = session.transcriptBuffer;
+
+    // Find the message in the buffer
+    const idx = buf.findIndex((m) => m.id === beforeMessageId);
+
+    if (idx > 0) {
+      // Serve from buffer
+      const start = Math.max(0, idx - PAGE);
+      const chunk = buf.slice(start, idx);
+      const hasMore = start > 0 || session.transcriptByteOffset > 0;
+      return { messages: chunk, hasMore };
+    }
+
+    // Buffer exhausted, read more from disk
+    if (session.transcriptByteOffset <= 0) {
+      return { messages: [], hasMore: false };
+    }
+
+    const cwd = session.info.cwd;
+    const result = await loadMoreMessages(sessionId, cwd, session.transcriptByteOffset, 150);
+    session.transcriptByteOffset = result.newByteOffset;
+
+    // Prepend to buffer
+    session.transcriptBuffer = [...result.messages, ...buf];
+
+    // Serve a page from the newly loaded messages
+    const newBuf = session.transcriptBuffer;
+    const newIdx = newBuf.findIndex((m) => m.id === beforeMessageId);
+    if (newIdx > 0) {
+      const start = Math.max(0, newIdx - PAGE);
+      const chunk = newBuf.slice(start, newIdx);
+      const hasMore = start > 0 || session.transcriptByteOffset > 0;
+      return { messages: chunk, hasMore };
+    }
+
+    // Fallback: return whatever we loaded
+    const chunk = result.messages.slice(-PAGE);
+    return { messages: chunk, hasMore: result.newByteOffset > 0 };
+  }
+
+  getTranscriptBuffer(id: string): ChatMessage[] {
+    return this.sessions.get(id)?.transcriptBuffer ?? [];
   }
 
   getStreamingSnapshot(id: string): StreamingSnapshot | null {
@@ -1397,8 +1479,8 @@ export class SessionManager {
 
   private async loadAgentChildren(session: Session, sessionId: string, messageId: string, cwd: string): Promise<void> {
     try {
-      const messages = await loadTranscript(sessionId, cwd);
-      const msg = messages.find((m) => m.id === messageId);
+      const result = await loadTranscript(sessionId, cwd);
+      const msg = result.messages.find((m) => m.id === messageId);
       if (!msg) return;
       for (const tool of msg.toolUses) {
         if (tool.name !== "Agent" || !tool.children || tool.children.length === 0) continue;

@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
 vi.mock("@/server/transcript", () => ({
-  loadTranscript: () => Promise.resolve([]),
+  loadTranscript: () => Promise.resolve({ messages: [], byteOffset: 0, totalSize: 0, lastUsage: null }),
+  loadMoreMessages: () => Promise.resolve({ messages: [], newByteOffset: 0 }),
   transcriptExists: () => false,
 }));
 

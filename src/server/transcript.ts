@@ -1,4 +1,4 @@
-import { readFile, readdir, stat } from "node:fs/promises";
+import { readFile, readdir, stat, open } from "node:fs/promises";
 import { existsSync, createReadStream } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
@@ -84,6 +84,121 @@ function stripCliXml(text: string): string {
   return text.replace(CLI_XML_RE, "").trim();
 }
 
+const INITIAL_CHUNK_SIZE = 64 * 1024; // 64KB
+
+async function readTailLines(
+  filePath: string,
+  targetCount: number,
+): Promise<{ lines: string[]; byteOffset: number; totalSize: number }> {
+  const fileStat = await stat(filePath);
+  const totalSize = fileStat.size;
+  if (totalSize === 0) return { lines: [], byteOffset: 0, totalSize };
+
+  let chunkSize = INITIAL_CHUNK_SIZE;
+  const fh = await open(filePath, "r");
+  try {
+    while (true) {
+      const readSize = Math.min(chunkSize, totalSize);
+      const offset = totalSize - readSize;
+      const buf = Buffer.alloc(readSize);
+      await fh.read(buf, 0, readSize, offset);
+      const text = buf.toString("utf-8");
+
+      // Split into lines, discard partial first line if we didn't read from start
+      let lines: string[];
+      if (offset > 0) {
+        const firstNewline = text.indexOf("\n");
+        if (firstNewline === -1) {
+          // Entire chunk is one partial line, need a bigger chunk
+          if (chunkSize >= totalSize) {
+            lines = [text];
+          } else {
+            chunkSize *= 2;
+            continue;
+          }
+        } else {
+          lines = text.slice(firstNewline + 1).split("\n");
+        }
+      } else {
+        lines = text.split("\n");
+      }
+
+      lines = lines.filter((l) => l.trim());
+
+      if (lines.length >= targetCount || offset === 0) {
+        // Take only the last targetCount lines
+        const result = lines.length > targetCount ? lines.slice(-targetCount) : lines;
+        // Calculate byte offset of the first returned line
+        // We approximate by finding position in the chunk text
+        const returnedText = result.join("\n");
+        const byteOffset = Math.max(0, offset + (text.length - returnedText.length - (text.endsWith("\n") ? 1 : 0)));
+        return { lines: result, byteOffset: offset === 0 ? 0 : byteOffset, totalSize };
+      }
+
+      // Not enough lines, double chunk and retry
+      chunkSize *= 2;
+      if (chunkSize >= totalSize) {
+        return { lines, byteOffset: 0, totalSize };
+      }
+    }
+  } finally {
+    await fh.close();
+  }
+}
+
+export async function readMoreLines(
+  filePath: string,
+  byteOffset: number,
+  targetCount: number,
+): Promise<{ lines: string[]; newByteOffset: number }> {
+  if (byteOffset <= 0) return { lines: [], newByteOffset: 0 };
+
+  let chunkSize = INITIAL_CHUNK_SIZE;
+  const fh = await open(filePath, "r");
+  try {
+    while (true) {
+      const readSize = Math.min(chunkSize, byteOffset);
+      const offset = byteOffset - readSize;
+      const buf = Buffer.alloc(readSize);
+      await fh.read(buf, 0, readSize, offset);
+      const text = buf.toString("utf-8");
+
+      let lines: string[];
+      if (offset > 0) {
+        const firstNewline = text.indexOf("\n");
+        if (firstNewline === -1) {
+          if (chunkSize >= byteOffset) {
+            lines = [text];
+          } else {
+            chunkSize *= 2;
+            continue;
+          }
+        } else {
+          lines = text.slice(firstNewline + 1).split("\n");
+        }
+      } else {
+        lines = text.split("\n");
+      }
+
+      lines = lines.filter((l) => l.trim());
+
+      if (lines.length >= targetCount || offset === 0) {
+        const result = lines.length > targetCount ? lines.slice(-targetCount) : lines;
+        const returnedText = result.join("\n");
+        const newByteOffset = Math.max(0, offset + (text.length - returnedText.length - (text.endsWith("\n") ? 1 : 0)));
+        return { lines: result, newByteOffset: offset === 0 ? 0 : newByteOffset };
+      }
+
+      chunkSize *= 2;
+      if (chunkSize >= byteOffset) {
+        return { lines, newByteOffset: 0 };
+      }
+    }
+  } finally {
+    await fh.close();
+  }
+}
+
 export async function loadLastUsage(sessionId: string, cwd: string): Promise<{ used: number; total: number } | null> {
   const fp = getTranscriptPath(sessionId, cwd);
   if (!existsSync(fp)) return null;
@@ -128,16 +243,19 @@ export async function loadLastUsage(sessionId: string, cwd: string): Promise<{ u
   return lastUsage;
 }
 
-export async function loadTranscript(sessionId: string, cwd: string): Promise<ChatMessage[]> {
-  const fp = getTranscriptPath(sessionId, cwd);
-  if (!existsSync(fp)) return [];
+export interface TranscriptResult {
+  messages: ChatMessage[];
+  byteOffset: number;
+  totalSize: number;
+  lastUsage: { used: number; total: number } | null;
+}
 
-  const raw = await readFile(fp, "utf-8");
-  const lines = raw.split("\n").filter((l) => l.trim());
-
+function parseLines(lines: string[]): { messages: ChatMessage[]; lastUsage: { used: number; total: number } | null } {
   const messages: ChatMessage[] = [];
   const messageById = new Map<string, ChatMessage>();
   const toolUseMap = new Map<string, ToolUse>();
+  let lastUsage: { used: number; total: number } | null = null;
+  let contextWindowSize = 200_000;
 
   for (const line of lines) {
     let entry: TranscriptEntry;
@@ -145,6 +263,27 @@ export async function loadTranscript(sessionId: string, cwd: string): Promise<Ch
       entry = JSON.parse(line);
     } catch {
       continue;
+    }
+
+    // Extract usage data as we parse
+    if (entry.type === "result") {
+      const modelUsage = (entry as unknown as Record<string, unknown>).modelUsage as Record<string, Record<string, number>> | undefined;
+      if (modelUsage) {
+        for (const model of Object.values(modelUsage)) {
+          if (model.contextWindow && model.contextWindow > 0) {
+            contextWindowSize = model.contextWindow;
+            break;
+          }
+        }
+      }
+      continue;
+    }
+    if (entry.type === "assistant" && entry.message) {
+      const usage = (entry.message as Record<string, unknown>).usage as Record<string, number> | undefined;
+      if (usage) {
+        const used = (usage.input_tokens || 0) + (usage.cache_creation_input_tokens || 0) + (usage.cache_read_input_tokens || 0);
+        lastUsage = { used, total: contextWindowSize };
+      }
     }
 
     // Attach sub-agent tool calls as children of their parent Agent tool
@@ -189,9 +328,9 @@ export async function loadTranscript(sessionId: string, cwd: string): Promise<Ch
     if (entry.isMeta) continue;
 
     if (entry.type === "system" && entry.subtype === "local_command" && entry.content) {
-      const raw = entry.content as string;
-      const match = raw.match(/<local-command-stdout>([\s\S]*?)<\/local-command-stdout>/);
-      const text = match ? match[1].trim() : raw;
+      const rawContent = entry.content as string;
+      const match = rawContent.match(/<local-command-stdout>([\s\S]*?)<\/local-command-stdout>/);
+      const text = match ? match[1].trim() : rawContent;
       if (text) {
         messages.push({
           id: entry.uuid || uuidv4(),
@@ -220,7 +359,6 @@ export async function loadTranscript(sessionId: string, cwd: string): Promise<Ch
     if (entry.type === "user" && entry.message) {
       const content = entry.message.content;
 
-      // Simple text user message
       if (typeof content === "string") {
         const stripped = stripCommandXml(content);
         if (stripped) {
@@ -240,7 +378,6 @@ export async function loadTranscript(sessionId: string, cwd: string): Promise<Ch
         continue;
       }
 
-      // Array content - contains tool_results, images, and text blocks
       if (Array.isArray(content)) {
         const toolResults = content.filter((b) => b.type === "tool_result");
         for (const tr of toolResults) {
@@ -252,7 +389,6 @@ export async function loadTranscript(sessionId: string, cwd: string): Promise<Ch
           }
         }
 
-        // Extract images from user messages
         const imageBlocks = content.filter(
           (b) => b.type === "image" && b.source?.type === "base64" && b.source.media_type && b.source.data
         );
@@ -261,7 +397,6 @@ export async function loadTranscript(sessionId: string, cwd: string): Promise<Ch
           data: b.source!.data as string,
         }));
 
-        // Extract document (PDF) blocks from user messages
         const docBlocks = content.filter(
           (b) => b.type === "document" && b.source?.type === "base64" && b.source.media_type === "application/pdf" && b.source.data
         );
@@ -271,7 +406,6 @@ export async function loadTranscript(sessionId: string, cwd: string): Promise<Ch
           name: "document.pdf",
         }));
 
-        // Extract text from user array messages (when attachments are present)
         const textParts = content.filter((b) => b.type === "text" && b.text).map((b) => b.text!);
         const userText = textParts.join("\n");
 
@@ -328,7 +462,6 @@ export async function loadTranscript(sessionId: string, cwd: string): Promise<Ch
         }
       }
 
-      // Skip noise messages that shouldn't appear as chat bubbles
       const trimmed = textContent.trim();
       if (toolUses.length === 0 && (trimmed === "No response requested." || /^API Error: \d+\s/.test(trimmed))) {
         continue;
@@ -336,7 +469,6 @@ export async function loadTranscript(sessionId: string, cwd: string): Promise<Ch
 
       const existing = entry.message.id ? messageById.get(msgId) : undefined;
       if (existing) {
-        // Accumulate blocks across streaming entries for the same message
         if (textContent) existing.content += textContent;
         for (const tu of toolUses) {
           if (!existing.toolUses.some((t) => t.id === tu.id)) {
@@ -364,7 +496,72 @@ export async function loadTranscript(sessionId: string, cwd: string): Promise<Ch
     }
   }
 
-  return messages;
+  return { messages, lastUsage };
+}
+
+const TAIL_LINES = 150;
+const PAGE_SIZE = 50;
+
+export async function loadTranscript(
+  sessionId: string,
+  cwd: string,
+  options?: { tailLines?: number },
+): Promise<TranscriptResult> {
+  const fp = getTranscriptPath(sessionId, cwd);
+  if (!existsSync(fp)) return { messages: [], byteOffset: 0, totalSize: 0, lastUsage: null };
+
+  const t0 = performance.now();
+  const tailCount = options?.tailLines;
+
+  let lines: string[];
+  let byteOffset: number;
+  let totalSize: number;
+  let readLabel: string;
+
+  if (tailCount) {
+    const result = await readTailLines(fp, tailCount);
+    lines = result.lines;
+    byteOffset = result.byteOffset;
+    totalSize = result.totalSize;
+    readLabel = `tail(${tailCount})`;
+  } else {
+    const raw = await readFile(fp, "utf-8");
+    lines = raw.split("\n").filter((l) => l.trim());
+    byteOffset = 0;
+    totalSize = raw.length;
+    readLabel = "full";
+  }
+  const tRead = performance.now();
+
+  const { messages, lastUsage } = parseLines(lines);
+  const tParse = performance.now();
+
+  const sid = sessionId.slice(0, 8);
+  console.log(`[transcript:${sid}] ${readLabel}: ${lines.length} lines, ${messages.length} msgs | read=${(tRead - t0).toFixed(0)}ms parse=${(tParse - tRead).toFixed(0)}ms total=${(tParse - t0).toFixed(0)}ms`);
+
+  return { messages, byteOffset, totalSize, lastUsage };
+}
+
+export async function loadMoreMessages(
+  sessionId: string,
+  cwd: string,
+  byteOffset: number,
+  targetLines?: number,
+): Promise<{ messages: ChatMessage[]; newByteOffset: number }> {
+  if (byteOffset <= 0) return { messages: [], newByteOffset: 0 };
+
+  const fp = getTranscriptPath(sessionId, cwd);
+  const t0 = performance.now();
+  const { lines, newByteOffset } = await readMoreLines(fp, byteOffset, targetLines || TAIL_LINES);
+  const tRead = performance.now();
+
+  const { messages } = parseLines(lines);
+  const tParse = performance.now();
+
+  const sid = sessionId.slice(0, 8);
+  console.log(`[transcript:${sid}] more: ${lines.length} lines, ${messages.length} msgs | read=${(tRead - t0).toFixed(0)}ms parse=${(tParse - tRead).toFixed(0)}ms`);
+
+  return { messages, newByteOffset };
 }
 
 function extractOutput(block: TranscriptBlock): string {

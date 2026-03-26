@@ -5,7 +5,7 @@ import type { ClientMessage, ServerMessage } from "@/types";
 import type { ParsedEvent } from "./event-parser";
 import { validateSession, extractTokenFromQuery, isAuthDisabled } from "./auth";
 import { SessionManager, type PendingRequest, type StreamingSnapshot } from "./session-manager";
-import { loadLastUsage } from "./transcript";
+// loadLastUsage no longer needed - usage is returned by loadTranscript
 import { logParsedEvent, logServerMessage, logClientMessage, logStatus } from "./debug-logger";
 
 export function createWebSocketHandler(
@@ -84,6 +84,7 @@ export function createWebSocketHandler(
 
         case "session:connect": {
           const sid = msg.sessionId.slice(0, 8);
+          const t0 = performance.now();
           console.log(`[ws:${wsId}] session:connect ${sid} (cwd=${msg.cwd || "none"}, process=${sessionManager.isProcessAlive(msg.sessionId)})`);
           const sessionPromise = msg.cwd
             ? sessionManager.getSessionByCwd(msg.sessionId, msg.cwd)
@@ -98,11 +99,14 @@ export function createWebSocketHandler(
             });
             return;
           }
-          console.log(`[ws:${wsId}] session ${sid} loaded (status=${session.info.status}, messages=${session.messages.length}, process=${sessionManager.isProcessAlive(msg.sessionId)})`);
+          const tLoaded = performance.now();
+          console.log(`[ws:${wsId}] session ${sid} loaded in ${(tLoaded - t0).toFixed(0)}ms (status=${session.info.status}, messages=${session.messages.length}, process=${sessionManager.isProcessAlive(msg.sessionId)})`);
 
           // Eagerly spawn the CLI process so initialize data (agents, models,
           // commands) is available before the user sends their first message.
           sessionManager.ensureProcess(msg.sessionId);
+          const tSpawn = performance.now();
+          console.log(`[ws:${wsId}] session ${sid} ensureProcess in ${(tSpawn - tLoaded).toFixed(0)}ms`);
 
           // Clean up previous subscriptions for this session
           const prev = sessionCleanups.get(msg.sessionId);
@@ -138,6 +142,7 @@ export function createWebSocketHandler(
                 messages: delta,
                 delta: true,
                 status: correctedStatus,
+                hasMore: session.hasMore,
               });
             } else {
               // ID not found - client has stale state, send full history
@@ -147,6 +152,7 @@ export function createWebSocketHandler(
                 sessionId: msg.sessionId,
                 messages: session.messages,
                 status: correctedStatus,
+                hasMore: session.hasMore,
               });
             }
           } else {
@@ -155,6 +161,7 @@ export function createWebSocketHandler(
               sessionId: msg.sessionId,
               messages: session.messages,
               status: correctedStatus,
+              hasMore: session.hasMore,
             });
           }
 
@@ -225,21 +232,12 @@ export function createWebSocketHandler(
           }
 
           const currentUsage = sessionManager.getContextUsage(msg.sessionId);
-          if (currentUsage) {
+          const usage = currentUsage || session.lastUsage;
+          if (usage) {
             send(ws, {
               type: "session:usage",
               sessionId: msg.sessionId,
-              usage: currentUsage,
-            });
-          } else if (session.info.cwd) {
-            loadLastUsage(msg.sessionId, session.info.cwd).then((usage) => {
-              if (usage) {
-                send(ws, {
-                  type: "session:usage",
-                  sessionId: msg.sessionId,
-                  usage,
-                });
-              }
+              usage,
             });
           }
 
@@ -337,7 +335,13 @@ export function createWebSocketHandler(
           if (unsubTodos) cleanups.push(unsubTodos);
 
           // Rebuild todos from last TodoWrite in history
-          sessionManager.rebuildTodosFromHistory(msg.sessionId, session.messages);
+          const tTodos0 = performance.now();
+          // Use the full transcript buffer (up to 150 messages) for todo rebuild,
+          // not just the 50 sent to the client
+          const fullBuffer = sessionManager.getTranscriptBuffer(msg.sessionId);
+          sessionManager.rebuildTodosFromHistory(msg.sessionId, fullBuffer.length > 0 ? fullBuffer : session.messages);
+          const tTodos1 = performance.now();
+          console.log(`[ws:${wsId}] session ${sid} rebuildTodos in ${(tTodos1 - tTodos0).toFixed(0)}ms`);
           const currentTodos = sessionManager.getTodos(msg.sessionId);
           if (currentTodos.length > 0) {
             send(ws, {
@@ -367,10 +371,6 @@ export function createWebSocketHandler(
             }
           );
           if (unsubInit) cleanups.push(unsubInit);
-
-          // Eagerly spawn the CLI process so init data, MCP servers,
-          // and model info are available before the first message.
-          sessionManager.ensureProcess(msg.sessionId);
 
           send(ws, {
             type: "session:queued",
@@ -416,6 +416,20 @@ export function createWebSocketHandler(
               });
             }
           }
+          const tDone = performance.now();
+          console.log(`[ws:${wsId}] session ${sid} connect complete in ${(tDone - t0).toFixed(0)}ms`);
+          });
+          break;
+        }
+
+        case "history:request_more": {
+          sessionManager.getMoreHistory(msg.sessionId, msg.beforeMessageId).then((result) => {
+            send(ws, {
+              type: "history:more",
+              sessionId: msg.sessionId,
+              messages: result.messages,
+              hasMore: result.hasMore,
+            });
           });
           break;
         }

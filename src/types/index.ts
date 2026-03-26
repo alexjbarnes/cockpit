@@ -163,6 +163,7 @@ export type ClientMessage =
   | { type: "message:resume_queue"; sessionId: string }
   | { type: "message:delete_queued"; sessionId: string; messageId: string }
   | { type: "message:edit_queued"; sessionId: string; messageId: string }
+  | { type: "history:request_more"; sessionId: string; beforeMessageId: string }
   | { type: "ping" };
 
 // Server -> Client messages
@@ -188,7 +189,8 @@ export type ServerMessage =
   | { type: "session:task_update"; sessionId: string; task: BackgroundTask }
   | { type: "session:todos"; sessionId: string; todos: TodoItem[] }
   | { type: "session:init"; sessionId: string; data: InitData }
-  | { type: "history"; sessionId: string; messages: ChatMessage[]; delta?: boolean; status?: "idle" | "running" }
+  | { type: "history"; sessionId: string; messages: ChatMessage[]; delta?: boolean; status?: "idle" | "running"; hasMore?: boolean }
+  | { type: "history:more"; sessionId: string; messages: ChatMessage[]; hasMore: boolean }
   | { type: "session:streaming_snapshot"; sessionId: string; messageId: string; content: string; toolUses: ToolUse[]; blocks: ContentBlock[] }
   | { type: "session:queued"; sessionId: string; count: number; cancelledText?: string; sentText?: string; messages?: Array<{ id: string; text: string }>; paused?: boolean; editText?: string }
   | { type: "message:ack"; sessionId: string }

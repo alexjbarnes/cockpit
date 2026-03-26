@@ -55,6 +55,7 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
       return;
     }
     connectingRef.current = true;
+    const t0 = performance.now();
     console.log("[ws] connecting...");
 
     let token: string;
@@ -68,6 +69,7 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
       }
       const data = await res.json();
       token = data.token;
+      console.log(`[ws] token fetched in ${(performance.now() - t0).toFixed(0)}ms`);
     } catch (err) {
       console.warn("[ws] ws-token fetch error:", err);
       connectingRef.current = false;
@@ -89,7 +91,7 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
     connectingRef.current = false;
 
     ws.onopen = () => {
-      console.log("[ws] connected");
+      console.log(`[ws] connected in ${(performance.now() - t0).toFixed(0)}ms`);
       setConnected(true);
       reconnectDelay.current = 1000;
       for (const queued of queueRef.current) {

@@ -20,7 +20,7 @@ const INITIAL_WINDOW = 50;
 const WINDOW_INCREMENT = 30;
 
 export function ChatView({ sessionId, cwd, initialName, initialContext }: { sessionId: string; cwd?: string; initialName?: string; initialContext?: string }) {
-  const { messages, historyLoaded, isResponding, pendingPermissions, pendingQuestions, modelPicker, currentModel, bypassActive, thinkingLevel, contextUsage, rateLimitStatus, apiError, sessionName, initData, hasQueuedMessage, queuedMessages, queuePaused, backgroundTasks, todos, btw, sendMessage, interrupt, respondToPermission, respondToQuestion, selectModel, setModel, setBypassAll, setThinkingLevel, cancelQueuedMessage, deleteQueuedMessage, editQueuedMessage, resumeQueue, restoredText, clearRestoredText, dismissBtw, retry } = useSession(sessionId, cwd);
+  const { messages, historyLoaded, isResponding, pendingPermissions, pendingQuestions, modelPicker, currentModel, bypassActive, thinkingLevel, contextUsage, rateLimitStatus, apiError, sessionName, initData, hasQueuedMessage, queuedMessages, queuePaused, backgroundTasks, todos, btw, hasMoreHistory, loadingMore, requestMoreHistory, sendMessage, interrupt, respondToPermission, respondToQuestion, selectModel, setModel, setBypassAll, setThinkingLevel, cancelQueuedMessage, deleteQueuedMessage, editQueuedMessage, resumeQueue, restoredText, clearRestoredText, dismissBtw, retry } = useSession(sessionId, cwd);
   const { settings } = useSettings();
   const { setHeader, setBackgroundTasks, setTodos, setInitData: setShellInitData } = useShell();
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -92,7 +92,7 @@ export function ChatView({ sessionId, cwd, initialName, initialContext }: { sess
       ignoreScrollUntil.current = Date.now() + 150;
     }
     prevScrollHeightRef.current = 0;
-  }, [renderWindow]);
+  }, [renderWindow, totalMessages]);
 
   const handleScroll = useCallback(() => {
     if (Date.now() < ignoreScrollUntil.current) return;
@@ -102,12 +102,17 @@ export function ChatView({ sessionId, cwd, initialName, initialContext }: { sess
     stickToBottom.current = distanceFromBottom < 80;
     setShowScrollDown(distanceFromBottom > 300);
 
-    if (el.scrollTop < 800 && hasMoreAbove && Date.now() > expandThrottleRef.current) {
+    if (el.scrollTop < 800 && Date.now() > expandThrottleRef.current) {
       expandThrottleRef.current = Date.now() + 100;
-      prevScrollHeightRef.current = el.scrollHeight;
-      setRenderWindow((w) => w + WINDOW_INCREMENT);
+      if (hasMoreAbove) {
+        prevScrollHeightRef.current = el.scrollHeight;
+        setRenderWindow((w) => w + WINDOW_INCREMENT);
+      } else if (hasMoreHistory && !loadingMore) {
+        prevScrollHeightRef.current = el.scrollHeight;
+        requestMoreHistory();
+      }
     }
-  }, [hasMoreAbove]);
+  }, [hasMoreAbove, hasMoreHistory, loadingMore, requestMoreHistory]);
 
   const scrollToBottom = useCallback(() => {
     const el = scrollRef.current;
@@ -224,7 +229,7 @@ export function ChatView({ sessionId, cwd, initialName, initialContext }: { sess
               )}
             </div>
           )}
-          {hasMoreAbove && (
+          {(hasMoreAbove || loadingMore) && (
             <div className="flex justify-center py-2">
               <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
             </div>
