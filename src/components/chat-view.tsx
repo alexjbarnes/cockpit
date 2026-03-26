@@ -22,7 +22,7 @@ const WINDOW_INCREMENT = 30;
 export function ChatView({ sessionId, cwd, initialName, initialContext }: { sessionId: string; cwd?: string; initialName?: string; initialContext?: string }) {
   const { messages, historyLoaded, isResponding, pendingPermissions, pendingQuestions, modelPicker, currentModel, bypassActive, thinkingLevel, contextUsage, rateLimitStatus, apiError, sessionName, initData, hasQueuedMessage, queuedMessages, queuePaused, backgroundTasks, todos, btw, sendMessage, interrupt, respondToPermission, respondToQuestion, selectModel, setModel, setBypassAll, setThinkingLevel, cancelQueuedMessage, deleteQueuedMessage, editQueuedMessage, resumeQueue, restoredText, clearRestoredText, dismissBtw, retry } = useSession(sessionId, cwd);
   const { settings } = useSettings();
-  const { setHeader, setBackgroundTasks, setTodos } = useShell();
+  const { setHeader, setBackgroundTasks, setTodos, setInitData: setShellInitData } = useShell();
   const scrollRef = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);
   const [showScrollDown, setShowScrollDown] = useState(false);
@@ -77,6 +77,10 @@ export function ChatView({ sessionId, cwd, initialName, initialContext }: { sess
   useEffect(() => {
     setTodos(todos);
   }, [todos, setTodos]);
+
+  useEffect(() => {
+    setShellInitData(initData);
+  }, [initData, setShellInitData]);
 
   // Preserve scroll position after expanding the window
   useLayoutEffect(() => {

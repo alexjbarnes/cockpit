@@ -1,13 +1,14 @@
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
-import type { ThinkingLevel } from "@/types";
+import type { ThinkingLevel, InitData } from "@/types";
 
 export interface SessionPrefs {
   name?: string;
   thinkingLevel?: ThinkingLevel;
   bypassAllPermissions?: boolean;
   model?: string;
+  initData?: InitData;
 }
 
 const PREFS_DIR = join(homedir(), ".cockpit");

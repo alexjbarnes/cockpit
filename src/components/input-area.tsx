@@ -244,6 +244,13 @@ export function InputArea({ sessionId, onSend, onInterrupt, isResponding, bypass
     if (!trimmed && !hasAttachments) return;
     if (!connected) return;
 
+    // Intercept /mcp to open the MCP status modal
+    if (/^\/mcp\s*$/i.test(trimmed)) {
+      setText("");
+      window.dispatchEvent(new CustomEvent("cockpit:open-mcp"));
+      return;
+    }
+
     onSend(
       trimmed,
       pendingImages.length > 0 ? pendingImages : undefined,

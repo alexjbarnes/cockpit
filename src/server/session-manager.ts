@@ -51,6 +51,7 @@ interface Session {
   todoItems: TodoItem[];
   initData?: InitData;
   pendingRequests: Map<string, PendingRequest>;
+  controlCallbacks: Map<string, (response: Record<string, unknown>) => void>;
   streamingSnapshot: StreamingSnapshot | null;
   queuedMessages: QueuedMessage[];
   queuePaused: boolean;
@@ -101,6 +102,7 @@ export class SessionManager {
       contextWindowSize: 200_000,
       todoItems: [],
       pendingRequests: new Map(),
+      controlCallbacks: new Map(),
       streamingSnapshot: null,
       queuedMessages: [],
       queuePaused: false,
@@ -136,6 +138,7 @@ export class SessionManager {
         contextWindowSize: 200_000,
         todoItems: [],
         pendingRequests: new Map(),
+        controlCallbacks: new Map(),
         streamingSnapshot: null,
         queuedMessages: [],
         queuePaused: false,
@@ -426,6 +429,45 @@ export class SessionManager {
     return this.sessions.get(sessionId)?.thinkingLevel ?? "high";
   }
 
+  sendControlRequest(sessionId: string, request: Record<string, unknown>, timeoutMs = 10_000): Promise<Record<string, unknown>> {
+    const session = this.sessions.get(sessionId);
+    if (!session?.stdin) return Promise.reject(new Error("Session not connected"));
+
+    const requestId = `ctrl-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const msg = {
+      type: "control_request",
+      request_id: requestId,
+      request,
+    };
+
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        session.controlCallbacks.delete(requestId);
+        reject(new Error("Control request timed out"));
+      }, timeoutMs);
+
+      session.controlCallbacks.set(requestId, (response) => {
+        clearTimeout(timer);
+        session.controlCallbacks.delete(requestId);
+        resolve(response);
+      });
+
+      session.stdin!.write(JSON.stringify(msg) + "\n");
+    });
+  }
+
+  async mcpStatus(sessionId: string): Promise<Record<string, unknown>> {
+    return this.sendControlRequest(sessionId, { subtype: "mcp_status" });
+  }
+
+  async mcpToggle(sessionId: string, serverName: string, enabled: boolean): Promise<Record<string, unknown>> {
+    return this.sendControlRequest(sessionId, { subtype: "mcp_toggle", serverName, enabled });
+  }
+
+  async mcpReconnect(sessionId: string, serverName: string): Promise<Record<string, unknown>> {
+    return this.sendControlRequest(sessionId, { subtype: "mcp_reconnect", serverName });
+  }
+
   getContextUsage(sessionId: string): ContextUsage | null {
     return this.sessions.get(sessionId)?.contextUsage ?? null;
   }
@@ -535,7 +577,7 @@ export class SessionManager {
   }
 
   getInitData(sessionId: string): InitData | undefined {
-    return this.sessions.get(sessionId)?.initData;
+    return this.sessions.get(sessionId)?.initData || getSessionPrefs(sessionId)?.initData;
   }
 
   setInitData(sessionId: string, data: InitData): void {
@@ -556,6 +598,7 @@ export class SessionManager {
       commands: data.commands || prev?.commands,
     };
     session.emitter.emit("init", sessionId, session.initData);
+    setSessionPrefs(sessionId, { initData: session.initData });
   }
 
   onInit(
@@ -987,6 +1030,23 @@ export class SessionManager {
 
       for (const line of lines) {
         logRawLine(sessionId, line);
+
+        // Resolve pending control request callbacks
+        if (session.controlCallbacks.size > 0 && line.includes('"control_response"')) {
+          try {
+            const parsed = JSON.parse(line);
+            if (parsed.type === "control_response" && parsed.request_id) {
+              const cb = session.controlCallbacks.get(parsed.request_id);
+              if (cb) {
+                cb(parsed.response || parsed);
+                continue;
+              }
+            }
+          } catch {
+            // not valid JSON, fall through to normal processing
+          }
+        }
+
         // Only extract usage from main thread messages, not sub-agents.
         // Sub-agent usage causes the context indicator to flicker.
         if (agentStack.length === 0) {

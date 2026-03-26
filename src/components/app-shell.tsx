@@ -19,7 +19,8 @@ import { FolderOpen, Menu } from "lucide-react";
 import { GitStatusButton } from "@/components/git-status-modal";
 import { BackgroundTasksButton } from "@/components/task-indicator";
 import { TodoIndicator } from "@/components/todo-indicator";
-import type { BackgroundTask, TodoItem } from "@/types";
+import { McpStatusButton } from "@/components/mcp-status-modal";
+import type { BackgroundTask, TodoItem, InitData } from "@/types";
 
 interface HeaderConfig {
   title: string;
@@ -34,6 +35,8 @@ interface ShellContextValue {
   setBackgroundTasks: (tasks: BackgroundTask[]) => void;
   todos: TodoItem[];
   setTodos: (todos: TodoItem[]) => void;
+  initData: InitData | null;
+  setInitData: (data: InitData | null) => void;
   sidebarContent: ReactNode | null;
   setSidebarContent: (content: ReactNode | null) => void;
   closeSidebar: () => void;
@@ -47,6 +50,8 @@ const ShellContext = createContext<ShellContextValue>({
   setBackgroundTasks: () => {},
   todos: [],
   setTodos: () => {},
+  initData: null,
+  setInitData: () => {},
   sidebarContent: null,
   setSidebarContent: () => {},
   closeSidebar: () => {},
@@ -139,6 +144,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   const [cwd, setCwdState] = useState<string | undefined>(undefined);
   const [backgroundTasks, setBackgroundTasks] = useState<BackgroundTask[]>([]);
   const [todos, setTodos] = useState<TodoItem[]>([]);
+  const [initData, setInitData] = useState<InitData | null>(null);
   const [sidebarContent, setSidebarContentState] = useState<ReactNode | null>(null);
 
   const setSidebarContent = useCallback((content: ReactNode | null) => {
@@ -175,7 +181,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   return (
     <AuthGuard>
       <WebSocketProvider>
-        <ShellContext.Provider value={{ setHeader, cwd, setCwd, backgroundTasks, setBackgroundTasks, todos, setTodos, sidebarContent, setSidebarContent, closeSidebar }}>
+        <ShellContext.Provider value={{ setHeader, cwd, setCwd, backgroundTasks, setBackgroundTasks, todos, setTodos, initData, setInitData, sidebarContent, setSidebarContent, closeSidebar }}>
           <div className="fixed inset-0 flex">
             <Sidebar ref={sidebarRef} />
             <div className="flex-1 min-h-0 min-w-0 flex flex-col">
@@ -190,6 +196,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                   {cwd && <TodoIndicator todos={todos} />}
                   {cwd && <BackgroundTasksButton tasks={backgroundTasks} />}
                   {cwd && <UsageButton />}
+                  {cwd && <McpStatusButton cwd={cwd} initData={initData} />}
                   {cwd && <GitStatusButton cwd={cwd} />}
                   {cwd && <FileBrowserButton cwd={cwd} />}
                 </div>

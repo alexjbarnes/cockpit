@@ -368,6 +368,10 @@ export function createWebSocketHandler(
           );
           if (unsubInit) cleanups.push(unsubInit);
 
+          // Eagerly spawn the CLI process so init data, MCP servers,
+          // and model info are available before the first message.
+          sessionManager.ensureProcess(msg.sessionId);
+
           send(ws, {
             type: "session:queued",
             sessionId: msg.sessionId,

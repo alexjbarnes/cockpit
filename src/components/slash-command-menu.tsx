@@ -6,6 +6,7 @@ import { slashCommands, type SlashCommand } from "@/lib/commands";
 // Commands handled client-side by Cockpit, always included
 const cockpitCommands: SlashCommand[] = [
   { command: "/btw", description: "Nudge Claude while it's working" },
+  { command: "/mcp", description: "Show MCP server status" },
 ];
 
 interface SlashCommandMenuProps {
