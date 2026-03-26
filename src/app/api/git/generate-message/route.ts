@@ -19,13 +19,24 @@ function run(cmd: string, args: string[], cwd: string): Promise<string> {
   });
 }
 
-function runWithStdin(cmd: string, args: string[], cwd: string, input: string): Promise<string> {
+function runWithStdin(cmd: string, args: string[], cwd: string, input: string, minimalEnv = false): Promise<string> {
   return new Promise((resolve, reject) => {
-    const env = { ...process.env };
+    const env: Record<string, string> = minimalEnv
+      ? {
+          PATH: process.env.PATH || "",
+          HOME: process.env.HOME || "",
+          USER: process.env.USER || "",
+          TERM: "xterm-256color",
+        }
+      : Object.fromEntries(Object.entries(process.env).filter((e): e is [string, string] => e[1] != null));
     delete env.CLAUDECODE;
     delete env.CLAUDE_CODE_ENTRYPOINT;
 
-    const proc = spawn(cmd, args, { cwd, env });
+    console.log("[generate-message] env keys:", Object.keys(env).join(", "));
+    console.log("[generate-message] args:", args.join(" "));
+    console.log("[generate-message] cwd:", cwd, "minimalEnv:", minimalEnv);
+
+    const proc = spawn(cmd, args, { cwd, env: env as NodeJS.ProcessEnv, detached: true });
     let stdout = "";
     let stderr = "";
 
@@ -46,7 +57,7 @@ function runWithStdin(cmd: string, args: string[], cwd: string, input: string): 
   });
 }
 
-const SYSTEM_PROMPT = `You generate git commit messages. Return only the commit message string, no explanations.`;
+const SYSTEM_PROMPT = "Output ONLY the commit message. No explanations, no markdown, no quotes, no preamble.";
 
 const PROMPT = `Generate a git commit message for the changes below.
 
@@ -58,16 +69,14 @@ Rules:
 Changes:
 `;
 
-const COMMIT_SCHEMA = JSON.stringify({
-  type: "object",
-  properties: {
-    message: {
-      type: "string",
-      description: "The git commit message. First line is the summary, optionally followed by a blank line and body.",
-    },
-  },
-  required: ["message"],
-});
+// Strip common preamble patterns the model sometimes adds
+function cleanMessage(raw: string): string {
+  return raw
+    .replace(/^(?:here(?:'s| is)(?: your| the| a)? commit message:?\s*)/i, "")
+    .replace(/^```\n?/, "")
+    .replace(/\n?```$/, "")
+    .trim();
+}
 
 export async function POST(req: NextRequest) {
   if (!authenticate(req)) {
@@ -82,85 +91,79 @@ export async function POST(req: NextRequest) {
   }
 
   try {
+    const t0 = Date.now();
+    console.log("[generate-message] files:", files.length, "cwd:", cwd);
+
+    // Use compact diff: numstat for overview + short patch for context
     let numstat = "";
     try {
       numstat = await run("git", ["diff", "--numstat", "HEAD", "--", ...files], cwd);
     } catch {
       try {
         numstat = await run("git", ["diff", "--numstat", "--cached", "--", ...files], cwd);
-      } catch {
-        // no stats available
-      }
+      } catch {}
     }
 
-    const diffs: string[] = [];
-    let totalLength = 0;
-    const maxTotal = 30000;
-
-    for (const file of files) {
-      if (totalLength > maxTotal) {
-        diffs.push(`\n[${files.length - diffs.length} more files truncated]`);
-        break;
-      }
-
-      let fileDiff = "";
+    let diff = "";
+    try {
+      diff = await run("git", ["diff", "--stat", "-p", "-U1", "HEAD", "--", ...files], cwd);
+    } catch {
       try {
-        fileDiff = await run("git", ["diff", "HEAD", "--", file], cwd);
-      } catch {
-        try {
-          fileDiff = await run("git", ["diff", "--cached", "--", file], cwd);
-        } catch {
-          const { readFile } = await import("node:fs/promises");
-          const { join } = await import("node:path");
-          try {
-            const content = await readFile(join(cwd, file), "utf-8");
-            fileDiff = `new file: ${file}\n${content.slice(0, 2000)}`;
-          } catch {
-            fileDiff = `new file: ${file}`;
-          }
-        }
-      }
-
-      if (fileDiff.length > 3000) {
-        fileDiff = fileDiff.slice(0, 3000) + "\n[truncated]";
-      }
-
-      diffs.push(fileDiff);
-      totalLength += fileDiff.length;
+        diff = await run("git", ["diff", "--stat", "-p", "-U1", "--cached", "--", ...files], cwd);
+      } catch {}
     }
 
-    const input = PROMPT + (numstat ? `Summary:\n${numstat}\n` : "") + diffs.join("\n");
+    const t1 = Date.now();
+
+    // Cap at 4KB to keep token count low and API response fast
+    if (diff.length > 4000) {
+      diff = diff.slice(0, 4000) + "\n[truncated]";
+    }
+
+    const input = PROMPT + (numstat ? `Summary:\n${numstat}\n` : "") + diff;
+    console.log("[generate-message] git diff:", t1 - t0, "ms, input length:", input.length);
+    console.log("[generate-message] input length:", input.length);
 
     const raw = await runWithStdin(
       "claude",
       [
         "-p",
-        "--model", "haiku",
+        "--model", "sonnet",
+        "--effort", "low",
         "--output-format", "json",
-        "--json-schema", COMMIT_SCHEMA,
         "--system-prompt", SYSTEM_PROMPT,
         "--no-session-persistence",
-        "--allowedTools", "",
+        "--tools", "",
+        "--disable-slash-commands",
+        "--setting-sources", "",
+        "--permission-mode", "bypassPermissions",
       ],
       cwd,
-      input
+      input,
+      true
     );
+
+    const t2 = Date.now();
+    console.log("[generate-message] claude CLI:", t2 - t1, "ms, raw length:", raw.length);
 
     let message: string;
     try {
       const parsed = JSON.parse(raw);
-      message = parsed.structured_output?.message || parsed.result || "";
+      console.log("[generate-message] num_turns:", parsed.num_turns, "api_ms:", parsed.duration_api_ms, "total_ms:", parsed.duration_ms, "cost:", parsed.total_cost_usd);
+      message = parsed.result || "";
     } catch {
-      // If JSON parse fails, the raw output might be plain text (fallback)
       message = raw;
     }
 
-    if (!message.trim()) {
+    message = cleanMessage(message);
+
+    if (!message) {
       console.error("[generate-message] empty result, raw output:", raw.slice(0, 500));
       return NextResponse.json({ error: "Empty response from model" }, { status: 500 });
     }
 
-    return NextResponse.json({ message: message.trim() });
+    console.log("[generate-message] total:", Date.now() - t0, "ms");
+    return NextResponse.json({ message });
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Failed to generate message";
     console.error("[generate-message] error:", msg);
