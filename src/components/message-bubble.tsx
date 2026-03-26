@@ -86,7 +86,8 @@ export const MessageBubble = memo(function MessageBubble({
   const isUser = message.role === "user";
   const isSystem = message.role === "system";
   const isSelectable = !isSystem;
-  const visibleBlocks = message.blocks?.filter((b) => !(b.type === "tool_use" && b.toolUse.name === "AskUserQuestion")) || [];
+  const hiddenTools = new Set(["AskUserQuestion", "TodoWrite"]);
+  const visibleBlocks = message.blocks?.filter((b) => !(b.type === "tool_use" && hiddenTools.has(b.toolUse.name))) || [];
   const hasBlocks = visibleBlocks.length > 0;
 
   const lastInputWasTouch = useRef(false);
@@ -159,7 +160,7 @@ export const MessageBubble = memo(function MessageBubble({
   }
 
   // Skip empty assistant bubbles (e.g. message only had AskUserQuestion)
-  if (!isUser && !isSystem && !hasBlocks && !message.content && message.toolUses.every((t) => t.name === "AskUserQuestion")) {
+  if (!isUser && !isSystem && !hasBlocks && !message.content && message.toolUses.every((t) => hiddenTools.has(t.name))) {
     return null;
   }
 
@@ -264,9 +265,9 @@ export const MessageBubble = memo(function MessageBubble({
           </div>
         ) : (
           <>
-            {message.toolUses.length > 0 && (
+            {message.toolUses.filter((t) => !hiddenTools.has(t.name)).length > 0 && (
               <div className="mb-2 space-y-1">
-                {message.toolUses.map((tool) => (
+                {message.toolUses.filter((t) => !hiddenTools.has(t.name)).map((tool) => (
                   <ToolCard key={tool.id} tool={tool} />
                 ))}
               </div>
