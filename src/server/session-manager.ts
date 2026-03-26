@@ -4,7 +4,7 @@ import { EventEmitter } from "node:events";
 import { v4 as uuidv4 } from "uuid";
 import type { SessionInfo, ChatMessage, ToolUse, ContentBlock, ThinkingLevel, ContextUsage, TodoItem, ImageAttachment, DocumentAttachment, InitData } from "@/types";
 import { EventParser, type ParsedEvent } from "./event-parser";
-import { loadTranscript, loadMoreMessages, transcriptExists } from "./transcript";
+import { loadTranscript, loadMoreMessages, transcriptExists, findSessionCwd } from "./transcript";
 import { logRawLine } from "./debug-logger";
 import { getSessionPrefs, setSessionPrefs } from "./session-prefs";
 import { getDefaults } from "./defaults";
@@ -145,6 +145,7 @@ export class SessionManager {
         todoItems: [],
         pendingRequests: new Map(),
         controlCallbacks: new Map(),
+        initData: prefs?.initData,
         streamingSnapshot: null,
         queuedMessages: [],
         queuePaused: false,
@@ -158,8 +159,15 @@ export class SessionManager {
   }
 
   async getSession(id: string): Promise<{ info: SessionInfo; messages: ChatMessage[]; hasMore: boolean; lastUsage: { used: number; total: number } | null } | null> {
-    const session = this.sessions.get(id);
-    if (!session) return null;
+    let session = this.sessions.get(id);
+    if (!session) {
+      // After server restart, session isn't in memory but transcript exists on disk.
+      // Find the cwd from the transcript file and bootstrap the session.
+      const cwd = await findSessionCwd(id);
+      if (!cwd) return null;
+      this.ensureSession(id, cwd);
+      session = this.sessions.get(id)!;
+    }
     const result = await loadTranscript(id, session.info.cwd, { tailLines: 150 });
     const { messages, byteOffset, totalSize, lastUsage } = result;
 
@@ -543,11 +551,27 @@ export class SessionManager {
   }
 
   async mcpToggle(sessionId: string, serverName: string, enabled: boolean): Promise<Record<string, unknown>> {
-    return this.sendControlRequest(sessionId, { subtype: "mcp_toggle", serverName, enabled });
+    const result = await this.sendControlRequest(sessionId, { subtype: "mcp_toggle", serverName, enabled });
+    this.updateMcpServerStatus(sessionId, serverName, enabled ? "connected" : "disabled");
+    return result;
   }
 
   async mcpReconnect(sessionId: string, serverName: string): Promise<Record<string, unknown>> {
-    return this.sendControlRequest(sessionId, { subtype: "mcp_reconnect", serverName });
+    const result = await this.sendControlRequest(sessionId, { subtype: "mcp_reconnect", serverName });
+    this.updateMcpServerStatus(sessionId, serverName, "connected");
+    return result;
+  }
+
+  private updateMcpServerStatus(sessionId: string, serverName: string, status: string): void {
+    const session = this.sessions.get(sessionId);
+    if (!session?.initData) return;
+    const servers = session.initData.mcpServers;
+    const server = servers.find((s) => s.name === serverName);
+    if (server) {
+      server.status = status;
+    }
+    session.emitter.emit("init", sessionId, session.initData);
+    setSessionPrefs(sessionId, { initData: session.initData });
   }
 
   getContextUsage(sessionId: string): ContextUsage | null {
@@ -666,8 +690,9 @@ export class SessionManager {
     const session = this.sessions.get(sessionId);
     if (!session) return;
     // Merge with existing init data so system/init and initialize
-    // control_response complement each other
-    const prev = session.initData;
+    // control_response complement each other.
+    // Also fall back to session-prefs so data survives server restarts.
+    const prev = session.initData || getSessionPrefs(sessionId)?.initData;
     session.initData = {
       slashCommands: data.slashCommands.length > 0 ? data.slashCommands : prev?.slashCommands || [],
       skills: data.skills.length > 0 ? data.skills : prev?.skills || [],

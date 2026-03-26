@@ -30,6 +30,7 @@ function statusColor(status: string): string {
 function statusLabel(status: string): string {
   switch (status) {
     case "connected": return "Connected";
+    case "connecting": return "Connecting...";
     case "disabled": return "Disabled";
     case "failed": return "Failed";
     default: return status;
@@ -55,7 +56,7 @@ export function McpStatusButton({ cwd, initData }: { cwd?: string; initData?: In
     }
   }, [initData]);
 
-  // Refresh by re-querying mcp_status (used after toggle/reconnect)
+  // Refresh from server's initData (instant, no CLI round-trip)
   const refreshStatus = useCallback(() => {
     if (!sessionId) return;
     setLoading(true);
@@ -65,10 +66,7 @@ export function McpStatusButton({ cwd, initData }: { cwd?: string; initData?: In
         return res.json();
       })
       .then((data) => {
-        const mcpServers = data.mcpServers
-          || data.response?.mcpServers
-          || data.response?.response?.mcpServers;
-        if (mcpServers) setServers(mcpServers);
+        if (data.mcpServers) setServers(data.mcpServers);
       })
       .catch(() => {
         // Keep existing data on failure
@@ -96,39 +94,58 @@ export function McpStatusButton({ cwd, initData }: { cwd?: string; initData?: In
     if (!sessionId) return;
     const enabled = currentStatus === "disabled";
     setActionLoading(serverName);
+
+    // Optimistically update UI
+    setServers((prev) => prev.map((s) =>
+      s.name === serverName ? { ...s, status: enabled ? "connecting" : "disabled" } : s
+    ));
+
     try {
       await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/mcp`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "toggle", serverName, enabled }),
       });
-      // Refresh status after toggle
-      await new Promise((r) => setTimeout(r, 500));
-      refreshStatus();
+      // Update to expected final state
+      setServers((prev) => prev.map((s) =>
+        s.name === serverName ? { ...s, status: enabled ? "connected" : "disabled" } : s
+      ));
     } catch {
-      // ignore
+      // Revert on failure
+      setServers((prev) => prev.map((s) =>
+        s.name === serverName ? { ...s, status: currentStatus } : s
+      ));
     } finally {
       setActionLoading(null);
     }
-  }, [sessionId, refreshStatus]);
+  }, [sessionId]);
 
   const handleReconnect = useCallback(async (serverName: string) => {
     if (!sessionId) return;
     setActionLoading(serverName);
+
+    // Optimistically show connecting
+    setServers((prev) => prev.map((s) =>
+      s.name === serverName ? { ...s, status: "connecting", error: undefined } : s
+    ));
+
     try {
       await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/mcp`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "reconnect", serverName }),
       });
-      await new Promise((r) => setTimeout(r, 1000));
-      refreshStatus();
+      setServers((prev) => prev.map((s) =>
+        s.name === serverName ? { ...s, status: "connected" } : s
+      ));
     } catch {
-      // ignore
+      setServers((prev) => prev.map((s) =>
+        s.name === serverName ? { ...s, status: "failed" } : s
+      ));
     } finally {
       setActionLoading(null);
     }
-  }, [sessionId, refreshStatus]);
+  }, [sessionId]);
 
   const serverCount = initData?.mcpServers?.length ?? 0;
   if (serverCount === 0) return null;

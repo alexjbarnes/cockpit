@@ -10,7 +10,7 @@ function authenticate(req: NextRequest): boolean {
   return !!token && validateSession(token);
 }
 
-// GET /api/sessions/[id]/mcp - Get MCP server status
+// GET /api/sessions/[id]/mcp - Get MCP server status from initData
 export async function GET(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> },
@@ -21,14 +21,8 @@ export async function GET(
 
   const { id } = await params;
   const manager = getSessionManager();
-
-  try {
-    const result = await manager.mcpStatus(id);
-    return NextResponse.json(result);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : "Failed to get MCP status";
-    return NextResponse.json({ error: message }, { status: 500 });
-  }
+  const initData = manager.getInitData(id);
+  return NextResponse.json({ mcpServers: initData?.mcpServers || [] });
 }
 
 // POST /api/sessions/[id]/mcp - Toggle or reconnect MCP server

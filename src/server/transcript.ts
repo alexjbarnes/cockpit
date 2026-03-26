@@ -656,6 +656,31 @@ async function extractSessionMeta(filePath: string): Promise<SessionMeta | null>
   }
 }
 
+export async function findSessionCwd(sessionId: string): Promise<string | null> {
+  const projectsDir = path.join(homedir(), ".claude", "projects");
+  if (!existsSync(projectsDir)) return null;
+
+  let projectDirs: string[];
+  try {
+    projectDirs = await readdir(projectsDir);
+  } catch {
+    return null;
+  }
+
+  const filename = `${sessionId}.jsonl`;
+  for (const dir of projectDirs) {
+    const filePath = path.join(projectsDir, dir, filename);
+    if (existsSync(filePath)) {
+      // Extract cwd from the transcript's first user entry
+      const meta = await extractSessionMeta(filePath);
+      if (meta?.cwd) return meta.cwd;
+      // Fallback: derive from directory name
+      return dir.replace(/^-/, "/").replace(/-/g, "/");
+    }
+  }
+  return null;
+}
+
 export async function scanAllSessions(): Promise<SessionGroup[]> {
   const projectsDir = path.join(homedir(), ".claude", "projects");
   if (!existsSync(projectsDir)) return [];
