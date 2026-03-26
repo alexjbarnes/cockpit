@@ -131,8 +131,8 @@ function FileList({ files, selectedFile, checkedFiles, onFileClick, onContextMen
             onClick={(e) => e.stopPropagation()}
           />
           {statusIcon(file.status)}
-          <span className="font-mono text-xs truncate flex-1 min-w-0">
-            {file.path}
+          <span className="font-mono text-xs truncate flex-1 min-w-0 text-left" dir="rtl" title={file.path}>
+            <bdo dir="ltr">{file.path}</bdo>
           </span>
           {(file.additions > 0 || file.deletions > 0) && (
             <span className="text-xs font-mono shrink-0 flex items-center gap-1">
@@ -299,7 +299,7 @@ function StackedDiffs({ files, cwd, diffStyle, scrollToFile, onScrolled, onViewF
                   className="flex items-center gap-2 flex-1 min-w-0 hover:text-foreground transition-colors"
                 >
                   <ChevronDown className="h-3.5 w-3.5 shrink-0" />
-                  <span className="font-mono text-xs truncate">{file.path}</span>
+                  <span className="font-mono text-xs truncate text-left" dir="rtl" title={file.path}><bdo dir="ltr">{file.path}</bdo></span>
                 </button>
               </div>
             ) : state?.loading && !state.diff ? (
@@ -313,7 +313,7 @@ function StackedDiffs({ files, cwd, diffStyle, scrollToFile, onScrolled, onViewF
                   data-testid="sticky-diff-header"
                 >
                   {statusIcon(file.status)}
-                  <span className="font-mono text-xs truncate flex-1 min-w-0">{file.path}</span>
+                  <span className="font-mono text-xs truncate flex-1 min-w-0 text-left" dir="rtl" title={file.path}><bdo dir="ltr">{file.path}</bdo></span>
                   <Checkbox
                     checked={checked}
                     onChange={() => handleToggleChecked(file.path)}
@@ -863,7 +863,7 @@ export function ChangesView({ cwd, sessionId }: { cwd: string; sessionId?: strin
                             className="sticky top-0 z-10 flex items-center gap-2 px-4 py-1.5 text-sm border-b bg-muted/80 backdrop-blur-sm"
                           >
                             {statusIcon(file.status)}
-                            <span className="font-mono text-xs truncate flex-1 min-w-0">{file.path}</span>
+                            <span className="font-mono text-xs truncate flex-1 min-w-0 text-left" dir="rtl" title={file.path}><bdo dir="ltr">{file.path}</bdo></span>
                             <Checkbox
                               checked={checkedFiles.has(file.path)}
                               onChange={() => toggleFile(file.path)}

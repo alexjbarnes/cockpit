@@ -123,7 +123,9 @@ export function SessionList() {
     const res = await fetch("/api/sessions");
     if (res.ok) {
       const data = await res.json();
-      const fetched = data.groups || [];
+      const fetched = (data.groups || []).filter(
+        (g: SessionGroup) => !g.cwd.endsWith(".cockpit/reviews"),
+      );
       cachedGroups = fetched;
       setGroups(fetched);
     }

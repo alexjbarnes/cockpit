@@ -672,7 +672,7 @@ export function InputArea({ sessionId, onSend, onInterrupt, isResponding, bypass
               onPaste={handlePaste}
               placeholder={hasQueuedMessage ? (queuePaused ? "Queue paused (send to discard, or manage in modal)" : "Message queued (Esc to interrupt)") : isResponding ? "Use /btw to nudge, or type to queue..." : "Send a message..."}
               rows={2}
-              className="w-full resize-none rounded-md border border-input bg-background px-3 py-2 pb-7 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              className="w-full resize-none rounded-md border border-input bg-background px-3 py-2 pb-7 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring overflow-y-auto scrollbar-none"
             />
             <button
               onClick={handleFilePick}

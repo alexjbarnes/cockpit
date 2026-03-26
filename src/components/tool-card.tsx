@@ -45,30 +45,10 @@ interface ToolCardProps {
   tool: ToolUse;
 }
 
-function useIsDesktop(): boolean {
-  const [desktop, setDesktop] = useState(false);
-  useEffect(() => {
-    const mq = window.matchMedia("(min-width: 768px)");
-    setDesktop(mq.matches);
-    const handler = (e: MediaQueryListEvent) => setDesktop(e.matches);
-    mq.addEventListener("change", handler);
-    return () => mq.removeEventListener("change", handler);
-  }, []);
-  return desktop;
-}
-
-const ALWAYS_EXPAND_DESKTOP = new Set(["Edit", "edit"]);
-
 export function ToolCard({ tool }: ToolCardProps) {
   const dark = useIsDark();
-  const isDesktop = useIsDesktop();
   const input = useMemo(() => parseInput(tool.input), [tool.input]);
-  const pinOpen = isDesktop && ALWAYS_EXPAND_DESKTOP.has(tool.name);
-  const [expanded, setExpanded] = useState(pinOpen);
-
-  useEffect(() => {
-    setExpanded(pinOpen);
-  }, [pinOpen]);
+  const [expanded, setExpanded] = useState(false);
 
   // Pre-highlight code for Read/Write tools so expanding is instant
   useEffect(() => {

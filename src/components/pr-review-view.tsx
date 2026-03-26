@@ -321,7 +321,7 @@ function LazyDiff({
         >
           <ChevronDown className="h-3.5 w-3.5 shrink-0" />
           {viewed && <Check className="h-3 w-3 text-green-500 shrink-0" />}
-          <span className="font-mono text-xs truncate">{file.path}</span>
+          <span className="font-mono text-xs truncate text-left" dir="rtl" title={file.path}><bdo dir="ltr">{file.path}</bdo></span>
         </button>
       ) : deleted && !loadDeleted ? (
         <button
@@ -329,7 +329,7 @@ function LazyDiff({
           className="flex items-center gap-2 w-full px-4 py-2 text-sm text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
         >
           <FileMinus className="h-3.5 w-3.5 text-red-500 shrink-0" />
-          <span className="font-mono text-xs truncate">{file.path}</span>
+          <span className="font-mono text-xs truncate text-left" dir="rtl" title={file.path}><bdo dir="ltr">{file.path}</bdo></span>
           <span className="text-xs shrink-0">deleted &mdash; click to load</span>
         </button>
       ) : binary && !loadBinary ? (
@@ -338,7 +338,7 @@ function LazyDiff({
           className="flex items-center gap-2 w-full px-4 py-2 text-sm text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
         >
           {fileStatusIcon(file.path, pr?.files || [])}
-          <span className="font-mono text-xs truncate">{file.path}</span>
+          <span className="font-mono text-xs truncate text-left" dir="rtl" title={file.path}><bdo dir="ltr">{file.path}</bdo></span>
           <span className="text-xs shrink-0">binary &mdash; click to load</span>
         </button>
       ) : !visible ? (
@@ -349,7 +349,7 @@ function LazyDiff({
         <>
           <div className="sticky top-0 z-10 flex items-center gap-2 px-4 py-1.5 text-sm border-b bg-muted/80 backdrop-blur-sm">
             {fileStatusIcon(file.path, pr?.files || [])}
-            <span className="font-mono text-xs truncate flex-1 min-w-0">{file.path}</span>
+            <span className="font-mono text-xs truncate flex-1 min-w-0 text-left" dir="rtl" title={file.path}><bdo dir="ltr">{file.path}</bdo></span>
             <button
               onClick={handleMarkViewed}
               className={cn(
@@ -597,7 +597,7 @@ export function PRReviewView({ owner, repo, number }: { owner: string; repo: str
               {viewedFiles.has(file.path) && <Check className="h-3 w-3" strokeWidth={3} />}
             </button>
             {fileStatusIcon(file.path, pr?.files || [])}
-            <span className="font-mono text-xs truncate flex-1 min-w-0">{file.path}</span>
+            <span className="font-mono text-xs truncate flex-1 min-w-0 text-left" dir="rtl" title={file.path}><bdo dir="ltr">{file.path}</bdo></span>
             {pr?.files && (() => {
               const f = pr.files.find((pf) => pf.path === file.path);
               if (!f) return null;
