@@ -63,19 +63,22 @@ export function PlanApprovalPrompt({ permission, onRespond, onSendMessage, onSet
       onSetBypass(true);
     }
     if (opt.clearContext) {
-      // Match CLI behavior: reject ExitPlanMode (stops agent from continuing
-      // in old context), clear conversation, then start a fresh turn.
-      // /clear kills the process and wipes state. The plan file at
-      // ~/.claude/plans/ persists on disk and is picked up by the system prompt.
+      // Reject ExitPlanMode (stops agent from continuing in old context),
+      // clear conversation, then start a fresh turn. /clear kills the process
+      // and creates a new session ID so the CLI starts with a clean context.
+      // The new session won't know the plan file, so we include its path.
+      const planRef = permission.planFilePath
+        ? ` at ${permission.planFilePath}`
+        : "";
       onRespond(permission.requestId, false, "deny");
       setTimeout(() => {
         onSendMessage("/clear");
-        setTimeout(() => onSendMessage("Implement the plan"), 200);
+        setTimeout(() => onSendMessage(`Implement the plan${planRef}`), 200);
       }, 100);
     } else {
       onRespond(permission.requestId, true, "allow");
     }
-  }, [permission.requestId, onRespond, onSendMessage, onSetBypass]);
+  }, [permission.requestId, permission.planFilePath, onRespond, onSendMessage, onSetBypass]);
 
   const handleSendFeedback = useCallback(() => {
     const text = feedback.trim();

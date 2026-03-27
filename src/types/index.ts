@@ -177,7 +177,7 @@ export type ServerMessage =
   | { type: "assistant:tool_children"; sessionId: string; messageId: string; toolId: string; children: ToolUse[] }
   | { type: "session:status"; sessionId: string; status: "idle" | "running" }
   | { type: "session:error"; sessionId: string; error: string }
-  | { type: "permission:request"; sessionId: string; requestId: string; toolName: string; input: string; suggestions?: PermissionSuggestion[] }
+  | { type: "permission:request"; sessionId: string; requestId: string; toolName: string; input: string; suggestions?: PermissionSuggestion[]; planFilePath?: string }
   | { type: "question:request"; sessionId: string; requestId: string; questions: string }
   | { type: "session:clear"; sessionId: string }
   | { type: "session:system"; sessionId: string; text: string }

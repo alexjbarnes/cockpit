@@ -43,6 +43,8 @@ interface Session {
   stdin: Writable | null;
   emitter: EventEmitter;
   hasSpawnedBefore: boolean;
+  cliSessionId: string;
+  previousCliSessionIds: string[];
   bypassAllPermissions: boolean;
   compacting: boolean;
   thinkingLevel: ThinkingLevel;
@@ -98,6 +100,8 @@ export class SessionManager {
       stdin: null,
       emitter: new EventEmitter(),
       hasSpawnedBefore: false,
+      cliSessionId: id,
+      previousCliSessionIds: [],
       bypassAllPermissions: defaults.bypassAllPermissions,
       compacting: false,
       thinkingLevel: defaults.thinkingLevel,
@@ -137,6 +141,8 @@ export class SessionManager {
         stdin: null,
         emitter: new EventEmitter(),
         hasSpawnedBefore: true,
+        cliSessionId: prefs?.cliSessionId || id,
+        previousCliSessionIds: prefs?.previousCliSessionIds || [],
         bypassAllPermissions: prefs?.bypassAllPermissions ?? defaults.bypassAllPermissions,
         compacting: false,
         thinkingLevel: prefs?.thinkingLevel || defaults.thinkingLevel,
@@ -162,13 +168,15 @@ export class SessionManager {
     let session = this.sessions.get(id);
     if (!session) {
       // After server restart, session isn't in memory but transcript exists on disk.
-      // Find the cwd from the transcript file and bootstrap the session.
-      const cwd = await findSessionCwd(id);
+      // Try cliSessionId from prefs first (may differ from Map key after /clear),
+      // then fall back to the Map key itself.
+      const prefs = getSessionPrefs(id);
+      const cwd = await findSessionCwd(prefs?.cliSessionId || id) || await findSessionCwd(id);
       if (!cwd) return null;
       this.ensureSession(id, cwd);
       session = this.sessions.get(id)!;
     }
-    const result = await loadTranscript(id, session.info.cwd, { tailLines: 150 });
+    const result = await loadTranscript(session.cliSessionId, session.info.cwd, { tailLines: 150 });
     const { messages, byteOffset, totalSize, lastUsage } = result;
 
     // Store buffer for backward pagination
@@ -179,7 +187,7 @@ export class SessionManager {
     // Send last 50 to client, keep rest in buffer
     const PAGE = 50;
     const clientMessages = messages.length > PAGE ? messages.slice(-PAGE) : messages;
-    const hasMore = messages.length > PAGE || byteOffset > 0;
+    const hasMore = messages.length > PAGE || byteOffset > 0 || session.previousCliSessionIds.length > 0;
 
     const defaultName = session.info.cwd.split("/").pop() || session.info.cwd;
     if (session.info.name === defaultName && messages.length > 0) {
@@ -193,8 +201,8 @@ export class SessionManager {
 
   async getSessionByCwd(id: string, cwd: string): Promise<{ info: SessionInfo; messages: ChatMessage[]; hasMore: boolean; lastUsage: { used: number; total: number } | null } | null> {
     this.ensureSession(id, cwd);
-    const result = await loadTranscript(id, cwd, { tailLines: 150 });
     const session = this.sessions.get(id)!;
+    const result = await loadTranscript(session.cliSessionId, cwd, { tailLines: 150 });
     const { messages, byteOffset, totalSize, lastUsage } = result;
 
     // Store buffer for backward pagination
@@ -205,7 +213,7 @@ export class SessionManager {
     // Send last 50 to client, keep rest in buffer
     const PAGE = 50;
     const clientMessages = messages.length > PAGE ? messages.slice(-PAGE) : messages;
-    const hasMore = messages.length > PAGE || byteOffset > 0;
+    const hasMore = messages.length > PAGE || byteOffset > 0 || session.previousCliSessionIds.length > 0;
 
     // Derive title from first user message if name is still the default
     const defaultName = cwd.split("/").pop() || cwd;
@@ -232,17 +240,35 @@ export class SessionManager {
       // Serve from buffer
       const start = Math.max(0, idx - PAGE);
       const chunk = buf.slice(start, idx);
-      const hasMore = start > 0 || session.transcriptByteOffset > 0;
+      const hasMore = start > 0 || session.transcriptByteOffset > 0 || session.previousCliSessionIds.length > 0;
       return { messages: chunk, hasMore };
     }
 
     // Buffer exhausted, read more from disk
     if (session.transcriptByteOffset <= 0) {
-      return { messages: [], hasMore: false };
+      // Current transcript fully read. Chain into previous CLI session transcripts.
+      if (session.previousCliSessionIds.length === 0) {
+        return { messages: [], hasMore: false };
+      }
+      const prevId = session.previousCliSessionIds[session.previousCliSessionIds.length - 1];
+      const prevResult = await loadTranscript(prevId, session.info.cwd, { tailLines: 150 });
+      session.previousCliSessionIds = session.previousCliSessionIds.slice(0, -1);
+      session.transcriptByteOffset = prevResult.byteOffset;
+      session.transcriptBuffer = [...prevResult.messages, ...buf];
+      const newBuf = session.transcriptBuffer;
+      const newIdx = newBuf.findIndex((m) => m.id === beforeMessageId);
+      if (newIdx > 0) {
+        const start = Math.max(0, newIdx - PAGE);
+        const chunk = newBuf.slice(start, newIdx);
+        const hasMore = start > 0 || session.transcriptByteOffset > 0 || session.previousCliSessionIds.length > 0;
+        return { messages: chunk, hasMore };
+      }
+      const chunk = prevResult.messages.slice(-PAGE);
+      return { messages: chunk, hasMore: prevResult.byteOffset > 0 || session.previousCliSessionIds.length > 0 };
     }
 
     const cwd = session.info.cwd;
-    const result = await loadMoreMessages(sessionId, cwd, session.transcriptByteOffset, 150);
+    const result = await loadMoreMessages(session.cliSessionId, cwd, session.transcriptByteOffset, 150);
     session.transcriptByteOffset = result.newByteOffset;
 
     // Prepend to buffer
@@ -254,13 +280,13 @@ export class SessionManager {
     if (newIdx > 0) {
       const start = Math.max(0, newIdx - PAGE);
       const chunk = newBuf.slice(start, newIdx);
-      const hasMore = start > 0 || session.transcriptByteOffset > 0;
+      const hasMore = start > 0 || session.transcriptByteOffset > 0 || session.previousCliSessionIds.length > 0;
       return { messages: chunk, hasMore };
     }
 
     // Fallback: return whatever we loaded
     const chunk = result.messages.slice(-PAGE);
-    return { messages: chunk, hasMore: result.newByteOffset > 0 };
+    return { messages: chunk, hasMore: result.newByteOffset > 0 || session.previousCliSessionIds.length > 0 };
   }
 
   getTranscriptBuffer(id: string): ChatMessage[] {
@@ -887,6 +913,10 @@ export class SessionManager {
       case "/reset":
       case "/new": {
         this.killProcess(session);
+        // The CLI doesn't support /clear in stream-json mode, so we
+        // generate a new CLI session ID to get a fresh context.
+        session.previousCliSessionIds.push(session.cliSessionId);
+        session.cliSessionId = uuidv4();
         session.hasSpawnedBefore = false;
         session.queuedMessages.length = 0;
         session.queuePaused = false;
@@ -894,6 +924,10 @@ export class SessionManager {
         session.info.status = "idle";
         session.emitter.emit("clear", sessionId);
         session.emitter.emit("status", sessionId, "idle");
+        setSessionPrefs(sessionId, {
+          cliSessionId: session.cliSessionId,
+          previousCliSessionIds: session.previousCliSessionIds,
+        });
         return true;
       }
 
@@ -1037,10 +1071,10 @@ export class SessionManager {
       args.push("--permission-mode", "bypassPermissions");
     }
 
-    if (session.hasSpawnedBefore || transcriptExists(sessionId, session.info.cwd)) {
-      args.push("--resume", session.info.id);
+    if (session.hasSpawnedBefore || transcriptExists(session.cliSessionId, session.info.cwd)) {
+      args.push("--resume", session.cliSessionId);
     } else {
-      args.push("--session-id", session.info.id);
+      args.push("--session-id", session.cliSessionId);
     }
 
     if (session.info.model) {
@@ -1504,7 +1538,7 @@ export class SessionManager {
 
   private async loadAgentChildren(session: Session, sessionId: string, messageId: string, cwd: string): Promise<void> {
     try {
-      const result = await loadTranscript(sessionId, cwd);
+      const result = await loadTranscript(session.cliSessionId, cwd);
       const msg = result.messages.find((m) => m.id === messageId);
       if (!msg) return;
       for (const tool of msg.toolUses) {

@@ -1,12 +1,37 @@
 import { WebSocketServer, WebSocket } from "ws";
 import type { Server as HTTPServer, IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
+import { readdirSync, statSync } from "node:fs";
+import { join } from "node:path";
+import { homedir } from "node:os";
 import type { ClientMessage, ServerMessage } from "@/types";
 import type { ParsedEvent } from "./event-parser";
 import { validateSession, extractTokenFromQuery, isAuthDisabled } from "./auth";
 import { SessionManager, type PendingRequest, type StreamingSnapshot } from "./session-manager";
 // loadLastUsage no longer needed - usage is returned by loadTranscript
 import { logParsedEvent, logServerMessage, logClientMessage, logStatus } from "./debug-logger";
+
+const PLANS_DIR = join(homedir(), ".claude", "plans");
+
+function findLatestPlanFile(): string | undefined {
+  try {
+    const files = readdirSync(PLANS_DIR)
+      .filter((f) => f.endsWith(".md") && !f.includes("-agent-"));
+    if (files.length === 0) return undefined;
+    let latest = files[0];
+    let latestMtime = 0;
+    for (const f of files) {
+      const mtime = statSync(join(PLANS_DIR, f)).mtimeMs;
+      if (mtime > latestMtime) {
+        latestMtime = mtime;
+        latest = f;
+      }
+    }
+    return join(PLANS_DIR, latest);
+  } catch {
+    return undefined;
+  }
+}
 
 export function createWebSocketHandler(
   server: HTTPServer,
@@ -757,14 +782,18 @@ function handleParsedEvent(
           questions: event.toolInput || "",
         });
       } else {
-        send(ws, {
+        const permMsg: ServerMessage & { type: "permission:request" } = {
           type: "permission:request",
           sessionId,
           requestId,
           toolName,
           input: event.toolInput || "",
           suggestions: event.permissionSuggestions as import("@/types").PermissionSuggestion[] | undefined,
-        });
+        };
+        if (toolName === "ExitPlanMode") {
+          permMsg.planFilePath = findLatestPlanFile();
+        }
+        send(ws, permMsg);
       }
       break;
     }

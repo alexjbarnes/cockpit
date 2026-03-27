@@ -9,6 +9,7 @@ export interface PendingPermission {
   toolName: string;
   input: string;
   suggestions?: import("@/types").PermissionSuggestion[];
+  planFilePath?: string;
 }
 
 export interface PendingQuestion {
@@ -678,6 +679,8 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
           setQueuePaused(false);
           setPendingPermissions([]);
           setPendingQuestions([]);
+          setHasMoreHistory(false);
+          setLoadingMore(false);
           break;
         }
 
@@ -792,7 +795,7 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
         case "permission:request": {
           setPendingPermissions((prev) => [
             ...prev,
-            { requestId: msg.requestId, toolName: msg.toolName, input: msg.input, suggestions: msg.suggestions },
+            { requestId: msg.requestId, toolName: msg.toolName, input: msg.input, suggestions: msg.suggestions, planFilePath: msg.planFilePath },
           ]);
           break;
         }

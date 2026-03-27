@@ -9,6 +9,8 @@ export interface SessionPrefs {
   bypassAllPermissions?: boolean;
   model?: string;
   initData?: InitData;
+  cliSessionId?: string;
+  previousCliSessionIds?: string[];
 }
 
 const PREFS_DIR = join(homedir(), ".cockpit");
