@@ -9,6 +9,7 @@ import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
 import { cn } from "@/lib/utils";
 import { Loader2, Check, ChevronDown, ChevronRight, Brain, FileText, File, Copy } from "lucide-react";
+import { CodeBlock as SyntaxCodeBlock, languageFromPath } from "@/components/code-block";
 
 const CLI_XML_RE = /<(?:task-notification|local-command-caveat|local-command-stdout|command-name|system-reminder)[^>]*>[\s\S]*?<\/(?:task-notification|local-command-caveat|local-command-stdout|command-name|system-reminder)>[\s\S]*/g;
 
@@ -306,8 +307,8 @@ function TextFileBlock({ name, content }: { name: string; content: string }) {
         )}
       </button>
       {expanded && (
-        <div className="border-t border-blue-500/20 px-3 py-2 text-xs text-muted-foreground whitespace-pre-wrap max-h-60 overflow-y-auto font-mono">
-          {content}
+        <div className="border-t border-blue-500/20">
+          <SyntaxCodeBlock code={content} language={languageFromPath(name)} dark />
         </div>
       )}
     </div>

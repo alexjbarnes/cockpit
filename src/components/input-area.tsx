@@ -10,6 +10,7 @@ import { SlashCommandMenu } from "@/components/slash-command-menu";
 import { MentionMenu, type MentionItem } from "@/components/mention-menu";
 import type { SlashCommand } from "@/lib/commands";
 import type { ThinkingLevel, ContextUsage, ImageAttachment, DocumentAttachment, TextFileAttachment, InitData } from "@/types";
+import { shouldCollapsePaste, detectPasteLanguage } from "@/lib/paste-detect";
 import { ContextIndicator } from "./context-indicator";
 import { QueueModal } from "./queue-modal";
 
@@ -385,6 +386,8 @@ export function InputArea({ sessionId, onSend, onInterrupt, isResponding, bypass
     }
   }, []);
 
+  const pasteCountRef = useRef(0);
+
   const handlePaste = useCallback((e: ClipboardEvent<HTMLTextAreaElement>) => {
     const items = e.clipboardData?.items;
     if (!items) return;
@@ -399,6 +402,18 @@ export function InputArea({ sessionId, onSend, onInterrupt, isResponding, bypass
     if (files.length > 0) {
       e.preventDefault();
       addFiles(files);
+      return;
+    }
+
+    const pastedText = e.clipboardData?.getData("text/plain");
+    if (pastedText && shouldCollapsePaste(pastedText)) {
+      e.preventDefault();
+      const lang = detectPasteLanguage(pastedText);
+      const ext = lang || "txt";
+      pasteCountRef.current += 1;
+      const suffix = pasteCountRef.current > 1 ? `-${pasteCountRef.current}` : "";
+      const name = `paste${suffix}.${ext}`;
+      setPendingTextFiles((prev) => [...prev, { name, content: pastedText }]);
     }
   }, [addFiles]);
 
