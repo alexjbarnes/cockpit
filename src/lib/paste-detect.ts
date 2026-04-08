@@ -1,4 +1,4 @@
-const MIN_LINES_FOR_COLLAPSE = 10;
+const MIN_LINES_FOR_COLLAPSE = 30;
 
 export function detectPasteLanguage(content: string): string | null {
   const trimmed = content.trim();
@@ -25,8 +25,10 @@ export function detectPasteLanguage(content: string): string | null {
   // Shell script patterns
   if (/^#!\s*\//.test(trimmed) || /^\$\s/.test(trimmed)) return "sh";
 
-  // SQL
-  if (/^\s*(SELECT|INSERT|UPDATE|DELETE|CREATE|ALTER|DROP)\b/i.test(trimmed)) return "sql";
+  // SQL: require at least 2 distinct SQL keywords
+  const sqlKeywords = trimmed.match(/\b(SELECT|INSERT|UPDATE|DELETE|CREATE|ALTER|DROP|FROM|WHERE|INTO|VALUES|SET|TABLE|INDEX|JOIN|GROUP\s+BY|ORDER\s+BY|HAVING|LIMIT)\b/gi);
+  const uniqueSql = new Set((sqlKeywords || []).map((k) => k.toUpperCase().replace(/\s+/, " ")));
+  if (uniqueSql.size >= 2) return "sql";
 
   // Go
   if (/^package\s+\w+/m.test(trimmed) || /\bfunc\s+\w+\s*\(/.test(trimmed)) return "go";
