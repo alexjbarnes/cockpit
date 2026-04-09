@@ -210,6 +210,7 @@ export function InputArea({ sessionId, onSend, onInterrupt, isResponding, bypass
   const fileInputRef = useRef<HTMLInputElement>(null);
   const mentionItemsRef = useRef<MentionItem[]>([]);
   const slashItemsRef = useRef<SlashCommand[]>([]);
+  const isPastingRef = useRef(false);
 
   const showMenu = text.startsWith("/") && !text.includes(" ");
   const query = showMenu ? text.slice(1) : "";
@@ -345,7 +346,7 @@ export function InputArea({ sessionId, onSend, onInterrupt, isResponding, bypass
         return;
       }
 
-      if (e.key === "Enter" && !e.shiftKey) {
+      if (e.key === "Enter" && !e.shiftKey && !isPastingRef.current) {
         e.preventDefault();
         handleSend();
       }
@@ -391,6 +392,9 @@ export function InputArea({ sessionId, onSend, onInterrupt, isResponding, bypass
   const pasteCountRef = useRef(0);
 
   const handlePaste = useCallback((e: ClipboardEvent<HTMLTextAreaElement>) => {
+    isPastingRef.current = true;
+    requestAnimationFrame(() => { isPastingRef.current = false; });
+
     const items = e.clipboardData?.items;
     if (!items) return;
     const files: File[] = [];
