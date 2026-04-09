@@ -11,7 +11,7 @@ const dev = process.env.NODE_ENV !== "production";
 const port = parseInt(process.env.PORT || "3001", 10);
 const host = process.env.HOST || "0.0.0.0";
 
-const app = next({ dev });
+const app = next({ dev, hostname: host, port });
 const handle = app.getRequestHandler();
 
 async function main() {
