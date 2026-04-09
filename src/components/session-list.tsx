@@ -8,6 +8,7 @@ import { SessionCard } from "./session-card";
 import { NewSessionDialog } from "./new-session-dialog";
 import { Button } from "@/components/ui/button";
 import { Plus, ChevronRight, Star, Folder } from "lucide-react";
+import { pinSession } from "./sidebar";
 
 let cachedGroups: SessionGroup[] | null = null;
 
@@ -166,6 +167,7 @@ export function SessionList() {
     });
     if (res.ok) {
       const data = await res.json();
+      await pinSession(data.sessionId);
       router.push(`/sessions/${data.sessionId}?cwd=${encodeURIComponent(cwd)}`);
     }
   };

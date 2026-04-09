@@ -189,10 +189,10 @@ export function AppShell({ children }: { children: ReactNode }) {
                 <Button variant="ghost" size="icon" onClick={toggleSidebar} title="Toggle sidebar (Ctrl+B)" className="md:hidden">
                   <Menu className="h-4 w-4" />
                 </Button>
-                <div className="hidden md:block min-w-0">
+                <div className="hidden md:block min-w-0 flex-1 overflow-hidden">
                   <EditableTitle title={header.title} onRename={header.onRename} />
                 </div>
-                <div className="ml-auto flex items-center gap-2">
+                <div className="flex items-center gap-2 shrink-0">
                   {cwd && <TodoIndicator todos={todos} />}
                   {cwd && <BackgroundTasksButton tasks={backgroundTasks} />}
                   {cwd && <UsageButton />}
