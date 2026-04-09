@@ -43,11 +43,13 @@ function DirectoryGroup({
   isFavorite,
   onToggleFavorite,
   onSelectSession,
+  onCreateSession,
 }: {
   group: SessionGroup;
   isFavorite: boolean;
   onToggleFavorite: () => void;
   onSelectSession: (session: SessionInfo) => void;
+  onCreateSession: (cwd: string) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const latestAt = group.sessions[0]?.lastActiveAt || 0;
@@ -77,6 +79,16 @@ function DirectoryGroup({
           <span className="text-xs text-muted-foreground">
             {group.sessions.length}
           </span>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onCreateSession(group.cwd);
+            }}
+            className="p-1 rounded hover:bg-accent"
+            title="New session in this folder"
+          >
+            <Plus className="h-3.5 w-3.5 text-muted-foreground" />
+          </button>
           <button
             onClick={(e) => {
               e.stopPropagation();
@@ -196,6 +208,7 @@ export function SessionList() {
           isFavorite
           onToggleFavorite={() => toggleFavorite(group.cwd)}
           onSelectSession={navigateToSession}
+          onCreateSession={(cwd) => createSession(cwd, "")}
         />
       ))}
 
@@ -210,6 +223,7 @@ export function SessionList() {
           isFavorite={false}
           onToggleFavorite={() => toggleFavorite(group.cwd)}
           onSelectSession={navigateToSession}
+          onCreateSession={(cwd) => createSession(cwd, "")}
         />
       ))}
 
