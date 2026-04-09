@@ -5,7 +5,7 @@ import { v4 as uuidv4 } from "uuid";
 import type { SessionInfo, ChatMessage, ToolUse, ContentBlock, ThinkingLevel, ContextUsage, TodoItem, ImageAttachment, DocumentAttachment, InitData } from "@/types";
 import { EventParser, type ParsedEvent } from "./event-parser";
 import { loadTranscript, loadMoreMessages, transcriptExists, findSessionCwd } from "./transcript";
-import { logRawLine } from "./debug-logger";
+import { logRawLine, logDiag } from "./debug-logger";
 import { getSessionPrefs, setSessionPrefs } from "./session-prefs";
 import { getDefaults } from "./defaults";
 
@@ -73,6 +73,7 @@ export class SessionManager {
         if (session.info.status === "running" && !session.process) {
           const short = id.slice(0, 8);
           console.log(`[session:${short}] stale check: status=running but process=null, correcting to idle`);
+          logDiag(id, "idle:stale-check");
           session.info.status = "idle";
           session.emitter.emit("status", id, "idle");
         }
@@ -382,7 +383,10 @@ export class SessionManager {
 
   interrupt(id: string): boolean {
     const session = this.sessions.get(id);
-    if (!session?.process) return false;
+    if (!session?.process) {
+      logDiag(id, "interrupt:no-process", { hasSession: !!session });
+      return false;
+    }
 
     // Pause the queue atomically with the interrupt so
     // flushQueuedMessage (called on message_done) becomes a no-op.
@@ -403,11 +407,13 @@ export class SessionManager {
         request_id: `interrupt-${Date.now()}`,
         request: { subtype: "interrupt" },
       };
+      logDiag(id, "interrupt:stdin", { requestId: request.request_id });
       session.stdin.write(JSON.stringify(request) + "\n");
       return true;
     }
 
     // Fallback: if stdin is gone, kill the process group
+    logDiag(id, "interrupt:kill-fallback");
     this.killProcessGroup(session.process);
     return true;
   }
@@ -1003,6 +1009,7 @@ export class SessionManager {
       if (handled) return true;
 
       if (text.trim().toLowerCase().startsWith("/compact")) {
+        logDiag(sessionId, "compact:start");
         session.compacting = true;
         this.emitSystem(session, sessionId, "__compact::start");
       }
@@ -1025,6 +1032,7 @@ export class SessionManager {
       return true;
     }
 
+    logDiag(sessionId, "running:send", { hasProcess: !!session.process, hasStdin: !!session.stdin });
     session.info.status = "running";
     session.emitter.emit("status", sessionId, "running");
 
@@ -1334,6 +1342,7 @@ export class SessionManager {
             // Interrupted turn (control_request interrupt): discard partial
             // content and go idle without emitting a message.
             if (event.interrupted) {
+              logDiag(sessionId, "idle:interrupted");
               pendingBlocks.length = 0;
               pendingToolUses.length = 0;
               agentStack.length = 0;
@@ -1349,6 +1358,7 @@ export class SessionManager {
             // If all messages were already finalized via intermediate emissions,
             // skip the duplicate result message but still update status.
             if (pendingBlocks.length === 0 && pendingToolUses.length === 0 && currentAssistantMsgId) {
+              logDiag(sessionId, "idle:message-done-empty", { msgId: currentAssistantMsgId });
               currentAssistantMsgId = null;
               session.info.status = "idle";
               session.emitter.emit("status", sessionId, "idle");
@@ -1380,6 +1390,7 @@ export class SessionManager {
               // "No response requested." is emitted by the CLI after SIGINT
               // (fallback path if stdin is unavailable).
               if (fullText === "No response requested.") {
+                logDiag(sessionId, "idle:no-response-requested");
                 pendingBlocks.length = 0;
                 currentAssistantMsgId = null;
                 session.info.status = "idle";
@@ -1397,6 +1408,7 @@ export class SessionManager {
                 const errMsg = msgMatch
                   ? `${msgMatch[1]} (HTTP ${apiErrMatch[1]})`
                   : fullText.slice(0, 200);
+                logDiag(sessionId, "idle:api-error", { error: errMsg });
                 pendingBlocks.length = 0;
                 pendingToolUses.length = 0;
                 agentStack.length = 0;
@@ -1419,10 +1431,12 @@ export class SessionManager {
             agentStack.length = 0;
             currentAssistantMsgId = null;
 
+            logDiag(sessionId, "idle:message-done", { toolCount: event.message.toolUses.length, blockCount: event.message.blocks.length });
             session.info.status = "idle";
             session.emitter.emit("status", sessionId, "idle");
 
             if (session.compacting) {
+              logDiag(sessionId, "compact:done");
               session.compacting = false;
               this.emitSystem(session, sessionId, "__compact::done");
             }
@@ -1499,10 +1513,12 @@ export class SessionManager {
       session.process = null;
       session.stdin = null;
       session.streamingSnapshot = null;
+      logDiag(sessionId, "idle:process-close", { code, flushedOnMessageDone });
       session.info.status = "idle";
       session.emitter.emit("status", sessionId, "idle");
 
       if (session.compacting) {
+        logDiag(sessionId, "compact:done-on-close");
         session.compacting = false;
         this.emitSystem(session, sessionId, "__compact::done");
       }
@@ -1528,6 +1544,7 @@ export class SessionManager {
 
     proc.on("error", (err) => {
       this.log(sessionId, `CLI process error: ${err.message}`);
+      logDiag(sessionId, "idle:process-error", { error: err.message });
       session.process = null;
       session.stdin = null;
       session.info.status = "idle";

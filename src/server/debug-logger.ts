@@ -75,6 +75,12 @@ export function logStatus(sessionId: string, status: string): void {
   init().then(() => write({ dir: "status", sessionId, status }));
 }
 
+/** Log a diagnostic event with a label and arbitrary data */
+export function logDiag(sessionId: string, label: string, data?: Record<string, unknown>): void {
+  if (!enabled) return;
+  init().then(() => write({ dir: "diag", sessionId, label, ...data }));
+}
+
 export function isDebugEnabled(): boolean {
   return enabled;
 }
