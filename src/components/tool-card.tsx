@@ -3,9 +3,10 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
 import type { ToolUse } from "@/types";
 import { cn } from "@/lib/utils";
-import { ChevronRight } from "lucide-react";
+import { ChevronRight, Loader2 } from "lucide-react";
 import { DiffViewer } from "./diff-viewer";
 import { CodeBlock, languageFromPath, prehighlight } from "./code-block";
+import { useShell } from "./app-shell";
 
 function parseInput(input: string): Record<string, unknown> {
   if (!input) return {};
@@ -47,6 +48,7 @@ interface ToolCardProps {
 
 export function ToolCard({ tool }: ToolCardProps) {
   const dark = useIsDark();
+  const { backgroundTasks } = useShell();
   const input = useMemo(() => parseInput(tool.input), [tool.input]);
   const [expanded, setExpanded] = useState(false);
 
@@ -105,6 +107,9 @@ export function ToolCard({ tool }: ToolCardProps) {
           )}
         />
         <span className="font-mono font-medium">{tool.name}</span>
+        {tool.name === "Agent" && (tool.status === "running" || backgroundTasks.some((t) => t.toolUseId === tool.id && t.status === "running")) && (
+          <Loader2 className="h-3 w-3 shrink-0 animate-spin text-muted-foreground" />
+        )}
         <ToolSummary tool={tool} input={input} />
       </button>
 
