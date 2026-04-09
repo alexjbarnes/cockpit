@@ -2,15 +2,16 @@
 
 import * as React from "react";
 import { cn } from "@/lib/utils";
-import { X } from "lucide-react";
+import { X, Trash2 } from "lucide-react";
 
 interface DialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   children: React.ReactNode;
+  className?: string;
 }
 
-function Dialog({ open, onOpenChange, children }: DialogProps) {
+function Dialog({ open, onOpenChange, children, className }: DialogProps) {
   if (!open) return null;
 
   return (
@@ -19,8 +20,10 @@ function Dialog({ open, onOpenChange, children }: DialogProps) {
         className="fixed inset-0 bg-black/80"
         onClick={() => onOpenChange(false)}
       />
-      <div className="fixed left-1/2 top-1/2 z-50 w-full max-w-lg -translate-x-1/2 -translate-y-1/2 p-4">
-        {children}
+      <div className="fixed inset-0 z-50 flex items-center justify-center px-4 py-12">
+        <div className={cn("w-full max-h-full flex flex-col", className || "max-w-lg")}>
+          {children}
+        </div>
       </div>
     </div>
   );
@@ -30,22 +33,34 @@ function DialogContent({
   className,
   children,
   ...props
-}: React.HTMLAttributes<HTMLDivElement> & { onClose?: () => void }) {
+}: React.HTMLAttributes<HTMLDivElement> & { onClose?: () => void; onDelete?: () => void }) {
   return (
     <div
       className={cn(
-        "relative rounded-lg border bg-background p-6 shadow-lg",
+        "relative rounded-lg border bg-background p-6 shadow-lg overflow-y-auto",
         className
       )}
       {...props}
     >
-      {props.onClose && (
-        <button
-          className="absolute right-4 top-4 rounded-sm opacity-70 hover:opacity-100"
-          onClick={props.onClose}
-        >
-          <X className="h-4 w-4" />
-        </button>
+      {(props.onClose || props.onDelete) && (
+        <div className="sticky top-0 z-10 flex justify-between -mx-2 -mt-2 mb-2">
+          {props.onClose ? (
+            <button
+              className="rounded-sm opacity-70 hover:opacity-100"
+              onClick={props.onClose}
+            >
+              <X className="h-4 w-4" />
+            </button>
+          ) : <span />}
+          {props.onDelete && (
+            <button
+              className="rounded-sm opacity-70 hover:opacity-100 text-destructive"
+              onClick={props.onDelete}
+            >
+              <Trash2 className="h-4 w-4" />
+            </button>
+          )}
+        </div>
       )}
       {children}
     </div>

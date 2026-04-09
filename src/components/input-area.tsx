@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback, type KeyboardEvent, type ClipboardEvent, type DragEvent } from "react";
 import { Button } from "@/components/ui/button";
-import { Send, Square, Settings2, ShieldOff, ShieldCheck, Brain, Cpu, Loader2, X, Paperclip, FileText, Maximize2, MessageSquare } from "lucide-react";
+import { Send, Square, Settings2, ShieldOff, ShieldCheck, Brain, Cpu, Loader2, X, Paperclip, FileText, Maximize2, MessageSquare, Trash2 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useWebSocket } from "@/hooks/use-websocket";
@@ -10,7 +10,8 @@ import { SlashCommandMenu } from "@/components/slash-command-menu";
 import { MentionMenu, type MentionItem } from "@/components/mention-menu";
 import type { SlashCommand } from "@/lib/commands";
 import type { ThinkingLevel, ContextUsage, ImageAttachment, DocumentAttachment, TextFileAttachment, InitData } from "@/types";
-import { shouldCollapsePaste, detectPasteLanguage } from "@/lib/paste-detect";
+import { shouldCollapsePaste } from "@/lib/paste-detect";
+import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { ContextIndicator } from "./context-indicator";
 import { QueueModal } from "./queue-modal";
 
@@ -204,6 +205,7 @@ export function InputArea({ sessionId, onSend, onInterrupt, isResponding, bypass
   const [pendingDocs, setPendingDocs] = useState<DocumentAttachment[]>([]);
   const [pendingTextFiles, setPendingTextFiles] = useState<TextFileAttachment[]>([]);
   const [dragOver, setDragOver] = useState(false);
+  const [preview, setPreview] = useState<{ type: "image"; src: string; index: number } | { type: "text"; content: string; index: number } | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const mentionItemsRef = useRef<MentionItem[]>([]);
@@ -408,11 +410,9 @@ export function InputArea({ sessionId, onSend, onInterrupt, isResponding, bypass
     const pastedText = e.clipboardData?.getData("text/plain");
     if (pastedText && shouldCollapsePaste(pastedText)) {
       e.preventDefault();
-      const lang = detectPasteLanguage(pastedText);
-      const ext = lang || "txt";
       pasteCountRef.current += 1;
       const suffix = pasteCountRef.current > 1 ? `-${pasteCountRef.current}` : "";
-      const name = `paste${suffix}.${ext}`;
+      const name = `paste${suffix}`;
       setPendingTextFiles((prev) => [...prev, { name, content: pastedText }]);
     }
   }, [addFiles]);
@@ -593,14 +593,15 @@ export function InputArea({ sessionId, onSend, onInterrupt, isResponding, bypass
               <div key={`img-${i}`} className="relative group">
                 <img
                   src={`data:${img.mediaType};base64,${img.data}`}
-                  className="h-16 rounded border object-contain"
+                  className="h-16 rounded border object-contain cursor-pointer"
                   alt=""
+                  onClick={() => setPreview({ type: "image", src: `data:${img.mediaType};base64,${img.data}`, index: i })}
                 />
                 <button
                   onClick={() => removeImage(i)}
-                  className="absolute -top-1.5 -right-1.5 h-4 w-4 rounded-full bg-destructive text-destructive-foreground flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                  className="absolute top-0.5 right-0.5 opacity-0 group-hover:opacity-100 transition-opacity text-destructive"
                 >
-                  <X className="h-3 w-3" />
+                  <Trash2 className="h-3.5 w-3.5" />
                 </button>
               </div>
             ))}
@@ -610,21 +611,25 @@ export function InputArea({ sessionId, onSend, onInterrupt, isResponding, bypass
                 <span className="truncate max-w-[120px]">{doc.name}</span>
                 <button
                   onClick={() => removeDoc(i)}
-                  className="absolute -top-1.5 -right-1.5 h-4 w-4 rounded-full bg-destructive text-destructive-foreground flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                  className="absolute top-0.5 right-0.5 opacity-0 group-hover:opacity-100 transition-opacity text-destructive"
                 >
-                  <X className="h-3 w-3" />
+                  <Trash2 className="h-3.5 w-3.5" />
                 </button>
               </div>
             ))}
             {pendingTextFiles.map((file, i) => (
-              <div key={`txt-${i}`} className="relative group flex items-center gap-1.5 rounded border px-2 py-1 text-xs bg-muted h-16">
+              <div
+                key={`txt-${i}`}
+                className="relative group flex items-center gap-1.5 rounded border px-2 py-1 text-xs bg-muted h-16 cursor-pointer"
+                onClick={() => setPreview({ type: "text", content: file.content, index: i })}
+              >
                 <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
                 <span className="truncate max-w-[120px]">{file.name}</span>
                 <button
-                  onClick={() => removeTextFile(i)}
-                  className="absolute -top-1.5 -right-1.5 h-4 w-4 rounded-full bg-destructive text-destructive-foreground flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                  onClick={(e) => { e.stopPropagation(); removeTextFile(i); }}
+                  className="absolute top-0.5 right-0.5 opacity-0 group-hover:opacity-100 transition-opacity text-destructive"
                 >
-                  <X className="h-3 w-3" />
+                  <Trash2 className="h-3.5 w-3.5" />
                 </button>
               </div>
             ))}
@@ -721,6 +726,21 @@ export function InputArea({ sessionId, onSend, onInterrupt, isResponding, bypass
           </div>
         </div>
       </div>
+      <Dialog open={preview !== null} onOpenChange={() => setPreview(null)} className="max-w-3xl">
+        <DialogContent className="max-h-[80vh] overflow-auto" onClose={() => setPreview(null)} onDelete={() => {
+          if (!preview) return;
+          if (preview.type === "image") removeImage(preview.index);
+          else removeTextFile(preview.index);
+          setPreview(null);
+        }}>
+          {preview?.type === "image" && (
+            <img src={preview.src} className="w-full rounded object-contain" alt="" />
+          )}
+          {preview?.type === "text" && (
+            <pre className="whitespace-pre-wrap text-sm font-mono">{preview.content}</pre>
+          )}
+        </DialogContent>
+      </Dialog>
       <QueueModal
         open={queueModalOpen}
         onOpenChange={setQueueModalOpen}
