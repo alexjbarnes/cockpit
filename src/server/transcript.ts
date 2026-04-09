@@ -44,7 +44,7 @@ interface TranscriptEntry {
 }
 
 function getTranscriptPath(sessionId: string, cwd: string): string {
-  const projectKey = cwd.replace(/\//g, "-");
+  const projectKey = cwd.replace(/[/.]/g, "-");
   return path.join(homedir(), ".claude", "projects", projectKey, `${sessionId}.jsonl`);
 }
 
@@ -671,11 +671,9 @@ export async function findSessionCwd(sessionId: string): Promise<string | null> 
   for (const dir of projectDirs) {
     const filePath = path.join(projectsDir, dir, filename);
     if (existsSync(filePath)) {
-      // Extract cwd from the transcript's first user entry
       const meta = await extractSessionMeta(filePath);
       if (meta?.cwd) return meta.cwd;
-      // Fallback: derive from directory name
-      return dir.replace(/^-/, "/").replace(/-/g, "/");
+      return null;
     }
   }
   return null;

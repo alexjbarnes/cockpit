@@ -62,12 +62,8 @@ export function UsageButton() {
     return () => window.removeEventListener("keydown", h);
   }, [open]);
 
-  const worst = usage
-    ? Math.max(
-        ...[usage.five_hour, usage.seven_day, usage.seven_day_sonnet, usage.seven_day_opus]
-          .flatMap((l) => l ? [l.utilization] : [])
-      ) || 0
-    : 0;
+  const sevenDayMaxed = usage?.seven_day && usage.seven_day.utilization >= 100;
+  const worst = sevenDayMaxed ? 100 : (usage?.five_hour?.utilization ?? 0);
 
   return (
     <>
