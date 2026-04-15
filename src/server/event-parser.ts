@@ -176,6 +176,10 @@ export class EventParser {
       if (subtype === "status" && event.status === "compacting") {
         return [{ type: "system_message", text: "__compact::start" }];
       }
+      if (subtype === "status" && event.permissionMode) {
+        const mode = event.permissionMode as string;
+        return [{ type: "system_message", text: `__permission_mode::${mode}` }];
+      }
 
       // Refined hook subtypes
       if (subtype === "hook_started") {

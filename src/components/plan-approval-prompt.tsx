@@ -15,6 +15,7 @@ interface PlanApprovalPromptProps {
   onRespond: (requestId: string, allowed: boolean, permissionMode?: PermissionMode, suggestionIndex?: number) => void;
   onSendMessage: (text: string) => void;
   onSetBypass: (enabled: boolean) => void;
+  onSetPlanMode: (enabled: boolean) => void;
 }
 
 interface PlanOption {
@@ -30,7 +31,7 @@ const OPTIONS: PlanOption[] = [
   { label: "Yes, manually approve edits", clearContext: false, autoAccept: false },
 ];
 
-export function PlanApprovalPrompt({ permission, onRespond, onSendMessage, onSetBypass }: PlanApprovalPromptProps) {
+export function PlanApprovalPrompt({ permission, onRespond, onSendMessage, onSetBypass, onSetPlanMode }: PlanApprovalPromptProps) {
   const [selected, setSelected] = useState(0);
   const [showFeedback, setShowFeedback] = useState(false);
   const [feedback, setFeedback] = useState("");
@@ -71,6 +72,7 @@ export function PlanApprovalPrompt({ permission, onRespond, onSendMessage, onSet
         ? ` at ${permission.planFilePath}`
         : "";
       onRespond(permission.requestId, false, "deny");
+      onSetPlanMode(false);
       setTimeout(() => {
         onSendMessage("/clear");
         setTimeout(() => onSendMessage(`Implement the plan${planRef}`), 200);
@@ -79,6 +81,13 @@ export function PlanApprovalPrompt({ permission, onRespond, onSendMessage, onSet
       onRespond(permission.requestId, true, "allow");
     }
   }, [permission.requestId, permission.planFilePath, onRespond, onSendMessage, onSetBypass]);
+
+  const handleDismiss = useCallback(() => {
+    onRespond(permission.requestId, false, "deny");
+    // Re-send plan mode to CLI since ExitPlanMode may have already changed
+    // the CLI's internal permission mode before the permission was resolved
+    setTimeout(() => onSetPlanMode(true), 100);
+  }, [permission.requestId, onRespond, onSetPlanMode]);
 
   const handleSendFeedback = useCallback(() => {
     const text = feedback.trim();
@@ -100,21 +109,28 @@ export function PlanApprovalPrompt({ permission, onRespond, onSendMessage, onSet
       return;
     }
 
+    if (e.key === "Escape") {
+      e.preventDefault();
+      handleDismiss();
+      return;
+    }
     if (e.key === "ArrowUp" || e.key === "k") {
       e.preventDefault();
       setSelected((s) => Math.max(0, s - 1));
     } else if (e.key === "ArrowDown" || e.key === "j") {
       e.preventDefault();
-      setSelected((s) => Math.min(OPTIONS.length, s + 1));
+      setSelected((s) => Math.min(OPTIONS.length + 1, s + 1));
     } else if (e.key === "Enter") {
       e.preventDefault();
       if (selected === OPTIONS.length) {
         setShowFeedback(true);
+      } else if (selected === OPTIONS.length + 1) {
+        handleDismiss();
       } else {
         handleProceed(selected);
       }
     }
-  }, [showFeedback, selected, handleProceed, handleSendFeedback]);
+  }, [showFeedback, selected, handleProceed, handleSendFeedback, handleDismiss]);
 
   return (
     <div className="mx-auto max-w-3xl">
@@ -173,6 +189,18 @@ export function PlanApprovalPrompt({ permission, onRespond, onSendMessage, onSet
               >
                 <span className="shrink-0 font-mono text-blue-500 w-4">5.</span>
                 <span>Tell Claude what to change</span>
+              </button>
+              <button
+                onClick={handleDismiss}
+                onMouseEnter={() => setSelected(OPTIONS.length + 1)}
+                className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs transition-colors ${
+                  selected === OPTIONS.length + 1
+                    ? "bg-blue-600/20 text-foreground"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                <span className="shrink-0 font-mono text-muted-foreground w-4">Esc</span>
+                <span>Dismiss</span>
               </button>
             </div>
             {showFeedback && (

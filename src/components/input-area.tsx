@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback, type KeyboardEvent, type ClipboardEvent, type DragEvent } from "react";
 import { Button } from "@/components/ui/button";
-import { Send, Square, Settings2, ShieldOff, ShieldCheck, Brain, Cpu, Loader2, X, Paperclip, FileText, Maximize2, MessageSquare, Trash2 } from "lucide-react";
+import { Send, Square, Settings2, ShieldOff, ShieldCheck, Brain, Cpu, Loader2, X, Paperclip, FileText, Maximize2, MessageSquare, Trash2, Eye, Hammer } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useWebSocket } from "@/hooks/use-websocket";
@@ -145,6 +145,8 @@ interface InputAreaProps {
   isResponding: boolean;
   bypassActive: boolean;
   onSetBypass: (enabled: boolean) => void;
+  planMode: boolean;
+  onSetPlanMode: (enabled: boolean) => void;
   thinkingLevel: ThinkingLevel;
   onSetThinking: (level: ThinkingLevel) => void;
   currentModel: string;
@@ -176,7 +178,7 @@ function getMentionContext(text: string, cursorPos: number): { active: boolean; 
   return { active: true, query: match[1], start: cursorPos - match[0].length };
 }
 
-export function InputArea({ sessionId, onSend, onInterrupt, isResponding, bypassActive, onSetBypass, thinkingLevel, onSetThinking, currentModel, onSetModel, contextUsage, dismissKeyboard, cwd, onCompact, initData, hasQueuedMessage, queuedMessages, queuePaused, onCancelQueued, onDeleteQueued, onEditQueued, onResumeQueue, restoredText, onClearRestoredText, btw, onDismissBtw }: InputAreaProps) {
+export function InputArea({ sessionId, onSend, onInterrupt, isResponding, bypassActive, onSetBypass, planMode, onSetPlanMode, thinkingLevel, onSetThinking, currentModel, onSetModel, contextUsage, dismissKeyboard, cwd, onCompact, initData, hasQueuedMessage, queuedMessages, queuePaused, onCancelQueued, onDeleteQueued, onEditQueued, onResumeQueue, restoredText, onClearRestoredText, btw, onDismissBtw }: InputAreaProps) {
   const { connected } = useWebSocket();
   const [text, setText] = useState(() => sessionDrafts.get(sessionId) || "");
   const [queueModalOpen, setQueueModalOpen] = useState(false);
@@ -340,6 +342,12 @@ export function InputArea({ sessionId, onSend, onInterrupt, isResponding, bypass
         }
       }
 
+      if (e.key === "Tab" && !e.shiftKey) {
+        e.preventDefault();
+        onSetPlanMode(!planMode);
+        return;
+      }
+
       if (e.key === "Escape" && isResponding) {
         e.preventDefault();
         onInterrupt();
@@ -351,7 +359,7 @@ export function InputArea({ sessionId, onSend, onInterrupt, isResponding, bypass
         handleSend();
       }
     },
-    [showMenu, showMention, query, selectedIndex, mentionSelectedIndex, handleSend, handleSelectCommand, handleSelectMention, text, mention.start, cursorPos, isResponding, onInterrupt]
+    [showMenu, showMention, query, selectedIndex, mentionSelectedIndex, handleSend, handleSelectCommand, handleSelectMention, text, mention.start, cursorPos, isResponding, onInterrupt, planMode, onSetPlanMode]
   );
 
   const handleInput = useCallback(() => {
@@ -693,7 +701,7 @@ export function InputArea({ sessionId, onSend, onInterrupt, isResponding, bypass
               <Settings2 className="h-4 w-4" />
             </Button>
           </div>
-          <div className="relative flex-1">
+          <div className="relative flex-1 mr-1">
             <textarea
               ref={textareaRef}
               value={text}
@@ -701,9 +709,11 @@ export function InputArea({ sessionId, onSend, onInterrupt, isResponding, bypass
               onKeyDown={handleKeyDown}
               onInput={handleInput}
               onPaste={handlePaste}
-              placeholder={hasQueuedMessage ? (queuePaused ? "Queue paused (send to discard, or manage in modal)" : "Message queued (Esc to interrupt)") : isResponding ? "Use /btw to nudge, or type to queue..." : "Send a message..."}
+              placeholder={hasQueuedMessage ? (queuePaused ? "Queue paused (send to discard, or manage in modal)" : "Message queued (Esc to interrupt)") : isResponding ? "Use /btw to nudge, or type to queue..." : planMode ? "Plan with Claude..." : "Send a message..."}
               rows={2}
-              className="w-full resize-none rounded-md border border-input bg-background px-3 py-2 pb-7 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring overflow-y-auto scrollbar-none"
+              className={`w-full resize-none rounded-md border bg-background px-3 py-2 pb-7 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 overflow-y-auto scrollbar-none ${
+                planMode ? "border-blue-500/50 focus-visible:ring-blue-500/50" : "border-input focus-visible:ring-ring"
+              }`}
             />
             <button
               onClick={handleFilePick}
@@ -713,7 +723,7 @@ export function InputArea({ sessionId, onSend, onInterrupt, isResponding, bypass
               <Paperclip className="h-4 w-4" />
             </button>
           </div>
-          <div className="flex flex-col items-center justify-center w-8 shrink-0">
+          <div className="flex flex-col items-center justify-center w-12 shrink-0 overflow-visible">
             {!connected ? (
               <Button size="icon" variant="ghost" className="h-8 w-8" disabled title="Connecting...">
                 <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
@@ -727,6 +737,18 @@ export function InputArea({ sessionId, onSend, onInterrupt, isResponding, bypass
                 <Send className="h-4 w-4" />
               </Button>
             )}
+            <button
+              onClick={() => onSetPlanMode(!planMode)}
+              title={planMode ? "Switch to Build mode (Tab)" : "Switch to Plan mode (Tab)"}
+              className={`mt-4 flex items-center gap-0.5 whitespace-nowrap rounded-full px-1.5 py-0.5 text-[10px] font-medium transition-colors ${
+                planMode
+                  ? "bg-blue-500/15 text-blue-500 hover:bg-blue-500/25"
+                  : "bg-muted text-muted-foreground hover:bg-muted/80 hover:text-foreground"
+              }`}
+            >
+              {planMode ? <Eye className="h-2.5 w-2.5" /> : <Hammer className="h-2.5 w-2.5" />}
+              {planMode ? "Plan" : "Build"}
+            </button>
           </div>
         </div>
       </div>

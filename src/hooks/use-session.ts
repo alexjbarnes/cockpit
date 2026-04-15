@@ -34,6 +34,7 @@ interface UseSessionReturn {
   modelPicker: string | null;
   currentModel: string;
   bypassActive: boolean;
+  planMode: boolean;
   thinkingLevel: ThinkingLevel;
   contextUsage: ContextUsage | null;
   rateLimitStatus: string | null;
@@ -57,6 +58,7 @@ interface UseSessionReturn {
   selectModel: (model: string) => void;
   setModel: (model: string) => void;
   setBypassAll: (enabled: boolean) => void;
+  setPlanMode: (enabled: boolean) => void;
   setThinkingLevel: (level: ThinkingLevel) => void;
   cancelQueuedMessage: () => void;
   deleteQueuedMessage: (id: string) => void;
@@ -77,6 +79,7 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
   const [modelPicker, setModelPicker] = useState<string | null>(null);
   const [currentModel, setCurrentModel] = useState("sonnet");
   const [bypassActive, setBypassActive] = useState(false);
+  const [planMode, setPlanModeState] = useState(false);
   const [thinkingLevel, setThinkingLevelState] = useState<ThinkingLevel>("high");
   const [historyLoaded, setHistoryLoaded] = useState(false);
   const [contextUsage, setContextUsage] = useState<ContextUsage | null>(null);
@@ -673,7 +676,19 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
         }
 
         case "session:clear": {
-          setMessages([]);
+          // Insert a visual divider instead of wiping messages so the user
+          // retains scroll-back context from the previous CLI session.
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: "clear-" + Date.now(),
+              role: "system" as const,
+              content: "__context_reset__",
+              toolUses: [],
+              blocks: [],
+              timestamp: Date.now(),
+            },
+          ]);
           lastServerMsgIdRef.current = null;
           streamingRef.current = null;
           agentStackRef.current = [];
@@ -685,8 +700,6 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
           setQueuePaused(false);
           setPendingPermissions([]);
           setPendingQuestions([]);
-          setHasMoreHistory(false);
-          setLoadingMore(false);
           break;
         }
 
@@ -706,6 +719,11 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
           const bypassPrefix = "__bypass_state::";
           if (msg.text.startsWith(bypassPrefix)) {
             setBypassActive(msg.text.slice(bypassPrefix.length) === "on");
+            break;
+          }
+          const planPrefix = "__plan_state::";
+          if (msg.text.startsWith(planPrefix)) {
+            setPlanModeState(msg.text.slice(planPrefix.length) === "on");
             break;
           }
           const thinkingPrefix = "__thinking_level::";
@@ -1046,6 +1064,14 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
     [send, sessionId]
   );
 
+  const setPlanMode = useCallback(
+    (enabled: boolean) => {
+      setPlanModeState(enabled);
+      send({ type: "session:set_plan_mode", sessionId, enabled });
+    },
+    [send, sessionId]
+  );
+
   const setThinkingLevel = useCallback(
     (level: ThinkingLevel) => {
       setThinkingLevelState(level);
@@ -1092,5 +1118,5 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
     send({ type: "message:send", sessionId, text: "Continue from where you left off." });
   }, [send, sessionId]);
 
-  return { messages, historyLoaded, isResponding, pendingPermissions, pendingQuestions, modelPicker, currentModel, bypassActive, thinkingLevel, contextUsage, rateLimitStatus, apiError, suggestions, sessionName, initData, hasQueuedMessage, queuedMessages, queuePaused, backgroundTasks, todos, btw, hasMoreHistory, loadingMore, requestMoreHistory, sendMessage, interrupt, respondToPermission, respondToQuestion, selectModel, setModel, setBypassAll, setThinkingLevel, cancelQueuedMessage, deleteQueuedMessage, editQueuedMessage, resumeQueue, restoredText, clearRestoredText, dismissBtw, retry };
+  return { messages, historyLoaded, isResponding, pendingPermissions, pendingQuestions, modelPicker, currentModel, bypassActive, planMode, thinkingLevel, contextUsage, rateLimitStatus, apiError, suggestions, sessionName, initData, hasQueuedMessage, queuedMessages, queuePaused, backgroundTasks, todos, btw, hasMoreHistory, loadingMore, requestMoreHistory, sendMessage, interrupt, respondToPermission, respondToQuestion, selectModel, setModel, setBypassAll, setPlanMode, setThinkingLevel, cancelQueuedMessage, deleteQueuedMessage, editQueuedMessage, resumeQueue, restoredText, clearRestoredText, dismissBtw, retry };
 }

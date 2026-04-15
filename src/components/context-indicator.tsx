@@ -17,7 +17,6 @@ function formatTokens(n: number): string {
 
 export function ContextIndicator({ usage, onCompact }: ContextIndicatorProps) {
   const [open, setOpen] = useState(false);
-
   useEffect(() => {
     if (!open) return;
     const h = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };

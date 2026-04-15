@@ -192,7 +192,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                 <div className="hidden md:block min-w-0 flex-1 overflow-hidden">
                   <EditableTitle title={header.title} onRename={header.onRename} />
                 </div>
-                <div className="flex items-center gap-2 shrink-0">
+                <div className="flex items-center gap-2 shrink-0 ml-auto">
                   {cwd && <TodoIndicator todos={todos} />}
                   {cwd && <BackgroundTasksButton tasks={backgroundTasks} />}
                   {cwd && <UsageButton />}

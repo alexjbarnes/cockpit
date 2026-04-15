@@ -8,6 +8,7 @@ import { loadTranscript, loadMoreMessages, transcriptExists, findSessionCwd } fr
 import { logRawLine, logDiag } from "./debug-logger";
 import { getSessionPrefs, setSessionPrefs } from "./session-prefs";
 import { getDefaults } from "./defaults";
+import { findLatestPlanFile } from "./plans";
 
 export interface SessionEvents {
   event: [sessionId: string, event: ParsedEvent];
@@ -21,6 +22,7 @@ export interface PendingRequest {
   toolName: string;
   toolInput: string;
   rawToolInput?: Record<string, unknown>;
+  planFilePath?: string;
 }
 
 export interface StreamingSnapshot {
@@ -46,6 +48,8 @@ interface Session {
   cliSessionId: string;
   previousCliSessionIds: string[];
   bypassAllPermissions: boolean;
+  planMode: boolean;
+  needsRespawnForPermissions: boolean;
   compacting: boolean;
   thinkingLevel: ThinkingLevel;
   contextUsage: ContextUsage | null;
@@ -60,7 +64,17 @@ interface Session {
   transcriptBuffer: ChatMessage[];
   transcriptByteOffset: number;
   transcriptTotalSize: number;
+  bufferCliSessionId: string;
+  /** Pagination-only copy of previousCliSessionIds, consumed by getMoreHistory
+   *  without affecting the canonical list used for stitching on reconnect. */
+  paginationPrevIds: string[];
 }
+
+/** Tools that mutate the filesystem/environment and must be blocked in plan mode. */
+const WRITE_TOOLS = new Set(["Edit", "Write", "Bash", "NotebookEdit"]);
+
+/** Tools that require user interaction and must not be auto-approved in plan mode. */
+const USER_FACING_TOOLS = new Set(["ExitPlanMode", "AskUserQuestion", "EnterPlanMode"]);
 
 export class SessionManager {
   private sessions = new Map<string, Session>();
@@ -104,6 +118,8 @@ export class SessionManager {
       cliSessionId: id,
       previousCliSessionIds: [],
       bypassAllPermissions: defaults.bypassAllPermissions,
+      planMode: false,
+      needsRespawnForPermissions: false,
       compacting: false,
       thinkingLevel: defaults.thinkingLevel,
       contextUsage: null,
@@ -117,6 +133,8 @@ export class SessionManager {
       transcriptBuffer: [],
       transcriptByteOffset: 0,
       transcriptTotalSize: 0,
+      bufferCliSessionId: id,
+      paginationPrevIds: [],
     });
 
     return info;
@@ -145,6 +163,8 @@ export class SessionManager {
         cliSessionId: prefs?.cliSessionId || id,
         previousCliSessionIds: prefs?.previousCliSessionIds || [],
         bypassAllPermissions: prefs?.bypassAllPermissions ?? defaults.bypassAllPermissions,
+        planMode: prefs?.planMode ?? false,
+        needsRespawnForPermissions: false,
         compacting: false,
         thinkingLevel: prefs?.thinkingLevel || defaults.thinkingLevel,
         contextUsage: null,
@@ -159,6 +179,8 @@ export class SessionManager {
         transcriptBuffer: [],
         transcriptByteOffset: 0,
         transcriptTotalSize: 0,
+        bufferCliSessionId: prefs?.cliSessionId || id,
+        paginationPrevIds: [],
       };
       this.sessions.set(id, session);
     }
@@ -178,12 +200,41 @@ export class SessionManager {
       session = this.sessions.get(id)!;
     }
     const result = await loadTranscript(session.cliSessionId, session.info.cwd, { tailLines: 150 });
-    const { messages, byteOffset, totalSize, lastUsage } = result;
+    let { messages, byteOffset, totalSize, lastUsage } = result;
+
+    session.bufferCliSessionId = session.cliSessionId;
+
+    // Stitch previous session messages across /clear boundaries so the full
+    // conversation is visible on refresh instead of only post-clear messages.
+    if (session.previousCliSessionIds.length > 0) {
+      const currentMessages = messages;
+      for (let i = session.previousCliSessionIds.length - 1; i >= 0; i--) {
+        const prevId = session.previousCliSessionIds[i];
+        const prevResult = await loadTranscript(prevId, session.info.cwd, { tailLines: 150 });
+        if (prevResult.messages.length > 0) {
+          const marker: ChatMessage = {
+            id: "clear-boundary-" + Date.now(),
+            role: "system" as const,
+            content: "__context_reset__",
+            toolUses: [],
+            blocks: [],
+            timestamp: Date.now(),
+          };
+          messages = [...prevResult.messages, marker, ...currentMessages];
+          byteOffset = prevResult.byteOffset;
+          lastUsage = lastUsage || prevResult.lastUsage;
+          session.bufferCliSessionId = prevId;
+          break;
+        }
+      }
+    }
 
     // Store buffer for backward pagination
     session.transcriptBuffer = messages;
     session.transcriptByteOffset = byteOffset;
     session.transcriptTotalSize = totalSize;
+    // Fresh pagination copy so getMoreHistory doesn't consume the canonical list
+    session.paginationPrevIds = [...session.previousCliSessionIds];
 
     // Send last 50 to client, keep rest in buffer
     const PAGE = 50;
@@ -204,12 +255,41 @@ export class SessionManager {
     this.ensureSession(id, cwd);
     const session = this.sessions.get(id)!;
     const result = await loadTranscript(session.cliSessionId, cwd, { tailLines: 150 });
-    const { messages, byteOffset, totalSize, lastUsage } = result;
+    let { messages, byteOffset, totalSize, lastUsage } = result;
+
+    session.bufferCliSessionId = session.cliSessionId;
+
+    // Stitch previous session messages across /clear boundaries so the full
+    // conversation is visible on refresh instead of only post-clear messages.
+    if (session.previousCliSessionIds.length > 0) {
+      const currentMessages = messages;
+      for (let i = session.previousCliSessionIds.length - 1; i >= 0; i--) {
+        const prevId = session.previousCliSessionIds[i];
+        const prevResult = await loadTranscript(prevId, cwd, { tailLines: 150 });
+        if (prevResult.messages.length > 0) {
+          const marker: ChatMessage = {
+            id: "clear-boundary-" + Date.now(),
+            role: "system" as const,
+            content: "__context_reset__",
+            toolUses: [],
+            blocks: [],
+            timestamp: Date.now(),
+          };
+          messages = [...prevResult.messages, marker, ...currentMessages];
+          byteOffset = prevResult.byteOffset;
+          lastUsage = lastUsage || prevResult.lastUsage;
+          session.bufferCliSessionId = prevId;
+          break;
+        }
+      }
+    }
 
     // Store buffer for backward pagination
     session.transcriptBuffer = messages;
     session.transcriptByteOffset = byteOffset;
     session.transcriptTotalSize = totalSize;
+    // Fresh pagination copy so getMoreHistory doesn't consume the canonical list
+    session.paginationPrevIds = [...session.previousCliSessionIds];
 
     // Send last 50 to client, keep rest in buffer
     const PAGE = 50;
@@ -231,6 +311,10 @@ export class SessionManager {
     const session = this.sessions.get(sessionId);
     if (!session) return { messages: [], hasMore: false };
 
+    // Use the pagination-only copy so we never consume the canonical
+    // previousCliSessionIds needed for stitching on reconnect.
+    const prevIds = session.paginationPrevIds;
+
     const PAGE = 50;
     const buf = session.transcriptBuffer;
 
@@ -241,35 +325,43 @@ export class SessionManager {
       // Serve from buffer
       const start = Math.max(0, idx - PAGE);
       const chunk = buf.slice(start, idx);
-      const hasMore = start > 0 || session.transcriptByteOffset > 0 || session.previousCliSessionIds.length > 0;
+      const hasMore = start > 0 || session.transcriptByteOffset > 0 || prevIds.length > 0;
       return { messages: chunk, hasMore };
     }
 
     // Buffer exhausted, read more from disk
     if (session.transcriptByteOffset <= 0) {
       // Current transcript fully read. Chain into previous CLI session transcripts.
-      if (session.previousCliSessionIds.length === 0) {
+      // Skip entries matching the buffer's current session (already loaded via fallback).
+      while (
+        prevIds.length > 0 &&
+        prevIds[prevIds.length - 1] === session.bufferCliSessionId
+      ) {
+        prevIds.pop();
+      }
+      if (prevIds.length === 0) {
         return { messages: [], hasMore: false };
       }
-      const prevId = session.previousCliSessionIds[session.previousCliSessionIds.length - 1];
+      const prevId = prevIds[prevIds.length - 1];
       const prevResult = await loadTranscript(prevId, session.info.cwd, { tailLines: 150 });
-      session.previousCliSessionIds = session.previousCliSessionIds.slice(0, -1);
+      prevIds.pop();
       session.transcriptByteOffset = prevResult.byteOffset;
+      session.bufferCliSessionId = prevId;
       session.transcriptBuffer = [...prevResult.messages, ...buf];
       const newBuf = session.transcriptBuffer;
       const newIdx = newBuf.findIndex((m) => m.id === beforeMessageId);
       if (newIdx > 0) {
         const start = Math.max(0, newIdx - PAGE);
         const chunk = newBuf.slice(start, newIdx);
-        const hasMore = start > 0 || session.transcriptByteOffset > 0 || session.previousCliSessionIds.length > 0;
+        const hasMore = start > 0 || session.transcriptByteOffset > 0 || prevIds.length > 0;
         return { messages: chunk, hasMore };
       }
       const chunk = prevResult.messages.slice(-PAGE);
-      return { messages: chunk, hasMore: prevResult.byteOffset > 0 || session.previousCliSessionIds.length > 0 };
+      return { messages: chunk, hasMore: prevResult.byteOffset > 0 || prevIds.length > 0 };
     }
 
     const cwd = session.info.cwd;
-    const result = await loadMoreMessages(session.cliSessionId, cwd, session.transcriptByteOffset, 150);
+    const result = await loadMoreMessages(session.bufferCliSessionId, cwd, session.transcriptByteOffset, 150);
     session.transcriptByteOffset = result.newByteOffset;
 
     // Prepend to buffer
@@ -281,13 +373,13 @@ export class SessionManager {
     if (newIdx > 0) {
       const start = Math.max(0, newIdx - PAGE);
       const chunk = newBuf.slice(start, newIdx);
-      const hasMore = start > 0 || session.transcriptByteOffset > 0 || session.previousCliSessionIds.length > 0;
+      const hasMore = start > 0 || session.transcriptByteOffset > 0 || prevIds.length > 0;
       return { messages: chunk, hasMore };
     }
 
     // Fallback: return whatever we loaded
     const chunk = result.messages.slice(-PAGE);
-    return { messages: chunk, hasMore: result.newByteOffset > 0 || session.previousCliSessionIds.length > 0 };
+    return { messages: chunk, hasMore: result.newByteOffset > 0 || prevIds.length > 0 };
   }
 
   getTranscriptBuffer(id: string): ChatMessage[] {
@@ -452,7 +544,7 @@ export class SessionManager {
         response: allowed
           ? {
               behavior: "allow" as const,
-              updatedInput: toolInput || {},
+              ...(toolInput ? { updatedInput: toolInput } : {}),
               ...(permissionSuggestions?.length ? { updatedPermissions: permissionSuggestions } : {}),
             }
           : { behavior: "deny" as const, message: "User denied" },
@@ -479,7 +571,10 @@ export class SessionManager {
     if (!session || session.bypassAllPermissions) return;
     session.bypassAllPermissions = true;
     setSessionPrefs(sessionId, { bypassAllPermissions: true });
-    this.sendPermissionMode(session, sessionId, "bypassPermissions");
+    // Don't change CLI mode while in plan mode; bypass will restore on plan exit
+    if (!session.planMode) {
+      this.sendPermissionMode(session, sessionId, "bypassPermissions");
+    }
     this.emitSystem(session, sessionId, "__bypass_state::on");
   }
 
@@ -488,13 +583,54 @@ export class SessionManager {
     if (!session || !session.bypassAllPermissions) return;
     session.bypassAllPermissions = false;
     setSessionPrefs(sessionId, { bypassAllPermissions: false });
-    this.sendPermissionMode(session, sessionId, "default");
+    if (!session.planMode) {
+      this.sendPermissionMode(session, sessionId, "default");
+    }
     this.emitSystem(session, sessionId, "__bypass_state::off");
   }
 
   isBypassActive(sessionId: string): boolean {
     const session = this.sessions.get(sessionId);
     return session?.bypassAllPermissions ?? false;
+  }
+
+  setPlanMode(sessionId: string): void {
+    const session = this.sessions.get(sessionId);
+    if (!session) return;
+    session.planMode = true;
+    setSessionPrefs(sessionId, { planMode: true });
+    // Kill process so it restarts without --allow-dangerously-skip-permissions,
+    // which lets the CLI natively enforce plan mode tool restrictions.
+    if (session.process) {
+      this.killProcess(session);
+      session.info.status = "idle";
+      session.emitter.emit("status", sessionId, "idle");
+    }
+    // Clear orphaned pending requests from the killed process
+    session.pendingRequests.clear();
+    this.emitSystem(session, sessionId, "__plan_state::on");
+  }
+
+  clearPlanMode(sessionId: string): void {
+    const session = this.sessions.get(sessionId);
+    if (!session || !session.planMode) return;
+    session.planMode = false;
+    setSessionPrefs(sessionId, { planMode: false });
+    // Kill process so it restarts with --allow-dangerously-skip-permissions,
+    // restoring bypass capability for build mode.
+    if (session.process) {
+      this.killProcess(session);
+      session.info.status = "idle";
+      session.emitter.emit("status", sessionId, "idle");
+    }
+    // Clear orphaned pending requests from the killed process
+    session.pendingRequests.clear();
+    this.emitSystem(session, sessionId, "__plan_state::off");
+  }
+
+  isPlanModeActive(sessionId: string): boolean {
+    const session = this.sessions.get(sessionId);
+    return session?.planMode ?? false;
   }
 
   setModel(sessionId: string, model: string): void {
@@ -1069,13 +1205,18 @@ export class SessionManager {
       "stream-json",
     ];
 
-    // Always enable bypass as an option so it can be toggled mid-session
-    // via set_permission_mode control request. Permission prompts still go
-    // through stdio so the UI can surface them when bypass is off.
-    args.push("--allow-dangerously-skip-permissions");
+    // In plan mode, omit --allow-dangerously-skip-permissions so the CLI
+    // natively enforces tool restrictions and sends permission_requests for
+    // write tools (which the server auto-denies).
+    // Outside plan mode, enable bypass so it can be toggled mid-session.
+    if (!session.planMode) {
+      args.push("--allow-dangerously-skip-permissions");
+    }
     args.push("--permission-prompt-tool", "stdio");
 
-    if (session.bypassAllPermissions) {
+    if (session.planMode) {
+      args.push("--permission-mode", "plan");
+    } else if (session.bypassAllPermissions) {
       args.push("--permission-mode", "bypassPermissions");
     }
 
@@ -1115,6 +1256,14 @@ export class SessionManager {
       request: { subtype: "initialize" },
     };
     proc.stdin!.write(JSON.stringify(initRequest) + "\n");
+
+    // Sync permission mode after init so the CLI matches session state,
+    // even if --permission-mode was ignored on resume.
+    if (session.planMode) {
+      this.sendPermissionMode(session, sessionId, "plan");
+    } else if (session.bypassAllPermissions) {
+      this.sendPermissionMode(session, sessionId, "bypassPermissions");
+    }
 
     if (text) {
       const content = this.buildContent(text, images, documents);
@@ -1337,6 +1486,25 @@ export class SessionManager {
               if (tool) tool.output += event.text;
             }
           } else if (event.type === "system_message" && event.text) {
+            // Sync plan mode state when CLI reports permission mode changes
+            const permModePrefix = "__permission_mode::";
+            if (event.text.startsWith(permModePrefix)) {
+              const mode = event.text.slice(permModePrefix.length);
+              if (mode === "plan" && !session.planMode) {
+                session.planMode = true;
+                setSessionPrefs(sessionId, { planMode: true });
+                this.emitSystem(session, sessionId, "__plan_state::on");
+              } else if (mode !== "plan" && session.planMode) {
+                session.planMode = false;
+                setSessionPrefs(sessionId, { planMode: false });
+                // Defer process kill until message_done so the agent can
+                // finish its turn after using ExitPlanMode.
+                session.needsRespawnForPermissions = true;
+                this.emitSystem(session, sessionId, "__plan_state::off");
+              }
+              // Don't forward the raw permission_mode message
+              continue;
+            }
             this.emitSystem(session, sessionId, event.text);
           } else if (event.type === "message_done" && event.message) {
             // Interrupted turn (control_request interrupt): discard partial
@@ -1450,12 +1618,25 @@ export class SessionManager {
           // so we only see requests that genuinely need user input.
           if (event.type === "permission_request" && event.requestId) {
             const toolName = event.toolName || "";
+            if (session.planMode) {
+              // Hard-block write tools in plan mode
+              if (WRITE_TOOLS.has(toolName)) {
+                this.respondToPermission(sessionId, event.requestId, false);
+                continue;
+              }
+              // Auto-approve read-only tools so the agent can research freely
+              if (!USER_FACING_TOOLS.has(toolName)) {
+                this.respondToPermission(sessionId, event.requestId, true, event.rawToolInput);
+                continue;
+              }
+            }
             session.pendingRequests.set(event.requestId, {
               type: toolName === "AskUserQuestion" ? "question" : "permission",
               requestId: event.requestId,
               toolName,
               toolInput: event.toolInput || "",
               rawToolInput: event.rawToolInput,
+              planFilePath: toolName === "ExitPlanMode" ? findLatestPlanFile() : undefined,
             });
           }
 
@@ -1471,6 +1652,14 @@ export class SessionManager {
             // so the assistant response appears before the queued user message.
             if (flushedOnMessageDone) {
               this.flushQueuedMessage(session, sessionId);
+            }
+            // Respawn process after turn completes if plan mode changed mid-turn
+            // (e.g. CLI used ExitPlanMode tool). This restores bypass permissions.
+            if (session.needsRespawnForPermissions) {
+              session.needsRespawnForPermissions = false;
+              this.killProcess(session);
+              session.info.status = "idle";
+              session.emitter.emit("status", sessionId, "idle");
             }
           }
         }

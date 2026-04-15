@@ -138,15 +138,23 @@ export const MessageBubble = memo(function MessageBubble({
 
     if (isCompacting || isCompacted) {
       return (
-        <div className="flex w-full justify-center">
-          <div className="flex items-center gap-1.5 text-xs text-muted-foreground py-1">
-            {isCompacting ? (
-              <Loader2 className="h-3 w-3 animate-spin" />
-            ) : (
-              <Check className="h-3 w-3" />
-            )}
+        <div className="flex w-full items-center gap-3 py-2">
+          <div className="flex-1 border-t border-border" />
+          <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground uppercase tracking-wider">
+            {isCompacting && <Loader2 className="h-3 w-3 animate-spin" />}
             {isCompacting ? "Compacting..." : "Compacted"}
           </div>
+          <div className="flex-1 border-t border-border" />
+        </div>
+      );
+    }
+
+    if (message.content === "__context_reset__") {
+      return (
+        <div className="flex w-full items-center gap-3 py-2">
+          <div className="flex-1 border-t border-border" />
+          <div className="text-[10px] text-muted-foreground uppercase tracking-wider">Context cleared</div>
+          <div className="flex-1 border-t border-border" />
         </div>
       );
     }

@@ -7,6 +7,7 @@ export interface SessionPrefs {
   name?: string;
   thinkingLevel?: ThinkingLevel;
   bypassAllPermissions?: boolean;
+  planMode?: boolean;
   model?: string;
   initData?: InitData;
   cliSessionId?: string;

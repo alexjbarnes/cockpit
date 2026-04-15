@@ -11,27 +11,7 @@ import { SessionManager, type PendingRequest, type StreamingSnapshot } from "./s
 // loadLastUsage no longer needed - usage is returned by loadTranscript
 import { logParsedEvent, logServerMessage, logClientMessage, logStatus } from "./debug-logger";
 
-const PLANS_DIR = join(homedir(), ".claude", "plans");
-
-function findLatestPlanFile(): string | undefined {
-  try {
-    const files = readdirSync(PLANS_DIR)
-      .filter((f) => f.endsWith(".md") && !f.includes("-agent-"));
-    if (files.length === 0) return undefined;
-    let latest = files[0];
-    let latestMtime = 0;
-    for (const f of files) {
-      const mtime = statSync(join(PLANS_DIR, f)).mtimeMs;
-      if (mtime > latestMtime) {
-        latestMtime = mtime;
-        latest = f;
-      }
-    }
-    return join(PLANS_DIR, latest);
-  } catch {
-    return undefined;
-  }
-}
+import { findLatestPlanFile } from "./plans";
 
 export function createWebSocketHandler(
   server: HTTPServer,
@@ -238,6 +218,14 @@ export function createWebSocketHandler(
             });
           }
 
+          if (sessionManager.isPlanModeActive(msg.sessionId)) {
+            send(ws, {
+              type: "session:system",
+              sessionId: msg.sessionId,
+              text: "__plan_state::on",
+            });
+          }
+
           const model = sessionManager.getModel(msg.sessionId);
           if (model && model !== "sonnet") {
             send(ws, {
@@ -432,13 +420,17 @@ export function createWebSocketHandler(
                 questions: req.toolInput,
               });
             } else {
-              send(ws, {
+              const permMsg: ServerMessage & { type: "permission:request" } = {
                 type: "permission:request",
                 sessionId: msg.sessionId,
                 requestId: req.requestId,
                 toolName: req.toolName,
                 input: req.toolInput,
-              });
+              };
+              if (req.planFilePath) {
+                permMsg.planFilePath = req.planFilePath;
+              }
+              send(ws, permMsg);
             }
           }
           const tDone = performance.now();
@@ -591,6 +583,15 @@ export function createWebSocketHandler(
             sessionManager.setBypassAllPermissions(msg.sessionId);
           } else {
             sessionManager.clearBypassAllPermissions(msg.sessionId);
+          }
+          break;
+        }
+
+        case "session:set_plan_mode": {
+          if (msg.enabled) {
+            sessionManager.setPlanMode(msg.sessionId);
+          } else {
+            sessionManager.clearPlanMode(msg.sessionId);
           }
           break;
         }
