@@ -20,6 +20,8 @@ class DiffErrorBoundary extends Component<{ children: ReactNode; fallback?: Reac
 
 export { DiffErrorBoundary };
 
+export const DIFF_SELECTABLE_CSS = "[data-column-content] { user-select: text; -webkit-user-select: text; }";
+
 interface DiffViewerProps {
   filePath: string;
   oldString: string;
@@ -45,6 +47,7 @@ export function DiffViewer({ filePath, oldString, newString, dark }: DiffViewerP
             disableFileHeader: true,
             overflow: "wrap",
             diffStyle: settings.diffStyle,
+            unsafeCSS: DIFF_SELECTABLE_CSS,
           }}
         />
       </DiffErrorBoundary>

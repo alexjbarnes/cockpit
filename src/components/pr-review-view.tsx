@@ -6,7 +6,7 @@ import { FileDiff as FileDiffComponent, PatchDiff } from "@pierre/diffs/react";
 import { parsePatchFiles } from "@pierre/diffs";
 import type { FileDiffMetadata } from "@pierre/diffs";
 import { useSettings } from "@/hooks/use-settings";
-import { DiffErrorBoundary } from "@/components/diff-viewer";
+import { DiffErrorBoundary, DIFF_SELECTABLE_CSS } from "@/components/diff-viewer";
 import { useShell } from "@/components/app-shell";
 import { usePageHeader } from "@/components/app-shell";
 import { useIsDesktop } from "@/hooks/use-is-desktop";
@@ -307,6 +307,7 @@ function LazyDiff({
     hunkSeparators: "line-info" as const,
     expansionLineCount: 20,
     disableFileHeader: true,
+    unsafeCSS: DIFF_SELECTABLE_CSS,
   };
 
   return (

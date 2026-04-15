@@ -6,7 +6,7 @@ import { FileDiff } from "@pierre/diffs/react";
 import { parsePatchFiles } from "@pierre/diffs";
 import type { FileDiffMetadata } from "@pierre/diffs";
 import { useSettings } from "@/hooks/use-settings";
-import { DiffErrorBoundary } from "@/components/diff-viewer";
+import { DiffErrorBoundary, DIFF_SELECTABLE_CSS } from "@/components/diff-viewer";
 import { useShell } from "@/components/app-shell";
 import { useIsDesktop } from "@/hooks/use-is-desktop";
 import { useWebSocket } from "@/hooks/use-websocket";
@@ -345,6 +345,7 @@ function StackedDiffs({ files, cwd, diffStyle, scrollToFile, onScrolled, onViewF
                         disableFileHeader: true,
                         hunkSeparators: "line-info",
                         expansionLineCount: 20,
+                        unsafeCSS: DIFF_SELECTABLE_CSS,
                       }}
                     />
                   ) : (
@@ -891,6 +892,7 @@ export function ChangesView({ cwd, sessionId }: { cwd: string; sessionId?: strin
                               disableFileHeader: true,
                               hunkSeparators: "line-info",
                               expansionLineCount: 20,
+                              unsafeCSS: DIFF_SELECTABLE_CSS,
                             }}
                           />
                         ) : (
