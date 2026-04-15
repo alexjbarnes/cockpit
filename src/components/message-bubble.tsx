@@ -7,6 +7,7 @@ import { useSettings } from "@/hooks/use-settings";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
+import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import { Loader2, Check, ChevronDown, ChevronRight, Brain, FileText, File, Copy } from "lucide-react";
 import { CodeBlock as SyntaxCodeBlock, languageFromPath } from "@/components/code-block";
@@ -84,6 +85,7 @@ export const MessageBubble = memo(function MessageBubble({
   onToggleSelect,
 }: MessageBubbleProps) {
   const [collapsed, setCollapsed] = useState(collapsedByDefault);
+  const [previewSrc, setPreviewSrc] = useState<string | null>(null);
   const isUser = message.role === "user";
   const isSystem = message.role === "system";
   const isSelectable = !isSystem;
@@ -228,8 +230,12 @@ export const MessageBubble = memo(function MessageBubble({
                   <img
                     key={i}
                     src={`data:${img.mediaType};base64,${img.data}`}
-                    className="max-h-60 rounded border border-primary-foreground/20 object-contain"
+                    className="max-h-60 rounded border border-primary-foreground/20 object-contain cursor-pointer"
                     alt=""
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setPreviewSrc(`data:${img.mediaType};base64,${img.data}`);
+                    }}
                   />
                 ))}
               </div>
@@ -251,7 +257,7 @@ export const MessageBubble = memo(function MessageBubble({
                 ))}
               </div>
             )}
-            {message.content && <p className="whitespace-pre-wrap text-base leading-relaxed">{message.content}</p>}
+            {message.content && <p className="whitespace-pre-wrap break-words text-base leading-relaxed">{message.content}</p>}
           </>
         ) : hasBlocks ? (
           <div className="space-y-2">
@@ -289,6 +295,11 @@ export const MessageBubble = memo(function MessageBubble({
           </>
         )}
       </div>
+      <Dialog open={previewSrc !== null} onOpenChange={() => setPreviewSrc(null)} className="max-w-3xl">
+        <DialogContent className="max-h-[80vh] overflow-auto" onClose={() => setPreviewSrc(null)}>
+          {previewSrc && <img src={previewSrc} className="w-full rounded object-contain" alt="" />}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 });

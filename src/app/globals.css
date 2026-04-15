@@ -91,6 +91,7 @@ pre::-webkit-scrollbar-corner,
 /* Prose overrides for message bubbles */
 .message-prose {
   line-height: 1.65;
+  overflow-wrap: anywhere;
 }
 
 .message-prose :where(p):not(:first-child) {
