@@ -31,6 +31,7 @@ export function ChatView({ sessionId, cwd, initialName, initialContext }: { sess
   const expandThrottleRef = useRef(0);
   const prevScrollHeightRef = useRef(0);
   const { selectedIds, selectionMode, enterSelection, toggleSelect, clearSelection, copySelected } = useMessageSelection();
+  const expandedToolIdsRef = useRef<Set<string>>(new Set());
   const [isTouch, setIsTouch] = useState(false);
   useEffect(() => {
     setIsTouch(matchMedia("(pointer: coarse)").matches);
@@ -253,6 +254,7 @@ export function ChatView({ sessionId, cwd, initialName, initialContext }: { sess
                       <MessageBubble
                         message={{ ...msg, blocks: before, content: "" }}
                         collapsedByDefault={collapsedByDefault}
+                        expandedToolIds={expandedToolIdsRef}
                         selectionMode={selectionMode}
                         selected={selectedIds.has(msg.id)}
                         onEnterSelection={enterSelection}
@@ -276,6 +278,7 @@ export function ChatView({ sessionId, cwd, initialName, initialContext }: { sess
                       <MessageBubble
                         message={{ ...msg, blocks: after, content: "" }}
                         collapsedByDefault={false}
+                        expandedToolIds={expandedToolIdsRef}
                         selectionMode={selectionMode}
                         selected={selectedIds.has(msg.id)}
                         onEnterSelection={enterSelection}
@@ -292,6 +295,7 @@ export function ChatView({ sessionId, cwd, initialName, initialContext }: { sess
                 <MessageBubble
                   message={msg}
                   collapsedByDefault={collapsedByDefault}
+                  expandedToolIds={expandedToolIdsRef}
                   selectionMode={selectionMode}
                   selected={selectedIds.has(msg.id)}
                   onEnterSelection={enterSelection}

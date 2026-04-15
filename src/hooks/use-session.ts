@@ -183,7 +183,21 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
               const existingIds = new Set(filtered.map((m) => m.id));
               const newMsgs = serverMsgs.filter((m) => !existingIds.has(m.id));
               if (newMsgs.length === 0 && filtered.length === prev.length) return prev;
-              return [...filtered, ...newMsgs];
+
+              // Optimistic user messages have client-generated IDs ("user-*")
+              // that won't match server-assigned IDs. When the delta contains
+              // the server's copy, remove the optimistic version to prevent
+              // duplicate bubbles after reconnect.
+              const deltaUserContents = new Set(
+                newMsgs.filter((m) => m.role === "user").map((m) => m.content)
+              );
+              const merged = deltaUserContents.size > 0
+                ? filtered.filter(
+                    (m) => !(m.role === "user" && m.id.startsWith("user-") && deltaUserContents.has(m.content))
+                  )
+                : filtered;
+
+              return [...merged, ...newMsgs];
             });
           } else {
             // Full history: replace everything
@@ -692,7 +706,6 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
           lastServerMsgIdRef.current = null;
           streamingRef.current = null;
           agentStackRef.current = [];
-          setBypassActive(false);
           setBackgroundTasks([]);
           setTodos([]);
           setHasQueuedMessage(false);

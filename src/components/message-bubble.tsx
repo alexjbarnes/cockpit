@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useRef, memo, type HTMLAttributes } from "react";
+import React, { useState, useCallback, useRef, memo, type HTMLAttributes } from "react";
 import type { ChatMessage } from "@/types";
 import { ToolCard } from "./tool-card";
 import { useSettings } from "@/hooks/use-settings";
@@ -70,6 +70,7 @@ const markdownComponents = { pre: CodeBlock };
 interface MessageBubbleProps {
   message: ChatMessage;
   collapsedByDefault?: boolean;
+  expandedToolIds?: React.RefObject<Set<string>>;
   selectionMode?: boolean;
   selected?: boolean;
   onEnterSelection?: (messageId: string) => void;
@@ -79,6 +80,7 @@ interface MessageBubbleProps {
 export const MessageBubble = memo(function MessageBubble({
   message,
   collapsedByDefault = false,
+  expandedToolIds,
   selectionMode = false,
   selected = false,
   onEnterSelection,
@@ -263,7 +265,7 @@ export const MessageBubble = memo(function MessageBubble({
           <div className="space-y-2">
             {visibleBlocks.map((block, i) =>
               block.type === "tool_use" ? (
-                <ToolCard key={`tool-${i}`} tool={block.toolUse} />
+                <ToolCard key={`tool-${i}`} tool={block.toolUse} expandedToolIds={expandedToolIds} />
               ) : block.type === "thinking" ? (
                 <ThinkingBlock key={`thinking-${i}`} text={block.text} />
               ) : (
@@ -283,7 +285,7 @@ export const MessageBubble = memo(function MessageBubble({
             {message.toolUses.filter((t) => !hiddenTools.has(t.name)).length > 0 && (
               <div className="mb-2 space-y-1">
                 {message.toolUses.filter((t) => !hiddenTools.has(t.name)).map((tool) => (
-                  <ToolCard key={tool.id} tool={tool} />
+                  <ToolCard key={tool.id} tool={tool} expandedToolIds={expandedToolIds} />
                 ))}
               </div>
             )}

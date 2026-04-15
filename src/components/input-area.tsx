@@ -413,6 +413,34 @@ export function InputArea({ sessionId, onSend, onInterrupt, isResponding, bypass
         if (file) files.push(file);
       }
     }
+    // Fallback: check clipboardData.files (Android often populates this instead of items)
+    if (files.length === 0 && e.clipboardData?.files?.length) {
+      for (let i = 0; i < e.clipboardData.files.length; i++) {
+        files.push(e.clipboardData.files[i]);
+      }
+    }
+
+    // Fallback: check for image in HTML content (Android pastes images as <img> tags)
+    if (files.length === 0) {
+      const html = e.clipboardData?.getData("text/html");
+      if (html) {
+        const match = html.match(/<img[^>]+src="(data:image\/[^;]+;base64,[^"]+)"/);
+        if (match) {
+          const dataUrl = match[1];
+          const [header, b64] = dataUrl.split(",");
+          const mimeMatch = header.match(/data:([^;]+)/);
+          if (mimeMatch && b64) {
+            const mime = mimeMatch[1];
+            const binary = atob(b64);
+            const bytes = new Uint8Array(binary.length);
+            for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+            const blob = new Blob([bytes], { type: mime });
+            files.push(new File([blob], `pasted-image.${mime.split("/")[1] || "png"}`, { type: mime }));
+          }
+        }
+      }
+    }
+
     if (files.length > 0) {
       e.preventDefault();
       addFiles(files);

@@ -626,6 +626,11 @@ export class SessionManager {
     // Clear orphaned pending requests from the killed process
     session.pendingRequests.clear();
     this.emitSystem(session, sessionId, "__plan_state::off");
+    // Re-sync bypass state with the client so the UI reflects it correctly
+    // after the plan-mode process is torn down.
+    if (session.bypassAllPermissions) {
+      this.emitSystem(session, sessionId, "__bypass_state::on");
+    }
   }
 
   isPlanModeActive(sessionId: string): boolean {
@@ -1528,6 +1533,7 @@ export class SessionManager {
             if (pendingBlocks.length === 0 && pendingToolUses.length === 0 && currentAssistantMsgId) {
               logDiag(sessionId, "idle:message-done-empty", { msgId: currentAssistantMsgId });
               currentAssistantMsgId = null;
+              session.streamingSnapshot = null;
               session.info.status = "idle";
               session.emitter.emit("status", sessionId, "idle");
               if (session.compacting) {

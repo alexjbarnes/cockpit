@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo, useCallback } from "react";
+import React, { useState, useEffect, useMemo, useCallback } from "react";
 import type { ToolUse } from "@/types";
 import { cn } from "@/lib/utils";
 import { ChevronRight, Loader2 } from "lucide-react";
@@ -44,13 +44,14 @@ function useIsDark(): boolean {
 
 interface ToolCardProps {
   tool: ToolUse;
+  expandedToolIds?: React.RefObject<Set<string>>;
 }
 
-export function ToolCard({ tool }: ToolCardProps) {
+export function ToolCard({ tool, expandedToolIds }: ToolCardProps) {
   const dark = useIsDark();
   const { backgroundTasks } = useShell();
   const input = useMemo(() => parseInput(tool.input), [tool.input]);
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(() => expandedToolIds?.current?.has(tool.id) ?? false);
 
   // Pre-highlight code for Read/Write tools so expanding is instant
   useEffect(() => {
@@ -91,8 +92,13 @@ export function ToolCard({ tool }: ToolCardProps) {
       <button
         onClick={() => {
           if (!hasContent) return;
-          userToggled.current = !expanded;
-          setExpanded(!expanded);
+          const next = !expanded;
+          userToggled.current = next;
+          setExpanded(next);
+          if (expandedToolIds?.current) {
+            if (next) expandedToolIds.current.add(tool.id);
+            else expandedToolIds.current.delete(tool.id);
+          }
         }}
         className={cn(
           "flex w-full items-center gap-2 px-3 py-1.5 text-left",
@@ -115,7 +121,7 @@ export function ToolCard({ tool }: ToolCardProps) {
 
       {expanded && hasContent && (
         <div ref={contentRef} className="border-t border-border px-3 py-2 space-y-2">
-          <ToolContent tool={tool} input={input} dark={dark} />
+          <ToolContent tool={tool} input={input} dark={dark} expandedToolIds={expandedToolIds} />
         </div>
       )}
     </div>
@@ -223,10 +229,12 @@ function ToolContent({
   tool,
   input,
   dark,
+  expandedToolIds,
 }: {
   tool: ToolUse;
   input: Record<string, unknown>;
   dark: boolean;
+  expandedToolIds?: React.RefObject<Set<string>>;
 }) {
   const name = tool.name;
 
@@ -251,7 +259,7 @@ function ToolContent({
   }
 
   if (name === "Agent") {
-    return <AgentContent input={input} tool={tool} dark={dark} />;
+    return <AgentContent input={input} tool={tool} dark={dark} expandedToolIds={expandedToolIds} />;
   }
 
   return <DefaultContent input={input} tool={tool} />;
@@ -385,10 +393,12 @@ function AgentContent({
   input,
   tool,
   dark,
+  expandedToolIds,
 }: {
   input: Record<string, unknown>;
   tool: ToolUse;
   dark: boolean;
+  expandedToolIds?: React.RefObject<Set<string>>;
 }) {
   const prompt = (input.prompt as string) || "";
   const children = tool.children || [];
@@ -403,7 +413,7 @@ function AgentContent({
       {children.length > 0 && (
         <div className="pl-3 border-l-2 border-border space-y-1">
           {children.map((child) => (
-            <ToolCard key={child.id} tool={child} />
+            <ToolCard key={child.id} tool={child} expandedToolIds={expandedToolIds} />
           ))}
         </div>
       )}

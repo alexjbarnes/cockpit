@@ -172,7 +172,12 @@ export function createWebSocketHandler(
 
           // Send in-progress streaming message if the CLI is mid-response.
           // This restores tool calls and partial text that aren't yet in the transcript.
-          const snapshot = sessionManager.getStreamingSnapshot(msg.sessionId);
+          // Only send when the session is actually running; an idle session has
+          // no in-progress streaming, and a stale snapshot would briefly show
+          // completed agents as still running until the status:idle clears it.
+          const snapshot = correctedStatus === "running"
+            ? sessionManager.getStreamingSnapshot(msg.sessionId)
+            : null;
           if (snapshot) {
             send(ws, {
               type: "session:streaming_snapshot",
