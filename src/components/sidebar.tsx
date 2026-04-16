@@ -10,6 +10,60 @@ import { Plus, Home, X, Settings, GitPullRequest } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useShell } from "@/components/app-shell";
 
+const SIDEBAR_WIDTH_KEY = "cockpit_sidebar_width";
+const DEFAULT_WIDTH = 288; // 18rem = w-72
+const MIN_WIDTH = 200;
+const MAX_WIDTH = 480;
+
+function getSavedWidth(): number {
+  try {
+    const v = localStorage.getItem(SIDEBAR_WIDTH_KEY);
+    if (v) {
+      const n = parseInt(v, 10);
+      if (n >= MIN_WIDTH && n <= MAX_WIDTH) return n;
+    }
+  } catch {}
+  return DEFAULT_WIDTH;
+}
+
+function SidebarResizeHandle({ onResize }: { onResize: (delta: number) => void }) {
+  const dragging = useRef(false);
+  const lastX = useRef(0);
+
+  const onMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    dragging.current = true;
+    lastX.current = e.clientX;
+
+    const onMouseMove = (ev: MouseEvent) => {
+      if (!dragging.current) return;
+      const delta = ev.clientX - lastX.current;
+      lastX.current = ev.clientX;
+      onResize(delta);
+    };
+
+    const onMouseUp = () => {
+      dragging.current = false;
+      document.removeEventListener("mousemove", onMouseMove);
+      document.removeEventListener("mouseup", onMouseUp);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    };
+
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    document.addEventListener("mousemove", onMouseMove);
+    document.addEventListener("mouseup", onMouseUp);
+  }, [onResize]);
+
+  return (
+    <div
+      onMouseDown={onMouseDown}
+      className="hidden md:block absolute inset-y-0 right-0 w-1 cursor-col-resize hover:bg-primary/30 transition-colors z-10"
+    />
+  );
+}
+
 const UNREAD_KEY = "cockpit_unread_sessions";
 
 // Server-side pinned sessions API helpers
@@ -79,6 +133,19 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
   const [unread, setUnread] = useState<Set<string>>(new Set());
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [width, setWidth] = useState(DEFAULT_WIDTH);
+
+  useEffect(() => {
+    setWidth(getSavedWidth());
+  }, []);
+
+  const handleResize = useCallback((delta: number) => {
+    setWidth((prev) => {
+      const next = Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, prev + delta));
+      localStorage.setItem(SIDEBAR_WIDTH_KEY, String(next));
+      return next;
+    });
+  }, []);
 
   const prevStatusRef = useRef<Map<string, string>>(new Map());
   const pinnedRef = useRef<Set<string>>(new Set());
@@ -237,11 +304,13 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
 
       <div
         className={cn(
-          "fixed inset-y-0 left-0 z-50 w-72 bg-background border-r flex flex-col transition-transform duration-200",
+          "fixed inset-y-0 left-0 z-50 bg-background border-r flex flex-col transition-transform duration-200 relative",
           "md:static md:inset-auto md:z-auto md:translate-x-0 md:shrink-0 md:transition-none",
           open ? "translate-x-0" : "-translate-x-full"
         )}
+        style={{ width }}
       >
+        <SidebarResizeHandle onResize={handleResize} />
         {sidebarContent ? (
           <>
             <div className="flex items-center justify-end px-3 py-2 border-b md:hidden">
