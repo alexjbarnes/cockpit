@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { useRouter, usePathname } from "next/navigation";
+import { useRouter } from "next/navigation";
 import { Plug, X, Loader2, RefreshCw, Settings, Power, PowerOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -37,17 +37,20 @@ function statusLabel(status: string): string {
   }
 }
 
-export function McpStatusButton({ cwd, initData }: { cwd?: string; initData?: InitData | null }) {
+interface McpStatusModalProps {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  sessionId: string;
+  initData?: InitData | null;
+}
+
+export function McpStatusModal({ open, onOpenChange, sessionId, initData }: McpStatusModalProps) {
   const router = useRouter();
-  const pathname = usePathname();
-  const [open, setOpen] = useState(false);
 
   const [servers, setServers] = useState<McpServer[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
-
-  const sessionId = pathname.match(/^\/sessions\/([^/?]+)/)?.[1] || null;
 
   // Use initData directly for instant display
   useEffect(() => {
@@ -74,19 +77,12 @@ export function McpStatusButton({ cwd, initData }: { cwd?: string; initData?: In
       .finally(() => setLoading(false));
   }, [sessionId]);
 
-  // Listen for /mcp slash command
-  useEffect(() => {
-    const handler = () => setOpen(true);
-    window.addEventListener("cockpit:open-mcp", handler);
-    return () => window.removeEventListener("cockpit:open-mcp", handler);
-  }, []);
-
   useEffect(() => {
     if (!open) return;
-    const h = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    const h = (e: KeyboardEvent) => { if (e.key === "Escape") onOpenChange(false); };
     window.addEventListener("keydown", h);
     return () => window.removeEventListener("keydown", h);
-  }, [open]);
+  }, [open, onOpenChange]);
 
   // No fetch on open - initData is already loaded
 
@@ -148,23 +144,14 @@ export function McpStatusButton({ cwd, initData }: { cwd?: string; initData?: In
   }, [sessionId]);
 
   const serverCount = initData?.mcpServers?.length ?? 0;
-  if (serverCount === 0) return null;
+  if (serverCount === 0 || !open) return null;
 
   return (
     <>
-      <Button
-        variant="ghost"
-        size="icon"
-        onClick={() => setOpen(true)}
-        title="MCP servers"
-      >
-        <Plug className="h-4 w-4" />
-      </Button>
-      {open && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
           onMouseDown={(e) => {
-            if (e.target === e.currentTarget) setOpen(false);
+            if (e.target === e.currentTarget) onOpenChange(false);
           }}
         >
           <div className="w-full max-w-lg mx-4 rounded-lg border bg-background p-5 shadow-lg max-h-[80vh] flex flex-col">
@@ -178,7 +165,7 @@ export function McpStatusButton({ cwd, initData }: { cwd?: string; initData?: In
                 <Button variant="ghost" size="icon" onClick={refreshStatus} title="Refresh">
                   <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} />
                 </Button>
-                <Button variant="ghost" size="icon" onClick={() => setOpen(false)}>
+                <Button variant="ghost" size="icon" onClick={() => onOpenChange(false)}>
                   <X className="h-4 w-4" />
                 </Button>
               </div>
@@ -269,7 +256,7 @@ export function McpStatusButton({ cwd, initData }: { cwd?: string; initData?: In
                 size="sm"
                 className="gap-1.5"
                 onClick={() => {
-                  setOpen(false);
+                  onOpenChange(false);
                   router.push("/mcp-servers");
                 }}
               >
@@ -279,7 +266,6 @@ export function McpStatusButton({ cwd, initData }: { cwd?: string; initData?: In
             </div>
           </div>
         </div>
-      )}
     </>
   );
 }

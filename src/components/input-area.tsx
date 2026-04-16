@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback, type KeyboardEvent, type ClipboardEvent, type DragEvent } from "react";
 import { Button } from "@/components/ui/button";
-import { Send, Square, Settings2, ShieldOff, ShieldCheck, Brain, Cpu, Loader2, X, Paperclip, FileText, Maximize2, MessageSquare, Trash2, Eye, Hammer } from "lucide-react";
+import { Send, Square, Settings2, ShieldOff, ShieldCheck, Brain, Cpu, Loader2, X, Paperclip, FileText, Maximize2, MessageSquare, Trash2, Eye, Hammer, Plug, ChevronRight } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useWebSocket } from "@/hooks/use-websocket";
@@ -14,6 +14,7 @@ import { shouldCollapsePaste } from "@/lib/paste-detect";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { ContextIndicator } from "./context-indicator";
 import { QueueModal } from "./queue-modal";
+import { McpStatusModal } from "@/components/mcp-status-modal";
 
 const models: { value: string; label: string }[] = [
   { value: "opus", label: "Opus" },
@@ -182,6 +183,7 @@ export function InputArea({ sessionId, onSend, onInterrupt, isResponding, bypass
   const { connected } = useWebSocket();
   const [text, setText] = useState(() => sessionDrafts.get(sessionId) || "");
   const [queueModalOpen, setQueueModalOpen] = useState(false);
+  const [mcpOpen, setMcpOpen] = useState(false);
 
   useEffect(() => {
     setText(sessionDrafts.get(sessionId) || "");
@@ -253,7 +255,7 @@ export function InputArea({ sessionId, onSend, onInterrupt, isResponding, bypass
     // Intercept /mcp to open the MCP status modal
     if (/^\/mcp\s*$/i.test(trimmed)) {
       setText("");
-      window.dispatchEvent(new CustomEvent("cockpit:open-mcp"));
+      setMcpOpen(true);
       return;
     }
 
@@ -625,6 +627,19 @@ export function InputArea({ sessionId, onSend, onInterrupt, isResponding, bypass
                 </div>
               </div>
             )}
+            {initData?.mcpServers && initData.mcpServers.length > 0 && (
+              <button
+                onClick={() => setMcpOpen(true)}
+                className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs hover:bg-muted transition-colors"
+              >
+                <Plug className="h-3.5 w-3.5 text-muted-foreground" />
+                <span className="text-muted-foreground">MCP Servers</span>
+                <span className="ml-auto flex items-center gap-1 text-muted-foreground">
+                  {initData.mcpServers.filter(s => s.status === "connected").length}/{initData.mcpServers.length}
+                  <ChevronRight className="h-3 w-3" />
+                </span>
+              </button>
+            )}
           </div>
         )}
         {hasAttachments && (
@@ -803,6 +818,12 @@ export function InputArea({ sessionId, onSend, onInterrupt, isResponding, bypass
         onDelete={onDeleteQueued ?? (() => {})}
         onEdit={onEditQueued ?? (() => {})}
         onResume={onResumeQueue ?? (() => {})}
+      />
+      <McpStatusModal
+        open={mcpOpen}
+        onOpenChange={setMcpOpen}
+        sessionId={sessionId}
+        initData={initData}
       />
     </div>
   );
