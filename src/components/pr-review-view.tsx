@@ -488,6 +488,14 @@ export function PRReviewView({ owner, repo, number }: { owner: string; repo: str
       .finally(() => setLoading(false));
   }, [fullRepo, number]);
 
+  // Reset session state when switching PRs so stale sessionId doesn't
+  // cause ChatView to connect to a non-existent session.
+  useEffect(() => {
+    setSessionId(null);
+    setReviewsCwd(null);
+    setSessionLoading(true);
+  }, [prKey]);
+
   // Resolve or create session
   useEffect(() => {
     if (!pr) return;
