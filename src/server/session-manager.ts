@@ -1636,6 +1636,14 @@ export class SessionManager {
                 continue;
               }
             }
+            // Auto-approve gh CLI commands (operates via GitHub API, no local file changes)
+            if (toolName === "Bash" && event.rawToolInput) {
+              const cmd = (event.rawToolInput as { command?: string }).command || "";
+              if (cmd.trimStart().startsWith("gh ")) {
+                this.respondToPermission(sessionId, event.requestId, true, event.rawToolInput);
+                continue;
+              }
+            }
             session.pendingRequests.set(event.requestId, {
               type: toolName === "AskUserQuestion" ? "question" : "permission",
               requestId: event.requestId,
