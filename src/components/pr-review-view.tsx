@@ -769,21 +769,21 @@ export function PRReviewView({ owner, repo, number }: { owner: string; repo: str
             )}
           </div>
         )}
-        {sessionId && !sessionLoading && (
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-6 px-2 text-xs gap-1"
-            onClick={startAgentReview}
-          >
-            <Bot className="h-3 w-3" />
-            Review
-          </Button>
-        )}
         <div className="flex items-center gap-2 ml-auto text-xs text-muted-foreground">
           <span className="text-green-500">+{pr.additions}</span>
           <span className="text-red-500">-{pr.deletions}</span>
           <span>{pr.changedFiles} files</span>
+          {sessionId && !sessionLoading && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-6 px-2.5 text-xs gap-1.5"
+              onClick={startAgentReview}
+            >
+              <Bot className="h-3.5 w-3.5" />
+              Agent Review
+            </Button>
+          )}
           <a
             href={pr.url}
             target="_blank"
