@@ -304,8 +304,8 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
 
       <div
         className={cn(
-          "fixed inset-y-0 left-0 z-50 bg-background border-r flex flex-col transition-transform duration-200 relative",
-          "md:static md:inset-auto md:z-auto md:translate-x-0 md:shrink-0 md:transition-none",
+          "fixed inset-y-0 left-0 z-50 bg-background border-r flex flex-col transition-transform duration-200",
+          "md:relative md:inset-auto md:z-auto md:translate-x-0 md:shrink-0 md:transition-none",
           open ? "translate-x-0" : "-translate-x-full"
         )}
         style={{ width }}

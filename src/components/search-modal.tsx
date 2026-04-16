@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { useShell } from "./app-shell";
+import { MessageContextModal } from "./message-context-modal";
 
 interface SearchResult {
   messageId: string;
@@ -48,11 +49,12 @@ function CopyButton({ text }: { text: string }) {
 }
 
 function SearchModal({ onClose }: { onClose: () => void }) {
-  const { sessionId, cwd, setScrollToMessageId } = useShell();
+  const { sessionId, cwd } = useShell();
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchResult[]>([]);
   const [loading, setLoading] = useState(false);
   const [searched, setSearched] = useState(false);
+  const [contextTimestamp, setContextTimestamp] = useState<number | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const abortRef = useRef<AbortController | null>(null);
 
@@ -104,10 +106,9 @@ function SearchModal({ onClose }: { onClose: () => void }) {
     };
   }, []);
 
-  const handleResultClick = useCallback((messageId: string) => {
-    setScrollToMessageId(messageId);
-    onClose();
-  }, [setScrollToMessageId, onClose]);
+  const handleResultClick = useCallback((timestamp: number) => {
+    setContextTimestamp(timestamp);
+  }, []);
 
   const handleOverlayClick = useCallback((e: React.MouseEvent) => {
     if (e.target === e.currentTarget) onClose();
@@ -125,9 +126,18 @@ function SearchModal({ onClose }: { onClose: () => void }) {
     return () => window.removeEventListener("keydown", handler, true);
   }, [onClose]);
 
+  if (contextTimestamp !== null) {
+    return (
+      <MessageContextModal
+        timestamp={contextTimestamp}
+        onClose={() => setContextTimestamp(null)}
+      />
+    );
+  }
+
   return (
-    <div className="fixed inset-0 z-50 bg-black/50 flex items-start justify-center pt-[10vh]" onClick={handleOverlayClick}>
-      <Card className="w-full max-w-2xl max-h-[80vh] flex flex-col mx-4">
+    <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" onClick={handleOverlayClick}>
+      <Card className="w-full max-w-2xl flex flex-col" style={{ maxHeight: "calc(100dvh - 2rem)" }}>
         <div className="flex items-center gap-2 p-4 border-b">
           <Search className="h-4 w-4 text-muted-foreground shrink-0" />
           <input
@@ -151,7 +161,7 @@ function SearchModal({ onClose }: { onClose: () => void }) {
           {results.map((result, i) => (
             <button
               key={`${result.messageId}-${i}`}
-              onClick={() => handleResultClick(result.messageId)}
+              onClick={() => handleResultClick(result.timestamp)}
               className="w-full text-left p-4 border-b last:border-b-0 hover:bg-muted/50 transition-colors cursor-pointer"
             >
               <div className="flex items-center gap-2 mb-1">

@@ -60,8 +60,14 @@ export function GET(
     const results: SearchResult[] = [];
 
     for (const transcript of transcripts) {
-      for (const msg of transcript.messages) {
+      const msgs = transcript.messages;
+      for (let i = 0; i < msgs.length; i++) {
+        const msg = msgs[i];
         if (msg.role !== "user" && msg.role !== "assistant") continue;
+
+        // Skip compaction summaries (first user + assistant messages after a compact boundary)
+        if (i > 0 && msgs[i - 1].content === "__compacted__") continue;
+        if (i > 1 && msgs[i - 2].content === "__compacted__") continue;
 
         let text = "";
         if (msg.blocks && msg.blocks.length > 0) {
@@ -104,7 +110,7 @@ export function GET(
       }
     }
 
-    results.sort((a, b) => a.timestamp - b.timestamp);
+    results.sort((a, b) => b.timestamp - a.timestamp);
 
     return NextResponse.json({ results });
   });

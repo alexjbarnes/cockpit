@@ -33,8 +33,6 @@ interface ShellContextValue {
   setCwd: (cwd: string | undefined) => void;
   sessionId: string | undefined;
   setSessionId: (id: string | undefined) => void;
-  scrollToMessageId: string | null;
-  setScrollToMessageId: (id: string | null) => void;
   backgroundTasks: BackgroundTask[];
   setBackgroundTasks: (tasks: BackgroundTask[]) => void;
   todos: TodoItem[];
@@ -52,8 +50,6 @@ const ShellContext = createContext<ShellContextValue>({
   setCwd: () => {},
   sessionId: undefined,
   setSessionId: () => {},
-  scrollToMessageId: null,
-  setScrollToMessageId: () => {},
   backgroundTasks: [],
   setBackgroundTasks: () => {},
   todos: [],
@@ -159,7 +155,6 @@ export function AppShell({ children }: { children: ReactNode }) {
   const [header, setHeaderState] = useState<HeaderConfig>({ title: "Cockpit" });
   const [cwd, setCwdState] = useState<string | undefined>(undefined);
   const [sessionId, setSessionIdState] = useState<string | undefined>(undefined);
-  const [scrollToMessageId, setScrollToMessageId] = useState<string | null>(null);
   const [backgroundTasks, setBackgroundTasks] = useState<BackgroundTask[]>([]);
   const [todos, setTodos] = useState<TodoItem[]>([]);
   const [initData, setInitData] = useState<InitData | null>(null);
@@ -203,7 +198,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   return (
     <AuthGuard>
       <WebSocketProvider>
-        <ShellContext.Provider value={{ setHeader, cwd, setCwd, sessionId, setSessionId, scrollToMessageId, setScrollToMessageId, backgroundTasks, setBackgroundTasks, todos, setTodos, initData, setInitData, sidebarContent, setSidebarContent, closeSidebar }}>
+        <ShellContext.Provider value={{ setHeader, cwd, setCwd, sessionId, setSessionId, backgroundTasks, setBackgroundTasks, todos, setTodos, initData, setInitData, sidebarContent, setSidebarContent, closeSidebar }}>
           <div className="fixed inset-0 flex">
             <Sidebar ref={sidebarRef} />
             <div className="flex-1 min-h-0 min-w-0 flex flex-col">

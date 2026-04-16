@@ -224,17 +224,6 @@ pre::-webkit-scrollbar-corner,
   color: oklch(0.8 0.15 250);
 }
 
-/* Search highlight animation */
-@keyframes search-flash {
-  0% { background-color: oklch(0.85 0.15 85 / 0.4); }
-  100% { background-color: transparent; }
-}
-
-.search-highlight {
-  animation: search-flash 2s ease-out;
-  border-radius: 0.375rem;
-}
-
 .dark {
   --color-background: oklch(0.145 0 0);
   --color-foreground: oklch(0.985 0 0);

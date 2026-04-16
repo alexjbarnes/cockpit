@@ -22,7 +22,7 @@ const WINDOW_INCREMENT = 30;
 export function ChatView({ sessionId, cwd, initialName, initialContext }: { sessionId: string; cwd?: string; initialName?: string; initialContext?: string }) {
   const { messages, historyLoaded, isResponding, pendingPermissions, pendingQuestions, modelPicker, currentModel, bypassActive, planMode, thinkingLevel, contextUsage, rateLimitStatus, apiError, sessionName, initData, hasQueuedMessage, queuedMessages, queuePaused, backgroundTasks, todos, btw, hasMoreHistory, loadingMore, requestMoreHistory, sendMessage, interrupt, respondToPermission, respondToQuestion, selectModel, setModel, setBypassAll, setPlanMode, setThinkingLevel, cancelQueuedMessage, deleteQueuedMessage, editQueuedMessage, resumeQueue, restoredText, clearRestoredText, dismissBtw, retry } = useSession(sessionId, cwd);
   const { settings } = useSettings();
-  const { setHeader, setBackgroundTasks, setTodos, setInitData: setShellInitData, scrollToMessageId, setScrollToMessageId } = useShell();
+  const { setHeader, setBackgroundTasks, setTodos, setInitData: setShellInitData } = useShell();
   const scrollRef = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);
   const [showScrollDown, setShowScrollDown] = useState(false);
@@ -192,37 +192,6 @@ export function ChatView({ sessionId, cwd, initialName, initialContext }: { sess
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   }, [isResponding, interrupt]);
-
-  // Scroll to a specific message when scrollToMessageId is set (from search)
-  useEffect(() => {
-    if (!scrollToMessageId) return;
-
-    const msgIndex = uniqueMessages.findIndex((m) => m.id === scrollToMessageId);
-
-    if (msgIndex === -1) {
-      if (hasMoreHistory && !loadingMore) {
-        requestMoreHistory();
-      }
-      return;
-    }
-
-    const neededWindow = totalMessages - msgIndex;
-    if (neededWindow > renderWindow) {
-      setRenderWindow(neededWindow);
-      return;
-    }
-
-    requestAnimationFrame(() => {
-      const el = document.querySelector(`[data-message-id="${CSS.escape(scrollToMessageId)}"]`);
-      if (el) {
-        stickToBottom.current = false;
-        el.scrollIntoView({ behavior: "smooth", block: "center" });
-        el.classList.add("search-highlight");
-        setTimeout(() => el.classList.remove("search-highlight"), 2000);
-      }
-      setScrollToMessageId(null);
-    });
-  }, [scrollToMessageId, uniqueMessages, hasMoreHistory, loadingMore, requestMoreHistory, totalMessages, renderWindow, setScrollToMessageId]);
 
   const contextInjected = useRef(false);
   const handleSend = useCallback((text: string, images?: import("@/types").ImageAttachment[], documents?: import("@/types").DocumentAttachment[], textFiles?: import("@/types").TextFileAttachment[]) => {
