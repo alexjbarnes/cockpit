@@ -5,7 +5,7 @@
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "https://github.com/cockpit-cli/cockpit.git"
+    "url": "https://github.com/alexjbarnes/cockpit.git"
   },
   "keywords": ["claude", "claude-code", "ai", "web-ui"],
   "bin": {
