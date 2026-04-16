@@ -38,6 +38,7 @@ export interface DocumentAttachment {
 export interface TextFileAttachment {
   name: string;
   content: string;
+  language?: string;
 }
 
 export type ContentBlock =

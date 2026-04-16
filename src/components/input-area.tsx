@@ -10,8 +10,9 @@ import { SlashCommandMenu } from "@/components/slash-command-menu";
 import { MentionMenu, type MentionItem } from "@/components/mention-menu";
 import type { SlashCommand } from "@/lib/commands";
 import type { ThinkingLevel, ContextUsage, ImageAttachment, DocumentAttachment, TextFileAttachment, InitData } from "@/types";
-import { shouldCollapsePaste } from "@/lib/paste-detect";
+import { shouldCollapsePaste, extensionForLabel, detectLanguage } from "@/lib/paste-detect";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
+import { CodeBlock, languageFromPath } from "@/components/code-block";
 import { ContextIndicator } from "./context-indicator";
 import { QueueModal } from "./queue-modal";
 import { McpStatusModal } from "@/components/mcp-status-modal";
@@ -209,7 +210,7 @@ export function InputArea({ sessionId, onSend, onInterrupt, isResponding, bypass
   const [pendingDocs, setPendingDocs] = useState<DocumentAttachment[]>([]);
   const [pendingTextFiles, setPendingTextFiles] = useState<TextFileAttachment[]>([]);
   const [dragOver, setDragOver] = useState(false);
-  const [preview, setPreview] = useState<{ type: "image"; src: string; index: number } | { type: "text"; content: string; index: number } | null>(null);
+  const [preview, setPreview] = useState<{ type: "image"; src: string; index: number } | { type: "text"; content: string; name: string; index: number } | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const mentionItemsRef = useRef<MentionItem[]>([]);
@@ -371,12 +372,55 @@ export function InputArea({ sessionId, onSend, onInterrupt, isResponding, bypass
     el.style.height = Math.min(el.scrollHeight, 200) + "px";
   }, []);
 
+  const pasteCountRef = useRef(0);
+
+  const collapseText = useCallback((pastedText: string) => {
+    pasteCountRef.current += 1;
+    const count = pasteCountRef.current;
+    const suffix = count > 1 ? `-${count}` : "";
+    const tempName = `paste${suffix}`;
+    setPendingTextFiles((prev) => [...prev, { name: tempName, content: pastedText }]);
+
+    detectLanguage(pastedText).then((label) => {
+      if (!label) return;
+      const ext = extensionForLabel(label);
+      if (!ext) return;
+      const newName = `paste${suffix}.${ext}`;
+      setPendingTextFiles((prev) =>
+        prev.map((f) =>
+          f.name === tempName && f.content === pastedText
+            ? { ...f, name: newName, language: label }
+            : f
+        )
+      );
+    });
+  }, []);
+
   const handleChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    setText(e.target.value);
+    const newValue = e.target.value;
+
+    // Detect large insertions from keyboard paste suggestions (bypass paste event)
+    const inserted = newValue.length - text.length;
+    if (inserted > 0) {
+      const cursor = e.target.selectionStart ?? newValue.length;
+      const insertedText = newValue.slice(cursor - inserted, cursor);
+      if (shouldCollapsePaste(insertedText)) {
+        const before = newValue.slice(0, cursor - inserted);
+        const after = newValue.slice(cursor);
+        setText(before + after);
+        collapseText(insertedText);
+        setCursorPos(before.length);
+        setSelectedIndex(0);
+        setMentionSelectedIndex(0);
+        return;
+      }
+    }
+
+    setText(newValue);
     setCursorPos(e.target.selectionStart ?? 0);
     setSelectedIndex(0);
     setMentionSelectedIndex(0);
-  }, []);
+  }, [text, collapseText]);
 
   const addFiles = useCallback(async (files: File[]) => {
     for (const file of files) {
@@ -398,8 +442,6 @@ export function InputArea({ sessionId, onSend, onInterrupt, isResponding, bypass
       }
     }
   }, []);
-
-  const pasteCountRef = useRef(0);
 
   const handlePaste = useCallback((e: ClipboardEvent<HTMLTextAreaElement>) => {
     isPastingRef.current = true;
@@ -452,12 +494,10 @@ export function InputArea({ sessionId, onSend, onInterrupt, isResponding, bypass
     const pastedText = e.clipboardData?.getData("text/plain");
     if (pastedText && shouldCollapsePaste(pastedText)) {
       e.preventDefault();
-      pasteCountRef.current += 1;
-      const suffix = pasteCountRef.current > 1 ? `-${pasteCountRef.current}` : "";
-      const name = `paste${suffix}`;
-      setPendingTextFiles((prev) => [...prev, { name, content: pastedText }]);
+      collapseText(pastedText);
     }
-  }, [addFiles]);
+  }, [addFiles, collapseText]);
+
 
   const handleDragOver = useCallback((e: DragEvent<HTMLDivElement>) => {
     e.preventDefault();
@@ -676,7 +716,7 @@ export function InputArea({ sessionId, onSend, onInterrupt, isResponding, bypass
               <div
                 key={`txt-${i}`}
                 className="relative group flex items-center gap-1.5 rounded border px-2 py-1 text-xs bg-muted h-16 cursor-pointer"
-                onClick={() => setPreview({ type: "text", content: file.content, index: i })}
+                onClick={() => setPreview({ type: "text", content: file.content, name: file.name, index: i })}
               >
                 <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
                 <span className="truncate max-w-[120px]">{file.name}</span>
@@ -805,9 +845,12 @@ export function InputArea({ sessionId, onSend, onInterrupt, isResponding, bypass
           {preview?.type === "image" && (
             <img src={preview.src} className="w-full rounded object-contain" alt="" />
           )}
-          {preview?.type === "text" && (
-            <pre className="whitespace-pre-wrap text-sm font-mono">{preview.content}</pre>
-          )}
+          {preview?.type === "text" && (() => {
+            const lang = languageFromPath(preview.name);
+            return lang
+              ? <CodeBlock code={preview.content} language={lang} fullHeight />
+              : <pre className="whitespace-pre-wrap text-sm font-mono">{preview.content}</pre>;
+          })()}
         </DialogContent>
       </Dialog>
       <QueueModal

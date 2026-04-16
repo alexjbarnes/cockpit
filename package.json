@@ -7,7 +7,12 @@
     "type": "git",
     "url": "https://github.com/alexjbarnes/cockpit.git"
   },
-  "keywords": ["claude", "claude-code", "ai", "web-ui"],
+  "keywords": [
+    "claude",
+    "claude-code",
+    "ai",
+    "web-ui"
+  ],
   "bin": {
     "cockpit": "./bin/cockpit.js"
   },
@@ -41,6 +46,7 @@
     "clsx": "^2",
     "codemirror": "^6.0.2",
     "lucide-react": "^0.468",
+    "magika": "^1.0.0",
     "next": "^15",
     "react": "^19",
     "react-dom": "^19",
