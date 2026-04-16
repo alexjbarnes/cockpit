@@ -795,7 +795,7 @@ export function PRReviewView({ owner, repo, number }: { owner: string; repo: str
             <Button
               variant="outline"
               size="sm"
-              className="h-6 px-2.5 text-xs gap-1.5"
+              className="h-6 px-2.5 text-xs gap-1.5 border-green-500/50 text-green-500 hover:bg-green-500/10"
               onClick={startAgentReview}
               disabled={agentReviewStarted}
             >
