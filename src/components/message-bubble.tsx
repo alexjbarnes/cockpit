@@ -177,6 +177,11 @@ export const MessageBubble = memo(function MessageBubble({
     return null;
   }
 
+  // Hide CLI-injected interrupt markers (e.g. after exiting plan mode)
+  if (isUser && message.content.startsWith("[Request interrupted")) {
+    return null;
+  }
+
   if (collapsed) {
     const preview = message.content.slice(0, 80).replace(/\n/g, " ");
     return (
