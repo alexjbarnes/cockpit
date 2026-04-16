@@ -445,6 +445,7 @@ export function PRReviewView({ owner, repo, number }: { owner: string; repo: str
   const [checksOpen, setChecksOpen] = useState(false);
   const [reviewBody, setReviewBody] = useState("");
   const [reviewSubmitting, setReviewSubmitting] = useState(false);
+  const [agentReviewStarted, setAgentReviewStarted] = useState(false);
 
   const ws = useWebSocket();
   const sectionRefs = useRef<Map<string, HTMLDivElement>>(new Map());
@@ -609,7 +610,8 @@ export function PRReviewView({ owner, repo, number }: { owner: string; repo: str
 
   // Start agent review
   const startAgentReview = useCallback(() => {
-    if (!sessionId || !pr) return;
+    if (!sessionId || !pr || agentReviewStarted) return;
+    setAgentReviewStarted(true);
     const prompt = [
       `Review this pull request. Use gh CLI and Read tools to examine the changes.`,
       `Repository: ${fullRepo}, PR #${number}: ${pr.title}`,
@@ -618,7 +620,7 @@ export function PRReviewView({ owner, repo, number }: { owner: string; repo: str
       `Focus on correctness, bugs, edge cases, and code quality.`,
     ].join("\n");
     ws.send({ type: "message:send", sessionId, text: prompt });
-  }, [sessionId, pr, fullRepo, number, ws]);
+  }, [sessionId, pr, fullRepo, number, ws, agentReviewStarted]);
 
   // Sidebar file list
   useEffect(() => {
@@ -781,17 +783,6 @@ export function PRReviewView({ owner, repo, number }: { owner: string; repo: str
           <span className="text-green-500">+{pr.additions}</span>
           <span className="text-red-500">-{pr.deletions}</span>
           <span>{pr.changedFiles} files</span>
-          {sessionId && !sessionLoading && (
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-6 px-2.5 text-xs gap-1.5"
-              onClick={startAgentReview}
-            >
-              <Bot className="h-3.5 w-3.5" />
-              Agent Review
-            </Button>
-          )}
           <a
             href={pr.url}
             target="_blank"
@@ -800,6 +791,18 @@ export function PRReviewView({ owner, repo, number }: { owner: string; repo: str
           >
             <ExternalLink className="h-3 w-3" />
           </a>
+          {sessionId && !sessionLoading && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-6 px-2.5 text-xs gap-1.5"
+              onClick={startAgentReview}
+              disabled={agentReviewStarted}
+            >
+              <Bot className="h-3.5 w-3.5" />
+              {agentReviewStarted ? "Review Started" : "Start Agent Review"}
+            </Button>
+          )}
         </div>
       </div>
 
