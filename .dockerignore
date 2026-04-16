@@ -1,0 +1,15 @@
+node_modules/
+.next/
+dist/
+.git/
+docs/
+e2e/
+tests/
+*.md
+justfile
+.env*
+!.env.example
+Screenshot_*
+playwright-report/
+test-results/
+.claude/

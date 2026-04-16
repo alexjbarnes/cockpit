@@ -1,12 +1,12 @@
-FROM node:22-bookworm-slim
+FROM oven/bun:latest
 
-RUN npm install -g @anthropic-ai/claude-code
+RUN bun install -g @anthropic-ai/claude-code
 
 WORKDIR /app
-COPY package*.json ./
-RUN npm ci --omit=dev
+COPY package.json bun.lock* ./
+RUN bun install --production
 COPY . .
-RUN npm run build
+RUN bun run build
 
 EXPOSE 3000
-CMD ["node", "dist/server.js"]
+CMD ["bun", "dist/server.js"]

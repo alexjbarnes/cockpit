@@ -7,3 +7,8 @@ next-env.d.ts
 !.env.example
 Screenshot_*
 data/
+docs/TODO.md
+changes.md
+fixes.md
+tui-commands.md
+justfile

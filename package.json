@@ -1,11 +1,34 @@
 {
   "name": "cockpit",
   "version": "0.1.0",
-  "private": true,
+  "description": "Web UI for Claude Code",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/cockpit-cli/cockpit.git"
+  },
+  "keywords": ["claude", "claude-code", "ai", "web-ui"],
+  "bin": {
+    "cockpit": "./bin/cockpit.js"
+  },
+  "files": [
+    "dist/",
+    ".next/",
+    "!.next/cache/",
+    "public/",
+    "bin/",
+    "package.json",
+    "next.config.ts",
+    "postcss.config.mjs"
+  ],
+  "engines": {
+    "bun": ">=1.0.0"
+  },
   "scripts": {
-    "dev": "tsx watch --env-file=.env.development server.ts",
-    "build": "next build && tsc -p tsconfig.server.json",
-    "start": "bun --env-file=.env.production dist/server.js"
+    "dev": "bun --watch --env-file=.env.development server.ts",
+    "build": "bunx next build && tsc -p tsconfig.server.json",
+    "start": "bun --env-file=.env.production dist/server.js",
+    "prepublishOnly": "bun run build"
   },
   "dependencies": {
     "@codemirror/lang-markdown": "^6.5.0",
@@ -37,7 +60,6 @@
     "@types/react-dom": "^19",
     "@types/uuid": "^10",
     "@types/ws": "^8",
-    "tsx": "^4",
     "typescript": "5.9.3",
     "vitest": "^4.1.0"
   }
