@@ -24,9 +24,14 @@ import {
   FilePlus,
   FileMinus,
   FileSymlink,
+  CheckCircle,
+  XCircle,
+  Clock,
+  Bot,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { pinSession } from "@/components/sidebar";
+import { useWebSocket } from "@/hooks/use-websocket";
 
 // --- Types ---
 
@@ -59,6 +64,13 @@ interface PRDetails {
 interface FileDiff {
   path: string;
   patch: string;
+}
+
+interface PRCheck {
+  name: string;
+  state: string;
+  conclusion: string;
+  url: string;
 }
 
 // --- Utilities ---
@@ -429,6 +441,12 @@ export function PRReviewView({ owner, repo, number }: { owner: string; repo: str
   const [reviewsCwd, setReviewsCwd] = useState<string | null>(null);
   const [sessionLoading, setSessionLoading] = useState(true);
 
+  const [checks, setChecks] = useState<PRCheck[]>([]);
+  const [checksOpen, setChecksOpen] = useState(false);
+  const [reviewBody, setReviewBody] = useState("");
+  const [reviewSubmitting, setReviewSubmitting] = useState(false);
+
+  const ws = useWebSocket();
   const sectionRefs = useRef<Map<string, HTMLDivElement>>(new Map());
 
   usePageHeader(pr ? `#${number} ${pr.title}` : `PR #${number}`);
@@ -454,6 +472,12 @@ export function PRReviewView({ owner, repo, number }: { owner: string; repo: str
         if (!res.ok) return res.json().then((d) => Promise.reject(d.error));
         return res.json();
       });
+
+    // Fetch checks non-critically
+    fetch(`/api/github/prs/checks?repo=${encodeURIComponent(fullRepo)}&number=${number}`)
+      .then((res) => (res.ok ? res.json() : []))
+      .then((data) => { if (Array.isArray(data)) setChecks(data); })
+      .catch(() => {});
 
     Promise.all([fetchDetails, fetchDiff])
       .then(([details, diffData]) => {
@@ -555,6 +579,39 @@ export function PRReviewView({ owner, repo, number }: { owner: string; repo: str
     setChatWidth((prev) => Math.max(MIN_CHAT_WIDTH, Math.min(maxChatWidth(), prev + delta)));
   }, []);
 
+  // Submit review
+  const submitReview = useCallback(async (action: "approve" | "request-changes" | "comment") => {
+    if (action === "request-changes" && !reviewBody.trim()) return;
+    setReviewSubmitting(true);
+    try {
+      const res = await fetch("/api/github/prs/review", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ repo: fullRepo, number, action, body: reviewBody }),
+      });
+      if (res.ok) {
+        setReviewBody("");
+        // Re-fetch PR details to update reviewDecision badge
+        const updated = await fetch(`/api/github/prs/view?repo=${encodeURIComponent(fullRepo)}&number=${number}`);
+        if (updated.ok) setPr(await updated.json());
+      }
+    } catch {}
+    setReviewSubmitting(false);
+  }, [fullRepo, number, reviewBody]);
+
+  // Start agent review
+  const startAgentReview = useCallback(() => {
+    if (!sessionId || !pr) return;
+    const prompt = [
+      `Review this pull request. Use gh CLI and Read tools to examine the changes.`,
+      `Repository: ${fullRepo}, PR #${number}: ${pr.title}`,
+      `Author: ${pr.author.login}, Branch: ${pr.headRefName} -> ${pr.baseRefName}`,
+      `Files changed: ${pr.changedFiles} (+${pr.additions} -${pr.deletions})`,
+      `Focus on correctness, bugs, edge cases, and code quality.`,
+    ].join("\n");
+    ws.send({ type: "message:send", sessionId, text: prompt });
+  }, [sessionId, pr, fullRepo, number, ws]);
+
   // Sidebar file list
   useEffect(() => {
     if (fileDiffs.length === 0) {
@@ -639,6 +696,10 @@ export function PRReviewView({ owner, repo, number }: { owner: string; repo: str
 
   const showChat = isDesktop && !!sessionId && !sessionLoading;
 
+  const passingChecks = checks.filter((c) => c.conclusion === "SUCCESS" || c.conclusion === "NEUTRAL" || c.conclusion === "SKIPPED");
+  const failingChecks = checks.filter((c) => c.conclusion === "FAILURE" || c.conclusion === "CANCELLED" || c.conclusion === "TIMED_OUT" || c.conclusion === "ACTION_REQUIRED");
+  const pendingChecks = checks.filter((c) => c.state === "PENDING" || c.state === "QUEUED" || c.state === "IN_PROGRESS" || c.state === "WAITING");
+
   return (
     <div className="flex flex-col flex-1 min-h-0">
       {/* Header bar */}
@@ -661,6 +722,63 @@ export function PRReviewView({ owner, repo, number }: { owner: string; repo: str
         )}
         {pr.reviewDecision === "CHANGES_REQUESTED" && (
           <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-red-500/15 text-red-500">Changes requested</span>
+        )}
+        {checks.length > 0 && (
+          <div className="relative">
+            <button
+              onClick={() => setChecksOpen((v) => !v)}
+              className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+            >
+              {passingChecks.length > 0 && (
+                <span className="flex items-center gap-0.5 text-green-500">
+                  <CheckCircle className="h-3 w-3" />{passingChecks.length}
+                </span>
+              )}
+              {failingChecks.length > 0 && (
+                <span className="flex items-center gap-0.5 text-red-500">
+                  <XCircle className="h-3 w-3" />{failingChecks.length}
+                </span>
+              )}
+              {pendingChecks.length > 0 && (
+                <span className="flex items-center gap-0.5 text-yellow-500">
+                  <Clock className="h-3 w-3" />{pendingChecks.length}
+                </span>
+              )}
+            </button>
+            {checksOpen && (
+              <div className="absolute top-full left-0 mt-1 z-50 bg-popover border rounded-md shadow-md py-1 min-w-[250px] max-h-[300px] overflow-y-auto">
+                {checks.map((check) => (
+                  <a
+                    key={check.name}
+                    href={check.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-muted/50 transition-colors"
+                  >
+                    {check.conclusion === "SUCCESS" || check.conclusion === "NEUTRAL" || check.conclusion === "SKIPPED" ? (
+                      <CheckCircle className="h-3 w-3 text-green-500 shrink-0" />
+                    ) : check.conclusion === "FAILURE" || check.conclusion === "CANCELLED" || check.conclusion === "TIMED_OUT" || check.conclusion === "ACTION_REQUIRED" ? (
+                      <XCircle className="h-3 w-3 text-red-500 shrink-0" />
+                    ) : (
+                      <Clock className="h-3 w-3 text-yellow-500 shrink-0" />
+                    )}
+                    <span className="truncate">{check.name}</span>
+                  </a>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+        {sessionId && !sessionLoading && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-6 px-2 text-xs gap-1"
+            onClick={startAgentReview}
+          >
+            <Bot className="h-3 w-3" />
+            Review
+          </Button>
         )}
         <div className="flex items-center gap-2 ml-auto text-xs text-muted-foreground">
           <span className="text-green-500">+{pr.additions}</span>
@@ -713,6 +831,48 @@ export function PRReviewView({ owner, repo, number }: { owner: string; repo: str
               ))}
             </div>
           )}
+
+          {/* Review actions */}
+          <div className="border-b px-4 py-3 space-y-2">
+            <textarea
+              value={reviewBody}
+              onChange={(e) => setReviewBody(e.target.value)}
+              placeholder="Leave a review comment..."
+              className="w-full text-sm rounded border bg-transparent px-3 py-2 min-h-[60px] resize-y focus:outline-none focus:ring-1 focus:ring-ring"
+            />
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                className="text-xs"
+                disabled={reviewSubmitting}
+                onClick={() => submitReview("comment")}
+              >
+                {reviewSubmitting ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : null}
+                Comment
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="text-xs text-green-500 border-green-500/30 hover:bg-green-500/10"
+                disabled={reviewSubmitting}
+                onClick={() => submitReview("approve")}
+              >
+                {reviewSubmitting ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : null}
+                Approve
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="text-xs text-red-500 border-red-500/30 hover:bg-red-500/10"
+                disabled={reviewSubmitting || !reviewBody.trim()}
+                onClick={() => submitReview("request-changes")}
+              >
+                {reviewSubmitting ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : null}
+                Request Changes
+              </Button>
+            </div>
+          </div>
 
           {/* Stacked diffs */}
           <div className="p-4 space-y-3">
