@@ -3,9 +3,10 @@
 import React, { useState, useEffect, useMemo, useCallback } from "react";
 import type { ToolUse } from "@/types";
 import { cn } from "@/lib/utils";
-import { ChevronRight, Loader2 } from "lucide-react";
+import { ChevronRight, ClipboardList, Loader2 } from "lucide-react";
 import { DiffViewer } from "./diff-viewer";
 import { CodeBlock, languageFromPath, prehighlight } from "./code-block";
+import { PlanViewModal } from "./plan-view-modal";
 import { useShell } from "./app-shell";
 
 function parseInput(input: string): Record<string, unknown> {
@@ -42,6 +43,15 @@ function useIsDark(): boolean {
   return dark;
 }
 
+function isPlanFile(toolName: string, filePath: string): boolean {
+  const name = toolName.toLowerCase();
+  return (
+    (name === "write" || name === "edit") &&
+    (filePath.includes("/.claude/plans/") || filePath.startsWith("~/.claude/plans/")) &&
+    filePath.endsWith(".md")
+  );
+}
+
 interface ToolCardProps {
   tool: ToolUse;
   expandedToolIds?: React.RefObject<Set<string>>;
@@ -52,6 +62,12 @@ export function ToolCard({ tool, expandedToolIds }: ToolCardProps) {
   const { backgroundTasks } = useShell();
   const input = useMemo(() => parseInput(tool.input), [tool.input]);
   const [expanded, setExpanded] = useState(() => expandedToolIds?.current?.has(tool.id) ?? false);
+  const [planModalOpen, setPlanModalOpen] = useState(false);
+
+  const filePath = (input.file_path as string) || tool.filePath || "";
+  const planFile = isPlanFile(tool.name, filePath);
+  const planWriteContent = (input.content as string) || "";
+  const isPlanWrite = planFile && (tool.name === "Write" || tool.name === "write") && planWriteContent;
 
   // Pre-highlight code for Read/Write tools so expanding is instant
   useEffect(() => {
@@ -88,9 +104,14 @@ export function ToolCard({ tool, expandedToolIds }: ToolCardProps) {
   }, [userToggled]);
 
   return (
+    <>
     <div className="rounded border border-border bg-card text-card-foreground text-xs overflow-hidden">
       <button
         onClick={() => {
+          if (isPlanWrite) {
+            setPlanModalOpen(true);
+            return;
+          }
           if (!hasContent) return;
           const next = !expanded;
           userToggled.current = next;
@@ -106,12 +127,16 @@ export function ToolCard({ tool, expandedToolIds }: ToolCardProps) {
           !hasContent && "cursor-default"
         )}
       >
-        <ChevronRight
-          className={cn(
-            "h-3 w-3 shrink-0 text-muted-foreground transition-transform",
-            expanded && "rotate-90"
-          )}
-        />
+        {isPlanWrite ? (
+          <ClipboardList className="h-3 w-3 shrink-0 text-blue-500" />
+        ) : (
+          <ChevronRight
+            className={cn(
+              "h-3 w-3 shrink-0 text-muted-foreground transition-transform",
+              expanded && "rotate-90"
+            )}
+          />
+        )}
         <span className="font-mono font-medium">{tool.name}</span>
         {tool.name === "Agent" && (tool.status === "running" || backgroundTasks.some((t) => t.toolUseId === tool.id && t.status === "running")) && (
           <Loader2 className="h-3 w-3 shrink-0 animate-spin text-muted-foreground" />
@@ -125,6 +150,15 @@ export function ToolCard({ tool, expandedToolIds }: ToolCardProps) {
         </div>
       )}
     </div>
+    {isPlanWrite && (
+      <PlanViewModal
+        open={planModalOpen}
+        onOpenChange={setPlanModalOpen}
+        content={planWriteContent}
+        filePath={filePath}
+      />
+    )}
+    </>
   );
 }
 
@@ -139,16 +173,23 @@ function ToolSummary({
 
   if (name === "Edit" || name === "edit") {
     const fp = (input.file_path as string) || tool.filePath || "";
-    return fp ? (
-      <span className="text-muted-foreground truncate">{shortPath(fp)}</span>
-    ) : null;
+    if (!fp) return null;
+    const plan = isPlanFile(name, fp);
+    return (
+      <span className="text-muted-foreground truncate">
+        {shortPath(fp)}{plan ? " (plan edit)" : ""}
+      </span>
+    );
   }
 
   if (name === "Write" || name === "write") {
     const fp = (input.file_path as string) || tool.filePath || "";
-    return fp ? (
-      <span className="text-muted-foreground truncate">{shortPath(fp)}</span>
-    ) : null;
+    if (!fp) return null;
+    const content = (input.content as string) || "";
+    if (isPlanFile(name, fp) && content) {
+      return <span className="text-blue-500 truncate">View plan</span>;
+    }
+    return <span className="text-muted-foreground truncate">{shortPath(fp)}</span>;
   }
 
   if (name === "Read" || name === "read") {
