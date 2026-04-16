@@ -19,7 +19,7 @@ import { FolderOpen, Menu } from "lucide-react";
 import { GitStatusButton } from "@/components/git-status-modal";
 import { BackgroundTasksButton } from "@/components/task-indicator";
 import { TodoIndicator } from "@/components/todo-indicator";
-import { McpStatusButton } from "@/components/mcp-status-modal";
+import { SearchButton } from "@/components/search-modal";
 import type { BackgroundTask, TodoItem, InitData } from "@/types";
 
 interface HeaderConfig {
@@ -31,6 +31,10 @@ interface ShellContextValue {
   setHeader: (config: HeaderConfig) => void;
   cwd: string | undefined;
   setCwd: (cwd: string | undefined) => void;
+  sessionId: string | undefined;
+  setSessionId: (id: string | undefined) => void;
+  scrollToMessageId: string | null;
+  setScrollToMessageId: (id: string | null) => void;
   backgroundTasks: BackgroundTask[];
   setBackgroundTasks: (tasks: BackgroundTask[]) => void;
   todos: TodoItem[];
@@ -46,6 +50,10 @@ const ShellContext = createContext<ShellContextValue>({
   setHeader: () => {},
   cwd: undefined,
   setCwd: () => {},
+  sessionId: undefined,
+  setSessionId: () => {},
+  scrollToMessageId: null,
+  setScrollToMessageId: () => {},
   backgroundTasks: [],
   setBackgroundTasks: () => {},
   todos: [],
@@ -74,6 +82,14 @@ export function useShellCwd(cwd: string | undefined) {
     setCwd(cwd);
     return () => setCwd(undefined);
   }, [cwd, setCwd]);
+}
+
+export function useShellSessionId(id: string | undefined) {
+  const { setSessionId } = useShell();
+  useEffect(() => {
+    setSessionId(id);
+    return () => setSessionId(undefined);
+  }, [id, setSessionId]);
 }
 
 function FileBrowserButton({ cwd }: { cwd: string }) {
@@ -142,6 +158,8 @@ export function AppShell({ children }: { children: ReactNode }) {
   const sidebarRef = useRef<SidebarHandle>(null);
   const [header, setHeaderState] = useState<HeaderConfig>({ title: "Cockpit" });
   const [cwd, setCwdState] = useState<string | undefined>(undefined);
+  const [sessionId, setSessionIdState] = useState<string | undefined>(undefined);
+  const [scrollToMessageId, setScrollToMessageId] = useState<string | null>(null);
   const [backgroundTasks, setBackgroundTasks] = useState<BackgroundTask[]>([]);
   const [todos, setTodos] = useState<TodoItem[]>([]);
   const [initData, setInitData] = useState<InitData | null>(null);
@@ -157,6 +175,10 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   const setCwd = useCallback((val: string | undefined) => {
     setCwdState(val);
+  }, []);
+
+  const setSessionId = useCallback((val: string | undefined) => {
+    setSessionIdState(val);
   }, []);
 
   const toggleSidebar = useCallback(() => {
@@ -181,7 +203,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   return (
     <AuthGuard>
       <WebSocketProvider>
-        <ShellContext.Provider value={{ setHeader, cwd, setCwd, backgroundTasks, setBackgroundTasks, todos, setTodos, initData, setInitData, sidebarContent, setSidebarContent, closeSidebar }}>
+        <ShellContext.Provider value={{ setHeader, cwd, setCwd, sessionId, setSessionId, scrollToMessageId, setScrollToMessageId, backgroundTasks, setBackgroundTasks, todos, setTodos, initData, setInitData, sidebarContent, setSidebarContent, closeSidebar }}>
           <div className="fixed inset-0 flex">
             <Sidebar ref={sidebarRef} />
             <div className="flex-1 min-h-0 min-w-0 flex flex-col">
@@ -193,10 +215,10 @@ export function AppShell({ children }: { children: ReactNode }) {
                   <EditableTitle title={header.title} onRename={header.onRename} />
                 </div>
                 <div className="flex items-center gap-2 shrink-0 ml-auto">
+                  <SearchButton />
                   {cwd && <TodoIndicator todos={todos} />}
                   {cwd && <BackgroundTasksButton tasks={backgroundTasks} />}
                   {cwd && <UsageButton />}
-                  {cwd && <McpStatusButton cwd={cwd} initData={initData} />}
                   {cwd && <GitStatusButton cwd={cwd} />}
                   {cwd && <FileBrowserButton cwd={cwd} />}
                 </div>

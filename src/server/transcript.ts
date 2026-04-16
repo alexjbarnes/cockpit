@@ -370,7 +370,7 @@ function parseLines(lines: string[]): { messages: ChatMessage[]; lastUsage: { us
               content: cleaned,
               toolUses: [],
               blocks: [],
-              timestamp: Date.now(),
+              timestamp: entry.timestamp ? new Date(entry.timestamp).getTime() : Date.now(),
               textFiles: textFiles.length > 0 ? textFiles : undefined,
             });
           }
@@ -419,7 +419,7 @@ function parseLines(lines: string[]): { messages: ChatMessage[]; lastUsage: { us
               content: cleaned,
               toolUses: [],
               blocks: [],
-              timestamp: Date.now(),
+              timestamp: entry.timestamp ? new Date(entry.timestamp).getTime() : Date.now(),
               images: images.length > 0 ? images : undefined,
               documents: documents.length > 0 ? documents : undefined,
               textFiles: textFiles.length > 0 ? textFiles : undefined,
@@ -488,7 +488,7 @@ function parseLines(lines: string[]): { messages: ChatMessage[]; lastUsage: { us
           content: textContent,
           toolUses,
           blocks,
-          timestamp: Date.now(),
+          timestamp: entry.timestamp ? new Date(entry.timestamp).getTime() : Date.now(),
         };
         messages.push(msg);
         messageById.set(msgId, msg);

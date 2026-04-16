@@ -2,7 +2,7 @@
 
 import { use, useEffect } from "react";
 import { useSearchParams } from "next/navigation";
-import { useShellCwd } from "@/components/app-shell";
+import { useShellCwd, useShellSessionId } from "@/components/app-shell";
 import { ChatView } from "@/components/chat-view";
 import { pinSession, clearUnreadSession } from "@/components/sidebar";
 
@@ -17,6 +17,7 @@ export default function SessionPage({
   const name = searchParams.get("name") || undefined;
 
   useShellCwd(cwd || undefined);
+  useShellSessionId(id);
 
   useEffect(() => {
     pinSession(id);
