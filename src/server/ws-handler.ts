@@ -649,6 +649,8 @@ function handleParsedEvent(
         type: "assistant:thinking",
         sessionId,
         text: event.text || "",
+        tokens: event.tokens,
+        redacted: event.redacted,
       });
       break;
 

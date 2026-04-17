@@ -319,8 +319,10 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
           const lastTBlock = tBlocks[tBlocks.length - 1];
           if (lastTBlock && lastTBlock.type === "thinking") {
             lastTBlock.text += msg.text;
+            if (msg.tokens) lastTBlock.tokens = (lastTBlock.tokens ?? 0) + msg.tokens;
+            if (msg.redacted) lastTBlock.redacted = true;
           } else {
-            tBlocks.push({ type: "thinking", text: msg.text });
+            tBlocks.push({ type: "thinking", text: msg.text, tokens: msg.tokens, redacted: msg.redacted });
           }
 
           const tStreaming = streamingRef.current;

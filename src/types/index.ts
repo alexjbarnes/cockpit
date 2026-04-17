@@ -43,7 +43,7 @@ export interface TextFileAttachment {
 
 export type ContentBlock =
   | { type: "text"; text: string }
-  | { type: "thinking"; text: string }
+  | { type: "thinking"; text: string; tokens?: number; redacted?: boolean }
   | { type: "tool_use"; toolUse: ToolUse };
 
 export interface ChatMessage {
@@ -173,7 +173,7 @@ export type ClientMessage =
 export type ServerMessage =
   | { type: "session:connected"; sessionId: string }
   | { type: "assistant:text"; sessionId: string; text: string }
-  | { type: "assistant:thinking"; sessionId: string; text: string }
+  | { type: "assistant:thinking"; sessionId: string; text: string; tokens?: number; redacted?: boolean }
   | { type: "assistant:tool_use"; sessionId: string; name: string; input: string; toolId: string; isMainThread?: boolean }
   | { type: "assistant:tool_result"; sessionId: string; toolId: string; output: string; filePath?: string }
   | { type: "assistant:message_done"; sessionId: string; message: ChatMessage }

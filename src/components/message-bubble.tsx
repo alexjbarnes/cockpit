@@ -226,7 +226,7 @@ export const MessageBubble = memo(function MessageBubble({
               block.type === "tool_use" ? (
                 <ToolCard key={`tool-${i}`} tool={block.toolUse} expandedToolIds={expandedToolIds} />
               ) : block.type === "thinking" ? (
-                <ThinkingBlock key={`thinking-${i}`} text={block.text} />
+                <ThinkingBlock key={`thinking-${i}`} text={block.text} tokens={block.tokens} redacted={block.redacted} />
               ) : (
                 <div
                   key={`text-${i}`}
@@ -295,29 +295,36 @@ function TextFileBlock({ name, content }: { name: string; content: string }) {
   );
 }
 
-function ThinkingBlock({ text }: { text: string }) {
+function ThinkingBlock({ text, tokens, redacted }: { text: string; tokens?: number; redacted?: boolean }) {
   const { settings } = useSettings();
   const [expanded, setExpanded] = useState<boolean | null>(null);
   const isExpanded = expanded ?? settings.thinkingExpanded;
+  const hasText = text.length > 0;
+  const sizeLabel = tokens != null
+    ? `${tokens.toLocaleString()} token${tokens === 1 ? "" : "s"}`
+    : hasText
+      ? `${text.length.toLocaleString()} chars`
+      : null;
 
   return (
     <div className="rounded border border-purple-500/20 bg-purple-500/5">
       <button
-        onClick={() => setExpanded(!isExpanded)}
-        className="flex w-full items-center gap-1.5 px-3 py-1.5 text-xs text-purple-400 hover:text-purple-300"
+        onClick={() => hasText && setExpanded(!isExpanded)}
+        disabled={!hasText}
+        className="flex w-full items-center gap-1.5 px-3 py-1.5 text-xs text-purple-400 hover:text-purple-300 disabled:cursor-default disabled:hover:text-purple-400"
       >
         <Brain className="h-3 w-3" />
-        <span className="font-medium">Thinking</span>
-        <span className="text-muted-foreground ml-1">
-          {text.length.toLocaleString()} chars
-        </span>
-        {isExpanded ? (
-          <ChevronDown className="h-3 w-3 ml-auto" />
-        ) : (
-          <ChevronRight className="h-3 w-3 ml-auto" />
+        <span className="font-medium">{redacted ? "Thinking (redacted)" : "Thinking"}</span>
+        {sizeLabel && <span className="text-muted-foreground ml-1">{sizeLabel}</span>}
+        {hasText && (
+          isExpanded ? (
+            <ChevronDown className="h-3 w-3 ml-auto" />
+          ) : (
+            <ChevronRight className="h-3 w-3 ml-auto" />
+          )
         )}
       </button>
-      {isExpanded && (
+      {hasText && isExpanded && (
         <div className="border-t border-purple-500/20 px-3 py-2 text-xs text-muted-foreground whitespace-pre-wrap max-h-60 overflow-y-auto">
           {text}
         </div>

@@ -1437,15 +1437,17 @@ Additional Cockpit rules beyond the CLI's defaults:
             }
           }
 
-          if (event.type === "thinking" && event.text) {
+          if (event.type === "thinking" && (event.text || event.redacted)) {
             // Sub-agent thinking is not useful to the client; the Agent
             // tool's output is already streamed via tool_progress events.
             if (agentStack.length > 0) continue;
             const last = pendingBlocks[pendingBlocks.length - 1];
             if (last && last.type === "thinking") {
-              last.text += event.text;
+              last.text += event.text ?? "";
+              if (event.tokens) last.tokens = (last.tokens ?? 0) + event.tokens;
+              if (event.redacted) last.redacted = true;
             } else {
-              pendingBlocks.push({ type: "thinking", text: event.text });
+              pendingBlocks.push({ type: "thinking", text: event.text ?? "", tokens: event.tokens, redacted: event.redacted });
             }
           } else if (event.type === "text_delta" && event.text) {
             if (agentStack.length > 0) continue;
