@@ -49,6 +49,7 @@ interface Session {
   previousCliSessionIds: string[];
   bypassAllPermissions: boolean;
   planMode: boolean;
+  pendingPlanReminder?: boolean;
   needsRespawnForPermissions: boolean;
   compacting: boolean;
   thinkingLevel: ThinkingLevel;
@@ -75,6 +76,38 @@ const WRITE_TOOLS = new Set(["Edit", "Write", "Bash", "NotebookEdit"]);
 
 /** Tools that require user interaction and must not be auto-approved in plan mode. */
 const USER_FACING_TOOLS = new Set(["ExitPlanMode", "AskUserQuestion", "EnterPlanMode"]);
+
+const READ_ONLY_BASH_COMMANDS = new Set([
+  "ls", "cat", "head", "tail", "wc", "grep", "rg", "find",
+  "pwd", "which", "type", "whereis", "file", "stat", "du", "df",
+  "tree", "date", "echo", "printf", "env", "printenv",
+  "basename", "dirname", "realpath", "readlink",
+  "uname", "whoami", "hostname", "id",
+]);
+
+const READ_ONLY_GIT_SUBCOMMANDS = new Set([
+  "status", "log", "diff", "show", "blame", "branch",
+  "remote", "ls-files", "ls-tree", "rev-parse", "describe",
+  "tag", "reflog",
+]);
+
+function isReadOnlyBashCommand(cmd: string): boolean {
+  const trimmed = cmd.trim();
+  if (!trimmed) return false;
+  if (/(?:;|&&|\|\||>|<|`|\$\(|<\()/.test(trimmed)) return false;
+  if (/(?:^|[^|])&(?!&)/.test(trimmed)) return false;
+  const segments = trimmed.split("|").map((s) => s.trim()).filter(Boolean);
+  if (!segments.length) return false;
+  for (const segment of segments) {
+    const [head, sub] = segment.split(/\s+/);
+    if (head === "git") {
+      if (!sub || !READ_ONLY_GIT_SUBCOMMANDS.has(sub)) return false;
+      continue;
+    }
+    if (!READ_ONLY_BASH_COMMANDS.has(head)) return false;
+  }
+  return true;
+}
 
 export class SessionManager {
   private sessions = new Map<string, Session>();
@@ -164,6 +197,7 @@ export class SessionManager {
         previousCliSessionIds: prefs?.previousCliSessionIds || [],
         bypassAllPermissions: prefs?.bypassAllPermissions ?? defaults.bypassAllPermissions,
         planMode: prefs?.planMode ?? false,
+        pendingPlanReminder: prefs?.planMode ?? false,
         needsRespawnForPermissions: false,
         compacting: false,
         thinkingLevel: prefs?.thinkingLevel || defaults.thinkingLevel,
@@ -530,7 +564,7 @@ export class SessionManager {
     return Array.from(session.pendingRequests.values());
   }
 
-  respondToPermission(sessionId: string, requestId: string, allowed: boolean, toolInput?: Record<string, unknown>, permissionSuggestions?: Record<string, unknown>[]): boolean {
+  respondToPermission(sessionId: string, requestId: string, allowed: boolean, toolInput?: Record<string, unknown>, permissionSuggestions?: Record<string, unknown>[], denyReason?: string): boolean {
     const session = this.sessions.get(sessionId);
     if (!session?.stdin) return false;
 
@@ -547,7 +581,7 @@ export class SessionManager {
               ...(toolInput ? { updatedInput: toolInput } : {}),
               ...(permissionSuggestions?.length ? { updatedPermissions: permissionSuggestions } : {}),
             }
-          : { behavior: "deny" as const, message: "User denied" },
+          : { behavior: "deny" as const, message: denyReason ?? "User denied" },
       },
     };
 
@@ -598,6 +632,7 @@ export class SessionManager {
     const session = this.sessions.get(sessionId);
     if (!session) return;
     session.planMode = true;
+    session.pendingPlanReminder = true;
     setSessionPrefs(sessionId, { planMode: true });
     // Kill process so it restarts without --allow-dangerously-skip-permissions,
     // which lets the CLI natively enforce plan mode tool restrictions.
@@ -1126,19 +1161,34 @@ export class SessionManager {
     return false;
   }
 
-  private buildContent(text: string, images?: ImageAttachment[], documents?: DocumentAttachment[]): string | Record<string, unknown>[] {
-    if (!images?.length && !documents?.length) return text;
-    return [
-      ...images?.map((img) => ({
-        type: "image",
-        source: { type: "base64", media_type: img.mediaType, data: img.data },
-      })) || [],
-      ...documents?.map((doc) => ({
-        type: "document",
-        source: { type: "base64", media_type: doc.mediaType, data: doc.data },
-      })) || [],
-      ...(text ? [{ type: "text", text }] : []),
-    ];
+  private buildContent(session: Session, text: string, images?: ImageAttachment[], documents?: DocumentAttachment[]): string | Record<string, unknown>[] {
+    const reminder = session.pendingPlanReminder ? this.planModeReminderText() : null;
+    if (session.pendingPlanReminder) session.pendingPlanReminder = false;
+
+    if (!images?.length && !documents?.length && !reminder) return text;
+
+    const blocks: Record<string, unknown>[] = [];
+    if (reminder) blocks.push({ type: "text", text: reminder });
+    for (const img of images ?? []) {
+      blocks.push({ type: "image", source: { type: "base64", media_type: img.mediaType, data: img.data } });
+    }
+    for (const doc of documents ?? []) {
+      blocks.push({ type: "document", source: { type: "base64", media_type: doc.mediaType, data: doc.data } });
+    }
+    if (text) blocks.push({ type: "text", text });
+    return blocks;
+  }
+
+  private planModeReminderText(): string {
+    return `<system-reminder>
+Cockpit plan mode is now active, layered on top of Claude Code's native plan mode.
+
+Additional Cockpit rules beyond the CLI's defaults:
+- Bash: only read-only commands are permitted (ls, cat, head, tail, wc, grep, rg, find, stat, file, du, df, tree, pwd, which, type, echo, env, date, basename, dirname, realpath, readlink, uname, whoami, hostname, id). Pipes are allowed; ';', '&&', '||', '>', '<', '$(...)', '\`...\`', '<(...)' are not.
+- git: only read-only subcommands (status, log, diff, show, blame, branch, remote, ls-files, ls-tree, rev-parse, describe, tag, reflog).
+- Edit, Write, NotebookEdit: blocked. Use ExitPlanMode to submit the plan before making changes.
+- Read, Grep, Glob, and all other read-only tools: unrestricted.
+</system-reminder>`;
   }
 
   sendMessage(sessionId: string, text: string, images?: ImageAttachment[], documents?: DocumentAttachment[]): boolean {
@@ -1156,7 +1206,7 @@ export class SessionManager {
       }
     }
 
-    const content = this.buildContent(text, images, documents);
+    const content = this.buildContent(session, text, images, documents);
 
     // If queue was paused (user interrupted then sent a new message),
     // discard the paused messages and reset the flag.
@@ -1271,7 +1321,7 @@ export class SessionManager {
     }
 
     if (text) {
-      const content = this.buildContent(text, images, documents);
+      const content = this.buildContent(session, text, images, documents);
       const userInput = { type: "user", message: { role: "user", content } };
       proc.stdin!.write(JSON.stringify(userInput) + "\n");
     }
@@ -1625,12 +1675,33 @@ export class SessionManager {
           if (event.type === "permission_request" && event.requestId) {
             const toolName = event.toolName || "";
             if (session.planMode) {
-              // Hard-block write tools in plan mode
-              if (WRITE_TOOLS.has(toolName)) {
-                this.respondToPermission(sessionId, event.requestId, false);
+              if (toolName === "Bash") {
+                const cmd = (event.rawToolInput as { command?: string })?.command ?? "";
+                if (isReadOnlyBashCommand(cmd)) {
+                  this.respondToPermission(sessionId, event.requestId, true, event.rawToolInput);
+                  continue;
+                }
+                this.respondToPermission(
+                  sessionId,
+                  event.requestId,
+                  false,
+                  undefined,
+                  undefined,
+                  `Cockpit plan mode: Bash is restricted to read-only commands (ls, cat, head, tail, wc, grep, rg, find, stat, file, du, df, tree, git status/log/diff/show/blame, etc.). Shell operators ';', '&&', '||', '>', '<', '$(...)', backticks are not allowed. Use Read/Grep/Glob for file access, or call ExitPlanMode when ready to implement.`,
+                );
                 continue;
               }
-              // Auto-approve read-only tools so the agent can research freely
+              if (WRITE_TOOLS.has(toolName)) {
+                this.respondToPermission(
+                  sessionId,
+                  event.requestId,
+                  false,
+                  undefined,
+                  undefined,
+                  `Cockpit plan mode: ${toolName} is blocked. Plan mode is read-only; call ExitPlanMode to submit the plan before making changes.`,
+                );
+                continue;
+              }
               if (!USER_FACING_TOOLS.has(toolName)) {
                 this.respondToPermission(sessionId, event.requestId, true, event.rawToolInput);
                 continue;
