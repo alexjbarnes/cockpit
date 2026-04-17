@@ -19,9 +19,9 @@ import { McpStatusModal } from "@/components/mcp-status-modal";
 import { findModelById, defaultForAlias, versionsForAlias, type ModelAlias, type ModelEntry } from "@/lib/models";
 
 const aliases: { value: ModelAlias; label: string }[] = [
-  { value: "opus", label: "Opus" },
-  { value: "sonnet", label: "Sonnet" },
   { value: "haiku", label: "Haiku" },
+  { value: "sonnet", label: "Sonnet" },
+  { value: "opus", label: "Opus" },
 ];
 
 const contextSizes: { value: string; label: string }[] = [

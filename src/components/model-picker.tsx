@@ -49,7 +49,7 @@ function rowsForEntry(entry: ModelEntry, isSoleVersion: boolean): PickerRow[] {
 }
 
 function buildRows(): PickerRow[] {
-  const aliases: ModelAlias[] = ["opus", "sonnet", "haiku"];
+  const aliases: ModelAlias[] = ["haiku", "sonnet", "opus"];
   const rows: PickerRow[] = [];
   for (const alias of aliases) {
     const entries = versionsForAlias(alias);
