@@ -11,7 +11,7 @@ dev:
 
 # Build for production
 build:
-    bunx next build && tsc -p tsconfig.server.json
+    bunx next build && bunx tsc -p tsconfig.server.json
 
 # Start production server
 start: build
