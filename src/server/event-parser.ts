@@ -45,6 +45,7 @@ interface StreamMessage {
   id?: string;
   content?: ContentBlock[];
   role?: string;
+  model?: string;
 }
 
 interface ToolResult {
@@ -54,6 +55,8 @@ interface ToolResult {
 }
 
 export class EventParser {
+  private lastAssistantModel: string | null = null;
+
   parseLine(line: string): ParsedEvent[] {
     const trimmed = line.trim();
     if (!trimmed) return [];
@@ -251,6 +254,10 @@ export class EventParser {
     const msg = event.message as StreamMessage | undefined;
     if (!msg?.content) return [];
 
+    if (msg.model) {
+      this.lastAssistantModel = msg.model;
+    }
+
     const assistantMessageId = msg.id || undefined;
     const events: ParsedEvent[] = [];
 
@@ -367,6 +374,7 @@ export class EventParser {
       toolUses: [],
       blocks: [],
       timestamp: Date.now(),
+      model: this.lastAssistantModel ?? undefined,
     };
 
     return [{ type: "message_done", message, interrupted: subtype === "error_during_execution" }];

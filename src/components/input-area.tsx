@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback, type KeyboardEvent, type ClipboardEvent, type DragEvent } from "react";
 import { Button } from "@/components/ui/button";
-import { Send, Square, Settings2, ShieldOff, ShieldCheck, Brain, Cpu, Loader2, X, Paperclip, FileText, Maximize2, MessageSquare, Trash2, Eye, Hammer, Plug, ChevronRight } from "lucide-react";
+import { Send, Square, Settings2, ShieldOff, ShieldCheck, Brain, Cpu, Loader2, X, Paperclip, FileText, Maximize2, MessageSquare, Trash2, Eye, Hammer, Plug, ChevronRight, Layers } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useWebSocket } from "@/hooks/use-websocket";
@@ -16,8 +16,9 @@ import { CodeBlock, languageFromPath } from "@/components/code-block";
 import { ContextIndicator } from "./context-indicator";
 import { QueueModal } from "./queue-modal";
 import { McpStatusModal } from "@/components/mcp-status-modal";
+import { findModelById, defaultForAlias, versionsForAlias, type ModelAlias, type ModelEntry } from "@/lib/models";
 
-const models: { value: string; label: string }[] = [
+const aliases: { value: ModelAlias; label: string }[] = [
   { value: "opus", label: "Opus" },
   { value: "sonnet", label: "Sonnet" },
   { value: "haiku", label: "Haiku" },
@@ -36,17 +37,35 @@ function hasExtendedContext(model: string): boolean {
   return model.includes("[1m]");
 }
 
-function buildModelId(base: string, extended: boolean): string {
-  if (extended && (base === "opus" || base === "sonnet")) {
-    return `${base}[1m]`;
+function parseCurrentModel(currentModel: string): { alias: ModelAlias | null; entry: ModelEntry | null; extended: boolean } {
+  const extended = hasExtendedContext(currentModel);
+  const base = baseModel(currentModel);
+  if (base === "opus" || base === "sonnet" || base === "haiku") {
+    return { alias: base, entry: defaultForAlias(base) ?? null, extended };
   }
-  return base;
+  const entry = findModelById(base) ?? null;
+  return { alias: entry?.alias ?? null, entry, extended };
+}
+
+function valueForEntry(entry: ModelEntry, extended: boolean): string {
+  const versions = versionsForAlias(entry.alias);
+  const isSoleDefault = versions.length === 1 && entry.isDefault;
+  const base = isSoleDefault ? entry.alias : entry.modelId;
+  return extended && entry.supportsExtendedContext ? `${base}[1m]` : base;
+}
+
+function valueForAlias(alias: ModelAlias, extended: boolean): string {
+  const entry = defaultForAlias(alias);
+  if (!entry) return alias;
+  return valueForEntry(entry, extended);
 }
 
 const thinkingLevels: { value: ThinkingLevel; label: string }[] = [
   { value: "low", label: "Low" },
   { value: "medium", label: "Medium" },
   { value: "high", label: "High" },
+  { value: "xhigh", label: "XHigh" },
+  { value: "max", label: "Max" },
 ];
 
 const IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
@@ -158,6 +177,7 @@ interface InputAreaProps {
   cwd?: string;
   onCompact?: () => void;
   initData?: InitData | null;
+  activeModelId?: string | null;
   hasQueuedMessage?: boolean;
   queuedMessages?: Array<{ id: string; text: string }>;
   queuePaused?: boolean;
@@ -180,7 +200,7 @@ function getMentionContext(text: string, cursorPos: number): { active: boolean; 
   return { active: true, query: match[1], start: cursorPos - match[0].length };
 }
 
-export function InputArea({ sessionId, onSend, onInterrupt, isResponding, bypassActive, onSetBypass, planMode, onSetPlanMode, thinkingLevel, onSetThinking, currentModel, onSetModel, contextUsage, dismissKeyboard, cwd, onCompact, initData, hasQueuedMessage, queuedMessages, queuePaused, onCancelQueued, onDeleteQueued, onEditQueued, onResumeQueue, restoredText, onClearRestoredText, btw, onDismissBtw }: InputAreaProps) {
+export function InputArea({ sessionId, onSend, onInterrupt, isResponding, bypassActive, onSetBypass, planMode, onSetPlanMode, thinkingLevel, onSetThinking, currentModel, onSetModel, contextUsage, dismissKeyboard, cwd, onCompact, initData, activeModelId, hasQueuedMessage, queuedMessages, queuePaused, onCancelQueued, onDeleteQueued, onEditQueued, onResumeQueue, restoredText, onClearRestoredText, btw, onDismissBtw }: InputAreaProps) {
   const { connected } = useWebSocket();
   const [text, setText] = useState(() => sessionDrafts.get(sessionId) || "");
   const [queueModalOpen, setQueueModalOpen] = useState(false);
@@ -580,18 +600,46 @@ export function InputArea({ sessionId, onSend, onInterrupt, isResponding, bypass
             )}
           </div>
         )}
-        {optionsOpen && (
-          <div className="mb-2 rounded-md border border-input bg-muted/50 p-2 space-y-1">
+        {optionsOpen && (() => {
+          const parsed = parseCurrentModel(currentModel);
+          const versionEntries = parsed.alias ? versionsForAlias(parsed.alias) : [];
+          const showVersionRow = versionEntries.length > 1;
+          const supportsExtended = parsed.entry?.supportsExtendedContext ?? false;
+          return (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+            onMouseDown={(e) => {
+              if (e.target === e.currentTarget) setOptionsOpen(false);
+            }}
+          >
+          <div className="w-full max-w-md mx-4 rounded-lg border bg-background p-4 shadow-lg space-y-1">
+            <div className="flex items-center justify-between pb-2">
+              <div className="flex items-center gap-2">
+                <Settings2 className="h-4 w-4" />
+                <h2 className="text-sm font-semibold">Session settings</h2>
+              </div>
+              <button
+                onClick={() => setOptionsOpen(false)}
+                className="rounded p-1 text-muted-foreground hover:text-foreground hover:bg-muted"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
             <div className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs">
               <Cpu className="h-3.5 w-3.5 text-muted-foreground" />
               <span className="text-muted-foreground">Model</span>
+              {activeModelId && (
+                <span className="text-[10px] font-mono text-muted-foreground/70 truncate">
+                  {activeModelId}
+                </span>
+              )}
               <div className="ml-auto flex gap-1">
-                {models.map((opt) => (
+                {aliases.map((opt) => (
                   <button
                     key={opt.value}
-                    onClick={() => onSetModel(buildModelId(opt.value, hasExtendedContext(currentModel) && opt.value !== "haiku"))}
+                    onClick={() => onSetModel(valueForAlias(opt.value, parsed.extended && opt.value !== "haiku"))}
                     className={`rounded px-2 py-0.5 text-xs transition-colors ${
-                      baseModel(currentModel) === opt.value
+                      parsed.alias === opt.value
                         ? "bg-primary text-primary-foreground"
                         : "bg-muted text-muted-foreground hover:text-foreground"
                     }`}
@@ -601,7 +649,28 @@ export function InputArea({ sessionId, onSend, onInterrupt, isResponding, bypass
                 ))}
               </div>
             </div>
-            {(baseModel(currentModel) === "opus" || baseModel(currentModel) === "sonnet") && (
+            {showVersionRow && (
+              <div className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs">
+                <Layers className="h-3.5 w-3.5 text-muted-foreground" />
+                <span className="text-muted-foreground">Version</span>
+                <div className="ml-auto flex gap-1">
+                  {versionEntries.map((entry) => (
+                    <button
+                      key={entry.modelId}
+                      onClick={() => onSetModel(valueForEntry(entry, parsed.extended && entry.supportsExtendedContext))}
+                      className={`rounded px-2 py-0.5 text-xs transition-colors ${
+                        parsed.entry?.modelId === entry.modelId
+                          ? "bg-primary text-primary-foreground"
+                          : "bg-muted text-muted-foreground hover:text-foreground"
+                      }`}
+                    >
+                      {entry.version}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+            {supportsExtended && parsed.entry && (
               <div className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs">
                 <Maximize2 className="h-3.5 w-3.5 text-muted-foreground" />
                 <span className="text-muted-foreground">Context</span>
@@ -609,9 +678,30 @@ export function InputArea({ sessionId, onSend, onInterrupt, isResponding, bypass
                   {contextSizes.map((opt) => (
                     <button
                       key={opt.value}
-                      onClick={() => onSetModel(buildModelId(baseModel(currentModel), opt.value === "1m"))}
+                      onClick={() => onSetModel(valueForEntry(parsed.entry!, opt.value === "1m"))}
                       className={`rounded px-2 py-0.5 text-xs transition-colors ${
-                        (opt.value === "1m") === hasExtendedContext(currentModel)
+                        (opt.value === "1m") === parsed.extended
+                          ? "bg-primary text-primary-foreground"
+                          : "bg-muted text-muted-foreground hover:text-foreground"
+                      }`}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+            {parsed.alias !== "haiku" && (
+              <div className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs">
+                <Brain className="h-3.5 w-3.5 text-muted-foreground" />
+                <span className="text-muted-foreground">Thinking</span>
+                <div className="ml-auto flex gap-1">
+                  {thinkingLevels.map((opt) => (
+                    <button
+                      key={opt.value}
+                      onClick={() => onSetThinking(opt.value)}
+                      className={`rounded px-2 py-0.5 text-xs transition-colors ${
+                        thinkingLevel === opt.value
                           ? "bg-primary text-primary-foreground"
                           : "bg-muted text-muted-foreground hover:text-foreground"
                       }`}
@@ -646,27 +736,6 @@ export function InputArea({ sessionId, onSend, onInterrupt, isResponding, bypass
                 />
               </span>
             </button>
-            {currentModel !== "haiku" && (
-              <div className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs">
-                <Brain className="h-3.5 w-3.5 text-muted-foreground" />
-                <span className="text-muted-foreground">Thinking</span>
-                <div className="ml-auto flex gap-1">
-                  {thinkingLevels.map((opt) => (
-                    <button
-                      key={opt.value}
-                      onClick={() => onSetThinking(opt.value)}
-                      className={`rounded px-2 py-0.5 text-xs transition-colors ${
-                        thinkingLevel === opt.value
-                          ? "bg-primary text-primary-foreground"
-                          : "bg-muted text-muted-foreground hover:text-foreground"
-                      }`}
-                    >
-                      {opt.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
             {initData?.mcpServers && initData.mcpServers.length > 0 && (
               <button
                 onClick={() => setMcpOpen(true)}
@@ -681,7 +750,9 @@ export function InputArea({ sessionId, onSend, onInterrupt, isResponding, bypass
               </button>
             )}
           </div>
-        )}
+          </div>
+          );
+        })()}
         {hasAttachments && (
           <div className="mb-1 flex gap-2 flex-wrap px-9">
             {pendingImages.map((img, i) => (

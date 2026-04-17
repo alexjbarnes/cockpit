@@ -56,6 +56,7 @@ export interface ChatMessage {
   images?: ImageAttachment[];
   documents?: DocumentAttachment[];
   textFiles?: TextFileAttachment[];
+  model?: string;
 }
 
 export interface ContextUsage {
@@ -129,7 +130,7 @@ export interface PermissionSuggestion {
   destination?: string;
 }
 
-export type ThinkingLevel = "low" | "medium" | "high";
+export type ThinkingLevel = "low" | "medium" | "high" | "xhigh" | "max";
 
 export interface UsageLimit {
   /** Percentage 0-100 */

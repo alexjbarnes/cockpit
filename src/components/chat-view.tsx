@@ -20,7 +20,7 @@ const INITIAL_WINDOW = 50;
 const WINDOW_INCREMENT = 30;
 
 export function ChatView({ sessionId, cwd, initialName, initialContext }: { sessionId: string; cwd?: string; initialName?: string; initialContext?: string }) {
-  const { messages, historyLoaded, isResponding, pendingPermissions, pendingQuestions, modelPicker, currentModel, bypassActive, planMode, thinkingLevel, contextUsage, rateLimitStatus, apiError, sessionName, initData, hasQueuedMessage, queuedMessages, queuePaused, backgroundTasks, todos, btw, hasMoreHistory, loadingMore, requestMoreHistory, sendMessage, interrupt, respondToPermission, respondToQuestion, selectModel, setModel, setBypassAll, setPlanMode, setThinkingLevel, cancelQueuedMessage, deleteQueuedMessage, editQueuedMessage, resumeQueue, restoredText, clearRestoredText, dismissBtw, retry } = useSession(sessionId, cwd);
+  const { messages, historyLoaded, isResponding, pendingPermissions, pendingQuestions, modelPicker, currentModel, bypassActive, planMode, thinkingLevel, contextUsage, rateLimitStatus, apiError, sessionName, initData, activeModelId, hasQueuedMessage, queuedMessages, queuePaused, backgroundTasks, todos, btw, hasMoreHistory, loadingMore, requestMoreHistory, sendMessage, interrupt, respondToPermission, respondToQuestion, selectModel, setModel, setBypassAll, setPlanMode, setThinkingLevel, cancelQueuedMessage, deleteQueuedMessage, editQueuedMessage, resumeQueue, restoredText, clearRestoredText, dismissBtw, retry } = useSession(sessionId, cwd);
   const { settings } = useSettings();
   const { setHeader, setBackgroundTasks, setTodos, setInitData: setShellInitData } = useShell();
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -364,7 +364,7 @@ export function ChatView({ sessionId, cwd, initialName, initialContext }: { sess
             </div>
           ))}
           {modelPicker !== null && (
-            <ModelPicker currentModel={modelPicker} onSelect={selectModel} />
+            <ModelPicker currentModel={modelPicker} activeModelId={activeModelId} onSelect={selectModel} />
           )}
           <div />
         </div>
@@ -409,6 +409,7 @@ export function ChatView({ sessionId, cwd, initialName, initialContext }: { sess
           cwd={cwd}
           onCompact={handleCompact}
           initData={initData}
+          activeModelId={activeModelId}
           hasQueuedMessage={hasQueuedMessage}
           queuedMessages={queuedMessages}
           queuePaused={queuePaused}

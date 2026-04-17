@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 
 export type DiffStyle = "split" | "unified";
-export type ThinkingLevel = "low" | "medium" | "high";
+export type ThinkingLevel = "low" | "medium" | "high" | "xhigh" | "max";
 
 export interface Settings {
   diffStyle: DiffStyle;

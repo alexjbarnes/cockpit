@@ -42,6 +42,7 @@ interface UseSessionReturn {
   suggestions: string[];
   sessionName: string | null;
   initData: InitData | null;
+  activeModelId: string | null;
   hasQueuedMessage: boolean;
   queuedMessages: Array<{ id: string; text: string }>;
   queuePaused: boolean;
@@ -88,6 +89,7 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const [sessionName, setSessionName] = useState<string | null>(null);
   const [initData, setInitData] = useState<InitData | null>(null);
+  const [activeModelId, setActiveModelId] = useState<string | null>(null);
   const [backgroundTasks, setBackgroundTasks] = useState<BackgroundTask[]>([]);
   const [todos, setTodos] = useState<TodoItem[]>([]);
   const [btw, setBtw] = useState<BtwState | null>(null);
@@ -210,6 +212,14 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
             setMessages(deduped);
             streamingRef.current = null;
             agentStackRef.current = [];
+
+            for (let i = deduped.length - 1; i >= 0; i--) {
+              const m = deduped[i];
+              if (m.role === "assistant" && m.model) {
+                setActiveModelId(m.model);
+                break;
+              }
+            }
           }
 
           // Status is bundled with history so it arrives atomically,
@@ -486,6 +496,9 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
           const streamedBlocks = streamingRef.current?.blocks || [];
           streamingRef.current = null;
           agentStackRef.current = [];
+          if (msg.message.model) {
+            setActiveModelId(msg.message.model);
+          }
           setMessages((prev) => {
             const filtered = prev.filter((m) => m.id !== "streaming");
             if (filtered.some((m) => m.id === msg.message.id)) return filtered;
@@ -568,6 +581,9 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
 
         case "session:init": {
           setInitData(msg.data);
+          if (msg.data?.model) {
+            setActiveModelId(msg.data.model);
+          }
           break;
         }
 
@@ -743,15 +759,6 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
           if (msg.text.startsWith(thinkingPrefix)) {
             const level = msg.text.slice(thinkingPrefix.length) as ThinkingLevel;
             setThinkingLevelState(level);
-            const sysMsg: ChatMessage = {
-              id: "thinking-" + Date.now(),
-              role: "system",
-              content: `Thinking: ${level}`,
-              toolUses: [],
-              blocks: [],
-              timestamp: Date.now(),
-            };
-            setMessages((prev) => [...prev, sysMsg]);
             break;
           }
           if (msg.text === "__compact_boundary__") {
@@ -890,6 +897,13 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
         setMessages(deduped);
         if (deduped.length > 0) {
           lastServerMsgIdRef.current = deduped[deduped.length - 1].id;
+        }
+        for (let i = deduped.length - 1; i >= 0; i--) {
+          const m = deduped[i];
+          if (m.role === "assistant" && m.model) {
+            setActiveModelId(m.model);
+            break;
+          }
         }
         setIsResponding(false);
         isRespondingRef.current = false;
@@ -1088,6 +1102,17 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
   const setThinkingLevel = useCallback(
     (level: ThinkingLevel) => {
       setThinkingLevelState(level);
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: "thinking-" + Date.now(),
+          role: "system",
+          content: `Thinking: ${level}`,
+          toolUses: [],
+          blocks: [],
+          timestamp: Date.now(),
+        },
+      ]);
       send({ type: "session:set_thinking", sessionId, level });
     },
     [send, sessionId]
@@ -1131,5 +1156,5 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
     send({ type: "message:send", sessionId, text: "Continue from where you left off." });
   }, [send, sessionId]);
 
-  return { messages, historyLoaded, isResponding, pendingPermissions, pendingQuestions, modelPicker, currentModel, bypassActive, planMode, thinkingLevel, contextUsage, rateLimitStatus, apiError, suggestions, sessionName, initData, hasQueuedMessage, queuedMessages, queuePaused, backgroundTasks, todos, btw, hasMoreHistory, loadingMore, requestMoreHistory, sendMessage, interrupt, respondToPermission, respondToQuestion, selectModel, setModel, setBypassAll, setPlanMode, setThinkingLevel, cancelQueuedMessage, deleteQueuedMessage, editQueuedMessage, resumeQueue, restoredText, clearRestoredText, dismissBtw, retry };
+  return { messages, historyLoaded, isResponding, pendingPermissions, pendingQuestions, modelPicker, currentModel, bypassActive, planMode, thinkingLevel, contextUsage, rateLimitStatus, apiError, suggestions, sessionName, initData, activeModelId, hasQueuedMessage, queuedMessages, queuePaused, backgroundTasks, todos, btw, hasMoreHistory, loadingMore, requestMoreHistory, sendMessage, interrupt, respondToPermission, respondToQuestion, selectModel, setModel, setBypassAll, setPlanMode, setThinkingLevel, cancelQueuedMessage, deleteQueuedMessage, editQueuedMessage, resumeQueue, restoredText, clearRestoredText, dismissBtw, retry };
 }

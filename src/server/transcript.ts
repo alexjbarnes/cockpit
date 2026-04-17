@@ -30,6 +30,7 @@ interface TranscriptEntry {
     id?: string;
     role?: string;
     content?: string | TranscriptBlock[];
+    model?: string;
   };
   parentToolUseID?: string;
   data?: {
@@ -489,6 +490,7 @@ function parseLines(lines: string[]): { messages: ChatMessage[]; lastUsage: { us
           toolUses,
           blocks,
           timestamp: entry.timestamp ? new Date(entry.timestamp).getTime() : Date.now(),
+          model: typeof entry.message.model === "string" ? entry.message.model : undefined,
         };
         messages.push(msg);
         messageById.set(msgId, msg);

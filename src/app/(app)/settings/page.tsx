@@ -51,6 +51,8 @@ const thinkingOptions: { value: ThinkingLevel; label: string }[] = [
   { value: "low", label: "Low" },
   { value: "medium", label: "Medium" },
   { value: "high", label: "High" },
+  { value: "xhigh", label: "XHigh" },
+  { value: "max", label: "Max" },
 ];
 
 function getSystemTheme(): "light" | "dark" {
