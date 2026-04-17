@@ -16,7 +16,7 @@ import { CodeBlock, languageFromPath } from "@/components/code-block";
 import { ContextIndicator } from "./context-indicator";
 import { QueueModal } from "./queue-modal";
 import { McpStatusModal } from "@/components/mcp-status-modal";
-import { findModelById, defaultForAlias, versionsForAlias, type ModelAlias, type ModelEntry } from "@/lib/models";
+import { findModelById, defaultForAlias, versionsForAlias, allowedEffortLevels, type ModelAlias, type ModelEntry } from "@/lib/models";
 
 const aliases: { value: ModelAlias; label: string }[] = [
   { value: "haiku", label: "Haiku" },
@@ -691,27 +691,32 @@ export function InputArea({ sessionId, onSend, onInterrupt, isResponding, bypass
                 </div>
               </div>
             )}
-            {parsed.alias !== "haiku" && (
-              <div className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs">
-                <Brain className="h-3.5 w-3.5 text-muted-foreground" />
-                <span className="text-muted-foreground">Thinking</span>
-                <div className="ml-auto flex gap-1">
-                  {thinkingLevels.map((opt) => (
-                    <button
-                      key={opt.value}
-                      onClick={() => onSetThinking(opt.value)}
-                      className={`rounded px-2 py-0.5 text-xs transition-colors ${
-                        thinkingLevel === opt.value
-                          ? "bg-primary text-primary-foreground"
-                          : "bg-muted text-muted-foreground hover:text-foreground"
-                      }`}
-                    >
-                      {opt.label}
-                    </button>
-                  ))}
+            {(() => {
+              const allowed = new Set(allowedEffortLevels(parsed.entry));
+              if (allowed.size === 0) return null;
+              const visible = thinkingLevels.filter((opt) => allowed.has(opt.value));
+              return (
+                <div className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs">
+                  <Brain className="h-3.5 w-3.5 text-muted-foreground" />
+                  <span className="text-muted-foreground">Thinking</span>
+                  <div className="ml-auto flex gap-1">
+                    {visible.map((opt) => (
+                      <button
+                        key={opt.value}
+                        onClick={() => onSetThinking(opt.value)}
+                        className={`rounded px-2 py-0.5 text-xs transition-colors ${
+                          thinkingLevel === opt.value
+                            ? "bg-primary text-primary-foreground"
+                            : "bg-muted text-muted-foreground hover:text-foreground"
+                        }`}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
                 </div>
-              </div>
-            )}
+              );
+            })()}
             <button
               onClick={() => onSetBypass(!bypassActive)}
               className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs hover:bg-muted transition-colors"

@@ -9,6 +9,7 @@ import { logRawLine, logDiag } from "./debug-logger";
 import { getSessionPrefs, setSessionPrefs } from "./session-prefs";
 import { getDefaults } from "./defaults";
 import { findLatestPlanFile } from "./plans";
+import { resolveModel, allowedEffortLevels, recommendedEffort, coerceEffort } from "@/lib/models";
 
 export interface SessionEvents {
   event: [sessionId: string, event: ParsedEvent];
@@ -200,7 +201,7 @@ export class SessionManager {
         pendingPlanReminder: prefs?.planMode ?? false,
         needsRespawnForPermissions: false,
         compacting: false,
-        thinkingLevel: prefs?.thinkingLevel || defaults.thinkingLevel,
+        thinkingLevel: prefs?.thinkingLevel ?? recommendedEffort(resolveModel(prefs?.model || defaults.model)) ?? defaults.thinkingLevel,
         contextUsage: null,
         contextWindowSize: 200_000,
         todoItems: [],
@@ -679,6 +680,15 @@ export class SessionManager {
     session.info.model = model;
     setSessionPrefs(sessionId, { model });
 
+    const nextEntry = resolveModel(model);
+    const coerced = coerceEffort(session.thinkingLevel, nextEntry);
+    const levelChanged = coerced !== null && coerced !== session.thinkingLevel;
+    if (levelChanged) {
+      session.thinkingLevel = coerced;
+      setSessionPrefs(sessionId, { thinkingLevel: coerced });
+      this.emitSystem(session, sessionId, `__thinking_level::${coerced}`);
+    }
+
     if (session.stdin) {
       const request = {
         type: "control_request",
@@ -686,6 +696,14 @@ export class SessionManager {
         request: { subtype: "set_model", model },
       };
       session.stdin.write(JSON.stringify(request) + "\n");
+      if (allowedEffortLevels(nextEntry).length > 0) {
+        const effortRequest = {
+          type: "control_request",
+          request_id: `effort-${Date.now()}`,
+          request: { subtype: "apply_flag_settings", settings: { effort: session.thinkingLevel } },
+        };
+        session.stdin.write(JSON.stringify(effortRequest) + "\n");
+      }
     } else {
       this.killProcess(session);
       session.queuedMessages.length = 0;
@@ -706,14 +724,15 @@ export class SessionManager {
     session.thinkingLevel = level;
     setSessionPrefs(sessionId, { thinkingLevel: level });
 
-    if (session.stdin) {
+    const supportsEffort = allowedEffortLevels(resolveModel(session.info.model)).length > 0;
+    if (session.stdin && supportsEffort) {
       const request = {
         type: "control_request",
         request_id: `effort-${Date.now()}`,
         request: { subtype: "apply_flag_settings", settings: { effort: level } },
       };
       session.stdin.write(JSON.stringify(request) + "\n");
-    } else {
+    } else if (!session.stdin) {
       this.killProcess(session);
       session.queuedMessages.length = 0;
       session.queuePaused = false;
@@ -1285,7 +1304,9 @@ Additional Cockpit rules beyond the CLI's defaults:
       args.push("--model", session.info.model);
     }
 
-    args.push("--effort", session.thinkingLevel);
+    if (allowedEffortLevels(resolveModel(session.info.model)).length > 0) {
+      args.push("--effort", session.thinkingLevel);
+    }
 
     const env = { ...process.env };
     delete env.CLAUDECODE;

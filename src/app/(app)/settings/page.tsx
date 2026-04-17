@@ -7,6 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { useSettings, type DiffStyle, type ThinkingLevel } from "@/hooks/use-settings";
 import { ChevronRight, RefreshCw, Download } from "lucide-react";
+import { resolveModel, allowedEffortLevels } from "@/lib/models";
 
 type Theme = "light" | "dark" | "system";
 
@@ -245,9 +246,16 @@ export default function SettingsPage() {
               />
             </SettingRow>
           )}
-          <SettingRow label="Thinking level">
-            <ButtonGroup options={thinkingOptions} value={settings.thinkingLevel} onChange={(v) => updateSetting("thinkingLevel", v)} />
-          </SettingRow>
+          {(() => {
+            const allowed = new Set(allowedEffortLevels(resolveModel(settings.model)));
+            if (allowed.size === 0) return null;
+            const visible = thinkingOptions.filter((opt) => allowed.has(opt.value));
+            return (
+              <SettingRow label="Thinking level">
+                <ButtonGroup options={visible} value={settings.thinkingLevel} onChange={(v) => updateSetting("thinkingLevel", v)} />
+              </SettingRow>
+            );
+          })()}
           <SettingRow label="Bypass all permissions">
             <Toggle enabled={settings.bypassAllPermissions} color="bg-orange-500" onToggle={() => updateSetting("bypassAllPermissions", !settings.bypassAllPermissions)} />
           </SettingRow>
