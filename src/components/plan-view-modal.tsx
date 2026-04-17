@@ -7,12 +7,9 @@ import rehypeHighlight from "rehype-highlight";
 import { X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { MarkdownCodeBlock } from "@/components/markdown-code-block";
 
-const markdownComponents = {
-  pre: (props: React.HTMLAttributes<HTMLPreElement>) => (
-    <pre className="overflow-x-auto rounded bg-muted/50 p-3 text-sm leading-relaxed" {...props} />
-  ),
-};
+const markdownComponents = { pre: MarkdownCodeBlock };
 
 interface PlanViewModalProps {
   open: boolean;
@@ -60,7 +57,7 @@ export function PlanViewModal({ open, onOpenChange, content, filePath }: PlanVie
             <X className="h-4 w-4" />
           </Button>
         </div>
-        <div className="flex-1 min-h-0 overflow-y-auto p-4 prose prose-sm dark:prose-invert max-w-none">
+        <div className="flex-1 min-h-0 overflow-y-auto p-4 message-prose prose prose-sm max-w-none dark:prose-invert">
           <ReactMarkdown
             remarkPlugins={[remarkGfm]}
             rehypePlugins={[rehypeHighlight]}

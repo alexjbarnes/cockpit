@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useCallback, useRef, memo, type HTMLAttributes } from "react";
+import React, { useState, useCallback, useRef, memo } from "react";
 import type { ChatMessage } from "@/types";
 import { ToolCard } from "./tool-card";
 import { useSettings } from "@/hooks/use-settings";
@@ -9,8 +9,9 @@ import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
-import { Loader2, Check, ChevronDown, ChevronRight, Brain, FileText, File, Copy } from "lucide-react";
+import { Loader2, ChevronDown, ChevronRight, Brain, FileText, File } from "lucide-react";
 import { CodeBlock as SyntaxCodeBlock, languageFromPath } from "@/components/code-block";
+import { MarkdownCodeBlock } from "@/components/markdown-code-block";
 
 const CLI_XML_RE = /<(?:task-notification|local-command-caveat|local-command-stdout|command-name|system-reminder)[^>]*>[\s\S]*?<\/(?:task-notification|local-command-caveat|local-command-stdout|command-name|system-reminder)>[\s\S]*/g;
 
@@ -18,54 +19,7 @@ function stripCliXml(text: string): string {
   return text.replace(CLI_XML_RE, "").trim();
 }
 
-function fallbackCopy(text: string): boolean {
-  const ta = document.createElement("textarea");
-  ta.value = text;
-  ta.style.position = "fixed";
-  ta.style.opacity = "0";
-  document.body.appendChild(ta);
-  ta.select();
-  try {
-    return document.execCommand("copy");
-  } finally {
-    document.body.removeChild(ta);
-  }
-}
-
-function CodeBlock(props: HTMLAttributes<HTMLPreElement>) {
-  const [copied, setCopied] = useState(false);
-  const preRef = useRef<HTMLPreElement>(null);
-
-  const handleCopy = useCallback(() => {
-    const text = preRef.current?.textContent ?? "";
-    const onSuccess = () => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    };
-    if (navigator.clipboard?.writeText) {
-      navigator.clipboard.writeText(text).then(onSuccess).catch(() => {
-        fallbackCopy(text) && onSuccess();
-      });
-    } else {
-      fallbackCopy(text) && onSuccess();
-    }
-  }, []);
-
-  return (
-    <div className="group/code relative">
-      <pre ref={preRef} {...props} />
-      <button
-        onClick={handleCopy}
-        className="absolute top-2 right-2 p-1.5 rounded bg-background/80 border border-border text-muted-foreground hover:text-foreground opacity-60 sm:opacity-0 sm:group-hover/code:opacity-100 transition-opacity"
-        title="Copy code"
-      >
-        {copied ? <Check className="h-3.5 w-3.5 text-green-500" /> : <Copy className="h-3.5 w-3.5" />}
-      </button>
-    </div>
-  );
-}
-
-const markdownComponents = { pre: CodeBlock };
+const markdownComponents = { pre: MarkdownCodeBlock };
 
 interface MessageBubbleProps {
   message: ChatMessage;
