@@ -1,12 +1,29 @@
-import { describe, it, expect, beforeAll, beforeEach, afterAll } from "vitest";
+import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from "vitest";
+import { EventEmitter } from "node:events";
 import { createServer, type Server } from "node:http";
 import { WebSocket } from "ws";
+
+vi.mock("node:child_process", () => ({
+  spawn: vi.fn(() => {
+    const emitter = new EventEmitter();
+    const stdin = new (require("node:stream").PassThrough)();
+    return Object.assign(emitter, {
+      pid: 99999,
+      stdin,
+      stdout: new EventEmitter(),
+      stderr: new EventEmitter(),
+      kill: vi.fn(),
+    });
+  }),
+}));
+
 import { createWebSocketHandler } from "@/server/ws-handler";
 import { SessionManager } from "@/server/session-manager";
-import { createSession as createAuthSession } from "@/server/auth";
+import { setupPassword, createSession as createAuthSession } from "@/server/auth";
 
-beforeAll(() => {
+beforeAll(async () => {
   delete process.env.COCKPIT_DISABLE_AUTH;
+  await setupPassword("test-password");
 });
 
 describe("WebSocket reconnection", () => {

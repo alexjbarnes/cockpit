@@ -136,6 +136,50 @@ describe("debug-logger", () => {
     });
   });
 
+  describe("maybeRotate", () => {
+    it("rotates log file when size exceeds threshold after CHECK_INTERVAL writes", async () => {
+      process.env.COCKPIT_DEBUG = "1";
+      const { logRawLine } = await import("@/server/debug-logger");
+      mockStat.mockResolvedValue({ size: 60 * 1024 * 1024 } as never);
+
+      for (let i = 0; i < 500; i++) {
+        logRawLine("s1", `line-${i}`);
+      }
+      await new Promise((r) => setTimeout(r, 100));
+
+      expect(mockStat).toHaveBeenCalled();
+      expect(mockRename).toHaveBeenCalled();
+    });
+
+    it("does not rotate when file is under size threshold", async () => {
+      process.env.COCKPIT_DEBUG = "1";
+      const { logRawLine } = await import("@/server/debug-logger");
+      mockStat.mockResolvedValue({ size: 100 } as never);
+
+      for (let i = 0; i < 500; i++) {
+        logRawLine("s1", `line-${i}`);
+      }
+      await new Promise((r) => setTimeout(r, 100));
+
+      expect(mockStat).toHaveBeenCalled();
+      expect(mockRename).not.toHaveBeenCalled();
+    });
+
+    it("handles stat errors gracefully during rotation", async () => {
+      process.env.COCKPIT_DEBUG = "1";
+      const { logRawLine } = await import("@/server/debug-logger");
+      mockStat.mockRejectedValue(new Error("ENOENT"));
+
+      for (let i = 0; i < 500; i++) {
+        logRawLine("s1", `line-${i}`);
+      }
+      await new Promise((r) => setTimeout(r, 100));
+
+      expect(mockStat).toHaveBeenCalled();
+      expect(mockRename).not.toHaveBeenCalled();
+    });
+  });
+
   describe("initialization", () => {
     it("creates .cockpit directory on first write", async () => {
       process.env.COCKPIT_DEBUG = "1";

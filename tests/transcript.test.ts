@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { existsSync } from "node:fs";
-import { readFile, stat, open } from "node:fs/promises";
+import { readFile, readdir, stat, open } from "node:fs/promises";
 import { transcriptExists, loadTranscript, loadMoreMessages } from "@/server/transcript";
 
 vi.mock("node:os", () => ({ homedir: () => "/home/user" }));
@@ -931,6 +931,268 @@ describe("transcript module", () => {
       const result = await loadTranscript("session-123", "/tmp");
 
       expect(result.lastUsage?.total).toBe(200000);
+    });
+  });
+
+  describe("loadLastUsage", () => {
+    it("returns null when file does not exist", async () => {
+      const { loadLastUsage } = await import("@/server/transcript");
+      (existsSync as any).mockReturnValue(false);
+
+      const result = await loadLastUsage("session-123", "/tmp");
+      expect(result).toBeNull();
+    });
+
+    it("extracts usage from assistant message", async () => {
+      const { loadLastUsage } = await import("@/server/transcript");
+      (existsSync as any).mockReturnValue(true);
+      const content = jsonl(
+        { type: "assistant", message: { usage: { input_tokens: 1000 } } }
+      );
+      (readFile as any).mockResolvedValue(content);
+
+      const result = await loadLastUsage("session-123", "/tmp");
+      expect(result).toEqual({ used: 1000, total: 200000 });
+    });
+
+    it("uses contextWindow from result entry", async () => {
+      const { loadLastUsage } = await import("@/server/transcript");
+      (existsSync as any).mockReturnValue(true);
+      const content = jsonl(
+        { type: "result", modelUsage: { "claude-3": { contextWindow: 100000 } } },
+        { type: "assistant", message: { usage: { input_tokens: 500, cache_read_input_tokens: 200 } } }
+      );
+      (readFile as any).mockResolvedValue(content);
+
+      const result = await loadLastUsage("session-123", "/tmp");
+      expect(result).toEqual({ used: 700, total: 100000 });
+    });
+
+    it("returns null when no assistant messages have usage", async () => {
+      const { loadLastUsage } = await import("@/server/transcript");
+      (existsSync as any).mockReturnValue(true);
+      const content = jsonl(
+        { type: "user", message: { content: "hello" } }
+      );
+      (readFile as any).mockResolvedValue(content);
+
+      const result = await loadLastUsage("session-123", "/tmp");
+      expect(result).toBeNull();
+    });
+
+    it("includes cache_creation_input_tokens in usage calculation", async () => {
+      const { loadLastUsage } = await import("@/server/transcript");
+      (existsSync as any).mockReturnValue(true);
+      const content = jsonl(
+        { type: "assistant", message: { usage: { input_tokens: 100, cache_creation_input_tokens: 300, cache_read_input_tokens: 200 } } }
+      );
+      (readFile as any).mockResolvedValue(content);
+
+      const result = await loadLastUsage("session-123", "/tmp");
+      expect(result).toEqual({ used: 600, total: 200000 });
+    });
+
+    it("skips malformed JSON lines", async () => {
+      const { loadLastUsage } = await import("@/server/transcript");
+      (existsSync as any).mockReturnValue(true);
+      (readFile as any).mockResolvedValue("not-json\n" + JSON.stringify({ type: "assistant", message: { usage: { input_tokens: 50 } } }));
+
+      const result = await loadLastUsage("session-123", "/tmp");
+      expect(result).toEqual({ used: 50, total: 200000 });
+    });
+  });
+
+  describe("findSessionCwd", () => {
+    it("returns null when projects dir does not exist", async () => {
+      const { findSessionCwd } = await import("@/server/transcript");
+      (existsSync as any).mockReturnValue(false);
+
+      const result = await findSessionCwd("session-123");
+
+      expect(result).toBeNull();
+    });
+
+    it("returns null when readdir fails", async () => {
+      const { findSessionCwd } = await import("@/server/transcript");
+      (existsSync as any).mockReturnValue(true);
+      (readdir as any).mockRejectedValue(new Error("readdir failed"));
+
+      const result = await findSessionCwd("session-123");
+
+      expect(result).toBeNull();
+    });
+
+    it("finds session cwd by scanning project dirs", async () => {
+      const { findSessionCwd } = await import("@/server/transcript");
+      const { createReadStream } = await import("node:fs");
+      const { createInterface } = await import("node:readline");
+
+      (existsSync as any).mockImplementation((p: string) => {
+        if (p.includes("session-123.jsonl")) return true;
+        return true;
+      });
+      (readdir as any).mockResolvedValue(["project-a"]);
+      (stat as any).mockResolvedValue({ mtimeMs: 1000 });
+
+      const lines = [
+        JSON.stringify({ type: "user", cwd: "/home/user/my-project", message: { content: "hello" }, timestamp: "2024-01-01T00:00:00Z" }),
+      ];
+      let lineIndex = 0;
+      const mockRl = {
+        [Symbol.asyncIterator]: () => ({
+          next: () => {
+            if (lineIndex < lines.length) {
+              return Promise.resolve({ value: lines[lineIndex++], done: false });
+            }
+            return Promise.resolve({ value: undefined, done: true });
+          },
+        }),
+        close: vi.fn(),
+      };
+      (createInterface as any).mockReturnValue(mockRl);
+      (createReadStream as any).mockReturnValue({});
+
+      const result = await findSessionCwd("session-123");
+      expect(result).toBe("/home/user/my-project");
+    });
+
+    it("returns null when session file not found in any project dir", async () => {
+      const { findSessionCwd } = await import("@/server/transcript");
+      (existsSync as any).mockImplementation((p: string) => {
+        if (p.includes("session-123.jsonl")) return false;
+        return true;
+      });
+      (readdir as any).mockResolvedValue(["project-a", "project-b"]);
+
+      const result = await findSessionCwd("session-123");
+      expect(result).toBeNull();
+    });
+  });
+
+  describe("scanAllSessions", () => {
+    it("returns empty array when projects dir does not exist", async () => {
+      const { scanAllSessions } = await import("@/server/transcript");
+      (existsSync as any).mockReturnValue(false);
+
+      const result = await scanAllSessions();
+
+      expect(result).toEqual([]);
+    });
+
+    it("returns empty array when readdir fails", async () => {
+      const { scanAllSessions } = await import("@/server/transcript");
+      (existsSync as any).mockReturnValue(true);
+      (readdir as any).mockRejectedValue(new Error("readdir failed"));
+
+      const result = await scanAllSessions();
+
+      expect(result).toEqual([]);
+    });
+
+    it("scans project dirs and groups sessions by cwd", async () => {
+      const { scanAllSessions } = await import("@/server/transcript");
+      const { createReadStream } = await import("node:fs");
+      const { createInterface } = await import("node:readline");
+
+      (existsSync as any).mockReturnValue(true);
+      (readdir as any)
+        .mockResolvedValueOnce(["project-a"])
+        .mockResolvedValueOnce(["sess1.jsonl", "sess2.jsonl", "other.txt"]);
+      (stat as any).mockResolvedValue({ mtimeMs: 2000 });
+
+      const makeRl = (cwd: string, title: string) => {
+        const lines = [
+          JSON.stringify({ type: "user", cwd, message: { content: title }, timestamp: "2024-01-01T00:00:00Z" }),
+        ];
+        let i = 0;
+        return {
+          [Symbol.asyncIterator]: () => ({
+            next: () => {
+              if (i < lines.length) return Promise.resolve({ value: lines[i++], done: false });
+              return Promise.resolve({ value: undefined, done: true });
+            },
+          }),
+          close: vi.fn(),
+        };
+      };
+
+      (createReadStream as any).mockReturnValue({});
+      (createInterface as any)
+        .mockReturnValueOnce(makeRl("/tmp/project", "First session"))
+        .mockReturnValueOnce(makeRl("/tmp/project", "Second session"));
+
+      const result = await scanAllSessions();
+      expect(result).toHaveLength(1);
+      expect(result[0].cwd).toBe("/tmp/project");
+      expect(result[0].sessions).toHaveLength(2);
+      expect(result[0].dirName).toBe("project");
+    });
+
+    it("handles readdir failure for individual project dirs", async () => {
+      const { scanAllSessions } = await import("@/server/transcript");
+      (existsSync as any).mockReturnValue(true);
+      (readdir as any)
+        .mockResolvedValueOnce(["project-a"])
+        .mockRejectedValueOnce(new Error("permission denied"));
+
+      const result = await scanAllSessions();
+      expect(result).toEqual([]);
+    });
+
+    it("sorts groups by most recent session activity", async () => {
+      const { scanAllSessions } = await import("@/server/transcript");
+      const { createReadStream } = await import("node:fs");
+      const { createInterface } = await import("node:readline");
+
+      (existsSync as any).mockReturnValue(true);
+      (readdir as any)
+        .mockResolvedValueOnce(["proj-a", "proj-b"])
+        .mockResolvedValueOnce(["s1.jsonl"])
+        .mockResolvedValueOnce(["s2.jsonl"]);
+
+      const makeRl = (cwd: string) => {
+        const lines = [
+          JSON.stringify({ type: "user", cwd, message: { content: "hi" }, timestamp: "2024-01-01T00:00:00Z" }),
+        ];
+        let i = 0;
+        return {
+          [Symbol.asyncIterator]: () => ({
+            next: () => {
+              if (i < lines.length) return Promise.resolve({ value: lines[i++], done: false });
+              return Promise.resolve({ value: undefined, done: true });
+            },
+          }),
+          close: vi.fn(),
+        };
+      };
+
+      (createReadStream as any).mockReturnValue({});
+      (stat as any)
+        .mockResolvedValueOnce({ mtimeMs: 1000 })
+        .mockResolvedValueOnce({ mtimeMs: 3000 });
+      (createInterface as any)
+        .mockReturnValueOnce(makeRl("/tmp/old-project"))
+        .mockReturnValueOnce(makeRl("/tmp/new-project"));
+
+      const result = await scanAllSessions();
+      expect(result).toHaveLength(2);
+      expect(result[0].cwd).toBe("/tmp/new-project");
+      expect(result[1].cwd).toBe("/tmp/old-project");
+    });
+
+    it("skips sessions where extractSessionMeta returns null", async () => {
+      const { scanAllSessions } = await import("@/server/transcript");
+      const { createReadStream } = await import("node:fs");
+      const { createInterface } = await import("node:readline");
+
+      (existsSync as any).mockReturnValue(true);
+      (readdir as any)
+        .mockResolvedValueOnce(["proj"])
+        .mockResolvedValueOnce(["s1.jsonl"]);
+      (stat as any).mockRejectedValue(new Error("stat failed"));
+
+      const result = await scanAllSessions();
+      expect(result).toEqual([]);
     });
   });
 });
