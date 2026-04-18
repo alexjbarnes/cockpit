@@ -268,7 +268,6 @@ export function InputArea({
   hasQueuedMessage,
   queuedMessages,
   queuePaused,
-  onCancelQueued,
   onDeleteQueued,
   onEditQueued,
   onResumeQueue,

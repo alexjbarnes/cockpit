@@ -66,12 +66,6 @@ interface StreamMessage {
   usage?: { output_tokens?: number };
 }
 
-interface ToolResult {
-  type: string;
-  tool_use_id?: string;
-  content?: string | ContentBlock[];
-}
-
 export class EventParser {
   private lastAssistantModel: string | null = null;
 

@@ -362,12 +362,11 @@ function SearchContent({ input, tool }: { input: Record<string, unknown>; tool: 
 function AgentContent({
   input,
   tool,
-  dark,
   expandedToolIds,
 }: {
   input: Record<string, unknown>;
   tool: ToolUse;
-  dark: boolean;
+  dark?: boolean;
   expandedToolIds?: React.RefObject<Set<string>>;
 }) {
   const prompt = (input.prompt as string) || "";

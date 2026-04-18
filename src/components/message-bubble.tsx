@@ -299,7 +299,7 @@ function TextFileBlock({ name, content }: { name: string; content: string }) {
   );
 }
 
-function ThinkingBlock({ text, tokens, redacted }: { text: string; tokens?: number; redacted?: boolean }) {
+function ThinkingBlock({ text, tokens }: { text: string; tokens?: number; redacted?: boolean }) {
   const { settings } = useSettings();
   const [expanded, setExpanded] = useState<boolean | null>(null);
   const isExpanded = expanded ?? settings.thinkingExpanded;

@@ -1158,8 +1158,6 @@ describe("transcript module", () => {
 
     it("skips sessions where extractSessionMeta returns null", async () => {
       const { scanAllSessions } = await import("@/server/transcript");
-      const { createReadStream } = await import("node:fs");
-      const { createInterface } = await import("node:readline");
 
       (existsSync as any).mockReturnValue(true);
       (readdir as any).mockResolvedValueOnce(["proj"]).mockResolvedValueOnce(["s1.jsonl"]);

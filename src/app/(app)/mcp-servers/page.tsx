@@ -71,7 +71,6 @@ export default function McpServersPage() {
               <ServerRow
                 key={server.name}
                 name={server.name}
-                scope="user"
                 type={server.type}
                 detail={server.command || server.url}
                 onClick={() => handleClick(server.name, "user")}
@@ -92,7 +91,6 @@ export default function McpServersPage() {
               <ServerRow
                 key={server.name}
                 name={server.name}
-                scope="project"
                 type={server.type}
                 detail={server.command || server.url}
                 onClick={() => handleClick(server.name, "project")}
@@ -156,14 +154,12 @@ export default function McpServersPage() {
 
 function ServerRow({
   name,
-  scope,
   type,
   detail,
   onClick,
   onDelete,
 }: {
   name: string;
-  scope: "user" | "project";
   type: string;
   detail?: string;
   onClick: () => void;
