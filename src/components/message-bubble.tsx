@@ -266,32 +266,31 @@ export const MessageBubble = memo(function MessageBubble({
 });
 
 function TextFileBlock({ name, content }: { name: string; content: string }) {
-  const [expanded, setExpanded] = useState(false);
+  const [open, setOpen] = useState(false);
   const lineCount = content.split("\n").length;
 
   return (
-    <div className="rounded border border-blue-500/20 bg-blue-500/5">
+    <>
       <button
-        onClick={() => setExpanded(!expanded)}
-        className="flex w-full items-center gap-1.5 px-3 py-1.5 text-xs text-blue-400 hover:text-blue-300"
+        onClick={(e) => { e.stopPropagation(); setOpen(true); }}
+        className="flex w-full items-center gap-1.5 rounded border border-blue-500/20 bg-blue-500/5 px-3 py-1.5 text-xs text-blue-400 hover:text-blue-300"
       >
         <File className="h-3 w-3" />
         <span className="font-medium">{name}</span>
-        <span className="text-muted-foreground ml-1">
-          {lineCount} lines
-        </span>
-        {expanded ? (
-          <ChevronDown className="h-3 w-3 ml-auto" />
-        ) : (
-          <ChevronRight className="h-3 w-3 ml-auto" />
-        )}
+        <span className="text-muted-foreground ml-1">{lineCount} lines</span>
       </button>
-      {expanded && (
-        <div className="border-t border-blue-500/20">
-          <SyntaxCodeBlock code={content} language={languageFromPath(name)} dark />
-        </div>
-      )}
-    </div>
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent className="max-w-3xl max-h-[80vh] flex flex-col" onClose={() => setOpen(false)}>
+          <div className="text-sm font-medium px-1 pb-2 border-b border-border flex items-center gap-1.5">
+            <File className="h-3.5 w-3.5 text-blue-400" />
+            {name}
+          </div>
+          <div className="flex-1 min-h-0 overflow-auto">
+            <SyntaxCodeBlock code={content} language={languageFromPath(name)} dark />
+          </div>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }
 
@@ -314,7 +313,7 @@ function ThinkingBlock({ text, tokens, redacted }: { text: string; tokens?: numb
         className="flex w-full items-center gap-1.5 px-3 py-1.5 text-xs text-purple-400 hover:text-purple-300 disabled:cursor-default disabled:hover:text-purple-400"
       >
         <Brain className="h-3 w-3" />
-        <span className="font-medium">{redacted ? "Thinking (redacted)" : "Thinking"}</span>
+        <span className="font-medium">Thinking</span>
         {sizeLabel && <span className="text-muted-foreground ml-1">{sizeLabel}</span>}
         {hasText && (
           isExpanded ? (
