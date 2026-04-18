@@ -89,8 +89,33 @@ export function createWebSocketHandler(server: HTTPServer, sessionManager: Sessi
           const sid = msg.sessionId.slice(0, 8);
           const t0 = performance.now();
           console.log(
-            `[ws:${wsId}] session:connect ${sid} (cwd=${msg.cwd || "none"}, process=${sessionManager.isProcessAlive(msg.sessionId)})`,
+            `[ws:${wsId}] session:connect ${sid} (cwd=${msg.cwd || "none"}, historyView=${!!msg.historyView}, process=${sessionManager.isProcessAlive(msg.sessionId)})`,
           );
+
+          if (msg.historyView && msg.cwd) {
+            sessionManager.getCliSessionView(msg.sessionId, msg.cwd).then((result) => {
+              if (!result) {
+                send(ws, { type: "session:error", sessionId: msg.sessionId, error: "Session not found" });
+                return;
+              }
+              console.log(`[ws:${wsId}] session ${sid} history view loaded in ${(performance.now() - t0).toFixed(0)}ms`);
+              send(ws, {
+                type: "history",
+                sessionId: msg.sessionId,
+                messages: result.messages,
+                status: "idle",
+                hasMore: result.hasMore,
+              });
+              send(ws, { type: "session:connected", sessionId: msg.sessionId });
+              send(ws, { type: "session:info_updated", sessionId: msg.sessionId, info: result.info });
+              send(ws, { type: "session:status", sessionId: msg.sessionId, status: "idle" });
+              if (result.lastUsage) {
+                send(ws, { type: "session:usage", sessionId: msg.sessionId, usage: result.lastUsage });
+              }
+            });
+            break;
+          }
+
           const sessionPromise = msg.cwd
             ? sessionManager.getSessionByCwd(msg.sessionId, msg.cwd)
             : sessionManager.getSession(msg.sessionId);

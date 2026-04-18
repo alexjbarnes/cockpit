@@ -167,7 +167,7 @@ export function SessionList() {
   };
 
   const navigateToSession = (session: SessionInfo) => {
-    router.push(`/sessions/${session.id}?cwd=${encodeURIComponent(session.cwd)}`);
+    router.push(`/sessions/${session.id}?cwd=${encodeURIComponent(session.cwd)}&historyView=true`);
   };
 
   const favoriteGroups = groups.filter((g) => favorites.has(g.cwd));

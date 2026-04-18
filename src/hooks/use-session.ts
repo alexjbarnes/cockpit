@@ -85,7 +85,7 @@ interface UseSessionReturn {
   retry: () => void;
 }
 
-export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
+export function useSession(sessionId: string, cwd?: string, historyView?: boolean): UseSessionReturn {
   const { send, subscribe, connected } = useWebSocket();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isResponding, setIsResponding] = useState(false);
@@ -174,9 +174,10 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
         sessionId,
         cwd: cwd || undefined,
         lastMessageId: isReconnect ? lastServerMsgIdRef.current : undefined,
+        historyView: historyView || undefined,
       });
     }
-  }, [connected, sessionId, cwd, send]);
+  }, [connected, sessionId, cwd, historyView, send]);
 
   useEffect(() => {
     const unsub = subscribe((msg: ServerMessage) => {

@@ -1,3 +1,4 @@
+import type { PathLike } from "node:fs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("node:fs");
@@ -27,7 +28,7 @@ describe("plans", () => {
 
   it("returns undefined when no .md files", async () => {
     const fs = await import("node:fs");
-    vi.mocked(fs.readdirSync).mockReturnValue(["file.txt", "readme.md.bak"]);
+    vi.mocked(fs.readdirSync).mockReturnValue(["file.txt", "readme.md.bak"] as unknown as ReturnType<typeof fs.readdirSync>);
 
     const { findLatestPlanFile } = await import("@/server/plans");
     const result = findLatestPlanFile();
@@ -37,15 +38,15 @@ describe("plans", () => {
 
   it("returns latest by mtime", async () => {
     const fs = await import("node:fs");
-    vi.mocked(fs.readdirSync).mockReturnValue(["plan-1.md", "plan-2.md", "plan-3.md"]);
+    vi.mocked(fs.readdirSync).mockReturnValue(["plan-1.md", "plan-2.md", "plan-3.md"] as unknown as ReturnType<typeof fs.readdirSync>);
 
-    vi.mocked(fs.statSync).mockImplementation((path: string) => {
+    vi.mocked(fs.statSync).mockImplementation((path: PathLike) => {
       const mtimes: Record<string, number> = {
         "/home/user/.claude/plans/plan-1.md": 1000,
         "/home/user/.claude/plans/plan-2.md": 3000,
         "/home/user/.claude/plans/plan-3.md": 2000,
       };
-      return { mtimeMs: mtimes[path] } as any;
+      return { mtimeMs: mtimes[String(path)] } as any;
     });
 
     const { findLatestPlanFile } = await import("@/server/plans");
@@ -56,14 +57,16 @@ describe("plans", () => {
 
   it("excludes agent plan files", async () => {
     const fs = await import("node:fs");
-    vi.mocked(fs.readdirSync).mockReturnValue(["plan.md", "plan-agent-123.md", "other-agent-plan.md", "latest.md"]);
+    vi.mocked(fs.readdirSync).mockReturnValue(["plan.md", "plan-agent-123.md", "other-agent-plan.md", "latest.md"] as unknown as ReturnType<
+      typeof fs.readdirSync
+    >);
 
-    vi.mocked(fs.statSync).mockImplementation((path: string) => {
+    vi.mocked(fs.statSync).mockImplementation((path: PathLike) => {
       const mtimes: Record<string, number> = {
         "/home/user/.claude/plans/plan.md": 1000,
         "/home/user/.claude/plans/latest.md": 5000,
       };
-      return { mtimeMs: mtimes[path] || 0 } as any;
+      return { mtimeMs: mtimes[String(path)] || 0 } as any;
     });
 
     const { findLatestPlanFile } = await import("@/server/plans");

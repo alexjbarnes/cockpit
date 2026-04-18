@@ -7,7 +7,7 @@ interface UseUsageResult {
   usage: UsageLimits | null;
   loading: boolean;
   error: string | null;
-  refresh: () => void;
+  refresh: (force?: boolean) => void;
 }
 
 const POLL_INTERVAL = 5 * 60 * 1000;
@@ -17,9 +17,9 @@ let cachedUsage: UsageLimits | null = null;
 let lastFetchTime = 0;
 let inflightRequest: Promise<UsageLimits | null> | null = null;
 
-async function fetchUsage(): Promise<UsageLimits | null> {
+async function fetchUsage(force = false): Promise<UsageLimits | null> {
   const now = Date.now();
-  if (cachedUsage && now - lastFetchTime < MIN_FETCH_INTERVAL) {
+  if (!force && cachedUsage && now - lastFetchTime < MIN_FETCH_INTERVAL) {
     return cachedUsage;
   }
 
@@ -51,8 +51,9 @@ export function useUsage(): UseUsageResult {
   const [error, setError] = useState<string | null>(null);
   const mountedRef = useRef(true);
 
-  const refresh = useCallback(async () => {
-    const data = await fetchUsage();
+  const refresh = useCallback(async (force = false) => {
+    if (force) setLoading(true);
+    const data = await fetchUsage(force);
     if (!mountedRef.current) return;
     if (data) {
       setUsage(data);

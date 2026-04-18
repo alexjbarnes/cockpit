@@ -251,7 +251,7 @@ describe("SessionManager", () => {
       const session = manager.createSession("/tmp");
       const unsub = manager.onStatus(session.id, () => {});
       expect(typeof unsub).toBe("function");
-      expect(() => unsub()).not.toThrow();
+      expect(() => unsub!()).not.toThrow();
     });
 
     it("listener receives status changes", () => {
@@ -267,7 +267,7 @@ describe("SessionManager", () => {
       const session = manager.createSession("/tmp");
       const statuses: Array<"idle" | "running"> = [];
       const unsub = manager.onStatus(session.id, (status) => statuses.push(status));
-      unsub();
+      unsub!();
       manager.sendMessage(session.id, "test");
       expect(statuses).toHaveLength(0);
     });
@@ -282,7 +282,7 @@ describe("SessionManager", () => {
       const session = manager.createSession("/tmp");
       const unsub = manager.onError(session.id, () => {});
       expect(typeof unsub).toBe("function");
-      expect(() => unsub()).not.toThrow();
+      expect(() => unsub!()).not.toThrow();
     });
   });
 
@@ -631,7 +631,7 @@ describe("SessionManager", () => {
 
     it("emits info_updated after model change", () => {
       const session = manager.createSession("/tmp");
-      const infoUpdates: Array<{ model: string }> = [];
+      const infoUpdates: Array<{ model: string | undefined }> = [];
       manager.onInfoUpdated(session.id, (info) => infoUpdates.push({ model: info.model }));
       manager.sendMessage(session.id, "/model opus");
       expect(infoUpdates.length).toBeGreaterThan(0);
@@ -727,7 +727,7 @@ describe("SessionManager", () => {
 
     it("emits info_updated event for model change", () => {
       const session = manager.createSession("/tmp");
-      const infoUpdates: Array<{ model: string }> = [];
+      const infoUpdates: Array<{ model: string | undefined }> = [];
       manager.onInfoUpdated(session.id, (info) => infoUpdates.push({ model: info.model }));
       manager.setModel(session.id, "haiku");
       expect(infoUpdates.length).toBeGreaterThan(0);
@@ -1039,7 +1039,7 @@ describe("SessionManager", () => {
     it("addPendingRequest and getPendingRequests", () => {
       const s = manager.createSession("/tmp");
       expect(manager.getPendingRequests(s.id)).toEqual([]);
-      manager.addPendingRequest(s.id, { requestId: "r1", toolName: "Bash", toolInput: {} });
+      manager.addPendingRequest(s.id, { type: "permission" as const, requestId: "r1", toolName: "Bash", toolInput: "" });
       const pending = manager.getPendingRequests(s.id);
       expect(pending).toHaveLength(1);
       expect(pending[0].requestId).toBe("r1");
@@ -1047,7 +1047,7 @@ describe("SessionManager", () => {
 
     it("removePendingRequest removes by id", () => {
       const s = manager.createSession("/tmp");
-      manager.addPendingRequest(s.id, { requestId: "r1", toolName: "Bash", toolInput: {} });
+      manager.addPendingRequest(s.id, { type: "permission" as const, requestId: "r1", toolName: "Bash", toolInput: "" });
       manager.removePendingRequest(s.id, "r1");
       expect(manager.getPendingRequests(s.id)).toEqual([]);
     });
@@ -1252,7 +1252,7 @@ describe("SessionManager", () => {
 
     it("removes pending request when responding with stdin", () => {
       const session = manager.createSession("/tmp");
-      manager.addPendingRequest(session.id, { requestId: "req-1", toolName: "Bash", toolInput: {} });
+      manager.addPendingRequest(session.id, { type: "permission" as const, requestId: "req-1", toolName: "Bash", toolInput: "" });
       expect(manager.getPendingRequests(session.id)).toHaveLength(1);
       const result = manager.respondToPermission(session.id, "req-1", true);
       expect(result).toBe(false);
@@ -1785,21 +1785,21 @@ describe("SessionManager", () => {
   describe("addPendingRequest and removePendingRequest", () => {
     it("adds a pending request", () => {
       const session = manager.createSession("/tmp");
-      manager.addPendingRequest(session.id, { requestId: "r1", toolName: "Bash", toolInput: {} });
+      manager.addPendingRequest(session.id, { type: "permission" as const, requestId: "r1", toolName: "Bash", toolInput: "" });
       expect(manager.getPendingRequests(session.id)).toHaveLength(1);
       expect(manager.getPendingRequests(session.id)[0].requestId).toBe("r1");
     });
 
     it("removes a pending request", () => {
       const session = manager.createSession("/tmp");
-      manager.addPendingRequest(session.id, { requestId: "r1", toolName: "Bash", toolInput: {} });
+      manager.addPendingRequest(session.id, { type: "permission" as const, requestId: "r1", toolName: "Bash", toolInput: "" });
       manager.removePendingRequest(session.id, "r1");
       expect(manager.getPendingRequests(session.id)).toHaveLength(0);
     });
 
     it("removePendingRequest does nothing for unknown message", () => {
       const session = manager.createSession("/tmp");
-      manager.addPendingRequest(session.id, { requestId: "r1", toolName: "Bash", toolInput: {} });
+      manager.addPendingRequest(session.id, { type: "permission" as const, requestId: "r1", toolName: "Bash", toolInput: "" });
       manager.removePendingRequest(session.id, "unknown");
       expect(manager.getPendingRequests(session.id)).toHaveLength(1);
     });
@@ -1850,7 +1850,7 @@ describe("SessionManager", () => {
   describe("setModel direct API", () => {
     it("changes model and emits info_updated", () => {
       const session = manager.createSession("/tmp");
-      const infoUpdates: Array<{ model: string }> = [];
+      const infoUpdates: Array<{ model: string | undefined }> = [];
       manager.onInfoUpdated(session.id, (info) => infoUpdates.push({ model: info.model }));
       manager.setModel(session.id, "haiku");
       expect(infoUpdates.length).toBeGreaterThan(0);
@@ -2275,7 +2275,7 @@ describe("SessionManager", () => {
       manager.setThinkingLevel(session.id, "low");
       expect(msgs).toHaveLength(1);
       unsub!();
-      manager.setThinkingLevel(session.id, "none");
+      manager.setThinkingLevel(session.id, "medium");
       expect(msgs).toHaveLength(1);
     });
   });

@@ -25,11 +25,13 @@ export function ChatView({
   cwd,
   initialName,
   initialContext,
+  historyView,
 }: {
   sessionId: string;
   cwd?: string;
   initialName?: string;
   initialContext?: string;
+  historyView?: boolean;
 }) {
   const {
     messages,
@@ -74,7 +76,7 @@ export function ChatView({
     clearRestoredText,
     dismissBtw,
     retry,
-  } = useSession(sessionId, cwd);
+  } = useSession(sessionId, cwd, historyView);
   const { settings } = useSettings();
   const { setHeader, setBackgroundTasks, setTodos, setInitData: setShellInitData } = useShell();
   const scrollRef = useRef<HTMLDivElement>(null);

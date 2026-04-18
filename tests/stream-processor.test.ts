@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ParsedEvent } from "@/server/event-parser";
 import { createStreamState, isReadOnlyBashCommand, processEvents, type StreamState } from "@/server/stream-processor";
+import type { ToolUse } from "@/types";
 
 const defaults = { planMode: false, compacting: false };
 
@@ -166,7 +167,7 @@ describe("processEvents", () => {
       processEvents(events, state, defaults);
 
       expect(state.pendingBlocks).toHaveLength(1);
-      expect(state.pendingBlocks[0].text).toBe("hello world");
+      expect((state.pendingBlocks[0] as { text: string }).text).toBe("hello world");
     });
 
     it("skips text_delta when inside agent", () => {
@@ -204,8 +205,9 @@ describe("processEvents", () => {
       processEvents(events, state, defaults);
 
       expect(state.pendingBlocks).toHaveLength(1);
-      expect(state.pendingBlocks[0].text).toBe("first second");
-      expect(state.pendingBlocks[0].tokens).toBe(7);
+      const block = state.pendingBlocks[0] as { text: string; tokens: number };
+      expect(block.text).toBe("first second");
+      expect(block.tokens).toBe(7);
     });
 
     it("handles redacted thinking", () => {
@@ -214,7 +216,7 @@ describe("processEvents", () => {
       processEvents(events, state, defaults);
 
       expect(state.pendingBlocks).toHaveLength(1);
-      expect(state.pendingBlocks[0].redacted).toBe(true);
+      expect((state.pendingBlocks[0] as { redacted: boolean }).redacted).toBe(true);
     });
 
     it("sets redacted flag on existing thinking block", () => {
@@ -224,7 +226,7 @@ describe("processEvents", () => {
       processEvents(events, state, defaults);
 
       expect(state.pendingBlocks).toHaveLength(1);
-      expect(state.pendingBlocks[0].redacted).toBe(true);
+      expect((state.pendingBlocks[0] as { redacted: boolean }).redacted).toBe(true);
     });
 
     it("skips thinking when inside agent", () => {
@@ -384,8 +386,8 @@ describe("processEvents", () => {
     });
 
     it("sets filePath on agent child result", () => {
-      const child = { id: "c1", name: "Read", input: "", output: "", status: "running" as const };
-      const agent = { id: "a1", name: "Agent", input: "", output: "", status: "running" as const, children: [child] };
+      const child: ToolUse = { id: "c1", name: "Read", input: "", output: "", status: "running" };
+      const agent: ToolUse = { id: "a1", name: "Agent", input: "", output: "", status: "running", children: [child] };
       const state = makeState({ currentAssistantMsgId: "msg-1" });
       state.agentStack.push(agent);
       const events: ParsedEvent[] = [
@@ -398,7 +400,7 @@ describe("processEvents", () => {
       ];
       processEvents(events, state, defaults);
 
-      expect(agent.children[0].filePath).toBe("/child/path");
+      expect(agent.children![0].filePath).toBe("/child/path");
     });
 
     it("completes child tool of agent", () => {

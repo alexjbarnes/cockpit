@@ -56,3 +56,20 @@ export function deleteSessionPrefs(sessionId: string): void {
   delete all[sessionId];
   save();
 }
+
+export function findChainForCliSession(targetCliId: string): { cockpitId: string; truncatedPrevIds: string[] } | null {
+  const all = load();
+  for (const [cockpitId, prefs] of Object.entries(all)) {
+    if (!prefs.previousCliSessionIds || !prefs.cliSessionId) continue;
+
+    if (prefs.cliSessionId === targetCliId) {
+      return { cockpitId, truncatedPrevIds: [...prefs.previousCliSessionIds] };
+    }
+
+    const idx = prefs.previousCliSessionIds.indexOf(targetCliId);
+    if (idx >= 0) {
+      return { cockpitId, truncatedPrevIds: prefs.previousCliSessionIds.slice(0, idx) };
+    }
+  }
+  return null;
+}

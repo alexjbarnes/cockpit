@@ -20,7 +20,7 @@ import { logDiag, logRawLine } from "./debug-logger";
 import { getDefaults } from "./defaults";
 import { EventParser, type ParsedEvent } from "./event-parser";
 import { findLatestPlanFile } from "./plans";
-import { getSessionPrefs, setSessionPrefs } from "./session-prefs";
+import { findChainForCliSession, getSessionPrefs, setSessionPrefs } from "./session-prefs";
 import { createStreamState, processEvents } from "./stream-processor";
 import { findSessionCwd, loadMoreMessages, loadTranscript, transcriptExists } from "./transcript";
 
@@ -87,10 +87,9 @@ interface Session {
 
 export class SessionManager {
   private sessions = new Map<string, Session>();
-
   constructor() {
     // Periodically check for sessions stuck in "running" with a dead process
-    this.staleCheckInterval = setInterval(() => {
+    setInterval(() => {
       for (const [id, session] of this.sessions) {
         if (session.info.status === "running" && !session.process) {
           const short = id.slice(0, 8);
@@ -319,6 +318,57 @@ export class SessionManager {
       }
     }
     return { info: session.info, messages: clientMessages, hasMore, lastUsage };
+  }
+
+  async getCliSessionView(
+    cliId: string,
+    cwd: string,
+  ): Promise<{ info: SessionInfo; messages: ChatMessage[]; hasMore: boolean; lastUsage: { used: number; total: number } | null } | null> {
+    if (!transcriptExists(cliId, cwd)) return null;
+
+    const chain = findChainForCliSession(cliId);
+    const prevIds = chain ? chain.truncatedPrevIds : [];
+
+    const result = await loadTranscript(cliId, cwd, { tailLines: 150 });
+    let { messages, lastUsage } = result;
+
+    if (prevIds.length > 0) {
+      const currentMessages = messages;
+      for (let i = prevIds.length - 1; i >= 0; i--) {
+        const prevResult = await loadTranscript(prevIds[i], cwd, { tailLines: 150 });
+        if (prevResult.messages.length > 0) {
+          const marker: ChatMessage = {
+            id: "clear-boundary-" + Date.now(),
+            role: "system" as const,
+            content: "__context_reset__",
+            toolUses: [],
+            blocks: [],
+            timestamp: Date.now(),
+          };
+          messages = [...prevResult.messages, marker, ...currentMessages];
+          lastUsage = lastUsage || prevResult.lastUsage;
+          break;
+        }
+      }
+    }
+
+    const PAGE = 50;
+    const clientMessages = messages.length > PAGE ? messages.slice(-PAGE) : messages;
+
+    let name = path.basename(cwd) || cwd;
+    if (messages.length > 0) {
+      const firstUser = messages.find((m) => m.role === "user" && m.content && !m.content.startsWith("[") && !m.content.startsWith("<"));
+      if (firstUser) {
+        name = firstUser.content.slice(0, 120);
+      }
+    }
+
+    return {
+      info: { id: cliId, name, cwd, createdAt: Date.now(), lastActiveAt: Date.now(), status: "idle" },
+      messages: clientMessages,
+      hasMore: messages.length > PAGE,
+      lastUsage,
+    };
   }
 
   async getMoreHistory(sessionId: string, beforeMessageId: string): Promise<{ messages: ChatMessage[]; hasMore: boolean }> {

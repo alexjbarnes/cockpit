@@ -80,12 +80,9 @@ export default function HookEditorPage({ params }: { params: Promise<{ event: st
       .finally(() => setLoading(false));
   }, [isNew, event, scope, cwd]);
 
-  function resolveFilePath(): string {
+  const resolveFilePath = useCallback((): string => {
     if (!isNew && filePath) return filePath;
-    // Build path from scope
     if (selectedScope === "global") {
-      // We can't call homedir() on client, but the API will validate
-      // Send a sentinel and let the API resolve it
       return "__global__";
     }
     if (selectedScope === "project" && cwd) {
@@ -95,7 +92,7 @@ export default function HookEditorPage({ params }: { params: Promise<{ event: st
       return `${cwd}/.claude/settings.local.json`;
     }
     return "";
-  }
+  }, [isNew, filePath, selectedScope, cwd]);
 
   const save = useCallback(async () => {
     const ev = isNew ? selectedEvent : event;

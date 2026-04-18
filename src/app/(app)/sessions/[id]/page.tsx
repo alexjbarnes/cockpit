@@ -11,14 +11,17 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
   const searchParams = useSearchParams();
   const cwd = searchParams.get("cwd") || "";
   const name = searchParams.get("name") || undefined;
+  const historyView = searchParams.get("historyView") === "true";
 
   useShellCwd(cwd || undefined);
   useShellSessionId(id);
 
   useEffect(() => {
-    pinSession(id);
+    if (!historyView) {
+      pinSession(id);
+    }
     clearUnreadSession(id);
-  }, [id]);
+  }, [id, historyView]);
 
-  return <ChatView sessionId={id} cwd={cwd} initialName={name} />;
+  return <ChatView sessionId={id} cwd={cwd} initialName={name} historyView={historyView} />;
 }

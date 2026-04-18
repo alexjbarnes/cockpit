@@ -1,6 +1,6 @@
 "use client";
 
-import { BarChart3, Loader2, X } from "lucide-react";
+import { BarChart3, Loader2, RefreshCw, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { useUsage } from "@/hooks/use-usage";
@@ -50,7 +50,7 @@ function LimitBar({ label, limit }: { label: string; limit: UsageLimit }) {
 
 export function UsageButton() {
   const [open, setOpen] = useState(false);
-  const { usage, loading, error } = useUsage();
+  const { usage, loading, error, refresh } = useUsage();
 
   useEffect(() => {
     if (!open) return;
@@ -79,9 +79,14 @@ export function UsageButton() {
           <div className="w-full max-w-md mx-4 rounded-lg border bg-background p-5 shadow-lg">
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-base font-semibold">Account Usage</h2>
-              <Button variant="ghost" size="icon" onClick={() => setOpen(false)}>
-                <X className="h-4 w-4" />
-              </Button>
+              <div className="flex gap-1">
+                <Button variant="ghost" size="icon" onClick={() => refresh(true)} disabled={loading} title="Refresh usage">
+                  <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
+                </Button>
+                <Button variant="ghost" size="icon" onClick={() => setOpen(false)}>
+                  <X className="h-4 w-4" />
+                </Button>
+              </div>
             </div>
 
             {loading && !usage && (
