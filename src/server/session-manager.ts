@@ -5,6 +5,7 @@ import path from "node:path";
 import { v4 as uuidv4 } from "uuid";
 import type { SessionInfo, ChatMessage, ToolUse, ContentBlock, ThinkingLevel, ContextUsage, TodoItem, ImageAttachment, DocumentAttachment, InitData } from "@/types";
 import { EventParser, type ParsedEvent } from "./event-parser";
+import { createStreamState, processEvents, isReadOnlyBashCommand, type StreamState } from "./stream-processor";
 import { loadTranscript, loadMoreMessages, transcriptExists, findSessionCwd } from "./transcript";
 import { logRawLine, logDiag } from "./debug-logger";
 import { getSessionPrefs, setSessionPrefs } from "./session-prefs";
@@ -71,46 +72,6 @@ interface Session {
   /** Pagination-only copy of previousCliSessionIds, consumed by getMoreHistory
    *  without affecting the canonical list used for stitching on reconnect. */
   paginationPrevIds: string[];
-}
-
-/** Tools that mutate the filesystem/environment and must be blocked in plan mode. */
-const WRITE_TOOLS = new Set(["Edit", "Write", "Bash", "NotebookEdit"]);
-
-/** Tools that require user interaction and must not be auto-approved in plan mode. */
-const USER_FACING_TOOLS = new Set(["ExitPlanMode", "AskUserQuestion", "EnterPlanMode"]);
-
-const READ_ONLY_BASH_COMMANDS = new Set([
-  "ls", "cat", "head", "tail", "wc", "grep", "rg", "find",
-  "pwd", "which", "type", "whereis", "file", "stat", "du", "df",
-  "tree", "date", "echo", "printf", "env", "printenv",
-  "basename", "dirname", "realpath", "readlink",
-  "uname", "whoami", "hostname", "id",
-  // Windows
-  "dir", "findstr", "where", "more", "sort",
-]);
-
-const READ_ONLY_GIT_SUBCOMMANDS = new Set([
-  "status", "log", "diff", "show", "blame", "branch",
-  "remote", "ls-files", "ls-tree", "rev-parse", "describe",
-  "tag", "reflog",
-]);
-
-function isReadOnlyBashCommand(cmd: string): boolean {
-  const trimmed = cmd.trim();
-  if (!trimmed) return false;
-  if (/(?:;|&&|\|\||>|<|`|\$\(|<\()/.test(trimmed)) return false;
-  if (/(?:^|[^|])&(?!&)/.test(trimmed)) return false;
-  const segments = trimmed.split("|").map((s) => s.trim()).filter(Boolean);
-  if (!segments.length) return false;
-  for (const segment of segments) {
-    const [head, sub] = segment.split(/\s+/);
-    if (head === "git") {
-      if (!sub || !READ_ONLY_GIT_SUBCOMMANDS.has(sub)) return false;
-      continue;
-    }
-    if (!READ_ONLY_BASH_COMMANDS.has(head)) return false;
-  }
-  return true;
 }
 
 export class SessionManager {
@@ -1068,6 +1029,89 @@ export class SessionManager {
     session.emitter.emit("system", sessionId, text);
   }
 
+  private applyProcessedResult(session: Session, sessionId: string, result: import("./stream-processor").ProcessedResult): void {
+    for (const msg of result.intermediateMessages) {
+      session.emitter.emit("event", sessionId, { type: "message_done", message: msg } as ParsedEvent);
+      if (msg.toolUses.some((t: ToolUse) => t.name === "Agent")) {
+        this.loadAgentChildren(session, sessionId, msg.id, session.info.cwd);
+      }
+    }
+
+    for (const sysMsg of result.systemMessages) {
+      const permModePrefix = "__permission_mode::";
+      if (sysMsg.startsWith(permModePrefix)) {
+        const mode = sysMsg.slice(permModePrefix.length);
+        if (mode === "plan" && !session.planMode) {
+          session.planMode = true;
+          setSessionPrefs(sessionId, { planMode: true });
+          this.emitSystem(session, sessionId, "__plan_state::on");
+        } else if (mode !== "plan" && session.planMode) {
+          session.planMode = false;
+          setSessionPrefs(sessionId, { planMode: false });
+          session.needsRespawnForPermissions = true;
+          this.emitSystem(session, sessionId, "__plan_state::off");
+        }
+      } else {
+        this.emitSystem(session, sessionId, sysMsg);
+      }
+    }
+
+    for (const errMsg of result.errors) {
+      session.emitter.emit("error", sessionId, errMsg);
+    }
+
+    for (const todoInput of result.todoInputs) {
+      this.handleTodoWrite(session, sessionId, todoInput);
+    }
+
+    for (const pa of result.permissionActions) {
+      if (pa.type === "auto_approve") {
+        this.respondToPermission(sessionId, pa.requestId, true, pa.rawToolInput);
+      } else if (pa.type === "auto_deny") {
+        this.respondToPermission(sessionId, pa.requestId, false, undefined, undefined, pa.denyReason);
+      } else {
+        session.pendingRequests.set(pa.requestId, {
+          type: pa.toolName === "AskUserQuestion" ? "question" : "permission",
+          requestId: pa.requestId,
+          toolName: pa.toolName,
+          toolInput: pa.toolInput || "",
+          rawToolInput: pa.rawToolInput,
+          planFilePath: pa.toolName === "ExitPlanMode" ? findLatestPlanFile() : undefined,
+        });
+      }
+    }
+
+    if (result.statusChange === "idle") {
+      session.info.status = "idle";
+      session.emitter.emit("status", sessionId, "idle");
+    }
+
+    if (result.compactDone) {
+      session.compacting = false;
+      this.emitSystem(session, sessionId, "__compact::done");
+    }
+
+    for (const event of result.emit) {
+      session.emitter.emit("event", sessionId, event);
+    }
+
+    session.streamingSnapshot = result.snapshot;
+
+    const lastEmit = result.emit[result.emit.length - 1];
+    if (lastEmit?.type === "message_done" && lastEmit.message) {
+      if (lastEmit.message.toolUses.some((t: ToolUse) => t.name === "Agent")) {
+        this.loadAgentChildren(session, sessionId, lastEmit.message.id, session.info.cwd);
+      }
+      this.flushQueuedMessage(session, sessionId);
+      if (session.needsRespawnForPermissions) {
+        session.needsRespawnForPermissions = false;
+        this.killProcess(session);
+        session.info.status = "idle";
+        session.emitter.emit("status", sessionId, "idle");
+      }
+    }
+  }
+
   private emitInfoUpdated(session: Session, sessionId: string): void {
     session.emitter.emit("info_updated", sessionId, { ...session.info });
   }
@@ -1365,28 +1409,7 @@ Additional Cockpit rules beyond the CLI's defaults:
 
     const parser = new EventParser();
     let stderrBuffer = "";
-    const pendingToolUses: ToolUse[] = [];
-    const pendingBlocks: ContentBlock[] = [];
-    const agentStack: ToolUse[] = [];
-    let currentAssistantMsgId: string | null = null;
-    let flushedOnMessageDone = false;
-
-    const updateSnapshot = () => {
-      if (currentAssistantMsgId && pendingBlocks.length > 0) {
-        const textContent = pendingBlocks
-          .filter((b) => b.type === "text")
-          .map((b) => b.text)
-          .join("");
-        session.streamingSnapshot = {
-          messageId: currentAssistantMsgId,
-          content: textContent,
-          toolUses: pendingToolUses.map((t) => ({ ...t, children: t.children ? [...t.children] : undefined })),
-          blocks: pendingBlocks.map((b) => b.type === "tool_use" ? { ...b, toolUse: { ...b.toolUse } } : { ...b }),
-        };
-      } else {
-        session.streamingSnapshot = null;
-      }
-    };
+    const streamState = createStreamState();
 
     let lineBuffer = "";
     proc.stdout!.on("data", (chunk: Buffer) => {
@@ -1394,9 +1417,6 @@ Additional Cockpit rules beyond the CLI's defaults:
       const lines = lineBuffer.split("\n");
       lineBuffer = lines.pop() || "";
 
-      // If the remaining buffer looks like a complete JSON object,
-      // process it immediately to avoid deadlocks when the CLI
-      // blocks waiting for a control_response after writing the last line.
       if (lineBuffer.trimStart().startsWith("{") && lineBuffer.trimEnd().endsWith("}")) {
         try {
           JSON.parse(lineBuffer);
@@ -1410,7 +1430,6 @@ Additional Cockpit rules beyond the CLI's defaults:
       for (const line of lines) {
         logRawLine(sessionId, line);
 
-        // Resolve pending control request callbacks
         if (session.controlCallbacks.size > 0 && line.includes('"control_response"')) {
           try {
             const parsed = JSON.parse(line);
@@ -1426,356 +1445,12 @@ Additional Cockpit rules beyond the CLI's defaults:
           }
         }
 
-        // Only extract usage from main thread messages, not sub-agents.
-        // Sub-agent usage causes the context indicator to flicker.
-        if (agentStack.length === 0) {
+        if (streamState.agentStack.length === 0) {
           this.extractUsage(session, sessionId, line);
         }
         const events = parser.parseLine(line);
-        for (const event of events) {
-          // Finalize the previous assistant message when a new one starts.
-          // When an Agent tool is active, sub-agent messages arrive with
-          // different assistantMessageIds. Don't finalize the parent message
-          // in that case - keep accumulating under the Agent.
-          if (event.assistantMessageId && event.assistantMessageId !== currentAssistantMsgId) {
-            if (agentStack.length === 0) {
-              if (currentAssistantMsgId && pendingBlocks.length > 0) {
-                const textContent = pendingBlocks
-                  .filter((b) => b.type === "text")
-                  .map((b) => b.text)
-                  .join("");
-                const intermediateMsg: ChatMessage = {
-                  id: currentAssistantMsgId,
-                  role: "assistant",
-                  content: textContent,
-                  toolUses: [...pendingToolUses],
-                  blocks: [...pendingBlocks],
-                  timestamp: Date.now(),
-                };
-                session.emitter.emit("event", sessionId, { type: "message_done", message: intermediateMsg } as ParsedEvent);
-                if (intermediateMsg.toolUses.some((t: ToolUse) => t.name === "Agent")) {
-                  this.loadAgentChildren(session, sessionId, intermediateMsg.id, session.info.cwd);
-                }
-                pendingToolUses.length = 0;
-                pendingBlocks.length = 0;
-              }
-              currentAssistantMsgId = event.assistantMessageId;
-            }
-          }
-
-          if (event.type === "thinking" && (event.text || event.redacted)) {
-            // Sub-agent thinking is not useful to the client; the Agent
-            // tool's output is already streamed via tool_progress events.
-            if (agentStack.length > 0) continue;
-            const last = pendingBlocks[pendingBlocks.length - 1];
-            if (last && last.type === "thinking") {
-              last.text += event.text ?? "";
-              if (event.tokens) last.tokens = (last.tokens ?? 0) + event.tokens;
-              if (event.redacted) last.redacted = true;
-            } else {
-              pendingBlocks.push({ type: "thinking", text: event.text ?? "", tokens: event.tokens, redacted: event.redacted });
-            }
-          } else if (event.type === "text_delta" && event.text) {
-            if (agentStack.length > 0) continue;
-            const last = pendingBlocks[pendingBlocks.length - 1];
-            if (last && last.type === "text") {
-              last.text += event.text;
-            } else {
-              pendingBlocks.push({ type: "text", text: event.text });
-            }
-          } else if (event.type === "tool_use_start") {
-            const tool: ToolUse = {
-              id: event.toolId || "",
-              name: event.toolName || "",
-              input: event.toolInput || "",
-              output: "",
-              status: "running",
-            };
-
-            const isAgent = tool.name === "Agent";
-
-            if (tool.name === "TodoWrite") {
-              this.handleTodoWrite(session, sessionId, tool.input);
-            }
-
-            // Tools from the main thread (same assistantMessageId) are
-            // top-level, even when agents are running in parallel.
-            // Only tools from sub-agents (different assistantMessageId)
-            // are children of an agent.
-            const isFromMainThread = event.assistantMessageId === currentAssistantMsgId;
-            event.isMainThread = isFromMainThread;
-
-            if (agentStack.length > 0 && !isFromMainThread) {
-              const parent = agentStack[agentStack.length - 1];
-              if (!parent.children) parent.children = [];
-              parent.children.push(tool);
-            } else {
-              pendingToolUses.push(tool);
-              pendingBlocks.push({ type: "tool_use", toolUse: tool });
-            }
-
-            if (isAgent) {
-              agentStack.push(tool);
-            }
-          } else if (event.type === "tool_result") {
-            // Find the agent anywhere in the stack, not just the top.
-            // Parallel agents complete in arbitrary order.
-            const agentIdx = agentStack.findIndex((a) => a.id === event.toolId);
-            if (agentIdx !== -1) {
-              agentStack[agentIdx].output = event.toolOutput || "";
-              if (event.filePath) agentStack[agentIdx].filePath = event.filePath;
-              agentStack[agentIdx].status = "done";
-              agentStack.splice(agentIdx, 1);
-            } else if (agentStack.length > 0) {
-              // Search all agents' children, not just the top agent
-              for (const agent of agentStack) {
-                const child = agent.children?.find((t) => t.id === event.toolId);
-                if (child) {
-                  child.output = event.toolOutput || "";
-                  if (event.filePath) child.filePath = event.filePath;
-                  child.status = "done";
-                  break;
-                }
-              }
-            } else {
-              const tool = pendingToolUses.find((t) => t.id === event.toolId);
-              if (tool) {
-                tool.output = event.toolOutput || "";
-                if (event.filePath) tool.filePath = event.filePath;
-                tool.status = "done";
-              }
-            }
-          } else if (event.type === "tool_progress" && event.toolId && event.text) {
-            // Search all agents and their children for progress updates
-            const agent = agentStack.find((a) => a.id === event.toolId);
-            if (agent) {
-              agent.output += event.text;
-            } else if (agentStack.length > 0) {
-              let found = false;
-              for (const a of agentStack) {
-                const child = a.children?.find((t) => t.id === event.toolId);
-                if (child) {
-                  child.output += event.text;
-                  found = true;
-                  break;
-                }
-              }
-              if (!found) {
-                const tool = pendingToolUses.find((t) => t.id === event.toolId);
-                if (tool) tool.output += event.text;
-              }
-            } else {
-              const tool = pendingToolUses.find((t) => t.id === event.toolId);
-              if (tool) tool.output += event.text;
-            }
-          } else if (event.type === "system_message" && event.text) {
-            // Sync plan mode state when CLI reports permission mode changes
-            const permModePrefix = "__permission_mode::";
-            if (event.text.startsWith(permModePrefix)) {
-              const mode = event.text.slice(permModePrefix.length);
-              if (mode === "plan" && !session.planMode) {
-                session.planMode = true;
-                setSessionPrefs(sessionId, { planMode: true });
-                this.emitSystem(session, sessionId, "__plan_state::on");
-              } else if (mode !== "plan" && session.planMode) {
-                session.planMode = false;
-                setSessionPrefs(sessionId, { planMode: false });
-                // Defer process kill until message_done so the agent can
-                // finish its turn after using ExitPlanMode.
-                session.needsRespawnForPermissions = true;
-                this.emitSystem(session, sessionId, "__plan_state::off");
-              }
-              // Don't forward the raw permission_mode message
-              continue;
-            }
-            this.emitSystem(session, sessionId, event.text);
-          } else if (event.type === "message_done" && event.message) {
-            // Interrupted turn (control_request interrupt): discard partial
-            // content and go idle without emitting a message.
-            if (event.interrupted) {
-              logDiag(sessionId, "idle:interrupted");
-              pendingBlocks.length = 0;
-              pendingToolUses.length = 0;
-              agentStack.length = 0;
-              currentAssistantMsgId = null;
-              session.streamingSnapshot = null;
-              session.info.status = "idle";
-              session.emitter.emit("status", sessionId, "idle");
-              flushedOnMessageDone = true;
-              this.flushQueuedMessage(session, sessionId);
-              continue;
-            }
-
-            // If all messages were already finalized via intermediate emissions,
-            // skip the duplicate result message but still update status.
-            if (pendingBlocks.length === 0 && pendingToolUses.length === 0 && currentAssistantMsgId) {
-              logDiag(sessionId, "idle:message-done-empty", { msgId: currentAssistantMsgId });
-              currentAssistantMsgId = null;
-              session.streamingSnapshot = null;
-              session.info.status = "idle";
-              session.emitter.emit("status", sessionId, "idle");
-              if (session.compacting) {
-                session.compacting = false;
-                this.emitSystem(session, sessionId, "__compact::done");
-              }
-              flushedOnMessageDone = true;
-              this.flushQueuedMessage(session, sessionId);
-              continue;
-            }
-
-            if (currentAssistantMsgId) {
-              event.message.id = currentAssistantMsgId;
-            }
-            const hasStreamedText = pendingBlocks.some((b) => b.type === "text");
-            if (event.message.content && !hasStreamedText) {
-              pendingBlocks.push({ type: "text", text: event.message.content });
-            }
-
-            // Filter out noise messages that shouldn't appear as chat bubbles
-            if (pendingToolUses.length === 0) {
-              const fullText = pendingBlocks
-                .filter((b) => b.type === "text")
-                .map((b) => b.text)
-                .join("")
-                .trim();
-
-              // "No response requested." is emitted by the CLI after SIGINT
-              // (fallback path if stdin is unavailable).
-              if (fullText === "No response requested.") {
-                logDiag(sessionId, "idle:no-response-requested");
-                pendingBlocks.length = 0;
-                currentAssistantMsgId = null;
-                session.info.status = "idle";
-                session.emitter.emit("status", sessionId, "idle");
-                flushedOnMessageDone = true;
-                this.flushQueuedMessage(session, sessionId);
-                continue;
-              }
-
-              // Detect API errors (e.g. "API Error: 500 {"type":"error",...}")
-              // and route them through the error path instead of chat.
-              const apiErrMatch = fullText.match(/^API Error: (\d+)\s/);
-              if (apiErrMatch) {
-                const msgMatch = fullText.match(/"message"\s*:\s*"([^"]+)"/);
-                const errMsg = msgMatch
-                  ? `${msgMatch[1]} (HTTP ${apiErrMatch[1]})`
-                  : fullText.slice(0, 200);
-                logDiag(sessionId, "idle:api-error", { error: errMsg });
-                pendingBlocks.length = 0;
-                pendingToolUses.length = 0;
-                agentStack.length = 0;
-                currentAssistantMsgId = null;
-                session.info.status = "idle";
-                session.emitter.emit("status", sessionId, "idle");
-                session.emitter.emit("error", sessionId, errMsg);
-                flushedOnMessageDone = true;
-                this.flushQueuedMessage(session, sessionId);
-                continue;
-              }
-            }
-
-            event.message.blocks = [...pendingBlocks];
-            if (event.message.toolUses.length === 0 && pendingToolUses.length > 0) {
-              event.message.toolUses = [...pendingToolUses];
-            }
-            pendingToolUses.length = 0;
-            pendingBlocks.length = 0;
-            agentStack.length = 0;
-            currentAssistantMsgId = null;
-
-            logDiag(sessionId, "idle:message-done", { toolCount: event.message.toolUses.length, blockCount: event.message.blocks.length });
-            session.info.status = "idle";
-            session.emitter.emit("status", sessionId, "idle");
-
-            if (session.compacting) {
-              logDiag(sessionId, "compact:done");
-              session.compacting = false;
-              this.emitSystem(session, sessionId, "__compact::done");
-            }
-            flushedOnMessageDone = true;
-            // Queue flush is deferred until after the message_done event
-            // is emitted to the client (below), so the assistant message
-            // appears before the queued user message.
-          }
-          // Store permission requests so they survive WS reconnections.
-          // The CLI handles bypass/auto-allow natively via set_permission_mode,
-          // so we only see requests that genuinely need user input.
-          if (event.type === "permission_request" && event.requestId) {
-            const toolName = event.toolName || "";
-            if (session.planMode) {
-              if (toolName === "Bash") {
-                const cmd = (event.rawToolInput as { command?: string })?.command ?? "";
-                if (isReadOnlyBashCommand(cmd)) {
-                  this.respondToPermission(sessionId, event.requestId, true, event.rawToolInput);
-                  continue;
-                }
-                this.respondToPermission(
-                  sessionId,
-                  event.requestId,
-                  false,
-                  undefined,
-                  undefined,
-                  `Cockpit plan mode: Bash is restricted to read-only commands (ls, cat, head, tail, wc, grep, rg, find, stat, file, du, df, tree, git status/log/diff/show/blame, etc.). Shell operators ';', '&&', '||', '>', '<', '$(...)', backticks are not allowed. Use Read/Grep/Glob for file access, or call ExitPlanMode when ready to implement.`,
-                );
-                continue;
-              }
-              if (WRITE_TOOLS.has(toolName)) {
-                this.respondToPermission(
-                  sessionId,
-                  event.requestId,
-                  false,
-                  undefined,
-                  undefined,
-                  `Cockpit plan mode: ${toolName} is blocked. Plan mode is read-only; call ExitPlanMode to submit the plan before making changes.`,
-                );
-                continue;
-              }
-              if (!USER_FACING_TOOLS.has(toolName)) {
-                this.respondToPermission(sessionId, event.requestId, true, event.rawToolInput);
-                continue;
-              }
-            }
-            // Auto-approve gh CLI commands (operates via GitHub API, no local file changes)
-            if (toolName === "Bash" && event.rawToolInput) {
-              const cmd = (event.rawToolInput as { command?: string }).command || "";
-              if (cmd.trimStart().startsWith("gh ")) {
-                this.respondToPermission(sessionId, event.requestId, true, event.rawToolInput);
-                continue;
-              }
-            }
-            session.pendingRequests.set(event.requestId, {
-              type: toolName === "AskUserQuestion" ? "question" : "permission",
-              requestId: event.requestId,
-              toolName,
-              toolInput: event.toolInput || "",
-              rawToolInput: event.rawToolInput,
-              planFilePath: toolName === "ExitPlanMode" ? findLatestPlanFile() : undefined,
-            });
-          }
-
-          session.emitter.emit("event", sessionId, event);
-          updateSnapshot();
-
-          if (event.type === "message_done" && event.message) {
-            const hasAgent = event.message.toolUses.some((t: ToolUse) => t.name === "Agent");
-            if (hasAgent) {
-              this.loadAgentChildren(session, sessionId, event.message.id, session.info.cwd);
-            }
-            // Flush queued messages AFTER message_done is emitted to client,
-            // so the assistant response appears before the queued user message.
-            if (flushedOnMessageDone) {
-              this.flushQueuedMessage(session, sessionId);
-            }
-            // Respawn process after turn completes if plan mode changed mid-turn
-            // (e.g. CLI used ExitPlanMode tool). This restores bypass permissions.
-            if (session.needsRespawnForPermissions) {
-              session.needsRespawnForPermissions = false;
-              this.killProcess(session);
-              session.info.status = "idle";
-              session.emitter.emit("status", sessionId, "idle");
-            }
-          }
-        }
+        const result = processEvents(events, streamState, { planMode: session.planMode, compacting: session.compacting });
+        this.applyProcessedResult(session, sessionId, result);
       }
     });
 
@@ -1786,8 +1461,6 @@ Additional Cockpit rules beyond the CLI's defaults:
     proc.on("close", (code, signal) => {
       this.log(sessionId, `CLI process exited (code=${code}, signal=${signal}, pid=${proc.pid})`);
 
-      // Guard: if a new process was already spawned (e.g. /clear followed
-      // by a quick message), don't clobber the new process reference.
       if (session.process !== null && session.process !== proc) {
         this.log(sessionId, `skipping close cleanup: newer process already running (pid=${session.process.pid})`);
         return;
@@ -1795,27 +1468,14 @@ Additional Cockpit rules beyond the CLI's defaults:
 
       if (lineBuffer.trim()) {
         const events = parser.parseLine(lineBuffer);
-        for (const event of events) {
-          if (event.type === "message_done" && event.message) {
-            const hasStreamedText = pendingBlocks.some((b) => b.type === "text");
-            if (event.message.content && !hasStreamedText) {
-              pendingBlocks.push({ type: "text", text: event.message.content });
-            }
-            event.message.blocks = [...pendingBlocks];
-            if (event.message.toolUses.length === 0 && pendingToolUses.length > 0) {
-              event.message.toolUses = [...pendingToolUses];
-            }
-            pendingToolUses.length = 0;
-            pendingBlocks.length = 0;
-          }
-          session.emitter.emit("event", sessionId, event);
-        }
+        const result = processEvents(events, streamState, { planMode: session.planMode, compacting: session.compacting });
+        this.applyProcessedResult(session, sessionId, result);
       }
 
       session.process = null;
       session.stdin = null;
       session.streamingSnapshot = null;
-      logDiag(sessionId, "idle:process-close", { code, flushedOnMessageDone });
+      logDiag(sessionId, "idle:process-close", { code, flushedOnMessageDone: streamState.flushedOnMessageDone });
       session.info.status = "idle";
       session.emitter.emit("status", sessionId, "idle");
 
@@ -1825,7 +1485,6 @@ Additional Cockpit rules beyond the CLI's defaults:
         this.emitSystem(session, sessionId, "__compact::done");
       }
 
-      // Auto-clear todos when the turn ends and all items are completed
       if (session.todoItems.length > 0 && session.todoItems.every((t) => t.status === "completed")) {
         session.todoItems = [];
         session.emitter.emit("todos", sessionId, []);
@@ -1835,11 +1494,7 @@ Additional Cockpit rules beyond the CLI's defaults:
         session.emitter.emit("error", sessionId, stderrBuffer.trim());
       }
 
-      // Only flush if message_done didn't already handle it.
-      // message_done flushes and sends the queued message to the still-alive
-      // process via stdin. If we flush again here, we'd send a second message
-      // before the first one gets a response.
-      if (!flushedOnMessageDone) {
+      if (!streamState.flushedOnMessageDone) {
         this.flushQueuedMessage(session, sessionId);
       }
     });

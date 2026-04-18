@@ -259,5 +259,34 @@ describe("auth", () => {
       const { validateSession } = await import("@/server/auth");
       expect(validateSession("abc.def")).toBe(false);
     });
+
+    it("validateSession returns false for mismatched signature length", async () => {
+      const { setupPassword, createSession, validateSession } = await import("@/server/auth");
+      await setupPassword("test");
+      const token = createSession();
+      const tampered = token.slice(0, token.indexOf(".") + 1) + "short";
+      expect(validateSession(tampered)).toBe(false);
+    });
+  });
+
+  describe("extractTokenFromQuery", () => {
+    it("extracts token from query string", async () => {
+      const { extractTokenFromQuery } = await import("@/server/auth");
+      expect(extractTokenFromQuery("/ws?token=abc123")).toBe("abc123");
+    });
+
+    it("returns null when no token param", async () => {
+      const { extractTokenFromQuery } = await import("@/server/auth");
+      expect(extractTokenFromQuery("/ws")).toBeNull();
+    });
+  });
+
+  describe("verifyPassword", () => {
+    it("returns false for wrong password", async () => {
+      const { setupPassword, verifyPassword } = await import("@/server/auth");
+      await setupPassword("correct-password");
+      const result = await verifyPassword("wrong-password");
+      expect(result).toBe(false);
+    });
   });
 });

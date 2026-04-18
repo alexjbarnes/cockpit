@@ -691,4 +691,107 @@ describe("EventParser", () => {
     }));
     expect(events[0].message!.model).toBe("claude-sonnet-4-6");
   });
+
+  it("parses init with object-format agents", () => {
+    const parser = new EventParser();
+    const events = parser.parseLine(JSON.stringify({
+      type: "system",
+      subtype: "init",
+      tools: [],
+      model: "sonnet",
+      agents: [
+        { name: "Explore", description: "search agent" },
+        "Plan",
+      ],
+      mcp_servers: [
+        { name: "server1", status: "connected" },
+      ],
+    }));
+    expect(events).toHaveLength(1);
+    expect(events[0].type).toBe("init");
+    expect(events[0].initData!.agents).toEqual([
+      { name: "Explore", description: "search agent" },
+      { name: "Plan" },
+    ]);
+    expect(events[0].initData!.mcpServers).toEqual([
+      { name: "server1", status: "connected" },
+    ]);
+  });
+
+  it("handles tool_result with string content parts", () => {
+    const parser = new EventParser();
+    const events = parser.parseLine(JSON.stringify({
+      type: "user",
+      message: {
+        role: "user",
+        content: [{ type: "tool_result", tool_use_id: "t1", content: ["line1", "line2"] }],
+      },
+    }));
+    const result = events.find((e) => e.type === "tool_result");
+    expect(result).toBeTruthy();
+    expect(result!.toolOutput).toContain("line1");
+    expect(result!.toolOutput).toContain("line2");
+  });
+
+  it("extracts filePath from tool input file_path", () => {
+    const parser = new EventParser();
+    const events = parser.parseLine(JSON.stringify({
+      type: "user",
+      message: {
+        role: "user",
+        content: [{
+          type: "tool_result",
+          tool_use_id: "t1",
+          content: [
+            { type: "tool_use", input: { file_path: "/test/file.ts" } },
+            { type: "text", text: "done" },
+          ],
+        }],
+      },
+    }));
+    const result = events.find((e) => e.type === "tool_result");
+    expect(result).toBeTruthy();
+    expect(result!.filePath).toBe("/test/file.ts");
+  });
+
+  it("extracts filePath from tool input path variant", () => {
+    const parser = new EventParser();
+    const events = parser.parseLine(JSON.stringify({
+      type: "user",
+      message: {
+        role: "user",
+        content: [{
+          type: "tool_result",
+          tool_use_id: "t1",
+          content: [
+            { type: "tool_use", input: { path: "/test" } },
+            { type: "text", text: "files" },
+          ],
+        }],
+      },
+    }));
+    const result = events.find((e) => e.type === "tool_result");
+    expect(result).toBeTruthy();
+    expect(result!.filePath).toBe("/test");
+  });
+
+  it("extracts filePath from filePath variant", () => {
+    const parser = new EventParser();
+    const events = parser.parseLine(JSON.stringify({
+      type: "user",
+      message: {
+        role: "user",
+        content: [{
+          type: "tool_result",
+          tool_use_id: "t1",
+          content: [
+            { type: "tool_use", input: { filePath: "/test/other.ts" } },
+          ],
+        }],
+      },
+    }));
+    const result = events.find((e) => e.type === "tool_result");
+    expect(result).toBeTruthy();
+    expect(result!.filePath).toBe("/test/other.ts");
+  });
 });

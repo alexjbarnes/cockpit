@@ -806,6 +806,50 @@ describe("WebSocket handler", () => {
       ws.close();
     });
 
+    it("handles permission:response", async () => {
+      const session = manager.createSession("/tmp");
+      const ws = await connectWs();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      ws.send(JSON.stringify({
+        type: "session:connect",
+        sessionId: session.id,
+      }));
+      await readMessages(ws, 5);
+
+      ws.send(JSON.stringify({
+        type: "permission:response",
+        sessionId: session.id,
+        requestId: "req-1",
+        allowed: true,
+      }));
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      ws.close();
+    });
+
+    it("handles question:response", async () => {
+      const session = manager.createSession("/tmp");
+      const ws = await connectWs();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      ws.send(JSON.stringify({
+        type: "session:connect",
+        sessionId: session.id,
+      }));
+      await readMessages(ws, 5);
+
+      ws.send(JSON.stringify({
+        type: "question:response",
+        sessionId: session.id,
+        requestId: "req-1",
+        answers: ["yes"],
+      }));
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      ws.close();
+    });
+
     it("handles session:connect with lastMessageId for delta sync", async () => {
       const session = manager.createSession("/tmp");
       const ws = await connectWs();
@@ -1085,6 +1129,179 @@ describe("WebSocket handler", () => {
       const msg = await readMessage(ws);
       expect(msg.type).toBe("assistant:tool_use");
       expect(msg.name).toBe("Write");
+
+      ws.close();
+    });
+  });
+
+  describe("session event forwarding", () => {
+    function emitOnChannel(sessionId: string, channel: string, ...args: unknown[]) {
+      const sessions = (manager as any).sessions as Map<string, any>;
+      const session = sessions.get(sessionId);
+      if (session) session.emitter.emit(channel, sessionId, ...args);
+    }
+
+    function waitForConnect2(ws: WebSocket, sessionId: string): Promise<void> {
+      return new Promise((resolve) => {
+        const handler = (data: Buffer) => {
+          const msg = JSON.parse(data.toString());
+          if (msg.type === "session:queued" && msg.sessionId === sessionId) {
+            ws.removeListener("message", handler);
+            resolve();
+          }
+        };
+        ws.on("message", handler);
+        ws.send(JSON.stringify({ type: "session:connect", sessionId }));
+      });
+    }
+
+    it("forwards error events as session:error", async () => {
+      const session = manager.createSession("/tmp");
+      const ws = await connectWs();
+      await waitForConnect2(ws, session.id);
+
+      emitOnChannel(session.id, "error", "something went wrong");
+      const msg = await readMessage(ws);
+      expect(msg.type).toBe("session:error");
+      expect(msg.error).toBe("something went wrong");
+
+      ws.close();
+    });
+
+    it("forwards system events as session:system", async () => {
+      const session = manager.createSession("/tmp");
+      const ws = await connectWs();
+      await waitForConnect2(ws, session.id);
+
+      emitOnChannel(session.id, "system", "__compact::done");
+      const msg = await readMessage(ws);
+      expect(msg.type).toBe("session:system");
+      expect(msg.text).toBe("__compact::done");
+
+      ws.close();
+    });
+
+    it("forwards clear events as session:clear", async () => {
+      const session = manager.createSession("/tmp");
+      const ws = await connectWs();
+      await waitForConnect2(ws, session.id);
+
+      emitOnChannel(session.id, "clear");
+      const msg = await readMessage(ws);
+      expect(msg.type).toBe("session:clear");
+      expect(msg.sessionId).toBe(session.id);
+
+      ws.close();
+    });
+
+    it("forwards info_updated events as session:info_updated", async () => {
+      const session = manager.createSession("/tmp");
+      const ws = await connectWs();
+      await waitForConnect2(ws, session.id);
+
+      emitOnChannel(session.id, "info_updated", { ...session, model: "opus" });
+      const msg = await readMessage(ws);
+      expect(msg.type).toBe("session:info_updated");
+      expect((msg.info as any).model).toBe("opus");
+
+      ws.close();
+    });
+
+    it("forwards usage events as session:usage", async () => {
+      const session = manager.createSession("/tmp");
+      const ws = await connectWs();
+      await waitForConnect2(ws, session.id);
+
+      emitOnChannel(session.id, "usage", { used: 5000, total: 200000 });
+      const msg = await readMessage(ws);
+      expect(msg.type).toBe("session:usage");
+      expect((msg.usage as any).used).toBe(5000);
+
+      ws.close();
+    });
+
+    it("forwards todos events as session:todos", async () => {
+      const session = manager.createSession("/tmp");
+      const ws = await connectWs();
+      await waitForConnect2(ws, session.id);
+
+      emitOnChannel(session.id, "todos", [{ content: "task 1", status: "pending" }]);
+      const msg = await readMessage(ws);
+      expect(msg.type).toBe("session:todos");
+      expect((msg.todos as any[])[0].content).toBe("task 1");
+
+      ws.close();
+    });
+
+    it("forwards queued events as session:queued", async () => {
+      const session = manager.createSession("/tmp");
+      const ws = await connectWs();
+      await waitForConnect2(ws, session.id);
+
+      emitOnChannel(session.id, "queued", 2, "test message");
+      const msg = await readMessage(ws);
+      expect(msg.type).toBe("session:queued");
+      expect(msg.count).toBe(2);
+      expect(msg.sentText).toBe("test message");
+
+      ws.close();
+    });
+  });
+
+  describe("history:request_more", () => {
+    function waitForConnect3(ws: WebSocket, sessionId: string): Promise<void> {
+      return new Promise((resolve) => {
+        const handler = (data: Buffer) => {
+          const msg = JSON.parse(data.toString());
+          if (msg.type === "session:queued" && msg.sessionId === sessionId) {
+            ws.removeListener("message", handler);
+            resolve();
+          }
+        };
+        ws.on("message", handler);
+        ws.send(JSON.stringify({ type: "session:connect", sessionId }));
+      });
+    }
+
+    it("sends history:more response", async () => {
+      const session = manager.createSession("/tmp");
+      const ws = await connectWs();
+      await waitForConnect3(ws, session.id);
+
+      ws.send(JSON.stringify({
+        type: "history:request_more",
+        sessionId: session.id,
+        beforeMessageId: "msg-1",
+      }));
+      const msg = await readMessage(ws);
+      expect(msg.type).toBe("history:more");
+      expect(msg.sessionId).toBe(session.id);
+      expect(Array.isArray(msg.messages)).toBe(true);
+
+      ws.close();
+    });
+  });
+
+  describe("session:subscribe", () => {
+    it("receives status updates for subscribed sessions", async () => {
+      const session = manager.createSession("/tmp");
+      const ws = await connectWs();
+
+      ws.send(JSON.stringify({
+        type: "session:subscribe",
+        sessionIds: [session.id],
+      }));
+      await new Promise((r) => setTimeout(r, 50));
+
+      const sessions = (manager as any).sessions as Map<string, any>;
+      const s = sessions.get(session.id);
+      if (s) {
+        s.emitter.emit("status", session.id, "running");
+      }
+
+      const msg = await readMessage(ws);
+      expect(msg.type).toBe("session:status");
+      expect(msg.status).toBe("running");
 
       ws.close();
     });

@@ -1954,6 +1954,62 @@ describe("SessionManager", () => {
       const result = await manager.getMoreHistory(session.id, "msg-1");
       expect(result).toEqual({ messages: [], hasMore: false });
     });
+
+    it("returns messages from buffer before target message", async () => {
+      const session = manager.createSession("/tmp");
+      const sessions = (manager as any).sessions as Map<string, any>;
+      const s = sessions.get(session.id)!;
+      const msgs = Array.from({ length: 10 }, (_, i) => ({
+        id: `msg-${i}`,
+        role: "assistant" as const,
+        content: `message ${i}`,
+        toolUses: [],
+        blocks: [],
+        timestamp: Date.now(),
+      }));
+      s.transcriptBuffer = msgs;
+      s.transcriptByteOffset = 0;
+
+      const result = await manager.getMoreHistory(session.id, "msg-5");
+      expect(result.messages).toHaveLength(5);
+      expect(result.messages[0].id).toBe("msg-0");
+      expect(result.messages[4].id).toBe("msg-4");
+      expect(result.hasMore).toBe(false);
+    });
+
+    it("reports hasMore when buffer has byteOffset", async () => {
+      const session = manager.createSession("/tmp");
+      const sessions = (manager as any).sessions as Map<string, any>;
+      const s = sessions.get(session.id)!;
+      const msgs = Array.from({ length: 5 }, (_, i) => ({
+        id: `msg-${i}`,
+        role: "assistant" as const,
+        content: `message ${i}`,
+        toolUses: [],
+        blocks: [],
+        timestamp: Date.now(),
+      }));
+      s.transcriptBuffer = msgs;
+      s.transcriptByteOffset = 1000;
+
+      const result = await manager.getMoreHistory(session.id, "msg-3");
+      expect(result.messages).toHaveLength(3);
+      expect(result.hasMore).toBe(true);
+    });
+
+    it("returns empty when message not in buffer and no offset", async () => {
+      const session = manager.createSession("/tmp");
+      const sessions = (manager as any).sessions as Map<string, any>;
+      const s = sessions.get(session.id)!;
+      s.transcriptBuffer = [{ id: "msg-0", role: "assistant", content: "x", toolUses: [], blocks: [], timestamp: 0 }];
+      s.transcriptByteOffset = 0;
+      s.paginationPrevIds = [];
+      s.bufferCliSessionId = s.cliSessionId;
+
+      const result = await manager.getMoreHistory(session.id, "nonexistent");
+      expect(result.messages).toEqual([]);
+      expect(result.hasMore).toBe(false);
+    });
   });
 
   describe("respondToPermission", () => {
@@ -2116,6 +2172,275 @@ describe("SessionManager", () => {
         mcpServers: [],
       });
       expect(received).toHaveLength(1);
+    });
+  });
+
+  describe("setModel", () => {
+    it("updates the session model", () => {
+      const session = manager.createSession("/tmp");
+      manager.setModel(session.id, "opus");
+      expect(manager.getModel(session.id)).toBe("opus");
+    });
+
+    it("no-ops for same model", () => {
+      const session = manager.createSession("/tmp");
+      manager.setModel(session.id, "sonnet");
+      expect(manager.getModel(session.id)).toBe("sonnet");
+    });
+
+    it("no-ops for unknown session", () => {
+      expect(() => manager.setModel("unknown", "opus")).not.toThrow();
+    });
+
+    it("kills process when stdin not available", () => {
+      const session = manager.createSession("/tmp");
+      const statuses: string[] = [];
+      manager.onStatus(session.id, (status) => statuses.push(status));
+      manager.setModel(session.id, "opus");
+      expect(statuses).toContain("idle");
+    });
+  });
+
+  describe("setThinkingLevel", () => {
+    it("updates thinking level", () => {
+      const session = manager.createSession("/tmp");
+      manager.setThinkingLevel(session.id, "low");
+      expect(manager.getThinkingLevel(session.id)).toBe("low");
+    });
+
+    it("no-ops for same level", () => {
+      const session = manager.createSession("/tmp");
+      manager.setThinkingLevel(session.id, "high");
+      expect(manager.getThinkingLevel(session.id)).toBe("high");
+    });
+
+    it("emits thinking_level system message", () => {
+      const session = manager.createSession("/tmp");
+      const msgs: string[] = [];
+      manager.onSystem(session.id, (text) => msgs.push(text));
+      manager.setThinkingLevel(session.id, "low");
+      expect(msgs).toContain("__thinking_level::low");
+    });
+  });
+
+  describe("isPlanModeActive", () => {
+    it("returns false by default", () => {
+      const session = manager.createSession("/tmp");
+      expect(manager.isPlanModeActive(session.id)).toBe(false);
+    });
+
+    it("returns true after setting plan mode", () => {
+      const session = manager.createSession("/tmp");
+      manager.setPlanMode(session.id);
+      expect(manager.isPlanModeActive(session.id)).toBe(true);
+    });
+
+    it("returns false for unknown session", () => {
+      expect(manager.isPlanModeActive("unknown")).toBe(false);
+    });
+  });
+
+  describe("getContextUsage", () => {
+    it("returns null by default", () => {
+      const session = manager.createSession("/tmp");
+      expect(manager.getContextUsage(session.id)).toBeNull();
+    });
+  });
+
+  describe("hasQueuedMessage and getQueuedCount", () => {
+    it("returns false and 0 for new session", () => {
+      const session = manager.createSession("/tmp");
+      expect(manager.hasQueuedMessage(session.id)).toBe(false);
+      expect(manager.getQueuedCount(session.id)).toBe(0);
+    });
+
+    it("returns false for unknown session", () => {
+      expect(manager.hasQueuedMessage("unknown")).toBe(false);
+      expect(manager.getQueuedCount("unknown")).toBe(0);
+    });
+  });
+
+  describe("onSystem / onClear listeners", () => {
+    it("returns null for unknown session", () => {
+      expect(manager.onSystem("unknown", () => {})).toBeNull();
+    });
+
+    it("unsubscribe stops receiving events", () => {
+      const session = manager.createSession("/tmp");
+      const msgs: string[] = [];
+      const unsub = manager.onSystem(session.id, (text) => msgs.push(text));
+      manager.setThinkingLevel(session.id, "low");
+      expect(msgs).toHaveLength(1);
+      unsub!();
+      manager.setThinkingLevel(session.id, "none");
+      expect(msgs).toHaveLength(1);
+    });
+  });
+
+  describe("slash commands via sendMessage", () => {
+    it("handles /model command", () => {
+      const session = manager.createSession("/tmp");
+      const msgs: string[] = [];
+      manager.onSystem(session.id, (text) => msgs.push(text));
+      manager.sendMessage(session.id, "/model opus");
+      expect(manager.getModel(session.id)).toBe("opus");
+      expect(msgs.some((m) => m.includes("Model switched"))).toBe(true);
+    });
+
+    it("handles /model without args shows picker", () => {
+      const session = manager.createSession("/tmp");
+      const msgs: string[] = [];
+      manager.onSystem(session.id, (text) => msgs.push(text));
+      manager.sendMessage(session.id, "/model");
+      expect(msgs.some((m) => m.includes("__model_picker::"))).toBe(true);
+    });
+
+    it("handles /rename command", () => {
+      const session = manager.createSession("/tmp");
+      const msgs: string[] = [];
+      manager.onSystem(session.id, (text) => msgs.push(text));
+      manager.sendMessage(session.id, "/rename My Project");
+      expect(session.name).toBe("My Project");
+    });
+
+    it("handles /rename without args", () => {
+      const session = manager.createSession("/tmp");
+      const msgs: string[] = [];
+      manager.onSystem(session.id, (text) => msgs.push(text));
+      manager.sendMessage(session.id, "/rename");
+      expect(msgs.some((m) => m.includes("Usage:"))).toBe(true);
+    });
+
+    it("handles /help command", () => {
+      const session = manager.createSession("/tmp");
+      const msgs: string[] = [];
+      manager.onSystem(session.id, (text) => msgs.push(text));
+      manager.sendMessage(session.id, "/help");
+      expect(msgs.some((m) => m.includes("/clear"))).toBe(true);
+    });
+
+    it("handles /clear command", () => {
+      const session = manager.createSession("/tmp");
+      let cleared = false;
+      manager.onClear(session.id, () => { cleared = true; });
+      manager.sendMessage(session.id, "/clear");
+      expect(cleared).toBe(true);
+    });
+
+    it("handles /reset as alias for /clear", () => {
+      const session = manager.createSession("/tmp");
+      let cleared = false;
+      manager.onClear(session.id, () => { cleared = true; });
+      manager.sendMessage(session.id, "/reset");
+      expect(cleared).toBe(true);
+    });
+
+    it("handles /new as alias for /clear", () => {
+      const session = manager.createSession("/tmp");
+      let cleared = false;
+      manager.onClear(session.id, () => { cleared = true; });
+      manager.sendMessage(session.id, "/new");
+      expect(cleared).toBe(true);
+    });
+
+    it("passes unknown slash commands through to CLI", () => {
+      const session = manager.createSession("/tmp");
+      const result = manager.sendMessage(session.id, "/compact");
+      expect(result).toBe(true);
+    });
+
+    it("isCompacting returns false by default", () => {
+      const session = manager.createSession("/tmp");
+      expect(manager.isCompacting(session.id)).toBe(false);
+    });
+  });
+
+  describe("fixStaleStatus", () => {
+    it("corrects stale running status to idle", () => {
+      const session = manager.createSession("/tmp");
+      const sessions = (manager as any).sessions as Map<string, any>;
+      const s = sessions.get(session.id)!;
+      s.info.status = "running";
+      manager.fixStaleStatus(session.id);
+      expect(s.info.status).toBe("idle");
+    });
+
+    it("no-ops when process is alive", () => {
+      const session = manager.createSession("/tmp");
+      const sessions = (manager as any).sessions as Map<string, any>;
+      const s = sessions.get(session.id)!;
+      s.info.status = "running";
+      s.process = {};
+      manager.fixStaleStatus(session.id);
+      expect(s.info.status).toBe("running");
+    });
+  });
+
+  describe("listActiveSessions and listKnownSessions", () => {
+    it("listActiveSessions returns only sessions with process", () => {
+      manager.createSession("/tmp");
+      expect(manager.listActiveSessions()).toHaveLength(0);
+    });
+
+    it("listKnownSessions returns all sessions", () => {
+      manager.createSession("/tmp");
+      manager.createSession("/tmp/other");
+      expect(manager.listKnownSessions()).toHaveLength(2);
+    });
+  });
+
+  describe("isProcessAlive", () => {
+    it("returns false for session without process", () => {
+      const session = manager.createSession("/tmp");
+      expect(manager.isProcessAlive(session.id)).toBe(false);
+    });
+
+    it("returns false for unknown session", () => {
+      expect(manager.isProcessAlive("unknown")).toBe(false);
+    });
+  });
+
+  describe("getStreamingSnapshot", () => {
+    it("returns null for new session", () => {
+      const session = manager.createSession("/tmp");
+      expect(manager.getStreamingSnapshot(session.id)).toBeNull();
+    });
+  });
+
+  describe("getTranscriptBuffer", () => {
+    it("returns empty array for new session", () => {
+      const session = manager.createSession("/tmp");
+      expect(manager.getTranscriptBuffer(session.id)).toEqual([]);
+    });
+
+    it("returns empty for unknown session", () => {
+      expect(manager.getTranscriptBuffer("unknown")).toEqual([]);
+    });
+  });
+
+  describe("addPendingRequest and removePendingRequest", () => {
+    it("adds and removes pending requests", () => {
+      const session = manager.createSession("/tmp");
+      manager.addPendingRequest(session.id, {
+        type: "permission",
+        requestId: "req-1",
+        toolName: "Bash",
+        toolInput: "ls",
+      });
+      expect(manager.getPendingRequests(session.id)).toHaveLength(1);
+      manager.removePendingRequest(session.id, "req-1");
+      expect(manager.getPendingRequests(session.id)).toHaveLength(0);
+    });
+  });
+
+  describe("interrupt", () => {
+    it("returns false for session without process", () => {
+      const session = manager.createSession("/tmp");
+      expect(manager.interrupt(session.id)).toBe(false);
+    });
+
+    it("returns false for unknown session", () => {
+      expect(manager.interrupt("unknown")).toBe(false);
     });
   });
 });
