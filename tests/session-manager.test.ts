@@ -4,6 +4,7 @@ vi.mock("@/server/transcript", () => ({
   loadTranscript: () => Promise.resolve({ messages: [], byteOffset: 0, totalSize: 0, lastUsage: null }),
   loadMoreMessages: () => Promise.resolve({ messages: [], newByteOffset: 0 }),
   transcriptExists: () => false,
+  findSessionCwd: () => Promise.resolve(null),
 }));
 
 import { SessionManager } from "@/server/session-manager";
@@ -127,16 +128,16 @@ describe("SessionManager", () => {
       // The session status should be "running" after send
     });
 
-    it("rejects second message while running", () => {
+    it("queues second message while running", () => {
       const session = manager.createSession("/tmp");
       manager.sendMessage(session.id, "first");
 
-      const errors: string[] = [];
-      manager.onError(session.id, (err) => errors.push(err));
+      const queued: number[] = [];
+      manager.onQueued(session.id, (count) => queued.push(count));
       manager.sendMessage(session.id, "second");
 
-      expect(errors).toHaveLength(1);
-      expect(errors[0]).toContain("already being processed");
+      expect(queued).toHaveLength(1);
+      expect(queued[0]).toBe(1);
     });
   });
 });

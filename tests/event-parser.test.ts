@@ -93,11 +93,13 @@ const RATE_LIMIT = JSON.stringify({
 });
 
 describe("EventParser", () => {
-  it("forwards system init events as __system:: messages", () => {
+  it("parses system init events into structured init", () => {
     const parser = new EventParser();
     const events = parser.parseLine(SYSTEM_INIT);
     expect(events).toHaveLength(1);
-    expect(events[0]).toEqual({ type: "system_message", text: "__system::init" });
+    expect(events[0].type).toBe("init");
+    expect(events[0].initData).toBeDefined();
+    expect(events[0].initData!.model).toBe("claude-opus-4-6");
   });
 
   it("parses rate_limit_event into rate_limit", () => {
@@ -187,7 +189,7 @@ describe("EventParser", () => {
     ].flatMap((line) => parser.parseLine(line));
 
     expect(allEvents).toHaveLength(6);
-    expect(allEvents[0].type).toBe("system_message");
+    expect(allEvents[0].type).toBe("init");
     expect(allEvents[1].type).toBe("tool_use_start");
     expect(allEvents[2].type).toBe("rate_limit");
     expect(allEvents[3].type).toBe("tool_result");

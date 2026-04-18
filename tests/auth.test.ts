@@ -47,12 +47,12 @@ describe("auth", () => {
     expect(validateSession("bogus")).toBe(false);
   });
 
-  it("destroys sessions", async () => {
+  it("destroySession is a no-op for stateless signed tokens", async () => {
     const { createSession, validateSession, destroySession } = await import("@/server/auth");
     const token = createSession();
     expect(validateSession(token)).toBe(true);
     destroySession(token);
-    expect(validateSession(token)).toBe(false);
+    expect(validateSession(token)).toBe(true);
   });
 
   it("bypasses validation when auth disabled", async () => {
