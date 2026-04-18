@@ -426,4 +426,269 @@ describe("EventParser", () => {
       summary: "Agent completed successfully",
     });
   });
+
+  it("parses control_request as permission_request", () => {
+    const parser = new EventParser();
+    const line = JSON.stringify({
+      type: "control_request",
+      request: {
+        subtype: "can_use_tool",
+        tool_name: "Read",
+        input: { file_path: "/etc/passwd" },
+      },
+      request_id: "req-123",
+      session_id: "abc",
+    });
+    const events = parser.parseLine(line);
+    expect(events).toHaveLength(1);
+    expect(events[0].type).toBe("permission_request");
+    expect(events[0].requestId).toBe("req-123");
+    expect(events[0].toolName).toBe("Read");
+    expect(events[0].rawToolInput).toEqual({ file_path: "/etc/passwd" });
+  });
+
+  it("parses assistant message with thinking block", () => {
+    const parser = new EventParser();
+    const line = JSON.stringify({
+      type: "assistant",
+      message: {
+        id: "msg_think",
+        content: [
+          { type: "thinking", thinking: "let me consider this..." },
+          { type: "text", text: "Here is my answer" },
+        ],
+      },
+      session_id: "abc",
+    });
+    const events = parser.parseLine(line);
+    expect(events).toHaveLength(2);
+    expect(events[0].type).toBe("thinking");
+    expect(events[0].text).toBe("let me consider this...");
+    expect(events[1].type).toBe("text_delta");
+    expect(events[1].text).toBe("Here is my answer");
+  });
+
+  it("parses thinking block with redacted state (signature only)", () => {
+    const parser = new EventParser();
+    const line = JSON.stringify({
+      type: "assistant",
+      message: {
+        id: "msg_redact",
+        content: [
+          { type: "thinking", signature: "sig123" },
+          { type: "text", text: "Answer provided" },
+        ],
+      },
+      session_id: "abc",
+    });
+    const events = parser.parseLine(line);
+    expect(events).toHaveLength(2);
+    expect(events[0].type).toBe("thinking");
+    expect(events[0].text).toBe("");
+    expect(events[0].redacted).toBe(true);
+    expect(events[1].type).toBe("text_delta");
+  });
+
+  it("ignores thinking block without thinking text or signature", () => {
+    const parser = new EventParser();
+    const line = JSON.stringify({
+      type: "assistant",
+      message: {
+        id: "msg_empty_think",
+        content: [
+          { type: "thinking" },
+          { type: "text", text: "Just text" },
+        ],
+      },
+      session_id: "abc",
+    });
+    const events = parser.parseLine(line);
+    expect(events).toHaveLength(1);
+    expect(events[0].type).toBe("text_delta");
+  });
+
+  it("returns empty for unknown event type", () => {
+    const parser = new EventParser();
+    const line = JSON.stringify({
+      type: "unknown_type",
+      data: "whatever",
+    });
+    const events = parser.parseLine(line);
+    expect(events).toEqual([]);
+  });
+
+  it("parses result event with error", () => {
+    const parser = new EventParser();
+    const line = JSON.stringify({
+      type: "result",
+      subtype: "error",
+      is_error: true,
+      error: "something went wrong",
+      session_id: "abc",
+    });
+    const events = parser.parseLine(line);
+    expect(events).toHaveLength(1);
+    expect(events[0].type).toBe("message_done");
+    expect(events[0].message).toBeDefined();
+    expect(events[0].message!.role).toBe("assistant");
+  });
+
+  it("parses control_request without subtype", () => {
+    const parser = new EventParser();
+    const line = JSON.stringify({
+      type: "control_request",
+      request: { tool_name: "Read" },
+      request_id: "req-456",
+    });
+    const events = parser.parseLine(line);
+    expect(events).toEqual([]);
+  });
+
+  it("returns empty for control_request without request object", () => {
+    const parser = new EventParser();
+    const line = JSON.stringify({
+      type: "control_request",
+      request_id: "req-789",
+    });
+    const events = parser.parseLine(line);
+    expect(events).toEqual([]);
+  });
+
+  it("parses control_response with models into init event", () => {
+    const parser = new EventParser();
+    const line = JSON.stringify({
+      type: "control_response",
+      response: {
+        subtype: "success",
+        response: {
+          models: [{ value: "claude-opus-4-7", displayName: "Opus 4.7", description: "Most capable" }],
+          account: { email: "test@example.com", organization: "Test Org", subscriptionType: "pro" },
+          commands: [{ name: "/help", description: "Get help" }],
+          agents: [{ name: "coder", description: "Coding agent" }],
+        },
+      },
+    });
+    const events = parser.parseLine(line);
+    expect(events).toHaveLength(1);
+    expect(events[0].type).toBe("init");
+    expect(events[0].initData!.models).toHaveLength(1);
+    expect(events[0].initData!.models![0].value).toBe("claude-opus-4-7");
+    expect(events[0].initData!.account!.email).toBe("test@example.com");
+    expect(events[0].initData!.commands).toHaveLength(1);
+  });
+
+  it("returns empty for control_response without response", () => {
+    const parser = new EventParser();
+    const events = parser.parseLine(JSON.stringify({ type: "control_response" }));
+    expect(events).toEqual([]);
+  });
+
+  it("returns empty for control_response with non-success subtype", () => {
+    const parser = new EventParser();
+    const events = parser.parseLine(JSON.stringify({
+      type: "control_response",
+      response: { subtype: "error" },
+    }));
+    expect(events).toEqual([]);
+  });
+
+  it("parses tool_result with array content", () => {
+    const parser = new EventParser();
+    const line = JSON.stringify({
+      type: "user",
+      message: {
+        role: "user",
+        content: [{
+          type: "tool_result",
+          tool_use_id: "toolu_arr",
+          content: [
+            { type: "text", text: "line one" },
+            { type: "text", text: "line two" },
+          ],
+        }],
+      },
+    });
+    const events = parser.parseLine(line);
+    expect(events).toHaveLength(1);
+    expect(events[0].toolOutput).toBe("line one\nline two");
+  });
+
+  it("parses tool_result with no content", () => {
+    const parser = new EventParser();
+    const line = JSON.stringify({
+      type: "user",
+      message: {
+        role: "user",
+        content: [{
+          type: "tool_result",
+          tool_use_id: "toolu_empty",
+        }],
+      },
+    });
+    const events = parser.parseLine(line);
+    expect(events).toHaveLength(1);
+    expect(events[0].toolOutput).toBe("");
+  });
+
+  it("extracts filePath from tool_result content", () => {
+    const parser = new EventParser();
+    const line = JSON.stringify({
+      type: "user",
+      message: {
+        role: "user",
+        content: [{
+          type: "tool_result",
+          tool_use_id: "toolu_fp",
+          content: [
+            { type: "text", text: "file contents", input: { file_path: "/tmp/test.txt" } },
+          ],
+        }],
+      },
+    });
+    const events = parser.parseLine(line);
+    expect(events).toHaveLength(1);
+    expect(events[0].filePath).toBe("/tmp/test.txt");
+  });
+
+  it("emits __compact_boundary__ for compact_boundary", () => {
+    const parser = new EventParser();
+    const events = parser.parseLine(JSON.stringify({ type: "system", subtype: "compact_boundary" }));
+    expect(events).toHaveLength(1);
+    expect(events[0].text).toBe("__compact_boundary__");
+  });
+
+  it("emits permission mode from system status", () => {
+    const parser = new EventParser();
+    const events = parser.parseLine(JSON.stringify({
+      type: "system",
+      subtype: "status",
+      permissionMode: "bypassPermissions",
+    }));
+    expect(events).toHaveLength(1);
+    expect(events[0].text).toBe("__permission_mode::bypassPermissions");
+  });
+
+  it("marks message_done as interrupted for error_during_execution", () => {
+    const parser = new EventParser();
+    const events = parser.parseLine(JSON.stringify({
+      type: "result",
+      subtype: "error_during_execution",
+      result: "Something failed",
+    }));
+    expect(events).toHaveLength(1);
+    expect(events[0].interrupted).toBe(true);
+  });
+
+  it("tracks assistant model across events", () => {
+    const parser = new EventParser();
+    parser.parseLine(JSON.stringify({
+      type: "assistant",
+      message: { id: "m1", model: "claude-sonnet-4-6", content: [{ type: "text", text: "hi" }] },
+    }));
+    const events = parser.parseLine(JSON.stringify({
+      type: "result",
+      result: "done",
+    }));
+    expect(events[0].message!.model).toBe("claude-sonnet-4-6");
+  });
 });
