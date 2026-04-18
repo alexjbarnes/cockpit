@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { spawn, execFile } from "node:child_process";
+import os from "node:os";
 import { validateSession, isAuthDisabled } from "@/server/auth";
 
 function authenticate(req: NextRequest): boolean {
@@ -21,12 +22,20 @@ function run(cmd: string, args: string[], cwd: string): Promise<string> {
 
 function runWithStdin(cmd: string, args: string[], cwd: string, input: string, minimalEnv = false): Promise<string> {
   return new Promise((resolve, reject) => {
+    const isWin = process.platform === "win32";
     const env: Record<string, string> = minimalEnv
       ? {
           PATH: process.env.PATH || "",
-          HOME: process.env.HOME || "",
-          USER: process.env.USER || "",
-          TERM: "xterm-256color",
+          HOME: process.env.HOME || os.homedir(),
+          USER: process.env.USER || os.userInfo().username,
+          ...(isWin ? {
+            USERPROFILE: process.env.USERPROFILE || os.homedir(),
+            HOMEDRIVE: process.env.HOMEDRIVE || "",
+            HOMEPATH: process.env.HOMEPATH || "",
+            SYSTEMROOT: process.env.SYSTEMROOT || "",
+          } : {
+            TERM: "xterm-256color",
+          }),
         }
       : Object.fromEntries(Object.entries(process.env).filter((e): e is [string, string] => e[1] != null));
     delete env.CLAUDECODE;
@@ -36,7 +45,11 @@ function runWithStdin(cmd: string, args: string[], cwd: string, input: string, m
     console.log("[generate-message] args:", args.join(" "));
     console.log("[generate-message] cwd:", cwd, "minimalEnv:", minimalEnv);
 
-    const proc = spawn(cmd, args, { cwd, env: env as NodeJS.ProcessEnv, detached: true });
+    const proc = spawn(cmd, args, {
+      cwd,
+      env: env as NodeJS.ProcessEnv,
+      ...(isWin ? { shell: true } : { detached: true }),
+    });
     let stdout = "";
     let stderr = "";
 

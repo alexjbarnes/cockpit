@@ -42,10 +42,10 @@ async function readClaudeMdFile(scope: Scope, cwd?: string): Promise<ClaudeMdFil
 
   try {
     const content = await readFile(filePath, "utf-8");
-    const dirName = cwd ? cwd.split("/").pop() || cwd : undefined;
+    const dirName = cwd ? path.basename(cwd) || cwd : undefined;
     return { scope, cwd, dirName, content, exists: true };
   } catch {
-    const dirName = cwd ? cwd.split("/").pop() || cwd : undefined;
+    const dirName = cwd ? path.basename(cwd) || cwd : undefined;
     return { scope, cwd, dirName, content: "", exists: false };
   }
 }

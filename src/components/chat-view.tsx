@@ -3,6 +3,7 @@
 import { useEffect, useLayoutEffect, useRef, useCallback, useMemo, useState } from "react";
 import { Loader2, AlertTriangle, RotateCcw, ArrowDown } from "lucide-react";
 import { useSession } from "@/hooks/use-session";
+import { pathBasename } from "@/lib/path";
 import { useWebSocket } from "@/hooks/use-websocket";
 import { useSettings } from "@/hooks/use-settings";
 import { MessageBubble } from "./message-bubble";
@@ -66,7 +67,7 @@ export function ChatView({ sessionId, cwd, initialName, initialContext }: { sess
   }, [wsSend, sessionId]);
 
   useEffect(() => {
-    const title = sessionName || initialName || cwd?.split("/").pop() || "Session";
+    const title = sessionName || initialName || (cwd ? pathBasename(cwd) : "") || "Session";
     setHeader({ title, onRename: handleRename });
   }, [sessionName, initialName, cwd, setHeader, handleRename]);
 

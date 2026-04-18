@@ -1,3 +1,5 @@
+# Unix/macOS only. On Windows, use package.json scripts.
+
 # Kill any running cockpit servers
 kill:
     @-pkill -f "bun.*server\.ts" 2>/dev/null

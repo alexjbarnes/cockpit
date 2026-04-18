@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { type Writable } from "node:stream";
 import { EventEmitter } from "node:events";
+import path from "node:path";
 import { v4 as uuidv4 } from "uuid";
 import type { SessionInfo, ChatMessage, ToolUse, ContentBlock, ThinkingLevel, ContextUsage, TodoItem, ImageAttachment, DocumentAttachment, InitData } from "@/types";
 import { EventParser, type ParsedEvent } from "./event-parser";
@@ -84,6 +85,8 @@ const READ_ONLY_BASH_COMMANDS = new Set([
   "tree", "date", "echo", "printf", "env", "printenv",
   "basename", "dirname", "realpath", "readlink",
   "uname", "whoami", "hostname", "id",
+  // Windows
+  "dir", "findstr", "where", "more", "sort",
 ]);
 
 const READ_ONLY_GIT_SUBCOMMANDS = new Set([
@@ -135,7 +138,7 @@ export class SessionManager {
     const defaults = getDefaults();
     const info: SessionInfo = {
       id,
-      name: name || cwd.split("/").pop() || cwd,
+      name: name || path.basename(cwd) || cwd,
       cwd,
       createdAt: now,
       lastActiveAt: now,
@@ -183,7 +186,7 @@ export class SessionManager {
       session = {
         info: {
           id,
-          name: prefs?.name || cwd.split("/").pop() || cwd,
+          name: prefs?.name || path.basename(cwd) || cwd,
           cwd,
           createdAt: now,
           lastActiveAt: now,
@@ -276,7 +279,7 @@ export class SessionManager {
     const clientMessages = messages.length > PAGE ? messages.slice(-PAGE) : messages;
     const hasMore = messages.length > PAGE || byteOffset > 0 || session.previousCliSessionIds.length > 0;
 
-    const defaultName = session.info.cwd.split("/").pop() || session.info.cwd;
+    const defaultName = path.basename(session.info.cwd) || session.info.cwd;
     if (session.info.name === defaultName && messages.length > 0) {
       const firstUser = messages.find((m) => m.role === "user" && m.content && !m.content.startsWith("[") && !m.content.startsWith("<"));
       if (firstUser) {
@@ -332,7 +335,7 @@ export class SessionManager {
     const hasMore = messages.length > PAGE || byteOffset > 0 || session.previousCliSessionIds.length > 0;
 
     // Derive title from first user message if name is still the default
-    const defaultName = cwd.split("/").pop() || cwd;
+    const defaultName = path.basename(cwd) || cwd;
     if (session.info.name === defaultName && messages.length > 0) {
       const firstUser = messages.find((m) => m.role === "user" && m.content && !m.content.startsWith("[") && !m.content.startsWith("<"));
       if (firstUser) {
@@ -1016,13 +1019,14 @@ export class SessionManager {
   }
 
   private killProcessGroup(proc: ChildProcess): void {
-    if (proc.pid) {
-      try {
+    if (!proc.pid) return;
+    try {
+      if (process.platform === "win32") {
+        spawn("taskkill", ["/PID", String(proc.pid), "/T", "/F"], { stdio: "ignore" });
+      } else {
         process.kill(-proc.pid, "SIGTERM");
-      } catch {
-        // Process group already dead
       }
-    }
+    } catch {}
   }
 
   // Graceful shutdown: send end_session control request via stdin.
@@ -1312,11 +1316,12 @@ Additional Cockpit rules beyond the CLI's defaults:
     delete env.CLAUDECODE;
     delete env.CLAUDE_CODE_ENTRYPOINT;
 
+    const isWin = process.platform === "win32";
     const proc = spawn("claude", args, {
       cwd: session.info.cwd,
       env,
       stdio: ["pipe", "pipe", "pipe"],
-      detached: true,
+      ...(isWin ? { shell: true } : { detached: true }),
     });
 
     session.process = proc;

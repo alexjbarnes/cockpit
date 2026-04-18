@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, useMemo } from "react";
 import type { InitAgentInfo } from "@/types";
+import { pathBasename, pathDirname } from "@/lib/path";
 
 const DEFAULT_AGENTS = [
   { name: "Explore", description: "Fast codebase exploration" },
@@ -141,10 +142,9 @@ export function MentionMenu({ query, cwd, selectedIndex, onSelect, onItemsChange
       )}
       {fileItems.map((item, i) => {
         const idx = matchedAgents.length + i;
-        const fileName = item.value.split("/").pop();
-        const dirPath = item.value.includes("/")
-          ? item.value.slice(0, item.value.lastIndexOf("/"))
-          : null;
+        const fileName = pathBasename(item.value);
+        const dir = pathDirname(item.value);
+        const dirPath = dir || null;
 
         return (
           <button

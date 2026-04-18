@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import path from "node:path";
 import { validateSession, isAuthDisabled } from "@/server/auth";
 import { getSessionManager } from "@/server/singleton";
 import { scanAllSessions } from "@/server/transcript";
@@ -47,7 +48,7 @@ export async function GET(req: NextRequest) {
     if (group) {
       group.sessions.push(mem);
     } else {
-      const dirName = mem.cwd.split("/").pop() || mem.cwd;
+      const dirName = path.basename(mem.cwd) || mem.cwd;
       groups.push({ cwd: mem.cwd, dirName, sessions: [mem] });
     }
   }

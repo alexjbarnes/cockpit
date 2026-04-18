@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useClaudeMd, type ClaudeMdFile } from "@/hooks/use-claude-md";
+import { pathBasename } from "@/lib/path";
 import { Plus } from "lucide-react";
 
 const SCOPE_DESCRIPTION: Record<ClaudeMdFile["scope"], string> = {
@@ -100,7 +101,7 @@ export default function ClaudeMdPage() {
         Array.from(byCwd.entries()).map(([cwd, group]) => {
           const existing = group.filter((f) => f.exists);
           if (existing.length === 0) return null;
-          const dirName = cwd.split("/").pop() || cwd;
+          const dirName = pathBasename(cwd) || cwd;
           return (
             <Card key={cwd}>
               <CardHeader>
@@ -196,7 +197,7 @@ function NewFileDialog({
         {!selectedCwd && (
           <div className="space-y-1 max-h-64 overflow-y-auto">
             {cwds.map((cwd) => {
-              const dirName = cwd.split("/").pop() || cwd;
+              const dirName = pathBasename(cwd) || cwd;
               return (
                 <button
                   key={cwd}

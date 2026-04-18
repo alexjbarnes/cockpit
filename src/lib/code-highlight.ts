@@ -1,3 +1,5 @@
+import { pathBasename } from "@/lib/path";
+
 const EXT_TO_LANG: Record<string, string> = {
   ts: "typescript",
   tsx: "tsx",
@@ -50,7 +52,7 @@ const EXT_TO_LANG: Record<string, string> = {
 };
 
 export function languageFromPath(filePath: string): string | undefined {
-  const basename = filePath.split("/").pop() || "";
+  const basename = pathBasename(filePath) || "";
 
   const lower = basename.toLowerCase();
   if (lower === "dockerfile") return "dockerfile";

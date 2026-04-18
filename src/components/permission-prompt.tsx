@@ -4,12 +4,7 @@ import { useEffect, useRef, useMemo } from "react";
 import { ShieldAlert } from "lucide-react";
 import type { PendingPermission } from "@/hooks/use-session";
 import type { PermissionMode, PermissionSuggestion } from "@/types";
-
-function shortPath(filePath: string): string {
-  const parts = filePath.split("/");
-  if (parts.length <= 3) return filePath;
-  return ".../" + parts.slice(-2).join("/");
-}
+import { shortPath, pathBasename } from "@/lib/path";
 
 function formatToolSummary(toolName: string, input: Record<string, unknown>): string {
   switch (toolName) {
@@ -49,7 +44,7 @@ function suggestionLabel(s: PermissionSuggestion): string {
 
   if (s.type === "addDirectories" && s.directories?.length) {
     const dir = s.directories[0];
-    const short = dir.split("/").pop() || dir;
+    const short = pathBasename(dir) || dir;
     return `Allow dir ${short} (${dest})`;
   }
 

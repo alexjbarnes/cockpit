@@ -60,7 +60,7 @@ export async function POST(req: NextRequest) {
   let repoName = folderName;
   if (!repoName) {
     const urlPath = url.replace(/\.git$/, "").replace(/\/$/, "");
-    repoName = urlPath.split("/").pop() || "repo";
+    repoName = path.basename(urlPath) || "repo";
   }
 
   const dest = path.join(parentPath, repoName);

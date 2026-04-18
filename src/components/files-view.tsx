@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useShell } from "@/components/app-shell";
 import { FileTree } from "@/components/file-tree";
+import { pathBasename } from "@/lib/path";
 import { CodeBlock, languageFromPath } from "@/components/code-block";
 import { Loader2 } from "lucide-react";
 
@@ -126,7 +127,7 @@ export function FilesView({ cwd, initialFile }: { cwd: string; initialFile?: str
   }
 
   const rel = relativePath(cwd, selectedFile);
-  const fileName = selectedFile.split("/").pop() || selectedFile;
+  const fileName = pathBasename(selectedFile) || selectedFile;
   const dirPart = rel.slice(0, rel.length - fileName.length);
   const lang = languageFromPath(selectedFile);
 

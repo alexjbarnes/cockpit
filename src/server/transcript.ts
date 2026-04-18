@@ -742,7 +742,7 @@ export async function scanAllSessions(): Promise<SessionGroup[]> {
     sessions.sort((a, b) => b.lastActiveAt - a.lastActiveAt);
     result.push({
       cwd,
-      dirName: cwd.split("/").pop() || cwd,
+      dirName: path.basename(cwd) || cwd,
       sessions,
     });
   }

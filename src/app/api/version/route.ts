@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { realpath } from "node:fs/promises";
+import { realpath, readFile } from "node:fs/promises";
 
 const execFileAsync = promisify(execFile);
 
@@ -22,7 +22,8 @@ const UPDATE_COMMANDS: Record<InstallMethod, string> = {
 
 async function detectInstallMethod(): Promise<InstallMethod> {
   try {
-    const { stdout } = await execFileAsync("which", ["claude"], { timeout: 3000 });
+    const whichCmd = process.platform === "win32" ? "where" : "which";
+    const { stdout } = await execFileAsync(whichCmd, ["claude"], { timeout: 3000 });
     const whichPath = stdout.trim();
     const resolved = await realpath(whichPath).catch(() => whichPath);
     const combined = `${whichPath}\n${resolved}`.toLowerCase();
@@ -38,7 +39,8 @@ async function detectInstallMethod(): Promise<InstallMethod> {
     if (combined.includes("/npm/") || combined.includes("/node_modules/")) return "npm";
 
     // Check if it's a node script (npm-installed) vs standalone binary
-    const { stdout: head } = await execFileAsync("head", ["-c", "20", resolved], { timeout: 2000 });
+    const headBuf = await readFile(resolved, "utf-8");
+    const head = headBuf.slice(0, 20);
     if (head.startsWith("#!/")) return "npm";
 
     return "binary";

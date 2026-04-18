@@ -3,6 +3,7 @@
 import { useEffect, useCallback } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { pathBasename } from "@/lib/path";
 import rehypeHighlight from "rehype-highlight";
 import { X } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -43,7 +44,7 @@ export function PlanViewModal({ open, onOpenChange, content, filePath }: PlanVie
 
   if (!open) return null;
 
-  const basename = filePath.split("/").pop() || filePath;
+  const basename = pathBasename(filePath) || filePath;
 
   return (
     <div

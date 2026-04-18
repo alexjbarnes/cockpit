@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Loader2, Folder, ChevronRight, FolderPlus } from "lucide-react";
+import { splitPathSegments, pathBasename } from "@/lib/path";
 
 interface DirEntry {
   name: string;
@@ -78,20 +79,24 @@ export function DirectoryPicker({ onSelect, onCancel }: DirectoryPickerProps) {
     }
   };
 
-  const segments = currentPath.split("/").filter(Boolean);
+  const allSegments = splitPathSegments(currentPath);
+  const hasDriveLetter = /^[a-zA-Z]:[/\\]/.test(currentPath);
+  const rootLabel = hasDriveLetter ? currentPath.slice(0, 3) : "/";
+  const rootPath = hasDriveLetter ? currentPath.slice(0, 3) : "/";
+  const segments = hasDriveLetter ? allSegments.slice(1) : allSegments;
 
   return (
     <div className="space-y-3">
       <div className="flex items-center gap-1 text-xs font-mono overflow-x-auto">
         <button
           type="button"
-          onClick={() => fetchEntries("/")}
+          onClick={() => fetchEntries(rootPath)}
           className="shrink-0 text-muted-foreground hover:text-foreground"
         >
-          /
+          {rootLabel}
         </button>
         {segments.map((seg, i) => {
-          const segPath = "/" + segments.slice(0, i + 1).join("/");
+          const segPath = rootPath + segments.slice(0, i + 1).join("/");
           const isLast = i === segments.length - 1;
           return (
             <span key={segPath} className="flex items-center gap-1">
@@ -182,7 +187,7 @@ export function DirectoryPicker({ onSelect, onCancel }: DirectoryPickerProps) {
           disabled={!currentPath}
           onClick={() => onSelect(currentPath)}
         >
-          Select {currentPath ? currentPath.split("/").pop() || "/" : ""}
+          Select {currentPath ? pathBasename(currentPath) || "/" : ""}
         </Button>
       </div>
     </div>

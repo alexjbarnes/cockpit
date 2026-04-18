@@ -8,6 +8,7 @@ import { DiffViewer } from "./diff-viewer";
 import { CodeBlock, languageFromPath, prehighlight } from "./code-block";
 import { PlanViewModal } from "./plan-view-modal";
 import { useShell } from "./app-shell";
+import { shortPath } from "@/lib/path";
 
 function parseInput(input: string): Record<string, unknown> {
   if (!input) return {};
@@ -16,12 +17,6 @@ function parseInput(input: string): Record<string, unknown> {
   } catch {
     return {};
   }
-}
-
-function shortPath(filePath: string): string {
-  const parts = filePath.split("/");
-  if (parts.length <= 3) return filePath;
-  return ".../" + parts.slice(-2).join("/");
 }
 
 function useIsDark(): boolean {

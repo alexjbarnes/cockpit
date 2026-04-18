@@ -120,7 +120,7 @@ export interface SidebarHandle {
 }
 
 function shortPath(cwd: string): string {
-  const parts = cwd.split("/");
+  const parts = cwd.split(/[/\\]/);
   return parts.length > 2 ? "~/" + parts.slice(-2).join("/") : cwd;
 }
 
