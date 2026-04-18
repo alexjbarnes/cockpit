@@ -16,11 +16,7 @@ export default function ChangesPage() {
   const { sessionId } = useSessionForCwd(cwd, urlSessionId);
 
   if (!cwd) {
-    return (
-      <div className="flex items-center justify-center h-full text-sm text-muted-foreground">
-        No working directory specified.
-      </div>
-    );
+    return <div className="flex items-center justify-center h-full text-sm text-muted-foreground">No working directory specified.</div>;
   }
 
   return <ChangesView cwd={cwd} sessionId={sessionId} />;

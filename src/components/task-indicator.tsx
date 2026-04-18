@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { Loader2, CheckCircle2, Activity, X } from "lucide-react";
+import { Activity, CheckCircle2, Loader2, X } from "lucide-react";
+import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import type { BackgroundTask } from "@/types";
 
@@ -14,7 +14,9 @@ export function BackgroundTasksButton({ tasks }: BackgroundTasksButtonProps) {
 
   useEffect(() => {
     if (!open) return;
-    const h = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    const h = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
     window.addEventListener("keydown", h);
     return () => window.removeEventListener("keydown", h);
   }, [open]);
@@ -56,10 +58,7 @@ export function BackgroundTasksButton({ tasks }: BackgroundTasksButtonProps) {
             ) : (
               <div className="space-y-2 max-h-64 overflow-y-auto">
                 {tasks.map((task) => (
-                  <div
-                    key={task.taskId}
-                    className="flex items-start gap-3 rounded-md border border-border px-3 py-2.5"
-                  >
+                  <div key={task.taskId} className="flex items-start gap-3 rounded-md border border-border px-3 py-2.5">
                     {task.status === "completed" ? (
                       <CheckCircle2 className="h-4 w-4 shrink-0 mt-0.5 text-green-500" />
                     ) : (

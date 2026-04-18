@@ -1,16 +1,12 @@
 "use client";
 
-import { use, useEffect } from "react";
 import { useSearchParams } from "next/navigation";
+import { use, useEffect } from "react";
 import { useShellCwd, useShellSessionId } from "@/components/app-shell";
 import { ChatView } from "@/components/chat-view";
-import { pinSession, clearUnreadSession } from "@/components/sidebar";
+import { clearUnreadSession, pinSession } from "@/components/sidebar";
 
-export default function SessionPage({
-  params,
-}: {
-  params: Promise<{ id: string }>;
-}) {
+export default function SessionPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const searchParams = useSearchParams();
   const cwd = searchParams.get("cwd") || "";

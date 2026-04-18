@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
 import { Moon, Sun } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 
 type Theme = "light" | "dark" | "system";
@@ -53,11 +53,7 @@ export function ThemeToggle() {
 
   return (
     <Button variant="ghost" size="icon" onClick={cycle} title={`Theme: ${theme}`}>
-      {resolved === "dark" ? (
-        <Moon className="h-4 w-4" />
-      ) : (
-        <Sun className="h-4 w-4" />
-      )}
+      {resolved === "dark" ? <Moon className="h-4 w-4" /> : <Sun className="h-4 w-4" />}
     </Button>
   );
 }

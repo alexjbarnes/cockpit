@@ -1,21 +1,19 @@
 "use client";
 
-import { useState } from "react";
+import { Plus, Trash2 } from "lucide-react";
 import { useRouter } from "next/navigation";
+import { useState } from "react";
 import { usePageHeader } from "@/components/app-shell";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useCommands } from "@/hooks/use-commands";
-import { Plus, Trash2 } from "lucide-react";
 
 export default function CommandsPage() {
   usePageHeader("Commands");
 
-  const cwd = typeof localStorage !== "undefined"
-    ? localStorage.getItem("cockpit-agents-cwd") || undefined
-    : undefined;
+  const cwd = typeof localStorage !== "undefined" ? localStorage.getItem("cockpit-agents-cwd") || undefined : undefined;
 
   const { commands, loading, deleteCommand } = useCommands(cwd);
   const router = useRouter();
@@ -57,9 +55,7 @@ export default function CommandsPage() {
       {loading && <p className="text-sm text-muted-foreground">Loading commands...</p>}
 
       {!loading && commands.length === 0 && (
-        <p className="text-sm text-muted-foreground">
-          No custom commands found. Create one to get started.
-        </p>
+        <p className="text-sm text-muted-foreground">No custom commands found. Create one to get started.</p>
       )}
 
       {globalCommands.length > 0 && (
@@ -107,9 +103,7 @@ export default function CommandsPage() {
           <DialogHeader>
             <DialogTitle>New Command</DialogTitle>
           </DialogHeader>
-          <p className="text-sm text-muted-foreground mb-4">
-            Where should this command be saved?
-          </p>
+          <p className="text-sm text-muted-foreground mb-4">Where should this command be saved?</p>
           <div className="flex gap-2">
             <Button variant="outline" className="flex-1" onClick={() => handleNew("user")}>
               Global
@@ -130,8 +124,12 @@ export default function CommandsPage() {
             Delete <span className="font-mono font-bold">{confirmDelete?.name}</span>? This cannot be undone.
           </p>
           <div className="flex justify-end gap-2">
-            <Button variant="outline" onClick={() => setConfirmDelete(null)}>Cancel</Button>
-            <Button variant="destructive" onClick={handleDelete}>Delete</Button>
+            <Button variant="outline" onClick={() => setConfirmDelete(null)}>
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={handleDelete}>
+              Delete
+            </Button>
           </div>
         </DialogContent>
       </Dialog>
@@ -161,9 +159,7 @@ function CommandRow({
             {scope === "user" ? "Global" : "Project"}
           </Badge>
         </div>
-        {description && (
-          <p className="text-xs text-muted-foreground truncate mt-0.5">{description}</p>
-        )}
+        {description && <p className="text-xs text-muted-foreground truncate mt-0.5">{description}</p>}
       </button>
       <button
         type="button"

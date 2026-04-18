@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { BarChart3, X, Loader2 } from "lucide-react";
+import { BarChart3, Loader2, X } from "lucide-react";
+import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { useUsage } from "@/hooks/use-usage";
 import type { UsageLimit } from "@/types";
@@ -42,10 +42,7 @@ function LimitBar({ label, limit }: { label: string; limit: UsageLimit }) {
         </span>
       </div>
       <div className="h-2.5 rounded-full bg-muted overflow-hidden">
-        <div
-          className="h-full rounded-full transition-all"
-          style={{ width: `${Math.min(pct, 100)}%`, backgroundColor: color }}
-        />
+        <div className="h-full rounded-full transition-all" style={{ width: `${Math.min(pct, 100)}%`, backgroundColor: color }} />
       </div>
     </div>
   );
@@ -57,7 +54,9 @@ export function UsageButton() {
 
   useEffect(() => {
     if (!open) return;
-    const h = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    const h = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
     window.addEventListener("keydown", h);
     return () => window.removeEventListener("keydown", h);
   }, [open]);
@@ -67,12 +66,7 @@ export function UsageButton() {
 
   return (
     <>
-      <Button
-        variant="ghost"
-        size="icon"
-        onClick={() => setOpen(true)}
-        title="Account usage"
-      >
+      <Button variant="ghost" size="icon" onClick={() => setOpen(true)} title="Account usage">
         <BarChart3 className={`h-4 w-4 ${usage ? iconColorClass(worst) : ""}`} />
       </Button>
       {open && (
@@ -96,9 +90,7 @@ export function UsageButton() {
               </div>
             )}
 
-            {error && !usage && (
-              <p className="text-sm text-muted-foreground py-4 text-center">{error}</p>
-            )}
+            {error && !usage && <p className="text-sm text-muted-foreground py-4 text-center">{error}</p>}
 
             {usage && (
               <>
@@ -111,9 +103,7 @@ export function UsageButton() {
                   <div className="mt-4 pt-3 border-t text-sm">
                     <div className="flex justify-between">
                       <span>Extra usage credits</span>
-                      <span className="font-medium">
-                        ${usage.extra_usage.remaining_credits.toFixed(2)} remaining
-                      </span>
+                      <span className="font-medium">${usage.extra_usage.remaining_credits.toFixed(2)} remaining</span>
                     </div>
                   </div>
                 )}

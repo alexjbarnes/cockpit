@@ -1,11 +1,11 @@
 "use client";
 
+import { FolderOpen, GitBranch, Loader2 } from "lucide-react";
 import { useState } from "react";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { DirectoryPicker } from "./directory-picker";
-import { FolderOpen, GitBranch, Loader2 } from "lucide-react";
 
 type Tab = "session" | "clone";
 
@@ -84,8 +84,19 @@ export function NewSessionDialog({ open, onOpenChange, onSubmit }: NewSessionDia
   };
 
   return (
-    <Dialog open={open} onOpenChange={(v) => { if (!v) reset(); onOpenChange(v); }}>
-      <DialogContent onClose={() => { reset(); onOpenChange(false); }}>
+    <Dialog
+      open={open}
+      onOpenChange={(v) => {
+        if (!v) reset();
+        onOpenChange(v);
+      }}
+    >
+      <DialogContent
+        onClose={() => {
+          reset();
+          onOpenChange(false);
+        }}
+      >
         <DialogHeader>
           <DialogTitle>New Session</DialogTitle>
         </DialogHeader>
@@ -117,19 +128,8 @@ export function NewSessionDialog({ open, onOpenChange, onSubmit }: NewSessionDia
             <div>
               <label className="text-sm font-medium">Working Directory</label>
               <div className="flex gap-2">
-                <Input
-                  value={cwd}
-                  onChange={(e) => setCwd(e.target.value)}
-                  placeholder="/home/user/project"
-                  required
-                />
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="icon"
-                  onClick={() => setBrowsing(!browsing)}
-                  title="Browse directories"
-                >
+                <Input value={cwd} onChange={(e) => setCwd(e.target.value)} placeholder="/home/user/project" required />
+                <Button type="button" variant="outline" size="icon" onClick={() => setBrowsing(!browsing)} title="Browse directories">
                   <FolderOpen className="h-4 w-4" />
                 </Button>
               </div>
@@ -145,11 +145,7 @@ export function NewSessionDialog({ open, onOpenChange, onSubmit }: NewSessionDia
             )}
             <div>
               <label className="text-sm font-medium">Name (optional)</label>
-              <Input
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder="My Project"
-              />
+              <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="My Project" />
             </div>
             <Button type="submit" className="w-full" disabled={!cwd.trim()}>
               Create Session
@@ -171,12 +167,7 @@ export function NewSessionDialog({ open, onOpenChange, onSubmit }: NewSessionDia
             <div>
               <label className="text-sm font-medium">Clone Into</label>
               <div className="flex gap-2">
-                <Input
-                  value={cloneDest}
-                  onChange={(e) => setCloneDest(e.target.value)}
-                  placeholder="/home/user/projects"
-                  required
-                />
+                <Input value={cloneDest} onChange={(e) => setCloneDest(e.target.value)} placeholder="/home/user/projects" required />
                 <Button
                   type="button"
                   variant="outline"
@@ -207,15 +198,9 @@ export function NewSessionDialog({ open, onOpenChange, onSubmit }: NewSessionDia
             </div>
             <div>
               <label className="text-sm font-medium">Session Name (optional)</label>
-              <Input
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder="My Project"
-              />
+              <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="My Project" />
             </div>
-            {cloneError && (
-              <p className="text-sm text-destructive">{cloneError}</p>
-            )}
+            {cloneError && <p className="text-sm text-destructive">{cloneError}</p>}
             <Button type="submit" className="w-full" disabled={!cloneUrl.trim() || !cloneDest.trim() || cloning}>
               {cloning ? (
                 <>

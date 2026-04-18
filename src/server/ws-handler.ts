@@ -1,22 +1,15 @@
-import { WebSocketServer, WebSocket } from "ws";
 import type { Server as HTTPServer, IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
-import { readdirSync, statSync } from "node:fs";
-import { join } from "node:path";
-import { homedir } from "node:os";
+import { WebSocket, WebSocketServer } from "ws";
 import type { ClientMessage, ServerMessage } from "@/types";
-import type { ParsedEvent } from "./event-parser";
-import { validateSession, extractTokenFromQuery, isAuthDisabled } from "./auth";
-import { SessionManager, type PendingRequest, type StreamingSnapshot } from "./session-manager";
+import { extractTokenFromQuery, isAuthDisabled, validateSession } from "./auth";
 // loadLastUsage no longer needed - usage is returned by loadTranscript
-import { logParsedEvent, logServerMessage, logClientMessage, logStatus } from "./debug-logger";
-
+import { logClientMessage, logParsedEvent, logServerMessage, logStatus } from "./debug-logger";
+import type { ParsedEvent } from "./event-parser";
 import { findLatestPlanFile } from "./plans";
+import { SessionManager } from "./session-manager";
 
-export function createWebSocketHandler(
-  server: HTTPServer,
-  sessionManager: SessionManager
-): WebSocketServer {
+export function createWebSocketHandler(server: HTTPServer, sessionManager: SessionManager): WebSocketServer {
   const wss = new WebSocketServer({ noServer: true });
 
   // Server-side heartbeat: detect dead connections every 30s.
@@ -64,11 +57,16 @@ export function createWebSocketHandler(
     console.log(`[ws:${wsId}] connected (clients=${wss.clients.size})`);
     const ext = ws as WebSocket & { isAlive?: boolean };
     ext.isAlive = true;
-    ws.on("pong", () => { ext.isAlive = true; });
+    ws.on("pong", () => {
+      ext.isAlive = true;
+    });
     // Track subscriptions per session so re-connects clean up old listeners
     const sessionCleanups = new Map<string, Array<() => void>>();
     // Track pending permission requests with tool name and raw input
-    const pendingPermissions = new Map<string, { toolName: string; toolInput: Record<string, unknown>; permissionSuggestions?: Record<string, unknown>[] }>();
+    const pendingPermissions = new Map<
+      string,
+      { toolName: string; toolInput: Record<string, unknown>; permissionSuggestions?: Record<string, unknown>[] }
+    >();
     // Lightweight status-only subscriptions for sidebar
     let watchCleanups: Array<() => void> = [];
 
@@ -90,68 +88,81 @@ export function createWebSocketHandler(
         case "session:connect": {
           const sid = msg.sessionId.slice(0, 8);
           const t0 = performance.now();
-          console.log(`[ws:${wsId}] session:connect ${sid} (cwd=${msg.cwd || "none"}, process=${sessionManager.isProcessAlive(msg.sessionId)})`);
+          console.log(
+            `[ws:${wsId}] session:connect ${sid} (cwd=${msg.cwd || "none"}, process=${sessionManager.isProcessAlive(msg.sessionId)})`,
+          );
           const sessionPromise = msg.cwd
             ? sessionManager.getSessionByCwd(msg.sessionId, msg.cwd)
             : sessionManager.getSession(msg.sessionId);
           sessionPromise.then((session) => {
-          if (!session) {
-            console.log(`[ws:${wsId}] session ${sid} not found`);
-            send(ws, {
-              type: "session:error",
-              sessionId: msg.sessionId,
-              error: "Session not found",
-            });
-            return;
-          }
-          const tLoaded = performance.now();
-          console.log(`[ws:${wsId}] session ${sid} loaded in ${(tLoaded - t0).toFixed(0)}ms (status=${session.info.status}, messages=${session.messages.length}, process=${sessionManager.isProcessAlive(msg.sessionId)})`);
-
-          // Eagerly spawn the CLI process so initialize data (agents, models,
-          // commands) is available before the user sends their first message.
-          sessionManager.ensureProcess(msg.sessionId);
-          const tSpawn = performance.now();
-          console.log(`[ws:${wsId}] session ${sid} ensureProcess in ${(tSpawn - tLoaded).toFixed(0)}ms`);
-
-          // Clean up previous subscriptions for this session
-          const prev = sessionCleanups.get(msg.sessionId);
-          if (prev) {
-            for (const fn of prev) fn();
-          }
-          const cleanups: Array<() => void> = [];
-          sessionCleanups.set(msg.sessionId, cleanups);
-
-          // Compute status early so it can be included in the history message.
-          // This ensures the client gets status atomically with history, even
-          // if the WebSocket drops before subsequent messages are delivered.
-          const correctedStatus = sessionManager.isProcessAlive(msg.sessionId)
-            ? session.info.status
-            : "idle";
-          if (correctedStatus !== session.info.status) {
-            sessionManager.fixStaleStatus(msg.sessionId);
-          }
-
-          // If client already has messages, send only the delta to avoid
-          // re-sending 1000+ messages on every mobile reconnect.
-          // Uses the last known server message ID instead of a count, since
-          // the client may have locally-generated messages with different IDs.
-          const lastId = msg.lastMessageId as string | undefined;
-          if (lastId) {
-            const idx = session.messages.findIndex((m) => m.id === lastId);
-            if (idx !== -1) {
-              const delta = session.messages.slice(idx + 1);
-              console.log(`[ws:${wsId}] session ${sid} sending delta (lastId=${lastId}, idx=${idx}, server=${session.messages.length}, delta=${delta.length})`);
+            if (!session) {
+              console.log(`[ws:${wsId}] session ${sid} not found`);
               send(ws, {
-                type: "history",
+                type: "session:error",
                 sessionId: msg.sessionId,
-                messages: delta,
-                delta: true,
-                status: correctedStatus,
-                hasMore: session.hasMore,
+                error: "Session not found",
               });
+              return;
+            }
+            const tLoaded = performance.now();
+            console.log(
+              `[ws:${wsId}] session ${sid} loaded in ${(tLoaded - t0).toFixed(0)}ms (status=${session.info.status}, messages=${session.messages.length}, process=${sessionManager.isProcessAlive(msg.sessionId)})`,
+            );
+
+            // Eagerly spawn the CLI process so initialize data (agents, models,
+            // commands) is available before the user sends their first message.
+            sessionManager.ensureProcess(msg.sessionId);
+            const tSpawn = performance.now();
+            console.log(`[ws:${wsId}] session ${sid} ensureProcess in ${(tSpawn - tLoaded).toFixed(0)}ms`);
+
+            // Clean up previous subscriptions for this session
+            const prev = sessionCleanups.get(msg.sessionId);
+            if (prev) {
+              for (const fn of prev) fn();
+            }
+            const cleanups: Array<() => void> = [];
+            sessionCleanups.set(msg.sessionId, cleanups);
+
+            // Compute status early so it can be included in the history message.
+            // This ensures the client gets status atomically with history, even
+            // if the WebSocket drops before subsequent messages are delivered.
+            const correctedStatus = sessionManager.isProcessAlive(msg.sessionId) ? session.info.status : "idle";
+            if (correctedStatus !== session.info.status) {
+              sessionManager.fixStaleStatus(msg.sessionId);
+            }
+
+            // If client already has messages, send only the delta to avoid
+            // re-sending 1000+ messages on every mobile reconnect.
+            // Uses the last known server message ID instead of a count, since
+            // the client may have locally-generated messages with different IDs.
+            const lastId = msg.lastMessageId as string | undefined;
+            if (lastId) {
+              const idx = session.messages.findIndex((m) => m.id === lastId);
+              if (idx !== -1) {
+                const delta = session.messages.slice(idx + 1);
+                console.log(
+                  `[ws:${wsId}] session ${sid} sending delta (lastId=${lastId}, idx=${idx}, server=${session.messages.length}, delta=${delta.length})`,
+                );
+                send(ws, {
+                  type: "history",
+                  sessionId: msg.sessionId,
+                  messages: delta,
+                  delta: true,
+                  status: correctedStatus,
+                  hasMore: session.hasMore,
+                });
+              } else {
+                // ID not found - client has stale state, send full history
+                console.log(`[ws:${wsId}] session ${sid} lastMessageId not found, sending full history`);
+                send(ws, {
+                  type: "history",
+                  sessionId: msg.sessionId,
+                  messages: session.messages,
+                  status: correctedStatus,
+                  hasMore: session.hasMore,
+                });
+              }
             } else {
-              // ID not found - client has stale state, send full history
-              console.log(`[ws:${wsId}] session ${sid} lastMessageId not found, sending full history`);
               send(ws, {
                 type: "history",
                 sessionId: msg.sessionId,
@@ -160,247 +171,207 @@ export function createWebSocketHandler(
                 hasMore: session.hasMore,
               });
             }
-          } else {
-            send(ws, {
-              type: "history",
-              sessionId: msg.sessionId,
-              messages: session.messages,
-              status: correctedStatus,
-              hasMore: session.hasMore,
-            });
-          }
 
-          // Send in-progress streaming message if the CLI is mid-response.
-          // This restores tool calls and partial text that aren't yet in the transcript.
-          // Only send when the session is actually running; an idle session has
-          // no in-progress streaming, and a stale snapshot would briefly show
-          // completed agents as still running until the status:idle clears it.
-          const snapshot = correctedStatus === "running"
-            ? sessionManager.getStreamingSnapshot(msg.sessionId)
-            : null;
-          if (snapshot) {
-            send(ws, {
-              type: "session:streaming_snapshot",
-              sessionId: msg.sessionId,
-              messageId: snapshot.messageId,
-              content: snapshot.content,
-              toolUses: snapshot.toolUses,
-              blocks: snapshot.blocks,
-            });
-          }
-
-          // Restore compacting indicator if compaction is in progress
-          if (sessionManager.isCompacting(msg.sessionId)) {
-            send(ws, {
-              type: "session:system",
-              sessionId: msg.sessionId,
-              text: "__compact::start",
-            });
-          }
-
-          send(ws, {
-            type: "session:connected",
-            sessionId: msg.sessionId,
-          });
-
-          send(ws, {
-            type: "session:info_updated",
-            sessionId: msg.sessionId,
-            info: session.info,
-          });
-
-          send(ws, {
-            type: "session:status",
-            sessionId: msg.sessionId,
-            status: correctedStatus,
-          });
-
-          if (sessionManager.isBypassActive(msg.sessionId)) {
-            send(ws, {
-              type: "session:system",
-              sessionId: msg.sessionId,
-              text: "__bypass_state::on",
-            });
-          }
-
-          if (sessionManager.isPlanModeActive(msg.sessionId)) {
-            send(ws, {
-              type: "session:system",
-              sessionId: msg.sessionId,
-              text: "__plan_state::on",
-            });
-          }
-
-          const model = sessionManager.getModel(msg.sessionId);
-          if (model && model !== "sonnet") {
-            send(ws, {
-              type: "session:system",
-              sessionId: msg.sessionId,
-              text: `__model::${model}`,
-            });
-          }
-
-          const thinkingLevel = sessionManager.getThinkingLevel(msg.sessionId);
-          if (thinkingLevel !== "high") {
-            send(ws, {
-              type: "session:system",
-              sessionId: msg.sessionId,
-              text: `__thinking_level::${thinkingLevel}`,
-            });
-          }
-
-          const currentUsage = sessionManager.getContextUsage(msg.sessionId);
-          const usage = currentUsage || session.lastUsage;
-          if (usage) {
-            send(ws, {
-              type: "session:usage",
-              sessionId: msg.sessionId,
-              usage,
-            });
-          }
-
-          const unsubEvent = sessionManager.subscribe(
-            msg.sessionId,
-            (event: ParsedEvent) => {
-              logParsedEvent(msg.sessionId, event);
-              handleParsedEvent(ws, msg.sessionId, event, pendingPermissions, sessionManager);
-            }
-          );
-          if (unsubEvent) cleanups.push(unsubEvent);
-
-          const unsubStatus = sessionManager.onStatus(
-            msg.sessionId,
-            (status) => {
-              logStatus(msg.sessionId, status);
+            // Send in-progress streaming message if the CLI is mid-response.
+            // This restores tool calls and partial text that aren't yet in the transcript.
+            // Only send when the session is actually running; an idle session has
+            // no in-progress streaming, and a stale snapshot would briefly show
+            // completed agents as still running until the status:idle clears it.
+            const snapshot = correctedStatus === "running" ? sessionManager.getStreamingSnapshot(msg.sessionId) : null;
+            if (snapshot) {
               send(ws, {
-                type: "session:status",
+                type: "session:streaming_snapshot",
                 sessionId: msg.sessionId,
-                status,
+                messageId: snapshot.messageId,
+                content: snapshot.content,
+                toolUses: snapshot.toolUses,
+                blocks: snapshot.blocks,
               });
             }
-          );
-          if (unsubStatus) cleanups.push(unsubStatus);
 
-          const unsubError = sessionManager.onError(
-            msg.sessionId,
-            (error) => {
-              send(ws, {
-                type: "session:error",
-                sessionId: msg.sessionId,
-                error,
-              });
-            }
-          );
-          if (unsubError) cleanups.push(unsubError);
-
-          const unsubSystem = sessionManager.onSystem(
-            msg.sessionId,
-            (text) => {
+            // Restore compacting indicator if compaction is in progress
+            if (sessionManager.isCompacting(msg.sessionId)) {
               send(ws, {
                 type: "session:system",
                 sessionId: msg.sessionId,
-                text,
+                text: "__compact::start",
               });
             }
-          );
-          if (unsubSystem) cleanups.push(unsubSystem);
 
-          const unsubClear = sessionManager.onClear(
-            msg.sessionId,
-            () => {
+            send(ws, {
+              type: "session:connected",
+              sessionId: msg.sessionId,
+            });
+
+            send(ws, {
+              type: "session:info_updated",
+              sessionId: msg.sessionId,
+              info: session.info,
+            });
+
+            send(ws, {
+              type: "session:status",
+              sessionId: msg.sessionId,
+              status: correctedStatus,
+            });
+
+            if (sessionManager.isBypassActive(msg.sessionId)) {
               send(ws, {
-                type: "session:clear",
+                type: "session:system",
                 sessionId: msg.sessionId,
+                text: "__bypass_state::on",
               });
             }
-          );
-          if (unsubClear) cleanups.push(unsubClear);
 
-          const unsubInfoUpdated = sessionManager.onInfoUpdated(
-            msg.sessionId,
-            (info) => {
+            if (sessionManager.isPlanModeActive(msg.sessionId)) {
               send(ws, {
-                type: "session:info_updated",
+                type: "session:system",
                 sessionId: msg.sessionId,
-                info,
+                text: "__plan_state::on",
               });
             }
-          );
-          if (unsubInfoUpdated) cleanups.push(unsubInfoUpdated);
 
-          const unsubUsage = sessionManager.onUsage(
-            msg.sessionId,
-            (usage) => {
+            const model = sessionManager.getModel(msg.sessionId);
+            if (model && model !== "sonnet") {
+              send(ws, {
+                type: "session:system",
+                sessionId: msg.sessionId,
+                text: `__model::${model}`,
+              });
+            }
+
+            const thinkingLevel = sessionManager.getThinkingLevel(msg.sessionId);
+            if (thinkingLevel !== "high") {
+              send(ws, {
+                type: "session:system",
+                sessionId: msg.sessionId,
+                text: `__thinking_level::${thinkingLevel}`,
+              });
+            }
+
+            const currentUsage = sessionManager.getContextUsage(msg.sessionId);
+            const usage = currentUsage || session.lastUsage;
+            if (usage) {
               send(ws, {
                 type: "session:usage",
                 sessionId: msg.sessionId,
                 usage,
               });
             }
-          );
-          if (unsubUsage) cleanups.push(unsubUsage);
 
-          const unsubTodos = sessionManager.onTodos(
-            msg.sessionId,
-            (todos) => {
+            const unsubEvent = sessionManager.subscribe(msg.sessionId, (event: ParsedEvent) => {
+              logParsedEvent(msg.sessionId, event);
+              handleParsedEvent(ws, msg.sessionId, event, pendingPermissions, sessionManager);
+            });
+            if (unsubEvent) cleanups.push(unsubEvent);
+
+            const unsubStatus = sessionManager.onStatus(msg.sessionId, (status) => {
+              logStatus(msg.sessionId, status);
+              send(ws, {
+                type: "session:status",
+                sessionId: msg.sessionId,
+                status,
+              });
+            });
+            if (unsubStatus) cleanups.push(unsubStatus);
+
+            const unsubError = sessionManager.onError(msg.sessionId, (error) => {
+              send(ws, {
+                type: "session:error",
+                sessionId: msg.sessionId,
+                error,
+              });
+            });
+            if (unsubError) cleanups.push(unsubError);
+
+            const unsubSystem = sessionManager.onSystem(msg.sessionId, (text) => {
+              send(ws, {
+                type: "session:system",
+                sessionId: msg.sessionId,
+                text,
+              });
+            });
+            if (unsubSystem) cleanups.push(unsubSystem);
+
+            const unsubClear = sessionManager.onClear(msg.sessionId, () => {
+              send(ws, {
+                type: "session:clear",
+                sessionId: msg.sessionId,
+              });
+            });
+            if (unsubClear) cleanups.push(unsubClear);
+
+            const unsubInfoUpdated = sessionManager.onInfoUpdated(msg.sessionId, (info) => {
+              send(ws, {
+                type: "session:info_updated",
+                sessionId: msg.sessionId,
+                info,
+              });
+            });
+            if (unsubInfoUpdated) cleanups.push(unsubInfoUpdated);
+
+            const unsubUsage = sessionManager.onUsage(msg.sessionId, (usage) => {
+              send(ws, {
+                type: "session:usage",
+                sessionId: msg.sessionId,
+                usage,
+              });
+            });
+            if (unsubUsage) cleanups.push(unsubUsage);
+
+            const unsubTodos = sessionManager.onTodos(msg.sessionId, (todos) => {
               send(ws, {
                 type: "session:todos",
                 sessionId: msg.sessionId,
                 todos,
               });
+            });
+            if (unsubTodos) cleanups.push(unsubTodos);
+
+            // Rebuild todos from last TodoWrite in history
+            const tTodos0 = performance.now();
+            // Use the full transcript buffer (up to 150 messages) for todo rebuild,
+            // not just the 50 sent to the client
+            const fullBuffer = sessionManager.getTranscriptBuffer(msg.sessionId);
+            sessionManager.rebuildTodosFromHistory(msg.sessionId, fullBuffer.length > 0 ? fullBuffer : session.messages);
+            const tTodos1 = performance.now();
+            console.log(`[ws:${wsId}] session ${sid} rebuildTodos in ${(tTodos1 - tTodos0).toFixed(0)}ms`);
+            const currentTodos = sessionManager.getTodos(msg.sessionId);
+            if (currentTodos.length > 0) {
+              send(ws, {
+                type: "session:todos",
+                sessionId: msg.sessionId,
+                todos: currentTodos,
+              });
             }
-          );
-          if (unsubTodos) cleanups.push(unsubTodos);
 
-          // Rebuild todos from last TodoWrite in history
-          const tTodos0 = performance.now();
-          // Use the full transcript buffer (up to 150 messages) for todo rebuild,
-          // not just the 50 sent to the client
-          const fullBuffer = sessionManager.getTranscriptBuffer(msg.sessionId);
-          sessionManager.rebuildTodosFromHistory(msg.sessionId, fullBuffer.length > 0 ? fullBuffer : session.messages);
-          const tTodos1 = performance.now();
-          console.log(`[ws:${wsId}] session ${sid} rebuildTodos in ${(tTodos1 - tTodos0).toFixed(0)}ms`);
-          const currentTodos = sessionManager.getTodos(msg.sessionId);
-          if (currentTodos.length > 0) {
-            send(ws, {
-              type: "session:todos",
-              sessionId: msg.sessionId,
-              todos: currentTodos,
-            });
-          }
+            const initData = sessionManager.getInitData(msg.sessionId);
+            if (initData) {
+              send(ws, {
+                type: "session:init",
+                sessionId: msg.sessionId,
+                data: initData,
+              });
+            }
 
-          const initData = sessionManager.getInitData(msg.sessionId);
-          if (initData) {
-            send(ws, {
-              type: "session:init",
-              sessionId: msg.sessionId,
-              data: initData,
-            });
-          }
-
-          const unsubInit = sessionManager.onInit(
-            msg.sessionId,
-            (data) => {
+            const unsubInit = sessionManager.onInit(msg.sessionId, (data) => {
               send(ws, {
                 type: "session:init",
                 sessionId: msg.sessionId,
                 data,
               });
-            }
-          );
-          if (unsubInit) cleanups.push(unsubInit);
+            });
+            if (unsubInit) cleanups.push(unsubInit);
 
-          send(ws, {
-            type: "session:queued",
-            sessionId: msg.sessionId,
-            count: sessionManager.getQueuedCount(msg.sessionId),
-            messages: sessionManager.getQueuedMessages(msg.sessionId),
-            paused: sessionManager.isQueuePaused(msg.sessionId),
-          });
+            send(ws, {
+              type: "session:queued",
+              sessionId: msg.sessionId,
+              count: sessionManager.getQueuedCount(msg.sessionId),
+              messages: sessionManager.getQueuedMessages(msg.sessionId),
+              paused: sessionManager.isQueuePaused(msg.sessionId),
+            });
 
-          const unsubQueued = sessionManager.onQueued(
-            msg.sessionId,
-            (count, sentText) => {
+            const unsubQueued = sessionManager.onQueued(msg.sessionId, (count, sentText) => {
               send(ws, {
                 type: "session:queued",
                 sessionId: msg.sessionId,
@@ -409,37 +380,36 @@ export function createWebSocketHandler(
                 messages: sessionManager.getQueuedMessages(msg.sessionId),
                 paused: sessionManager.isQueuePaused(msg.sessionId),
               });
-            }
-          );
-          if (unsubQueued) cleanups.push(unsubQueued);
+            });
+            if (unsubQueued) cleanups.push(unsubQueued);
 
-          // Re-emit any pending permission/question requests that were
-          // sent to a previous (now dead) WebSocket connection
-          const pendingReqs = sessionManager.getPendingRequests(msg.sessionId);
-          for (const req of pendingReqs) {
-            if (req.type === "question") {
-              send(ws, {
-                type: "question:request",
-                sessionId: msg.sessionId,
-                requestId: req.requestId,
-                questions: req.toolInput,
-              });
-            } else {
-              const permMsg: ServerMessage & { type: "permission:request" } = {
-                type: "permission:request",
-                sessionId: msg.sessionId,
-                requestId: req.requestId,
-                toolName: req.toolName,
-                input: req.toolInput,
-              };
-              if (req.planFilePath) {
-                permMsg.planFilePath = req.planFilePath;
+            // Re-emit any pending permission/question requests that were
+            // sent to a previous (now dead) WebSocket connection
+            const pendingReqs = sessionManager.getPendingRequests(msg.sessionId);
+            for (const req of pendingReqs) {
+              if (req.type === "question") {
+                send(ws, {
+                  type: "question:request",
+                  sessionId: msg.sessionId,
+                  requestId: req.requestId,
+                  questions: req.toolInput,
+                });
+              } else {
+                const permMsg: ServerMessage & { type: "permission:request" } = {
+                  type: "permission:request",
+                  sessionId: msg.sessionId,
+                  requestId: req.requestId,
+                  toolName: req.toolName,
+                  input: req.toolInput,
+                };
+                if (req.planFilePath) {
+                  permMsg.planFilePath = req.planFilePath;
+                }
+                send(ws, permMsg);
               }
-              send(ws, permMsg);
             }
-          }
-          const tDone = performance.now();
-          console.log(`[ws:${wsId}] session ${sid} connect complete in ${(tDone - t0).toFixed(0)}ms`);
+            const tDone = performance.now();
+            console.log(`[ws:${wsId}] session ${sid} connect complete in ${(tDone - t0).toFixed(0)}ms`);
           });
           break;
         }
@@ -551,7 +521,11 @@ export function createWebSocketHandler(
 
           let suggestions: Record<string, unknown>[] | undefined;
           if (msg.permissionMode === "allow_always" && pending?.permissionSuggestions) {
-            if (msg.suggestionIndex !== undefined && msg.suggestionIndex >= 0 && msg.suggestionIndex < pending.permissionSuggestions.length) {
+            if (
+              msg.suggestionIndex !== undefined &&
+              msg.suggestionIndex >= 0 &&
+              msg.suggestionIndex < pending.permissionSuggestions.length
+            ) {
               suggestions = [pending.permissionSuggestions[msg.suggestionIndex]];
             } else {
               suggestions = pending.permissionSuggestions;
@@ -621,7 +595,7 @@ export function createWebSocketHandler(
       }
     });
 
-    ws.on("close", (code, reason) => {
+    ws.on("close", (code, _reason) => {
       const sessions = Array.from(sessionCleanups.keys()).map((s) => s.slice(0, 8));
       console.log(`[ws:${wsId}] closed (code=${code}, sessions=[${sessions.join(",")}], clients=${wss.clients.size})`);
       for (const fns of sessionCleanups.values()) {
@@ -640,8 +614,11 @@ function handleParsedEvent(
   ws: WebSocket,
   sessionId: string,
   event: ParsedEvent,
-  pendingPermissions: Map<string, { toolName: string; toolInput: Record<string, unknown>; permissionSuggestions?: Record<string, unknown>[] }>,
-  sessionManager: SessionManager
+  pendingPermissions: Map<
+    string,
+    { toolName: string; toolInput: Record<string, unknown>; permissionSuggestions?: Record<string, unknown>[] }
+  >,
+  sessionManager: SessionManager,
 ): void {
   switch (event.type) {
     case "thinking":
@@ -805,7 +782,6 @@ function handleParsedEvent(
       }
       break;
     }
-
   }
 }
 

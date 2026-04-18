@@ -1,13 +1,13 @@
 "use client";
 
-import { useState, useEffect, useCallback, use } from "react";
+import { Check, Copy, Save } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
+import { use, useCallback, useEffect, useState } from "react";
 import { usePageHeader } from "@/components/app-shell";
+import { CodeEditor } from "@/components/code-editor";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Badge } from "@/components/ui/badge";
-import { CodeEditor } from "@/components/code-editor";
-import { Save, Copy, Check } from "lucide-react";
 
 const TEMPLATE = `---
 name: my-agent
@@ -18,11 +18,7 @@ model: sonnet
 Your system prompt here.
 `;
 
-export default function AgentEditorPage({
-  params,
-}: {
-  params: Promise<{ name: string }>;
-}) {
+export default function AgentEditorPage({ params }: { params: Promise<{ name: string }> }) {
   const { name: rawName } = use(params);
   const searchParams = useSearchParams();
   const router = useRouter();
@@ -113,22 +109,30 @@ export default function AgentEditorPage({
       <div className="flex items-center gap-3">
         <div className="flex-1 min-w-0">
           {isNew ? (
-            <Input
-              placeholder="agent-name"
-              value={agentName}
-              onChange={(e) => setAgentName(e.target.value)}
-              className="font-mono"
-            />
+            <Input placeholder="agent-name" value={agentName} onChange={(e) => setAgentName(e.target.value)} className="font-mono" />
           ) : (
             <div className="flex items-center gap-2">
               <span className="font-mono font-bold text-lg">{agentName}</span>
-              <Badge variant="secondary">
-                {scope === "user" ? "Global" : "Project"}
-              </Badge>
+              <Badge variant="secondary">{scope === "user" ? "Global" : "Project"}</Badge>
             </div>
           )}
         </div>
-        <Button size="sm" variant="outline" onClick={() => { const ta = document.createElement("textarea"); ta.value = content; ta.style.position = "fixed"; ta.style.opacity = "0"; document.body.appendChild(ta); ta.select(); document.execCommand("copy"); document.body.removeChild(ta); setCopied(true); setTimeout(() => setCopied(false), 1500); }}>
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={() => {
+            const ta = document.createElement("textarea");
+            ta.value = content;
+            ta.style.position = "fixed";
+            ta.style.opacity = "0";
+            document.body.appendChild(ta);
+            ta.select();
+            document.execCommand("copy");
+            document.body.removeChild(ta);
+            setCopied(true);
+            setTimeout(() => setCopied(false), 1500);
+          }}
+        >
           {copied ? <Check className="h-4 w-4 mr-1" /> : <Copy className="h-4 w-4 mr-1" />}
           {copied ? "Copied" : "Copy"}
         </Button>
@@ -138,19 +142,9 @@ export default function AgentEditorPage({
         </Button>
       </div>
 
-      {feedback && (
-        <p className={`text-sm ${feedback === "Saved" ? "text-green-600" : "text-destructive"}`}>
-          {feedback}
-        </p>
-      )}
+      {feedback && <p className={`text-sm ${feedback === "Saved" ? "text-green-600" : "text-destructive"}`}>{feedback}</p>}
 
-      <CodeEditor
-        value={content}
-        onChange={setContent}
-        language="markdown"
-        onSave={save}
-        className="flex-1"
-      />
+      <CodeEditor value={content} onChange={setContent} language="markdown" onSave={save} className="flex-1" />
     </div>
   );
 }

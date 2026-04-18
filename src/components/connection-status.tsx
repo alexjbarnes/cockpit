@@ -11,12 +11,7 @@ export function ConnectionStatus() {
       className="flex h-9 w-9 items-center justify-center text-xs text-muted-foreground"
       title={connected ? "Connected" : "Reconnecting..."}
     >
-      <div
-        className={cn(
-          "h-2 w-2 rounded-full",
-          connected ? "bg-green-500" : "bg-yellow-500 animate-pulse"
-        )}
-      />
+      <div className={cn("h-2 w-2 rounded-full", connected ? "bg-green-500" : "bg-yellow-500 animate-pulse")} />
     </div>
   );
 }

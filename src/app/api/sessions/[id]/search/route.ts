@@ -1,13 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { validateSession, isAuthDisabled } from "@/server/auth";
+import { isAuthDisabled, validateSession } from "@/server/auth";
 import { getSessionPrefs } from "@/server/session-prefs";
-import { loadTranscript, findSessionCwd } from "@/server/transcript";
+import { findSessionCwd, loadTranscript } from "@/server/transcript";
 
 function authenticate(req: NextRequest): boolean {
   if (isAuthDisabled()) return true;
-  const token =
-    req.cookies.get("cockpit_session")?.value ||
-    req.headers.get("authorization")?.replace("Bearer ", "");
+  const token = req.cookies.get("cockpit_session")?.value || req.headers.get("authorization")?.replace("Bearer ", "");
   return !!token && validateSession(token);
 }
 
@@ -21,10 +19,7 @@ interface SearchResult {
   fullContent: string;
 }
 
-export function GET(
-  req: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
+export function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   if (!authenticate(req)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
@@ -47,14 +42,9 @@ export function GET(
     }
 
     const prefs = getSessionPrefs(id);
-    const cliSessionIds: string[] = [
-      ...(prefs?.previousCliSessionIds || []),
-      ...(prefs?.cliSessionId ? [prefs.cliSessionId] : [id]),
-    ];
+    const cliSessionIds: string[] = [...(prefs?.previousCliSessionIds || []), ...(prefs?.cliSessionId ? [prefs.cliSessionId] : [id])];
 
-    const transcripts = await Promise.all(
-      cliSessionIds.map((sid) => loadTranscript(sid, cwd))
-    );
+    const transcripts = await Promise.all(cliSessionIds.map((sid) => loadTranscript(sid, cwd)));
 
     const query = q.toLowerCase();
     const results: SearchResult[] = [];

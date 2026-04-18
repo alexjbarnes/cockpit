@@ -1,14 +1,14 @@
 "use client";
 
-import React, { useState, useEffect, useMemo, useCallback } from "react";
-import type { ToolUse } from "@/types";
-import { cn } from "@/lib/utils";
 import { ChevronRight, ClipboardList, Loader2 } from "lucide-react";
-import { DiffViewer } from "./diff-viewer";
-import { CodeBlock, languageFromPath, prehighlight } from "./code-block";
-import { PlanViewModal } from "./plan-view-modal";
-import { useShell } from "./app-shell";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { shortPath } from "@/lib/path";
+import { cn } from "@/lib/utils";
+import type { ToolUse } from "@/types";
+import { useShell } from "./app-shell";
+import { CodeBlock, languageFromPath, prehighlight } from "./code-block";
+import { DiffViewer } from "./diff-viewer";
+import { PlanViewModal } from "./plan-view-modal";
 
 function parseInput(input: string): Record<string, unknown> {
   if (!input) return {};
@@ -78,92 +78,85 @@ export function ToolCard({ tool, expandedToolIds }: ToolCardProps) {
     }
   }, [tool.name, tool.output, tool.filePath, input, dark]);
 
-  const isStatusOnly = tool.name === "EnterPlanMode" || tool.name === "ExitPlanMode" || tool.name === "TaskCreate" || tool.name === "TaskUpdate" || tool.name === "TaskList" || tool.name === "TaskGet" || tool.name === "TodoWrite";
+  const isStatusOnly =
+    tool.name === "EnterPlanMode" ||
+    tool.name === "ExitPlanMode" ||
+    tool.name === "TaskCreate" ||
+    tool.name === "TaskUpdate" ||
+    tool.name === "TaskList" ||
+    tool.name === "TaskGet" ||
+    tool.name === "TodoWrite";
   const hasContent = !isStatusOnly && (tool.input || tool.output);
 
   // Track whether this expansion was user-initiated (click) vs automatic
   const userToggled = useMemo(() => ({ current: false }), []);
 
-  const contentRef = useCallback((el: HTMLDivElement | null) => {
-    if (!el || !userToggled.current) return;
-    userToggled.current = false;
-    requestAnimationFrame(() => {
-      const scrollParent = el.closest("[tabindex]");
-      if (!scrollParent) return;
-      const parentRect = scrollParent.getBoundingClientRect();
-      const elRect = el.getBoundingClientRect();
-      if (elRect.bottom > parentRect.bottom) {
-        el.scrollIntoView({ block: "nearest", behavior: "smooth" });
-      }
-    });
-  }, [userToggled]);
+  const contentRef = useCallback(
+    (el: HTMLDivElement | null) => {
+      if (!el || !userToggled.current) return;
+      userToggled.current = false;
+      requestAnimationFrame(() => {
+        const scrollParent = el.closest("[tabindex]");
+        if (!scrollParent) return;
+        const parentRect = scrollParent.getBoundingClientRect();
+        const elRect = el.getBoundingClientRect();
+        if (elRect.bottom > parentRect.bottom) {
+          el.scrollIntoView({ block: "nearest", behavior: "smooth" });
+        }
+      });
+    },
+    [userToggled],
+  );
 
   return (
     <>
-    <div className="rounded border border-border bg-card text-card-foreground text-xs overflow-hidden">
-      <button
-        onClick={() => {
-          if (isPlanWrite) {
-            setPlanModalOpen(true);
-            return;
-          }
-          if (!hasContent) return;
-          const next = !expanded;
-          userToggled.current = next;
-          setExpanded(next);
-          if (expandedToolIds?.current) {
-            if (next) expandedToolIds.current.add(tool.id);
-            else expandedToolIds.current.delete(tool.id);
-          }
-        }}
-        className={cn(
-          "flex w-full items-center gap-2 px-3 py-1.5 text-left",
-          hasContent && "cursor-pointer hover:bg-muted/50",
-          !hasContent && "cursor-default"
-        )}
-      >
-        {isPlanWrite ? (
-          <ClipboardList className="h-3 w-3 shrink-0 text-blue-500" />
-        ) : (
-          <ChevronRight
-            className={cn(
-              "h-3 w-3 shrink-0 text-muted-foreground transition-transform",
-              expanded && "rotate-90"
+      <div className="rounded border border-border bg-card text-card-foreground text-xs overflow-hidden">
+        <button
+          onClick={() => {
+            if (isPlanWrite) {
+              setPlanModalOpen(true);
+              return;
+            }
+            if (!hasContent) return;
+            const next = !expanded;
+            userToggled.current = next;
+            setExpanded(next);
+            if (expandedToolIds?.current) {
+              if (next) expandedToolIds.current.add(tool.id);
+              else expandedToolIds.current.delete(tool.id);
+            }
+          }}
+          className={cn(
+            "flex w-full items-center gap-2 px-3 py-1.5 text-left",
+            hasContent && "cursor-pointer hover:bg-muted/50",
+            !hasContent && "cursor-default",
+          )}
+        >
+          {isPlanWrite ? (
+            <ClipboardList className="h-3 w-3 shrink-0 text-blue-500" />
+          ) : (
+            <ChevronRight className={cn("h-3 w-3 shrink-0 text-muted-foreground transition-transform", expanded && "rotate-90")} />
+          )}
+          <span className="font-mono font-medium">{tool.name}</span>
+          {tool.name === "Agent" &&
+            (tool.status === "running" || backgroundTasks.some((t) => t.toolUseId === tool.id && t.status === "running")) && (
+              <Loader2 className="h-3 w-3 shrink-0 animate-spin text-muted-foreground" />
             )}
-          />
-        )}
-        <span className="font-mono font-medium">{tool.name}</span>
-        {tool.name === "Agent" && (tool.status === "running" || backgroundTasks.some((t) => t.toolUseId === tool.id && t.status === "running")) && (
-          <Loader2 className="h-3 w-3 shrink-0 animate-spin text-muted-foreground" />
-        )}
-        <ToolSummary tool={tool} input={input} />
-      </button>
+          <ToolSummary tool={tool} input={input} />
+        </button>
 
-      {expanded && hasContent && (
-        <div ref={contentRef} className="border-t border-border px-3 py-2 space-y-2">
-          <ToolContent tool={tool} input={input} dark={dark} expandedToolIds={expandedToolIds} />
-        </div>
-      )}
-    </div>
-    {isPlanWrite && (
-      <PlanViewModal
-        open={planModalOpen}
-        onOpenChange={setPlanModalOpen}
-        content={planWriteContent}
-        filePath={filePath}
-      />
-    )}
+        {expanded && hasContent && (
+          <div ref={contentRef} className="border-t border-border px-3 py-2 space-y-2">
+            <ToolContent tool={tool} input={input} dark={dark} expandedToolIds={expandedToolIds} />
+          </div>
+        )}
+      </div>
+      {isPlanWrite && <PlanViewModal open={planModalOpen} onOpenChange={setPlanModalOpen} content={planWriteContent} filePath={filePath} />}
     </>
   );
 }
 
-function ToolSummary({
-  tool,
-  input,
-}: {
-  tool: ToolUse;
-  input: Record<string, unknown>;
-}) {
+function ToolSummary({ tool, input }: { tool: ToolUse; input: Record<string, unknown> }) {
   const name = tool.name;
 
   if (name === "Edit" || name === "edit") {
@@ -172,7 +165,8 @@ function ToolSummary({
     const plan = isPlanFile(name, fp);
     return (
       <span className="text-muted-foreground truncate">
-        {shortPath(fp)}{plan ? " (plan edit)" : ""}
+        {shortPath(fp)}
+        {plan ? " (plan edit)" : ""}
       </span>
     );
   }
@@ -189,39 +183,29 @@ function ToolSummary({
 
   if (name === "Read" || name === "read") {
     const fp = (input.file_path as string) || tool.filePath || "";
-    return fp ? (
-      <span className="text-muted-foreground truncate">{shortPath(fp)}</span>
-    ) : null;
+    return fp ? <span className="text-muted-foreground truncate">{shortPath(fp)}</span> : null;
   }
 
   if (name === "Bash" || name === "bash") {
     const cmd = (input.command as string) || "";
     const short = cmd.length > 60 ? cmd.slice(0, 60) + "..." : cmd;
-    return short ? (
-      <span className="font-mono text-muted-foreground truncate">{short}</span>
-    ) : null;
+    return short ? <span className="font-mono text-muted-foreground truncate">{short}</span> : null;
   }
 
   if (name === "Grep" || name === "grep") {
     const pattern = (input.pattern as string) || "";
-    return pattern ? (
-      <span className="font-mono text-muted-foreground truncate">/{pattern}/</span>
-    ) : null;
+    return pattern ? <span className="font-mono text-muted-foreground truncate">/{pattern}/</span> : null;
   }
 
   if (name === "Glob" || name === "glob") {
     const pattern = (input.pattern as string) || "";
-    return pattern ? (
-      <span className="font-mono text-muted-foreground truncate">{pattern}</span>
-    ) : null;
+    return pattern ? <span className="font-mono text-muted-foreground truncate">{pattern}</span> : null;
   }
 
   if (name === "Agent") {
     const desc = (input.description as string) || (input.prompt as string) || "";
     const short = desc.length > 60 ? desc.slice(0, 60) + "..." : desc;
-    return short ? (
-      <span className="text-muted-foreground truncate">{short}</span>
-    ) : null;
+    return short ? <span className="text-muted-foreground truncate">{short}</span> : null;
   }
 
   if (name === "EnterPlanMode") {
@@ -234,16 +218,16 @@ function ToolSummary({
 
   if (name === "TaskCreate") {
     const subject = (input.subject as string) || (input.content as string) || "";
-    return subject ? (
-      <span className="text-muted-foreground truncate">{subject}</span>
-    ) : null;
+    return subject ? <span className="text-muted-foreground truncate">{subject}</span> : null;
   }
 
   if (name === "TaskUpdate") {
     const taskId = (input.taskId as string) || "";
     const status = (input.status as string) || "";
     return taskId ? (
-      <span className="text-muted-foreground truncate">#{taskId} {status}</span>
+      <span className="text-muted-foreground truncate">
+        #{taskId} {status}
+      </span>
     ) : null;
   }
 
@@ -253,9 +237,7 @@ function ToolSummary({
 
   if (name === "TaskGet") {
     const taskId = (input.taskId as string) || "";
-    return taskId ? (
-      <span className="text-muted-foreground">#{taskId}</span>
-    ) : null;
+    return taskId ? <span className="text-muted-foreground">#{taskId}</span> : null;
   }
 
   return null;
@@ -301,15 +283,7 @@ function ToolContent({
   return <DefaultContent input={input} tool={tool} />;
 }
 
-function EditContent({
-  input,
-  tool,
-  dark,
-}: {
-  input: Record<string, unknown>;
-  tool: ToolUse;
-  dark: boolean;
-}) {
+function EditContent({ input, tool, dark }: { input: Record<string, unknown>; tool: ToolUse; dark: boolean }) {
   const filePath = (input.file_path as string) || tool.filePath || "file";
   const oldString = (input.old_string as string) || "";
   const newString = (input.new_string as string) || "";
@@ -321,27 +295,15 @@ function EditContent({
   return <DiffViewer filePath={filePath} oldString={oldString} newString={newString} dark={dark} />;
 }
 
-function WriteContent({
-  input,
-  tool,
-  dark,
-}: {
-  input: Record<string, unknown>;
-  tool: ToolUse;
-  dark: boolean;
-}) {
+function WriteContent({ input, tool, dark }: { input: Record<string, unknown>; tool: ToolUse; dark: boolean }) {
   const filePath = (input.file_path as string) || tool.filePath || "";
   const content = (input.content as string) || "";
   const lang = filePath ? languageFromPath(filePath) : undefined;
 
   return (
     <div className="space-y-1">
-      {filePath && (
-        <div className="font-mono text-muted-foreground">{filePath}</div>
-      )}
-      {content && (
-        <CodeBlock code={content} language={lang} dark={dark} />
-      )}
+      {filePath && <div className="font-mono text-muted-foreground">{filePath}</div>}
+      {content && <CodeBlock code={content} language={lang} dark={dark} />}
       {tool.output && (
         <pre className="overflow-x-auto rounded bg-muted/50 p-2 text-[11px] leading-relaxed max-h-32 overflow-y-auto text-muted-foreground">
           {tool.output}
@@ -351,37 +313,19 @@ function WriteContent({
   );
 }
 
-function ReadContent({
-  input,
-  tool,
-  dark,
-}: {
-  input: Record<string, unknown>;
-  tool: ToolUse;
-  dark: boolean;
-}) {
+function ReadContent({ input, tool, dark }: { input: Record<string, unknown>; tool: ToolUse; dark: boolean }) {
   const filePath = (input.file_path as string) || tool.filePath || "";
   const lang = filePath ? languageFromPath(filePath) : undefined;
 
   return (
     <div className="space-y-1">
-      {filePath && (
-        <div className="font-mono text-muted-foreground">{filePath}</div>
-      )}
-      {tool.output && (
-        <CodeBlock code={tool.output} language={lang} dark={dark} />
-      )}
+      {filePath && <div className="font-mono text-muted-foreground">{filePath}</div>}
+      {tool.output && <CodeBlock code={tool.output} language={lang} dark={dark} />}
     </div>
   );
 }
 
-function BashContent({
-  input,
-  tool,
-}: {
-  input: Record<string, unknown>;
-  tool: ToolUse;
-}) {
+function BashContent({ input, tool }: { input: Record<string, unknown>; tool: ToolUse }) {
   const command = (input.command as string) || "";
 
   return (
@@ -392,21 +336,13 @@ function BashContent({
         </div>
       )}
       {tool.output && (
-        <pre className="overflow-x-auto rounded bg-muted/50 p-2 text-[11px] leading-relaxed max-h-64 overflow-y-auto">
-          {tool.output}
-        </pre>
+        <pre className="overflow-x-auto rounded bg-muted/50 p-2 text-[11px] leading-relaxed max-h-64 overflow-y-auto">{tool.output}</pre>
       )}
     </div>
   );
 }
 
-function SearchContent({
-  input,
-  tool,
-}: {
-  input: Record<string, unknown>;
-  tool: ToolUse;
-}) {
+function SearchContent({ input, tool }: { input: Record<string, unknown>; tool: ToolUse }) {
   const pattern = (input.pattern as string) || "";
   const path = (input.path as string) || "";
 
@@ -417,9 +353,7 @@ function SearchContent({
         {path && <span> in {shortPath(path)}</span>}
       </div>
       {tool.output && (
-        <pre className="overflow-x-auto rounded bg-muted/50 p-2 text-[11px] leading-relaxed max-h-64 overflow-y-auto">
-          {tool.output}
-        </pre>
+        <pre className="overflow-x-auto rounded bg-muted/50 p-2 text-[11px] leading-relaxed max-h-64 overflow-y-auto">{tool.output}</pre>
       )}
     </div>
   );
@@ -462,13 +396,7 @@ function AgentContent({
   );
 }
 
-function DefaultContent({
-  input,
-  tool,
-}: {
-  input: Record<string, unknown>;
-  tool: ToolUse;
-}) {
+function DefaultContent({ input, tool }: { input: Record<string, unknown>; tool: ToolUse }) {
   const hasInput = Object.keys(input).length > 0;
 
   return (

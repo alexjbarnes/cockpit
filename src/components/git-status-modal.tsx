@@ -1,8 +1,8 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
-import { useRouter, usePathname } from "next/navigation";
-import { GitBranch, X, Loader2, Plus, Minus, FilePlus, FileMinus, FileEdit, FileSymlink, ExternalLink } from "lucide-react";
+import { ExternalLink, FileEdit, FileMinus, FilePlus, FileSymlink, GitBranch, Loader2, Minus, Plus, X } from "lucide-react";
+import { usePathname, useRouter } from "next/navigation";
+import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 
 interface GitFileChange {
@@ -19,11 +19,16 @@ interface GitStatus {
 
 function statusIcon(status: string) {
   switch (status) {
-    case "added": return <FilePlus className="h-3.5 w-3.5 text-green-500" />;
-    case "deleted": return <FileMinus className="h-3.5 w-3.5 text-red-500" />;
-    case "renamed": return <FileSymlink className="h-3.5 w-3.5 text-blue-500" />;
-    case "untracked": return <FilePlus className="h-3.5 w-3.5 text-green-500" />;
-    default: return <FileEdit className="h-3.5 w-3.5 text-yellow-500" />;
+    case "added":
+      return <FilePlus className="h-3.5 w-3.5 text-green-500" />;
+    case "deleted":
+      return <FileMinus className="h-3.5 w-3.5 text-red-500" />;
+    case "renamed":
+      return <FileSymlink className="h-3.5 w-3.5 text-blue-500" />;
+    case "untracked":
+      return <FilePlus className="h-3.5 w-3.5 text-green-500" />;
+    default:
+      return <FileEdit className="h-3.5 w-3.5 text-yellow-500" />;
   }
 }
 
@@ -34,7 +39,9 @@ export function GitStatusButton({ cwd }: { cwd?: string }) {
 
   useEffect(() => {
     if (!open) return;
-    const h = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    const h = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
     window.addEventListener("keydown", h);
     return () => window.removeEventListener("keydown", h);
   }, [open]);
@@ -61,7 +68,7 @@ export function GitStatusButton({ cwd }: { cwd?: string }) {
   useEffect(() => {
     setStatus(null);
     setError(null);
-  }, [cwd]);
+  }, []);
 
   useEffect(() => {
     if (open) fetchStatus();
@@ -75,7 +82,11 @@ export function GitStatusButton({ cwd }: { cwd?: string }) {
       <Button
         variant="ghost"
         size="icon"
-        onClick={() => { setStatus(null); setError(null); setOpen(true); }}
+        onClick={() => {
+          setStatus(null);
+          setError(null);
+          setOpen(true);
+        }}
         title="Git status"
         disabled={!cwd}
       >
@@ -105,9 +116,7 @@ export function GitStatusButton({ cwd }: { cwd?: string }) {
               </div>
             )}
 
-            {!loading && error && (
-              <p className="text-sm text-muted-foreground py-4 text-center">{error}</p>
-            )}
+            {!loading && error && <p className="text-sm text-muted-foreground py-4 text-center">{error}</p>}
 
             {!loading && status && (
               <>
@@ -117,21 +126,23 @@ export function GitStatusButton({ cwd }: { cwd?: string }) {
                 </div>
 
                 {status.files.length === 0 ? (
-                  <p className="text-sm text-muted-foreground py-4 text-center">
-                    Working tree clean
-                  </p>
+                  <p className="text-sm text-muted-foreground py-4 text-center">Working tree clean</p>
                 ) : (
                   <>
                     <div className="flex items-center gap-3 mb-2 px-1 text-xs text-muted-foreground">
-                      <span>{status.files.length} file{status.files.length !== 1 ? "s" : ""} changed</span>
+                      <span>
+                        {status.files.length} file{status.files.length !== 1 ? "s" : ""} changed
+                      </span>
                       {totalAdded > 0 && (
                         <span className="flex items-center gap-0.5 text-green-500">
-                          <Plus className="h-3 w-3" />{totalAdded}
+                          <Plus className="h-3 w-3" />
+                          {totalAdded}
                         </span>
                       )}
                       {totalDeleted > 0 && (
                         <span className="flex items-center gap-0.5 text-red-500">
-                          <Minus className="h-3 w-3" />{totalDeleted}
+                          <Minus className="h-3 w-3" />
+                          {totalDeleted}
                         </span>
                       )}
                     </div>
@@ -142,16 +153,10 @@ export function GitStatusButton({ cwd }: { cwd?: string }) {
                           className="flex items-center gap-2 px-3 py-1.5 text-sm border-b last:border-b-0 hover:bg-muted/50"
                         >
                           {statusIcon(file.status)}
-                          <span className="font-mono text-xs truncate flex-1 min-w-0">
-                            {file.path}
-                          </span>
+                          <span className="font-mono text-xs truncate flex-1 min-w-0">{file.path}</span>
                           <div className="flex items-center gap-2 shrink-0 text-xs">
-                            {file.additions > 0 && (
-                              <span className="text-green-500">+{file.additions}</span>
-                            )}
-                            {file.deletions > 0 && (
-                              <span className="text-red-500">-{file.deletions}</span>
-                            )}
+                            {file.additions > 0 && <span className="text-green-500">+{file.additions}</span>}
+                            {file.deletions > 0 && <span className="text-red-500">-{file.deletions}</span>}
                           </div>
                         </div>
                       ))}

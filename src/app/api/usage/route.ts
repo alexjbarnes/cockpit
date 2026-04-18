@@ -1,24 +1,22 @@
-import { NextRequest, NextResponse } from "next/server";
-import { validateSession, isAuthDisabled } from "@/server/auth";
 import { execSync } from "node:child_process";
 import fs from "node:fs";
-import path from "node:path";
 import os from "node:os";
+import path from "node:path";
+import { NextRequest, NextResponse } from "next/server";
+import { isAuthDisabled, validateSession } from "@/server/auth";
 
 function authenticate(req: NextRequest): boolean {
   if (isAuthDisabled()) return true;
-  const token =
-    req.cookies.get("cockpit_session")?.value ||
-    req.headers.get("authorization")?.replace("Bearer ", "");
+  const token = req.cookies.get("cockpit_session")?.value || req.headers.get("authorization")?.replace("Bearer ", "");
   return !!token && validateSession(token);
 }
 
 function readFromKeychain(): string | null {
   try {
-    const raw = execSync(
-      `security find-generic-password -s "Claude Code-credentials" -a "${os.userInfo().username}" -w`,
-      { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] }
-    ).trim();
+    const raw = execSync(`security find-generic-password -s "Claude Code-credentials" -a "${os.userInfo().username}" -w`, {
+      encoding: "utf-8",
+      stdio: ["pipe", "pipe", "pipe"],
+    }).trim();
     const creds = JSON.parse(raw);
     return creds?.claudeAiOauth?.accessToken ?? null;
   } catch {
@@ -53,10 +51,7 @@ export async function GET(req: NextRequest) {
 
   const accessToken = getOAuthAccessToken();
   if (!accessToken) {
-    return NextResponse.json(
-      { error: "No OAuth credentials found" },
-      { status: 503 }
-    );
+    return NextResponse.json({ error: "No OAuth credentials found" }, { status: 503 });
   }
 
   try {
@@ -68,10 +63,7 @@ export async function GET(req: NextRequest) {
     });
 
     if (!res.ok) {
-      return NextResponse.json(
-        { error: `Anthropic API returned ${res.status}` },
-        { status: res.status }
-      );
+      return NextResponse.json({ error: `Anthropic API returned ${res.status}` }, { status: res.status });
     }
 
     const data = await res.json();

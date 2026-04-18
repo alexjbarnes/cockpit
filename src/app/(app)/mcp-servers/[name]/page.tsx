@@ -1,14 +1,14 @@
 "use client";
 
-import { useState, useEffect, useCallback, use } from "react";
+import { Save } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
+import { use, useCallback, useEffect, useState } from "react";
 import { usePageHeader } from "@/components/app-shell";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Badge } from "@/components/ui/badge";
 import { KeyValueEditor } from "@/components/key-value-editor";
 import { StringListEditor } from "@/components/string-list-editor";
-import { Save } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 
 type TransportType = "stdio" | "http" | "sse";
 
@@ -37,8 +37,7 @@ const transportOptions: { value: TransportType; label: string }[] = [
 ];
 
 function configToForm(config: Record<string, unknown>): McpServerFormState {
-  const type = (config.type as TransportType) ||
-    (config.command ? "stdio" : config.url ? "http" : "stdio");
+  const type = (config.type as TransportType) || (config.command ? "stdio" : config.url ? "http" : "stdio");
   return {
     type,
     command: (config.command as string) || "",
@@ -65,11 +64,7 @@ function serialize(form: McpServerFormState): string {
   return JSON.stringify(formToConfig(form));
 }
 
-export default function McpServerEditorPage({
-  params,
-}: {
-  params: Promise<{ name: string }>;
-}) {
+export default function McpServerEditorPage({ params }: { params: Promise<{ name: string }> }) {
   const { name: rawName } = use(params);
   const searchParams = useSearchParams();
   const router = useRouter();
@@ -173,18 +168,11 @@ export default function McpServerEditorPage({
       <div className="flex items-center gap-3">
         <div className="flex-1 min-w-0">
           {isNew ? (
-            <Input
-              placeholder="server-name"
-              value={serverName}
-              onChange={(e) => setServerName(e.target.value)}
-              className="font-mono"
-            />
+            <Input placeholder="server-name" value={serverName} onChange={(e) => setServerName(e.target.value)} className="font-mono" />
           ) : (
             <div className="flex items-center gap-2">
               <span className="font-mono font-bold text-lg">{serverName}</span>
-              <Badge variant="secondary">
-                {scope === "user" ? "Global" : "Project"}
-              </Badge>
+              <Badge variant="secondary">{scope === "user" ? "Global" : "Project"}</Badge>
             </div>
           )}
         </div>
@@ -194,11 +182,7 @@ export default function McpServerEditorPage({
         </Button>
       </div>
 
-      {feedback && (
-        <p className={`text-sm ${feedback === "Saved" ? "text-green-600" : "text-destructive"}`}>
-          {feedback}
-        </p>
-      )}
+      {feedback && <p className={`text-sm ${feedback === "Saved" ? "text-green-600" : "text-destructive"}`}>{feedback}</p>}
 
       <div className="space-y-4">
         <div>
@@ -230,20 +214,11 @@ export default function McpServerEditorPage({
             </div>
             <div>
               <label className="text-sm font-medium mb-1.5 block">Arguments</label>
-              <StringListEditor
-                value={form.args}
-                onChange={(args) => updateForm({ args })}
-                placeholder="argument"
-              />
+              <StringListEditor value={form.args} onChange={(args) => updateForm({ args })} placeholder="argument" />
             </div>
             <div>
               <label className="text-sm font-medium mb-1.5 block">Environment Variables</label>
-              <KeyValueEditor
-                value={form.env}
-                onChange={(env) => updateForm({ env })}
-                keyPlaceholder="VARIABLE"
-                valuePlaceholder="value"
-              />
+              <KeyValueEditor value={form.env} onChange={(env) => updateForm({ env })} keyPlaceholder="VARIABLE" valuePlaceholder="value" />
             </div>
           </>
         )}

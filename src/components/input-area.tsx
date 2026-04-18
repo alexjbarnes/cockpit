@@ -1,22 +1,42 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback, type KeyboardEvent, type ClipboardEvent, type DragEvent } from "react";
-import { Button } from "@/components/ui/button";
-import { Send, Square, Settings2, ShieldOff, ShieldCheck, Brain, Cpu, Loader2, X, Paperclip, FileText, Maximize2, MessageSquare, Trash2, Eye, Hammer, Plug, ChevronRight, Layers } from "lucide-react";
+import {
+  Brain,
+  ChevronRight,
+  Cpu,
+  Eye,
+  FileText,
+  Hammer,
+  Layers,
+  Loader2,
+  Maximize2,
+  MessageSquare,
+  Paperclip,
+  Plug,
+  Send,
+  Settings2,
+  ShieldCheck,
+  ShieldOff,
+  Square,
+  Trash2,
+  X,
+} from "lucide-react";
+import { type ClipboardEvent, type DragEvent, type KeyboardEvent, useCallback, useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { useWebSocket } from "@/hooks/use-websocket";
-import { SlashCommandMenu } from "@/components/slash-command-menu";
-import { MentionMenu, type MentionItem } from "@/components/mention-menu";
-import type { SlashCommand } from "@/lib/commands";
-import type { ThinkingLevel, ContextUsage, ImageAttachment, DocumentAttachment, TextFileAttachment, InitData } from "@/types";
-import { shouldCollapsePaste, extensionForLabel, detectLanguage } from "@/lib/paste-detect";
-import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { CodeBlock, languageFromPath } from "@/components/code-block";
+import { McpStatusModal } from "@/components/mcp-status-modal";
+import { type MentionItem, MentionMenu } from "@/components/mention-menu";
+import { SlashCommandMenu } from "@/components/slash-command-menu";
+import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent } from "@/components/ui/dialog";
+import { useWebSocket } from "@/hooks/use-websocket";
+import type { SlashCommand } from "@/lib/commands";
+import { allowedEffortLevels, defaultForAlias, findModelById, type ModelAlias, type ModelEntry, versionsForAlias } from "@/lib/models";
+import { detectLanguage, extensionForLabel, shouldCollapsePaste } from "@/lib/paste-detect";
+import type { ContextUsage, DocumentAttachment, ImageAttachment, InitData, TextFileAttachment, ThinkingLevel } from "@/types";
 import { ContextIndicator } from "./context-indicator";
 import { QueueModal } from "./queue-modal";
-import { McpStatusModal } from "@/components/mcp-status-modal";
-import { findModelById, defaultForAlias, versionsForAlias, allowedEffortLevels, type ModelAlias, type ModelEntry } from "@/lib/models";
 
 const aliases: { value: ModelAlias; label: string }[] = [
   { value: "haiku", label: "Haiku" },
@@ -71,10 +91,40 @@ const thinkingLevels: { value: ThinkingLevel; label: string }[] = [
 const IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
 
 const TEXT_EXTENSIONS = new Set([
-  ".txt", ".md", ".py", ".js", ".ts", ".tsx", ".jsx", ".json", ".csv",
-  ".xml", ".yaml", ".yml", ".html", ".css", ".log", ".sh", ".go", ".rs",
-  ".java", ".c", ".cpp", ".h", ".rb", ".swift", ".kt", ".toml", ".cfg",
-  ".ini", ".env", ".sql", ".r", ".lua", ".pl", ".php",
+  ".txt",
+  ".md",
+  ".py",
+  ".js",
+  ".ts",
+  ".tsx",
+  ".jsx",
+  ".json",
+  ".csv",
+  ".xml",
+  ".yaml",
+  ".yml",
+  ".html",
+  ".css",
+  ".log",
+  ".sh",
+  ".go",
+  ".rs",
+  ".java",
+  ".c",
+  ".cpp",
+  ".h",
+  ".rb",
+  ".swift",
+  ".kt",
+  ".toml",
+  ".cfg",
+  ".ini",
+  ".env",
+  ".sql",
+  ".r",
+  ".lua",
+  ".pl",
+  ".php",
 ]);
 
 function getFileExtension(name: string): string {
@@ -100,9 +150,7 @@ function readFileAsBase64(file: File): Promise<string | null> {
 
 function processImageFile(file: File): Promise<ImageAttachment | null> {
   if (file.size <= MAX_RAW_IMAGE_BYTES) {
-    return readFileAsBase64(file).then((data) =>
-      data ? { mediaType: file.type as ImageAttachment["mediaType"], data } : null
-    );
+    return readFileAsBase64(file).then((data) => (data ? { mediaType: file.type as ImageAttachment["mediaType"], data } : null));
   }
   return resizeImageFile(file);
 }
@@ -122,7 +170,10 @@ function resizeImageFile(file: File): Promise<ImageAttachment | null> {
       canvas.width = width;
       canvas.height = height;
       const ctx = canvas.getContext("2d");
-      if (!ctx) { resolve(null); return; }
+      if (!ctx) {
+        resolve(null);
+        return;
+      }
       ctx.drawImage(img, 0, 0, width, height);
 
       let quality = 0.85;
@@ -152,12 +203,7 @@ function readFileAsText(file: File): Promise<string | null> {
   });
 }
 
-
-const FILE_ACCEPT = [
-  "image/*",
-  ".pdf",
-  ...Array.from(TEXT_EXTENSIONS),
-].join(",");
+const FILE_ACCEPT = ["image/*", ".pdf", ...Array.from(TEXT_EXTENSIONS)].join(",");
 
 interface InputAreaProps {
   sessionId: string;
@@ -200,7 +246,37 @@ function getMentionContext(text: string, cursorPos: number): { active: boolean; 
   return { active: true, query: match[1], start: cursorPos - match[0].length };
 }
 
-export function InputArea({ sessionId, onSend, onInterrupt, isResponding, bypassActive, onSetBypass, planMode, onSetPlanMode, thinkingLevel, onSetThinking, currentModel, onSetModel, contextUsage, dismissKeyboard, cwd, onCompact, initData, activeModelId, hasQueuedMessage, queuedMessages, queuePaused, onCancelQueued, onDeleteQueued, onEditQueued, onResumeQueue, restoredText, onClearRestoredText, btw, onDismissBtw }: InputAreaProps) {
+export function InputArea({
+  sessionId,
+  onSend,
+  onInterrupt,
+  isResponding,
+  bypassActive,
+  onSetBypass,
+  planMode,
+  onSetPlanMode,
+  thinkingLevel,
+  onSetThinking,
+  currentModel,
+  onSetModel,
+  contextUsage,
+  dismissKeyboard,
+  cwd,
+  onCompact,
+  initData,
+  activeModelId,
+  hasQueuedMessage,
+  queuedMessages,
+  queuePaused,
+  onCancelQueued,
+  onDeleteQueued,
+  onEditQueued,
+  onResumeQueue,
+  restoredText,
+  onClearRestoredText,
+  btw,
+  onDismissBtw,
+}: InputAreaProps) {
   const { connected } = useWebSocket();
   const [text, setText] = useState(() => sessionDrafts.get(sessionId) || "");
   const [queueModalOpen, setQueueModalOpen] = useState(false);
@@ -230,7 +306,9 @@ export function InputArea({ sessionId, onSend, onInterrupt, isResponding, bypass
   const [pendingDocs, setPendingDocs] = useState<DocumentAttachment[]>([]);
   const [pendingTextFiles, setPendingTextFiles] = useState<TextFileAttachment[]>([]);
   const [dragOver, setDragOver] = useState(false);
-  const [preview, setPreview] = useState<{ type: "image"; src: string; index: number } | { type: "text"; content: string; name: string; index: number } | null>(null);
+  const [preview, setPreview] = useState<
+    { type: "image"; src: string; index: number } | { type: "text"; content: string; name: string; index: number } | null
+  >(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const mentionItemsRef = useRef<MentionItem[]>([]);
@@ -249,22 +327,25 @@ export function InputArea({ sessionId, onSend, onInterrupt, isResponding, bypass
     textareaRef.current?.focus();
   }, []);
 
-  const handleSelectMention = useCallback((path: string) => {
-    const before = text.slice(0, mention.start);
-    const after = text.slice(cursorPos);
-    const newText = before + "@" + path + " " + after;
-    setText(newText);
-    setMentionSelectedIndex(0);
-    const newCursor = mention.start + 1 + path.length + 1;
-    setCursorPos(newCursor);
-    requestAnimationFrame(() => {
-      const el = textareaRef.current;
-      if (el) {
-        el.focus();
-        el.setSelectionRange(newCursor, newCursor);
-      }
-    });
-  }, [text, mention.start, cursorPos]);
+  const handleSelectMention = useCallback(
+    (path: string) => {
+      const before = text.slice(0, mention.start);
+      const after = text.slice(cursorPos);
+      const newText = before + "@" + path + " " + after;
+      setText(newText);
+      setMentionSelectedIndex(0);
+      const newCursor = mention.start + 1 + path.length + 1;
+      setCursorPos(newCursor);
+      requestAnimationFrame(() => {
+        const el = textareaRef.current;
+        if (el) {
+          el.focus();
+          el.setSelectionRange(newCursor, newCursor);
+        }
+      });
+    },
+    [text, mention.start, cursorPos],
+  );
 
   const hasAttachments = pendingImages.length > 0 || pendingDocs.length > 0 || pendingTextFiles.length > 0;
 
@@ -382,7 +463,22 @@ export function InputArea({ sessionId, onSend, onInterrupt, isResponding, bypass
         handleSend();
       }
     },
-    [showMenu, showMention, query, selectedIndex, mentionSelectedIndex, handleSend, handleSelectCommand, handleSelectMention, text, mention.start, cursorPos, isResponding, onInterrupt, planMode, onSetPlanMode]
+    [
+      showMenu,
+      showMention,
+      selectedIndex,
+      mentionSelectedIndex,
+      handleSend,
+      handleSelectCommand,
+      handleSelectMention,
+      text,
+      mention.start,
+      cursorPos,
+      isResponding,
+      onInterrupt,
+      planMode,
+      onSetPlanMode,
+    ],
   );
 
   const handleInput = useCallback(() => {
@@ -407,40 +503,39 @@ export function InputArea({ sessionId, onSend, onInterrupt, isResponding, bypass
       if (!ext) return;
       const newName = `paste${suffix}.${ext}`;
       setPendingTextFiles((prev) =>
-        prev.map((f) =>
-          f.name === tempName && f.content === pastedText
-            ? { ...f, name: newName, language: label }
-            : f
-        )
+        prev.map((f) => (f.name === tempName && f.content === pastedText ? { ...f, name: newName, language: label } : f)),
       );
     });
   }, []);
 
-  const handleChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    const newValue = e.target.value;
+  const handleChange = useCallback(
+    (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+      const newValue = e.target.value;
 
-    // Detect large insertions from keyboard paste suggestions (bypass paste event)
-    const inserted = newValue.length - text.length;
-    if (inserted > 0) {
-      const cursor = e.target.selectionStart ?? newValue.length;
-      const insertedText = newValue.slice(cursor - inserted, cursor);
-      if (shouldCollapsePaste(insertedText)) {
-        const before = newValue.slice(0, cursor - inserted);
-        const after = newValue.slice(cursor);
-        setText(before + after);
-        collapseText(insertedText);
-        setCursorPos(before.length);
-        setSelectedIndex(0);
-        setMentionSelectedIndex(0);
-        return;
+      // Detect large insertions from keyboard paste suggestions (bypass paste event)
+      const inserted = newValue.length - text.length;
+      if (inserted > 0) {
+        const cursor = e.target.selectionStart ?? newValue.length;
+        const insertedText = newValue.slice(cursor - inserted, cursor);
+        if (shouldCollapsePaste(insertedText)) {
+          const before = newValue.slice(0, cursor - inserted);
+          const after = newValue.slice(cursor);
+          setText(before + after);
+          collapseText(insertedText);
+          setCursorPos(before.length);
+          setSelectedIndex(0);
+          setMentionSelectedIndex(0);
+          return;
+        }
       }
-    }
 
-    setText(newValue);
-    setCursorPos(e.target.selectionStart ?? 0);
-    setSelectedIndex(0);
-    setMentionSelectedIndex(0);
-  }, [text, collapseText]);
+      setText(newValue);
+      setCursorPos(e.target.selectionStart ?? 0);
+      setSelectedIndex(0);
+      setMentionSelectedIndex(0);
+    },
+    [text, collapseText],
+  );
 
   const addFiles = useCallback(async (files: File[]) => {
     for (const file of files) {
@@ -463,61 +558,65 @@ export function InputArea({ sessionId, onSend, onInterrupt, isResponding, bypass
     }
   }, []);
 
-  const handlePaste = useCallback((e: ClipboardEvent<HTMLTextAreaElement>) => {
-    isPastingRef.current = true;
-    requestAnimationFrame(() => { isPastingRef.current = false; });
+  const handlePaste = useCallback(
+    (e: ClipboardEvent<HTMLTextAreaElement>) => {
+      isPastingRef.current = true;
+      requestAnimationFrame(() => {
+        isPastingRef.current = false;
+      });
 
-    const items = e.clipboardData?.items;
-    if (!items) return;
-    const files: File[] = [];
-    for (let i = 0; i < items.length; i++) {
-      const item = items[i];
-      if (item.kind === "file") {
-        const file = item.getAsFile();
-        if (file) files.push(file);
+      const items = e.clipboardData?.items;
+      if (!items) return;
+      const files: File[] = [];
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        if (item.kind === "file") {
+          const file = item.getAsFile();
+          if (file) files.push(file);
+        }
       }
-    }
-    // Fallback: check clipboardData.files (Android often populates this instead of items)
-    if (files.length === 0 && e.clipboardData?.files?.length) {
-      for (let i = 0; i < e.clipboardData.files.length; i++) {
-        files.push(e.clipboardData.files[i]);
+      // Fallback: check clipboardData.files (Android often populates this instead of items)
+      if (files.length === 0 && e.clipboardData?.files?.length) {
+        for (let i = 0; i < e.clipboardData.files.length; i++) {
+          files.push(e.clipboardData.files[i]);
+        }
       }
-    }
 
-    // Fallback: check for image in HTML content (Android pastes images as <img> tags)
-    if (files.length === 0) {
-      const html = e.clipboardData?.getData("text/html");
-      if (html) {
-        const match = html.match(/<img[^>]+src="(data:image\/[^;]+;base64,[^"]+)"/);
-        if (match) {
-          const dataUrl = match[1];
-          const [header, b64] = dataUrl.split(",");
-          const mimeMatch = header.match(/data:([^;]+)/);
-          if (mimeMatch && b64) {
-            const mime = mimeMatch[1];
-            const binary = atob(b64);
-            const bytes = new Uint8Array(binary.length);
-            for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-            const blob = new Blob([bytes], { type: mime });
-            files.push(new File([blob], `pasted-image.${mime.split("/")[1] || "png"}`, { type: mime }));
+      // Fallback: check for image in HTML content (Android pastes images as <img> tags)
+      if (files.length === 0) {
+        const html = e.clipboardData?.getData("text/html");
+        if (html) {
+          const match = html.match(/<img[^>]+src="(data:image\/[^;]+;base64,[^"]+)"/);
+          if (match) {
+            const dataUrl = match[1];
+            const [header, b64] = dataUrl.split(",");
+            const mimeMatch = header.match(/data:([^;]+)/);
+            if (mimeMatch && b64) {
+              const mime = mimeMatch[1];
+              const binary = atob(b64);
+              const bytes = new Uint8Array(binary.length);
+              for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+              const blob = new Blob([bytes], { type: mime });
+              files.push(new File([blob], `pasted-image.${mime.split("/")[1] || "png"}`, { type: mime }));
+            }
           }
         }
       }
-    }
 
-    if (files.length > 0) {
-      e.preventDefault();
-      addFiles(files);
-      return;
-    }
+      if (files.length > 0) {
+        e.preventDefault();
+        addFiles(files);
+        return;
+      }
 
-    const pastedText = e.clipboardData?.getData("text/plain");
-    if (pastedText && shouldCollapsePaste(pastedText)) {
-      e.preventDefault();
-      collapseText(pastedText);
-    }
-  }, [addFiles, collapseText]);
-
+      const pastedText = e.clipboardData?.getData("text/plain");
+      if (pastedText && shouldCollapsePaste(pastedText)) {
+        e.preventDefault();
+        collapseText(pastedText);
+      }
+    },
+    [addFiles, collapseText],
+  );
 
   const handleDragOver = useCallback((e: DragEvent<HTMLDivElement>) => {
     e.preventDefault();
@@ -529,17 +628,20 @@ export function InputArea({ sessionId, onSend, onInterrupt, isResponding, bypass
     setDragOver(false);
   }, []);
 
-  const handleDrop = useCallback((e: DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    setDragOver(false);
-    const files: File[] = [];
-    if (e.dataTransfer?.files) {
-      for (let i = 0; i < e.dataTransfer.files.length; i++) {
-        files.push(e.dataTransfer.files[i]);
+  const handleDrop = useCallback(
+    (e: DragEvent<HTMLDivElement>) => {
+      e.preventDefault();
+      setDragOver(false);
+      const files: File[] = [];
+      if (e.dataTransfer?.files) {
+        for (let i = 0; i < e.dataTransfer.files.length; i++) {
+          files.push(e.dataTransfer.files[i]);
+        }
       }
-    }
-    if (files.length > 0) addFiles(files);
-  }, [addFiles]);
+      if (files.length > 0) addFiles(files);
+    },
+    [addFiles],
+  );
 
   const removeImage = useCallback((index: number) => {
     setPendingImages((prev) => prev.filter((_, i) => i !== index));
@@ -557,12 +659,15 @@ export function InputArea({ sessionId, onSend, onInterrupt, isResponding, bypass
     fileInputRef.current?.click();
   }, []);
 
-  const handleFileInputChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (!files || files.length === 0) return;
-    addFiles(Array.from(files));
-    e.target.value = "";
-  }, [addFiles]);
+  const handleFileInputChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const files = e.target.files;
+      if (!files || files.length === 0) return;
+      addFiles(Array.from(files));
+      e.target.value = "";
+    },
+    [addFiles],
+  );
 
   return (
     <div
@@ -590,9 +695,7 @@ export function InputArea({ sessionId, onSend, onInterrupt, isResponding, bypass
                 <span>Thinking...</span>
               </div>
             )}
-            {btw.error && (
-              <p className="text-xs text-destructive px-1">{btw.error}</p>
-            )}
+            {btw.error && <p className="text-xs text-destructive px-1">{btw.error}</p>}
             {btw.answer && (
               <div className="text-xs prose prose-sm dark:prose-invert max-w-none px-1 border-t pt-1 max-h-48 overflow-y-auto">
                 <ReactMarkdown remarkPlugins={[remarkGfm]}>{btw.answer}</ReactMarkdown>
@@ -600,164 +703,159 @@ export function InputArea({ sessionId, onSend, onInterrupt, isResponding, bypass
             )}
           </div>
         )}
-        {optionsOpen && (() => {
-          const parsed = parseCurrentModel(currentModel);
-          const versionEntries = parsed.alias ? versionsForAlias(parsed.alias) : [];
-          const showVersionRow = versionEntries.length > 1;
-          const supportsExtended = parsed.entry?.supportsExtendedContext ?? false;
-          return (
-          <div
-            className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
-            onMouseDown={(e) => {
-              if (e.target === e.currentTarget) setOptionsOpen(false);
-            }}
-          >
-          <div className="w-full max-w-md mx-4 rounded-lg border bg-background p-4 shadow-lg space-y-1">
-            <div className="flex items-center justify-between pb-2">
-              <div className="flex items-center gap-2">
-                <Settings2 className="h-4 w-4" />
-                <h2 className="text-sm font-semibold">Session settings</h2>
-              </div>
-              <button
-                onClick={() => setOptionsOpen(false)}
-                className="rounded p-1 text-muted-foreground hover:text-foreground hover:bg-muted"
+        {optionsOpen &&
+          (() => {
+            const parsed = parseCurrentModel(currentModel);
+            const versionEntries = parsed.alias ? versionsForAlias(parsed.alias) : [];
+            const showVersionRow = versionEntries.length > 1;
+            const supportsExtended = parsed.entry?.supportsExtendedContext ?? false;
+            return (
+              <div
+                className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+                onMouseDown={(e) => {
+                  if (e.target === e.currentTarget) setOptionsOpen(false);
+                }}
               >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-            <div className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs">
-              <Cpu className="h-3.5 w-3.5 text-muted-foreground" />
-              <span className="text-muted-foreground">Model</span>
-              {activeModelId && (
-                <span className="text-[10px] font-mono text-muted-foreground/70 truncate">
-                  {activeModelId}
-                </span>
-              )}
-              <div className="ml-auto flex gap-1">
-                {aliases.map((opt) => (
-                  <button
-                    key={opt.value}
-                    onClick={() => onSetModel(valueForAlias(opt.value, parsed.extended && opt.value !== "haiku"))}
-                    className={`rounded px-2 py-0.5 text-xs transition-colors ${
-                      parsed.alias === opt.value
-                        ? "bg-primary text-primary-foreground"
-                        : "bg-muted text-muted-foreground hover:text-foreground"
-                    }`}
-                  >
-                    {opt.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-            {showVersionRow && (
-              <div className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs">
-                <Layers className="h-3.5 w-3.5 text-muted-foreground" />
-                <span className="text-muted-foreground">Version</span>
-                <div className="ml-auto flex gap-1">
-                  {versionEntries.map((entry) => (
+                <div className="w-full max-w-md mx-4 rounded-lg border bg-background p-4 shadow-lg space-y-1">
+                  <div className="flex items-center justify-between pb-2">
+                    <div className="flex items-center gap-2">
+                      <Settings2 className="h-4 w-4" />
+                      <h2 className="text-sm font-semibold">Session settings</h2>
+                    </div>
                     <button
-                      key={entry.modelId}
-                      onClick={() => onSetModel(valueForEntry(entry, parsed.extended && entry.supportsExtendedContext))}
-                      className={`rounded px-2 py-0.5 text-xs transition-colors ${
-                        parsed.entry?.modelId === entry.modelId
-                          ? "bg-primary text-primary-foreground"
-                          : "bg-muted text-muted-foreground hover:text-foreground"
-                      }`}
+                      onClick={() => setOptionsOpen(false)}
+                      className="rounded p-1 text-muted-foreground hover:text-foreground hover:bg-muted"
                     >
-                      {entry.version}
+                      <X className="h-4 w-4" />
                     </button>
-                  ))}
-                </div>
-              </div>
-            )}
-            {supportsExtended && parsed.entry && (
-              <div className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs">
-                <Maximize2 className="h-3.5 w-3.5 text-muted-foreground" />
-                <span className="text-muted-foreground">Context</span>
-                <div className="ml-auto flex gap-1">
-                  {contextSizes.map((opt) => (
-                    <button
-                      key={opt.value}
-                      onClick={() => onSetModel(valueForEntry(parsed.entry!, opt.value === "1m"))}
-                      className={`rounded px-2 py-0.5 text-xs transition-colors ${
-                        (opt.value === "1m") === parsed.extended
-                          ? "bg-primary text-primary-foreground"
-                          : "bg-muted text-muted-foreground hover:text-foreground"
-                      }`}
-                    >
-                      {opt.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-            {(() => {
-              const allowed = new Set(allowedEffortLevels(parsed.entry));
-              if (allowed.size === 0) return null;
-              const visible = thinkingLevels.filter((opt) => allowed.has(opt.value));
-              return (
-                <div className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs">
-                  <Brain className="h-3.5 w-3.5 text-muted-foreground" />
-                  <span className="text-muted-foreground">Thinking</span>
-                  <div className="ml-auto flex gap-1">
-                    {visible.map((opt) => (
-                      <button
-                        key={opt.value}
-                        onClick={() => onSetThinking(opt.value)}
-                        className={`rounded px-2 py-0.5 text-xs transition-colors ${
-                          thinkingLevel === opt.value
-                            ? "bg-primary text-primary-foreground"
-                            : "bg-muted text-muted-foreground hover:text-foreground"
-                        }`}
-                      >
-                        {opt.label}
-                      </button>
-                    ))}
                   </div>
+                  <div className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs">
+                    <Cpu className="h-3.5 w-3.5 text-muted-foreground" />
+                    <span className="text-muted-foreground">Model</span>
+                    {activeModelId && <span className="text-[10px] font-mono text-muted-foreground/70 truncate">{activeModelId}</span>}
+                    <div className="ml-auto flex gap-1">
+                      {aliases.map((opt) => (
+                        <button
+                          key={opt.value}
+                          onClick={() => onSetModel(valueForAlias(opt.value, parsed.extended && opt.value !== "haiku"))}
+                          className={`rounded px-2 py-0.5 text-xs transition-colors ${
+                            parsed.alias === opt.value
+                              ? "bg-primary text-primary-foreground"
+                              : "bg-muted text-muted-foreground hover:text-foreground"
+                          }`}
+                        >
+                          {opt.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  {showVersionRow && (
+                    <div className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs">
+                      <Layers className="h-3.5 w-3.5 text-muted-foreground" />
+                      <span className="text-muted-foreground">Version</span>
+                      <div className="ml-auto flex gap-1">
+                        {versionEntries.map((entry) => (
+                          <button
+                            key={entry.modelId}
+                            onClick={() => onSetModel(valueForEntry(entry, parsed.extended && entry.supportsExtendedContext))}
+                            className={`rounded px-2 py-0.5 text-xs transition-colors ${
+                              parsed.entry?.modelId === entry.modelId
+                                ? "bg-primary text-primary-foreground"
+                                : "bg-muted text-muted-foreground hover:text-foreground"
+                            }`}
+                          >
+                            {entry.version}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {supportsExtended && parsed.entry && (
+                    <div className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs">
+                      <Maximize2 className="h-3.5 w-3.5 text-muted-foreground" />
+                      <span className="text-muted-foreground">Context</span>
+                      <div className="ml-auto flex gap-1">
+                        {contextSizes.map((opt) => (
+                          <button
+                            key={opt.value}
+                            onClick={() => onSetModel(valueForEntry(parsed.entry!, opt.value === "1m"))}
+                            className={`rounded px-2 py-0.5 text-xs transition-colors ${
+                              (opt.value === "1m") === parsed.extended
+                                ? "bg-primary text-primary-foreground"
+                                : "bg-muted text-muted-foreground hover:text-foreground"
+                            }`}
+                          >
+                            {opt.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {(() => {
+                    const allowed = new Set(allowedEffortLevels(parsed.entry));
+                    if (allowed.size === 0) return null;
+                    const visible = thinkingLevels.filter((opt) => allowed.has(opt.value));
+                    return (
+                      <div className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs">
+                        <Brain className="h-3.5 w-3.5 text-muted-foreground" />
+                        <span className="text-muted-foreground">Thinking</span>
+                        <div className="ml-auto flex gap-1">
+                          {visible.map((opt) => (
+                            <button
+                              key={opt.value}
+                              onClick={() => onSetThinking(opt.value)}
+                              className={`rounded px-2 py-0.5 text-xs transition-colors ${
+                                thinkingLevel === opt.value
+                                  ? "bg-primary text-primary-foreground"
+                                  : "bg-muted text-muted-foreground hover:text-foreground"
+                              }`}
+                            >
+                              {opt.label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })()}
+                  <button
+                    onClick={() => onSetBypass(!bypassActive)}
+                    className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs hover:bg-muted transition-colors"
+                  >
+                    {bypassActive ? (
+                      <ShieldOff className="h-3.5 w-3.5 text-orange-500" />
+                    ) : (
+                      <ShieldCheck className="h-3.5 w-3.5 text-muted-foreground" />
+                    )}
+                    <span className={bypassActive ? "text-orange-500 font-medium" : "text-muted-foreground"}>Bypass all permissions</span>
+                    <span
+                      className={`ml-auto inline-flex h-4 w-7 items-center rounded-full transition-colors ${
+                        bypassActive ? "bg-orange-500" : "bg-muted-foreground/30"
+                      }`}
+                    >
+                      <span
+                        className={`inline-block h-3 w-3 rounded-full bg-white transition-transform ${
+                          bypassActive ? "translate-x-3.5" : "translate-x-0.5"
+                        }`}
+                      />
+                    </span>
+                  </button>
+                  {initData?.mcpServers && initData.mcpServers.length > 0 && (
+                    <button
+                      onClick={() => setMcpOpen(true)}
+                      className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs hover:bg-muted transition-colors"
+                    >
+                      <Plug className="h-3.5 w-3.5 text-muted-foreground" />
+                      <span className="text-muted-foreground">MCP Servers</span>
+                      <span className="ml-auto flex items-center gap-1 text-muted-foreground">
+                        {initData.mcpServers.filter((s) => s.status === "connected").length}/{initData.mcpServers.length}
+                        <ChevronRight className="h-3 w-3" />
+                      </span>
+                    </button>
+                  )}
                 </div>
-              );
-            })()}
-            <button
-              onClick={() => onSetBypass(!bypassActive)}
-              className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs hover:bg-muted transition-colors"
-            >
-              {bypassActive ? (
-                <ShieldOff className="h-3.5 w-3.5 text-orange-500" />
-              ) : (
-                <ShieldCheck className="h-3.5 w-3.5 text-muted-foreground" />
-              )}
-              <span className={bypassActive ? "text-orange-500 font-medium" : "text-muted-foreground"}>
-                Bypass all permissions
-              </span>
-              <span
-                className={`ml-auto inline-flex h-4 w-7 items-center rounded-full transition-colors ${
-                  bypassActive ? "bg-orange-500" : "bg-muted-foreground/30"
-                }`}
-              >
-                <span
-                  className={`inline-block h-3 w-3 rounded-full bg-white transition-transform ${
-                    bypassActive ? "translate-x-3.5" : "translate-x-0.5"
-                  }`}
-                />
-              </span>
-            </button>
-            {initData?.mcpServers && initData.mcpServers.length > 0 && (
-              <button
-                onClick={() => setMcpOpen(true)}
-                className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs hover:bg-muted transition-colors"
-              >
-                <Plug className="h-3.5 w-3.5 text-muted-foreground" />
-                <span className="text-muted-foreground">MCP Servers</span>
-                <span className="ml-auto flex items-center gap-1 text-muted-foreground">
-                  {initData.mcpServers.filter(s => s.status === "connected").length}/{initData.mcpServers.length}
-                  <ChevronRight className="h-3 w-3" />
-                </span>
-              </button>
-            )}
-          </div>
-          </div>
-          );
-        })()}
+              </div>
+            );
+          })()}
         {hasAttachments && (
           <div className="mb-1 flex gap-2 flex-wrap px-9">
             {pendingImages.map((img, i) => (
@@ -797,7 +895,10 @@ export function InputArea({ sessionId, onSend, onInterrupt, isResponding, bypass
                 <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
                 <span className="truncate max-w-[120px]">{file.name}</span>
                 <button
-                  onClick={(e) => { e.stopPropagation(); removeTextFile(i); }}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    removeTextFile(i);
+                  }}
                   className="absolute top-0.5 right-0.5 opacity-0 group-hover:opacity-100 transition-opacity text-destructive"
                 >
                   <Trash2 className="h-3.5 w-3.5" />
@@ -809,7 +910,7 @@ export function InputArea({ sessionId, onSend, onInterrupt, isResponding, bypass
         {hasQueuedMessage && (
           <div className="mb-1 flex items-center gap-2 px-9">
             <span className={`text-xs ${queuePaused ? "text-yellow-500" : "text-muted-foreground"}`}>
-              {(queuedMessages?.length ?? 0)} message{(queuedMessages?.length ?? 0) !== 1 ? "s" : ""} {queuePaused ? "paused" : "queued"}
+              {queuedMessages?.length ?? 0} message{(queuedMessages?.length ?? 0) !== 1 ? "s" : ""} {queuePaused ? "paused" : "queued"}
             </span>
             <button
               onClick={() => setQueueModalOpen(true)}
@@ -827,7 +928,9 @@ export function InputArea({ sessionId, onSend, onInterrupt, isResponding, bypass
               selectedIndex={selectedIndex}
               onSelect={handleSelectCommand}
               cwd={cwd}
-              onItemsChange={(items) => { slashItemsRef.current = items; }}
+              onItemsChange={(items) => {
+                slashItemsRef.current = items;
+              }}
               initCommands={initData?.slashCommands}
             />
           )}
@@ -837,18 +940,13 @@ export function InputArea({ sessionId, onSend, onInterrupt, isResponding, bypass
               cwd={cwd}
               selectedIndex={mentionSelectedIndex}
               onSelect={handleSelectMention}
-              onItemsChange={(items) => { mentionItemsRef.current = items; }}
+              onItemsChange={(items) => {
+                mentionItemsRef.current = items;
+              }}
               initAgents={initData?.agents}
             />
           )}
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept={FILE_ACCEPT}
-            multiple
-            onChange={handleFileInputChange}
-            className="hidden"
-          />
+          <input ref={fileInputRef} type="file" accept={FILE_ACCEPT} multiple onChange={handleFileInputChange} className="hidden" />
           <div className="flex flex-col items-center justify-evenly w-8 shrink-0">
             {contextUsage && <ContextIndicator usage={contextUsage} onCompact={onCompact} />}
             <Button
@@ -868,7 +966,17 @@ export function InputArea({ sessionId, onSend, onInterrupt, isResponding, bypass
               onKeyDown={handleKeyDown}
               onInput={handleInput}
               onPaste={handlePaste}
-              placeholder={hasQueuedMessage ? (queuePaused ? "Queue paused (send to discard, or manage in modal)" : "Message queued (Esc to interrupt)") : isResponding ? "Use /btw to nudge, or type to queue..." : planMode ? "Plan with Claude..." : "Send a message..."}
+              placeholder={
+                hasQueuedMessage
+                  ? queuePaused
+                    ? "Queue paused (send to discard, or manage in modal)"
+                    : "Message queued (Esc to interrupt)"
+                  : isResponding
+                    ? "Use /btw to nudge, or type to queue..."
+                    : planMode
+                      ? "Plan with Claude..."
+                      : "Send a message..."
+              }
               rows={2}
               className={`w-full resize-none rounded-md border bg-background px-3 py-2 pb-7 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 overflow-y-auto scrollbar-none ${
                 planMode ? "border-blue-500/50 focus-visible:ring-blue-500/50" : "border-input focus-visible:ring-ring"
@@ -912,21 +1020,26 @@ export function InputArea({ sessionId, onSend, onInterrupt, isResponding, bypass
         </div>
       </div>
       <Dialog open={preview !== null} onOpenChange={() => setPreview(null)} className="max-w-3xl">
-        <DialogContent className="max-h-[80vh] overflow-auto" onClose={() => setPreview(null)} onDelete={() => {
-          if (!preview) return;
-          if (preview.type === "image") removeImage(preview.index);
-          else removeTextFile(preview.index);
-          setPreview(null);
-        }}>
-          {preview?.type === "image" && (
-            <img src={preview.src} className="w-full rounded object-contain" alt="" />
-          )}
-          {preview?.type === "text" && (() => {
-            const lang = languageFromPath(preview.name);
-            return lang
-              ? <CodeBlock code={preview.content} language={lang} fullHeight />
-              : <pre className="whitespace-pre-wrap text-sm font-mono">{preview.content}</pre>;
-          })()}
+        <DialogContent
+          className="max-h-[80vh] overflow-auto"
+          onClose={() => setPreview(null)}
+          onDelete={() => {
+            if (!preview) return;
+            if (preview.type === "image") removeImage(preview.index);
+            else removeTextFile(preview.index);
+            setPreview(null);
+          }}
+        >
+          {preview?.type === "image" && <img src={preview.src} className="w-full rounded object-contain" alt="" />}
+          {preview?.type === "text" &&
+            (() => {
+              const lang = languageFromPath(preview.name);
+              return lang ? (
+                <CodeBlock code={preview.content} language={lang} fullHeight />
+              ) : (
+                <pre className="whitespace-pre-wrap text-sm font-mono">{preview.content}</pre>
+              );
+            })()}
         </DialogContent>
       </Dialog>
       <QueueModal
@@ -938,12 +1051,7 @@ export function InputArea({ sessionId, onSend, onInterrupt, isResponding, bypass
         onEdit={onEditQueued ?? (() => {})}
         onResume={onResumeQueue ?? (() => {})}
       />
-      <McpStatusModal
-        open={mcpOpen}
-        onOpenChange={setMcpOpen}
-        sessionId={sessionId}
-        initData={initData}
-      />
+      <McpStatusModal open={mcpOpen} onOpenChange={setMcpOpen} sessionId={sessionId} initData={initData} />
     </div>
   );
 }

@@ -1,9 +1,9 @@
 import crypto from "node:crypto";
-import { readFile, writeFile, mkdir, unlink } from "node:fs/promises";
 import { existsSync } from "node:fs";
+import { mkdir, unlink, writeFile } from "node:fs/promises";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import { homedir } from "node:os";
 import path from "node:path";
-import type { IncomingMessage, ServerResponse } from "node:http";
 
 // ---------------------------------------------------------------------------
 // Config
@@ -47,7 +47,7 @@ interface StoredPassword {
 function readPasswordFile(): StoredPassword | null {
   if (!existsSync(PASSWORD_FILE)) return null;
   try {
-    const raw = require("fs").readFileSync(PASSWORD_FILE, "utf-8");
+    const raw = require("node:fs").readFileSync(PASSWORD_FILE, "utf-8");
     const data = JSON.parse(raw) as StoredPassword;
     if (data.hash && data.salt) return data;
     return null;
@@ -176,15 +176,9 @@ export function isAuthenticated(req: IncomingMessage): boolean {
 }
 
 export function setSessionCookie(res: ServerResponse, token: string): void {
-  res.setHeader(
-    "Set-Cookie",
-    `cockpit_session=${token}; HttpOnly; Path=/; SameSite=Strict; Max-Age=31536000`
-  );
+  res.setHeader("Set-Cookie", `cockpit_session=${token}; HttpOnly; Path=/; SameSite=Strict; Max-Age=31536000`);
 }
 
 export function clearSessionCookie(res: ServerResponse): void {
-  res.setHeader(
-    "Set-Cookie",
-    `cockpit_session=; HttpOnly; Path=/; SameSite=Strict; Max-Age=0`
-  );
+  res.setHeader("Set-Cookie", `cockpit_session=; HttpOnly; Path=/; SameSite=Strict; Max-Age=0`);
 }

@@ -1,14 +1,14 @@
 "use client";
 
-import { useEffect, useCallback } from "react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
-import { pathBasename } from "@/lib/path";
-import rehypeHighlight from "rehype-highlight";
 import { X } from "lucide-react";
+import { useCallback, useEffect } from "react";
+import ReactMarkdown from "react-markdown";
+import rehypeHighlight from "rehype-highlight";
+import remarkGfm from "remark-gfm";
+import { MarkdownCodeBlock } from "@/components/markdown-code-block";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { MarkdownCodeBlock } from "@/components/markdown-code-block";
+import { pathBasename } from "@/lib/path";
 
 const markdownComponents = { pre: MarkdownCodeBlock };
 
@@ -39,7 +39,7 @@ export function PlanViewModal({ open, onOpenChange, content, filePath }: PlanVie
     (e: React.MouseEvent) => {
       if (e.target === e.currentTarget) onClose();
     },
-    [onClose]
+    [onClose],
   );
 
   if (!open) return null;
@@ -47,10 +47,7 @@ export function PlanViewModal({ open, onOpenChange, content, filePath }: PlanVie
   const basename = pathBasename(filePath) || filePath;
 
   return (
-    <div
-      className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4"
-      onClick={handleOverlayClick}
-    >
+    <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" onClick={handleOverlayClick}>
       <Card className="w-full max-w-3xl flex flex-col" style={{ maxHeight: "calc(100dvh - 2rem)" }}>
         <div className="flex items-center justify-between px-4 py-2 border-b shrink-0">
           <span className="text-sm font-medium text-muted-foreground">{basename}</span>
@@ -59,11 +56,7 @@ export function PlanViewModal({ open, onOpenChange, content, filePath }: PlanVie
           </Button>
         </div>
         <div className="flex-1 min-h-0 overflow-y-auto p-4 message-prose prose prose-sm max-w-none dark:prose-invert">
-          <ReactMarkdown
-            remarkPlugins={[remarkGfm]}
-            rehypePlugins={[rehypeHighlight]}
-            components={markdownComponents}
-          >
+          <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]} components={markdownComponents}>
             {content}
           </ReactMarkdown>
         </div>

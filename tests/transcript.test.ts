@@ -1,7 +1,15 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { existsSync } from "node:fs";
-import { readFile, readdir, stat, open } from "node:fs/promises";
-import { transcriptExists, loadTranscript, loadMoreMessages, scanAllSessions, findSessionCwd, loadLastUsage, readMoreLines } from "@/server/transcript";
+import { open, readdir, readFile, stat } from "node:fs/promises";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  findSessionCwd,
+  loadLastUsage,
+  loadMoreMessages,
+  loadTranscript,
+  readMoreLines,
+  scanAllSessions,
+  transcriptExists,
+} from "@/server/transcript";
 
 vi.mock("node:os", () => ({ homedir: () => "/home/user" }));
 vi.mock("node:fs", () => ({ existsSync: vi.fn(), createReadStream: vi.fn() }));
@@ -64,9 +72,7 @@ describe("transcript module", () => {
 
     it("parses user text messages (string content)", async () => {
       (existsSync as any).mockReturnValue(true);
-      const content = jsonl(
-        { type: "user", message: { id: "u1", content: "hello" }, timestamp: "2024-01-01T00:00:00Z", cwd: "/tmp" }
-      );
+      const content = jsonl({ type: "user", message: { id: "u1", content: "hello" }, timestamp: "2024-01-01T00:00:00Z", cwd: "/tmp" });
       (readFile as any).mockResolvedValue(content);
 
       const result = await loadTranscript("session-123", "/tmp");
@@ -83,9 +89,11 @@ describe("transcript module", () => {
 
     it("parses assistant text messages (array content with text block)", async () => {
       (existsSync as any).mockReturnValue(true);
-      const content = jsonl(
-        { type: "assistant", message: { id: "a1", content: [{ type: "text", text: "world" }] }, timestamp: "2024-01-01T00:00:01Z" }
-      );
+      const content = jsonl({
+        type: "assistant",
+        message: { id: "a1", content: [{ type: "text", text: "world" }] },
+        timestamp: "2024-01-01T00:00:01Z",
+      });
       (readFile as any).mockResolvedValue(content);
 
       const result = await loadTranscript("session-123", "/tmp");
@@ -104,7 +112,7 @@ describe("transcript module", () => {
       (existsSync as any).mockReturnValue(true);
       const content = jsonl(
         { type: "assistant", message: { id: "a2", content: [{ type: "tool_use", id: "t1", name: "Bash", input: { command: "ls" } }] } },
-        { type: "user", message: { content: [{ type: "tool_result", tool_use_id: "t1", content: "file.txt" }] } }
+        { type: "user", message: { content: [{ type: "tool_result", tool_use_id: "t1", content: "file.txt" }] } },
       );
       (readFile as any).mockResolvedValue(content);
 
@@ -125,7 +133,7 @@ describe("transcript module", () => {
       (existsSync as any).mockReturnValue(true);
       const content = [
         '{"type":"user","message":{"id":"u1","content":"hello"},"timestamp":"2024-01-01T00:00:00Z","cwd":"/tmp"}',
-        'invalid json {',
+        "invalid json {",
         '{"type":"user","message":{"id":"u2","content":"world"},"timestamp":"2024-01-01T00:00:01Z","cwd":"/tmp"}',
       ].join("\n");
       (readFile as any).mockResolvedValue(content);
@@ -141,7 +149,7 @@ describe("transcript module", () => {
       (existsSync as any).mockReturnValue(true);
       const content = jsonl(
         { type: "user", message: { id: "u1", content: "hello" }, timestamp: "2024-01-01T00:00:00Z", cwd: "/tmp", isMeta: true },
-        { type: "user", message: { id: "u2", content: "world" }, timestamp: "2024-01-01T00:00:01Z", cwd: "/tmp" }
+        { type: "user", message: { id: "u2", content: "world" }, timestamp: "2024-01-01T00:00:01Z", cwd: "/tmp" },
       );
       (readFile as any).mockResolvedValue(content);
 
@@ -153,9 +161,7 @@ describe("transcript module", () => {
 
     it("handles compact_boundary system events", async () => {
       (existsSync as any).mockReturnValue(true);
-      const content = jsonl(
-        { type: "system", subtype: "compact_boundary", timestamp: "2024-01-01T00:00:00Z", uuid: "sys-1" }
-      );
+      const content = jsonl({ type: "system", subtype: "compact_boundary", timestamp: "2024-01-01T00:00:00Z", uuid: "sys-1" });
       (readFile as any).mockResolvedValue(content);
 
       const result = await loadTranscript("session-123", "/tmp");
@@ -170,9 +176,13 @@ describe("transcript module", () => {
 
     it("handles local_command system events", async () => {
       (existsSync as any).mockReturnValue(true);
-      const content = jsonl(
-        { type: "system", subtype: "local_command", content: "<local-command-stdout>command output</local-command-stdout>", timestamp: "2024-01-01T00:00:00Z", uuid: "sys-2" }
-      );
+      const content = jsonl({
+        type: "system",
+        subtype: "local_command",
+        content: "<local-command-stdout>command output</local-command-stdout>",
+        timestamp: "2024-01-01T00:00:00Z",
+        uuid: "sys-2",
+      });
       (readFile as any).mockResolvedValue(content);
 
       const result = await loadTranscript("session-123", "/tmp");
@@ -188,9 +198,12 @@ describe("transcript module", () => {
 
     it("strips CLI XML tags from text", async () => {
       (existsSync as any).mockReturnValue(true);
-      const content = jsonl(
-        { type: "user", message: { id: "u1", content: "<task-notification>some notification</task-notification>" }, timestamp: "2024-01-01T00:00:00Z", cwd: "/tmp" }
-      );
+      const content = jsonl({
+        type: "user",
+        message: { id: "u1", content: "<task-notification>some notification</task-notification>" },
+        timestamp: "2024-01-01T00:00:00Z",
+        cwd: "/tmp",
+      });
       (readFile as any).mockResolvedValue(content);
 
       const result = await loadTranscript("session-123", "/tmp");
@@ -202,7 +215,11 @@ describe("transcript module", () => {
       (existsSync as any).mockReturnValue(true);
       const content = jsonl(
         { type: "result", modelUsage: { "claude-3-5-sonnet": { contextWindow: 200000 } } },
-        { type: "assistant", message: { id: "a1", content: [{ type: "text", text: "hello" }], usage: { input_tokens: 50, output_tokens: 100 } }, timestamp: "2024-01-01T00:00:00Z" }
+        {
+          type: "assistant",
+          message: { id: "a1", content: [{ type: "text", text: "hello" }], usage: { input_tokens: 50, output_tokens: 100 } },
+          timestamp: "2024-01-01T00:00:00Z",
+        },
       );
       (readFile as any).mockResolvedValue(content);
 
@@ -216,9 +233,11 @@ describe("transcript module", () => {
 
     it("skips 'No response requested.' messages", async () => {
       (existsSync as any).mockReturnValue(true);
-      const content = jsonl(
-        { type: "assistant", message: { id: "a1", content: [{ type: "text", text: "No response requested." }] }, timestamp: "2024-01-01T00:00:00Z" }
-      );
+      const content = jsonl({
+        type: "assistant",
+        message: { id: "a1", content: [{ type: "text", text: "No response requested." }] },
+        timestamp: "2024-01-01T00:00:00Z",
+      });
       (readFile as any).mockResolvedValue(content);
 
       const result = await loadTranscript("session-123", "/tmp");
@@ -228,9 +247,11 @@ describe("transcript module", () => {
 
     it("skips 'API Error: 429 ...' messages", async () => {
       (existsSync as any).mockReturnValue(true);
-      const content = jsonl(
-        { type: "assistant", message: { id: "a1", content: [{ type: "text", text: "API Error: 429 Rate limit exceeded" }] }, timestamp: "2024-01-01T00:00:00Z" }
-      );
+      const content = jsonl({
+        type: "assistant",
+        message: { id: "a1", content: [{ type: "text", text: "API Error: 429 Rate limit exceeded" }] },
+        timestamp: "2024-01-01T00:00:00Z",
+      });
       (readFile as any).mockResolvedValue(content);
 
       const result = await loadTranscript("session-123", "/tmp");
@@ -240,9 +261,11 @@ describe("transcript module", () => {
 
     it("handles thinking blocks", async () => {
       (existsSync as any).mockReturnValue(true);
-      const content = jsonl(
-        { type: "assistant", message: { id: "a3", content: [{ type: "thinking", thinking: "let me think..." }] }, timestamp: "2024-01-01T00:00:00Z" }
-      );
+      const content = jsonl({
+        type: "assistant",
+        message: { id: "a3", content: [{ type: "thinking", thinking: "let me think..." }] },
+        timestamp: "2024-01-01T00:00:00Z",
+      });
       (readFile as any).mockResolvedValue(content);
 
       const result = await loadTranscript("session-123", "/tmp");
@@ -258,9 +281,11 @@ describe("transcript module", () => {
 
     it("handles redacted thinking (signature but no thinking text)", async () => {
       (existsSync as any).mockReturnValue(true);
-      const content = jsonl(
-        { type: "assistant", message: { id: "a4", content: [{ type: "thinking", signature: "abc123" }] }, timestamp: "2024-01-01T00:00:00Z" }
-      );
+      const content = jsonl({
+        type: "assistant",
+        message: { id: "a4", content: [{ type: "thinking", signature: "abc123" }] },
+        timestamp: "2024-01-01T00:00:00Z",
+      });
       (readFile as any).mockResolvedValue(content);
 
       const result = await loadTranscript("session-123", "/tmp");
@@ -278,7 +303,7 @@ describe("transcript module", () => {
       (existsSync as any).mockReturnValue(true);
       const content = jsonl(
         { type: "assistant", message: { id: "a1", content: [{ type: "text", text: "part 1" }] }, timestamp: "2024-01-01T00:00:00Z" },
-        { type: "assistant", message: { id: "a1", content: [{ type: "text", text: "part 2" }] }, timestamp: "2024-01-01T00:00:01Z" }
+        { type: "assistant", message: { id: "a1", content: [{ type: "text", text: "part 2" }] }, timestamp: "2024-01-01T00:00:01Z" },
       );
       (readFile as any).mockResolvedValue(content);
 
@@ -291,20 +316,18 @@ describe("transcript module", () => {
 
     it("extracts images from user content arrays", async () => {
       (existsSync as any).mockReturnValue(true);
-      const content = jsonl(
-        {
-          type: "user",
-          message: {
-            id: "u1",
-            content: [
-              { type: "text", text: "check this image" },
-              { type: "image", source: { type: "base64", media_type: "image/png", data: "iVBORw0KG..." } },
-            ],
-          },
-          timestamp: "2024-01-01T00:00:00Z",
-          cwd: "/tmp",
-        }
-      );
+      const content = jsonl({
+        type: "user",
+        message: {
+          id: "u1",
+          content: [
+            { type: "text", text: "check this image" },
+            { type: "image", source: { type: "base64", media_type: "image/png", data: "iVBORw0KG..." } },
+          ],
+        },
+        timestamp: "2024-01-01T00:00:00Z",
+        cwd: "/tmp",
+      });
       (readFile as any).mockResolvedValue(content);
 
       const result = await loadTranscript("session-123", "/tmp");
@@ -320,17 +343,15 @@ describe("transcript module", () => {
 
     it("extracts text files from file XML tags", async () => {
       (existsSync as any).mockReturnValue(true);
-      const content = jsonl(
-        {
-          type: "user",
-          message: {
-            id: "u1",
-            content: '<file path="test.txt">\nfile contents\n</file>',
-          },
-          timestamp: "2024-01-01T00:00:00Z",
-          cwd: "/tmp",
-        }
-      );
+      const content = jsonl({
+        type: "user",
+        message: {
+          id: "u1",
+          content: '<file path="test.txt">\nfile contents\n</file>',
+        },
+        timestamp: "2024-01-01T00:00:00Z",
+        cwd: "/tmp",
+      });
       (readFile as any).mockResolvedValue(content);
 
       const result = await loadTranscript("session-123", "/tmp");
@@ -364,7 +385,7 @@ describe("transcript module", () => {
             },
           },
           timestamp: "2024-01-01T00:00:00Z",
-        }
+        },
       );
       (readFile as any).mockResolvedValue(content);
 
@@ -378,20 +399,18 @@ describe("transcript module", () => {
 
     it("extracts documents (PDFs) from user content arrays", async () => {
       (existsSync as any).mockReturnValue(true);
-      const content = jsonl(
-        {
-          type: "user",
-          message: {
-            id: "u1",
-            content: [
-              { type: "text", text: "see document" },
-              { type: "document", source: { type: "base64", media_type: "application/pdf", data: "JVBERi0x..." } },
-            ],
-          },
-          timestamp: "2024-01-01T00:00:00Z",
-          cwd: "/tmp",
-        }
-      );
+      const content = jsonl({
+        type: "user",
+        message: {
+          id: "u1",
+          content: [
+            { type: "text", text: "see document" },
+            { type: "document", source: { type: "base64", media_type: "application/pdf", data: "JVBERi0x..." } },
+          ],
+        },
+        timestamp: "2024-01-01T00:00:00Z",
+        cwd: "/tmp",
+      });
       (readFile as any).mockResolvedValue(content);
 
       const result = await loadTranscript("session-123", "/tmp");
@@ -408,9 +427,11 @@ describe("transcript module", () => {
 
     it("preserves model information in assistant messages", async () => {
       (existsSync as any).mockReturnValue(true);
-      const content = jsonl(
-        { type: "assistant", message: { id: "a1", content: [{ type: "text", text: "hello" }], model: "claude-3-5-sonnet" }, timestamp: "2024-01-01T00:00:00Z" }
-      );
+      const content = jsonl({
+        type: "assistant",
+        message: { id: "a1", content: [{ type: "text", text: "hello" }], model: "claude-3-5-sonnet" },
+        timestamp: "2024-01-01T00:00:00Z",
+      });
       (readFile as any).mockResolvedValue(content);
 
       const result = await loadTranscript("session-123", "/tmp");
@@ -420,9 +441,7 @@ describe("transcript module", () => {
 
     it("generates UUIDs for messages without IDs", async () => {
       (existsSync as any).mockReturnValue(true);
-      const content = jsonl(
-        { type: "user", message: { content: "hello" }, timestamp: "2024-01-01T00:00:00Z", cwd: "/tmp" }
-      );
+      const content = jsonl({ type: "user", message: { content: "hello" }, timestamp: "2024-01-01T00:00:00Z", cwd: "/tmp" });
       (readFile as any).mockResolvedValue(content);
 
       const result = await loadTranscript("session-123", "/tmp");
@@ -435,9 +454,7 @@ describe("transcript module", () => {
     it("sets timestamp from ISO string", async () => {
       (existsSync as any).mockReturnValue(true);
       const isoTime = "2024-01-15T14:30:00Z";
-      const content = jsonl(
-        { type: "user", message: { id: "u1", content: "hello" }, timestamp: isoTime, cwd: "/tmp" }
-      );
+      const content = jsonl({ type: "user", message: { id: "u1", content: "hello" }, timestamp: isoTime, cwd: "/tmp" });
       (readFile as any).mockResolvedValue(content);
 
       const result = await loadTranscript("session-123", "/tmp");
@@ -458,7 +475,7 @@ describe("transcript module", () => {
           type: "user",
           message: { content: [{ type: "tool_result", tool_use_id: "t1", content: "output" }] },
           timestamp: "2024-01-01T00:00:01Z",
-        }
+        },
       );
       (readFile as any).mockResolvedValue(content);
 
@@ -488,7 +505,7 @@ describe("transcript module", () => {
             ],
           },
           timestamp: "2024-01-01T00:00:01Z",
-        }
+        },
       );
       (readFile as any).mockResolvedValue(content);
 
@@ -527,9 +544,12 @@ describe("transcript module", () => {
 
       (open as any).mockResolvedValue(mockFileHandle);
 
-      const content = jsonl(
-        { type: "user", message: { id: "u1", content: "earlier message" }, timestamp: "2024-01-01T00:00:00Z", cwd: "/tmp" }
-      );
+      const content = jsonl({
+        type: "user",
+        message: { id: "u1", content: "earlier message" },
+        timestamp: "2024-01-01T00:00:00Z",
+        cwd: "/tmp",
+      });
 
       mockFileHandle.read.mockImplementation((_buf: Buffer, _offset: number, _len: number, _pos: number) => {
         const text = content;
@@ -547,9 +567,7 @@ describe("transcript module", () => {
   describe("edge cases", () => {
     it("handles assistant messages with no content blocks", async () => {
       (existsSync as any).mockReturnValue(true);
-      const content = jsonl(
-        { type: "assistant", message: { id: "a1", content: [] }, timestamp: "2024-01-01T00:00:00Z" }
-      );
+      const content = jsonl({ type: "assistant", message: { id: "a1", content: [] }, timestamp: "2024-01-01T00:00:00Z" });
       (readFile as any).mockResolvedValue(content);
 
       const result = await loadTranscript("session-123", "/tmp");
@@ -570,17 +588,15 @@ describe("transcript module", () => {
 
     it("handles thinking-only messages with token count", async () => {
       (existsSync as any).mockReturnValue(true);
-      const content = jsonl(
-        {
-          type: "assistant",
-          message: {
-            id: "a1",
-            content: [{ type: "thinking", thinking: "internal reasoning" }],
-            usage: { output_tokens: 500 },
-          },
-          timestamp: "2024-01-01T00:00:00Z",
-        }
-      );
+      const content = jsonl({
+        type: "assistant",
+        message: {
+          id: "a1",
+          content: [{ type: "thinking", thinking: "internal reasoning" }],
+          usage: { output_tokens: 500 },
+        },
+        timestamp: "2024-01-01T00:00:00Z",
+      });
       (readFile as any).mockResolvedValue(content);
 
       const result = await loadTranscript("session-123", "/tmp");
@@ -595,20 +611,18 @@ describe("transcript module", () => {
 
     it("handles multiple images in one message", async () => {
       (existsSync as any).mockReturnValue(true);
-      const content = jsonl(
-        {
-          type: "user",
-          message: {
-            id: "u1",
-            content: [
-              { type: "image", source: { type: "base64", media_type: "image/png", data: "img1" } },
-              { type: "image", source: { type: "base64", media_type: "image/jpeg", data: "img2" } },
-            ],
-          },
-          timestamp: "2024-01-01T00:00:00Z",
-          cwd: "/tmp",
-        }
-      );
+      const content = jsonl({
+        type: "user",
+        message: {
+          id: "u1",
+          content: [
+            { type: "image", source: { type: "base64", media_type: "image/png", data: "img1" } },
+            { type: "image", source: { type: "base64", media_type: "image/jpeg", data: "img2" } },
+          ],
+        },
+        timestamp: "2024-01-01T00:00:00Z",
+        cwd: "/tmp",
+      });
       (readFile as any).mockResolvedValue(content);
 
       const result = await loadTranscript("session-123", "/tmp");
@@ -618,19 +632,15 @@ describe("transcript module", () => {
 
     it("filters out images with incomplete source data", async () => {
       (existsSync as any).mockReturnValue(true);
-      const content = jsonl(
-        {
-          type: "user",
-          message: {
-            id: "u1",
-            content: [
-              { type: "image", source: { type: "base64", media_type: "image/png" } },
-            ],
-          },
-          timestamp: "2024-01-01T00:00:00Z",
-          cwd: "/tmp",
-        }
-      );
+      const content = jsonl({
+        type: "user",
+        message: {
+          id: "u1",
+          content: [{ type: "image", source: { type: "base64", media_type: "image/png" } }],
+        },
+        timestamp: "2024-01-01T00:00:00Z",
+        cwd: "/tmp",
+      });
       (readFile as any).mockResolvedValue(content);
 
       const result = await loadTranscript("session-123", "/tmp");
@@ -640,15 +650,13 @@ describe("transcript module", () => {
 
     it("handles local-command-stdout extraction with XML tags", async () => {
       (existsSync as any).mockReturnValue(true);
-      const content = jsonl(
-        {
-          type: "system",
-          subtype: "local_command",
-          content: "<local-command-stdout>stdout content</local-command-stdout>",
-          timestamp: "2024-01-01T00:00:00Z",
-          uuid: "sys-1",
-        }
-      );
+      const content = jsonl({
+        type: "system",
+        subtype: "local_command",
+        content: "<local-command-stdout>stdout content</local-command-stdout>",
+        timestamp: "2024-01-01T00:00:00Z",
+        uuid: "sys-1",
+      });
       (readFile as any).mockResolvedValue(content);
 
       const result = await loadTranscript("session-123", "/tmp");
@@ -658,15 +666,13 @@ describe("transcript module", () => {
 
     it("handles local-command content without XML tags", async () => {
       (existsSync as any).mockReturnValue(true);
-      const content = jsonl(
-        {
-          type: "system",
-          subtype: "local_command",
-          content: "raw command output",
-          timestamp: "2024-01-01T00:00:00Z",
-          uuid: "sys-1",
-        }
-      );
+      const content = jsonl({
+        type: "system",
+        subtype: "local_command",
+        content: "raw command output",
+        timestamp: "2024-01-01T00:00:00Z",
+        uuid: "sys-1",
+      });
       (readFile as any).mockResolvedValue(content);
 
       const result = await loadTranscript("session-123", "/tmp");
@@ -676,15 +682,13 @@ describe("transcript module", () => {
 
     it("skips empty local-command content", async () => {
       (existsSync as any).mockReturnValue(true);
-      const content = jsonl(
-        {
-          type: "system",
-          subtype: "local_command",
-          content: "",
-          timestamp: "2024-01-01T00:00:00Z",
-          uuid: "sys-1",
-        }
-      );
+      const content = jsonl({
+        type: "system",
+        subtype: "local_command",
+        content: "",
+        timestamp: "2024-01-01T00:00:00Z",
+        uuid: "sys-1",
+      });
       (readFile as any).mockResolvedValue(content);
 
       const result = await loadTranscript("session-123", "/tmp");
@@ -694,14 +698,12 @@ describe("transcript module", () => {
 
     it("skips user messages with only command XML tags", async () => {
       (existsSync as any).mockReturnValue(true);
-      const content = jsonl(
-        {
-          type: "user",
-          message: { id: "u1", content: "<local-command-caveat>some caveat</local-command-caveat>" },
-          timestamp: "2024-01-01T00:00:00Z",
-          cwd: "/tmp",
-        }
-      );
+      const content = jsonl({
+        type: "user",
+        message: { id: "u1", content: "<local-command-caveat>some caveat</local-command-caveat>" },
+        timestamp: "2024-01-01T00:00:00Z",
+        cwd: "/tmp",
+      });
       (readFile as any).mockResolvedValue(content);
 
       const result = await loadTranscript("session-123", "/tmp");
@@ -711,21 +713,19 @@ describe("transcript module", () => {
 
     it("handles CLI XML stripping in assistant text blocks", async () => {
       (existsSync as any).mockReturnValue(true);
-      const content = jsonl(
-        {
-          type: "assistant",
-          message: {
-            id: "a1",
-            content: [
-              {
-                type: "text",
-                text: "before<local-command-stdout>command</local-command-stdout>after",
-              },
-            ],
-          },
-          timestamp: "2024-01-01T00:00:00Z",
-        }
-      );
+      const content = jsonl({
+        type: "assistant",
+        message: {
+          id: "a1",
+          content: [
+            {
+              type: "text",
+              text: "before<local-command-stdout>command</local-command-stdout>after",
+            },
+          ],
+        },
+        timestamp: "2024-01-01T00:00:00Z",
+      });
       (readFile as any).mockResolvedValue(content);
 
       const result = await loadTranscript("session-123", "/tmp");
@@ -735,16 +735,14 @@ describe("transcript module", () => {
 
     it("handles tool_use blocks without optional fields", async () => {
       (existsSync as any).mockReturnValue(true);
-      const content = jsonl(
-        {
-          type: "assistant",
-          message: {
-            id: "a1",
-            content: [{ type: "tool_use", input: {} }],
-          },
-          timestamp: "2024-01-01T00:00:00Z",
-        }
-      );
+      const content = jsonl({
+        type: "assistant",
+        message: {
+          id: "a1",
+          content: [{ type: "tool_use", input: {} }],
+        },
+        timestamp: "2024-01-01T00:00:00Z",
+      });
       (readFile as any).mockResolvedValue(content);
 
       const result = await loadTranscript("session-123", "/tmp");
@@ -757,15 +755,13 @@ describe("transcript module", () => {
 
     it("handles assistant messages without message ID", async () => {
       (existsSync as any).mockReturnValue(true);
-      const content = jsonl(
-        {
-          type: "assistant",
-          message: {
-            content: [{ type: "text", text: "hello" }],
-          },
-          timestamp: "2024-01-01T00:00:00Z",
-        }
-      );
+      const content = jsonl({
+        type: "assistant",
+        message: {
+          content: [{ type: "text", text: "hello" }],
+        },
+        timestamp: "2024-01-01T00:00:00Z",
+      });
       (readFile as any).mockResolvedValue(content);
 
       const result = await loadTranscript("session-123", "/tmp");
@@ -798,7 +794,7 @@ describe("transcript module", () => {
             },
           },
           timestamp: "2024-01-01T00:00:01Z",
-        }
+        },
       );
       (readFile as any).mockResolvedValue(content);
 
@@ -850,7 +846,7 @@ describe("transcript module", () => {
             },
           },
           timestamp: "2024-01-01T00:00:02Z",
-        }
+        },
       );
       (readFile as any).mockResolvedValue(content);
 
@@ -875,7 +871,7 @@ describe("transcript module", () => {
             content: [{ type: "text", text: "message 2" }],
           },
           timestamp: "2024-01-01T00:00:01Z",
-        }
+        },
       );
       (readFile as any).mockResolvedValue(content);
 
@@ -886,17 +882,15 @@ describe("transcript module", () => {
 
     it("extracts multiple text files from content", async () => {
       (existsSync as any).mockReturnValue(true);
-      const content = jsonl(
-        {
-          type: "user",
-          message: {
-            id: "u1",
-            content: '<file path="file1.txt">\ncontent1\n</file>\n<file path="file2.txt">\ncontent2\n</file>',
-          },
-          timestamp: "2024-01-01T00:00:00Z",
-          cwd: "/tmp",
-        }
-      );
+      const content = jsonl({
+        type: "user",
+        message: {
+          id: "u1",
+          content: '<file path="file1.txt">\ncontent1\n</file>\n<file path="file2.txt">\ncontent2\n</file>',
+        },
+        timestamp: "2024-01-01T00:00:00Z",
+        cwd: "/tmp",
+      });
       (readFile as any).mockResolvedValue(content);
 
       const result = await loadTranscript("session-123", "/tmp");
@@ -924,7 +918,7 @@ describe("transcript module", () => {
             usage: { input_tokens: 10 },
           },
           timestamp: "2024-01-01T00:00:00Z",
-        }
+        },
       );
       (readFile as any).mockResolvedValue(content);
 
@@ -946,9 +940,7 @@ describe("transcript module", () => {
     it("extracts usage from assistant message", async () => {
       const { loadLastUsage } = await import("@/server/transcript");
       (existsSync as any).mockReturnValue(true);
-      const content = jsonl(
-        { type: "assistant", message: { usage: { input_tokens: 1000 } } }
-      );
+      const content = jsonl({ type: "assistant", message: { usage: { input_tokens: 1000 } } });
       (readFile as any).mockResolvedValue(content);
 
       const result = await loadLastUsage("session-123", "/tmp");
@@ -960,7 +952,7 @@ describe("transcript module", () => {
       (existsSync as any).mockReturnValue(true);
       const content = jsonl(
         { type: "result", modelUsage: { "claude-3": { contextWindow: 100000 } } },
-        { type: "assistant", message: { usage: { input_tokens: 500, cache_read_input_tokens: 200 } } }
+        { type: "assistant", message: { usage: { input_tokens: 500, cache_read_input_tokens: 200 } } },
       );
       (readFile as any).mockResolvedValue(content);
 
@@ -971,9 +963,7 @@ describe("transcript module", () => {
     it("returns null when no assistant messages have usage", async () => {
       const { loadLastUsage } = await import("@/server/transcript");
       (existsSync as any).mockReturnValue(true);
-      const content = jsonl(
-        { type: "user", message: { content: "hello" } }
-      );
+      const content = jsonl({ type: "user", message: { content: "hello" } });
       (readFile as any).mockResolvedValue(content);
 
       const result = await loadLastUsage("session-123", "/tmp");
@@ -983,9 +973,10 @@ describe("transcript module", () => {
     it("includes cache_creation_input_tokens in usage calculation", async () => {
       const { loadLastUsage } = await import("@/server/transcript");
       (existsSync as any).mockReturnValue(true);
-      const content = jsonl(
-        { type: "assistant", message: { usage: { input_tokens: 100, cache_creation_input_tokens: 300, cache_read_input_tokens: 200 } } }
-      );
+      const content = jsonl({
+        type: "assistant",
+        message: { usage: { input_tokens: 100, cache_creation_input_tokens: 300, cache_read_input_tokens: 200 } },
+      });
       (readFile as any).mockResolvedValue(content);
 
       const result = await loadLastUsage("session-123", "/tmp");
@@ -1095,15 +1086,11 @@ describe("transcript module", () => {
       const { createInterface } = await import("node:readline");
 
       (existsSync as any).mockReturnValue(true);
-      (readdir as any)
-        .mockResolvedValueOnce(["project-a"])
-        .mockResolvedValueOnce(["sess1.jsonl", "sess2.jsonl", "other.txt"]);
+      (readdir as any).mockResolvedValueOnce(["project-a"]).mockResolvedValueOnce(["sess1.jsonl", "sess2.jsonl", "other.txt"]);
       (stat as any).mockResolvedValue({ mtimeMs: 2000 });
 
       const makeRl = (cwd: string, title: string) => {
-        const lines = [
-          JSON.stringify({ type: "user", cwd, message: { content: title }, timestamp: "2024-01-01T00:00:00Z" }),
-        ];
+        const lines = [JSON.stringify({ type: "user", cwd, message: { content: title }, timestamp: "2024-01-01T00:00:00Z" })];
         let i = 0;
         return {
           [Symbol.asyncIterator]: () => ({
@@ -1131,9 +1118,7 @@ describe("transcript module", () => {
     it("handles readdir failure for individual project dirs", async () => {
       const { scanAllSessions } = await import("@/server/transcript");
       (existsSync as any).mockReturnValue(true);
-      (readdir as any)
-        .mockResolvedValueOnce(["project-a"])
-        .mockRejectedValueOnce(new Error("permission denied"));
+      (readdir as any).mockResolvedValueOnce(["project-a"]).mockRejectedValueOnce(new Error("permission denied"));
 
       const result = await scanAllSessions();
       expect(result).toEqual([]);
@@ -1145,15 +1130,10 @@ describe("transcript module", () => {
       const { createInterface } = await import("node:readline");
 
       (existsSync as any).mockReturnValue(true);
-      (readdir as any)
-        .mockResolvedValueOnce(["proj-a", "proj-b"])
-        .mockResolvedValueOnce(["s1.jsonl"])
-        .mockResolvedValueOnce(["s2.jsonl"]);
+      (readdir as any).mockResolvedValueOnce(["proj-a", "proj-b"]).mockResolvedValueOnce(["s1.jsonl"]).mockResolvedValueOnce(["s2.jsonl"]);
 
       const makeRl = (cwd: string) => {
-        const lines = [
-          JSON.stringify({ type: "user", cwd, message: { content: "hi" }, timestamp: "2024-01-01T00:00:00Z" }),
-        ];
+        const lines = [JSON.stringify({ type: "user", cwd, message: { content: "hi" }, timestamp: "2024-01-01T00:00:00Z" })];
         let i = 0;
         return {
           [Symbol.asyncIterator]: () => ({
@@ -1167,12 +1147,8 @@ describe("transcript module", () => {
       };
 
       (createReadStream as any).mockReturnValue({});
-      (stat as any)
-        .mockResolvedValueOnce({ mtimeMs: 1000 })
-        .mockResolvedValueOnce({ mtimeMs: 3000 });
-      (createInterface as any)
-        .mockReturnValueOnce(makeRl("/tmp/old-project"))
-        .mockReturnValueOnce(makeRl("/tmp/new-project"));
+      (stat as any).mockResolvedValueOnce({ mtimeMs: 1000 }).mockResolvedValueOnce({ mtimeMs: 3000 });
+      (createInterface as any).mockReturnValueOnce(makeRl("/tmp/old-project")).mockReturnValueOnce(makeRl("/tmp/new-project"));
 
       const result = await scanAllSessions();
       expect(result).toHaveLength(2);
@@ -1186,9 +1162,7 @@ describe("transcript module", () => {
       const { createInterface } = await import("node:readline");
 
       (existsSync as any).mockReturnValue(true);
-      (readdir as any)
-        .mockResolvedValueOnce(["proj"])
-        .mockResolvedValueOnce(["s1.jsonl"]);
+      (readdir as any).mockResolvedValueOnce(["proj"]).mockResolvedValueOnce(["s1.jsonl"]);
       (stat as any).mockRejectedValue(new Error("stat failed"));
 
       const result = await scanAllSessions();
@@ -1199,14 +1173,12 @@ describe("transcript module", () => {
   describe("stripCommandXml edge cases", () => {
     it("extracts slash command from command-name tag (non-compact)", async () => {
       (existsSync as any).mockReturnValue(true);
-      const content = jsonl(
-        {
-          type: "user",
-          message: { id: "u1", content: "<command-name>/analyze</command-name>" },
-          timestamp: "2024-01-01T00:00:00Z",
-          cwd: "/tmp",
-        }
-      );
+      const content = jsonl({
+        type: "user",
+        message: { id: "u1", content: "<command-name>/analyze</command-name>" },
+        timestamp: "2024-01-01T00:00:00Z",
+        cwd: "/tmp",
+      });
       (readFile as any).mockResolvedValue(content);
 
       const result = await loadTranscript("session-123", "/tmp");
@@ -1217,14 +1189,12 @@ describe("transcript module", () => {
 
     it("suppresses /compact command from command-name tag", async () => {
       (existsSync as any).mockReturnValue(true);
-      const content = jsonl(
-        {
-          type: "user",
-          message: { id: "u1", content: "<command-name>/compact</command-name>" },
-          timestamp: "2024-01-01T00:00:00Z",
-          cwd: "/tmp",
-        }
-      );
+      const content = jsonl({
+        type: "user",
+        message: { id: "u1", content: "<command-name>/compact</command-name>" },
+        timestamp: "2024-01-01T00:00:00Z",
+        cwd: "/tmp",
+      });
       (readFile as any).mockResolvedValue(content);
 
       const result = await loadTranscript("session-123", "/tmp");
@@ -1234,14 +1204,12 @@ describe("transcript module", () => {
 
     it("strips local-command-stdout content from user messages", async () => {
       (existsSync as any).mockReturnValue(true);
-      const content = jsonl(
-        {
-          type: "user",
-          message: { id: "u1", content: "<local-command-stdout>output here</local-command-stdout>" },
-          timestamp: "2024-01-01T00:00:00Z",
-          cwd: "/tmp",
-        }
-      );
+      const content = jsonl({
+        type: "user",
+        message: { id: "u1", content: "<local-command-stdout>output here</local-command-stdout>" },
+        timestamp: "2024-01-01T00:00:00Z",
+        cwd: "/tmp",
+      });
       (readFile as any).mockResolvedValue(content);
 
       const result = await loadTranscript("session-123", "/tmp");
@@ -1253,22 +1221,20 @@ describe("transcript module", () => {
   describe("progress entries with missing parent", () => {
     it("skips progress entry when parent tool not found", async () => {
       (existsSync as any).mockReturnValue(true);
-      const content = jsonl(
-        {
-          type: "progress",
-          parentToolUseID: "nonexistent-tool",
-          data: {
+      const content = jsonl({
+        type: "progress",
+        parentToolUseID: "nonexistent-tool",
+        data: {
+          message: {
+            type: "assistant",
             message: {
-              type: "assistant",
-              message: {
-                role: "assistant",
-                content: [{ type: "tool_use", id: "child-tool", name: "Bash", input: {} }],
-              },
+              role: "assistant",
+              content: [{ type: "tool_use", id: "child-tool", name: "Bash", input: {} }],
             },
           },
-          timestamp: "2024-01-01T00:00:00Z",
-        }
-      );
+        },
+        timestamp: "2024-01-01T00:00:00Z",
+      });
       (readFile as any).mockResolvedValue(content);
 
       const result = await loadTranscript("session-123", "/tmp");
@@ -1289,7 +1255,7 @@ describe("transcript module", () => {
           parentToolUseID: "parent-tool",
           data: { message: { type: "assistant", message: { role: "assistant", content: "not-array" } } },
           timestamp: "2024-01-01T00:00:01Z",
-        }
+        },
       );
       (readFile as any).mockResolvedValue(content);
 
@@ -1303,19 +1269,15 @@ describe("transcript module", () => {
   describe("user content array with text and tool results", () => {
     it("creates user message when text present without tool results", async () => {
       (existsSync as any).mockReturnValue(true);
-      const content = jsonl(
-        {
-          type: "user",
-          message: {
-            id: "u1",
-            content: [
-              { type: "text", text: "Hello with context" },
-            ],
-          },
-          timestamp: "2024-01-01T00:00:00Z",
-          cwd: "/tmp",
-        }
-      );
+      const content = jsonl({
+        type: "user",
+        message: {
+          id: "u1",
+          content: [{ type: "text", text: "Hello with context" }],
+        },
+        timestamp: "2024-01-01T00:00:00Z",
+        cwd: "/tmp",
+      });
       (readFile as any).mockResolvedValue(content);
 
       const result = await loadTranscript("session-123", "/tmp");
@@ -1338,7 +1300,7 @@ describe("transcript module", () => {
             content: [{ type: "tool_result", tool_use_id: "t1", content: "output" }],
           },
           timestamp: "2024-01-01T00:00:01Z",
-        }
+        },
       );
       (readFile as any).mockResolvedValue(content);
 
@@ -1352,19 +1314,14 @@ describe("transcript module", () => {
   describe("thinking blocks edge cases", () => {
     it("skips thinking block with no thinking text and no signature", async () => {
       (existsSync as any).mockReturnValue(true);
-      const content = jsonl(
-        {
-          type: "assistant",
-          message: {
-            id: "a1",
-            content: [
-              { type: "thinking" },
-              { type: "text", text: "actual response" },
-            ],
-          },
-          timestamp: "2024-01-01T00:00:00Z",
-        }
-      );
+      const content = jsonl({
+        type: "assistant",
+        message: {
+          id: "a1",
+          content: [{ type: "thinking" }, { type: "text", text: "actual response" }],
+        },
+        timestamp: "2024-01-01T00:00:00Z",
+      });
       (readFile as any).mockResolvedValue(content);
 
       const result = await loadTranscript("session-123", "/tmp");
@@ -1397,7 +1354,7 @@ describe("transcript module", () => {
             ],
           },
           timestamp: "2024-01-01T00:00:01Z",
-        }
+        },
       );
       (readFile as any).mockResolvedValue(content);
 
@@ -1455,7 +1412,7 @@ describe("transcript module", () => {
             content: [{ type: "tool_result", tool_use_id: "t1", content: [] }],
           },
           timestamp: "2024-01-01T00:00:01Z",
-        }
+        },
       );
       (readFile as any).mockResolvedValue(content);
 
@@ -1478,7 +1435,7 @@ describe("transcript module", () => {
             content: [{ type: "tool_result", tool_use_id: "t1" }],
           },
           timestamp: "2024-01-01T00:00:01Z",
-        }
+        },
       );
       (readFile as any).mockResolvedValue(content);
 
@@ -1491,13 +1448,11 @@ describe("transcript module", () => {
   describe("assistant message with non-array content", () => {
     it("skips assistant message when content is string", async () => {
       (existsSync as any).mockReturnValue(true);
-      const content = jsonl(
-        {
-          type: "assistant",
-          message: { id: "a1", content: "string content" },
-          timestamp: "2024-01-01T00:00:00Z",
-        }
-      );
+      const content = jsonl({
+        type: "assistant",
+        message: { id: "a1", content: "string content" },
+        timestamp: "2024-01-01T00:00:00Z",
+      });
       (readFile as any).mockResolvedValue(content);
 
       const result = await loadTranscript("session-123", "/tmp");
@@ -1509,19 +1464,15 @@ describe("transcript module", () => {
   describe("text files extraction from array content", () => {
     it("extracts text files from array content user messages", async () => {
       (existsSync as any).mockReturnValue(true);
-      const content = jsonl(
-        {
-          type: "user",
-          message: {
-            id: "u1",
-            content: [
-              { type: "text", text: '<file path="data.json">\n{"key":"value"}\n</file>' },
-            ],
-          },
-          timestamp: "2024-01-01T00:00:00Z",
-          cwd: "/tmp",
-        }
-      );
+      const content = jsonl({
+        type: "user",
+        message: {
+          id: "u1",
+          content: [{ type: "text", text: '<file path="data.json">\n{"key":"value"}\n</file>' }],
+        },
+        timestamp: "2024-01-01T00:00:00Z",
+        cwd: "/tmp",
+      });
       (readFile as any).mockResolvedValue(content);
 
       const result = await loadTranscript("session-123", "/tmp");
@@ -1535,14 +1486,12 @@ describe("transcript module", () => {
   describe("local_command without content", () => {
     it("skips local_command system event without content", async () => {
       (existsSync as any).mockReturnValue(true);
-      const content = jsonl(
-        {
-          type: "system",
-          subtype: "local_command",
-          timestamp: "2024-01-01T00:00:00Z",
-          uuid: "sys-1",
-        }
-      );
+      const content = jsonl({
+        type: "system",
+        subtype: "local_command",
+        timestamp: "2024-01-01T00:00:00Z",
+        uuid: "sys-1",
+      });
       (readFile as any).mockResolvedValue(content);
 
       const result = await loadTranscript("session-123", "/tmp");
@@ -1665,7 +1614,7 @@ describe("transcript module", () => {
       (existsSync as any).mockReturnValue(true);
       const content = jsonl(
         { type: "result", modelUsage: { "claude-3": { contextWindow: 150000, inputTokens: 100 } } },
-        { type: "assistant", message: { usage: { input_tokens: 500, cache_creation_input_tokens: 100, cache_read_input_tokens: 50 } } }
+        { type: "assistant", message: { usage: { input_tokens: 500, cache_creation_input_tokens: 100, cache_read_input_tokens: 50 } } },
       );
       (readFile as any).mockResolvedValue(content);
 
@@ -1677,7 +1626,7 @@ describe("transcript module", () => {
       (existsSync as any).mockReturnValue(true);
       const content = jsonl(
         { type: "result", modelUsage: { "claude-3": { inputTokens: 100 } } },
-        { type: "assistant", message: { usage: { input_tokens: 200 } } }
+        { type: "assistant", message: { usage: { input_tokens: 200 } } },
       );
       (readFile as any).mockResolvedValue(content);
 
@@ -1687,9 +1636,7 @@ describe("transcript module", () => {
 
     it("returns null when no assistant message with usage", async () => {
       (existsSync as any).mockReturnValue(true);
-      const content = jsonl(
-        { type: "user", message: { content: "hello" } }
-      );
+      const content = jsonl({ type: "user", message: { content: "hello" } });
       (readFile as any).mockResolvedValue(content);
 
       const result = await loadLastUsage("session-123", "/tmp");
@@ -1714,14 +1661,10 @@ describe("transcript module", () => {
     it("scans sessions from project directories", async () => {
       (existsSync as any).mockReturnValue(true);
       const { createInterface } = await import("node:readline");
-      (readdir as any)
-        .mockResolvedValueOnce(["project1"])
-        .mockResolvedValueOnce(["sess1.jsonl"]);
+      (readdir as any).mockResolvedValueOnce(["project1"]).mockResolvedValueOnce(["sess1.jsonl"]);
       (stat as any).mockResolvedValue({ mtimeMs: 1700000000000 });
 
-      const lines = [
-        JSON.stringify({ type: "user", cwd: "/home/test", message: { content: "hello" }, timestamp: "2024-01-01T00:00:00Z" }),
-      ];
+      const lines = [JSON.stringify({ type: "user", cwd: "/home/test", message: { content: "hello" }, timestamp: "2024-01-01T00:00:00Z" })];
 
       const mockRl = {
         [Symbol.asyncIterator]: async function* () {
@@ -1740,9 +1683,7 @@ describe("transcript module", () => {
     it("skips sessions without cwd", async () => {
       (existsSync as any).mockReturnValue(true);
       const { createInterface } = await import("node:readline");
-      (readdir as any)
-        .mockResolvedValueOnce(["project1"])
-        .mockResolvedValueOnce(["sess1.jsonl"]);
+      (readdir as any).mockResolvedValueOnce(["project1"]).mockResolvedValueOnce(["sess1.jsonl"]);
       (stat as any).mockResolvedValue({ mtimeMs: 1700000000000 });
 
       const mockRl = {
@@ -1766,9 +1707,7 @@ describe("transcript module", () => {
     });
 
     it("returns null when readdir fails", async () => {
-      (existsSync as any)
-        .mockReturnValueOnce(true)
-        .mockReturnValue(false);
+      (existsSync as any).mockReturnValueOnce(true).mockReturnValue(false);
       (readdir as any).mockRejectedValue(new Error("EACCES"));
       const result = await findSessionCwd("session-123");
       expect(result).toBeNull();
@@ -1797,9 +1736,7 @@ describe("transcript module", () => {
     it("extracts title from array content in user message", async () => {
       (existsSync as any).mockReturnValue(true);
       const { createInterface } = await import("node:readline");
-      (readdir as any)
-        .mockResolvedValueOnce(["project1"])
-        .mockResolvedValueOnce(["sess1.jsonl"]);
+      (readdir as any).mockResolvedValueOnce(["project1"]).mockResolvedValueOnce(["sess1.jsonl"]);
       (stat as any).mockResolvedValue({ mtimeMs: 1700000000000 });
 
       const mockRl = {
@@ -1823,9 +1760,7 @@ describe("transcript module", () => {
     it("skips system-generated messages starting with [", async () => {
       (existsSync as any).mockReturnValue(true);
       const { createInterface } = await import("node:readline");
-      (readdir as any)
-        .mockResolvedValueOnce(["project1"])
-        .mockResolvedValueOnce(["sess1.jsonl"]);
+      (readdir as any).mockResolvedValueOnce(["project1"]).mockResolvedValueOnce(["sess1.jsonl"]);
       (stat as any).mockResolvedValue({ mtimeMs: 1700000000000 });
 
       const mockRl = {
@@ -1849,9 +1784,7 @@ describe("transcript module", () => {
     it("uses Untitled session when no title found", async () => {
       (existsSync as any).mockReturnValue(true);
       const { createInterface } = await import("node:readline");
-      (readdir as any)
-        .mockResolvedValueOnce(["project1"])
-        .mockResolvedValueOnce(["sess1.jsonl"]);
+      (readdir as any).mockResolvedValueOnce(["project1"]).mockResolvedValueOnce(["sess1.jsonl"]);
       (stat as any).mockResolvedValue({ mtimeMs: 1700000000000 });
 
       const mockRl = {
@@ -1874,9 +1807,7 @@ describe("transcript module", () => {
     it("uses lastActiveAt when no createdAt timestamp", async () => {
       (existsSync as any).mockReturnValue(true);
       const { createInterface } = await import("node:readline");
-      (readdir as any)
-        .mockResolvedValueOnce(["project1"])
-        .mockResolvedValueOnce(["sess1.jsonl"]);
+      (readdir as any).mockResolvedValueOnce(["project1"]).mockResolvedValueOnce(["sess1.jsonl"]);
       (stat as any).mockResolvedValue({ mtimeMs: 1700000000000 });
 
       const mockRl = {
@@ -1897,9 +1828,7 @@ describe("transcript module", () => {
 
     it("handles stat errors gracefully", async () => {
       (existsSync as any).mockReturnValue(true);
-      (readdir as any)
-        .mockResolvedValueOnce(["project1"])
-        .mockResolvedValueOnce(["sess1.jsonl"]);
+      (readdir as any).mockResolvedValueOnce(["project1"]).mockResolvedValueOnce(["sess1.jsonl"]);
       (stat as any).mockRejectedValue(new Error("ENOENT"));
 
       const result = await scanAllSessions();
@@ -1936,9 +1865,7 @@ describe("transcript module", () => {
         type: "user",
         message: {
           id: "u1",
-          content: [
-            { type: "tool_result", tool_use_id: "t1", content: "result" },
-          ],
+          content: [{ type: "tool_result", tool_use_id: "t1", content: "result" }],
         },
         timestamp: "2024-01-01T00:00:00Z",
       });
@@ -1999,7 +1926,11 @@ describe("transcript module", () => {
       const content = jsonl(
         { type: "user", message: { id: "u1", content: "hello" }, timestamp: "2024-01-01T00:00:00Z" },
         { type: "result", modelUsage: { "claude-3": { contextWindow: 150000, inputTokens: 100 } } },
-        { type: "assistant", message: { id: "a1", content: [{ type: "text", text: "hi" }], usage: { input_tokens: 100 } }, timestamp: "2024-01-01T00:00:01Z" }
+        {
+          type: "assistant",
+          message: { id: "a1", content: [{ type: "text", text: "hi" }], usage: { input_tokens: 100 } },
+          timestamp: "2024-01-01T00:00:01Z",
+        },
       );
       (readFile as any).mockResolvedValue(content);
 

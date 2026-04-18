@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { stripLineNumbers, highlightCode } from "@/lib/code-highlight";
+import { useEffect, useState } from "react";
+import { highlightCode, stripLineNumbers } from "@/lib/code-highlight";
 
 export { languageFromPath } from "@/lib/code-highlight";
 
@@ -32,7 +32,7 @@ export function CodeBlock({ code, language, dark, fullHeight }: CodeBlockProps) 
   const { code: strippedCode, startLine } = stripLineNumbers(code);
   const theme = dark ? "github-dark" : "github-light";
   const key = language ? cacheKey(strippedCode, language, theme) : "";
-  const [html, setHtml] = useState<string | null>(language ? htmlCache.get(key) ?? null : null);
+  const [html, setHtml] = useState<string | null>(language ? (htmlCache.get(key) ?? null) : null);
 
   useEffect(() => {
     if (!language) {

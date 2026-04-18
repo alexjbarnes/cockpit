@@ -1,7 +1,7 @@
 "use client";
 
+import { Pencil, Play, Trash2, X } from "lucide-react";
 import { useEffect } from "react";
-import { Pencil, Trash2, Play, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 interface QueueModalProps {
@@ -14,18 +14,12 @@ interface QueueModalProps {
   onResume: () => void;
 }
 
-export function QueueModal({
-  open,
-  onOpenChange,
-  messages,
-  paused,
-  onDelete,
-  onEdit,
-  onResume,
-}: QueueModalProps) {
+export function QueueModal({ open, onOpenChange, messages, paused, onDelete, onEdit, onResume }: QueueModalProps) {
   useEffect(() => {
     if (!open) return;
-    const h = (e: KeyboardEvent) => { if (e.key === "Escape") onOpenChange(false); };
+    const h = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onOpenChange(false);
+    };
     window.addEventListener("keydown", h);
     return () => window.removeEventListener("keydown", h);
   }, [open, onOpenChange]);
@@ -48,19 +42,12 @@ export function QueueModal({
         </div>
 
         {messages.length === 0 ? (
-          <p className="text-sm text-muted-foreground py-4 text-center">
-            No queued messages
-          </p>
+          <p className="text-sm text-muted-foreground py-4 text-center">No queued messages</p>
         ) : (
           <div className="space-y-2 max-h-64 overflow-y-auto">
             {messages.map((msg, i) => (
-              <div
-                key={msg.id}
-                className="flex items-start gap-3 rounded-md border border-border px-3 py-2.5"
-              >
-                <span className="text-xs text-muted-foreground mt-0.5 shrink-0">
-                  {i + 1}.
-                </span>
+              <div key={msg.id} className="flex items-start gap-3 rounded-md border border-border px-3 py-2.5">
+                <span className="text-xs text-muted-foreground mt-0.5 shrink-0">{i + 1}.</span>
                 <div className="min-w-0 flex-1">
                   <p className="text-sm break-words line-clamp-3">{msg.text}</p>
                   <span className={`text-[10px] mt-0.5 inline-block ${paused ? "text-yellow-500" : "text-muted-foreground"}`}>

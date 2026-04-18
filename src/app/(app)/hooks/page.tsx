@@ -2,8 +2,8 @@
 
 import { useRouter } from "next/navigation";
 import { usePageHeader } from "@/components/app-shell";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useHooks } from "@/hooks/use-hooks";
 
 const SCOPE_LABELS: Record<string, string> = {
@@ -12,20 +12,12 @@ const SCOPE_LABELS: Record<string, string> = {
   "project-local": "Local",
 };
 
-const BLOCKING_EVENTS = new Set([
-  "UserPromptSubmit",
-  "PreToolUse",
-  "PermissionRequest",
-  "Stop",
-  "SubagentStop",
-]);
+const BLOCKING_EVENTS = new Set(["UserPromptSubmit", "PreToolUse", "PermissionRequest", "Stop", "SubagentStop"]);
 
 export default function HooksPage() {
   usePageHeader("Hooks");
 
-  const cwd = typeof localStorage !== "undefined"
-    ? localStorage.getItem("cockpit-agents-cwd") || undefined
-    : undefined;
+  const cwd = typeof localStorage !== "undefined" ? localStorage.getItem("cockpit-agents-cwd") || undefined : undefined;
 
   const { hooks, loading } = useHooks(cwd);
   const router = useRouter();
@@ -87,7 +79,9 @@ export default function HooksPage() {
                   <div className="flex items-center gap-2">
                     <span className="font-mono font-bold text-sm">{item.event}</span>
                     {BLOCKING_EVENTS.has(item.event) && (
-                      <Badge variant="outline" className="text-[10px]">can block</Badge>
+                      <Badge variant="outline" className="text-[10px]">
+                        can block
+                      </Badge>
                     )}
                   </div>
                   <p className="text-xs text-muted-foreground mt-0.5">

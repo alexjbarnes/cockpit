@@ -28,11 +28,7 @@ export const viewport: Viewport = {
   ],
 };
 
-export default function RootLayout({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
+export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" className="h-full overflow-hidden" suppressHydrationWarning>
       <body className="h-full overflow-hidden bg-background font-sans antialiased">

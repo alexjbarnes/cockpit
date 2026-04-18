@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { slashCommands, type SlashCommand } from "@/lib/commands";
+import { type SlashCommand, slashCommands } from "@/lib/commands";
 
 // Commands handled client-side by Cockpit, always included
 const cockpitCommands: SlashCommand[] = [
@@ -18,14 +18,7 @@ interface SlashCommandMenuProps {
   initCommands?: string[];
 }
 
-export function SlashCommandMenu({
-  query,
-  selectedIndex,
-  onSelect,
-  cwd,
-  onItemsChange,
-  initCommands,
-}: SlashCommandMenuProps) {
+export function SlashCommandMenu({ query, selectedIndex, onSelect, cwd, onItemsChange, initCommands }: SlashCommandMenuProps) {
   const listRef = useRef<HTMLDivElement>(null);
   const [custom, setCustom] = useState<SlashCommand[]>([]);
 
@@ -78,17 +71,11 @@ export function SlashCommandMenu({
           return builtinMap.get(cmd) || { command: cmd, description: "" };
         });
         const initNames = new Set(fromInit.map((c) => c.command));
-        return [
-          ...fromInit,
-          ...slashCommands.filter((c) => !initNames.has(c.command)),
-        ];
+        return [...fromInit, ...slashCommands.filter((c) => !initNames.has(c.command))];
       })()
     : (() => {
         const builtinNames = new Set(slashCommands.map((c) => c.command));
-        return [
-          ...slashCommands,
-          ...custom.filter((s) => !builtinNames.has(s.command)),
-        ];
+        return [...slashCommands, ...custom.filter((s) => !builtinNames.has(s.command))];
       })();
 
   // Always include Cockpit-local commands, dedup by command name
@@ -101,13 +88,11 @@ export function SlashCommandMenu({
     }
   }
 
-  const filtered = allCommands.filter((cmd) =>
-    cmd.command.startsWith("/" + query)
-  );
+  const filtered = allCommands.filter((cmd) => cmd.command.startsWith("/" + query));
 
   useEffect(() => {
     onItemsChange?.(filtered);
-  }, [filtered.length, onItemsChange]);
+  }, [filtered.length, onItemsChange, filtered]);
 
   useEffect(() => {
     const el = listRef.current;
@@ -136,9 +121,7 @@ export function SlashCommandMenu({
           }}
         >
           <span className="font-mono font-bold shrink-0">{cmd.command}</span>
-          <span className="text-muted-foreground truncate">
-            {cmd.description}
-          </span>
+          <span className="text-muted-foreground truncate">{cmd.description}</span>
         </button>
       ))}
     </div>

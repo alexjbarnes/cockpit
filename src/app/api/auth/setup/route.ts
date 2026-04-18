@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { needsSetup, setupPassword, createSession, isAuthDisabled } from "@/server/auth";
+import { createSession, isAuthDisabled, needsSetup, setupPassword } from "@/server/auth";
 
 export async function POST(req: NextRequest) {
   if (isAuthDisabled()) {

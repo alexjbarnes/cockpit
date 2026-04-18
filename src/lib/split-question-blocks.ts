@@ -15,9 +15,7 @@ export interface SplitResult {
  * Additional AskUserQuestion blocks in `after` are filtered out.
  */
 export function splitAtQuestion(blocks: ContentBlock[]): SplitResult {
-  const qIdx = blocks.findIndex(
-    (b) => b.type === "tool_use" && b.toolUse.name === "AskUserQuestion"
-  );
+  const qIdx = blocks.findIndex((b) => b.type === "tool_use" && b.toolUse.name === "AskUserQuestion");
 
   if (qIdx < 0) {
     return { before: blocks, questionBlock: null, after: [] };
@@ -28,8 +26,6 @@ export function splitAtQuestion(blocks: ContentBlock[]): SplitResult {
   return {
     before: blocks.slice(0, qIdx),
     questionBlock,
-    after: blocks.slice(qIdx + 1).filter(
-      (b) => !(b.type === "tool_use" && b.toolUse.name === "AskUserQuestion")
-    ),
+    after: blocks.slice(qIdx + 1).filter((b) => !(b.type === "tool_use" && b.toolUse.name === "AskUserQuestion")),
   };
 }

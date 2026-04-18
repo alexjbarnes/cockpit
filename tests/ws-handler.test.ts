@@ -1,6 +1,6 @@
-import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from "vitest";
 import { EventEmitter } from "node:events";
 import { createServer, type Server } from "node:http";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 
 vi.mock("node:child_process", () => ({
@@ -17,10 +17,10 @@ vi.mock("node:child_process", () => ({
   }),
 }));
 
-import { createWebSocketHandler } from "@/server/ws-handler";
-import { SessionManager } from "@/server/session-manager";
-import { setupPassword, createSession as createAuthSession } from "@/server/auth";
+import { createSession as createAuthSession, setupPassword } from "@/server/auth";
 import type { ParsedEvent } from "@/server/event-parser";
+import { SessionManager } from "@/server/session-manager";
+import { createWebSocketHandler } from "@/server/ws-handler";
 
 // Auth is enabled (default) so we can test rejection and acceptance
 beforeAll(async () => {
@@ -46,7 +46,7 @@ describe("WebSocket handler", () => {
           port = typeof addr === "object" && addr ? addr.port : 0;
           resolve();
         });
-      })
+      }),
   );
 
   afterAll(() => {
@@ -58,9 +58,7 @@ describe("WebSocket handler", () => {
 
   function connectWs(): Promise<WebSocket> {
     return new Promise((resolve, reject) => {
-      const ws = new WebSocket(
-        `ws://localhost:${port}/ws?token=${validToken}`
-      );
+      const ws = new WebSocket(`ws://localhost:${port}/ws?token=${validToken}`);
       ws.on("open", () => resolve(ws));
       ws.on("error", reject);
     });
@@ -92,7 +90,7 @@ describe("WebSocket handler", () => {
 
   it("rejects connection without token", async () => {
     const ws = new WebSocket(`ws://localhost:${port}/ws`);
-    const code = await new Promise<number>((resolve) => {
+    const _code = await new Promise<number>((resolve) => {
       ws.on("close", (c) => resolve(c));
       ws.on("error", () => {});
     });
@@ -124,9 +122,7 @@ describe("WebSocket handler", () => {
 
   it("sends error for unknown session on connect", async () => {
     const ws = await connectWs();
-    ws.send(
-      JSON.stringify({ type: "session:connect", sessionId: "nonexistent" })
-    );
+    ws.send(JSON.stringify({ type: "session:connect", sessionId: "nonexistent" }));
     const msg = await readMessage(ws);
     expect(msg.type).toBe("session:error");
     expect(msg.error).toContain("not found");
@@ -145,9 +141,7 @@ describe("WebSocket handler", () => {
       });
     });
 
-    ws.send(
-      JSON.stringify({ type: "session:connect", sessionId: session.id })
-    );
+    ws.send(JSON.stringify({ type: "session:connect", sessionId: session.id }));
 
     await collected;
 
@@ -171,18 +165,16 @@ describe("WebSocket handler", () => {
       const ws = await connectWs();
 
       // Connect to the session and collect initial messages
-      ws.send(
-        JSON.stringify({ type: "session:connect", sessionId: session.id })
-      );
+      ws.send(JSON.stringify({ type: "session:connect", sessionId: session.id }));
 
       // Skip the initial connection messages
       await readMessages(ws, 5);
 
       // Create a subscription to verify event types are handled
-      let eventReceived = false;
+      let _eventReceived = false;
       const unsubscribe = manager.subscribe(session.id, (event: ParsedEvent) => {
         if (event.type === "text_delta" && event.text) {
-          eventReceived = true;
+          _eventReceived = true;
         }
       });
 
@@ -197,9 +189,7 @@ describe("WebSocket handler", () => {
       const session = manager.createSession("/tmp");
       const ws = await connectWs();
 
-      ws.send(
-        JSON.stringify({ type: "session:connect", sessionId: session.id })
-      );
+      ws.send(JSON.stringify({ type: "session:connect", sessionId: session.id }));
 
       // Collect initial messages
       await readMessages(ws, 3);
@@ -217,9 +207,7 @@ describe("WebSocket handler", () => {
       const session = manager.createSession("/tmp");
       const ws = await connectWs();
 
-      ws.send(
-        JSON.stringify({ type: "session:connect", sessionId: session.id })
-      );
+      ws.send(JSON.stringify({ type: "session:connect", sessionId: session.id }));
 
       // Collect initial connection messages
       await readMessages(ws, 3);
@@ -238,9 +226,7 @@ describe("WebSocket handler", () => {
       const session = manager.createSession("/tmp");
       const ws = await connectWs();
 
-      ws.send(
-        JSON.stringify({ type: "session:connect", sessionId: session.id })
-      );
+      ws.send(JSON.stringify({ type: "session:connect", sessionId: session.id }));
 
       await readMessages(ws, 3);
 
@@ -258,9 +244,7 @@ describe("WebSocket handler", () => {
       const session = manager.createSession("/tmp");
       const ws = await connectWs();
 
-      ws.send(
-        JSON.stringify({ type: "session:connect", sessionId: session.id })
-      );
+      ws.send(JSON.stringify({ type: "session:connect", sessionId: session.id }));
 
       await readMessages(ws, 3);
 
@@ -279,9 +263,7 @@ describe("WebSocket handler", () => {
       const session = manager.createSession("/tmp");
       const ws = await connectWs();
 
-      ws.send(
-        JSON.stringify({ type: "session:connect", sessionId: session.id })
-      );
+      ws.send(JSON.stringify({ type: "session:connect", sessionId: session.id }));
 
       // Collect initial messages including session:init if present
       const messages = await readMessages(ws, 5);
@@ -300,9 +282,7 @@ describe("WebSocket handler", () => {
       const session = manager.createSession("/tmp");
       const ws = await connectWs();
 
-      ws.send(
-        JSON.stringify({ type: "session:connect", sessionId: session.id })
-      );
+      ws.send(JSON.stringify({ type: "session:connect", sessionId: session.id }));
 
       await readMessages(ws, 3);
 
@@ -320,9 +300,7 @@ describe("WebSocket handler", () => {
       const session = manager.createSession("/tmp");
       const ws = await connectWs();
 
-      ws.send(
-        JSON.stringify({ type: "session:connect", sessionId: session.id })
-      );
+      ws.send(JSON.stringify({ type: "session:connect", sessionId: session.id }));
 
       await readMessages(ws, 3);
 
@@ -340,9 +318,7 @@ describe("WebSocket handler", () => {
       const session = manager.createSession("/tmp");
       const ws = await connectWs();
 
-      ws.send(
-        JSON.stringify({ type: "session:connect", sessionId: session.id })
-      );
+      ws.send(JSON.stringify({ type: "session:connect", sessionId: session.id }));
 
       await readMessages(ws, 3);
 
@@ -360,9 +336,7 @@ describe("WebSocket handler", () => {
       const session = manager.createSession("/tmp");
       const ws = await connectWs();
 
-      ws.send(
-        JSON.stringify({ type: "session:connect", sessionId: session.id })
-      );
+      ws.send(JSON.stringify({ type: "session:connect", sessionId: session.id }));
 
       await readMessages(ws, 3);
 
@@ -380,9 +354,7 @@ describe("WebSocket handler", () => {
       const session = manager.createSession("/tmp");
       const ws = await connectWs();
 
-      ws.send(
-        JSON.stringify({ type: "session:connect", sessionId: session.id })
-      );
+      ws.send(JSON.stringify({ type: "session:connect", sessionId: session.id }));
 
       await readMessages(ws, 3);
 
@@ -400,9 +372,7 @@ describe("WebSocket handler", () => {
       const session = manager.createSession("/tmp");
       const ws = await connectWs();
 
-      ws.send(
-        JSON.stringify({ type: "session:connect", sessionId: session.id })
-      );
+      ws.send(JSON.stringify({ type: "session:connect", sessionId: session.id }));
 
       await readMessages(ws, 3);
 
@@ -422,9 +392,7 @@ describe("WebSocket handler", () => {
       const session = manager.createSession("/tmp");
       const ws = await connectWs();
 
-      ws.send(
-        JSON.stringify({ type: "session:connect", sessionId: session.id })
-      );
+      ws.send(JSON.stringify({ type: "session:connect", sessionId: session.id }));
 
       await readMessages(ws, 3);
 
@@ -444,9 +412,7 @@ describe("WebSocket handler", () => {
       const session = manager.createSession("/tmp");
       const ws = await connectWs();
 
-      ws.send(
-        JSON.stringify({ type: "session:connect", sessionId: session.id })
-      );
+      ws.send(JSON.stringify({ type: "session:connect", sessionId: session.id }));
 
       await readMessages(ws, 3);
 
@@ -468,9 +434,7 @@ describe("WebSocket handler", () => {
 
       expect(ws.readyState).toBe(WebSocket.OPEN);
 
-      ws.send(
-        JSON.stringify({ type: "session:connect", sessionId: session.id })
-      );
+      ws.send(JSON.stringify({ type: "session:connect", sessionId: session.id }));
 
       const msg = await readMessage(ws);
       expect(msg).toBeDefined();
@@ -487,9 +451,7 @@ describe("WebSocket handler", () => {
       const session = manager.createSession("/tmp");
       const ws = await connectWs();
 
-      ws.send(
-        JSON.stringify({ type: "session:connect", sessionId: session.id })
-      );
+      ws.send(JSON.stringify({ type: "session:connect", sessionId: session.id }));
 
       await readMessages(ws, 3);
 
@@ -505,9 +467,7 @@ describe("WebSocket handler", () => {
       const session = manager.createSession("/tmp");
       const ws = await connectWs();
 
-      ws.send(
-        JSON.stringify({ type: "session:connect", sessionId: session.id })
-      );
+      ws.send(JSON.stringify({ type: "session:connect", sessionId: session.id }));
 
       const messages = await readMessages(ws, 3);
       expect(messages.length).toBeGreaterThanOrEqual(3);
@@ -519,9 +479,7 @@ describe("WebSocket handler", () => {
       const session = manager.createSession("/tmp");
       const ws = await connectWs();
 
-      ws.send(
-        JSON.stringify({ type: "session:connect", sessionId: session.id })
-      );
+      ws.send(JSON.stringify({ type: "session:connect", sessionId: session.id }));
 
       await readMessages(ws, 3);
 
@@ -540,9 +498,7 @@ describe("WebSocket handler", () => {
       const session = manager.createSession("/tmp");
       const ws = await connectWs();
 
-      ws.send(
-        JSON.stringify({ type: "session:connect", sessionId: session.id })
-      );
+      ws.send(JSON.stringify({ type: "session:connect", sessionId: session.id }));
 
       await readMessages(ws, 3);
 
@@ -561,9 +517,7 @@ describe("WebSocket handler", () => {
       const session = manager.createSession("/tmp");
       const ws = await connectWs();
 
-      ws.send(
-        JSON.stringify({ type: "session:connect", sessionId: session.id })
-      );
+      ws.send(JSON.stringify({ type: "session:connect", sessionId: session.id }));
 
       await readMessages(ws, 3);
 
@@ -581,9 +535,7 @@ describe("WebSocket handler", () => {
       const session = manager.createSession("/tmp");
       const ws = await connectWs();
 
-      ws.send(
-        JSON.stringify({ type: "session:connect", sessionId: session.id })
-      );
+      ws.send(JSON.stringify({ type: "session:connect", sessionId: session.id }));
 
       await readMessages(ws, 3);
 
@@ -601,9 +553,7 @@ describe("WebSocket handler", () => {
       const session = manager.createSession("/tmp");
       const ws = await connectWs();
 
-      ws.send(
-        JSON.stringify({ type: "session:connect", sessionId: session.id })
-      );
+      ws.send(JSON.stringify({ type: "session:connect", sessionId: session.id }));
 
       await readMessages(ws, 3);
 
@@ -811,18 +761,22 @@ describe("WebSocket handler", () => {
       const ws = await connectWs();
       await new Promise((resolve) => setTimeout(resolve, 50));
 
-      ws.send(JSON.stringify({
-        type: "session:connect",
-        sessionId: session.id,
-      }));
+      ws.send(
+        JSON.stringify({
+          type: "session:connect",
+          sessionId: session.id,
+        }),
+      );
       await readMessages(ws, 5);
 
-      ws.send(JSON.stringify({
-        type: "permission:response",
-        sessionId: session.id,
-        requestId: "req-1",
-        allowed: true,
-      }));
+      ws.send(
+        JSON.stringify({
+          type: "permission:response",
+          sessionId: session.id,
+          requestId: "req-1",
+          allowed: true,
+        }),
+      );
       await new Promise((resolve) => setTimeout(resolve, 50));
 
       ws.close();
@@ -833,18 +787,22 @@ describe("WebSocket handler", () => {
       const ws = await connectWs();
       await new Promise((resolve) => setTimeout(resolve, 50));
 
-      ws.send(JSON.stringify({
-        type: "session:connect",
-        sessionId: session.id,
-      }));
+      ws.send(
+        JSON.stringify({
+          type: "session:connect",
+          sessionId: session.id,
+        }),
+      );
       await readMessages(ws, 5);
 
-      ws.send(JSON.stringify({
-        type: "question:response",
-        sessionId: session.id,
-        requestId: "req-1",
-        answers: ["yes"],
-      }));
+      ws.send(
+        JSON.stringify({
+          type: "question:response",
+          sessionId: session.id,
+          requestId: "req-1",
+          answers: ["yes"],
+        }),
+      );
       await new Promise((resolve) => setTimeout(resolve, 50));
 
       ws.close();
@@ -854,11 +812,13 @@ describe("WebSocket handler", () => {
       const session = manager.createSession("/tmp");
       const ws = await connectWs();
 
-      ws.send(JSON.stringify({
-        type: "session:connect",
-        sessionId: session.id,
-        lastMessageId: "nonexistent-id",
-      }));
+      ws.send(
+        JSON.stringify({
+          type: "session:connect",
+          sessionId: session.id,
+          lastMessageId: "nonexistent-id",
+        }),
+      );
 
       const msgs = await readMessages(ws, 5);
       const historyMsg = msgs.find((m) => m.type === "history");
@@ -1268,11 +1228,13 @@ describe("WebSocket handler", () => {
       const ws = await connectWs();
       await waitForConnect3(ws, session.id);
 
-      ws.send(JSON.stringify({
-        type: "history:request_more",
-        sessionId: session.id,
-        beforeMessageId: "msg-1",
-      }));
+      ws.send(
+        JSON.stringify({
+          type: "history:request_more",
+          sessionId: session.id,
+          beforeMessageId: "msg-1",
+        }),
+      );
       const msg = await readMessage(ws);
       expect(msg.type).toBe("history:more");
       expect(msg.sessionId).toBe(session.id);
@@ -1287,10 +1249,12 @@ describe("WebSocket handler", () => {
       const session = manager.createSession("/tmp");
       const ws = await connectWs();
 
-      ws.send(JSON.stringify({
-        type: "session:subscribe",
-        sessionIds: [session.id],
-      }));
+      ws.send(
+        JSON.stringify({
+          type: "session:subscribe",
+          sessionIds: [session.id],
+        }),
+      );
       await new Promise((r) => setTimeout(r, 50));
 
       const sessions = (manager as any).sessions as Map<string, any>;
@@ -1327,11 +1291,13 @@ describe("WebSocket handler", () => {
       const ws = await connectWs();
       await waitForConnect(ws, session.id);
 
-      ws.send(JSON.stringify({
-        type: "message:send",
-        sessionId: session.id,
-        text: "hello",
-      }));
+      ws.send(
+        JSON.stringify({
+          type: "message:send",
+          sessionId: session.id,
+          text: "hello",
+        }),
+      );
       const msg = await readMessage(ws);
       expect(msg.type).toBe("message:ack");
       expect(msg.sessionId).toBe(session.id);
@@ -1359,10 +1325,12 @@ describe("WebSocket handler", () => {
       const ws = await connectWs();
       await waitForConnect(ws, session.id);
 
-      ws.send(JSON.stringify({
-        type: "message:cancel_queued",
-        sessionId: session.id,
-      }));
+      ws.send(
+        JSON.stringify({
+          type: "message:cancel_queued",
+          sessionId: session.id,
+        }),
+      );
       const msg = await readMessage(ws);
       expect(msg.type).toBe("session:queued");
       expect(msg.sessionId).toBe(session.id);
@@ -1390,10 +1358,12 @@ describe("WebSocket handler", () => {
       const ws = await connectWs();
       await waitForConnect(ws, session.id);
 
-      ws.send(JSON.stringify({
-        type: "message:pause_queue",
-        sessionId: session.id,
-      }));
+      ws.send(
+        JSON.stringify({
+          type: "message:pause_queue",
+          sessionId: session.id,
+        }),
+      );
       const msg = await readMessage(ws);
       expect(msg.type).toBe("session:queued");
       expect(msg.paused).toBe(true);
@@ -1406,10 +1376,12 @@ describe("WebSocket handler", () => {
       await waitForConnect(ws, session.id);
 
       manager.pauseQueue(session.id);
-      ws.send(JSON.stringify({
-        type: "message:resume_queue",
-        sessionId: session.id,
-      }));
+      ws.send(
+        JSON.stringify({
+          type: "message:resume_queue",
+          sessionId: session.id,
+        }),
+      );
       const msg = await readMessage(ws);
       expect(msg.type).toBe("session:queued");
       expect(msg.paused).toBe(false);
@@ -1437,11 +1409,13 @@ describe("WebSocket handler", () => {
       const ws = await connectWs();
       await waitForConnect(ws, session.id);
 
-      ws.send(JSON.stringify({
-        type: "message:delete_queued",
-        sessionId: session.id,
-        messageId: "nonexistent",
-      }));
+      ws.send(
+        JSON.stringify({
+          type: "message:delete_queued",
+          sessionId: session.id,
+          messageId: "nonexistent",
+        }),
+      );
       const msg = await readMessage(ws);
       expect(msg.type).toBe("session:queued");
       ws.close();
@@ -1452,11 +1426,13 @@ describe("WebSocket handler", () => {
       const ws = await connectWs();
       await waitForConnect(ws, session.id);
 
-      ws.send(JSON.stringify({
-        type: "message:edit_queued",
-        sessionId: session.id,
-        messageId: "nonexistent",
-      }));
+      ws.send(
+        JSON.stringify({
+          type: "message:edit_queued",
+          sessionId: session.id,
+          messageId: "nonexistent",
+        }),
+      );
       const msg = await readMessage(ws);
       expect(msg.type).toBe("session:queued");
       ws.close();
@@ -1483,10 +1459,12 @@ describe("WebSocket handler", () => {
       const ws = await connectWs();
       await waitForConnect(ws, session.id);
 
-      ws.send(JSON.stringify({
-        type: "session:interrupt",
-        sessionId: session.id,
-      }));
+      ws.send(
+        JSON.stringify({
+          type: "session:interrupt",
+          sessionId: session.id,
+        }),
+      );
       // Interrupt doesn't send a response directly, just test no crash
       await new Promise((r) => setTimeout(r, 50));
       ws.close();
@@ -1513,11 +1491,13 @@ describe("WebSocket handler", () => {
       const ws = await connectWs();
       await waitForConnect(ws, session.id);
 
-      ws.send(JSON.stringify({
-        type: "session:set_thinking",
-        sessionId: session.id,
-        level: "low",
-      }));
+      ws.send(
+        JSON.stringify({
+          type: "session:set_thinking",
+          sessionId: session.id,
+          level: "low",
+        }),
+      );
       await new Promise((r) => setTimeout(r, 50));
       expect(manager.getThinkingLevel(session.id)).toBe("low");
       ws.close();
@@ -1528,11 +1508,13 @@ describe("WebSocket handler", () => {
       const ws = await connectWs();
       await waitForConnect(ws, session.id);
 
-      ws.send(JSON.stringify({
-        type: "session:set_model",
-        sessionId: session.id,
-        model: "opus",
-      }));
+      ws.send(
+        JSON.stringify({
+          type: "session:set_model",
+          sessionId: session.id,
+          model: "opus",
+        }),
+      );
       await new Promise((r) => setTimeout(r, 50));
       expect(manager.getModel(session.id)).toBe("opus");
       ws.close();
@@ -1559,11 +1541,13 @@ describe("WebSocket handler", () => {
       const ws = await connectWs();
       await waitForConnect(ws, session.id);
 
-      ws.send(JSON.stringify({
-        type: "permission:set_bypass",
-        sessionId: session.id,
-        enabled: true,
-      }));
+      ws.send(
+        JSON.stringify({
+          type: "permission:set_bypass",
+          sessionId: session.id,
+          enabled: true,
+        }),
+      );
       await new Promise((r) => setTimeout(r, 50));
       expect(manager.isBypassActive(session.id)).toBe(true);
       ws.close();
@@ -1575,11 +1559,13 @@ describe("WebSocket handler", () => {
       const ws = await connectWs();
       await waitForConnect(ws, session.id);
 
-      ws.send(JSON.stringify({
-        type: "permission:set_bypass",
-        sessionId: session.id,
-        enabled: false,
-      }));
+      ws.send(
+        JSON.stringify({
+          type: "permission:set_bypass",
+          sessionId: session.id,
+          enabled: false,
+        }),
+      );
       await new Promise((r) => setTimeout(r, 50));
       expect(manager.isBypassActive(session.id)).toBe(false);
       ws.close();
@@ -1606,11 +1592,13 @@ describe("WebSocket handler", () => {
       const ws = await connectWs();
       await waitForConnect(ws, session.id);
 
-      ws.send(JSON.stringify({
-        type: "session:set_plan_mode",
-        sessionId: session.id,
-        enabled: true,
-      }));
+      ws.send(
+        JSON.stringify({
+          type: "session:set_plan_mode",
+          sessionId: session.id,
+          enabled: true,
+        }),
+      );
       await new Promise((r) => setTimeout(r, 50));
       expect(manager.isPlanModeActive(session.id)).toBe(true);
       ws.close();
@@ -1622,11 +1610,13 @@ describe("WebSocket handler", () => {
       const ws = await connectWs();
       await waitForConnect(ws, session.id);
 
-      ws.send(JSON.stringify({
-        type: "session:set_plan_mode",
-        sessionId: session.id,
-        enabled: false,
-      }));
+      ws.send(
+        JSON.stringify({
+          type: "session:set_plan_mode",
+          sessionId: session.id,
+          enabled: false,
+        }),
+      );
       await new Promise((r) => setTimeout(r, 50));
       expect(manager.isPlanModeActive(session.id)).toBe(false);
       ws.close();
@@ -2428,14 +2418,16 @@ describe("WebSocket handler", () => {
       const permMsg = await readMessage(ws);
       expect(permMsg.type).toBe("permission:request");
 
-      ws.send(JSON.stringify({
-        type: "permission:response",
-        sessionId: session.id,
-        requestId: "req-sug",
-        allowed: true,
-        permissionMode: "allow_always",
-        suggestionIndex: 0,
-      }));
+      ws.send(
+        JSON.stringify({
+          type: "permission:response",
+          sessionId: session.id,
+          requestId: "req-sug",
+          allowed: true,
+          permissionMode: "allow_always",
+          suggestionIndex: 0,
+        }),
+      );
       await new Promise((r) => setTimeout(r, 50));
       ws.close();
     });
@@ -2456,13 +2448,15 @@ describe("WebSocket handler", () => {
       });
       await readMessage(ws);
 
-      ws.send(JSON.stringify({
-        type: "permission:response",
-        sessionId: session.id,
-        requestId: "req-sug2",
-        allowed: true,
-        permissionMode: "allow_always",
-      }));
+      ws.send(
+        JSON.stringify({
+          type: "permission:response",
+          sessionId: session.id,
+          requestId: "req-sug2",
+          allowed: true,
+          permissionMode: "allow_always",
+        }),
+      );
       await new Promise((r) => setTimeout(r, 50));
       ws.close();
     });
@@ -2488,13 +2482,15 @@ describe("WebSocket handler", () => {
       const ws = await connectWs();
       await waitForConnect(ws, session.id);
 
-      ws.send(JSON.stringify({
-        type: "permission:response",
-        sessionId: session.id,
-        requestId: "req-1",
-        allowed: true,
-        permissionMode: "allow_all",
-      }));
+      ws.send(
+        JSON.stringify({
+          type: "permission:response",
+          sessionId: session.id,
+          requestId: "req-1",
+          allowed: true,
+          permissionMode: "allow_all",
+        }),
+      );
       await new Promise((r) => setTimeout(r, 50));
       expect(manager.isBypassActive(session.id)).toBe(true);
       ws.close();
@@ -2505,12 +2501,14 @@ describe("WebSocket handler", () => {
       const ws = await connectWs();
       await waitForConnect(ws, session.id);
 
-      ws.send(JSON.stringify({
-        type: "question:response",
-        sessionId: session.id,
-        requestId: "req-1",
-        answers: ["yes"],
-      }));
+      ws.send(
+        JSON.stringify({
+          type: "question:response",
+          sessionId: session.id,
+          requestId: "req-1",
+          answers: ["yes"],
+        }),
+      );
       await new Promise((r) => setTimeout(r, 50));
       // No crash, question handled
       ws.close();

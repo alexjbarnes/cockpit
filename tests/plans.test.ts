@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("node:fs");
 vi.mock("node:os", () => ({ homedir: () => "/home/user" }));
@@ -37,11 +37,7 @@ describe("plans", () => {
 
   it("returns latest by mtime", async () => {
     const fs = await import("node:fs");
-    vi.mocked(fs.readdirSync).mockReturnValue([
-      "plan-1.md",
-      "plan-2.md",
-      "plan-3.md",
-    ]);
+    vi.mocked(fs.readdirSync).mockReturnValue(["plan-1.md", "plan-2.md", "plan-3.md"]);
 
     vi.mocked(fs.statSync).mockImplementation((path: string) => {
       const mtimes: Record<string, number> = {
@@ -60,12 +56,7 @@ describe("plans", () => {
 
   it("excludes agent plan files", async () => {
     const fs = await import("node:fs");
-    vi.mocked(fs.readdirSync).mockReturnValue([
-      "plan.md",
-      "plan-agent-123.md",
-      "other-agent-plan.md",
-      "latest.md",
-    ]);
+    vi.mocked(fs.readdirSync).mockReturnValue(["plan.md", "plan-agent-123.md", "other-agent-plan.md", "latest.md"]);
 
     vi.mocked(fs.statSync).mockImplementation((path: string) => {
       const mtimes: Record<string, number> = {

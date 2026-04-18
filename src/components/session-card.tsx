@@ -1,7 +1,7 @@
 "use client";
 
-import type { SessionInfo } from "@/types";
 import { Badge } from "@/components/ui/badge";
+import type { SessionInfo } from "@/types";
 
 interface SessionCardProps {
   session: SessionInfo;
@@ -29,7 +29,9 @@ export function SessionCard({ session, onClick }: SessionCardProps) {
       <span className="text-sm truncate flex-1">{session.name}</span>
       <div className="flex items-center gap-2 shrink-0">
         {session.status === "running" && (
-          <Badge variant="default" className="text-xs">running</Badge>
+          <Badge variant="default" className="text-xs">
+            running
+          </Badge>
         )}
         <span className="text-xs text-muted-foreground">{timeAgo(session.lastActiveAt)}</span>
       </div>

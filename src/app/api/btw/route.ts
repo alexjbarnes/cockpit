@@ -1,12 +1,10 @@
-import { NextRequest, NextResponse } from "next/server";
 import { spawn } from "node:child_process";
-import { validateSession, isAuthDisabled } from "@/server/auth";
+import { NextRequest, NextResponse } from "next/server";
+import { isAuthDisabled, validateSession } from "@/server/auth";
 
 function authenticate(req: NextRequest): boolean {
   if (isAuthDisabled()) return true;
-  const token =
-    req.cookies.get("cockpit_session")?.value ||
-    req.headers.get("authorization")?.replace("Bearer ", "");
+  const token = req.cookies.get("cockpit_session")?.value || req.headers.get("authorization")?.replace("Bearer ", "");
   return !!token && validateSession(token);
 }
 
@@ -37,20 +35,11 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const conversationText = (context || [])
-      .map((m) => `${m.role === "user" ? "User" : "Assistant"}: ${m.content}`)
-      .join("\n\n");
+    const conversationText = (context || []).map((m) => `${m.role === "user" ? "User" : "Assistant"}: ${m.content}`).join("\n\n");
 
-    const input = conversationText
-      ? `${conversationText}\n\nUser (side question): ${question}`
-      : question;
+    const input = conversationText ? `${conversationText}\n\nUser (side question): ${question}` : question;
 
-    const args = [
-      "-p",
-      "--no-session-persistence",
-      "--allowedTools", "",
-      "--system-prompt", SYSTEM_PROMPT,
-    ];
+    const args = ["-p", "--no-session-persistence", "--allowedTools", "", "--system-prompt", SYSTEM_PROMPT];
 
     if (model) {
       args.push("--model", model);
@@ -67,8 +56,12 @@ export async function POST(req: NextRequest) {
       let stdout = "";
       let stderr = "";
 
-      proc.stdout.on("data", (chunk: Buffer) => { stdout += chunk.toString(); });
-      proc.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
+      proc.stdout.on("data", (chunk: Buffer) => {
+        stdout += chunk.toString();
+      });
+      proc.stderr.on("data", (chunk: Buffer) => {
+        stderr += chunk.toString();
+      });
       proc.on("error", reject);
       proc.on("close", (code) => {
         if (code !== 0) reject(new Error(stderr || `Process exited with code ${code}`));

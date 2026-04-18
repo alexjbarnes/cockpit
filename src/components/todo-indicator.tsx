@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
-import { ListChecks, X, Circle, Loader2, CheckCircle2 } from "lucide-react";
+import { CheckCircle2, Circle, ListChecks, Loader2, X } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import type { TodoItem } from "@/types";
 
@@ -14,7 +14,9 @@ export function TodoIndicator({ todos }: TodoIndicatorProps) {
 
   useEffect(() => {
     if (!open) return;
-    const h = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    const h = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
     window.addEventListener("keydown", h);
     return () => window.removeEventListener("keydown", h);
   }, [open]);
@@ -56,15 +58,10 @@ export function TodoIndicator({ todos }: TodoIndicatorProps) {
             ) : (
               <div className="space-y-1 max-h-80 overflow-y-auto">
                 {todos.map((todo, i) => (
-                  <div
-                    key={i}
-                    className="flex items-start gap-2.5 rounded-md px-3 py-2"
-                  >
+                  <div key={i} className="flex items-start gap-2.5 rounded-md px-3 py-2">
                     <StatusIcon status={todo.status} />
                     <div className={`min-w-0 flex-1 text-sm ${todo.status === "completed" ? "text-muted-foreground line-through" : ""}`}>
-                      {todo.status === "in_progress" && todo.activeForm
-                        ? todo.activeForm
-                        : todo.content}
+                      {todo.status === "in_progress" && todo.activeForm ? todo.activeForm : todo.content}
                     </div>
                   </div>
                 ))}

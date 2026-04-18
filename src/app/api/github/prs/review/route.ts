@@ -1,12 +1,10 @@
-import { NextRequest, NextResponse } from "next/server";
 import { execFile } from "node:child_process";
-import { validateSession, isAuthDisabled } from "@/server/auth";
+import { NextRequest, NextResponse } from "next/server";
+import { isAuthDisabled, validateSession } from "@/server/auth";
 
 function authenticate(req: NextRequest): boolean {
   if (isAuthDisabled()) return true;
-  const token =
-    req.cookies.get("cockpit_session")?.value ||
-    req.headers.get("authorization")?.replace("Bearer ", "");
+  const token = req.cookies.get("cockpit_session")?.value || req.headers.get("authorization")?.replace("Bearer ", "");
   return !!token && validateSession(token);
 }
 
@@ -25,7 +23,12 @@ export async function POST(req: NextRequest) {
   }
 
   const body = await req.json();
-  const { repo, number, action, body: reviewBody } = body as {
+  const {
+    repo,
+    number,
+    action,
+    body: reviewBody,
+  } = body as {
     repo?: string;
     number?: number;
     action?: string;
@@ -33,10 +36,7 @@ export async function POST(req: NextRequest) {
   };
 
   if (!repo || !number || !action) {
-    return NextResponse.json(
-      { error: "repo, number, and action are required" },
-      { status: 400 },
-    );
+    return NextResponse.json({ error: "repo, number, and action are required" }, { status: 400 });
   }
 
   const flagMap: Record<string, string> = {
@@ -47,10 +47,7 @@ export async function POST(req: NextRequest) {
 
   const flag = flagMap[action];
   if (!flag) {
-    return NextResponse.json(
-      { error: `Invalid action: ${action}. Must be approve, request-changes, or comment` },
-      { status: 400 },
-    );
+    return NextResponse.json({ error: `Invalid action: ${action}. Must be approve, request-changes, or comment` }, { status: 400 });
   }
 
   const args = ["pr", "review", String(number), "-R", repo, flag];
@@ -62,9 +59,6 @@ export async function POST(req: NextRequest) {
     await run("gh", args);
     return NextResponse.json({ ok: true });
   } catch (err) {
-    return NextResponse.json(
-      { error: String(err) },
-      { status: 500 },
-    );
+    return NextResponse.json({ error: String(err) }, { status: 500 });
   }
 }

@@ -1,14 +1,12 @@
-import { NextRequest, NextResponse } from "next/server";
 import { spawn } from "node:child_process";
 import { stat } from "node:fs/promises";
 import path from "node:path";
-import { validateSession, isAuthDisabled } from "@/server/auth";
+import { NextRequest, NextResponse } from "next/server";
+import { isAuthDisabled, validateSession } from "@/server/auth";
 
 function authenticate(req: NextRequest): boolean {
   if (isAuthDisabled()) return true;
-  const token =
-    req.cookies.get("cockpit_session")?.value ||
-    req.headers.get("authorization")?.replace("Bearer ", "");
+  const token = req.cookies.get("cockpit_session")?.value || req.headers.get("authorization")?.replace("Bearer ", "");
   return !!token && validateSession(token);
 }
 
@@ -52,7 +50,7 @@ export async function POST(req: NextRequest) {
   const folderName: string | undefined = body.folderName?.trim();
 
   const parentStat = await stat(parentPath).catch(() => null);
-  if (!parentStat || !parentStat.isDirectory()) {
+  if (!parentStat?.isDirectory()) {
     return NextResponse.json({ error: "Parent directory does not exist" }, { status: 400 });
   }
 

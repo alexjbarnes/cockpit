@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { ChatMessage } from "@/types";
 
 /**
@@ -130,9 +130,7 @@ describe("compaction", () => {
     });
 
     it("generates fallback id when compact_boundary has no uuid", () => {
-      const entries: TranscriptEntry[] = [
-        { type: "system", subtype: "compact_boundary" },
-      ];
+      const entries: TranscriptEntry[] = [{ type: "system", subtype: "compact_boundary" }];
 
       const messages = loadMessagesFromEntries(entries);
       expect(messages).toHaveLength(1);
@@ -238,7 +236,14 @@ describe("compaction", () => {
         { type: "user", message: { id: "u1", role: "user", content: "Before compact" } },
         { type: "assistant", message: { id: "a1", role: "assistant", content: [{ type: "text", text: "Reply" }] } },
         { type: "system", subtype: "compact_boundary", uuid: "9ccdc811-same-uuid" },
-        { type: "user", message: { id: null, role: "user", content: "This session is being continued from a previous conversation that ran out of context." } },
+        {
+          type: "user",
+          message: {
+            id: null,
+            role: "user",
+            content: "This session is being continued from a previous conversation that ran out of context.",
+          },
+        },
         { type: "assistant", message: { id: "a2", role: "assistant", content: [{ type: "text", text: "Based on summary..." }] } },
         { type: "user", message: { id: "u2", role: "user", content: "Did you just compact?" } },
         { type: "assistant", message: { id: "a3", role: "assistant", content: [{ type: "text", text: "Yes" }] } },

@@ -1,12 +1,12 @@
 "use client";
 
-import { useState, useEffect, useCallback, use } from "react";
+import { Check, Copy, Save } from "lucide-react";
 import { useSearchParams } from "next/navigation";
+import { use, useCallback, useEffect, useState } from "react";
 import { usePageHeader } from "@/components/app-shell";
-import { Button } from "@/components/ui/button";
 import { CodeEditor } from "@/components/code-editor";
 import { Badge } from "@/components/ui/badge";
-import { Save, Copy, Check } from "lucide-react";
+import { Button } from "@/components/ui/button";
 
 const HOOK_EVENTS = [
   "SessionStart",
@@ -36,11 +36,7 @@ const TEMPLATE = `[
   }
 ]`;
 
-export default function HookEditorPage({
-  params,
-}: {
-  params: Promise<{ event: string }>;
-}) {
+export default function HookEditorPage({ params }: { params: Promise<{ event: string }> }) {
   const { event: rawEvent } = use(params);
   const searchParams = useSearchParams();
 
@@ -112,7 +108,7 @@ export default function HookEditorPage({
     try {
       parsed = JSON.parse(content);
       if (!Array.isArray(parsed)) throw new Error("Must be an array");
-    } catch (err) {
+    } catch (_err) {
       setFeedback("Invalid JSON: must be an array of hook objects");
       return;
     }
@@ -141,7 +137,7 @@ export default function HookEditorPage({
     } finally {
       setSaving(false);
     }
-  }, [content, isNew, selectedEvent, event, selectedScope, cwd, filePath]);
+  }, [content, isNew, selectedEvent, event, cwd, resolveFilePath]);
 
   if (loading) {
     return (
@@ -164,7 +160,9 @@ export default function HookEditorPage({
               >
                 <option value="">Select event...</option>
                 {HOOK_EVENTS.map((ev) => (
-                  <option key={ev} value={ev}>{ev}</option>
+                  <option key={ev} value={ev}>
+                    {ev}
+                  </option>
                 ))}
               </select>
               <select
@@ -182,24 +180,26 @@ export default function HookEditorPage({
           ) : (
             <div className="flex items-center gap-2">
               <span className="font-mono font-bold text-lg">{event}</span>
-              <Badge variant="secondary">
-                {scope === "global" ? "Global" : scope === "project" ? "Project" : "Local"}
-              </Badge>
+              <Badge variant="secondary">{scope === "global" ? "Global" : scope === "project" ? "Project" : "Local"}</Badge>
             </div>
           )}
         </div>
-        <Button size="sm" variant="outline" onClick={() => {
-          const ta = document.createElement("textarea");
-          ta.value = content;
-          ta.style.position = "fixed";
-          ta.style.opacity = "0";
-          document.body.appendChild(ta);
-          ta.select();
-          document.execCommand("copy");
-          document.body.removeChild(ta);
-          setCopied(true);
-          setTimeout(() => setCopied(false), 1500);
-        }}>
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={() => {
+            const ta = document.createElement("textarea");
+            ta.value = content;
+            ta.style.position = "fixed";
+            ta.style.opacity = "0";
+            document.body.appendChild(ta);
+            ta.select();
+            document.execCommand("copy");
+            document.body.removeChild(ta);
+            setCopied(true);
+            setTimeout(() => setCopied(false), 1500);
+          }}
+        >
           {copied ? <Check className="h-4 w-4 mr-1" /> : <Copy className="h-4 w-4 mr-1" />}
           {copied ? "Copied" : "Copy"}
         </Button>
@@ -209,19 +209,9 @@ export default function HookEditorPage({
         </Button>
       </div>
 
-      {feedback && (
-        <p className={`text-sm ${feedback === "Saved" ? "text-green-600" : "text-destructive"}`}>
-          {feedback}
-        </p>
-      )}
+      {feedback && <p className={`text-sm ${feedback === "Saved" ? "text-green-600" : "text-destructive"}`}>{feedback}</p>}
 
-      <CodeEditor
-        value={content}
-        onChange={setContent}
-        language="json"
-        onSave={save}
-        className="flex-1"
-      />
+      <CodeEditor value={content} onChange={setContent} language="json" onSave={save} className="flex-1" />
     </div>
   );
 }

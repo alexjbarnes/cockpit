@@ -1,7 +1,7 @@
 "use client";
 
 import { Check } from "lucide-react";
-import { MODELS, findModelById, versionsForAlias, type ModelAlias, type ModelEntry } from "@/lib/models";
+import { findModelById, type ModelAlias, type ModelEntry, versionsForAlias } from "@/lib/models";
 
 interface ModelPickerProps {
   currentModel: string;
@@ -84,21 +84,16 @@ export function ModelPicker({ currentModel, activeModelId, onSelect }: ModelPick
           const rowBase = baseAlias(row.value);
           const active =
             row.extended === currentExtended &&
-            (rowBase === currentBase ||
-              (activeEntry && row.entry.modelId === activeEntry.modelId && rowBase === currentBase));
+            (rowBase === currentBase || (activeEntry && row.entry.modelId === activeEntry.modelId && rowBase === currentBase));
           return (
             <button
               key={row.key}
               onClick={() => onSelect(row.value)}
               className={`w-full flex items-center gap-3 rounded-md px-3 py-2 text-left text-sm transition-colors ${
-                active
-                  ? "bg-primary/10 text-primary"
-                  : "hover:bg-muted text-foreground"
+                active ? "bg-primary/10 text-primary" : "hover:bg-muted text-foreground"
               }`}
             >
-              <div className="w-4 shrink-0">
-                {active && <Check className="h-4 w-4" />}
-              </div>
+              <div className="w-4 shrink-0">{active && <Check className="h-4 w-4" />}</div>
               <span className="font-mono font-bold">{row.value}</span>
               <span className="text-muted-foreground">{row.label}</span>
               <span className="text-muted-foreground ml-auto text-xs">{row.entry.description}</span>

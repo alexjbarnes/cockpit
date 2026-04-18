@@ -1,27 +1,80 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useRef, useCallback, useMemo, useState } from "react";
-import { Loader2, AlertTriangle, RotateCcw, ArrowDown } from "lucide-react";
+import { AlertTriangle, ArrowDown, Loader2, RotateCcw } from "lucide-react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useMessageSelection } from "@/hooks/use-message-selection";
 import { useSession } from "@/hooks/use-session";
-import { pathBasename } from "@/lib/path";
-import { useWebSocket } from "@/hooks/use-websocket";
 import { useSettings } from "@/hooks/use-settings";
-import { MessageBubble } from "./message-bubble";
+import { useWebSocket } from "@/hooks/use-websocket";
+import { pathBasename } from "@/lib/path";
+import { splitAtQuestion } from "@/lib/split-question-blocks";
+import { useShell } from "./app-shell";
 import { InputArea } from "./input-area";
+import { MessageBubble } from "./message-bubble";
+import { ModelPicker } from "./model-picker";
 import { PermissionPrompt } from "./permission-prompt";
 import { PlanApprovalPrompt } from "./plan-approval-prompt";
-import { QuestionCard, QuestionPrompt, parseQuestionsFromInput } from "./question-card";
-import { splitAtQuestion } from "@/lib/split-question-blocks";
-import { ModelPicker } from "./model-picker";
+import { parseQuestionsFromInput, QuestionCard, QuestionPrompt } from "./question-card";
 import { SelectionToolbar } from "./selection-toolbar";
-import { useMessageSelection } from "@/hooks/use-message-selection";
-import { useShell } from "./app-shell";
 
 const INITIAL_WINDOW = 50;
 const WINDOW_INCREMENT = 30;
 
-export function ChatView({ sessionId, cwd, initialName, initialContext }: { sessionId: string; cwd?: string; initialName?: string; initialContext?: string }) {
-  const { messages, historyLoaded, isResponding, pendingPermissions, pendingQuestions, modelPicker, currentModel, bypassActive, planMode, thinkingLevel, contextUsage, rateLimitStatus, apiError, sessionName, initData, activeModelId, hasQueuedMessage, queuedMessages, queuePaused, backgroundTasks, todos, btw, hasMoreHistory, loadingMore, requestMoreHistory, sendMessage, interrupt, respondToPermission, respondToQuestion, selectModel, setModel, setBypassAll, setPlanMode, setThinkingLevel, cancelQueuedMessage, deleteQueuedMessage, editQueuedMessage, resumeQueue, restoredText, clearRestoredText, dismissBtw, retry } = useSession(sessionId, cwd);
+export function ChatView({
+  sessionId,
+  cwd,
+  initialName,
+  initialContext,
+}: {
+  sessionId: string;
+  cwd?: string;
+  initialName?: string;
+  initialContext?: string;
+}) {
+  const {
+    messages,
+    historyLoaded,
+    isResponding,
+    pendingPermissions,
+    pendingQuestions,
+    modelPicker,
+    currentModel,
+    bypassActive,
+    planMode,
+    thinkingLevel,
+    contextUsage,
+    rateLimitStatus,
+    apiError,
+    sessionName,
+    initData,
+    activeModelId,
+    hasQueuedMessage,
+    queuedMessages,
+    queuePaused,
+    backgroundTasks,
+    todos,
+    btw,
+    hasMoreHistory,
+    loadingMore,
+    requestMoreHistory,
+    sendMessage,
+    interrupt,
+    respondToPermission,
+    respondToQuestion,
+    selectModel,
+    setModel,
+    setBypassAll,
+    setPlanMode,
+    setThinkingLevel,
+    cancelQueuedMessage,
+    deleteQueuedMessage,
+    editQueuedMessage,
+    resumeQueue,
+    restoredText,
+    clearRestoredText,
+    dismissBtw,
+    retry,
+  } = useSession(sessionId, cwd);
   const { settings } = useSettings();
   const { setHeader, setBackgroundTasks, setTodos, setInitData: setShellInitData } = useShell();
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -49,22 +102,22 @@ export function ChatView({ sessionId, cwd, initialName, initialContext }: { sess
 
   const totalMessages = uniqueMessages.length;
   const startIndex = Math.max(0, totalMessages - renderWindow);
-  const visibleMessages = useMemo(
-    () => uniqueMessages.slice(startIndex),
-    [uniqueMessages, startIndex]
-  );
+  const visibleMessages = useMemo(() => uniqueMessages.slice(startIndex), [uniqueMessages, startIndex]);
   const hasMoreAbove = startIndex > 0;
 
   // Reset window on session change
   useEffect(() => {
     setRenderWindow(INITIAL_WINDOW);
-  }, [sessionId]);
+  }, []);
 
   // Update header with session name
   const { send: wsSend } = useWebSocket();
-  const handleRename = useCallback((name: string) => {
-    wsSend({ type: "message:send", sessionId, text: `/rename ${name}` });
-  }, [wsSend, sessionId]);
+  const handleRename = useCallback(
+    (name: string) => {
+      wsSend({ type: "message:send", sessionId, text: `/rename ${name}` });
+    },
+    [wsSend, sessionId],
+  );
 
   useEffect(() => {
     const title = sessionName || initialName || (cwd ? pathBasename(cwd) : "") || "Session";
@@ -94,7 +147,7 @@ export function ChatView({ sessionId, cwd, initialName, initialContext }: { sess
       ignoreScrollUntil.current = Date.now() + 150;
     }
     prevScrollHeightRef.current = 0;
-  }, [renderWindow, totalMessages]);
+  }, []);
 
   const handleScroll = useCallback(() => {
     if (Date.now() < ignoreScrollUntil.current) return;
@@ -129,7 +182,7 @@ export function ChatView({ sessionId, cwd, initialName, initialContext }: { sess
     if (stickToBottom.current) {
       scrollToBottom();
     }
-  }, [messages, isResponding, pendingQuestions, pendingPermissions, scrollToBottom]);
+  }, [scrollToBottom]);
 
   // Re-scroll when virtual keyboard shows/hides (viewport resize)
   useEffect(() => {
@@ -195,15 +248,23 @@ export function ChatView({ sessionId, cwd, initialName, initialContext }: { sess
   }, [isResponding, interrupt]);
 
   const contextInjected = useRef(false);
-  const handleSend = useCallback((text: string, images?: import("@/types").ImageAttachment[], documents?: import("@/types").DocumentAttachment[], textFiles?: import("@/types").TextFileAttachment[]) => {
-    stickToBottom.current = true;
-    if (initialContext && !contextInjected.current && messages.length === 0) {
-      contextInjected.current = true;
-      sendMessage(`${text}\n\n---\n${initialContext}`, images, documents, textFiles);
-    } else {
-      sendMessage(text, images, documents, textFiles);
-    }
-  }, [sendMessage, initialContext, messages.length]);
+  const handleSend = useCallback(
+    (
+      text: string,
+      images?: import("@/types").ImageAttachment[],
+      documents?: import("@/types").DocumentAttachment[],
+      textFiles?: import("@/types").TextFileAttachment[],
+    ) => {
+      stickToBottom.current = true;
+      if (initialContext && !contextInjected.current && messages.length === 0) {
+        contextInjected.current = true;
+        sendMessage(`${text}\n\n---\n${initialContext}`, images, documents, textFiles);
+      } else {
+        sendMessage(text, images, documents, textFiles);
+      }
+    },
+    [sendMessage, initialContext, messages.length],
+  );
 
   const handleCompact = useCallback(() => {
     sendMessage("/compact");
@@ -224,11 +285,7 @@ export function ChatView({ sessionId, cwd, initialName, initialContext }: { sess
         <div className="mx-auto max-w-3xl lg:max-w-4xl xl:max-w-5xl 2xl:max-w-6xl space-y-4">
           {uniqueMessages.length === 0 && (
             <div className="flex flex-col items-center pt-20 text-sm text-muted-foreground">
-              {historyLoaded ? (
-                <p>Send a message to start the conversation.</p>
-              ) : (
-                <Loader2 className="h-5 w-5 animate-spin" />
-              )}
+              {historyLoaded ? <p>Send a message to start the conversation.</p> : <Loader2 className="h-5 w-5 animate-spin" />}
             </div>
           )}
           {(hasMoreAbove || loadingMore) && (
@@ -308,9 +365,7 @@ export function ChatView({ sessionId, cwd, initialName, initialContext }: { sess
           {isResponding && pendingPermissions.length === 0 && !pendingQuestions.some((q) => !q.answered) && (
             <div className="flex items-center gap-2 text-muted-foreground">
               <Loader2 className="h-4 w-4 animate-spin" />
-              {rateLimitStatus && (
-                <span className="text-xs">Rate limited, retrying...</span>
-              )}
+              {rateLimitStatus && <span className="text-xs">Rate limited, retrying...</span>}
             </div>
           )}
           {apiError && !isResponding && (
@@ -342,41 +397,25 @@ export function ChatView({ sessionId, cwd, initialName, initialContext }: { sess
                 onSetPlanMode={setPlanMode}
               />
             ) : (
-              <PermissionPrompt
-                key={p.requestId}
-                permission={p}
-                onRespond={respondToPermission}
-              />
-            )
+              <PermissionPrompt key={p.requestId} permission={p} onRespond={respondToPermission} />
+            ),
           )}
-          {pendingQuestions.length > 0 && !visibleMessages.some((m) =>
-            m.role === "assistant" && (m.blocks || []).some(
-              (b) => b.type === "tool_use" && b.toolUse.name === "AskUserQuestion"
-            )
-          ) && pendingQuestions.map((q) => (
-            <div key={q.requestId} className="flex w-full justify-start">
-              <div className="max-w-[85%]">
-                <QuestionPrompt
-                  questions={parseQuestionsFromInput(q.questions)}
-                  onSubmit={respondToQuestion}
-                  requestId={q.requestId}
-                />
+          {pendingQuestions.length > 0 &&
+            !visibleMessages.some(
+              (m) => m.role === "assistant" && (m.blocks || []).some((b) => b.type === "tool_use" && b.toolUse.name === "AskUserQuestion"),
+            ) &&
+            pendingQuestions.map((q) => (
+              <div key={q.requestId} className="flex w-full justify-start">
+                <div className="max-w-[85%]">
+                  <QuestionPrompt questions={parseQuestionsFromInput(q.questions)} onSubmit={respondToQuestion} requestId={q.requestId} />
+                </div>
               </div>
-            </div>
-          ))}
-          {modelPicker !== null && (
-            <ModelPicker currentModel={modelPicker} activeModelId={activeModelId} onSelect={selectModel} />
-          )}
+            ))}
+          {modelPicker !== null && <ModelPicker currentModel={modelPicker} activeModelId={activeModelId} onSelect={selectModel} />}
           <div />
         </div>
       </div>
-      {selectionMode && (
-        <SelectionToolbar
-          count={selectedIds.size}
-          onCopy={handleCopySelected}
-          onCancel={clearSelection}
-        />
-      )}
+      {selectionMode && <SelectionToolbar count={selectedIds.size} onCopy={handleCopySelected} onCancel={clearSelection} />}
       {showScrollDown && (
         <div className="relative z-10 flex justify-center pointer-events-none" style={{ marginTop: -52 }}>
           <button

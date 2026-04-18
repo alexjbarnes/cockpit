@@ -1,12 +1,12 @@
 "use client";
 
-import { useRef, useEffect, useCallback } from "react";
-import { EditorView, keymap } from "@codemirror/view";
-import { EditorState, Compartment } from "@codemirror/state";
-import { basicSetup } from "codemirror";
 import { markdown } from "@codemirror/lang-markdown";
 import { yaml } from "@codemirror/lang-yaml";
+import { Compartment, EditorState } from "@codemirror/state";
 import { oneDark } from "@codemirror/theme-one-dark";
+import { EditorView, keymap } from "@codemirror/view";
+import { basicSetup } from "codemirror";
+import { useEffect, useRef } from "react";
 
 const lightTheme = EditorView.theme({
   "&": {
@@ -93,7 +93,7 @@ export function CodeEditor({ value, onChange, language, readOnly, className, onS
       view.destroy();
       viewRef.current = null;
     };
-  }, []);
+  }, [value, readOnly, language]);
 
   // Sync external value changes
   useEffect(() => {

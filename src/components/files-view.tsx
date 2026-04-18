@@ -1,11 +1,11 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { Loader2 } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useShell } from "@/components/app-shell";
+import { CodeBlock, languageFromPath } from "@/components/code-block";
 import { FileTree } from "@/components/file-tree";
 import { pathBasename } from "@/lib/path";
-import { CodeBlock, languageFromPath } from "@/components/code-block";
-import { Loader2 } from "lucide-react";
 
 interface FileContent {
   content: string;
@@ -34,9 +34,7 @@ function relativePath(cwd: string, filePath: string): string {
 
 export function FilesView({ cwd, initialFile }: { cwd: string; initialFile?: string | null }) {
   const { setSidebarContent, closeSidebar } = useShell();
-  const [selectedFile, setSelectedFile] = useState<string | null>(
-    () => initialFile || selectedFileCache.get(cwd) || null
-  );
+  const [selectedFile, setSelectedFile] = useState<string | null>(() => initialFile || selectedFileCache.get(cwd) || null);
   const [fileData, setFileData] = useState<FileContent | null>(null);
   const [loading, setLoading] = useState(false);
   const fetchRef = useRef(0);
@@ -50,14 +48,12 @@ export function FilesView({ cwd, initialFile }: { cwd: string; initialFile?: str
         closeSidebar();
       }
     },
-    [cwd, closeSidebar]
+    [cwd, closeSidebar],
   );
 
   // Push file tree into sidebar
   useEffect(() => {
-    setSidebarContent(
-      <FileTree cwd={cwd} selectedFile={selectedFile} onSelectFile={handleSelectFile} />
-    );
+    setSidebarContent(<FileTree cwd={cwd} selectedFile={selectedFile} onSelectFile={handleSelectFile} />);
     return () => setSidebarContent(null);
   }, [cwd, selectedFile, handleSelectFile, setSidebarContent]);
 
@@ -102,11 +98,7 @@ export function FilesView({ cwd, initialFile }: { cwd: string; initialFile?: str
 
   // No file selected
   if (!selectedFile) {
-    return (
-      <div className="flex items-center justify-center h-full text-sm text-muted-foreground">
-        Select a file to view
-      </div>
-    );
+    return <div className="flex items-center justify-center h-full text-sm text-muted-foreground">Select a file to view</div>;
   }
 
   // Loading
@@ -119,11 +111,7 @@ export function FilesView({ cwd, initialFile }: { cwd: string; initialFile?: str
   }
 
   if (!fileData) {
-    return (
-      <div className="flex items-center justify-center h-full text-sm text-muted-foreground">
-        Failed to read file
-      </div>
-    );
+    return <div className="flex items-center justify-center h-full text-sm text-muted-foreground">Failed to read file</div>;
   }
 
   const rel = relativePath(cwd, selectedFile);
@@ -134,27 +122,16 @@ export function FilesView({ cwd, initialFile }: { cwd: string; initialFile?: str
   return (
     <div className="flex flex-col h-full min-h-0">
       <div className="shrink-0 flex items-center gap-1 border-b px-4 py-2 font-mono text-xs">
-        {dirPart && (
-          <span className="text-muted-foreground">{dirPart}</span>
-        )}
+        {dirPart && <span className="text-muted-foreground">{dirPart}</span>}
         <span className="font-bold">{fileName}</span>
-        {fileData.truncated && (
-          <span className="ml-2 text-muted-foreground">(truncated to 100KB)</span>
-        )}
+        {fileData.truncated && <span className="ml-2 text-muted-foreground">(truncated to 100KB)</span>}
       </div>
 
       {fileData.binary ? (
-        <div className="flex items-center justify-center flex-1 text-sm text-muted-foreground">
-          Binary file
-        </div>
+        <div className="flex items-center justify-center flex-1 text-sm text-muted-foreground">Binary file</div>
       ) : (
         <div className="flex-1 min-h-0 overflow-auto">
-          <CodeBlock
-            code={fileData.content}
-            language={lang}
-            dark={isDark()}
-            fullHeight
-          />
+          <CodeBlock code={fileData.content} language={lang} dark={isDark()} fullHeight />
         </div>
       )}
     </div>

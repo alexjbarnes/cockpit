@@ -37,18 +37,57 @@ export interface PermissionAction {
 }
 
 const READ_ONLY_BASH_COMMANDS = new Set([
-  "ls", "cat", "head", "tail", "wc", "grep", "rg", "find",
-  "pwd", "which", "type", "whereis", "file", "stat", "du", "df",
-  "tree", "date", "echo", "printf", "env", "printenv",
-  "basename", "dirname", "realpath", "readlink",
-  "uname", "whoami", "hostname", "id",
-  "dir", "findstr", "where", "more", "sort",
+  "ls",
+  "cat",
+  "head",
+  "tail",
+  "wc",
+  "grep",
+  "rg",
+  "find",
+  "pwd",
+  "which",
+  "type",
+  "whereis",
+  "file",
+  "stat",
+  "du",
+  "df",
+  "tree",
+  "date",
+  "echo",
+  "printf",
+  "env",
+  "printenv",
+  "basename",
+  "dirname",
+  "realpath",
+  "readlink",
+  "uname",
+  "whoami",
+  "hostname",
+  "id",
+  "dir",
+  "findstr",
+  "where",
+  "more",
+  "sort",
 ]);
 
 const READ_ONLY_GIT_SUBCOMMANDS = new Set([
-  "status", "log", "diff", "show", "blame", "branch",
-  "remote", "ls-files", "ls-tree", "rev-parse", "describe",
-  "tag", "reflog",
+  "status",
+  "log",
+  "diff",
+  "show",
+  "blame",
+  "branch",
+  "remote",
+  "ls-files",
+  "ls-tree",
+  "rev-parse",
+  "describe",
+  "tag",
+  "reflog",
 ]);
 
 const WRITE_TOOLS = new Set(["Edit", "Write", "Bash", "NotebookEdit"]);
@@ -59,7 +98,10 @@ export function isReadOnlyBashCommand(cmd: string): boolean {
   if (!trimmed) return false;
   if (/(?:;|&&|\|\||>|<|`|\$\(|<\()/.test(trimmed)) return false;
   if (/(?:^|[^|])&(?!&)/.test(trimmed)) return false;
-  const segments = trimmed.split("|").map((s) => s.trim()).filter(Boolean);
+  const segments = trimmed
+    .split("|")
+    .map((s) => s.trim())
+    .filter(Boolean);
   if (!segments.length) return false;
   for (const segment of segments) {
     const [head, sub] = segment.split(/\s+/);
@@ -92,7 +134,7 @@ function buildSnapshot(state: StreamState): ProcessedResult["snapshot"] {
       messageId: state.currentAssistantMsgId,
       content: textContent,
       toolUses: state.pendingToolUses.map((t) => ({ ...t, children: t.children ? [...t.children] : undefined })),
-      blocks: state.pendingBlocks.map((b) => b.type === "tool_use" ? { ...b, toolUse: { ...b.toolUse } } : { ...b }),
+      blocks: state.pendingBlocks.map((b) => (b.type === "tool_use" ? { ...b, toolUse: { ...b.toolUse } } : { ...b })),
     };
   }
   return null;
@@ -289,9 +331,7 @@ export function processEvents(
         const apiErrMatch = fullText.match(/^API Error: (\d+)\s/);
         if (apiErrMatch) {
           const msgMatch = fullText.match(/"message"\s*:\s*"([^"]+)"/);
-          const errMsg = msgMatch
-            ? `${msgMatch[1]} (HTTP ${apiErrMatch[1]})`
-            : fullText.slice(0, 200);
+          const errMsg = msgMatch ? `${msgMatch[1]} (HTTP ${apiErrMatch[1]})` : fullText.slice(0, 200);
           state.pendingBlocks.length = 0;
           state.pendingToolUses.length = 0;
           state.agentStack.length = 0;

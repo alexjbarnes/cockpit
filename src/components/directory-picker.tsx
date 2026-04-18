@@ -1,10 +1,10 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { ChevronRight, Folder, FolderPlus, Loader2 } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Loader2, Folder, ChevronRight, FolderPlus } from "lucide-react";
-import { splitPathSegments, pathBasename } from "@/lib/path";
+import { pathBasename, splitPathSegments } from "@/lib/path";
 
 interface DirEntry {
   name: string;
@@ -88,11 +88,7 @@ export function DirectoryPicker({ onSelect, onCancel }: DirectoryPickerProps) {
   return (
     <div className="space-y-3">
       <div className="flex items-center gap-1 text-xs font-mono overflow-x-auto">
-        <button
-          type="button"
-          onClick={() => fetchEntries(rootPath)}
-          className="shrink-0 text-muted-foreground hover:text-foreground"
-        >
+        <button type="button" onClick={() => fetchEntries(rootPath)} className="shrink-0 text-muted-foreground hover:text-foreground">
           {rootLabel}
         </button>
         {segments.map((seg, i) => {
@@ -104,11 +100,7 @@ export function DirectoryPicker({ onSelect, onCancel }: DirectoryPickerProps) {
               {isLast ? (
                 <span className="text-foreground font-medium">{seg}</span>
               ) : (
-                <button
-                  type="button"
-                  onClick={() => fetchEntries(segPath)}
-                  className="text-muted-foreground hover:text-foreground"
-                >
+                <button type="button" onClick={() => fetchEntries(segPath)} className="text-muted-foreground hover:text-foreground">
                   {seg}
                 </button>
               )}
@@ -123,23 +115,23 @@ export function DirectoryPicker({ onSelect, onCancel }: DirectoryPickerProps) {
             <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
           </div>
         )}
-        {error && (
-          <div className="px-3 py-4 text-sm text-destructive">{error}</div>
-        )}
+        {error && <div className="px-3 py-4 text-sm text-destructive">{error}</div>}
         {!loading && !error && entries.length === 0 && !creatingFolder && (
           <div className="px-3 py-4 text-sm text-muted-foreground">No subdirectories</div>
         )}
-        {!loading && !error && entries.map((entry) => (
-          <button
-            key={entry.path}
-            type="button"
-            onClick={() => fetchEntries(entry.path)}
-            className="flex w-full items-center gap-2 px-3 py-1.5 text-sm hover:bg-muted/50 text-left"
-          >
-            <Folder className="h-4 w-4 shrink-0 text-muted-foreground" />
-            <span className="truncate">{entry.name}</span>
-          </button>
-        ))}
+        {!loading &&
+          !error &&
+          entries.map((entry) => (
+            <button
+              key={entry.path}
+              type="button"
+              onClick={() => fetchEntries(entry.path)}
+              className="flex w-full items-center gap-2 px-3 py-1.5 text-sm hover:bg-muted/50 text-left"
+            >
+              <Folder className="h-4 w-4 shrink-0 text-muted-foreground" />
+              <span className="truncate">{entry.name}</span>
+            </button>
+          ))}
         {creatingFolder && (
           <div className="px-3 py-1.5 space-y-1">
             <div className="flex items-center gap-2">
@@ -148,8 +140,15 @@ export function DirectoryPicker({ onSelect, onCancel }: DirectoryPickerProps) {
                 value={newFolderName}
                 onChange={(e) => setNewFolderName(e.target.value)}
                 onKeyDown={(e) => {
-                  if (e.key === "Enter") { e.preventDefault(); handleCreateFolder(); }
-                  if (e.key === "Escape") { setCreatingFolder(false); setNewFolderName(""); setCreateError(""); }
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    handleCreateFolder();
+                  }
+                  if (e.key === "Escape") {
+                    setCreatingFolder(false);
+                    setNewFolderName("");
+                    setCreateError("");
+                  }
                 }}
                 placeholder="Folder name"
                 className="h-7 text-sm"
@@ -170,7 +169,10 @@ export function DirectoryPicker({ onSelect, onCancel }: DirectoryPickerProps) {
             type="button"
             variant="outline"
             size="sm"
-            onClick={() => { setCreatingFolder(true); setCreateError(""); }}
+            onClick={() => {
+              setCreatingFolder(true);
+              setCreateError("");
+            }}
             disabled={!currentPath}
           >
             <FolderPlus className="h-3.5 w-3.5 mr-1.5" />
@@ -181,12 +183,7 @@ export function DirectoryPicker({ onSelect, onCancel }: DirectoryPickerProps) {
         <Button type="button" variant="outline" size="sm" onClick={onCancel}>
           Cancel
         </Button>
-        <Button
-          type="button"
-          size="sm"
-          disabled={!currentPath}
-          onClick={() => onSelect(currentPath)}
-        >
+        <Button type="button" size="sm" disabled={!currentPath} onClick={() => onSelect(currentPath)}>
           Select {currentPath ? pathBasename(currentPath) || "/" : ""}
         </Button>
       </div>

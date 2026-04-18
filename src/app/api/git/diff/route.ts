@@ -1,14 +1,12 @@
-import { NextRequest, NextResponse } from "next/server";
 import { execFile } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { validateSession, isAuthDisabled } from "@/server/auth";
+import { NextRequest, NextResponse } from "next/server";
+import { isAuthDisabled, validateSession } from "@/server/auth";
 
 function authenticate(req: NextRequest): boolean {
   if (isAuthDisabled()) return true;
-  const token =
-    req.cookies.get("cockpit_session")?.value ||
-    req.headers.get("authorization")?.replace("Bearer ", "");
+  const token = req.cookies.get("cockpit_session")?.value || req.headers.get("authorization")?.replace("Bearer ", "");
   return !!token && validateSession(token);
 }
 
@@ -73,22 +71,12 @@ export async function GET(req: NextRequest) {
       try {
         const content = await run("git", ["show", `:${file}`], cwd);
         const lines = content.split("\n");
-        diff = [
-          `--- /dev/null`,
-          `+++ b/${file}`,
-          `@@ -0,0 +1,${lines.length} @@`,
-          ...lines.map((l) => `+${l}`),
-        ].join("\n");
+        diff = [`--- /dev/null`, `+++ b/${file}`, `@@ -0,0 +1,${lines.length} @@`, ...lines.map((l) => `+${l}`)].join("\n");
       } catch {
         try {
           const content = await readFile(join(cwd, file), "utf-8");
           const lines = content.split("\n");
-          diff = [
-            `--- /dev/null`,
-            `+++ b/${file}`,
-            `@@ -0,0 +1,${lines.length} @@`,
-            ...lines.map((l) => `+${l}`),
-          ].join("\n");
+          diff = [`--- /dev/null`, `+++ b/${file}`, `@@ -0,0 +1,${lines.length} @@`, ...lines.map((l) => `+${l}`)].join("\n");
         } catch {
           return NextResponse.json({ error: "File not found" }, { status: 404 });
         }
@@ -96,10 +84,7 @@ export async function GET(req: NextRequest) {
     }
 
     // Fetch full file contents for expand-context support
-    const [oldContent, newContent] = await Promise.all([
-      getOldContent(cwd, file),
-      getNewContent(cwd, file),
-    ]);
+    const [oldContent, newContent] = await Promise.all([getOldContent(cwd, file), getNewContent(cwd, file)]);
 
     return NextResponse.json({
       diff,

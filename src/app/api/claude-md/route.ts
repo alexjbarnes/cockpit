@@ -1,17 +1,14 @@
-import { NextRequest, NextResponse } from "next/server";
-import { readdir, readFile, writeFile, mkdir } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { createReadStream, existsSync } from "node:fs";
+import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline";
-import { createReadStream } from "node:fs";
-import { validateSession, isAuthDisabled } from "@/server/auth";
+import { NextRequest, NextResponse } from "next/server";
+import { isAuthDisabled, validateSession } from "@/server/auth";
 
 function authenticate(req: NextRequest): boolean {
   if (isAuthDisabled()) return true;
-  const token =
-    req.cookies.get("cockpit_session")?.value ||
-    req.headers.get("authorization")?.replace("Bearer ", "");
+  const token = req.cookies.get("cockpit_session")?.value || req.headers.get("authorization")?.replace("Bearer ", "");
   return !!token && validateSession(token);
 }
 
@@ -67,9 +64,7 @@ async function extractCwdFromJsonl(filePath: string): Promise<string | null> {
           rl.close();
           return entry.cwd;
         }
-      } catch {
-        continue;
-      }
+      } catch {}
     }
     rl.close();
   } catch {

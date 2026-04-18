@@ -1,6 +1,6 @@
-import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from "vitest";
 import { EventEmitter } from "node:events";
 import { createServer, type Server } from "node:http";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 
 vi.mock("node:child_process", () => ({
@@ -17,9 +17,9 @@ vi.mock("node:child_process", () => ({
   }),
 }));
 
-import { createWebSocketHandler } from "@/server/ws-handler";
+import { createSession as createAuthSession, setupPassword } from "@/server/auth";
 import { SessionManager } from "@/server/session-manager";
-import { setupPassword, createSession as createAuthSession } from "@/server/auth";
+import { createWebSocketHandler } from "@/server/ws-handler";
 
 beforeAll(async () => {
   delete process.env.COCKPIT_DISABLE_AUTH;
@@ -44,7 +44,7 @@ describe("WebSocket reconnection", () => {
           port = typeof addr === "object" && addr ? addr.port : 0;
           resolve();
         });
-      })
+      }),
   );
 
   afterAll(() => {
@@ -56,9 +56,7 @@ describe("WebSocket reconnection", () => {
 
   function connectWs(): Promise<WebSocket> {
     return new Promise((resolve, reject) => {
-      const ws = new WebSocket(
-        `ws://localhost:${port}/ws?token=${validToken}`
-      );
+      const ws = new WebSocket(`ws://localhost:${port}/ws?token=${validToken}`);
       ws.on("open", () => resolve(ws));
       ws.on("error", reject);
     });
@@ -83,9 +81,7 @@ describe("WebSocket reconnection", () => {
     const ws = await connectWs();
 
     const collecting = collectMessages(ws, 5);
-    ws.send(
-      JSON.stringify({ type: "session:connect", sessionId: session.id })
-    );
+    ws.send(JSON.stringify({ type: "session:connect", sessionId: session.id }));
     const messages = await collecting;
 
     const historyMsg = messages.find((m) => m.type === "history");
@@ -104,9 +100,7 @@ describe("WebSocket reconnection", () => {
 
     const firstMsg = await new Promise<Record<string, unknown>>((resolve) => {
       ws.once("message", (data) => resolve(JSON.parse(data.toString())));
-      ws.send(
-        JSON.stringify({ type: "session:connect", sessionId: session.id })
-      );
+      ws.send(JSON.stringify({ type: "session:connect", sessionId: session.id }));
     });
 
     // Terminate immediately - simulates 1006 drop
@@ -122,9 +116,7 @@ describe("WebSocket reconnection", () => {
     // First connection: get full history (0 messages)
     const ws1 = await connectWs();
     const collecting1 = collectMessages(ws1, 5);
-    ws1.send(
-      JSON.stringify({ type: "session:connect", sessionId: session.id })
-    );
+    ws1.send(JSON.stringify({ type: "session:connect", sessionId: session.id }));
     const msgs1 = await collecting1;
     const history1 = msgs1.find((m) => m.type === "history");
     expect(history1).toBeDefined();
@@ -147,7 +139,7 @@ describe("WebSocket reconnection", () => {
         type: "session:connect",
         sessionId: session.id,
         messageCount: msgCount, // 0
-      })
+      }),
     );
     const msgs2 = await collecting2;
     const history2 = msgs2.find((m) => m.type === "history");
@@ -171,7 +163,7 @@ describe("WebSocket reconnection", () => {
             type: "session:connect",
             sessionId: session.id,
             messageCount: i > 0 ? 0 : undefined,
-          })
+          }),
         );
       });
 
@@ -192,9 +184,7 @@ describe("WebSocket reconnection", () => {
     const ws = await connectWs();
 
     const collecting = collectMessages(ws, 5);
-    ws.send(
-      JSON.stringify({ type: "session:connect", sessionId: session.id })
-    );
+    ws.send(JSON.stringify({ type: "session:connect", sessionId: session.id }));
     const messages = await collecting;
 
     const historyMsg = messages.find((m) => m.type === "history");

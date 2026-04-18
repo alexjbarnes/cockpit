@@ -1,15 +1,15 @@
 "use client";
 
-import { useState } from "react";
+import { Plus } from "lucide-react";
 import { useRouter } from "next/navigation";
+import { useState } from "react";
 import { usePageHeader } from "@/components/app-shell";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { useClaudeMd, type ClaudeMdFile } from "@/hooks/use-claude-md";
+import { type ClaudeMdFile, useClaudeMd } from "@/hooks/use-claude-md";
 import { pathBasename } from "@/lib/path";
-import { Plus } from "lucide-react";
 
 const SCOPE_DESCRIPTION: Record<ClaudeMdFile["scope"], string> = {
   user: "Applies to all projects",
@@ -116,13 +116,7 @@ export default function ClaudeMdPage() {
           );
         })}
 
-      <NewFileDialog
-        open={newDialog}
-        onOpenChange={setNewDialog}
-        cwds={cwdsForNew}
-        byCwd={byCwd}
-        onSelect={handleNew}
-      />
+      <NewFileDialog open={newDialog} onOpenChange={setNewDialog} cwds={cwdsForNew} byCwd={byCwd} onSelect={handleNew} />
     </div>
   );
 }
@@ -141,9 +135,7 @@ function FileRow({ file, onClick }: { file: ClaudeMdFile; onClick: () => void })
             {file.scope === "user" ? "Global" : "Project"}
           </Badge>
         </div>
-        <p className="text-xs text-muted-foreground mt-0.5">
-          {SCOPE_DESCRIPTION[file.scope]}
-        </p>
+        <p className="text-xs text-muted-foreground mt-0.5">{SCOPE_DESCRIPTION[file.scope]}</p>
       </div>
     </button>
   );
@@ -215,12 +207,7 @@ function NewFileDialog({
         {selectedCwd && (
           <div className="flex gap-2">
             {missingScopes(selectedCwd).map((scope) => (
-              <Button
-                key={scope}
-                variant="outline"
-                className="flex-1"
-                onClick={() => onSelect(scope, selectedCwd)}
-              >
+              <Button key={scope} variant="outline" className="flex-1" onClick={() => onSelect(scope, selectedCwd)}>
                 {scope === "project" ? "CLAUDE.md" : ".claude/CLAUDE.md"}
               </Button>
             ))}

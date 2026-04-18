@@ -1,10 +1,10 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback } from "react";
-import { Search, Loader2, Copy, Check, X } from "lucide-react";
+import { Check, Copy, Loader2, Search, X } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import { useShell } from "./app-shell";
 import { MessageContextModal } from "./message-context-modal";
 
@@ -34,12 +34,15 @@ function HighlightedPreview({ preview, matchStart, matchLength }: { preview: str
 function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
 
-  const handleCopy = useCallback((e: React.MouseEvent) => {
-    e.stopPropagation();
-    navigator.clipboard.writeText(text);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
-  }, [text]);
+  const handleCopy = useCallback(
+    (e: React.MouseEvent) => {
+      e.stopPropagation();
+      navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    },
+    [text],
+  );
 
   return (
     <Button variant="ghost" size="icon" className="h-6 w-6 shrink-0" onClick={handleCopy} title="Copy full message">
@@ -110,9 +113,12 @@ function SearchModal({ onClose }: { onClose: () => void }) {
     setContextTimestamp(timestamp);
   }, []);
 
-  const handleOverlayClick = useCallback((e: React.MouseEvent) => {
-    if (e.target === e.currentTarget) onClose();
-  }, [onClose]);
+  const handleOverlayClick = useCallback(
+    (e: React.MouseEvent) => {
+      if (e.target === e.currentTarget) onClose();
+    },
+    [onClose],
+  );
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -127,12 +133,7 @@ function SearchModal({ onClose }: { onClose: () => void }) {
   }, [onClose]);
 
   if (contextTimestamp !== null) {
-    return (
-      <MessageContextModal
-        timestamp={contextTimestamp}
-        onClose={() => setContextTimestamp(null)}
-      />
-    );
+    return <MessageContextModal timestamp={contextTimestamp} onClose={() => setContextTimestamp(null)} />;
   }
 
   return (
@@ -153,11 +154,7 @@ function SearchModal({ onClose }: { onClose: () => void }) {
           </Button>
         </div>
         <div className="flex-1 min-h-0 overflow-y-auto">
-          {searched && results.length === 0 && (
-            <div className="p-8 text-center text-sm text-muted-foreground">
-              No results
-            </div>
-          )}
+          {searched && results.length === 0 && <div className="p-8 text-center text-sm text-muted-foreground">No results</div>}
           {results.map((result, i) => (
             <button
               key={`${result.messageId}-${i}`}
@@ -168,9 +165,7 @@ function SearchModal({ onClose }: { onClose: () => void }) {
                 <Badge variant={result.role === "user" ? "default" : "secondary"} className="text-[10px] px-1.5 py-0">
                   {result.role === "user" ? "User" : "Assistant"}
                 </Badge>
-                <span className="text-xs text-muted-foreground select-text">
-                  {new Date(result.timestamp).toLocaleString()}
-                </span>
+                <span className="text-xs text-muted-foreground select-text">{new Date(result.timestamp).toLocaleString()}</span>
                 <div className="ml-auto">
                   <CopyButton text={result.fullContent} />
                 </div>

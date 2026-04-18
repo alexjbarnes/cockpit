@@ -1,12 +1,10 @@
-import { NextRequest, NextResponse } from "next/server";
 import { execFile } from "node:child_process";
-import { validateSession, isAuthDisabled } from "@/server/auth";
+import { NextRequest, NextResponse } from "next/server";
+import { isAuthDisabled, validateSession } from "@/server/auth";
 
 function authenticate(req: NextRequest): boolean {
   if (isAuthDisabled()) return true;
-  const token =
-    req.cookies.get("cockpit_session")?.value ||
-    req.headers.get("authorization")?.replace("Bearer ", "");
+  const token = req.cookies.get("cockpit_session")?.value || req.headers.get("authorization")?.replace("Bearer ", "");
   return !!token && validateSession(token);
 }
 
@@ -79,11 +77,7 @@ function buildFullPatch(f: GHFile): string {
 // Fallback: fetch per-file patches via GitHub REST API when the full
 // diff exceeds the 20K line limit (HTTP 406 from gh pr diff).
 async function fetchFileDiffs(repo: string, number: string): Promise<{ path: string; patch: string }[]> {
-  const stdout = await run("gh", [
-    "api",
-    `repos/${repo}/pulls/${number}/files?per_page=100`,
-    "--paginate",
-  ]);
+  const stdout = await run("gh", ["api", `repos/${repo}/pulls/${number}/files?per_page=100`, "--paginate"]);
 
   // gh api --paginate concatenates JSON arrays back-to-back.
   // Parse by finding top-level array boundaries.
@@ -127,22 +121,11 @@ export async function GET(req: NextRequest) {
   const number = url.searchParams.get("number");
 
   if (!repo || !number) {
-    return NextResponse.json(
-      { error: "repo and number are required" },
-      { status: 400 },
-    );
+    return NextResponse.json({ error: "repo and number are required" }, { status: 400 });
   }
 
   try {
-    const stdout = await run("gh", [
-      "pr",
-      "diff",
-      number,
-      "-R",
-      repo,
-      "--color",
-      "never",
-    ]);
+    const stdout = await run("gh", ["pr", "diff", number, "-R", repo, "--color", "never"]);
     const files = splitDiff(stdout);
     return NextResponse.json({ files });
   } catch (err) {
@@ -154,15 +137,9 @@ export async function GET(req: NextRequest) {
         const files = await fetchFileDiffs(repo, number);
         return NextResponse.json({ files, partial: true });
       } catch (fallbackErr) {
-        return NextResponse.json(
-          { error: `Diff too large and per-file fallback failed: ${String(fallbackErr)}` },
-          { status: 500 },
-        );
+        return NextResponse.json({ error: `Diff too large and per-file fallback failed: ${String(fallbackErr)}` }, { status: 500 });
       }
     }
-    return NextResponse.json(
-      { error: errStr },
-      { status: 500 },
-    );
+    return NextResponse.json({ error: errStr }, { status: 500 });
   }
 }

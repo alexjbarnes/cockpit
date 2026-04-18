@@ -1,11 +1,6 @@
-import { describe, it, expect } from "vitest";
-import {
-  isReadOnlyBashCommand,
-  createStreamState,
-  processEvents,
-  type StreamState,
-} from "@/server/stream-processor";
+import { describe, expect, it } from "vitest";
 import type { ParsedEvent } from "@/server/event-parser";
+import { createStreamState, isReadOnlyBashCommand, processEvents, type StreamState } from "@/server/stream-processor";
 
 const defaults = { planMode: false, compacting: false };
 
@@ -245,13 +240,15 @@ describe("processEvents", () => {
   describe("tool_use_start", () => {
     it("creates a tool use and adds to pending", () => {
       const state = makeState({ currentAssistantMsgId: "msg-1" });
-      const events: ParsedEvent[] = [makeEvent({
-        type: "tool_use_start",
-        toolId: "t1",
-        toolName: "Read",
-        toolInput: '{"file":"/a"}',
-        assistantMessageId: "msg-1",
-      })];
+      const events: ParsedEvent[] = [
+        makeEvent({
+          type: "tool_use_start",
+          toolId: "t1",
+          toolName: "Read",
+          toolInput: '{"file":"/a"}',
+          assistantMessageId: "msg-1",
+        }),
+      ];
       processEvents(events, state, defaults);
 
       expect(state.pendingToolUses).toHaveLength(1);
@@ -263,13 +260,15 @@ describe("processEvents", () => {
 
     it("pushes Agent tools onto agentStack", () => {
       const state = makeState({ currentAssistantMsgId: "msg-1" });
-      const events: ParsedEvent[] = [makeEvent({
-        type: "tool_use_start",
-        toolId: "a1",
-        toolName: "Agent",
-        toolInput: '{}',
-        assistantMessageId: "msg-1",
-      })];
+      const events: ParsedEvent[] = [
+        makeEvent({
+          type: "tool_use_start",
+          toolId: "a1",
+          toolName: "Agent",
+          toolInput: "{}",
+          assistantMessageId: "msg-1",
+        }),
+      ];
       processEvents(events, state, defaults);
 
       expect(state.agentStack).toHaveLength(1);
@@ -279,13 +278,15 @@ describe("processEvents", () => {
     it("nests sub-agent tools as children", () => {
       const state = makeState({ currentAssistantMsgId: "msg-1" });
       state.agentStack.push({ id: "a1", name: "Agent", input: "", output: "", status: "running" });
-      const events: ParsedEvent[] = [makeEvent({
-        type: "tool_use_start",
-        toolId: "t1",
-        toolName: "Read",
-        toolInput: '{}',
-        assistantMessageId: "sub-msg",
-      })];
+      const events: ParsedEvent[] = [
+        makeEvent({
+          type: "tool_use_start",
+          toolId: "t1",
+          toolName: "Read",
+          toolInput: "{}",
+          assistantMessageId: "sub-msg",
+        }),
+      ];
       processEvents(events, state, defaults);
 
       expect(state.agentStack[0].children).toHaveLength(1);
@@ -296,13 +297,15 @@ describe("processEvents", () => {
     it("keeps main thread tools at top level even with active agent", () => {
       const state = makeState({ currentAssistantMsgId: "msg-1" });
       state.agentStack.push({ id: "a1", name: "Agent", input: "", output: "", status: "running" });
-      const events: ParsedEvent[] = [makeEvent({
-        type: "tool_use_start",
-        toolId: "t1",
-        toolName: "Read",
-        toolInput: '{}',
-        assistantMessageId: "msg-1",
-      })];
+      const events: ParsedEvent[] = [
+        makeEvent({
+          type: "tool_use_start",
+          toolId: "t1",
+          toolName: "Read",
+          toolInput: "{}",
+          assistantMessageId: "msg-1",
+        }),
+      ];
       processEvents(events, state, defaults);
 
       expect(state.pendingToolUses).toHaveLength(1);
@@ -312,13 +315,15 @@ describe("processEvents", () => {
     it("collects TodoWrite inputs", () => {
       const state = makeState({ currentAssistantMsgId: "msg-1" });
       const input = '{"todos":[{"content":"task","status":"pending"}]}';
-      const events: ParsedEvent[] = [makeEvent({
-        type: "tool_use_start",
-        toolId: "t1",
-        toolName: "TodoWrite",
-        toolInput: input,
-        assistantMessageId: "msg-1",
-      })];
+      const events: ParsedEvent[] = [
+        makeEvent({
+          type: "tool_use_start",
+          toolId: "t1",
+          toolName: "TodoWrite",
+          toolInput: input,
+          assistantMessageId: "msg-1",
+        }),
+      ];
       const result = processEvents(events, state, defaults);
 
       expect(result.todoInputs).toEqual([input]);
@@ -329,12 +334,14 @@ describe("processEvents", () => {
     it("marks tool as done", () => {
       const state = makeState({ currentAssistantMsgId: "msg-1" });
       state.pendingToolUses.push({ id: "t1", name: "Read", input: "", output: "", status: "running" });
-      const events: ParsedEvent[] = [makeEvent({
-        type: "tool_result",
-        toolId: "t1",
-        toolOutput: "file content",
-        filePath: "/a/b",
-      })];
+      const events: ParsedEvent[] = [
+        makeEvent({
+          type: "tool_result",
+          toolId: "t1",
+          toolOutput: "file content",
+          filePath: "/a/b",
+        }),
+      ];
       processEvents(events, state, defaults);
 
       expect(state.pendingToolUses[0].output).toBe("file content");
@@ -346,11 +353,13 @@ describe("processEvents", () => {
       const state = makeState({ currentAssistantMsgId: "msg-1" });
       state.agentStack.push({ id: "a1", name: "Agent", input: "", output: "", status: "running" });
       state.pendingToolUses.push(state.agentStack[0]);
-      const events: ParsedEvent[] = [makeEvent({
-        type: "tool_result",
-        toolId: "a1",
-        toolOutput: "agent result",
-      })];
+      const events: ParsedEvent[] = [
+        makeEvent({
+          type: "tool_result",
+          toolId: "a1",
+          toolOutput: "agent result",
+        }),
+      ];
       processEvents(events, state, defaults);
 
       expect(state.agentStack).toHaveLength(0);
@@ -361,12 +370,14 @@ describe("processEvents", () => {
       const state = makeState({ currentAssistantMsgId: "msg-1" });
       state.agentStack.push({ id: "a1", name: "Agent", input: "", output: "", status: "running" });
       state.pendingToolUses.push(state.agentStack[0]);
-      const events: ParsedEvent[] = [makeEvent({
-        type: "tool_result",
-        toolId: "a1",
-        toolOutput: "result",
-        filePath: "/agent/path",
-      })];
+      const events: ParsedEvent[] = [
+        makeEvent({
+          type: "tool_result",
+          toolId: "a1",
+          toolOutput: "result",
+          filePath: "/agent/path",
+        }),
+      ];
       processEvents(events, state, defaults);
 
       expect(state.pendingToolUses[0].filePath).toBe("/agent/path");
@@ -377,12 +388,14 @@ describe("processEvents", () => {
       const agent = { id: "a1", name: "Agent", input: "", output: "", status: "running" as const, children: [child] };
       const state = makeState({ currentAssistantMsgId: "msg-1" });
       state.agentStack.push(agent);
-      const events: ParsedEvent[] = [makeEvent({
-        type: "tool_result",
-        toolId: "c1",
-        toolOutput: "child result",
-        filePath: "/child/path",
-      })];
+      const events: ParsedEvent[] = [
+        makeEvent({
+          type: "tool_result",
+          toolId: "c1",
+          toolOutput: "child result",
+          filePath: "/child/path",
+        }),
+      ];
       processEvents(events, state, defaults);
 
       expect(agent.children[0].filePath).toBe("/child/path");
@@ -393,11 +406,13 @@ describe("processEvents", () => {
       const agent = { id: "a1", name: "Agent", input: "", output: "", status: "running" as const, children: [child] };
       const state = makeState({ currentAssistantMsgId: "msg-1" });
       state.agentStack.push(agent);
-      const events: ParsedEvent[] = [makeEvent({
-        type: "tool_result",
-        toolId: "c1",
-        toolOutput: "child result",
-      })];
+      const events: ParsedEvent[] = [
+        makeEvent({
+          type: "tool_result",
+          toolId: "c1",
+          toolOutput: "child result",
+        }),
+      ];
       processEvents(events, state, defaults);
 
       expect(agent.children[0].status).toBe("done");
@@ -556,9 +571,12 @@ describe("processEvents", () => {
       state.pendingToolUses.push(tool);
       state.pendingBlocks.push({ type: "tool_use", toolUse: tool });
       const msg = {
-        id: "x", role: "assistant" as const,
+        id: "x",
+        role: "assistant" as const,
         content: "fallback content",
-        toolUses: [] as any[], blocks: [] as any[], timestamp: 0,
+        toolUses: [] as any[],
+        blocks: [] as any[],
+        timestamp: 0,
       };
       const events: ParsedEvent[] = [makeEvent({ type: "message_done", message: msg })];
       const result = processEvents(events, state, defaults);
@@ -584,11 +602,13 @@ describe("processEvents", () => {
       const state = makeState({ currentAssistantMsgId: "msg-1" });
       state.pendingBlocks.push({ type: "text", text: "first response" });
       state.pendingToolUses.push({ id: "t1", name: "Read", input: "", output: "ok", status: "done" });
-      const events: ParsedEvent[] = [makeEvent({
-        type: "text_delta",
-        text: "second",
-        assistantMessageId: "msg-2",
-      })];
+      const events: ParsedEvent[] = [
+        makeEvent({
+          type: "text_delta",
+          text: "second",
+          assistantMessageId: "msg-2",
+        }),
+      ];
       const result = processEvents(events, state, defaults);
 
       expect(result.intermediateMessages).toHaveLength(1);
@@ -601,11 +621,13 @@ describe("processEvents", () => {
       const state = makeState({ currentAssistantMsgId: "msg-1" });
       state.agentStack.push({ id: "a1", name: "Agent", input: "", output: "", status: "running" });
       state.pendingBlocks.push({ type: "text", text: "content" });
-      const events: ParsedEvent[] = [makeEvent({
-        type: "text_delta",
-        text: "sub",
-        assistantMessageId: "sub-msg",
-      })];
+      const events: ParsedEvent[] = [
+        makeEvent({
+          type: "text_delta",
+          text: "sub",
+          assistantMessageId: "sub-msg",
+        }),
+      ];
       const result = processEvents(events, state, defaults);
 
       expect(result.intermediateMessages).toHaveLength(0);
@@ -616,13 +638,15 @@ describe("processEvents", () => {
   describe("permission_request", () => {
     it("stores permission requests", () => {
       const state = makeState();
-      const events: ParsedEvent[] = [makeEvent({
-        type: "permission_request",
-        requestId: "req-1",
-        toolName: "Bash",
-        toolInput: "rm -rf /",
-        rawToolInput: { command: "rm -rf /" },
-      })];
+      const events: ParsedEvent[] = [
+        makeEvent({
+          type: "permission_request",
+          requestId: "req-1",
+          toolName: "Bash",
+          toolInput: "rm -rf /",
+          rawToolInput: { command: "rm -rf /" },
+        }),
+      ];
       const result = processEvents(events, state, defaults);
 
       expect(result.permissionActions).toHaveLength(1);
@@ -633,12 +657,14 @@ describe("processEvents", () => {
 
     it("auto-approves gh commands", () => {
       const state = makeState();
-      const events: ParsedEvent[] = [makeEvent({
-        type: "permission_request",
-        requestId: "req-1",
-        toolName: "Bash",
-        rawToolInput: { command: "gh pr list" },
-      })];
+      const events: ParsedEvent[] = [
+        makeEvent({
+          type: "permission_request",
+          requestId: "req-1",
+          toolName: "Bash",
+          rawToolInput: { command: "gh pr list" },
+        }),
+      ];
       const result = processEvents(events, state, defaults);
 
       expect(result.permissionActions[0].type).toBe("auto_approve");
@@ -650,12 +676,14 @@ describe("processEvents", () => {
 
       it("auto-approves read-only bash in plan mode", () => {
         const state = makeState();
-        const events: ParsedEvent[] = [makeEvent({
-          type: "permission_request",
-          requestId: "req-1",
-          toolName: "Bash",
-          rawToolInput: { command: "ls -la" },
-        })];
+        const events: ParsedEvent[] = [
+          makeEvent({
+            type: "permission_request",
+            requestId: "req-1",
+            toolName: "Bash",
+            rawToolInput: { command: "ls -la" },
+          }),
+        ];
         const result = processEvents(events, state, planOpts);
 
         expect(result.permissionActions[0].type).toBe("auto_approve");
@@ -663,12 +691,14 @@ describe("processEvents", () => {
 
       it("auto-denies write bash in plan mode", () => {
         const state = makeState();
-        const events: ParsedEvent[] = [makeEvent({
-          type: "permission_request",
-          requestId: "req-1",
-          toolName: "Bash",
-          rawToolInput: { command: "npm install foo" },
-        })];
+        const events: ParsedEvent[] = [
+          makeEvent({
+            type: "permission_request",
+            requestId: "req-1",
+            toolName: "Bash",
+            rawToolInput: { command: "npm install foo" },
+          }),
+        ];
         const result = processEvents(events, state, planOpts);
 
         expect(result.permissionActions[0].type).toBe("auto_deny");
@@ -678,11 +708,13 @@ describe("processEvents", () => {
       it("auto-denies write tools in plan mode", () => {
         for (const toolName of ["Edit", "Write", "NotebookEdit"]) {
           const state = makeState();
-          const events: ParsedEvent[] = [makeEvent({
-            type: "permission_request",
-            requestId: "req-1",
-            toolName,
-          })];
+          const events: ParsedEvent[] = [
+            makeEvent({
+              type: "permission_request",
+              requestId: "req-1",
+              toolName,
+            }),
+          ];
           const result = processEvents(events, state, planOpts);
 
           expect(result.permissionActions[0].type).toBe("auto_deny");
@@ -692,12 +724,14 @@ describe("processEvents", () => {
 
       it("auto-approves non-write, non-user-facing tools in plan mode", () => {
         const state = makeState();
-        const events: ParsedEvent[] = [makeEvent({
-          type: "permission_request",
-          requestId: "req-1",
-          toolName: "Read",
-          rawToolInput: { file: "/a" },
-        })];
+        const events: ParsedEvent[] = [
+          makeEvent({
+            type: "permission_request",
+            requestId: "req-1",
+            toolName: "Read",
+            rawToolInput: { file: "/a" },
+          }),
+        ];
         const result = processEvents(events, state, planOpts);
 
         expect(result.permissionActions[0].type).toBe("auto_approve");
@@ -706,11 +740,13 @@ describe("processEvents", () => {
       it("stores user-facing tools in plan mode", () => {
         for (const toolName of ["ExitPlanMode", "AskUserQuestion", "EnterPlanMode"]) {
           const state = makeState();
-          const events: ParsedEvent[] = [makeEvent({
-            type: "permission_request",
-            requestId: "req-1",
-            toolName,
-          })];
+          const events: ParsedEvent[] = [
+            makeEvent({
+              type: "permission_request",
+              requestId: "req-1",
+              toolName,
+            }),
+          ];
           const result = processEvents(events, state, planOpts);
 
           expect(result.permissionActions[0].type).toBe("store");
@@ -776,7 +812,7 @@ describe("processEvents", () => {
         makeEvent({ type: "text_delta", text: "done" }),
         makeEvent({ type: "message_done", message: msg }),
       ];
-      const result = processEvents(events, state, defaults);
+      const _result = processEvents(events, state, defaults);
 
       expect(msg.toolUses).toHaveLength(1);
       expect(msg.toolUses[0].status).toBe("done");

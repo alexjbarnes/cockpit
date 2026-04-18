@@ -1,14 +1,6 @@
 "use client";
 
-import React, {
-  createContext,
-  useContext,
-  useEffect,
-  useRef,
-  useState,
-  useCallback,
-  type ReactNode,
-} from "react";
+import { createContext, type ReactNode, useCallback, useContext, useEffect, useRef, useState } from "react";
 import type { ClientMessage, ServerMessage } from "@/types";
 
 type MessageHandler = (msg: ServerMessage) => void;
@@ -286,11 +278,7 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  return (
-    <WebSocketContext.Provider value={{ connected, send, subscribe }}>
-      {children}
-    </WebSocketContext.Provider>
-  );
+  return <WebSocketContext.Provider value={{ connected, send, subscribe }}>{children}</WebSocketContext.Provider>;
 }
 
 export function useWebSocket(): WebSocketContextValue {

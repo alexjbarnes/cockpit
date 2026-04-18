@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useCallback, useState } from "react";
 import type { ChatMessage } from "@/types";
 
 function extractText(message: ChatMessage): string {
@@ -9,9 +9,7 @@ function extractText(message: ChatMessage): string {
   if (message.role === "user") return message.content;
 
   // Assistant: use text blocks only, fall back to content
-  const textBlocks = message.blocks
-    .filter((b): b is { type: "text"; text: string } => b.type === "text")
-    .map((b) => b.text);
+  const textBlocks = message.blocks.filter((b): b is { type: "text"; text: string } => b.type === "text").map((b) => b.text);
 
   return textBlocks.length > 0 ? textBlocks.join("\n") : message.content;
 }
@@ -42,9 +40,7 @@ export function useMessageSelection() {
 
   const copySelected = useCallback(
     async (messages: ChatMessage[]) => {
-      const selected = messages.filter(
-        (m) => selectedIds.has(m.id) && m.role !== "system"
-      );
+      const selected = messages.filter((m) => selectedIds.has(m.id) && m.role !== "system");
       const text = selected.map(extractText).filter(Boolean).join("\n\n---\n\n");
       if (text) {
         if (navigator.clipboard?.writeText) {
@@ -62,7 +58,7 @@ export function useMessageSelection() {
       }
       setSelectedIds(new Set());
     },
-    [selectedIds]
+    [selectedIds],
   );
 
   return {

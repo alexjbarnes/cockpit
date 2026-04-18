@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 export type DiffStyle = "split" | "unified";
 export type ThinkingLevel = "low" | "medium" | "high" | "xhigh" | "max";
@@ -37,20 +37,17 @@ export function useSettings() {
       .catch(() => setLoaded(true));
   }, []);
 
-  const updateSetting = useCallback(
-    <K extends keyof Settings>(key: K, value: Settings[K]) => {
-      setSettings((prev) => {
-        const next = { ...prev, [key]: value };
-        fetch("/api/defaults", {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ [key]: value }),
-        }).catch(() => {});
-        return next;
-      });
-    },
-    []
-  );
+  const updateSetting = useCallback(<K extends keyof Settings>(key: K, value: Settings[K]) => {
+    setSettings((prev) => {
+      const next = { ...prev, [key]: value };
+      fetch("/api/defaults", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ [key]: value }),
+      }).catch(() => {});
+      return next;
+    });
+  }, []);
 
   return { settings, updateSetting, loaded };
 }

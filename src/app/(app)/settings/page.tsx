@@ -1,13 +1,13 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { ChevronRight, Download, RefreshCw } from "lucide-react";
 import { useRouter } from "next/navigation";
+import { useCallback, useEffect, useState } from "react";
 import { usePageHeader } from "@/components/app-shell";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { useSettings, type DiffStyle, type ThinkingLevel } from "@/hooks/use-settings";
-import { ChevronRight, RefreshCw, Download } from "lucide-react";
-import { resolveModel, allowedEffortLevels } from "@/lib/models";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { type DiffStyle, type ThinkingLevel, useSettings } from "@/hooks/use-settings";
+import { allowedEffortLevels, resolveModel } from "@/lib/models";
 
 type Theme = "light" | "dark" | "system";
 
@@ -71,11 +71,13 @@ function applyTheme(theme: Theme) {
 }
 
 function Toggle({ enabled, color, onToggle }: { enabled: boolean; color?: string; onToggle: () => void }) {
-  const bg = enabled ? (color || "bg-green-500") : "bg-muted-foreground/30";
+  const bg = enabled ? color || "bg-green-500" : "bg-muted-foreground/30";
   return (
     <button onClick={onToggle} className="shrink-0">
       <span className={`inline-flex h-7 w-12 items-center rounded-full transition-colors ${bg}`}>
-        <span className={`inline-block h-5 w-5 rounded-full bg-white shadow transition-transform ${enabled ? "translate-x-6" : "translate-x-1"}`} />
+        <span
+          className={`inline-block h-5 w-5 rounded-full bg-white shadow transition-transform ${enabled ? "translate-x-6" : "translate-x-1"}`}
+        />
       </span>
     </button>
   );
@@ -102,16 +104,19 @@ function NavRow({ label, onClick }: { label: string; onClick: () => void }) {
   );
 }
 
-function ButtonGroup<T extends string>({ options, value, onChange }: { options: { value: T; label: string }[]; value: T; onChange: (v: T) => void }) {
+function ButtonGroup<T extends string>({
+  options,
+  value,
+  onChange,
+}: {
+  options: { value: T; label: string }[];
+  value: T;
+  onChange: (v: T) => void;
+}) {
   return (
     <div className="flex gap-1">
       {options.map((opt) => (
-        <Button
-          key={opt.value}
-          variant={value === opt.value ? "default" : "outline"}
-          size="sm"
-          onClick={() => onChange(opt.value)}
-        >
+        <Button key={opt.value} variant={value === opt.value ? "default" : "outline"} size="sm" onClick={() => onChange(opt.value)}>
           {opt.label}
         </Button>
       ))}
@@ -180,7 +185,9 @@ export default function SettingsPage() {
   }, []);
 
   return (
-    <div className={`flex-1 min-h-0 overflow-y-auto p-4 space-y-4 transition-opacity duration-150 ${settingsLoaded ? "opacity-100" : "opacity-0"}`}>
+    <div
+      className={`flex-1 min-h-0 overflow-y-auto p-4 space-y-4 transition-opacity duration-150 ${settingsLoaded ? "opacity-100" : "opacity-0"}`}
+    >
       <Card>
         <CardHeader>
           <div className="flex items-center justify-between">
@@ -257,7 +264,11 @@ export default function SettingsPage() {
             );
           })()}
           <SettingRow label="Bypass all permissions">
-            <Toggle enabled={settings.bypassAllPermissions} color="bg-orange-500" onToggle={() => updateSetting("bypassAllPermissions", !settings.bypassAllPermissions)} />
+            <Toggle
+              enabled={settings.bypassAllPermissions}
+              color="bg-orange-500"
+              onToggle={() => updateSetting("bypassAllPermissions", !settings.bypassAllPermissions)}
+            />
           </SettingRow>
         </CardContent>
       </Card>
@@ -274,7 +285,10 @@ export default function SettingsPage() {
           </SettingRow>
           <SettingRow label="Thinking blocks">
             <ButtonGroup
-              options={[{ value: "collapsed" as const, label: "Collapsed" }, { value: "expanded" as const, label: "Expanded" }]}
+              options={[
+                { value: "collapsed" as const, label: "Collapsed" },
+                { value: "expanded" as const, label: "Expanded" },
+              ]}
               value={settings.thinkingExpanded ? "expanded" : "collapsed"}
               onChange={(v) => updateSetting("thinkingExpanded", v === "expanded")}
             />
@@ -287,7 +301,10 @@ export default function SettingsPage() {
         </CardHeader>
         <CardContent>
           <SettingRow label="Dismiss keyboard on send">
-            <Toggle enabled={settings.dismissKeyboardOnSend} onToggle={() => updateSetting("dismissKeyboardOnSend", !settings.dismissKeyboardOnSend)} />
+            <Toggle
+              enabled={settings.dismissKeyboardOnSend}
+              onToggle={() => updateSetting("dismissKeyboardOnSend", !settings.dismissKeyboardOnSend)}
+            />
           </SettingRow>
         </CardContent>
       </Card>

@@ -1,8 +1,8 @@
 "use client";
 
-import { Input } from "@/components/ui/input";
-import { Button } from "@/components/ui/button";
 import { Plus, X } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 
 interface KeyValueEditorProps {
   value: Record<string, string>;
@@ -11,12 +11,7 @@ interface KeyValueEditorProps {
   valuePlaceholder?: string;
 }
 
-export function KeyValueEditor({
-  value,
-  onChange,
-  keyPlaceholder = "Key",
-  valuePlaceholder = "Value",
-}: KeyValueEditorProps) {
+export function KeyValueEditor({ value, onChange, keyPlaceholder = "Key", valuePlaceholder = "Value" }: KeyValueEditorProps) {
   const entries = Object.entries(value);
 
   function updateKey(oldKey: string, newKey: string) {

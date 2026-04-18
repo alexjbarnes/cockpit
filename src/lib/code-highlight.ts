@@ -78,11 +78,7 @@ export function stripLineNumbers(raw: string): { code: string; startLine: number
   return { code: stripped.join("\n"), startLine };
 }
 
-export async function highlightCode(
-  code: string,
-  language: string,
-  theme: "github-dark" | "github-light"
-): Promise<string | null> {
+export async function highlightCode(code: string, language: string, theme: "github-dark" | "github-light"): Promise<string | null> {
   try {
     const shiki = await import("shiki/bundle/full");
     return await shiki.codeToHtml(code, { lang: language, theme });

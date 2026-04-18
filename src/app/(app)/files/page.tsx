@@ -13,11 +13,7 @@ export default function FilesPage() {
   useShellCwd(cwd || undefined);
 
   if (!cwd) {
-    return (
-      <div className="flex items-center justify-center h-full text-sm text-muted-foreground">
-        No working directory specified.
-      </div>
-    );
+    return <div className="flex items-center justify-center h-full text-sm text-muted-foreground">No working directory specified.</div>;
   }
 
   return <FilesView cwd={cwd} initialFile={file} />;

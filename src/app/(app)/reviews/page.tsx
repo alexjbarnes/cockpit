@@ -1,9 +1,9 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { Building2, Globe, Loader2, Lock, RefreshCw, Search } from "lucide-react";
 import { useRouter } from "next/navigation";
+import { useCallback, useEffect, useState } from "react";
 import { usePageHeader } from "@/components/app-shell";
-import { Loader2, Search, Lock, Globe, Building2, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
@@ -129,9 +129,8 @@ export default function ReviewsPage() {
 
   const sorted = [...repos].sort((a, b) => a.name.localeCompare(b.name));
   const filtered = search
-    ? sorted.filter((r) =>
-        r.name.toLowerCase().includes(search.toLowerCase()) ||
-        r.description?.toLowerCase().includes(search.toLowerCase()),
+    ? sorted.filter(
+        (r) => r.name.toLowerCase().includes(search.toLowerCase()) || r.description?.toLowerCase().includes(search.toLowerCase()),
       )
     : sorted;
 
@@ -146,9 +145,7 @@ export default function ReviewsPage() {
   if (orgsError) {
     return (
       <div className="flex-1 p-4">
-        <div className="rounded-md border border-destructive/50 bg-destructive/10 p-4 text-sm text-destructive">
-          {orgsError}
-        </div>
+        <div className="rounded-md border border-destructive/50 bg-destructive/10 p-4 text-sm text-destructive">{orgsError}</div>
       </div>
     );
   }
@@ -216,9 +213,7 @@ export default function ReviewsPage() {
       )}
 
       {reposError && (
-        <div className="rounded-md border border-destructive/50 bg-destructive/10 p-4 text-sm text-destructive">
-          {reposError}
-        </div>
+        <div className="rounded-md border border-destructive/50 bg-destructive/10 p-4 text-sm text-destructive">{reposError}</div>
       )}
 
       {!reposLoading && !reposError && filtered.length === 0 && (
@@ -242,14 +237,10 @@ export default function ReviewsPage() {
                   <Globe className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
                 )}
                 <span className="font-medium text-sm truncate">{repo.name}</span>
-                {repo.primaryLanguage && (
-                  <span className="text-xs text-muted-foreground shrink-0">{repo.primaryLanguage.name}</span>
-                )}
+                {repo.primaryLanguage && <span className="text-xs text-muted-foreground shrink-0">{repo.primaryLanguage.name}</span>}
                 <span className="text-xs text-muted-foreground shrink-0 ml-auto">{timeAgo(repo.pushedAt)}</span>
               </div>
-              {repo.description && (
-                <p className="text-xs text-muted-foreground mt-1 truncate">{repo.description}</p>
-              )}
+              {repo.description && <p className="text-xs text-muted-foreground mt-1 truncate">{repo.description}</p>}
             </button>
           ))}
         </div>

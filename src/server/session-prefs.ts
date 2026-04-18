@@ -1,7 +1,7 @@
-import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import type { ThinkingLevel, InitData } from "@/types";
+import { join } from "node:path";
+import type { InitData, ThinkingLevel } from "@/types";
 
 export interface SessionPrefs {
   name?: string;

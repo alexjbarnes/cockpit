@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { ClipboardCheck, Send } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { PendingPermission } from "@/hooks/use-session";
 import type { PermissionMode } from "@/types";
 
@@ -58,29 +58,30 @@ export function PlanApprovalPrompt({ permission, onRespond, onSendMessage, onSet
     }
   }, [showFeedback]);
 
-  const handleProceed = useCallback((optionIndex: number) => {
-    const opt = OPTIONS[optionIndex];
-    if (opt.autoAccept) {
-      onSetBypass(true);
-    }
-    if (opt.clearContext) {
-      // Reject ExitPlanMode (stops agent from continuing in old context),
-      // clear conversation, then start a fresh turn. /clear kills the process
-      // and creates a new session ID so the CLI starts with a clean context.
-      // The new session won't know the plan file, so we include its path.
-      const planRef = permission.planFilePath
-        ? ` at ${permission.planFilePath}`
-        : "";
-      onRespond(permission.requestId, false, "deny");
-      onSetPlanMode(false);
-      setTimeout(() => {
-        onSendMessage("/clear");
-        setTimeout(() => onSendMessage(`Implement the plan${planRef}`), 200);
-      }, 100);
-    } else {
-      onRespond(permission.requestId, true, "allow");
-    }
-  }, [permission.requestId, permission.planFilePath, onRespond, onSendMessage, onSetBypass]);
+  const handleProceed = useCallback(
+    (optionIndex: number) => {
+      const opt = OPTIONS[optionIndex];
+      if (opt.autoAccept) {
+        onSetBypass(true);
+      }
+      if (opt.clearContext) {
+        // Reject ExitPlanMode (stops agent from continuing in old context),
+        // clear conversation, then start a fresh turn. /clear kills the process
+        // and creates a new session ID so the CLI starts with a clean context.
+        // The new session won't know the plan file, so we include its path.
+        const planRef = permission.planFilePath ? ` at ${permission.planFilePath}` : "";
+        onRespond(permission.requestId, false, "deny");
+        onSetPlanMode(false);
+        setTimeout(() => {
+          onSendMessage("/clear");
+          setTimeout(() => onSendMessage(`Implement the plan${planRef}`), 200);
+        }, 100);
+      } else {
+        onRespond(permission.requestId, true, "allow");
+      }
+    },
+    [permission.requestId, permission.planFilePath, onRespond, onSendMessage, onSetBypass, onSetPlanMode],
+  );
 
   const handleDismiss = useCallback(() => {
     onRespond(permission.requestId, false, "deny");
@@ -96,41 +97,44 @@ export function PlanApprovalPrompt({ permission, onRespond, onSendMessage, onSet
     setTimeout(() => onSendMessage(text), 100);
   }, [feedback, permission.requestId, onRespond, onSendMessage]);
 
-  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
-    if (showFeedback) {
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      if (showFeedback) {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          setShowFeedback(false);
+          containerRef.current?.focus();
+        } else if (e.key === "Enter" && !e.shiftKey) {
+          e.preventDefault();
+          handleSendFeedback();
+        }
+        return;
+      }
+
       if (e.key === "Escape") {
         e.preventDefault();
-        setShowFeedback(false);
-        containerRef.current?.focus();
-      } else if (e.key === "Enter" && !e.shiftKey) {
-        e.preventDefault();
-        handleSendFeedback();
-      }
-      return;
-    }
-
-    if (e.key === "Escape") {
-      e.preventDefault();
-      handleDismiss();
-      return;
-    }
-    if (e.key === "ArrowUp" || e.key === "k") {
-      e.preventDefault();
-      setSelected((s) => Math.max(0, s - 1));
-    } else if (e.key === "ArrowDown" || e.key === "j") {
-      e.preventDefault();
-      setSelected((s) => Math.min(OPTIONS.length + 1, s + 1));
-    } else if (e.key === "Enter") {
-      e.preventDefault();
-      if (selected === OPTIONS.length) {
-        setShowFeedback(true);
-      } else if (selected === OPTIONS.length + 1) {
         handleDismiss();
-      } else {
-        handleProceed(selected);
+        return;
       }
-    }
-  }, [showFeedback, selected, handleProceed, handleSendFeedback, handleDismiss]);
+      if (e.key === "ArrowUp" || e.key === "k") {
+        e.preventDefault();
+        setSelected((s) => Math.max(0, s - 1));
+      } else if (e.key === "ArrowDown" || e.key === "j") {
+        e.preventDefault();
+        setSelected((s) => Math.min(OPTIONS.length + 1, s + 1));
+      } else if (e.key === "Enter") {
+        e.preventDefault();
+        if (selected === OPTIONS.length) {
+          setShowFeedback(true);
+        } else if (selected === OPTIONS.length + 1) {
+          handleDismiss();
+        } else {
+          handleProceed(selected);
+        }
+      }
+    },
+    [showFeedback, selected, handleProceed, handleSendFeedback, handleDismiss],
+  );
 
   return (
     <div className="mx-auto max-w-3xl">
@@ -146,9 +150,7 @@ export function PlanApprovalPrompt({ permission, onRespond, onSendMessage, onSet
             <div className="text-sm font-medium">Would you like to proceed?</div>
             {allowedPrompts.length > 0 && (
               <div className="space-y-1">
-                <div className="text-xs text-muted-foreground">
-                  Permissions requested for implementation:
-                </div>
+                <div className="text-xs text-muted-foreground">Permissions requested for implementation:</div>
                 <ul className="text-xs text-muted-foreground space-y-0.5">
                   {allowedPrompts.map((p, i) => (
                     <li key={i} className="flex items-center gap-1.5 pl-2">
@@ -166,25 +168,19 @@ export function PlanApprovalPrompt({ permission, onRespond, onSendMessage, onSet
                   onClick={() => handleProceed(i)}
                   onMouseEnter={() => setSelected(i)}
                   className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs transition-colors ${
-                    selected === i
-                      ? "bg-blue-600/20 text-foreground"
-                      : "text-muted-foreground hover:text-foreground"
+                    selected === i ? "bg-blue-600/20 text-foreground" : "text-muted-foreground hover:text-foreground"
                   }`}
                 >
                   <span className="shrink-0 font-mono text-blue-500 w-4">{i + 1}.</span>
                   <span>{opt.label}</span>
-                  {i === 0 && (
-                    <span className="ml-auto text-[10px] text-muted-foreground hidden sm:inline">default</span>
-                  )}
+                  {i === 0 && <span className="ml-auto text-[10px] text-muted-foreground hidden sm:inline">default</span>}
                 </button>
               ))}
               <button
                 onClick={() => setShowFeedback(true)}
                 onMouseEnter={() => setSelected(OPTIONS.length)}
                 className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs transition-colors ${
-                  selected === OPTIONS.length
-                    ? "bg-blue-600/20 text-foreground"
-                    : "text-muted-foreground hover:text-foreground"
+                  selected === OPTIONS.length ? "bg-blue-600/20 text-foreground" : "text-muted-foreground hover:text-foreground"
                 }`}
               >
                 <span className="shrink-0 font-mono text-blue-500 w-4">5.</span>
@@ -194,9 +190,7 @@ export function PlanApprovalPrompt({ permission, onRespond, onSendMessage, onSet
                 onClick={handleDismiss}
                 onMouseEnter={() => setSelected(OPTIONS.length + 1)}
                 className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs transition-colors ${
-                  selected === OPTIONS.length + 1
-                    ? "bg-blue-600/20 text-foreground"
-                    : "text-muted-foreground hover:text-foreground"
+                  selected === OPTIONS.length + 1 ? "bg-blue-600/20 text-foreground" : "text-muted-foreground hover:text-foreground"
                 }`}
               >
                 <span className="shrink-0 font-mono text-muted-foreground w-4">Esc</span>

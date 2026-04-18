@@ -1,14 +1,12 @@
-import { NextRequest, NextResponse } from "next/server";
-import { readdir, stat, realpath } from "node:fs/promises";
+import { readdir, realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
-import { validateSession, isAuthDisabled } from "@/server/auth";
+import { NextRequest, NextResponse } from "next/server";
+import { isAuthDisabled, validateSession } from "@/server/auth";
 
 function authenticate(req: NextRequest): boolean {
   if (isAuthDisabled()) return true;
-  const token =
-    req.cookies.get("cockpit_session")?.value ||
-    req.headers.get("authorization")?.replace("Bearer ", "");
+  const token = req.cookies.get("cockpit_session")?.value || req.headers.get("authorization")?.replace("Bearer ", "");
   return !!token && validateSession(token);
 }
 
@@ -27,7 +25,7 @@ export async function GET(req: NextRequest) {
   }
 
   const info = await stat(resolved).catch(() => null);
-  if (!info || !info.isDirectory()) {
+  if (!info?.isDirectory()) {
     return NextResponse.json({ error: "Path is not a directory" }, { status: 400 });
   }
 
@@ -38,17 +36,13 @@ export async function GET(req: NextRequest) {
     .filter((d) => d.isDirectory() || (includeFiles && d.isFile()))
     .filter((d) => showHidden || !d.name.startsWith("."));
 
-  const dirs = filtered
-    .filter((d) => d.isDirectory())
-    .sort((a, b) => a.name.localeCompare(b.name));
-  const files = filtered
-    .filter((d) => d.isFile())
-    .sort((a, b) => a.name.localeCompare(b.name));
+  const dirs = filtered.filter((d) => d.isDirectory()).sort((a, b) => a.name.localeCompare(b.name));
+  const files = filtered.filter((d) => d.isFile()).sort((a, b) => a.name.localeCompare(b.name));
 
   const entries = [...dirs, ...files].map((d) => ({
     name: d.name,
     path: path.join(resolved, d.name),
-    type: d.isDirectory() ? "directory" as const : "file" as const,
+    type: d.isDirectory() ? ("directory" as const) : ("file" as const),
   }));
 
   return NextResponse.json({ path: resolved, entries });

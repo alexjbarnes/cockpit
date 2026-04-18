@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { X, Shrink } from "lucide-react";
+import { Shrink, X } from "lucide-react";
+import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import type { ContextUsage } from "@/types";
 
@@ -19,7 +19,9 @@ export function ContextIndicator({ usage, onCompact }: ContextIndicatorProps) {
   const [open, setOpen] = useState(false);
   useEffect(() => {
     if (!open) return;
-    const h = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    const h = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
     window.addEventListener("keydown", h);
     return () => window.removeEventListener("keydown", h);
   }, [open]);
@@ -96,7 +98,10 @@ export function ContextIndicator({ usage, onCompact }: ContextIndicatorProps) {
                 variant="outline"
                 size="sm"
                 className="w-full mt-4"
-                onClick={() => { onCompact(); setOpen(false); }}
+                onClick={() => {
+                  onCompact();
+                  setOpen(false);
+                }}
               >
                 <Shrink className="h-3.5 w-3.5 mr-2" />
                 Compact now

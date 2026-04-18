@@ -1,14 +1,12 @@
-import { NextRequest, NextResponse } from "next/server";
 import { readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
-import { validateSession, isAuthDisabled } from "@/server/auth";
+import { NextRequest, NextResponse } from "next/server";
+import { isAuthDisabled, validateSession } from "@/server/auth";
 
 function authenticate(req: NextRequest): boolean {
   if (isAuthDisabled()) return true;
-  const token =
-    req.cookies.get("cockpit_session")?.value ||
-    req.headers.get("authorization")?.replace("Bearer ", "");
+  const token = req.cookies.get("cockpit_session")?.value || req.headers.get("authorization")?.replace("Bearer ", "");
   return !!token && validateSession(token);
 }
 
@@ -27,7 +25,7 @@ const HOOK_EVENTS = [
   "SessionEnd",
 ] as const;
 
-type HookEvent = typeof HOOK_EVENTS[number];
+type HookEvent = (typeof HOOK_EVENTS)[number];
 
 interface HookEntry {
   type: "command" | "http" | "prompt" | "agent";
@@ -123,9 +121,7 @@ export async function PUT(req: NextRequest) {
   // Resolve __global__ sentinel to actual path
   const url = new URL(req.url);
   const cwd = url.searchParams.get("cwd");
-  const resolvedPath = filePath === "__global__"
-    ? path.join(homedir(), ".claude", "settings.json")
-    : filePath;
+  const resolvedPath = filePath === "__global__" ? path.join(homedir(), ".claude", "settings.json") : filePath;
 
   // Security: validate filePath is a known settings location
   const validPaths = getSettingsPaths(cwd).map((p) => p.path);

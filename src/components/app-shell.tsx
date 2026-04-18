@@ -1,26 +1,18 @@
 "use client";
 
-import {
-  createContext,
-  useContext,
-  useState,
-  useEffect,
-  useCallback,
-  useRef,
-  type ReactNode,
-} from "react";
-import { AuthGuard } from "@/components/auth-guard";
-import { WebSocketProvider } from "@/hooks/use-websocket";
-import { UsageButton } from "@/components/usage-modal";
-import { Sidebar, type SidebarHandle } from "@/components/sidebar";
-import { Button } from "@/components/ui/button";
-import { useRouter } from "next/navigation";
 import { FolderOpen, Menu } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { createContext, type ReactNode, useCallback, useContext, useEffect, useRef, useState } from "react";
+import { AuthGuard } from "@/components/auth-guard";
 import { GitStatusButton } from "@/components/git-status-modal";
+import { SearchButton } from "@/components/search-modal";
+import { Sidebar, type SidebarHandle } from "@/components/sidebar";
 import { BackgroundTasksButton } from "@/components/task-indicator";
 import { TodoIndicator } from "@/components/todo-indicator";
-import { SearchButton } from "@/components/search-modal";
-import type { BackgroundTask, TodoItem, InitData } from "@/types";
+import { Button } from "@/components/ui/button";
+import { UsageButton } from "@/components/usage-modal";
+import { WebSocketProvider } from "@/hooks/use-websocket";
+import type { BackgroundTask, InitData, TodoItem } from "@/types";
 
 interface HeaderConfig {
   title: string;
@@ -91,12 +83,7 @@ export function useShellSessionId(id: string | undefined) {
 function FileBrowserButton({ cwd }: { cwd: string }) {
   const router = useRouter();
   return (
-    <Button
-      variant="ghost"
-      size="icon"
-      onClick={() => router.push(`/files?cwd=${encodeURIComponent(cwd)}`)}
-      title="Browse files"
-    >
+    <Button variant="ghost" size="icon" onClick={() => router.push(`/files?cwd=${encodeURIComponent(cwd)}`)} title="Browse files">
       <FolderOpen className="h-4 w-4" />
     </Button>
   );
@@ -107,7 +94,9 @@ function EditableTitle({ title, onRename }: { title: string; onRename?: (name: s
   const [value, setValue] = useState(title);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => { setValue(title); }, [title]);
+  useEffect(() => {
+    setValue(title);
+  }, [title]);
 
   useEffect(() => {
     if (editing) inputRef.current?.select();
@@ -143,7 +132,10 @@ function EditableTitle({ title, onRename }: { title: string; onRename?: (name: s
       onBlur={commit}
       onKeyDown={(e) => {
         if (e.key === "Enter") commit();
-        if (e.key === "Escape") { setValue(title); setEditing(false); }
+        if (e.key === "Escape") {
+          setValue(title);
+          setEditing(false);
+        }
       }}
       className="text-sm font-bold bg-transparent border-b border-primary outline-none w-40"
     />
@@ -198,7 +190,24 @@ export function AppShell({ children }: { children: ReactNode }) {
   return (
     <AuthGuard>
       <WebSocketProvider>
-        <ShellContext.Provider value={{ setHeader, cwd, setCwd, sessionId, setSessionId, backgroundTasks, setBackgroundTasks, todos, setTodos, initData, setInitData, sidebarContent, setSidebarContent, closeSidebar }}>
+        <ShellContext.Provider
+          value={{
+            setHeader,
+            cwd,
+            setCwd,
+            sessionId,
+            setSessionId,
+            backgroundTasks,
+            setBackgroundTasks,
+            todos,
+            setTodos,
+            initData,
+            setInitData,
+            sidebarContent,
+            setSidebarContent,
+            closeSidebar,
+          }}
+        >
           <div className="fixed inset-0 flex">
             <Sidebar ref={sidebarRef} />
             <div className="flex-1 min-h-0 min-w-0 flex flex-col">
@@ -218,9 +227,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                   {cwd && <FileBrowserButton cwd={cwd} />}
                 </div>
               </header>
-              <main className="flex-1 min-h-0 min-w-0 flex flex-col">
-                {children}
-              </main>
+              <main className="flex-1 min-h-0 min-w-0 flex flex-col">{children}</main>
             </div>
           </div>
         </ShellContext.Provider>

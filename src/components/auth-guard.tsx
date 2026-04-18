@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
+import { type ReactNode, useEffect, useState } from "react";
 
 let authVerified = false;
 

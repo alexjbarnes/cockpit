@@ -1,12 +1,12 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback } from "react";
 import { Loader2, X } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { MessageBubble } from "./message-bubble";
-import { useShell } from "./app-shell";
 import type { ChatMessage } from "@/types";
+import { useShell } from "./app-shell";
+import { MessageBubble } from "./message-bubble";
 
 interface MessageContextModalProps {
   timestamp: number;
@@ -60,9 +60,12 @@ export function MessageContextModal({ timestamp, onClose }: MessageContextModalP
     return () => window.removeEventListener("keydown", handler, true);
   }, [onClose]);
 
-  const handleOverlayClick = useCallback((e: React.MouseEvent) => {
-    if (e.target === e.currentTarget) onClose();
-  }, [onClose]);
+  const handleOverlayClick = useCallback(
+    (e: React.MouseEvent) => {
+      if (e.target === e.currentTarget) onClose();
+    },
+    [onClose],
+  );
 
   return (
     <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" onClick={handleOverlayClick}>
@@ -79,21 +82,17 @@ export function MessageContextModal({ timestamp, onClose }: MessageContextModalP
               <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
             </div>
           )}
-          {error && (
-            <div className="text-center text-sm text-red-500 py-12">{error}</div>
-          )}
-          {!loading && messages.map((msg) => (
-            <div
-              key={msg.id}
-              ref={msg.id === targetId ? targetRef : undefined}
-              className={msg.id === targetId ? "ring-2 ring-primary/50 rounded-lg" : undefined}
-            >
-              <MessageBubble
-                message={msg}
-                expandedToolIds={expandedToolIds}
-              />
-            </div>
-          ))}
+          {error && <div className="text-center text-sm text-red-500 py-12">{error}</div>}
+          {!loading &&
+            messages.map((msg) => (
+              <div
+                key={msg.id}
+                ref={msg.id === targetId ? targetRef : undefined}
+                className={msg.id === targetId ? "ring-2 ring-primary/50 rounded-lg" : undefined}
+              >
+                <MessageBubble message={msg} expandedToolIds={expandedToolIds} />
+              </div>
+            ))}
         </div>
       </Card>
     </div>

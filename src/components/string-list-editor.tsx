@@ -1,8 +1,8 @@
 "use client";
 
-import { Input } from "@/components/ui/input";
-import { Button } from "@/components/ui/button";
 import { Plus, X } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 
 interface StringListEditorProps {
   value: string[];
@@ -10,11 +10,7 @@ interface StringListEditorProps {
   placeholder?: string;
 }
 
-export function StringListEditor({
-  value,
-  onChange,
-  placeholder = "Value",
-}: StringListEditorProps) {
+export function StringListEditor({ value, onChange, placeholder = "Value" }: StringListEditorProps) {
   function updateItem(index: number, newValue: string) {
     const next = [...value];
     next[index] = newValue;

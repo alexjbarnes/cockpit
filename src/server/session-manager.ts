@@ -1,17 +1,28 @@
-import { spawn, type ChildProcess } from "node:child_process";
-import { type Writable } from "node:stream";
+import { type ChildProcess, spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import path from "node:path";
+import { type Writable } from "node:stream";
 import { v4 as uuidv4 } from "uuid";
-import type { SessionInfo, ChatMessage, ToolUse, ContentBlock, ThinkingLevel, ContextUsage, TodoItem, ImageAttachment, DocumentAttachment, InitData } from "@/types";
-import { EventParser, type ParsedEvent } from "./event-parser";
-import { createStreamState, processEvents, isReadOnlyBashCommand, type StreamState } from "./stream-processor";
-import { loadTranscript, loadMoreMessages, transcriptExists, findSessionCwd } from "./transcript";
-import { logRawLine, logDiag } from "./debug-logger";
-import { getSessionPrefs, setSessionPrefs } from "./session-prefs";
+import { allowedEffortLevels, coerceEffort, recommendedEffort, resolveModel } from "@/lib/models";
+import type {
+  ChatMessage,
+  ContentBlock,
+  ContextUsage,
+  DocumentAttachment,
+  ImageAttachment,
+  InitData,
+  SessionInfo,
+  ThinkingLevel,
+  TodoItem,
+  ToolUse,
+} from "@/types";
+import { logDiag, logRawLine } from "./debug-logger";
 import { getDefaults } from "./defaults";
+import { EventParser, type ParsedEvent } from "./event-parser";
 import { findLatestPlanFile } from "./plans";
-import { resolveModel, allowedEffortLevels, recommendedEffort, coerceEffort } from "@/lib/models";
+import { getSessionPrefs, setSessionPrefs } from "./session-prefs";
+import { createStreamState, processEvents } from "./stream-processor";
+import { findSessionCwd, loadMoreMessages, loadTranscript, transcriptExists } from "./transcript";
 
 export interface SessionEvents {
   event: [sessionId: string, event: ParsedEvent];
@@ -76,7 +87,6 @@ interface Session {
 
 export class SessionManager {
   private sessions = new Map<string, Session>();
-  private staleCheckInterval: ReturnType<typeof setInterval>;
 
   constructor() {
     // Periodically check for sessions stuck in "running" with a dead process
@@ -186,14 +196,16 @@ export class SessionManager {
     return session;
   }
 
-  async getSession(id: string): Promise<{ info: SessionInfo; messages: ChatMessage[]; hasMore: boolean; lastUsage: { used: number; total: number } | null } | null> {
+  async getSession(
+    id: string,
+  ): Promise<{ info: SessionInfo; messages: ChatMessage[]; hasMore: boolean; lastUsage: { used: number; total: number } | null } | null> {
     let session = this.sessions.get(id);
     if (!session) {
       // After server restart, session isn't in memory but transcript exists on disk.
       // Try cliSessionId from prefs first (may differ from Map key after /clear),
       // then fall back to the Map key itself.
       const prefs = getSessionPrefs(id);
-      const cwd = await findSessionCwd(prefs?.cliSessionId || id) || await findSessionCwd(id);
+      const cwd = (await findSessionCwd(prefs?.cliSessionId || id)) || (await findSessionCwd(id));
       if (!cwd) return null;
       this.ensureSession(id, cwd);
       session = this.sessions.get(id)!;
@@ -250,7 +262,10 @@ export class SessionManager {
     return { info: session.info, messages: clientMessages, hasMore, lastUsage };
   }
 
-  async getSessionByCwd(id: string, cwd: string): Promise<{ info: SessionInfo; messages: ChatMessage[]; hasMore: boolean; lastUsage: { used: number; total: number } | null } | null> {
+  async getSessionByCwd(
+    id: string,
+    cwd: string,
+  ): Promise<{ info: SessionInfo; messages: ChatMessage[]; hasMore: boolean; lastUsage: { used: number; total: number } | null } | null> {
     this.ensureSession(id, cwd);
     const session = this.sessions.get(id)!;
     const result = await loadTranscript(session.cliSessionId, cwd, { tailLines: 150 });
@@ -332,10 +347,7 @@ export class SessionManager {
     if (session.transcriptByteOffset <= 0) {
       // Current transcript fully read. Chain into previous CLI session transcripts.
       // Skip entries matching the buffer's current session (already loaded via fallback).
-      while (
-        prevIds.length > 0 &&
-        prevIds[prevIds.length - 1] === session.bufferCliSessionId
-      ) {
+      while (prevIds.length > 0 && prevIds[prevIds.length - 1] === session.bufferCliSessionId) {
         prevIds.pop();
       }
       if (prevIds.length === 0) {
@@ -427,10 +439,7 @@ export class SessionManager {
     return true;
   }
 
-  subscribe(
-    id: string,
-    listener: (event: ParsedEvent) => void
-  ): (() => void) | null {
+  subscribe(id: string, listener: (event: ParsedEvent) => void): (() => void) | null {
     const session = this.sessions.get(id);
     if (!session) return null;
 
@@ -442,10 +451,7 @@ export class SessionManager {
     return () => session.emitter.off("event", handler);
   }
 
-  onStatus(
-    id: string,
-    listener: (status: "idle" | "running") => void
-  ): (() => void) | null {
+  onStatus(id: string, listener: (status: "idle" | "running") => void): (() => void) | null {
     const session = this.sessions.get(id);
     if (!session) return null;
 
@@ -457,10 +463,7 @@ export class SessionManager {
     return () => session.emitter.off("status", handler);
   }
 
-  onError(
-    id: string,
-    listener: (error: string) => void
-  ): (() => void) | null {
+  onError(id: string, listener: (error: string) => void): (() => void) | null {
     const session = this.sessions.get(id);
     if (!session) return null;
 
@@ -529,7 +532,14 @@ export class SessionManager {
     return Array.from(session.pendingRequests.values());
   }
 
-  respondToPermission(sessionId: string, requestId: string, allowed: boolean, toolInput?: Record<string, unknown>, permissionSuggestions?: Record<string, unknown>[], denyReason?: string): boolean {
+  respondToPermission(
+    sessionId: string,
+    requestId: string,
+    allowed: boolean,
+    toolInput?: Record<string, unknown>,
+    permissionSuggestions?: Record<string, unknown>[],
+    denyReason?: string,
+  ): boolean {
     const session = this.sessions.get(sessionId);
     if (!session?.stdin) return false;
 
@@ -579,7 +589,7 @@ export class SessionManager {
 
   clearBypassAllPermissions(sessionId: string): void {
     const session = this.sessions.get(sessionId);
-    if (!session || !session.bypassAllPermissions) return;
+    if (!session?.bypassAllPermissions) return;
     session.bypassAllPermissions = false;
     setSessionPrefs(sessionId, { bypassAllPermissions: false });
     if (!session.planMode) {
@@ -613,7 +623,7 @@ export class SessionManager {
 
   clearPlanMode(sessionId: string): void {
     const session = this.sessions.get(sessionId);
-    if (!session || !session.planMode) return;
+    if (!session?.planMode) return;
     session.planMode = false;
     setSessionPrefs(sessionId, { planMode: false });
     // Kill process so it restarts with --allow-dangerously-skip-permissions,
@@ -828,10 +838,7 @@ export class SessionManager {
     return this.sessions.get(sessionId)?.queuePaused ?? false;
   }
 
-  onQueued(
-    id: string,
-    listener: (count: number, sentText?: string) => void
-  ): (() => void) | null {
+  onQueued(id: string, listener: (count: number, sentText?: string) => void): (() => void) | null {
     const session = this.sessions.get(id);
     if (!session) return null;
     const handler = (_sessionId: string, count: number, sentText?: string) => listener(count, sentText);
@@ -847,10 +854,7 @@ export class SessionManager {
     this.sendMessage(sessionId, next.text, next.images, next.documents);
   }
 
-  onUsage(
-    id: string,
-    listener: (usage: ContextUsage) => void
-  ): (() => void) | null {
+  onUsage(id: string, listener: (usage: ContextUsage) => void): (() => void) | null {
     const session = this.sessions.get(id);
     if (!session) return null;
     const handler = (_sessionId: string, usage: ContextUsage) => listener(usage);
@@ -862,10 +866,7 @@ export class SessionManager {
     return this.sessions.get(sessionId)?.todoItems ?? [];
   }
 
-  onTodos(
-    id: string,
-    listener: (todos: TodoItem[]) => void
-  ): (() => void) | null {
+  onTodos(id: string, listener: (todos: TodoItem[]) => void): (() => void) | null {
     const session = this.sessions.get(id);
     if (!session) return null;
     const handler = (_sessionId: string, todos: TodoItem[]) => listener(todos);
@@ -899,10 +900,7 @@ export class SessionManager {
     setSessionPrefs(sessionId, { initData: session.initData });
   }
 
-  onInit(
-    id: string,
-    listener: (data: InitData) => void
-  ): (() => void) | null {
+  onInit(id: string, listener: (data: InitData) => void): (() => void) | null {
     const session = this.sessions.get(id);
     if (!session) return null;
     const handler = (_sessionId: string, data: InitData) => listener(data);
@@ -915,11 +913,13 @@ export class SessionManager {
       const input = JSON.parse(toolInput);
       const todos = input.todos;
       if (!Array.isArray(todos)) return;
-      session.todoItems = todos.filter((t: Record<string, unknown>) => t.content && t.status).map((t: Record<string, unknown>) => ({
-        content: t.content as string,
-        status: t.status as TodoItem["status"],
-        activeForm: (t.activeForm as string) || undefined,
-      }));
+      session.todoItems = todos
+        .filter((t: Record<string, unknown>) => t.content && t.status)
+        .map((t: Record<string, unknown>) => ({
+          content: t.content as string,
+          status: t.status as TodoItem["status"],
+          activeForm: (t.activeForm as string) || undefined,
+        }));
       session.emitter.emit("todos", sessionId, [...session.todoItems]);
     } catch {
       // invalid input, ignore
@@ -1116,10 +1116,7 @@ export class SessionManager {
     session.emitter.emit("info_updated", sessionId, { ...session.info });
   }
 
-  onSystem(
-    id: string,
-    listener: (text: string) => void
-  ): (() => void) | null {
+  onSystem(id: string, listener: (text: string) => void): (() => void) | null {
     const session = this.sessions.get(id);
     if (!session) return null;
     const handler = (_sessionId: string, text: string) => listener(text);
@@ -1127,10 +1124,7 @@ export class SessionManager {
     return () => session.emitter.off("system", handler);
   }
 
-  onClear(
-    id: string,
-    listener: () => void
-  ): (() => void) | null {
+  onClear(id: string, listener: () => void): (() => void) | null {
     const session = this.sessions.get(id);
     if (!session) return null;
     const handler = () => listener();
@@ -1138,10 +1132,7 @@ export class SessionManager {
     return () => session.emitter.off("clear", handler);
   }
 
-  onInfoUpdated(
-    id: string,
-    listener: (info: SessionInfo) => void
-  ): (() => void) | null {
+  onInfoUpdated(id: string, listener: (info: SessionInfo) => void): (() => void) | null {
     const session = this.sessions.get(id);
     if (!session) return null;
     const handler = (_sessionId: string, info: SessionInfo) => listener(info);
@@ -1228,7 +1219,12 @@ export class SessionManager {
     return false;
   }
 
-  private buildContent(session: Session, text: string, images?: ImageAttachment[], documents?: DocumentAttachment[]): string | Record<string, unknown>[] {
+  private buildContent(
+    session: Session,
+    text: string,
+    images?: ImageAttachment[],
+    documents?: DocumentAttachment[],
+  ): string | Record<string, unknown>[] {
     const reminder = session.pendingPlanReminder ? this.planModeReminderText() : null;
     if (session.pendingPlanReminder) session.pendingPlanReminder = false;
 
@@ -1316,16 +1312,15 @@ Additional Cockpit rules beyond the CLI's defaults:
     this.spawnProcess(session, sessionId);
   }
 
-  private spawnProcess(session: Session, sessionId: string, text?: string, images?: ImageAttachment[], documents?: DocumentAttachment[]): void {
+  private spawnProcess(
+    session: Session,
+    sessionId: string,
+    text?: string,
+    images?: ImageAttachment[],
+    documents?: DocumentAttachment[],
+  ): void {
     this.log(sessionId, `spawning CLI process (resume=${session.hasSpawnedBefore}, model=${session.info.model || "sonnet"})`);
-    const args = [
-      "-p",
-      "--verbose",
-      "--output-format",
-      "stream-json",
-      "--input-format",
-      "stream-json",
-    ];
+    const args = ["-p", "--verbose", "--output-format", "stream-json", "--input-format", "stream-json"];
 
     // In plan mode, omit --allow-dangerously-skip-permissions so the CLI
     // natively enforces tool restrictions and sends permission_requests for

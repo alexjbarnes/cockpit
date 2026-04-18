@@ -1,14 +1,12 @@
-import { NextRequest, NextResponse } from "next/server";
 import { readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
-import { validateSession, isAuthDisabled } from "@/server/auth";
+import { NextRequest, NextResponse } from "next/server";
+import { isAuthDisabled, validateSession } from "@/server/auth";
 
 function authenticate(req: NextRequest): boolean {
   if (isAuthDisabled()) return true;
-  const token =
-    req.cookies.get("cockpit_session")?.value ||
-    req.headers.get("authorization")?.replace("Bearer ", "");
+  const token = req.cookies.get("cockpit_session")?.value || req.headers.get("authorization")?.replace("Bearer ", "");
   return !!token && validateSession(token);
 }
 
@@ -37,10 +35,7 @@ async function writeJsonFile(filePath: string, data: Record<string, unknown>): P
   await writeFile(filePath, JSON.stringify(data, null, 2) + "\n", "utf-8");
 }
 
-export async function GET(
-  req: NextRequest,
-  { params }: { params: Promise<{ name: string }> },
-) {
+export async function GET(req: NextRequest, { params }: { params: Promise<{ name: string }> }) {
   if (!authenticate(req)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
@@ -70,10 +65,7 @@ export async function GET(
   return NextResponse.json({ name, scope, config });
 }
 
-export async function PUT(
-  req: NextRequest,
-  { params }: { params: Promise<{ name: string }> },
-) {
+export async function PUT(req: NextRequest, { params }: { params: Promise<{ name: string }> }) {
   if (!authenticate(req)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
@@ -109,10 +101,7 @@ export async function PUT(
   return NextResponse.json({ ok: true, name, scope });
 }
 
-export async function DELETE(
-  req: NextRequest,
-  { params }: { params: Promise<{ name: string }> },
-) {
+export async function DELETE(req: NextRequest, { params }: { params: Promise<{ name: string }> }) {
   if (!authenticate(req)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }

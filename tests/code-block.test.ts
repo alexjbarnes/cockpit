@@ -1,9 +1,5 @@
-import { describe, it, expect } from "vitest";
-import {
-  languageFromPath,
-  stripLineNumbers,
-  highlightCode,
-} from "@/lib/code-highlight";
+import { describe, expect, it } from "vitest";
+import { highlightCode, languageFromPath, stripLineNumbers } from "@/lib/code-highlight";
 
 describe("languageFromPath", () => {
   it("maps common extensions to shiki language IDs", () => {
@@ -56,9 +52,9 @@ describe("languageFromPath", () => {
 
 describe("stripLineNumbers", () => {
   it("strips cat -n style line number prefixes", () => {
-    const input = "     1\u2192package main\n     2\u2192\n     3\u2192import \"fmt\"";
+    const input = '     1\u2192package main\n     2\u2192\n     3\u2192import "fmt"';
     const result = stripLineNumbers(input);
-    expect(result.code).toBe("package main\n\nimport \"fmt\"");
+    expect(result.code).toBe('package main\n\nimport "fmt"');
     expect(result.startLine).toBe(1);
   });
 
@@ -70,7 +66,7 @@ describe("stripLineNumbers", () => {
   });
 
   it("returns raw code when no line number prefixes found", () => {
-    const input = "func main() {\n    fmt.Println(\"hello\")\n}";
+    const input = 'func main() {\n    fmt.Println("hello")\n}';
     const result = stripLineNumbers(input);
     expect(result.code).toBe(input);
     expect(result.startLine).toBe(1);
@@ -93,11 +89,7 @@ describe("stripLineNumbers", () => {
 
 describe("highlightCode", () => {
   it("produces colored HTML for Go code", async () => {
-    const html = await highlightCode(
-      'func main() {\n\tfmt.Println("hello")\n}',
-      "go",
-      "github-dark"
-    );
+    const html = await highlightCode('func main() {\n\tfmt.Println("hello")\n}', "go", "github-dark");
     expect(html).not.toBeNull();
     expect(html).toContain("color:");
     expect(html).toContain("func");
@@ -105,11 +97,7 @@ describe("highlightCode", () => {
   });
 
   it("produces colored HTML for TypeScript code", async () => {
-    const html = await highlightCode(
-      'const x: number = 42;\nfunction hello(): string { return "hi"; }',
-      "typescript",
-      "github-dark"
-    );
+    const html = await highlightCode('const x: number = 42;\nfunction hello(): string { return "hi"; }', "typescript", "github-dark");
     expect(html).not.toBeNull();
     expect(html).toContain("color:");
     expect(html).toContain("const");
@@ -123,11 +111,7 @@ describe("highlightCode", () => {
   });
 
   it("supports Python", async () => {
-    const html = await highlightCode(
-      "def hello():\n    print('hi')",
-      "python",
-      "github-dark"
-    );
+    const html = await highlightCode("def hello():\n    print('hi')", "python", "github-dark");
     expect(html).not.toBeNull();
     expect(html).toContain("color:");
   });

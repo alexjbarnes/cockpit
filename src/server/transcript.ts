@@ -1,10 +1,19 @@
-import { readFile, readdir, stat, open } from "node:fs/promises";
-import { existsSync, createReadStream } from "node:fs";
+import { createReadStream, existsSync } from "node:fs";
+import { open, readdir, readFile, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline";
-import type { ChatMessage, SessionInfo, SessionGroup, ToolUse, ContentBlock, ImageAttachment, DocumentAttachment, TextFileAttachment } from "@/types";
 import { v4 as uuidv4 } from "uuid";
+import type {
+  ChatMessage,
+  ContentBlock,
+  DocumentAttachment,
+  ImageAttachment,
+  SessionGroup,
+  SessionInfo,
+  TextFileAttachment,
+  ToolUse,
+} from "@/types";
 
 interface TranscriptBlock {
   type: string;
@@ -55,16 +64,20 @@ export function transcriptExists(sessionId: string, cwd: string): boolean {
   return existsSync(getTranscriptPath(sessionId, cwd));
 }
 
-const CLI_XML_RE = /<(?:task-notification|local-command-caveat|local-command-stdout|system-reminder)[^>]*>[\s\S]*?<\/(?:task-notification|local-command-caveat|local-command-stdout|system-reminder)>[\s\S]*/g;
+const CLI_XML_RE =
+  /<(?:task-notification|local-command-caveat|local-command-stdout|system-reminder)[^>]*>[\s\S]*?<\/(?:task-notification|local-command-caveat|local-command-stdout|system-reminder)>[\s\S]*/g;
 
 const FILE_TAG_RE = /<file\s+path="([^"]+)">\n([\s\S]*?)\n<\/file>/g;
 
 function extractTextFiles(text: string): { cleaned: string; textFiles: TextFileAttachment[] } {
   const textFiles: TextFileAttachment[] = [];
-  const cleaned = text.replace(FILE_TAG_RE, (_match, name: string, content: string) => {
-    textFiles.push({ name, content });
-    return "";
-  }).replace(/\n{3,}/g, "\n\n").trim();
+  const cleaned = text
+    .replace(FILE_TAG_RE, (_match, name: string, content: string) => {
+      textFiles.push({ name, content });
+      return "";
+    })
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
   return { cleaned, textFiles };
 }
 
@@ -89,10 +102,7 @@ function stripCliXml(text: string): string {
 
 const INITIAL_CHUNK_SIZE = 64 * 1024; // 64KB
 
-async function readTailLines(
-  filePath: string,
-  targetCount: number,
-): Promise<{ lines: string[]; byteOffset: number; totalSize: number }> {
+async function readTailLines(filePath: string, targetCount: number): Promise<{ lines: string[]; byteOffset: number; totalSize: number }> {
   const fileStat = await stat(filePath);
   const totalSize = fileStat.size;
   if (totalSize === 0) return { lines: [], byteOffset: 0, totalSize };
@@ -225,9 +235,7 @@ export async function loadLastUsage(sessionId: string, cwd: string): Promise<{ u
         }
         break;
       }
-    } catch {
-      continue;
-    }
+    } catch {}
   }
 
   for (let i = lines.length - 1; i >= 0; i--) {
@@ -239,9 +247,7 @@ export async function loadLastUsage(sessionId: string, cwd: string): Promise<{ u
         lastUsage = { used, total: contextWindowSize };
         break;
       }
-    } catch {
-      continue;
-    }
+    } catch {}
   }
   return lastUsage;
 }
@@ -393,7 +399,7 @@ function parseLines(lines: string[]): { messages: ChatMessage[]; lastUsage: { us
         }
 
         const imageBlocks = content.filter(
-          (b) => b.type === "image" && b.source?.type === "base64" && b.source.media_type && b.source.data
+          (b) => b.type === "image" && b.source?.type === "base64" && b.source.media_type && b.source.data,
         );
         const images: ImageAttachment[] = imageBlocks.map((b) => ({
           mediaType: b.source!.media_type as ImageAttachment["mediaType"],
@@ -401,7 +407,7 @@ function parseLines(lines: string[]): { messages: ChatMessage[]; lastUsage: { us
         }));
 
         const docBlocks = content.filter(
-          (b) => b.type === "document" && b.source?.type === "base64" && b.source.media_type === "application/pdf" && b.source.data
+          (b) => b.type === "document" && b.source?.type === "base64" && b.source.media_type === "application/pdf" && b.source.data,
         );
         const documents: DocumentAttachment[] = docBlocks.map((b) => ({
           mediaType: "application/pdf" as const,
@@ -443,7 +449,7 @@ function parseLines(lines: string[]): { messages: ChatMessage[]; lastUsage: { us
       const msgId = entry.message.id || uuidv4();
 
       const thinkingOnly = content.every((b) => b.type === "thinking");
-      let thinkingTokensLeft = thinkingOnly ? entry.message.usage?.output_tokens ?? undefined : undefined;
+      let thinkingTokensLeft = thinkingOnly ? (entry.message.usage?.output_tokens ?? undefined) : undefined;
 
       for (const block of content) {
         if (block.type === "thinking") {
@@ -511,13 +517,9 @@ function parseLines(lines: string[]): { messages: ChatMessage[]; lastUsage: { us
 }
 
 const TAIL_LINES = 150;
-const PAGE_SIZE = 50;
+const _PAGE_SIZE = 50;
 
-export async function loadTranscript(
-  sessionId: string,
-  cwd: string,
-  options?: { tailLines?: number },
-): Promise<TranscriptResult> {
+export async function loadTranscript(sessionId: string, cwd: string, options?: { tailLines?: number }): Promise<TranscriptResult> {
   const fp = getTranscriptPath(sessionId, cwd);
   if (!existsSync(fp)) return { messages: [], byteOffset: 0, totalSize: 0, lastUsage: null };
 
@@ -548,7 +550,9 @@ export async function loadTranscript(
   const tParse = performance.now();
 
   const sid = sessionId.slice(0, 8);
-  console.log(`[transcript:${sid}] ${readLabel}: ${lines.length} lines, ${messages.length} msgs | read=${(tRead - t0).toFixed(0)}ms parse=${(tParse - tRead).toFixed(0)}ms total=${(tParse - t0).toFixed(0)}ms`);
+  console.log(
+    `[transcript:${sid}] ${readLabel}: ${lines.length} lines, ${messages.length} msgs | read=${(tRead - t0).toFixed(0)}ms parse=${(tParse - tRead).toFixed(0)}ms total=${(tParse - t0).toFixed(0)}ms`,
+  );
 
   return { messages, byteOffset, totalSize, lastUsage };
 }
@@ -570,7 +574,9 @@ export async function loadMoreMessages(
   const tParse = performance.now();
 
   const sid = sessionId.slice(0, 8);
-  console.log(`[transcript:${sid}] more: ${lines.length} lines, ${messages.length} msgs | read=${(tRead - t0).toFixed(0)}ms parse=${(tParse - tRead).toFixed(0)}ms`);
+  console.log(
+    `[transcript:${sid}] more: ${lines.length} lines, ${messages.length} msgs | read=${(tRead - t0).toFixed(0)}ms parse=${(tParse - tRead).toFixed(0)}ms`,
+  );
 
   return { messages, newByteOffset };
 }
@@ -713,9 +719,7 @@ export async function scanAllSessions(): Promise<SessionGroup[]> {
     }
 
     const jsonlFiles = files.filter((f) => f.endsWith(".jsonl"));
-    const metas = await Promise.all(
-      jsonlFiles.map((f) => extractSessionMeta(path.join(dirPath, f)))
-    );
+    const metas = await Promise.all(jsonlFiles.map((f) => extractSessionMeta(path.join(dirPath, f))));
 
     for (const meta of metas) {
       if (meta) allMeta.push(meta);

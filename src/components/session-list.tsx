@@ -1,13 +1,13 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { ChevronRight, Folder, Plus, Star } from "lucide-react";
 import { useRouter } from "next/navigation";
-import type { SessionInfo, SessionGroup } from "@/types";
-import { useWebSocket } from "@/hooks/use-websocket";
-import { SessionCard } from "./session-card";
-import { NewSessionDialog } from "./new-session-dialog";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Plus, ChevronRight, Star, Folder } from "lucide-react";
+import { useWebSocket } from "@/hooks/use-websocket";
+import type { SessionGroup, SessionInfo } from "@/types";
+import { NewSessionDialog } from "./new-session-dialog";
+import { SessionCard } from "./session-card";
 import { pinSession } from "./sidebar";
 
 let cachedGroups: SessionGroup[] | null = null;
@@ -62,23 +62,15 @@ function DirectoryGroup({
         onClick={() => setExpanded(!expanded)}
         className="w-full flex items-center gap-2 p-3 text-left hover:bg-accent/50 rounded-lg transition-colors cursor-pointer"
       >
-        <ChevronRight
-          className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform ${
-            expanded ? "rotate-90" : ""
-          }`}
-        />
+        <ChevronRight className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform ${expanded ? "rotate-90" : ""}`} />
         <Folder className="h-4 w-4 shrink-0 text-muted-foreground" />
         <span className="font-medium text-sm truncate flex-1">{group.dirName}</span>
         <div className="flex items-center gap-2 shrink-0">
           {runningCount > 0 && (
-            <span className="text-xs bg-primary text-primary-foreground px-1.5 py-0.5 rounded">
-              {runningCount} running
-            </span>
+            <span className="text-xs bg-primary text-primary-foreground px-1.5 py-0.5 rounded">{runningCount} running</span>
           )}
           <span className="text-xs text-muted-foreground">{timeAgo(latestAt)}</span>
-          <span className="text-xs text-muted-foreground">
-            {group.sessions.length}
-          </span>
+          <span className="text-xs text-muted-foreground">{group.sessions.length}</span>
           <button
             onClick={(e) => {
               e.stopPropagation();
@@ -96,22 +88,14 @@ function DirectoryGroup({
             }}
             className="p-1 rounded hover:bg-accent"
           >
-            <Star
-              className={`h-3.5 w-3.5 ${
-                isFavorite ? "fill-yellow-400 text-yellow-400" : "text-muted-foreground"
-              }`}
-            />
+            <Star className={`h-3.5 w-3.5 ${isFavorite ? "fill-yellow-400 text-yellow-400" : "text-muted-foreground"}`} />
           </button>
         </div>
       </div>
       {expanded && (
         <div className="px-3 pb-3 space-y-1">
           {group.sessions.map((s) => (
-            <SessionCard
-              key={s.id}
-              session={s}
-              onClick={() => onSelectSession(s)}
-            />
+            <SessionCard key={s.id} session={s} onClick={() => onSelectSession(s)} />
           ))}
         </div>
       )}
@@ -136,9 +120,7 @@ export function SessionList() {
     const res = await fetch("/api/sessions");
     if (res.ok) {
       const data = await res.json();
-      const fetched = (data.groups || []).filter(
-        (g: SessionGroup) => !g.cwd.endsWith(".cockpit/reviews"),
-      );
+      const fetched = (data.groups || []).filter((g: SessionGroup) => !g.cwd.endsWith(".cockpit/reviews"));
       cachedGroups = fetched;
       setGroups(fetched);
     }
@@ -195,11 +177,7 @@ export function SessionList() {
     <div className="mx-auto max-w-lg p-4 space-y-3">
       <h1 className="text-2xl font-bold">Sessions</h1>
 
-      {groups.length === 0 && loaded && (
-        <p className="text-sm text-muted-foreground">
-          No sessions found. Create one to get started.
-        </p>
-      )}
+      {groups.length === 0 && loaded && <p className="text-sm text-muted-foreground">No sessions found. Create one to get started.</p>}
 
       {favoriteGroups.map((group) => (
         <DirectoryGroup
@@ -212,9 +190,7 @@ export function SessionList() {
         />
       ))}
 
-      {favoriteGroups.length > 0 && otherGroups.length > 0 && (
-        <div className="border-t" />
-      )}
+      {favoriteGroups.length > 0 && otherGroups.length > 0 && <div className="border-t" />}
 
       {otherGroups.map((group) => (
         <DirectoryGroup
@@ -233,11 +209,7 @@ export function SessionList() {
           New Session
         </Button>
       </div>
-      <NewSessionDialog
-        open={dialogOpen}
-        onOpenChange={setDialogOpen}
-        onSubmit={createSession}
-      />
+      <NewSessionDialog open={dialogOpen} onOpenChange={setDialogOpen} onSubmit={createSession} />
     </div>
   );
 }

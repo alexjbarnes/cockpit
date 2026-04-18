@@ -1,7 +1,7 @@
 "use client";
 
-import { useMemo, useState, useCallback, useRef, useEffect } from "react";
-import { MessageCircleQuestion, Check, Circle, Pencil } from "lucide-react";
+import { Check, Circle, MessageCircleQuestion, Pencil } from "lucide-react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import type { ToolUse } from "@/types";
 
 interface QuestionOption {
@@ -28,8 +28,7 @@ function parseQuestions(input: string): Question[] {
 function parseAnswer(output: string): Map<string, string> {
   const answers = new Map<string, string>();
   const re = /"([^"]+)"="([^"]+)"/g;
-  let match;
-  while ((match = re.exec(output)) !== null) {
+  for (const match of output.matchAll(re)) {
     answers.set(match[1], match[2]);
   }
   return answers;
@@ -59,9 +58,7 @@ export function QuestionCard({ tool }: { tool: ToolUse }) {
                 return (
                   <div
                     key={oi}
-                    className={`flex w-full items-start gap-2.5 rounded-md px-2.5 py-2 text-xs ${
-                      isSelected ? "bg-primary/10" : ""
-                    }`}
+                    className={`flex w-full items-start gap-2.5 rounded-md px-2.5 py-2 text-xs ${isSelected ? "bg-primary/10" : ""}`}
                   >
                     {isSelected ? (
                       <Check className="h-3.5 w-3.5 shrink-0 mt-0.5 text-primary" />
@@ -69,12 +66,8 @@ export function QuestionCard({ tool }: { tool: ToolUse }) {
                       <Circle className="h-3.5 w-3.5 shrink-0 mt-0.5 text-muted-foreground/40" />
                     )}
                     <div className="min-w-0">
-                      <div className={isSelected ? "font-medium text-foreground" : "text-muted-foreground"}>
-                        {opt.label}
-                      </div>
-                      {isSelected && opt.description && (
-                        <div className="text-muted-foreground text-[11px] mt-0.5">{opt.description}</div>
-                      )}
+                      <div className={isSelected ? "font-medium text-foreground" : "text-muted-foreground"}>{opt.label}</div>
+                      {isSelected && opt.description && <div className="text-muted-foreground text-[11px] mt-0.5">{opt.description}</div>}
                     </div>
                   </div>
                 );
@@ -110,22 +103,28 @@ export function QuestionPrompt({ questions, requestId, onSubmit }: QuestionPromp
   const [submitted, setSubmitted] = useState(false);
   const otherInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
 
-  const toggleSelection = useCallback((questionText: string, label: string) => {
-    if (submitted) return;
-    setSelections((prev) => ({
-      ...prev,
-      [questionText]: prev[questionText] === label ? "" : label,
-    }));
-  }, [submitted]);
+  const toggleSelection = useCallback(
+    (questionText: string, label: string) => {
+      if (submitted) return;
+      setSelections((prev) => ({
+        ...prev,
+        [questionText]: prev[questionText] === label ? "" : label,
+      }));
+    },
+    [submitted],
+  );
 
-  const selectOther = useCallback((questionText: string) => {
-    if (submitted) return;
-    setSelections((prev) => ({
-      ...prev,
-      [questionText]: OTHER_LABEL,
-    }));
-    setTimeout(() => otherInputRefs.current[questionText]?.focus(), 0);
-  }, [submitted]);
+  const selectOther = useCallback(
+    (questionText: string) => {
+      if (submitted) return;
+      setSelections((prev) => ({
+        ...prev,
+        [questionText]: OTHER_LABEL,
+      }));
+      setTimeout(() => otherInputRefs.current[questionText]?.focus(), 0);
+    },
+    [submitted],
+  );
 
   const allAnswered = questions.every((q) => {
     const sel = selections[q.question];
@@ -153,9 +152,7 @@ export function QuestionPrompt({ questions, requestId, onSubmit }: QuestionPromp
           const isOtherSelected = selected === OTHER_LABEL;
           return (
             <div key={qi} className="space-y-2">
-              {q.header && (
-                <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">{q.header}</div>
-              )}
+              {q.header && <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">{q.header}</div>}
               <div className="text-sm font-medium flex items-center gap-2">
                 <MessageCircleQuestion className="h-4 w-4 shrink-0 text-muted-foreground" />
                 {q.question}
@@ -169,11 +166,7 @@ export function QuestionPrompt({ questions, requestId, onSubmit }: QuestionPromp
                       key={oi}
                       onClick={submitted ? undefined : () => toggleSelection(q.question, opt.label)}
                       className={`flex w-full items-start gap-2.5 rounded-md px-2.5 py-2 text-xs text-left transition-colors ${
-                        isSelected
-                          ? "bg-primary/10"
-                          : submitted
-                            ? ""
-                            : "hover:bg-muted/50 cursor-pointer"
+                        isSelected ? "bg-primary/10" : submitted ? "" : "hover:bg-muted/50 cursor-pointer"
                       }`}
                     >
                       {isSelected ? (
@@ -182,12 +175,12 @@ export function QuestionPrompt({ questions, requestId, onSubmit }: QuestionPromp
                         <Circle className="h-3.5 w-3.5 shrink-0 mt-0.5 text-muted-foreground/40" />
                       )}
                       <div className="min-w-0">
-                        <div className={isSelected ? "font-medium text-foreground" : submitted ? "text-muted-foreground" : "text-foreground"}>
+                        <div
+                          className={isSelected ? "font-medium text-foreground" : submitted ? "text-muted-foreground" : "text-foreground"}
+                        >
                           {opt.label}
                         </div>
-                        {opt.description && (
-                          <div className="text-muted-foreground text-[11px] mt-0.5">{opt.description}</div>
-                        )}
+                        {opt.description && <div className="text-muted-foreground text-[11px] mt-0.5">{opt.description}</div>}
                       </div>
                     </El>
                   );
@@ -196,9 +189,7 @@ export function QuestionPrompt({ questions, requestId, onSubmit }: QuestionPromp
                   <button
                     onClick={() => selectOther(q.question)}
                     className={`flex w-full items-start gap-2.5 rounded-md px-2.5 py-2 text-xs text-left transition-colors ${
-                      isOtherSelected
-                        ? "bg-primary/10"
-                        : "hover:bg-muted/50 cursor-pointer"
+                      isOtherSelected ? "bg-primary/10" : "hover:bg-muted/50 cursor-pointer"
                     }`}
                   >
                     {isOtherSelected ? (
@@ -207,16 +198,18 @@ export function QuestionPrompt({ questions, requestId, onSubmit }: QuestionPromp
                       <Circle className="h-3.5 w-3.5 shrink-0 mt-0.5 text-muted-foreground/40" />
                     )}
                     <div className="min-w-0 flex-1">
-                      <div className={isOtherSelected ? "font-medium text-foreground" : "text-foreground"}>
-                        Other
-                      </div>
+                      <div className={isOtherSelected ? "font-medium text-foreground" : "text-foreground"}>Other</div>
                       {isOtherSelected && (
                         <input
-                          ref={(el) => { otherInputRefs.current[q.question] = el; }}
+                          ref={(el) => {
+                            otherInputRefs.current[q.question] = el;
+                          }}
                           type="text"
                           value={otherTexts[q.question] || ""}
                           onChange={(e) => setOtherTexts((prev) => ({ ...prev, [q.question]: e.target.value }))}
-                          onKeyDown={(e) => { if (e.key === "Enter" && allAnswered) handleSubmit(); }}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" && allAnswered) handleSubmit();
+                          }}
                           onClick={(e) => e.stopPropagation()}
                           placeholder="Tell Claude what to do instead..."
                           className="mt-1 w-full rounded border border-border bg-background px-2 py-1 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
@@ -224,15 +217,15 @@ export function QuestionPrompt({ questions, requestId, onSubmit }: QuestionPromp
                       )}
                     </div>
                   </button>
-                ) : isOtherSelected && (
-                  <div className="flex w-full items-start gap-2.5 rounded-md px-2.5 py-2 text-xs bg-primary/10">
-                    <Check className="h-3.5 w-3.5 shrink-0 mt-0.5 text-primary" />
-                    <div className="min-w-0">
-                      <div className="font-medium text-foreground">
-                        {otherTexts[q.question]}
+                ) : (
+                  isOtherSelected && (
+                    <div className="flex w-full items-start gap-2.5 rounded-md px-2.5 py-2 text-xs bg-primary/10">
+                      <Check className="h-3.5 w-3.5 shrink-0 mt-0.5 text-primary" />
+                      <div className="min-w-0">
+                        <div className="font-medium text-foreground">{otherTexts[q.question]}</div>
                       </div>
                     </div>
-                  </div>
+                  )
                 )}
               </div>
             </div>
@@ -244,9 +237,7 @@ export function QuestionPrompt({ questions, requestId, onSubmit }: QuestionPromp
               disabled={!allAnswered}
               onClick={handleSubmit}
               className={`rounded px-4 py-1.5 text-xs font-medium transition-colors ${
-                allAnswered
-                  ? "bg-primary text-primary-foreground hover:bg-primary/90"
-                  : "bg-muted text-muted-foreground cursor-not-allowed"
+                allAnswered ? "bg-primary text-primary-foreground hover:bg-primary/90" : "bg-muted text-muted-foreground cursor-not-allowed"
               }`}
             >
               Submit

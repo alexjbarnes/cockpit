@@ -1,11 +1,10 @@
 import { createServer } from "node:http";
-import next from "next";
 import { parse } from "node:url";
-
+import next from "next";
+import { deletePasswordFile, isAuthDisabled, needsSetup } from "./src/server/auth";
 import { SessionManager } from "./src/server/session-manager";
 import { setSessionManager } from "./src/server/singleton";
 import { createWebSocketHandler } from "./src/server/ws-handler";
-import { deletePasswordFile, isAuthDisabled, needsSetup } from "./src/server/auth";
 
 const dev = process.env.NODE_ENV !== "production";
 const port = parseInt(process.env.PORT || "3001", 10);

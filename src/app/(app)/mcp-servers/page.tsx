@@ -1,22 +1,20 @@
 "use client";
 
-import { useState } from "react";
-import { useRouter } from "next/navigation";
-import { usePageHeader } from "@/components/app-shell";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { DirectoryPicker } from "@/components/directory-picker";
-import { useMcpServers } from "@/hooks/use-mcp-servers";
 import { Plus, Trash2 } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { useState } from "react";
+import { usePageHeader } from "@/components/app-shell";
+import { DirectoryPicker } from "@/components/directory-picker";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { useMcpServers } from "@/hooks/use-mcp-servers";
 
 export default function McpServersPage() {
   usePageHeader("MCP Servers");
 
-  const cwd = typeof localStorage !== "undefined"
-    ? localStorage.getItem("cockpit-agents-cwd") || undefined
-    : undefined;
+  const cwd = typeof localStorage !== "undefined" ? localStorage.getItem("cockpit-agents-cwd") || undefined : undefined;
 
   const { servers, loading, deleteServer } = useMcpServers(cwd);
   const router = useRouter();
@@ -60,9 +58,7 @@ export default function McpServersPage() {
       {loading && <p className="text-sm text-muted-foreground">Loading servers...</p>}
 
       {!loading && servers.length === 0 && (
-        <p className="text-sm text-muted-foreground">
-          No MCP servers configured. Add one to get started.
-        </p>
+        <p className="text-sm text-muted-foreground">No MCP servers configured. Add one to get started.</p>
       )}
 
       {globalServers.length > 0 && (
@@ -107,21 +103,22 @@ export default function McpServersPage() {
         </Card>
       )}
 
-      <Dialog open={scopeDialog} onOpenChange={(open) => { setScopeDialog(open); if (!open) setPickingDir(false); }}>
+      <Dialog
+        open={scopeDialog}
+        onOpenChange={(open) => {
+          setScopeDialog(open);
+          if (!open) setPickingDir(false);
+        }}
+      >
         <DialogContent>
           <DialogHeader>
             <DialogTitle>New MCP Server</DialogTitle>
           </DialogHeader>
           {pickingDir ? (
-            <DirectoryPicker
-              onSelect={(dir) => handleNew("project", dir)}
-              onCancel={() => setPickingDir(false)}
-            />
+            <DirectoryPicker onSelect={(dir) => handleNew("project", dir)} onCancel={() => setPickingDir(false)} />
           ) : (
             <>
-              <p className="text-sm text-muted-foreground mb-4">
-                Where should this server be saved?
-              </p>
+              <p className="text-sm text-muted-foreground mb-4">Where should this server be saved?</p>
               <div className="flex gap-2">
                 <Button variant="outline" className="flex-1" onClick={() => handleNew("user")}>
                   Global
@@ -144,8 +141,12 @@ export default function McpServersPage() {
             Delete <span className="font-mono font-bold">{confirmDelete?.name}</span>? This cannot be undone.
           </p>
           <div className="flex justify-end gap-2">
-            <Button variant="outline" onClick={() => setConfirmDelete(null)}>Cancel</Button>
-            <Button variant="destructive" onClick={handleDelete}>Delete</Button>
+            <Button variant="outline" onClick={() => setConfirmDelete(null)}>
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={handleDelete}>
+              Delete
+            </Button>
           </div>
         </DialogContent>
       </Dialog>
@@ -177,9 +178,7 @@ function ServerRow({
             {type}
           </Badge>
         </div>
-        {detail && (
-          <p className="text-xs text-muted-foreground truncate mt-0.5">{detail}</p>
-        )}
+        {detail && <p className="text-xs text-muted-foreground truncate mt-0.5">{detail}</p>}
       </button>
       <button
         type="button"

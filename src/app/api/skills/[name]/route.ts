@@ -1,14 +1,12 @@
-import { NextRequest, NextResponse } from "next/server";
-import { readFile, writeFile, rm, mkdir } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
-import { validateSession, isAuthDisabled } from "@/server/auth";
+import { NextRequest, NextResponse } from "next/server";
+import { isAuthDisabled, validateSession } from "@/server/auth";
 
 function authenticate(req: NextRequest): boolean {
   if (isAuthDisabled()) return true;
-  const token =
-    req.cookies.get("cockpit_session")?.value ||
-    req.headers.get("authorization")?.replace("Bearer ", "");
+  const token = req.cookies.get("cockpit_session")?.value || req.headers.get("authorization")?.replace("Bearer ", "");
   return !!token && validateSession(token);
 }
 
@@ -25,10 +23,7 @@ function resolveSkillDir(name: string, scope: string, cwd?: string | null): stri
   return null;
 }
 
-export async function GET(
-  req: NextRequest,
-  { params }: { params: Promise<{ name: string }> },
-) {
+export async function GET(req: NextRequest, { params }: { params: Promise<{ name: string }> }) {
   if (!authenticate(req)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
@@ -51,10 +46,7 @@ export async function GET(
   }
 }
 
-export async function PUT(
-  req: NextRequest,
-  { params }: { params: Promise<{ name: string }> },
-) {
+export async function PUT(req: NextRequest, { params }: { params: Promise<{ name: string }> }) {
   if (!authenticate(req)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
@@ -78,10 +70,7 @@ export async function PUT(
   return NextResponse.json({ ok: true, name, scope });
 }
 
-export async function DELETE(
-  req: NextRequest,
-  { params }: { params: Promise<{ name: string }> },
-) {
+export async function DELETE(req: NextRequest, { params }: { params: Promise<{ name: string }> }) {
   if (!authenticate(req)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }

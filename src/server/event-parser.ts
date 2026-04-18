@@ -1,8 +1,22 @@
-import type { ChatMessage, ToolUse, InitData } from "@/types";
 import { v4 as uuidv4 } from "uuid";
+import type { ChatMessage, InitData, ToolUse } from "@/types";
 
 export interface ParsedEvent {
-  type: "text_delta" | "thinking" | "tool_use_start" | "tool_done" | "tool_result" | "message_done" | "permission_request" | "system_message" | "tool_children" | "tool_progress" | "rate_limit" | "prompt_suggestion" | "task_update" | "init";
+  type:
+    | "text_delta"
+    | "thinking"
+    | "tool_use_start"
+    | "tool_done"
+    | "tool_result"
+    | "message_done"
+    | "permission_request"
+    | "system_message"
+    | "tool_children"
+    | "tool_progress"
+    | "rate_limit"
+    | "prompt_suggestion"
+    | "task_update"
+    | "init";
   text?: string;
   toolName?: string;
   toolId?: string;
@@ -139,40 +153,44 @@ export class EventParser {
       const commands = (data.commands || []) as Array<Record<string, unknown>>;
       const agents = (data.agents || []) as Array<Record<string, unknown>>;
 
-      return [{
-        type: "init",
-        initData: {
-          slashCommands: commands.map((c) => (c.name || "") as string),
-          skills: [],
-          agents: agents.map((a) => ({
-            name: (a.name || "") as string,
-            description: (a.description || undefined) as string | undefined,
-          })),
-          version: "",
-          model: "",
-          mcpServers: [],
-          models: models.map((m) => ({
-            value: (m.value || "") as string,
-            displayName: (m.displayName || "") as string,
-            description: (m.description || "") as string,
-            supportsEffort: m.supportsEffort as boolean | undefined,
-            supportedEffortLevels: m.supportedEffortLevels as string[] | undefined,
-            supportsAdaptiveThinking: m.supportsAdaptiveThinking as boolean | undefined,
-            supportsFastMode: m.supportsFastMode as boolean | undefined,
-            supportsAutoMode: m.supportsAutoMode as boolean | undefined,
-          })),
-          account: account ? {
-            email: (account.email || "") as string,
-            organization: (account.organization || "") as string,
-            subscriptionType: (account.subscriptionType || "") as string,
-          } : undefined,
-          commands: commands.map((c) => ({
-            name: (c.name || "") as string,
-            description: (c.description || "") as string,
-            argumentHint: c.argumentHint as string | undefined,
-          })),
+      return [
+        {
+          type: "init",
+          initData: {
+            slashCommands: commands.map((c) => (c.name || "") as string),
+            skills: [],
+            agents: agents.map((a) => ({
+              name: (a.name || "") as string,
+              description: (a.description || undefined) as string | undefined,
+            })),
+            version: "",
+            model: "",
+            mcpServers: [],
+            models: models.map((m) => ({
+              value: (m.value || "") as string,
+              displayName: (m.displayName || "") as string,
+              description: (m.description || "") as string,
+              supportsEffort: m.supportsEffort as boolean | undefined,
+              supportedEffortLevels: m.supportedEffortLevels as string[] | undefined,
+              supportsAdaptiveThinking: m.supportsAdaptiveThinking as boolean | undefined,
+              supportsFastMode: m.supportsFastMode as boolean | undefined,
+              supportsAutoMode: m.supportsAutoMode as boolean | undefined,
+            })),
+            account: account
+              ? {
+                  email: (account.email || "") as string,
+                  organization: (account.organization || "") as string,
+                  subscriptionType: (account.subscriptionType || "") as string,
+                }
+              : undefined,
+            commands: commands.map((c) => ({
+              name: (c.name || "") as string,
+              description: (c.description || "") as string,
+              argumentHint: c.argumentHint as string | undefined,
+            })),
+          },
         },
-      }];
+      ];
     }
 
     if (type === "system") {
@@ -203,29 +221,44 @@ export class EventParser {
 
       // Structured task events
       if (subtype === "task_started") {
-        return [{ type: "task_update", taskInfo: {
-          taskId: (event.task_id || "") as string,
-          toolUseId: (event.tool_use_id || "") as string,
-          status: "running",
-          description: (event.description || "") as string,
-        } }];
+        return [
+          {
+            type: "task_update",
+            taskInfo: {
+              taskId: (event.task_id || "") as string,
+              toolUseId: (event.tool_use_id || "") as string,
+              status: "running",
+              description: (event.description || "") as string,
+            },
+          },
+        ];
       }
       if (subtype === "task_progress") {
-        return [{ type: "task_update", taskInfo: {
-          taskId: (event.task_id || "") as string,
-          toolUseId: (event.tool_use_id || "") as string,
-          status: "progress",
-          description: (event.description || "") as string,
-        } }];
+        return [
+          {
+            type: "task_update",
+            taskInfo: {
+              taskId: (event.task_id || "") as string,
+              toolUseId: (event.tool_use_id || "") as string,
+              status: "progress",
+              description: (event.description || "") as string,
+            },
+          },
+        ];
       }
       if (subtype === "task_notification") {
-        return [{ type: "task_update", taskInfo: {
-          taskId: (event.task_id || "") as string,
-          toolUseId: (event.tool_use_id || "") as string,
-          status: "completed",
-          description: (event.description || "") as string,
-          summary: (event.summary || "") as string,
-        } }];
+        return [
+          {
+            type: "task_update",
+            taskInfo: {
+              taskId: (event.task_id || "") as string,
+              toolUseId: (event.tool_use_id || "") as string,
+              status: "completed",
+              description: (event.description || "") as string,
+              summary: (event.summary || "") as string,
+            },
+          },
+        ];
       }
 
       if (subtype === "init") {
@@ -233,7 +266,7 @@ export class EventParser {
         const skills = (event.skills || []) as string[];
         const rawAgents = (event.agents || []) as Array<string | Record<string, unknown>>;
         const agents = rawAgents.map((a) =>
-          typeof a === "string" ? { name: a } : { name: (a.name || "") as string, description: a.description as string | undefined }
+          typeof a === "string" ? { name: a } : { name: (a.name || "") as string, description: a.description as string | undefined },
         );
         const version = (event.claude_code_version || "") as string;
         const model = (event.model || "") as string;
@@ -266,7 +299,7 @@ export class EventParser {
     const events: ParsedEvent[] = [];
 
     const thinkingOnly = msg.content.every((b) => b.type === "thinking");
-    let thinkingTokensLeft = thinkingOnly ? msg.usage?.output_tokens ?? undefined : undefined;
+    let thinkingTokensLeft = thinkingOnly ? (msg.usage?.output_tokens ?? undefined) : undefined;
 
     for (const block of msg.content) {
       if (block.type === "thinking") {
@@ -352,22 +385,26 @@ export class EventParser {
   }
 
   private parseControlRequest(event: Record<string, unknown>): ParsedEvent[] {
-    const request = event.request as {
-      subtype?: string;
-      tool_name?: string;
-      input?: Record<string, unknown>;
-      permission_suggestions?: Record<string, unknown>[];
-    } | undefined;
+    const request = event.request as
+      | {
+          subtype?: string;
+          tool_name?: string;
+          input?: Record<string, unknown>;
+          permission_suggestions?: Record<string, unknown>[];
+        }
+      | undefined;
 
     if (request?.subtype === "can_use_tool") {
-      return [{
-        type: "permission_request",
-        requestId: event.request_id as string,
-        toolName: request.tool_name || "unknown",
-        toolInput: request.input ? JSON.stringify(request.input) : "",
-        rawToolInput: request.input,
-        permissionSuggestions: request.permission_suggestions,
-      }];
+      return [
+        {
+          type: "permission_request",
+          requestId: event.request_id as string,
+          toolName: request.tool_name || "unknown",
+          toolInput: request.input ? JSON.stringify(request.input) : "",
+          rawToolInput: request.input,
+          permissionSuggestions: request.permission_suggestions,
+        },
+      ];
     }
 
     return [];

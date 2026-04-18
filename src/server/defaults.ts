@@ -1,6 +1,6 @@
-import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
+import { join } from "node:path";
 import type { ThinkingLevel } from "@/types";
 
 export type DiffStyle = "split" | "unified";

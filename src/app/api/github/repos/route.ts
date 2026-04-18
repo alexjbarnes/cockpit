@@ -1,12 +1,10 @@
-import { NextRequest, NextResponse } from "next/server";
 import { execFile } from "node:child_process";
-import { validateSession, isAuthDisabled } from "@/server/auth";
+import { NextRequest, NextResponse } from "next/server";
+import { isAuthDisabled, validateSession } from "@/server/auth";
 
 function authenticate(req: NextRequest): boolean {
   if (isAuthDisabled()) return true;
-  const token =
-    req.cookies.get("cockpit_session")?.value ||
-    req.headers.get("authorization")?.replace("Bearer ", "");
+  const token = req.cookies.get("cockpit_session")?.value || req.headers.get("authorization")?.replace("Bearer ", "");
   return !!token && validateSession(token);
 }
 
@@ -28,10 +26,7 @@ export async function GET(req: NextRequest) {
   try {
     await run("gh", ["auth", "status"]);
   } catch {
-    return NextResponse.json(
-      { error: "GitHub CLI not authenticated. Run 'gh auth login' first." },
-      { status: 401 },
-    );
+    return NextResponse.json({ error: "GitHub CLI not authenticated. Run 'gh auth login' first." }, { status: 401 });
   }
 
   const url = new URL(req.url);
@@ -40,21 +35,12 @@ export async function GET(req: NextRequest) {
   try {
     const args = ["repo", "list"];
     if (owner) args.push(owner);
-    args.push(
-      "--json",
-      "name,nameWithOwner,description,primaryLanguage,pushedAt,isPrivate",
-      "--limit",
-      "100",
-      "--no-archived",
-    );
+    args.push("--json", "name,nameWithOwner,description,primaryLanguage,pushedAt,isPrivate", "--limit", "100", "--no-archived");
 
     const stdout = await run("gh", args);
     const repos = JSON.parse(stdout);
     return NextResponse.json(repos);
   } catch (err) {
-    return NextResponse.json(
-      { error: String(err) },
-      { status: 500 },
-    );
+    return NextResponse.json({ error: String(err) }, { status: 500 });
   }
 }

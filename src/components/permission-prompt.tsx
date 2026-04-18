@@ -1,10 +1,10 @@
 "use client";
 
-import { useEffect, useRef, useMemo } from "react";
 import { ShieldAlert } from "lucide-react";
+import { useEffect, useMemo, useRef } from "react";
 import type { PendingPermission } from "@/hooks/use-session";
+import { pathBasename, shortPath } from "@/lib/path";
 import type { PermissionMode, PermissionSuggestion } from "@/types";
-import { shortPath, pathBasename } from "@/lib/path";
 
 function formatToolSummary(toolName: string, input: Record<string, unknown>): string {
   switch (toolName) {
@@ -98,16 +98,10 @@ export function PermissionPrompt({ permission, onRespond }: PermissionPromptProp
             <div className="text-sm font-medium">
               Permission requested: <span className="font-mono">{permission.toolName}</span>
             </div>
-            {summary && (
-              <div className="font-mono text-xs text-muted-foreground truncate">
-                {summary}
-              </div>
-            )}
+            {summary && <div className="font-mono text-xs text-muted-foreground truncate">{summary}</div>}
             {permission.input && (
               <pre className="overflow-x-auto rounded bg-black/10 dark:bg-white/5 p-2 text-[11px] leading-relaxed max-h-32 overflow-y-auto">
-                {permission.input.length > 500
-                  ? permission.input.slice(0, 500) + "\n... (truncated)"
-                  : permission.input}
+                {permission.input.length > 500 ? permission.input.slice(0, 500) + "\n... (truncated)" : permission.input}
               </pre>
             )}
             <div className="flex flex-wrap gap-2 pt-1">

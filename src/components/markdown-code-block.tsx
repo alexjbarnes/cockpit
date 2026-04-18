@@ -1,7 +1,7 @@
 "use client";
 
-import { useCallback, useRef, useState, type HTMLAttributes } from "react";
 import { Check, Copy } from "lucide-react";
+import { type HTMLAttributes, useCallback, useRef, useState } from "react";
 
 function fallbackCopy(text: string): boolean {
   const ta = document.createElement("textarea");
@@ -28,9 +28,12 @@ export function MarkdownCodeBlock(props: HTMLAttributes<HTMLPreElement>) {
       setTimeout(() => setCopied(false), 1500);
     };
     if (navigator.clipboard?.writeText) {
-      navigator.clipboard.writeText(text).then(onSuccess).catch(() => {
-        fallbackCopy(text) && onSuccess();
-      });
+      navigator.clipboard
+        .writeText(text)
+        .then(onSuccess)
+        .catch(() => {
+          fallbackCopy(text) && onSuccess();
+        });
     } else {
       fallbackCopy(text) && onSuccess();
     }

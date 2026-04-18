@@ -1,14 +1,14 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef, useImperativeHandle, forwardRef } from "react";
-import { useRouter, usePathname } from "next/navigation";
-import type { SessionInfo, SessionGroup } from "@/types";
-import { useWebSocket } from "@/hooks/use-websocket";
-import { NewSessionDialog } from "./new-session-dialog";
-import { cn } from "@/lib/utils";
-import { Plus, Home, X, Settings, GitPullRequest } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { GitPullRequest, Home, Plus, Settings, X } from "lucide-react";
+import { usePathname, useRouter } from "next/navigation";
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { useShell } from "@/components/app-shell";
+import { Button } from "@/components/ui/button";
+import { useWebSocket } from "@/hooks/use-websocket";
+import { cn } from "@/lib/utils";
+import type { SessionGroup, SessionInfo } from "@/types";
+import { NewSessionDialog } from "./new-session-dialog";
 
 const SIDEBAR_WIDTH_KEY = "cockpit_sidebar_width";
 const DEFAULT_WIDTH = 288; // 18rem = w-72
@@ -30,31 +30,34 @@ function SidebarResizeHandle({ onResize }: { onResize: (delta: number) => void }
   const dragging = useRef(false);
   const lastX = useRef(0);
 
-  const onMouseDown = useCallback((e: React.MouseEvent) => {
-    e.preventDefault();
-    dragging.current = true;
-    lastX.current = e.clientX;
+  const onMouseDown = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault();
+      dragging.current = true;
+      lastX.current = e.clientX;
 
-    const onMouseMove = (ev: MouseEvent) => {
-      if (!dragging.current) return;
-      const delta = ev.clientX - lastX.current;
-      lastX.current = ev.clientX;
-      onResize(delta);
-    };
+      const onMouseMove = (ev: MouseEvent) => {
+        if (!dragging.current) return;
+        const delta = ev.clientX - lastX.current;
+        lastX.current = ev.clientX;
+        onResize(delta);
+      };
 
-    const onMouseUp = () => {
-      dragging.current = false;
-      document.removeEventListener("mousemove", onMouseMove);
-      document.removeEventListener("mouseup", onMouseUp);
-      document.body.style.cursor = "";
-      document.body.style.userSelect = "";
-    };
+      const onMouseUp = () => {
+        dragging.current = false;
+        document.removeEventListener("mousemove", onMouseMove);
+        document.removeEventListener("mouseup", onMouseUp);
+        document.body.style.cursor = "";
+        document.body.style.userSelect = "";
+      };
 
-    document.body.style.cursor = "col-resize";
-    document.body.style.userSelect = "none";
-    document.addEventListener("mousemove", onMouseMove);
-    document.addEventListener("mouseup", onMouseUp);
-  }, [onResize]);
+      document.body.style.cursor = "col-resize";
+      document.body.style.userSelect = "none";
+      document.addEventListener("mousemove", onMouseMove);
+      document.addEventListener("mouseup", onMouseUp);
+    },
+    [onResize],
+  );
 
   return (
     <div
@@ -150,16 +153,18 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
   const prevStatusRef = useRef<Map<string, string>>(new Map());
   const pinnedRef = useRef<Set<string>>(new Set());
 
-  useImperativeHandle(ref, () => ({
-    toggle: () => setOpen((prev) => !prev),
-    close: () => setOpen(false),
-  }), []);
+  useImperativeHandle(
+    ref,
+    () => ({
+      toggle: () => setOpen((prev) => !prev),
+      close: () => setOpen(false),
+    }),
+    [],
+  );
 
   const close = useCallback(() => setOpen(false), []);
 
-  const currentSessionId = pathname.startsWith("/sessions/")
-    ? pathname.split("/")[2]
-    : null;
+  const currentSessionId = pathname.startsWith("/sessions/") ? pathname.split("/")[2] : null;
 
   useEffect(() => {
     return subscribe((msg) => {
@@ -177,18 +182,10 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
           setUnread(getUnreadSessions());
         }
 
-        setSessions((list) =>
-          list.map((s) =>
-            s.id === sessionId ? { ...s, status: status as SessionInfo["status"] } : s
-          )
-        );
+        setSessions((list) => list.map((s) => (s.id === sessionId ? { ...s, status: status as SessionInfo["status"] } : s)));
       } else if (msg.type === "session:info_updated") {
         const { sessionId, info } = msg;
-        setSessions((list) =>
-          list.map((s) =>
-            s.id === sessionId ? { ...s, name: info.name, model: info.model } : s
-          )
-        );
+        setSessions((list) => list.map((s) => (s.id === sessionId ? { ...s, name: info.name, model: info.model } : s)));
       }
     });
   }, [subscribe, currentSessionId, sessions]);
@@ -199,20 +196,18 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
     // Fetch pinned IDs from server and all sessions in parallel
     const [pinned, sessionsRes] = await Promise.all([
       fetchPinnedIds(),
-      fetch("/api/sessions").then((r) => r.ok ? r.json() : null).catch(() => null),
+      fetch("/api/sessions")
+        .then((r) => (r.ok ? r.json() : null))
+        .catch(() => null),
     ]);
     pinnedRef.current = pinned;
 
     if (!sessionsRes) return;
     const groups: SessionGroup[] = sessionsRes.groups || [];
-    const allSessions = groups
-      .flatMap((g) => g.sessions)
-      .filter((s) => !s.cwd.endsWith(".cockpit/reviews"));
+    const allSessions = groups.flatMap((g) => g.sessions).filter((s) => !s.cwd.endsWith(".cockpit/reviews"));
 
     // Show union of pinned + running sessions
-    const visible = allSessions
-      .filter((s) => pinned.has(s.id) || s.status === "running")
-      .sort((a, b) => b.lastActiveAt - a.lastActiveAt);
+    const visible = allSessions.filter((s) => pinned.has(s.id) || s.status === "running").sort((a, b) => b.lastActiveAt - a.lastActiveAt);
 
     // Clean up pinned IDs that no longer exist on server
     const serverIds = new Set(allSessions.map((s) => s.id));
@@ -297,7 +292,7 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
       <div
         className={cn(
           "fixed inset-0 z-40 bg-black/50 transition-opacity md:hidden",
-          open ? "opacity-100" : "opacity-0 pointer-events-none"
+          open ? "opacity-100" : "opacity-0 pointer-events-none",
         )}
         onMouseDown={close}
       />
@@ -306,7 +301,7 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
         className={cn(
           "fixed inset-y-0 left-0 z-50 bg-background border-r flex flex-col transition-transform duration-200",
           "md:relative md:inset-auto md:z-auto md:translate-x-0 md:shrink-0 md:transition-none",
-          open ? "translate-x-0" : "-translate-x-full"
+          open ? "translate-x-0" : "-translate-x-full",
         )}
         style={{ width }}
       >
@@ -318,21 +313,14 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
                 <X className="h-4 w-4" />
               </Button>
             </div>
-            <div className="flex-1 min-h-0 overflow-y-auto">
-              {sidebarContent}
-            </div>
+            <div className="flex-1 min-h-0 overflow-y-auto">{sidebarContent}</div>
           </>
         ) : (
           <>
             <div className="flex items-center justify-between px-3 py-2 border-b">
               <span className="text-sm font-bold">Active Sessions</span>
               <div className="flex items-center gap-1">
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={() => setDialogOpen(true)}
-                  title="New session"
-                >
+                <Button variant="ghost" size="icon" onClick={() => setDialogOpen(true)} title="New session">
                   <Plus className="h-4 w-4" />
                 </Button>
                 <Button variant="ghost" size="icon" onClick={close} className="md:hidden">
@@ -356,7 +344,7 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
                   }}
                   className={cn(
                     "w-full flex items-center gap-2 px-3 py-2 text-left text-sm hover:bg-accent/50 transition-colors cursor-pointer",
-                    currentSessionId === session.id && "bg-accent"
+                    currentSessionId === session.id && "bg-accent",
                   )}
                 >
                   <div className="shrink-0 relative flex items-center justify-center h-4 w-4">
@@ -373,32 +361,21 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className="truncate font-medium">{session.name}</div>
-                    <div className="truncate text-xs text-muted-foreground">
-                      {shortPath(session.cwd)}
-                    </div>
+                    <div className="truncate text-xs text-muted-foreground">{shortPath(session.cwd)}</div>
                   </div>
                   <Button
                     variant="ghost"
                     size="icon"
                     className="h-8 w-8 shrink-0 text-red-500 hover:text-red-600 hover:bg-red-500/10"
-                    onClick={(e) =>
-                      session.status === "running"
-                        ? stopSession(e, session.id)
-                        : dismissSession(e, session.id)
-                    }
+                    onClick={(e) => (session.status === "running" ? stopSession(e, session.id) : dismissSession(e, session.id))}
                     title={session.status === "running" ? "Stop session" : "Remove from sidebar"}
                   >
                     <X className="h-4 w-4" />
                   </Button>
                 </div>
               ))}
-              {sessions.length === 0 && (
-                <p className="px-3 py-4 text-sm text-muted-foreground">
-                  No active sessions.
-                </p>
-              )}
+              {sessions.length === 0 && <p className="px-3 py-4 text-sm text-muted-foreground">No active sessions.</p>}
             </div>
-
           </>
         )}
 
@@ -440,11 +417,7 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
         </div>
       </div>
 
-      <NewSessionDialog
-        open={dialogOpen}
-        onOpenChange={setDialogOpen}
-        onSubmit={createSession}
-      />
+      <NewSessionDialog open={dialogOpen} onOpenChange={setDialogOpen} onSubmit={createSession} />
     </>
   );
 });

@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("node:fs", () => ({
   readFileSync: vi.fn(),
@@ -19,38 +19,42 @@ describe("session-prefs", () => {
   });
 
   it("getSessionPrefs returns undefined for unknown session", async () => {
-    mockReadFileSync.mockImplementation(() => { throw new Error("ENOENT"); });
+    mockReadFileSync.mockImplementation(() => {
+      throw new Error("ENOENT");
+    });
     const { getSessionPrefs } = await import("@/server/session-prefs");
     expect(getSessionPrefs("unknown")).toBeUndefined();
   });
 
   it("setSessionPrefs creates and saves", async () => {
-    mockReadFileSync.mockImplementation(() => { throw new Error("ENOENT"); });
+    mockReadFileSync.mockImplementation(() => {
+      throw new Error("ENOENT");
+    });
     const { setSessionPrefs } = await import("@/server/session-prefs");
     setSessionPrefs("s1", { name: "Test" });
 
     expect(mockWriteFileSync).toHaveBeenCalledOnce();
     const data = JSON.parse(mockWriteFileSync.mock.calls[0][1] as string);
-    expect(data["s1"].name).toBe("Test");
+    expect(data.s1.name).toBe("Test");
   });
 
   it("setSessionPrefs merges with existing", async () => {
-    mockReadFileSync.mockReturnValue(JSON.stringify({ "s1": { name: "Old", planMode: true } }));
+    mockReadFileSync.mockReturnValue(JSON.stringify({ s1: { name: "Old", planMode: true } }));
     const { setSessionPrefs } = await import("@/server/session-prefs");
     setSessionPrefs("s1", { name: "New" });
 
     const data = JSON.parse(mockWriteFileSync.mock.calls[0][1] as string);
-    expect(data["s1"].name).toBe("New");
-    expect(data["s1"].planMode).toBe(true);
+    expect(data.s1.name).toBe("New");
+    expect(data.s1.planMode).toBe(true);
   });
 
   it("deleteSessionPrefs removes entry", async () => {
-    mockReadFileSync.mockReturnValue(JSON.stringify({ "s1": { name: "A" }, "s2": { name: "B" } }));
+    mockReadFileSync.mockReturnValue(JSON.stringify({ s1: { name: "A" }, s2: { name: "B" } }));
     const { deleteSessionPrefs } = await import("@/server/session-prefs");
     deleteSessionPrefs("s1");
 
     const data = JSON.parse(mockWriteFileSync.mock.calls[0][1] as string);
-    expect(data["s1"]).toBeUndefined();
-    expect(data["s2"]).toBeDefined();
+    expect(data.s1).toBeUndefined();
+    expect(data.s2).toBeDefined();
   });
 });

@@ -1,18 +1,18 @@
 "use client";
 
-import { Component, useMemo, type ReactNode } from "react";
-import { createTwoFilesPatch } from "diff";
 import { PatchDiff } from "@pierre/diffs/react";
+import { createTwoFilesPatch } from "diff";
+import { Component, type ReactNode, useMemo } from "react";
 import { useSettings } from "@/hooks/use-settings";
 
 class DiffErrorBoundary extends Component<{ children: ReactNode; fallback?: ReactNode }, { error: boolean }> {
   state = { error: false };
-  static getDerivedStateFromError() { return { error: true }; }
+  static getDerivedStateFromError() {
+    return { error: true };
+  }
   render() {
     if (this.state.error) {
-      return this.props.fallback || (
-        <pre className="p-3 text-xs text-muted-foreground">Unable to render diff</pre>
-      );
+      return this.props.fallback || <pre className="p-3 text-xs text-muted-foreground">Unable to render diff</pre>;
     }
     return this.props.children;
   }
@@ -33,7 +33,7 @@ export function DiffViewer({ filePath, oldString, newString, dark }: DiffViewerP
   const { settings } = useSettings();
   const patch = useMemo(
     () => createTwoFilesPatch(`a/${filePath}`, `b/${filePath}`, oldString, newString, "", "", { context: 3 }),
-    [filePath, oldString, newString]
+    [filePath, oldString, newString],
   );
 
   return (

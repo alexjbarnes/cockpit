@@ -33,6 +33,9 @@
     "dev": "bun --watch --env-file=.env.development server.ts",
     "build": "bunx next build && tsc -p tsconfig.server.json",
     "start": "bun --env-file=.env.production dist/server.js",
+    "lint": "biome check src/ tests/ server.ts",
+    "lint:fix": "biome check --fix src/ tests/ server.ts",
+    "format": "biome format --write src/ tests/ server.ts",
     "prepublishOnly": "bun run build"
   },
   "dependencies": {
@@ -60,6 +63,7 @@
     "ws": "^8"
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.4.12",
     "@playwright/test": "^1.58.2",
     "@types/node": "^22",
     "@types/react": "^19",

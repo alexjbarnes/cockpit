@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { validateSession, needsSetup, isAuthDisabled } from "@/server/auth";
+import { isAuthDisabled, needsSetup, validateSession } from "@/server/auth";
 
 export function GET(req: NextRequest) {
   if (isAuthDisabled()) {

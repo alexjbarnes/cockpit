@@ -1,13 +1,12 @@
 import { readdirSync, statSync } from "node:fs";
-import { join } from "node:path";
 import { homedir } from "node:os";
+import { join } from "node:path";
 
 const PLANS_DIR = join(homedir(), ".claude", "plans");
 
 export function findLatestPlanFile(): string | undefined {
   try {
-    const files = readdirSync(PLANS_DIR)
-      .filter((f) => f.endsWith(".md") && !f.includes("-agent-"));
+    const files = readdirSync(PLANS_DIR).filter((f) => f.endsWith(".md") && !f.includes("-agent-"));
     if (files.length === 0) return undefined;
     let latest = files[0];
     let latestMtime = 0;

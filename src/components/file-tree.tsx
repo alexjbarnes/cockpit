@@ -1,8 +1,8 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { ChevronDown, ChevronRight, File, Folder, FolderOpen, Loader2 } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
-import { ChevronRight, ChevronDown, Folder, FolderOpen, File, Loader2 } from "lucide-react";
 
 interface TreeNode {
   name: string;
@@ -34,13 +34,11 @@ async function fetchChildren(dirPath: string): Promise<TreeNode[]> {
   const res = await fetch(`/api/filesystem/browse?${params}`);
   if (!res.ok) return [];
   const data = await res.json();
-  const nodes: TreeNode[] = (data.entries || []).map(
-    (e: { name: string; path: string; type: "file" | "directory" }) => ({
-      name: e.name,
-      path: e.path,
-      type: e.type,
-    })
-  );
+  const nodes: TreeNode[] = (data.entries || []).map((e: { name: string; path: string; type: "file" | "directory" }) => ({
+    name: e.name,
+    path: e.path,
+    type: e.type,
+  }));
   childrenCache.set(dirPath, nodes);
   return nodes;
 }
@@ -74,9 +72,7 @@ function TreeRow({
 }) {
   const isDir = node.type === "directory";
   const isExpanded = expandedSet.has(node.path);
-  const [children, setChildren] = useState<TreeNode[]>(
-    childrenCache.get(node.path) || []
-  );
+  const [children, setChildren] = useState<TreeNode[]>(childrenCache.get(node.path) || []);
   const [loading, setLoading] = useState(false);
 
   const handleClick = useCallback(() => {
@@ -115,7 +111,7 @@ function TreeRow({
       <div
         className={cn(
           "flex items-center gap-1 px-2 py-1 text-sm cursor-pointer hover:bg-muted/50",
-          !isDir && selectedFile === node.path && "bg-muted"
+          !isDir && selectedFile === node.path && "bg-muted",
         )}
         style={{ paddingLeft: `${depth * 16 + 8}px` }}
         onClick={handleClick}
@@ -143,17 +139,19 @@ function TreeRow({
         )}
         <span className="font-mono text-xs truncate">{node.name}</span>
       </div>
-      {isDir && isExpanded && children.map((child) => (
-        <TreeRow
-          key={child.path}
-          node={child}
-          depth={depth + 1}
-          selectedFile={selectedFile}
-          onSelectFile={onSelectFile}
-          expandedSet={expandedSet}
-          onToggleExpand={onToggleExpand}
-        />
-      ))}
+      {isDir &&
+        isExpanded &&
+        children.map((child) => (
+          <TreeRow
+            key={child.path}
+            node={child}
+            depth={depth + 1}
+            selectedFile={selectedFile}
+            onSelectFile={onSelectFile}
+            expandedSet={expandedSet}
+            onToggleExpand={onToggleExpand}
+          />
+        ))}
     </>
   );
 }
@@ -195,7 +193,7 @@ export function FileTree({ cwd, selectedFile, onSelectFile }: FileTreeProps) {
         return next;
       });
     },
-    [cwd]
+    [cwd],
   );
 
   if (loading) {
@@ -207,11 +205,7 @@ export function FileTree({ cwd, selectedFile, onSelectFile }: FileTreeProps) {
   }
 
   if (roots.length === 0) {
-    return (
-      <div className="flex items-center justify-center py-12 text-sm text-muted-foreground">
-        Empty directory
-      </div>
-    );
+    return <div className="flex items-center justify-center py-12 text-sm text-muted-foreground">Empty directory</div>;
   }
 
   return (

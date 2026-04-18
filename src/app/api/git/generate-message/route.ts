@@ -1,13 +1,11 @@
-import { NextRequest, NextResponse } from "next/server";
-import { spawn, execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import os from "node:os";
-import { validateSession, isAuthDisabled } from "@/server/auth";
+import { NextRequest, NextResponse } from "next/server";
+import { isAuthDisabled, validateSession } from "@/server/auth";
 
 function authenticate(req: NextRequest): boolean {
   if (isAuthDisabled()) return true;
-  const token =
-    req.cookies.get("cockpit_session")?.value ||
-    req.headers.get("authorization")?.replace("Bearer ", "");
+  const token = req.cookies.get("cockpit_session")?.value || req.headers.get("authorization")?.replace("Bearer ", "");
   return !!token && validateSession(token);
 }
 
@@ -28,14 +26,16 @@ function runWithStdin(cmd: string, args: string[], cwd: string, input: string, m
           PATH: process.env.PATH || "",
           HOME: process.env.HOME || os.homedir(),
           USER: process.env.USER || os.userInfo().username,
-          ...(isWin ? {
-            USERPROFILE: process.env.USERPROFILE || os.homedir(),
-            HOMEDRIVE: process.env.HOMEDRIVE || "",
-            HOMEPATH: process.env.HOMEPATH || "",
-            SYSTEMROOT: process.env.SYSTEMROOT || "",
-          } : {
-            TERM: "xterm-256color",
-          }),
+          ...(isWin
+            ? {
+                USERPROFILE: process.env.USERPROFILE || os.homedir(),
+                HOMEDRIVE: process.env.HOMEDRIVE || "",
+                HOMEPATH: process.env.HOMEPATH || "",
+                SYSTEMROOT: process.env.SYSTEMROOT || "",
+              }
+            : {
+                TERM: "xterm-256color",
+              }),
         }
       : Object.fromEntries(Object.entries(process.env).filter((e): e is [string, string] => e[1] != null));
     delete env.CLAUDECODE;
@@ -53,8 +53,12 @@ function runWithStdin(cmd: string, args: string[], cwd: string, input: string, m
     let stdout = "";
     let stderr = "";
 
-    proc.stdout.on("data", (chunk: Buffer) => { stdout += chunk.toString(); });
-    proc.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
+    proc.stdout.on("data", (chunk: Buffer) => {
+      stdout += chunk.toString();
+    });
+    proc.stderr.on("data", (chunk: Buffer) => {
+      stderr += chunk.toString();
+    });
     proc.on("error", reject);
     proc.on("close", (code) => {
       if (code !== 0) {
@@ -141,19 +145,26 @@ export async function POST(req: NextRequest) {
       "claude",
       [
         "-p",
-        "--model", "sonnet",
-        "--effort", "low",
-        "--output-format", "json",
-        "--system-prompt", SYSTEM_PROMPT,
+        "--model",
+        "sonnet",
+        "--effort",
+        "low",
+        "--output-format",
+        "json",
+        "--system-prompt",
+        SYSTEM_PROMPT,
         "--no-session-persistence",
-        "--tools", "",
+        "--tools",
+        "",
         "--disable-slash-commands",
-        "--setting-sources", "",
-        "--permission-mode", "bypassPermissions",
+        "--setting-sources",
+        "",
+        "--permission-mode",
+        "bypassPermissions",
       ],
       cwd,
       input,
-      true
+      true,
     );
 
     const t2 = Date.now();
@@ -162,7 +173,16 @@ export async function POST(req: NextRequest) {
     let message: string;
     try {
       const parsed = JSON.parse(raw);
-      console.log("[generate-message] num_turns:", parsed.num_turns, "api_ms:", parsed.duration_api_ms, "total_ms:", parsed.duration_ms, "cost:", parsed.total_cost_usd);
+      console.log(
+        "[generate-message] num_turns:",
+        parsed.num_turns,
+        "api_ms:",
+        parsed.duration_api_ms,
+        "total_ms:",
+        parsed.duration_ms,
+        "cost:",
+        parsed.total_cost_usd,
+      );
       message = parsed.result || "";
     } catch {
       message = raw;

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("node:fs");
 vi.mock("node:os", () => ({ homedir: () => "/home/user" }));
@@ -38,7 +38,7 @@ describe("defaults", () => {
       JSON.stringify({
         model: "opus",
         thinkingLevel: "low",
-      })
+      }),
     );
 
     const { getDefaults } = await import("@/server/defaults");
@@ -56,9 +56,7 @@ describe("defaults", () => {
 
   it("setDefaults merges partial with current and writes file", async () => {
     const fs = await import("node:fs");
-    vi.mocked(fs.readFileSync).mockReturnValue(
-      JSON.stringify({ model: "opus" })
-    );
+    vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify({ model: "opus" }));
     vi.mocked(fs.writeFileSync).mockImplementation(() => {});
     vi.mocked(fs.mkdirSync).mockImplementation(() => "");
 

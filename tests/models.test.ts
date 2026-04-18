@@ -1,14 +1,13 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
-  MODELS,
-  findModelById,
-  versionsForAlias,
-  defaultForAlias,
-  resolveModel,
   allowedEffortLevels,
-  recommendedEffort,
   coerceEffort,
-  type ModelEntry,
+  defaultForAlias,
+  findModelById,
+  MODELS,
+  recommendedEffort,
+  resolveModel,
+  versionsForAlias,
 } from "@/lib/models";
 
 describe("findModelById", () => {
@@ -262,7 +261,7 @@ describe("coerceEffort", () => {
   });
 
   it("returns recommended if level not allowed for opus 4.7", () => {
-    const levels = allowedEffortLevels(opus47);
+    const _levels = allowedEffortLevels(opus47);
     expect(coerceEffort("other" as any, opus47)).toBe("xhigh");
   });
 

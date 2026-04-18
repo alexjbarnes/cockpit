@@ -1,7 +1,21 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
-import type { ChatMessage, ServerMessage, ToolUse, ContentBlock, PermissionMode, ThinkingLevel, ContextUsage, BackgroundTask, TodoItem, ImageAttachment, DocumentAttachment, TextFileAttachment, InitData } from "@/types";
+import { useCallback, useEffect, useRef, useState } from "react";
+import type {
+  BackgroundTask,
+  ChatMessage,
+  ContentBlock,
+  ContextUsage,
+  DocumentAttachment,
+  ImageAttachment,
+  InitData,
+  PermissionMode,
+  ServerMessage,
+  TextFileAttachment,
+  ThinkingLevel,
+  TodoItem,
+  ToolUse,
+} from "@/types";
 import { useWebSocket } from "./use-websocket";
 
 export interface PendingPermission {
@@ -124,7 +138,9 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
   // Each is injected into the UI when the server confirms delivery
   // via session:queued sentText. Using an array (not a single ref)
   // so rapid-fire messages don't overwrite each other.
-  const queuedTextsRef = useRef<Array<{ text: string; images?: ImageAttachment[]; documents?: DocumentAttachment[]; textFiles?: TextFileAttachment[] }>>([]);
+  const queuedTextsRef = useRef<
+    Array<{ text: string; images?: ImageAttachment[]; documents?: DocumentAttachment[]; textFiles?: TextFileAttachment[] }>
+  >([]);
   const loadedSessionRef = useRef<string | null>(null);
 
   // Reset when switching sessions
@@ -137,8 +153,12 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
   }
 
   // Keep refs in sync for use inside callbacks
-  useEffect(() => { messagesRef.current = messages; }, [messages]);
-  useEffect(() => { currentModelRef.current = currentModel; }, [currentModel]);
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
+  useEffect(() => {
+    currentModelRef.current = currentModel;
+  }, [currentModel]);
 
   // Send session:connect whenever WS (re)connects
   useEffect(() => {
@@ -190,14 +210,11 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
               // that won't match server-assigned IDs. When the delta contains
               // the server's copy, remove the optimistic version to prevent
               // duplicate bubbles after reconnect.
-              const deltaUserContents = new Set(
-                newMsgs.filter((m) => m.role === "user").map((m) => m.content)
-              );
-              const merged = deltaUserContents.size > 0
-                ? filtered.filter(
-                    (m) => !(m.role === "user" && m.id.startsWith("user-") && deltaUserContents.has(m.content))
-                  )
-                : filtered;
+              const deltaUserContents = new Set(newMsgs.filter((m) => m.role === "user").map((m) => m.content));
+              const merged =
+                deltaUserContents.size > 0
+                  ? filtered.filter((m) => !(m.role === "user" && m.id.startsWith("user-") && deltaUserContents.has(m.content)))
+                  : filtered;
 
               return [...merged, ...newMsgs];
             });
@@ -249,7 +266,9 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
 
           const connectTime = (window as unknown as Record<string, unknown>).__sessionConnectTime as number | undefined;
           if (connectTime) {
-            console.log(`[session] history received for ${sessionId.slice(0, 8)} in ${(performance.now() - connectTime).toFixed(0)}ms (${serverMsgs.length} msgs, delta=${!!msg.delta}, hasMore=${!!msg.hasMore})`);
+            console.log(
+              `[session] history received for ${sessionId.slice(0, 8)} in ${(performance.now() - connectTime).toFixed(0)}ms (${serverMsgs.length} msgs, delta=${!!msg.delta}, hasMore=${!!msg.hasMore})`,
+            );
           }
           setHistoryLoaded(true);
           loadedSessionRef.current = sessionId;
@@ -277,9 +296,7 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
           // Rebuild the agent stack from running Agent tool uses in the
           // snapshot. Without this, sub-agent events after reconnect leak
           // into the main thread because agentStackRef is empty.
-          agentStackRef.current = msg.toolUses.filter(
-            (t: ToolUse) => t.name === "Agent" && t.status === "running"
-          );
+          agentStackRef.current = msg.toolUses.filter((t: ToolUse) => t.name === "Agent" && t.status === "running");
 
           streamingRef.current = {
             content: msg.content,
@@ -301,9 +318,7 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
             // may contain a stale version of this message (from an
             // intermediate emission) while the snapshot has the latest
             // in-progress state including new tool calls.
-            const filtered = prev.filter(
-              (m) => m.id !== "streaming" && m.id !== msg.messageId
-            );
+            const filtered = prev.filter((m) => m.id !== "streaming" && m.id !== msg.messageId);
             return [...filtered, streamMsg];
           });
           break;
@@ -385,9 +400,7 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
           if (!streamingRef.current) {
             streamingRef.current = { content: "", toolUses: [], blocks: [] };
           }
-          const existing = streamingRef.current.toolUses.find(
-            (t) => t.id === msg.toolId && t.status === "running"
-          );
+          const existing = streamingRef.current.toolUses.find((t) => t.id === msg.toolId && t.status === "running");
           if (existing) {
             existing.input = msg.input;
             existing.status = "done";
@@ -464,9 +477,7 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
               }
             }
           } else {
-            const tool = streamingRef.current.toolUses.find(
-              (t) => t.id === msg.toolId
-            );
+            const tool = streamingRef.current.toolUses.find((t) => t.id === msg.toolId);
             if (tool) {
               tool.output = msg.output;
               if (msg.filePath) tool.filePath = msg.filePath;
@@ -536,15 +547,11 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
               }
             }
             if (!progressFound) {
-              const tool = streamingRef.current.toolUses.find(
-                (t) => t.id === msg.toolId
-              );
+              const tool = streamingRef.current.toolUses.find((t) => t.id === msg.toolId);
               if (tool) tool.output += msg.content;
             }
           } else {
-            const tool = streamingRef.current.toolUses.find(
-              (t) => t.id === msg.toolId
-            );
+            const tool = streamingRef.current.toolUses.find((t) => t.id === msg.toolId);
             if (tool) tool.output += msg.content;
           }
 
@@ -607,7 +614,7 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
                       activity: msg.task.activity || t.activity,
                       summary: msg.task.summary || t.summary,
                     }
-                  : t
+                  : t,
               );
             }
             return [...prev, msg.task];
@@ -621,18 +628,16 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
         }
 
         case "assistant:tool_children": {
-          setMessages((prev) => prev.map((m) => {
-            if (m.id !== msg.messageId) return m;
-            const updatedToolUses = m.toolUses.map((t) =>
-              t.id === msg.toolId ? { ...t, children: msg.children } : t
-            );
-            const updatedBlocks = m.blocks.map((b) =>
-              b.type === "tool_use" && b.toolUse.id === msg.toolId
-                ? { ...b, toolUse: { ...b.toolUse, children: msg.children } }
-                : b
-            );
-            return { ...m, toolUses: updatedToolUses, blocks: updatedBlocks };
-          }));
+          setMessages((prev) =>
+            prev.map((m) => {
+              if (m.id !== msg.messageId) return m;
+              const updatedToolUses = m.toolUses.map((t) => (t.id === msg.toolId ? { ...t, children: msg.children } : t));
+              const updatedBlocks = m.blocks.map((b) =>
+                b.type === "tool_use" && b.toolUse.id === msg.toolId ? { ...b, toolUse: { ...b.toolUse, children: msg.children } } : b,
+              );
+              return { ...m, toolUses: updatedToolUses, blocks: updatedBlocks };
+            }),
+          );
           break;
         }
 
@@ -768,20 +773,19 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
               const doneId = "compact-done-" + Date.now();
               const hasProgress = prev.some((m) => m.id === "compact-progress");
               if (hasProgress) {
-                return prev.map((m) =>
-                  m.id === "compact-progress"
-                    ? { ...m, id: doneId, content: "__compacted__" }
-                    : m
-                );
+                return prev.map((m) => (m.id === "compact-progress" ? { ...m, id: doneId, content: "__compacted__" } : m));
               }
-              return [...prev, {
-                id: doneId,
-                role: "system" as const,
-                content: "__compacted__",
-                toolUses: [],
-                blocks: [],
-                timestamp: Date.now(),
-              }];
+              return [
+                ...prev,
+                {
+                  id: doneId,
+                  role: "system" as const,
+                  content: "__compacted__",
+                  toolUses: [],
+                  blocks: [],
+                  timestamp: Date.now(),
+                },
+              ];
             });
             break;
           }
@@ -791,22 +795,21 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
             if (state === "start") {
               setMessages((prev) => {
                 if (prev.some((m) => m.id === "compact-progress")) return prev;
-                return [...prev, {
-                  id: "compact-progress",
-                  role: "system" as const,
-                  content: "__compacting__",
-                  toolUses: [],
-                  blocks: [],
-                  timestamp: Date.now(),
-                }];
+                return [
+                  ...prev,
+                  {
+                    id: "compact-progress",
+                    role: "system" as const,
+                    content: "__compacting__",
+                    toolUses: [],
+                    blocks: [],
+                    timestamp: Date.now(),
+                  },
+                ];
               });
             } else if (state === "done") {
               setMessages((prev) =>
-                prev.map((m) =>
-                  m.id === "compact-progress"
-                    ? { ...m, id: "compact-done-" + Date.now(), content: "__compacted__" }
-                    : m
-                )
+                prev.map((m) => (m.id === "compact-progress" ? { ...m, id: "compact-done-" + Date.now(), content: "__compacted__" } : m)),
               );
             }
             break;
@@ -841,24 +844,26 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
         case "permission:request": {
           setPendingPermissions((prev) => [
             ...prev,
-            { requestId: msg.requestId, toolName: msg.toolName, input: msg.input, suggestions: msg.suggestions, planFilePath: msg.planFilePath },
+            {
+              requestId: msg.requestId,
+              toolName: msg.toolName,
+              input: msg.input,
+              suggestions: msg.suggestions,
+              planFilePath: msg.planFilePath,
+            },
           ]);
           break;
         }
 
         case "question:request": {
-          setPendingQuestions((prev) => [
-            ...prev,
-            { requestId: msg.requestId, questions: msg.questions },
-          ]);
+          setPendingQuestions((prev) => [...prev, { requestId: msg.requestId, questions: msg.questions }]);
           break;
         }
-
       }
     });
 
     return unsub;
-  }, [sessionId, send, subscribe]);
+  }, [sessionId, subscribe]);
 
   const requestMoreHistory = useCallback(() => {
     if (loadingMore || !hasMoreHistory) return;
@@ -927,9 +932,13 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
     lastEventRef.current = Date.now();
     const handler = (msg: ServerMessage) => {
       if ("sessionId" in msg && msg.sessionId === sessionId) {
-        if (msg.type === "assistant:text" || msg.type === "assistant:thinking" ||
-            msg.type === "assistant:tool_use" || msg.type === "assistant:tool_result" ||
-            msg.type === "session:status") {
+        if (
+          msg.type === "assistant:text" ||
+          msg.type === "assistant:thinking" ||
+          msg.type === "assistant:tool_use" ||
+          msg.type === "assistant:tool_result" ||
+          msg.type === "session:status"
+        ) {
           lastEventRef.current = Date.now();
         }
       }
@@ -957,7 +966,7 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
       clearInterval(poll);
       document.removeEventListener("visibilitychange", onVisible);
     };
-  }, [isResponding, sessionId, cwd, subscribe, checkSessionViaHttp]);
+  }, [isResponding, sessionId, subscribe, checkSessionViaHttp]);
 
   const sendMessage = useCallback(
     (text: string, images?: ImageAttachment[], documents?: DocumentAttachment[], textFiles?: TextFileAttachment[]) => {
@@ -989,13 +998,13 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
           .then((res) => res.json())
           .then((data) => {
             if (data.error) {
-              setBtw((prev) => prev ? { ...prev, loading: false, error: data.error } : null);
+              setBtw((prev) => (prev ? { ...prev, loading: false, error: data.error } : null));
             } else {
-              setBtw((prev) => prev ? { ...prev, loading: false, answer: data.answer } : null);
+              setBtw((prev) => (prev ? { ...prev, loading: false, answer: data.answer } : null));
             }
           })
           .catch((err) => {
-            setBtw((prev) => prev ? { ...prev, loading: false, error: err.message } : null);
+            setBtw((prev) => (prev ? { ...prev, loading: false, error: err.message } : null));
           });
         return;
       }
@@ -1043,7 +1052,7 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
         documents: documents?.length ? documents : undefined,
       });
     },
-    [send, sessionId, queuePaused]
+    [send, sessionId, queuePaused, cwd],
   );
 
   const interrupt = useCallback(() => {
@@ -1055,17 +1064,15 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
       send({ type: "permission:response", sessionId, requestId, allowed, permissionMode, suggestionIndex });
       setPendingPermissions((prev) => prev.filter((p) => p.requestId !== requestId));
     },
-    [send, sessionId]
+    [send, sessionId],
   );
 
   const respondToQuestion = useCallback(
     (requestId: string, answers: Record<string, string>) => {
       send({ type: "question:response", sessionId, requestId, answers });
-      setPendingQuestions((prev) =>
-        prev.map((q) => q.requestId === requestId ? { ...q, answered: true } : q)
-      );
+      setPendingQuestions((prev) => prev.map((q) => (q.requestId === requestId ? { ...q, answered: true } : q)));
     },
-    [send, sessionId]
+    [send, sessionId],
   );
 
   const selectModel = useCallback(
@@ -1074,7 +1081,7 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
       setCurrentModel(model);
       send({ type: "message:send", sessionId, text: `/model ${model}` });
     },
-    [send, sessionId]
+    [send, sessionId],
   );
 
   const setModel = useCallback(
@@ -1082,7 +1089,7 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
       setCurrentModel(model);
       send({ type: "session:set_model", sessionId, model });
     },
-    [send, sessionId]
+    [send, sessionId],
   );
 
   const setBypassAll = useCallback(
@@ -1090,7 +1097,7 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
       setBypassActive(enabled);
       send({ type: "permission:set_bypass", sessionId, enabled });
     },
-    [send, sessionId]
+    [send, sessionId],
   );
 
   const setPlanMode = useCallback(
@@ -1098,7 +1105,7 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
       setPlanModeState(enabled);
       send({ type: "session:set_plan_mode", sessionId, enabled });
     },
-    [send, sessionId]
+    [send, sessionId],
   );
 
   const setThinkingLevel = useCallback(
@@ -1117,20 +1124,26 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
       ]);
       send({ type: "session:set_thinking", sessionId, level });
     },
-    [send, sessionId]
+    [send, sessionId],
   );
 
   const cancelQueuedMessage = useCallback(() => {
     send({ type: "message:cancel_queued", sessionId });
   }, [send, sessionId]);
 
-  const deleteQueuedMessage = useCallback((id: string) => {
-    send({ type: "message:delete_queued", sessionId, messageId: id });
-  }, [send, sessionId]);
+  const deleteQueuedMessage = useCallback(
+    (id: string) => {
+      send({ type: "message:delete_queued", sessionId, messageId: id });
+    },
+    [send, sessionId],
+  );
 
-  const editQueuedMessage = useCallback((id: string) => {
-    send({ type: "message:edit_queued", sessionId, messageId: id });
-  }, [send, sessionId]);
+  const editQueuedMessage = useCallback(
+    (id: string) => {
+      send({ type: "message:edit_queued", sessionId, messageId: id });
+    },
+    [send, sessionId],
+  );
 
   const resumeQueue = useCallback(() => {
     send({ type: "message:resume_queue", sessionId });
@@ -1146,7 +1159,14 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
       const ts = Date.now();
       setMessages((prev) => [
         ...prev,
-        { id: `btw-q-${ts}`, role: "user" as const, content: `[side question] ${current.question}`, toolUses: [], blocks: [], timestamp: ts },
+        {
+          id: `btw-q-${ts}`,
+          role: "user" as const,
+          content: `[side question] ${current.question}`,
+          toolUses: [],
+          blocks: [],
+          timestamp: ts,
+        },
         { id: `btw-a-${ts}`, role: "assistant" as const, content: current.answer!, toolUses: [], blocks: [], timestamp: ts + 1 },
       ]);
     }
@@ -1158,5 +1178,49 @@ export function useSession(sessionId: string, cwd?: string): UseSessionReturn {
     send({ type: "message:send", sessionId, text: "Continue from where you left off." });
   }, [send, sessionId]);
 
-  return { messages, historyLoaded, isResponding, pendingPermissions, pendingQuestions, modelPicker, currentModel, bypassActive, planMode, thinkingLevel, contextUsage, rateLimitStatus, apiError, suggestions, sessionName, initData, activeModelId, hasQueuedMessage, queuedMessages, queuePaused, backgroundTasks, todos, btw, hasMoreHistory, loadingMore, requestMoreHistory, sendMessage, interrupt, respondToPermission, respondToQuestion, selectModel, setModel, setBypassAll, setPlanMode, setThinkingLevel, cancelQueuedMessage, deleteQueuedMessage, editQueuedMessage, resumeQueue, restoredText, clearRestoredText, dismissBtw, retry };
+  return {
+    messages,
+    historyLoaded,
+    isResponding,
+    pendingPermissions,
+    pendingQuestions,
+    modelPicker,
+    currentModel,
+    bypassActive,
+    planMode,
+    thinkingLevel,
+    contextUsage,
+    rateLimitStatus,
+    apiError,
+    suggestions,
+    sessionName,
+    initData,
+    activeModelId,
+    hasQueuedMessage,
+    queuedMessages,
+    queuePaused,
+    backgroundTasks,
+    todos,
+    btw,
+    hasMoreHistory,
+    loadingMore,
+    requestMoreHistory,
+    sendMessage,
+    interrupt,
+    respondToPermission,
+    respondToQuestion,
+    selectModel,
+    setModel,
+    setBypassAll,
+    setPlanMode,
+    setThinkingLevel,
+    cancelQueuedMessage,
+    deleteQueuedMessage,
+    editQueuedMessage,
+    resumeQueue,
+    restoredText,
+    clearRestoredText,
+    dismissBtw,
+    retry,
+  };
 }

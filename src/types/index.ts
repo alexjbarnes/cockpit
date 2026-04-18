@@ -154,7 +154,14 @@ export type ClientMessage =
   | { type: "session:connect"; sessionId: string; cwd?: string; lastMessageId?: string | null }
   | { type: "message:send"; sessionId: string; text: string; images?: ImageAttachment[]; documents?: DocumentAttachment[] }
   | { type: "session:interrupt"; sessionId: string }
-  | { type: "permission:response"; sessionId: string; requestId: string; allowed: boolean; permissionMode?: PermissionMode; suggestionIndex?: number }
+  | {
+      type: "permission:response";
+      sessionId: string;
+      requestId: string;
+      allowed: boolean;
+      permissionMode?: PermissionMode;
+      suggestionIndex?: number;
+    }
   | { type: "permission:set_bypass"; sessionId: string; enabled: boolean }
   | { type: "session:set_plan_mode"; sessionId: string; enabled: boolean }
   | { type: "session:set_thinking"; sessionId: string; level: ThinkingLevel }
@@ -180,7 +187,15 @@ export type ServerMessage =
   | { type: "assistant:tool_children"; sessionId: string; messageId: string; toolId: string; children: ToolUse[] }
   | { type: "session:status"; sessionId: string; status: "idle" | "running" }
   | { type: "session:error"; sessionId: string; error: string }
-  | { type: "permission:request"; sessionId: string; requestId: string; toolName: string; input: string; suggestions?: PermissionSuggestion[]; planFilePath?: string }
+  | {
+      type: "permission:request";
+      sessionId: string;
+      requestId: string;
+      toolName: string;
+      input: string;
+      suggestions?: PermissionSuggestion[];
+      planFilePath?: string;
+    }
   | { type: "question:request"; sessionId: string; requestId: string; questions: string }
   | { type: "session:clear"; sessionId: string }
   | { type: "session:system"; sessionId: string; text: string }
@@ -194,7 +209,23 @@ export type ServerMessage =
   | { type: "session:init"; sessionId: string; data: InitData }
   | { type: "history"; sessionId: string; messages: ChatMessage[]; delta?: boolean; status?: "idle" | "running"; hasMore?: boolean }
   | { type: "history:more"; sessionId: string; messages: ChatMessage[]; hasMore: boolean }
-  | { type: "session:streaming_snapshot"; sessionId: string; messageId: string; content: string; toolUses: ToolUse[]; blocks: ContentBlock[] }
-  | { type: "session:queued"; sessionId: string; count: number; cancelledText?: string; sentText?: string; messages?: Array<{ id: string; text: string }>; paused?: boolean; editText?: string }
+  | {
+      type: "session:streaming_snapshot";
+      sessionId: string;
+      messageId: string;
+      content: string;
+      toolUses: ToolUse[];
+      blocks: ContentBlock[];
+    }
+  | {
+      type: "session:queued";
+      sessionId: string;
+      count: number;
+      cancelledText?: string;
+      sentText?: string;
+      messages?: Array<{ id: string; text: string }>;
+      paused?: boolean;
+      editText?: string;
+    }
   | { type: "message:ack"; sessionId: string }
   | { type: "pong" };

@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useRef, useState, useMemo } from "react";
-import type { InitAgentInfo } from "@/types";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { pathBasename, pathDirname } from "@/lib/path";
+import type { InitAgentInfo } from "@/types";
 
 const DEFAULT_AGENTS = [
   { name: "Explore", description: "Fast codebase exploration" },
@@ -89,19 +89,16 @@ export function MentionMenu({ query, cwd, selectedIndex, onSelect, onItemsChange
       allAgents
         .filter((a) => a.name.toLowerCase().includes(lowerQuery))
         .map((a) => ({ value: a.name, label: a.name, description: a.description, kind: "agent" as const })),
-    [lowerQuery, allAgents]
+    [lowerQuery, allAgents],
   );
 
-  const fileItems: MentionItem[] = useMemo(
-    () => files.map((f) => ({ value: f, label: f, kind: "file" as const })),
-    [files]
-  );
+  const fileItems: MentionItem[] = useMemo(() => files.map((f) => ({ value: f, label: f, kind: "file" as const })), [files]);
 
   const items = useMemo(() => [...matchedAgents, ...fileItems], [matchedAgents, fileItems]);
 
   useEffect(() => {
     onItemsChange?.(items);
-  }, [items]);
+  }, [items, onItemsChange]);
 
   useEffect(() => {
     const el = listRef.current;
@@ -137,9 +134,7 @@ export function MentionMenu({ query, cwd, selectedIndex, onSelect, onItemsChange
           <span className="text-muted-foreground truncate">{item.description}</span>
         </button>
       ))}
-      {fileItems.length > 0 && matchedAgents.length > 0 && (
-        <div className="px-3 py-1 text-xs text-muted-foreground font-medium">Files</div>
-      )}
+      {fileItems.length > 0 && matchedAgents.length > 0 && <div className="px-3 py-1 text-xs text-muted-foreground font-medium">Files</div>}
       {fileItems.map((item, i) => {
         const idx = matchedAgents.length + i;
         const fileName = pathBasename(item.value);

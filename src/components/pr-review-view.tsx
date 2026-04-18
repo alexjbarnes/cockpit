@@ -1,37 +1,35 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
-import { useRouter } from "next/navigation";
-import { FileDiff as FileDiffComponent, PatchDiff } from "@pierre/diffs/react";
-import { parsePatchFiles } from "@pierre/diffs";
 import type { FileDiffMetadata } from "@pierre/diffs";
-import { useSettings } from "@/hooks/use-settings";
-import { DiffErrorBoundary, DIFF_SELECTABLE_CSS } from "@/components/diff-viewer";
-import { useShell } from "@/components/app-shell";
-import { usePageHeader } from "@/components/app-shell";
-import { useIsDesktop } from "@/hooks/use-is-desktop";
-import { ChatView } from "@/components/chat-view";
-import { Button } from "@/components/ui/button";
+import { parsePatchFiles } from "@pierre/diffs";
+import { FileDiff as FileDiffComponent, PatchDiff } from "@pierre/diffs/react";
 import {
-  Loader2,
   ArrowLeft,
-  ExternalLink,
-  GitBranch,
+  Bot,
   Check,
+  CheckCircle,
   ChevronDown,
   ChevronUp,
-  FileEdit,
-  FilePlus,
-  FileMinus,
-  FileSymlink,
-  CheckCircle,
-  XCircle,
   Clock,
-  Bot,
+  ExternalLink,
+  FileEdit,
+  FileMinus,
+  FilePlus,
+  GitBranch,
+  Loader2,
+  XCircle,
 } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { useRouter } from "next/navigation";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { usePageHeader, useShell } from "@/components/app-shell";
+import { ChatView } from "@/components/chat-view";
+import { DIFF_SELECTABLE_CSS, DiffErrorBoundary } from "@/components/diff-viewer";
 import { pinSession } from "@/components/sidebar";
+import { Button } from "@/components/ui/button";
+import { useIsDesktop } from "@/hooks/use-is-desktop";
+import { useSettings } from "@/hooks/use-settings";
 import { useWebSocket } from "@/hooks/use-websocket";
+import { cn } from "@/lib/utils";
 
 // --- Types ---
 
@@ -93,12 +91,43 @@ function isDeletedFile(patch: string): boolean {
 }
 
 const BINARY_EXTENSIONS = new Set([
-  "png", "jpg", "jpeg", "gif", "bmp", "ico", "webp", "avif",
-  "woff", "woff2", "ttf", "eot", "otf",
-  "zip", "gz", "tar", "bz2", "7z", "rar",
-  "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx",
-  "mp3", "mp4", "wav", "avi", "mov", "mkv", "webm",
-  "exe", "dll", "so", "dylib",
+  "png",
+  "jpg",
+  "jpeg",
+  "gif",
+  "bmp",
+  "ico",
+  "webp",
+  "avif",
+  "woff",
+  "woff2",
+  "ttf",
+  "eot",
+  "otf",
+  "zip",
+  "gz",
+  "tar",
+  "bz2",
+  "7z",
+  "rar",
+  "pdf",
+  "doc",
+  "docx",
+  "xls",
+  "xlsx",
+  "ppt",
+  "pptx",
+  "mp3",
+  "mp4",
+  "wav",
+  "avi",
+  "mov",
+  "mkv",
+  "webm",
+  "exe",
+  "dll",
+  "so",
+  "dylib",
 ]);
 
 function isBinaryFile(path: string): boolean {
@@ -112,38 +141,36 @@ function ResizeHandle({ onResize }: { onResize: (delta: number) => void }) {
   const dragging = useRef(false);
   const lastX = useRef(0);
 
-  const onMouseDown = useCallback((e: React.MouseEvent) => {
-    e.preventDefault();
-    dragging.current = true;
-    lastX.current = e.clientX;
+  const onMouseDown = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault();
+      dragging.current = true;
+      lastX.current = e.clientX;
 
-    const onMouseMove = (ev: MouseEvent) => {
-      if (!dragging.current) return;
-      const delta = lastX.current - ev.clientX;
-      lastX.current = ev.clientX;
-      onResize(delta);
-    };
+      const onMouseMove = (ev: MouseEvent) => {
+        if (!dragging.current) return;
+        const delta = lastX.current - ev.clientX;
+        lastX.current = ev.clientX;
+        onResize(delta);
+      };
 
-    const onMouseUp = () => {
-      dragging.current = false;
-      document.removeEventListener("mousemove", onMouseMove);
-      document.removeEventListener("mouseup", onMouseUp);
-      document.body.style.cursor = "";
-      document.body.style.userSelect = "";
-    };
+      const onMouseUp = () => {
+        dragging.current = false;
+        document.removeEventListener("mousemove", onMouseMove);
+        document.removeEventListener("mouseup", onMouseUp);
+        document.body.style.cursor = "";
+        document.body.style.userSelect = "";
+      };
 
-    document.body.style.cursor = "col-resize";
-    document.body.style.userSelect = "none";
-    document.addEventListener("mousemove", onMouseMove);
-    document.addEventListener("mouseup", onMouseUp);
-  }, [onResize]);
-
-  return (
-    <div
-      onMouseDown={onMouseDown}
-      className="w-1 shrink-0 cursor-col-resize bg-border hover:bg-primary/30 transition-colors"
-    />
+      document.body.style.cursor = "col-resize";
+      document.body.style.userSelect = "none";
+      document.addEventListener("mousemove", onMouseMove);
+      document.addEventListener("mouseup", onMouseUp);
+    },
+    [onResize],
   );
+
+  return <div onMouseDown={onMouseDown} className="w-1 shrink-0 cursor-col-resize bg-border hover:bg-primary/30 transition-colors" />;
 }
 
 // --- Session Storage ---
@@ -194,18 +221,18 @@ function maxChatWidth(): number {
 }
 
 function getCachedState(prKey: string): ReviewState {
-  return stateCache.get(prKey) || {
-    chatWidth: DEFAULT_CHAT_WIDTH,
-    descriptionOpen: true,
-  };
+  return (
+    stateCache.get(prKey) || {
+      chatWidth: DEFAULT_CHAT_WIDTH,
+      descriptionOpen: true,
+    }
+  );
 }
 
 // --- Lazy Diff ---
 
 function fetchFileContent(repo: string, path: string, ref: string): Promise<string | null> {
-  return fetch(
-    `/api/github/file-content?repo=${encodeURIComponent(repo)}&path=${encodeURIComponent(path)}&ref=${encodeURIComponent(ref)}`,
-  )
+  return fetch(`/api/github/file-content?repo=${encodeURIComponent(repo)}&path=${encodeURIComponent(path)}&ref=${encodeURIComponent(ref)}`)
     .then((res) => (res.ok ? res.json() : null))
     .then((data) => data?.content ?? null)
     .catch(() => null);
@@ -281,28 +308,29 @@ function LazyDiff({
     }
 
     // Fetch old (base) and new (head) file contents in parallel
-    Promise.all([
-      fetchFileContent(repo, file.path, pr.baseRefName),
-      fetchFileContent(repo, file.path, pr.headRefName),
-    ]).then(([oldContent, newContent]) => {
-      if (cancelled) return;
-      if (oldContent != null) {
-        meta!.oldLines = oldContent.split("\n").map((l) => l + "\n");
-      } else {
-        console.warn(`[diff] ${file.path}: oldContent is null (base=${pr.baseRefName})`);
-      }
-      if (newContent != null) {
-        meta!.newLines = newContent.split("\n").map((l) => l + "\n");
-      } else {
-        console.warn(`[diff] ${file.path}: newContent is null (head=${pr.headRefName})`);
-      }
-      console.info(`[diff] ${file.path}: oldLines=${!!meta!.oldLines} newLines=${!!meta!.newLines}`);
-      setFileDiffMeta(meta);
-    }).catch((e) => {
-      console.error(`[diff] fetch failed for ${file.path}:`, e);
-    });
+    Promise.all([fetchFileContent(repo, file.path, pr.baseRefName), fetchFileContent(repo, file.path, pr.headRefName)])
+      .then(([oldContent, newContent]) => {
+        if (cancelled) return;
+        if (oldContent != null) {
+          meta!.oldLines = oldContent.split("\n").map((l) => l + "\n");
+        } else {
+          console.warn(`[diff] ${file.path}: oldContent is null (base=${pr.baseRefName})`);
+        }
+        if (newContent != null) {
+          meta!.newLines = newContent.split("\n").map((l) => l + "\n");
+        } else {
+          console.warn(`[diff] ${file.path}: newContent is null (head=${pr.headRefName})`);
+        }
+        console.info(`[diff] ${file.path}: oldLines=${!!meta!.oldLines} newLines=${!!meta!.newLines}`);
+        setFileDiffMeta(meta);
+      })
+      .catch((e) => {
+        console.error(`[diff] fetch failed for ${file.path}:`, e);
+      });
 
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [visible, pr, repo, file.patch, file.path]);
 
   const handleMarkViewed = (e: React.MouseEvent) => {
@@ -324,7 +352,10 @@ function LazyDiff({
 
   return (
     <div
-      ref={(el) => { sentinelRef.current = el; sectionRef(el); }}
+      ref={(el) => {
+        sentinelRef.current = el;
+        sectionRef(el);
+      }}
       className={cn("rounded border overflow-clip", viewed && "opacity-60")}
     >
       {collapsed ? (
@@ -334,7 +365,9 @@ function LazyDiff({
         >
           <ChevronDown className="h-3.5 w-3.5 shrink-0" />
           {viewed && <Check className="h-3 w-3 text-green-500 shrink-0" />}
-          <span className="font-mono text-xs truncate text-left" dir="rtl" title={file.path}><bdo dir="ltr">{file.path}</bdo></span>
+          <span className="font-mono text-xs truncate text-left" dir="rtl" title={file.path}>
+            <bdo dir="ltr">{file.path}</bdo>
+          </span>
         </button>
       ) : deleted && !loadDeleted ? (
         <button
@@ -342,7 +375,9 @@ function LazyDiff({
           className="flex items-center gap-2 w-full px-4 py-2 text-sm text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
         >
           <FileMinus className="h-3.5 w-3.5 text-red-500 shrink-0" />
-          <span className="font-mono text-xs truncate text-left" dir="rtl" title={file.path}><bdo dir="ltr">{file.path}</bdo></span>
+          <span className="font-mono text-xs truncate text-left" dir="rtl" title={file.path}>
+            <bdo dir="ltr">{file.path}</bdo>
+          </span>
           <span className="text-xs shrink-0">deleted &mdash; click to load</span>
         </button>
       ) : binary && !loadBinary ? (
@@ -351,7 +386,9 @@ function LazyDiff({
           className="flex items-center gap-2 w-full px-4 py-2 text-sm text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
         >
           {fileStatusIcon(file.path, pr?.files || [])}
-          <span className="font-mono text-xs truncate text-left" dir="rtl" title={file.path}><bdo dir="ltr">{file.path}</bdo></span>
+          <span className="font-mono text-xs truncate text-left" dir="rtl" title={file.path}>
+            <bdo dir="ltr">{file.path}</bdo>
+          </span>
           <span className="text-xs shrink-0">binary &mdash; click to load</span>
         </button>
       ) : !visible ? (
@@ -362,7 +399,9 @@ function LazyDiff({
         <>
           <div className="sticky top-0 z-10 flex items-center gap-2 px-4 py-1.5 text-sm border-b bg-muted/80 backdrop-blur-sm">
             {fileStatusIcon(file.path, pr?.files || [])}
-            <span className="font-mono text-xs truncate flex-1 min-w-0 text-left" dir="rtl" title={file.path}><bdo dir="ltr">{file.path}</bdo></span>
+            <span className="font-mono text-xs truncate flex-1 min-w-0 text-left" dir="rtl" title={file.path}>
+              <bdo dir="ltr">{file.path}</bdo>
+            </span>
             <button
               onClick={handleMarkViewed}
               className={cn(
@@ -376,7 +415,10 @@ function LazyDiff({
               {viewed && <Check className="h-3 w-3" strokeWidth={3} />}
             </button>
             <button
-              onClick={(e) => { e.stopPropagation(); onToggleCollapse(); }}
+              onClick={(e) => {
+                e.stopPropagation();
+                onToggleCollapse();
+              }}
               className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
               title="Collapse"
             >
@@ -396,15 +438,9 @@ function LazyDiff({
           </div>
           <DiffErrorBoundary fallback={<pre className="p-4 text-xs text-muted-foreground whitespace-pre-wrap">{file.patch}</pre>}>
             {fileDiffMeta ? (
-              <FileDiffComponent
-                fileDiff={fileDiffMeta}
-                options={diffOptions}
-              />
+              <FileDiffComponent fileDiff={fileDiffMeta} options={diffOptions} />
             ) : (
-              <PatchDiff
-                patch={file.patch}
-                options={diffOptions}
-              />
+              <PatchDiff patch={file.patch} options={diffOptions} />
             )}
           </DiffErrorBoundary>
         </>
@@ -462,22 +498,22 @@ export function PRReviewView({ owner, repo, number }: { owner: string; repo: str
     setLoading(true);
     setError(null);
 
-    const fetchDetails = fetch(`/api/github/prs/view?repo=${encodeURIComponent(fullRepo)}&number=${number}`)
-      .then((res) => {
-        if (!res.ok) return res.json().then((d) => Promise.reject(d.error));
-        return res.json();
-      });
+    const fetchDetails = fetch(`/api/github/prs/view?repo=${encodeURIComponent(fullRepo)}&number=${number}`).then((res) => {
+      if (!res.ok) return res.json().then((d) => Promise.reject(d.error));
+      return res.json();
+    });
 
-    const fetchDiff = fetch(`/api/github/prs/diff?repo=${encodeURIComponent(fullRepo)}&number=${number}`)
-      .then((res) => {
-        if (!res.ok) return res.json().then((d) => Promise.reject(d.error));
-        return res.json();
-      });
+    const fetchDiff = fetch(`/api/github/prs/diff?repo=${encodeURIComponent(fullRepo)}&number=${number}`).then((res) => {
+      if (!res.ok) return res.json().then((d) => Promise.reject(d.error));
+      return res.json();
+    });
 
     // Fetch checks non-critically
     fetch(`/api/github/prs/checks?repo=${encodeURIComponent(fullRepo)}&number=${number}`)
       .then((res) => (res.ok ? res.json() : []))
-      .then((data) => { if (Array.isArray(data)) setChecks(data); })
+      .then((data) => {
+        if (Array.isArray(data)) setChecks(data);
+      })
       .catch(() => {});
 
     Promise.all([fetchDetails, fetchDiff])
@@ -495,7 +531,7 @@ export function PRReviewView({ owner, repo, number }: { owner: string; repo: str
     setSessionId(null);
     setReviewsCwd(null);
     setSessionLoading(true);
-  }, [prKey]);
+  }, []);
 
   // Resolve or create session
   useEffect(() => {
@@ -552,26 +588,32 @@ export function PRReviewView({ owner, repo, number }: { owner: string; repo: str
   }, [scrollToFile]);
 
   // Toggle viewed
-  const toggleViewed = useCallback((path: string) => {
-    setViewedFilesState((prev) => {
-      const next = new Set(prev);
-      if (next.has(path)) next.delete(path);
-      else next.add(path);
-      setViewedFiles(prKey, next);
-      return next;
-    });
-  }, [prKey]);
+  const toggleViewed = useCallback(
+    (path: string) => {
+      setViewedFilesState((prev) => {
+        const next = new Set(prev);
+        if (next.has(path)) next.delete(path);
+        else next.add(path);
+        setViewedFiles(prKey, next);
+        return next;
+      });
+    },
+    [prKey],
+  );
 
   // Mark as viewed (always adds, never removes)
-  const markViewed = useCallback((path: string) => {
-    setViewedFilesState((prev) => {
-      if (prev.has(path)) return prev;
-      const next = new Set(prev);
-      next.add(path);
-      setViewedFiles(prKey, next);
-      return next;
-    });
-  }, [prKey]);
+  const markViewed = useCallback(
+    (path: string) => {
+      setViewedFilesState((prev) => {
+        if (prev.has(path)) return prev;
+        const next = new Set(prev);
+        next.add(path);
+        setViewedFiles(prKey, next);
+        return next;
+      });
+    },
+    [prKey],
+  );
 
   // Toggle collapse
   const toggleCollapse = useCallback((path: string) => {
@@ -589,24 +631,27 @@ export function PRReviewView({ owner, repo, number }: { owner: string; repo: str
   }, []);
 
   // Submit review
-  const submitReview = useCallback(async (action: "approve" | "request-changes" | "comment") => {
-    if (action === "request-changes" && !reviewBody.trim()) return;
-    setReviewSubmitting(true);
-    try {
-      const res = await fetch("/api/github/prs/review", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ repo: fullRepo, number, action, body: reviewBody }),
-      });
-      if (res.ok) {
-        setReviewBody("");
-        // Re-fetch PR details to update reviewDecision badge
-        const updated = await fetch(`/api/github/prs/view?repo=${encodeURIComponent(fullRepo)}&number=${number}`);
-        if (updated.ok) setPr(await updated.json());
-      }
-    } catch {}
-    setReviewSubmitting(false);
-  }, [fullRepo, number, reviewBody]);
+  const submitReview = useCallback(
+    async (action: "approve" | "request-changes" | "comment") => {
+      if (action === "request-changes" && !reviewBody.trim()) return;
+      setReviewSubmitting(true);
+      try {
+        const res = await fetch("/api/github/prs/review", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ repo: fullRepo, number, action, body: reviewBody }),
+        });
+        if (res.ok) {
+          setReviewBody("");
+          // Re-fetch PR details to update reviewDecision badge
+          const updated = await fetch(`/api/github/prs/view?repo=${encodeURIComponent(fullRepo)}&number=${number}`);
+          if (updated.ok) setPr(await updated.json());
+        }
+      } catch {}
+      setReviewSubmitting(false);
+    },
+    [fullRepo, number, reviewBody],
+  );
 
   // Start agent review
   const startAgentReview = useCallback(() => {
@@ -665,17 +710,20 @@ export function PRReviewView({ owner, repo, number }: { owner: string; repo: str
               {viewedFiles.has(file.path) && <Check className="h-3 w-3" strokeWidth={3} />}
             </button>
             {fileStatusIcon(file.path, pr?.files || [])}
-            <span className="font-mono text-xs truncate flex-1 min-w-0 text-left" dir="rtl" title={file.path}><bdo dir="ltr">{file.path}</bdo></span>
-            {pr?.files && (() => {
-              const f = pr.files.find((pf) => pf.path === file.path);
-              if (!f) return null;
-              return (
-                <span className="text-xs font-mono shrink-0 flex gap-1">
-                  {f.additions > 0 && <span className="text-green-500">+{f.additions}</span>}
-                  {f.deletions > 0 && <span className="text-red-500">-{f.deletions}</span>}
-                </span>
-              );
-            })()}
+            <span className="font-mono text-xs truncate flex-1 min-w-0 text-left" dir="rtl" title={file.path}>
+              <bdo dir="ltr">{file.path}</bdo>
+            </span>
+            {pr?.files &&
+              (() => {
+                const f = pr.files.find((pf) => pf.path === file.path);
+                if (!f) return null;
+                return (
+                  <span className="text-xs font-mono shrink-0 flex gap-1">
+                    {f.additions > 0 && <span className="text-green-500">+{f.additions}</span>}
+                    {f.deletions > 0 && <span className="text-red-500">-{f.deletions}</span>}
+                  </span>
+                );
+              })()}
           </div>
         ))}
       </>,
@@ -695,9 +743,7 @@ export function PRReviewView({ owner, repo, number }: { owner: string; repo: str
   if (error) {
     return (
       <div className="flex-1 p-4">
-        <div className="rounded-md border border-destructive/50 bg-destructive/10 p-4 text-sm text-destructive">
-          {error}
-        </div>
+        <div className="rounded-md border border-destructive/50 bg-destructive/10 p-4 text-sm text-destructive">{error}</div>
       </div>
     );
   }
@@ -707,8 +753,12 @@ export function PRReviewView({ owner, repo, number }: { owner: string; repo: str
   const showChat = isDesktop && !!sessionId && !sessionLoading;
 
   const passingChecks = checks.filter((c) => c.conclusion === "SUCCESS" || c.conclusion === "NEUTRAL" || c.conclusion === "SKIPPED");
-  const failingChecks = checks.filter((c) => c.conclusion === "FAILURE" || c.conclusion === "CANCELLED" || c.conclusion === "TIMED_OUT" || c.conclusion === "ACTION_REQUIRED");
-  const pendingChecks = checks.filter((c) => c.state === "PENDING" || c.state === "QUEUED" || c.state === "IN_PROGRESS" || c.state === "WAITING");
+  const failingChecks = checks.filter(
+    (c) => c.conclusion === "FAILURE" || c.conclusion === "CANCELLED" || c.conclusion === "TIMED_OUT" || c.conclusion === "ACTION_REQUIRED",
+  );
+  const pendingChecks = checks.filter(
+    (c) => c.state === "PENDING" || c.state === "QUEUED" || c.state === "IN_PROGRESS" || c.state === "WAITING",
+  );
 
   return (
     <div className="flex flex-col flex-1 min-h-0">
@@ -724,9 +774,7 @@ export function PRReviewView({ owner, repo, number }: { owner: string; repo: str
           <span className="mx-1">into</span>
           <span>{pr.baseRefName}</span>
         </div>
-        {pr.isDraft && (
-          <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-muted text-muted-foreground">Draft</span>
-        )}
+        {pr.isDraft && <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-muted text-muted-foreground">Draft</span>}
         {pr.reviewDecision === "APPROVED" && (
           <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-green-500/15 text-green-500">Approved</span>
         )}
@@ -741,17 +789,20 @@ export function PRReviewView({ owner, repo, number }: { owner: string; repo: str
             >
               {passingChecks.length > 0 && (
                 <span className="flex items-center gap-0.5 text-green-500">
-                  <CheckCircle className="h-3 w-3" />{passingChecks.length}
+                  <CheckCircle className="h-3 w-3" />
+                  {passingChecks.length}
                 </span>
               )}
               {failingChecks.length > 0 && (
                 <span className="flex items-center gap-0.5 text-red-500">
-                  <XCircle className="h-3 w-3" />{failingChecks.length}
+                  <XCircle className="h-3 w-3" />
+                  {failingChecks.length}
                 </span>
               )}
               {pendingChecks.length > 0 && (
                 <span className="flex items-center gap-0.5 text-yellow-500">
-                  <Clock className="h-3 w-3" />{pendingChecks.length}
+                  <Clock className="h-3 w-3" />
+                  {pendingChecks.length}
                 </span>
               )}
             </button>
@@ -767,7 +818,10 @@ export function PRReviewView({ owner, repo, number }: { owner: string; repo: str
                   >
                     {check.conclusion === "SUCCESS" || check.conclusion === "NEUTRAL" || check.conclusion === "SKIPPED" ? (
                       <CheckCircle className="h-3 w-3 text-green-500 shrink-0" />
-                    ) : check.conclusion === "FAILURE" || check.conclusion === "CANCELLED" || check.conclusion === "TIMED_OUT" || check.conclusion === "ACTION_REQUIRED" ? (
+                    ) : check.conclusion === "FAILURE" ||
+                      check.conclusion === "CANCELLED" ||
+                      check.conclusion === "TIMED_OUT" ||
+                      check.conclusion === "ACTION_REQUIRED" ? (
                       <XCircle className="h-3 w-3 text-red-500 shrink-0" />
                     ) : (
                       <Clock className="h-3 w-3 text-yellow-500 shrink-0" />
@@ -821,9 +875,7 @@ export function PRReviewView({ owner, repo, number }: { owner: string; repo: str
                 Description
               </button>
               {descriptionOpen && (
-                <div className="px-4 pb-3 text-sm prose prose-sm dark:prose-invert max-w-none whitespace-pre-wrap">
-                  {pr.body}
-                </div>
+                <div className="px-4 pb-3 text-sm prose prose-sm dark:prose-invert max-w-none whitespace-pre-wrap">{pr.body}</div>
               )}
             </div>
           )}
@@ -852,13 +904,7 @@ export function PRReviewView({ owner, repo, number }: { owner: string; repo: str
               className="w-full text-sm rounded border bg-transparent px-3 py-2 min-h-[60px] resize-y focus:outline-none focus:ring-1 focus:ring-ring"
             />
             <div className="flex items-center gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                className="text-xs"
-                disabled={reviewSubmitting}
-                onClick={() => submitReview("comment")}
-              >
+              <Button variant="outline" size="sm" className="text-xs" disabled={reviewSubmitting} onClick={() => submitReview("comment")}>
                 {reviewSubmitting ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : null}
                 Comment
               </Button>
@@ -887,9 +933,7 @@ export function PRReviewView({ owner, repo, number }: { owner: string; repo: str
 
           {/* Stacked diffs */}
           <div className="p-4 space-y-3">
-            {fileDiffs.length === 0 && (
-              <div className="text-center py-12 text-sm text-muted-foreground">No changes</div>
-            )}
+            {fileDiffs.length === 0 && <div className="text-center py-12 text-sm text-muted-foreground">No changes</div>}
             {fileDiffs.map((file) => (
               <LazyDiff
                 key={file.path}
@@ -901,7 +945,9 @@ export function PRReviewView({ owner, repo, number }: { owner: string; repo: str
                 collapsed={collapsedFiles.has(file.path)}
                 onToggleViewed={() => markViewed(file.path)}
                 onToggleCollapse={() => toggleCollapse(file.path)}
-                sectionRef={(el) => { if (el) sectionRefs.current.set(file.path, el); }}
+                sectionRef={(el) => {
+                  if (el) sectionRefs.current.set(file.path, el);
+                }}
               />
             ))}
           </div>

@@ -1,7 +1,7 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { existsSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const PASSWORD_FILE = path.join(homedir(), ".cockpit", "password.json");
 

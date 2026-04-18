@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import { splitAtQuestion } from "@/lib/split-question-blocks";
 import type { ContentBlock, ToolUse } from "@/types";
 
@@ -55,10 +55,7 @@ describe("splitAtQuestion", () => {
   });
 
   it("splits when AskUserQuestion is the first block", () => {
-    const blocks = [
-      toolUse("AskUserQuestion"),
-      text("response"),
-    ];
+    const blocks = [toolUse("AskUserQuestion"), text("response")];
     const result = splitAtQuestion(blocks);
 
     expect(result.before).toHaveLength(0);
@@ -68,11 +65,7 @@ describe("splitAtQuestion", () => {
   });
 
   it("splits when AskUserQuestion is the last block", () => {
-    const blocks = [
-      thinking("thinking"),
-      text("some text"),
-      toolUse("AskUserQuestion"),
-    ];
+    const blocks = [thinking("thinking"), text("some text"), toolUse("AskUserQuestion")];
     const result = splitAtQuestion(blocks);
 
     expect(result.before).toHaveLength(2);
@@ -102,11 +95,7 @@ describe("splitAtQuestion", () => {
   });
 
   it("preserves question block tool output for determining static vs interactive", () => {
-    const blocks = [
-      thinking("thinking"),
-      toolUse("AskUserQuestion", { output: '{"answers":{}}' }),
-      text("You chose X"),
-    ];
+    const blocks = [thinking("thinking"), toolUse("AskUserQuestion", { output: '{"answers":{}}' }), text("You chose X")];
     const result = splitAtQuestion(blocks);
 
     expect(result.questionBlock!.toolUse.output).toBe('{"answers":{}}');
@@ -154,8 +143,6 @@ describe("splitAtQuestion", () => {
 
     // After: text, Read, Edit, text (4 blocks, no AskUserQuestion)
     expect(result.after).toHaveLength(4);
-    expect(result.after.map((b) => b.type)).toEqual([
-      "text", "tool_use", "tool_use", "text",
-    ]);
+    expect(result.after.map((b) => b.type)).toEqual(["text", "tool_use", "tool_use", "text"]);
   });
 });

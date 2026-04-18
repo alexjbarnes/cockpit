@@ -1,20 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
-import { validateSession, isAuthDisabled } from "@/server/auth";
+import { isAuthDisabled, validateSession } from "@/server/auth";
 import { getSessionManager } from "@/server/singleton";
 
 function authenticate(req: NextRequest): boolean {
   if (isAuthDisabled()) return true;
-  const token =
-    req.cookies.get("cockpit_session")?.value ||
-    req.headers.get("authorization")?.replace("Bearer ", "");
+  const token = req.cookies.get("cockpit_session")?.value || req.headers.get("authorization")?.replace("Bearer ", "");
   return !!token && validateSession(token);
 }
 
 // GET /api/sessions/[id]/mcp - Get MCP server status from initData
-export async function GET(
-  req: NextRequest,
-  { params }: { params: Promise<{ id: string }> },
-) {
+export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   if (!authenticate(req)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
@@ -26,10 +21,7 @@ export async function GET(
 }
 
 // POST /api/sessions/[id]/mcp - Toggle or reconnect MCP server
-export async function POST(
-  req: NextRequest,
-  { params }: { params: Promise<{ id: string }> },
-) {
+export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   if (!authenticate(req)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }

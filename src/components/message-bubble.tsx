@@ -1,19 +1,20 @@
 "use client";
 
-import React, { useState, useCallback, useRef, memo } from "react";
+import { Brain, ChevronDown, ChevronRight, File, FileText, Loader2 } from "lucide-react";
+import React, { memo, useCallback, useRef, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import rehypeHighlight from "rehype-highlight";
+import remarkGfm from "remark-gfm";
+import { languageFromPath, CodeBlock as SyntaxCodeBlock } from "@/components/code-block";
+import { MarkdownCodeBlock } from "@/components/markdown-code-block";
+import { Dialog, DialogContent } from "@/components/ui/dialog";
+import { useSettings } from "@/hooks/use-settings";
+import { cn } from "@/lib/utils";
 import type { ChatMessage } from "@/types";
 import { ToolCard } from "./tool-card";
-import { useSettings } from "@/hooks/use-settings";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
-import rehypeHighlight from "rehype-highlight";
-import { Dialog, DialogContent } from "@/components/ui/dialog";
-import { cn } from "@/lib/utils";
-import { Loader2, ChevronDown, ChevronRight, Brain, FileText, File } from "lucide-react";
-import { CodeBlock as SyntaxCodeBlock, languageFromPath } from "@/components/code-block";
-import { MarkdownCodeBlock } from "@/components/markdown-code-block";
 
-const CLI_XML_RE = /<(?:task-notification|local-command-caveat|local-command-stdout|command-name|system-reminder)[^>]*>[\s\S]*?<\/(?:task-notification|local-command-caveat|local-command-stdout|command-name|system-reminder)>[\s\S]*/g;
+const CLI_XML_RE =
+  /<(?:task-notification|local-command-caveat|local-command-stdout|command-name|system-reminder)[^>]*>[\s\S]*?<\/(?:task-notification|local-command-caveat|local-command-stdout|command-name|system-reminder)>[\s\S]*/g;
 
 function stripCliXml(text: string): string {
   return text.replace(CLI_XML_RE, "").trim();
@@ -53,12 +54,15 @@ export const MessageBubble = memo(function MessageBubble({
   const lastTap = useRef<{ time: number; x: number; y: number } | null>(null);
 
   // Right-click: only toggle selection when already in selection mode
-  const handleContextMenu = useCallback((e: React.MouseEvent) => {
-    if (lastInputWasTouch.current) return;
-    if (!selectionMode) return;
-    e.preventDefault();
-    if (isSelectable) onToggleSelect?.(message.id);
-  }, [isSelectable, selectionMode, message.id, onToggleSelect]);
+  const handleContextMenu = useCallback(
+    (e: React.MouseEvent) => {
+      if (lastInputWasTouch.current) return;
+      if (!selectionMode) return;
+      e.preventDefault();
+      if (isSelectable) onToggleSelect?.(message.id);
+    },
+    [isSelectable, selectionMode, message.id, onToggleSelect],
+  );
 
   const handleTouchStart = useCallback(() => {
     lastInputWasTouch.current = true;
@@ -69,26 +73,29 @@ export const MessageBubble = memo(function MessageBubble({
   }, []);
 
   // Double-tap/click enters message selection (touch + desktop)
-  const handleClick = useCallback((e: React.MouseEvent) => {
-    if (selectionMode) {
-      if (isSelectable) onToggleSelect?.(message.id);
-      return;
-    }
-    if (!isSelectable) return;
-    const now = Date.now();
-    const prev = lastTap.current;
-    if (prev && now - prev.time < 300) {
-      const dx = e.clientX - prev.x;
-      const dy = e.clientY - prev.y;
-      if (dx * dx + dy * dy < 400) {
-        lastTap.current = null;
-        window.getSelection()?.removeAllRanges();
-        onEnterSelection?.(message.id);
+  const handleClick = useCallback(
+    (e: React.MouseEvent) => {
+      if (selectionMode) {
+        if (isSelectable) onToggleSelect?.(message.id);
         return;
       }
-    }
-    lastTap.current = { time: now, x: e.clientX, y: e.clientY };
-  }, [selectionMode, isSelectable, message.id, onToggleSelect, onEnterSelection]);
+      if (!isSelectable) return;
+      const now = Date.now();
+      const prev = lastTap.current;
+      if (prev && now - prev.time < 300) {
+        const dx = e.clientX - prev.x;
+        const dy = e.clientY - prev.y;
+        if (dx * dx + dy * dy < 400) {
+          lastTap.current = null;
+          window.getSelection()?.removeAllRanges();
+          onEnterSelection?.(message.id);
+          return;
+        }
+      }
+      lastTap.current = { time: now, x: e.clientX, y: e.clientY };
+    },
+    [selectionMode, isSelectable, message.id, onToggleSelect, onEnterSelection],
+  );
 
   if (isSystem) {
     const isCompacting = message.content === "__compacting__";
@@ -119,9 +126,7 @@ export const MessageBubble = memo(function MessageBubble({
 
     return (
       <div className="flex w-full justify-center">
-        <div className="text-xs text-muted-foreground whitespace-pre-wrap py-1">
-          {message.content}
-        </div>
+        <div className="text-xs text-muted-foreground whitespace-pre-wrap py-1">{message.content}</div>
       </div>
     );
   }
@@ -137,7 +142,7 @@ export const MessageBubble = memo(function MessageBubble({
   }
 
   if (collapsed) {
-    const preview = message.content.slice(0, 80).replace(/\n/g, " ");
+    const _preview = message.content.slice(0, 80).replace(/\n/g, " ");
     return (
       <div className="flex w-full justify-start">
         <button
@@ -158,7 +163,7 @@ export const MessageBubble = memo(function MessageBubble({
       className={cn(
         "flex w-full",
         isUser && !collapsedByDefault ? "justify-end" : "justify-start",
-        selectionMode && "cursor-pointer select-none"
+        selectionMode && "cursor-pointer select-none",
       )}
       onContextMenu={handleContextMenu}
       onTouchStart={handleTouchStart}
@@ -168,10 +173,8 @@ export const MessageBubble = memo(function MessageBubble({
       <div
         className={cn(
           "max-w-[85%] rounded-lg px-4 py-2 overflow-hidden transition-colors",
-          isUser && !collapsedByDefault
-            ? "bg-primary text-primary-foreground"
-            : "bg-muted text-foreground",
-          selected && "ring-2 ring-blue-500"
+          isUser && !collapsedByDefault ? "bg-primary text-primary-foreground" : "bg-muted text-foreground",
+          selected && "ring-2 ring-blue-500",
         )}
       >
         {collapsedByDefault && (
@@ -228,24 +231,23 @@ export const MessageBubble = memo(function MessageBubble({
               ) : block.type === "thinking" ? (
                 <ThinkingBlock key={`thinking-${i}`} text={block.text} tokens={block.tokens} redacted={block.redacted} />
               ) : (
-                <div
-                  key={`text-${i}`}
-                  className="message-prose prose prose-sm max-w-none dark:prose-invert"
-                >
+                <div key={`text-${i}`} className="message-prose prose prose-sm max-w-none dark:prose-invert">
                   <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]} components={markdownComponents}>
                     {stripCliXml(block.text)}
                   </ReactMarkdown>
                 </div>
-              )
+              ),
             )}
           </div>
         ) : (
           <>
             {message.toolUses.filter((t) => !hiddenTools.has(t.name)).length > 0 && (
               <div className="mb-2 space-y-1">
-                {message.toolUses.filter((t) => !hiddenTools.has(t.name)).map((tool) => (
-                  <ToolCard key={tool.id} tool={tool} expandedToolIds={expandedToolIds} />
-                ))}
+                {message.toolUses
+                  .filter((t) => !hiddenTools.has(t.name))
+                  .map((tool) => (
+                    <ToolCard key={tool.id} tool={tool} expandedToolIds={expandedToolIds} />
+                  ))}
               </div>
             )}
             <div className="message-prose prose prose-sm max-w-none dark:prose-invert">
@@ -272,7 +274,10 @@ function TextFileBlock({ name, content }: { name: string; content: string }) {
   return (
     <>
       <button
-        onClick={(e) => { e.stopPropagation(); setOpen(true); }}
+        onClick={(e) => {
+          e.stopPropagation();
+          setOpen(true);
+        }}
         className="flex w-full items-center gap-1.5 rounded border border-blue-500/20 bg-blue-500/5 px-3 py-1.5 text-xs text-blue-400 hover:text-blue-300"
       >
         <File className="h-3 w-3" />
@@ -299,11 +304,12 @@ function ThinkingBlock({ text, tokens, redacted }: { text: string; tokens?: numb
   const [expanded, setExpanded] = useState<boolean | null>(null);
   const isExpanded = expanded ?? settings.thinkingExpanded;
   const hasText = text.length > 0;
-  const sizeLabel = tokens != null
-    ? `${tokens.toLocaleString()} token${tokens === 1 ? "" : "s"}`
-    : hasText
-      ? `${text.length.toLocaleString()} chars`
-      : null;
+  const sizeLabel =
+    tokens != null
+      ? `${tokens.toLocaleString()} token${tokens === 1 ? "" : "s"}`
+      : hasText
+        ? `${text.length.toLocaleString()} chars`
+        : null;
 
   return (
     <div className="rounded border border-purple-500/20 bg-purple-500/5">
@@ -315,13 +321,7 @@ function ThinkingBlock({ text, tokens, redacted }: { text: string; tokens?: numb
         <Brain className="h-3 w-3" />
         <span className="font-medium">Thinking</span>
         {sizeLabel && <span className="text-muted-foreground ml-1">{sizeLabel}</span>}
-        {hasText && (
-          isExpanded ? (
-            <ChevronDown className="h-3 w-3 ml-auto" />
-          ) : (
-            <ChevronRight className="h-3 w-3 ml-auto" />
-          )
-        )}
+        {hasText && (isExpanded ? <ChevronDown className="h-3 w-3 ml-auto" /> : <ChevronRight className="h-3 w-3 ml-auto" />)}
       </button>
       {hasText && isExpanded && (
         <div className="border-t border-purple-500/20 px-3 py-2 text-xs text-muted-foreground whitespace-pre-wrap max-h-60 overflow-y-auto">

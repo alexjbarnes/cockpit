@@ -1,16 +1,14 @@
-import { NextRequest, NextResponse } from "next/server";
 import { open, realpath, stat } from "node:fs/promises";
 import path from "node:path";
-import { validateSession, isAuthDisabled } from "@/server/auth";
+import { NextRequest, NextResponse } from "next/server";
+import { isAuthDisabled, validateSession } from "@/server/auth";
 
 const MAX_BYTES = 100 * 1024; // 100KB
 const BINARY_CHECK_BYTES = 8192;
 
 function authenticate(req: NextRequest): boolean {
   if (isAuthDisabled()) return true;
-  const token =
-    req.cookies.get("cockpit_session")?.value ||
-    req.headers.get("authorization")?.replace("Bearer ", "");
+  const token = req.cookies.get("cockpit_session")?.value || req.headers.get("authorization")?.replace("Bearer ", "");
   return !!token && validateSession(token);
 }
 
@@ -31,7 +29,7 @@ export async function GET(req: NextRequest) {
   }
 
   const info = await stat(resolved).catch(() => null);
-  if (!info || !info.isFile()) {
+  if (!info?.isFile()) {
     return NextResponse.json({ error: "Path is not a file" }, { status: 400 });
   }
 

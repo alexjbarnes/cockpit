@@ -1,12 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { validateSession, isAuthDisabled } from "@/server/auth";
+import { isAuthDisabled, validateSession } from "@/server/auth";
 import { getDefaults, setDefaults } from "@/server/defaults";
 
 function authenticate(req: NextRequest): boolean {
   if (isAuthDisabled()) return true;
-  const token =
-    req.cookies.get("cockpit_session")?.value ||
-    req.headers.get("authorization")?.replace("Bearer ", "");
+  const token = req.cookies.get("cockpit_session")?.value || req.headers.get("authorization")?.replace("Bearer ", "");
   return !!token && validateSession(token);
 }
 

@@ -1,7 +1,7 @@
-import { appendFile, mkdir, stat, rename } from "node:fs/promises";
+import { appendFile, mkdir, rename, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
-import type { ServerMessage, ClientMessage } from "@/types";
+import type { ClientMessage, ServerMessage } from "@/types";
 import type { ParsedEvent } from "./event-parser";
 
 const enabled = process.env.COCKPIT_DEBUG === "1";
@@ -35,7 +35,9 @@ function maybeRotate(): void {
       }
     })
     .catch(() => {})
-    .finally(() => { rotating = false; });
+    .finally(() => {
+      rotating = false;
+    });
 }
 
 function write(entry: Record<string, unknown>): void {

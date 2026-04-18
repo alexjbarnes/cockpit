@@ -1,37 +1,37 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
-import { useRouter } from "next/navigation";
-import { FileDiff } from "@pierre/diffs/react";
-import { parsePatchFiles } from "@pierre/diffs";
 import type { FileDiffMetadata } from "@pierre/diffs";
-import { useSettings } from "@/hooks/use-settings";
-import { DiffErrorBoundary, DIFF_SELECTABLE_CSS } from "@/components/diff-viewer";
-import { useShell } from "@/components/app-shell";
-import { useIsDesktop } from "@/hooks/use-is-desktop";
-import { useWebSocket } from "@/hooks/use-websocket";
-import { ChatView } from "@/components/chat-view";
-import { Button } from "@/components/ui/button";
+import { parsePatchFiles } from "@pierre/diffs";
+import { FileDiff } from "@pierre/diffs/react";
 import {
-  Loader2,
-  GitBranch,
-  FilePlus,
-  FileMinus,
-  FileEdit,
-  FileSymlink,
-  Trash2,
-  Send,
-  Check,
-  ChevronUp,
-  ChevronDown,
-  Sparkles,
   ArrowUpFromLine,
+  Check,
+  Check as CheckIcon,
+  ChevronDown,
+  ChevronUp,
+  ExternalLink,
+  FileEdit,
+  FileMinus,
+  FilePlus,
+  FileSymlink,
+  GitBranch,
   Layers,
   List,
-  ExternalLink,
+  Loader2,
+  Send,
+  Sparkles,
+  Trash2,
 } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useShell } from "@/components/app-shell";
+import { ChatView } from "@/components/chat-view";
+import { DIFF_SELECTABLE_CSS, DiffErrorBoundary } from "@/components/diff-viewer";
+import { Button } from "@/components/ui/button";
+import { useIsDesktop } from "@/hooks/use-is-desktop";
+import { useSettings } from "@/hooks/use-settings";
+import { useWebSocket } from "@/hooks/use-websocket";
 import { cn } from "@/lib/utils";
-import { Check as CheckIcon } from "lucide-react";
 
 function Checkbox({ checked, onChange, onClick }: { checked: boolean; onChange: () => void; onClick?: (e: React.MouseEvent) => void }) {
   return (
@@ -39,12 +39,15 @@ function Checkbox({ checked, onChange, onClick }: { checked: boolean; onChange: 
       type="button"
       role="checkbox"
       aria-checked={checked}
-      onClick={(e) => { onClick?.(e); onChange(); }}
+      onClick={(e) => {
+        onClick?.(e);
+        onChange();
+      }}
       className={cn(
         "h-4 w-4 shrink-0 rounded border flex items-center justify-center transition-colors",
         checked
           ? "border-primary bg-primary text-primary-foreground"
-          : "border-muted-foreground/40 bg-transparent hover:border-muted-foreground/60"
+          : "border-muted-foreground/40 bg-transparent hover:border-muted-foreground/60",
       )}
     >
       {checked && <CheckIcon className="h-3 w-3" strokeWidth={3} />}
@@ -67,21 +70,31 @@ interface GitStatus {
 
 function statusIcon(status: string) {
   switch (status) {
-    case "added": return <FilePlus className="h-3.5 w-3.5 text-green-500 shrink-0" />;
-    case "deleted": return <FileMinus className="h-3.5 w-3.5 text-red-500 shrink-0" />;
-    case "renamed": return <FileSymlink className="h-3.5 w-3.5 text-blue-500 shrink-0" />;
-    case "untracked": return <FilePlus className="h-3.5 w-3.5 text-green-500 shrink-0" />;
-    default: return <FileEdit className="h-3.5 w-3.5 text-yellow-500 shrink-0" />;
+    case "added":
+      return <FilePlus className="h-3.5 w-3.5 text-green-500 shrink-0" />;
+    case "deleted":
+      return <FileMinus className="h-3.5 w-3.5 text-red-500 shrink-0" />;
+    case "renamed":
+      return <FileSymlink className="h-3.5 w-3.5 text-blue-500 shrink-0" />;
+    case "untracked":
+      return <FilePlus className="h-3.5 w-3.5 text-green-500 shrink-0" />;
+    default:
+      return <FileEdit className="h-3.5 w-3.5 text-yellow-500 shrink-0" />;
   }
 }
 
 function statusLabel(status: string) {
   switch (status) {
-    case "added": return "A";
-    case "deleted": return "D";
-    case "renamed": return "R";
-    case "untracked": return "?";
-    default: return "M";
+    case "added":
+      return "A";
+    case "deleted":
+      return "D";
+    case "renamed":
+      return "R";
+    case "untracked":
+      return "?";
+    default:
+      return "M";
   }
 }
 
@@ -102,11 +115,7 @@ interface FileListProps {
 
 function FileList({ files, selectedFile, checkedFiles, onFileClick, onContextMenu, onToggleFile, onToggleAll }: FileListProps) {
   if (files.length === 0) {
-    return (
-      <div className="flex items-center justify-center py-12 text-sm text-muted-foreground">
-        Working tree clean
-      </div>
-    );
+    return <div className="flex items-center justify-center py-12 text-sm text-muted-foreground">Working tree clean</div>;
   }
 
   return (
@@ -120,16 +129,12 @@ function FileList({ files, selectedFile, checkedFiles, onFileClick, onContextMen
           key={file.path}
           className={cn(
             "flex items-center gap-2 px-3 py-1.5 text-sm cursor-pointer border-b last:border-b-0 hover:bg-muted/50",
-            selectedFile === file.path && "bg-muted"
+            selectedFile === file.path && "bg-muted",
           )}
           onClick={() => onFileClick(file)}
           onContextMenu={(e) => onContextMenu(e, file)}
         >
-          <Checkbox
-            checked={checkedFiles.has(file.path)}
-            onChange={() => onToggleFile(file.path)}
-            onClick={(e) => e.stopPropagation()}
-          />
+          <Checkbox checked={checkedFiles.has(file.path)} onChange={() => onToggleFile(file.path)} onClick={(e) => e.stopPropagation()} />
           {statusIcon(file.status)}
           <span className="font-mono text-xs truncate flex-1 min-w-0 text-left" dir="rtl" title={file.path}>
             <bdo dir="ltr">{file.path}</bdo>
@@ -140,11 +145,16 @@ function FileList({ files, selectedFile, checkedFiles, onFileClick, onContextMen
               {file.deletions > 0 && <span className="text-red-500">-{file.deletions}</span>}
             </span>
           )}
-          <span className={cn(
-            "text-xs font-mono shrink-0",
-            file.status === "added" || file.status === "untracked" ? "text-green-500" :
-            file.status === "deleted" ? "text-red-500" : "text-yellow-500"
-          )}>
+          <span
+            className={cn(
+              "text-xs font-mono shrink-0",
+              file.status === "added" || file.status === "untracked"
+                ? "text-green-500"
+                : file.status === "deleted"
+                  ? "text-red-500"
+                  : "text-yellow-500",
+            )}
+          >
             {statusLabel(file.status)}
           </span>
         </div>
@@ -173,54 +183,67 @@ interface StackedDiffsProps {
   refreshKey: number;
 }
 
-function StackedDiffs({ files, cwd, diffStyle, scrollToFile, onScrolled, onViewFile, checkedFiles, onToggleFile, refreshKey }: StackedDiffsProps) {
+function StackedDiffs({
+  files,
+  cwd,
+  diffStyle,
+  scrollToFile,
+  onScrolled,
+  onViewFile,
+  checkedFiles,
+  onToggleFile,
+  refreshKey,
+}: StackedDiffsProps) {
   const [diffs, setDiffs] = useState<Map<string, FileDiffState>>(new Map());
   const sectionRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const fetchedRef = useRef<Set<string>>(new Set());
   const lastRefreshKey = useRef(refreshKey);
   const [collapsedFiles, setCollapsedFiles] = useState<Set<string>>(new Set());
 
-  const fetchDiff = useCallback((file: string) => {
-    setDiffs((prev) => {
-      const next = new Map(prev);
-      next.set(file, { diff: prev.get(file)?.diff || null, fileDiff: prev.get(file)?.fileDiff || null, loading: true });
-      return next;
-    });
-    fetch(`/api/git/diff?cwd=${encodeURIComponent(cwd)}&file=${encodeURIComponent(file)}`)
-      .then((res) => {
-        if (!res.ok) throw new Error("Failed");
-        return res.json();
-      })
-      .then((data: { diff: string; oldContent?: string; newContent?: string }) => {
-        let fileDiffMeta: FileDiffMetadata | null = null;
-        try {
-          const parsed = parsePatchFiles(data.diff);
-          if (parsed.length > 0 && parsed[0].files.length > 0) {
-            fileDiffMeta = parsed[0].files[0];
-            if (data.oldContent != null) {
-              fileDiffMeta.oldLines = data.oldContent.split("\n").map((l) => l + "\n");
-            }
-            if (data.newContent != null) {
-              fileDiffMeta.newLines = data.newContent.split("\n").map((l) => l + "\n");
-            }
-          }
-        } catch {
-          // Fall back to raw diff string
-        }
-        setDiffs((prev) => {
-          const next = new Map(prev);
-          next.set(file, { diff: data.diff, fileDiff: fileDiffMeta, loading: false });
-          return next;
-        });
-      })
-      .catch(() => {
-        setDiffs((prev) => {
-          const next = new Map(prev);
-          next.set(file, { diff: null, fileDiff: null, loading: false });
-          return next;
-        });
+  const fetchDiff = useCallback(
+    (file: string) => {
+      setDiffs((prev) => {
+        const next = new Map(prev);
+        next.set(file, { diff: prev.get(file)?.diff || null, fileDiff: prev.get(file)?.fileDiff || null, loading: true });
+        return next;
       });
-  }, [cwd]);
+      fetch(`/api/git/diff?cwd=${encodeURIComponent(cwd)}&file=${encodeURIComponent(file)}`)
+        .then((res) => {
+          if (!res.ok) throw new Error("Failed");
+          return res.json();
+        })
+        .then((data: { diff: string; oldContent?: string; newContent?: string }) => {
+          let fileDiffMeta: FileDiffMetadata | null = null;
+          try {
+            const parsed = parsePatchFiles(data.diff);
+            if (parsed.length > 0 && parsed[0].files.length > 0) {
+              fileDiffMeta = parsed[0].files[0];
+              if (data.oldContent != null) {
+                fileDiffMeta.oldLines = data.oldContent.split("\n").map((l) => l + "\n");
+              }
+              if (data.newContent != null) {
+                fileDiffMeta.newLines = data.newContent.split("\n").map((l) => l + "\n");
+              }
+            }
+          } catch {
+            // Fall back to raw diff string
+          }
+          setDiffs((prev) => {
+            const next = new Map(prev);
+            next.set(file, { diff: data.diff, fileDiff: fileDiffMeta, loading: false });
+            return next;
+          });
+        })
+        .catch(() => {
+          setDiffs((prev) => {
+            const next = new Map(prev);
+            next.set(file, { diff: null, fileDiff: null, loading: false });
+            return next;
+          });
+        });
+    },
+    [cwd],
+  );
 
   // Fetch all diffs on mount, when files change, or when refreshKey bumps
   useEffect(() => {
@@ -247,14 +270,6 @@ function StackedDiffs({ files, cwd, diffStyle, scrollToFile, onScrolled, onViewF
     onScrolled();
   }, [scrollToFile, onScrolled]);
 
-  if (files.length === 0) {
-    return (
-      <div className="flex items-center justify-center h-full text-sm text-muted-foreground">
-        No changes
-      </div>
-    );
-  }
-
   const toggleCollapse = useCallback((path: string) => {
     setCollapsedFiles((prev) => {
       const next = new Set(prev);
@@ -264,12 +279,19 @@ function StackedDiffs({ files, cwd, diffStyle, scrollToFile, onScrolled, onViewF
     });
   }, []);
 
-  const handleToggleChecked = useCallback((path: string) => {
-    onToggleFile(path);
-    if (!checkedFiles.has(path)) {
-      setCollapsedFiles((prev) => new Set(prev).add(path));
-    }
-  }, [onToggleFile, checkedFiles]);
+  const handleToggleChecked = useCallback(
+    (path: string) => {
+      onToggleFile(path);
+      if (!checkedFiles.has(path)) {
+        setCollapsedFiles((prev) => new Set(prev).add(path));
+      }
+    },
+    [onToggleFile, checkedFiles],
+  );
+
+  if (files.length === 0) {
+    return <div className="flex items-center justify-center h-full text-sm text-muted-foreground">No changes</div>;
+  }
 
   return (
     <div className="p-4 space-y-3">
@@ -281,7 +303,9 @@ function StackedDiffs({ files, cwd, diffStyle, scrollToFile, onScrolled, onViewF
         return (
           <div
             key={file.path}
-            ref={(el) => { if (el) sectionRefs.current.set(file.path, el); }}
+            ref={(el) => {
+              if (el) sectionRefs.current.set(file.path, el);
+            }}
             className={cn("rounded border overflow-clip", checked && !collapsed && "opacity-60")}
           >
             {collapsed ? (
@@ -290,7 +314,12 @@ function StackedDiffs({ files, cwd, diffStyle, scrollToFile, onScrolled, onViewF
                   checked={checked}
                   onChange={() => {
                     onToggleFile(file.path);
-                    if (checked) setCollapsedFiles((prev) => { const next = new Set(prev); next.delete(file.path); return next; });
+                    if (checked)
+                      setCollapsedFiles((prev) => {
+                        const next = new Set(prev);
+                        next.delete(file.path);
+                        return next;
+                      });
                   }}
                   onClick={(e) => e.stopPropagation()}
                 />
@@ -299,7 +328,9 @@ function StackedDiffs({ files, cwd, diffStyle, scrollToFile, onScrolled, onViewF
                   className="flex items-center gap-2 flex-1 min-w-0 hover:text-foreground transition-colors"
                 >
                   <ChevronDown className="h-3.5 w-3.5 shrink-0" />
-                  <span className="font-mono text-xs truncate text-left" dir="rtl" title={file.path}><bdo dir="ltr">{file.path}</bdo></span>
+                  <span className="font-mono text-xs truncate text-left" dir="rtl" title={file.path}>
+                    <bdo dir="ltr">{file.path}</bdo>
+                  </span>
                 </button>
               </div>
             ) : state?.loading && !state.diff ? (
@@ -313,12 +344,10 @@ function StackedDiffs({ files, cwd, diffStyle, scrollToFile, onScrolled, onViewF
                   data-testid="sticky-diff-header"
                 >
                   {statusIcon(file.status)}
-                  <span className="font-mono text-xs truncate flex-1 min-w-0 text-left" dir="rtl" title={file.path}><bdo dir="ltr">{file.path}</bdo></span>
-                  <Checkbox
-                    checked={checked}
-                    onChange={() => handleToggleChecked(file.path)}
-                    onClick={(e) => e.stopPropagation()}
-                  />
+                  <span className="font-mono text-xs truncate flex-1 min-w-0 text-left" dir="rtl" title={file.path}>
+                    <bdo dir="ltr">{file.path}</bdo>
+                  </span>
+                  <Checkbox checked={checked} onChange={() => handleToggleChecked(file.path)} onClick={(e) => e.stopPropagation()} />
                   <button
                     onClick={() => toggleCollapse(file.path)}
                     className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
@@ -369,38 +398,36 @@ function ResizeHandle({ onResize }: { onResize: (delta: number) => void }) {
   const dragging = useRef(false);
   const lastX = useRef(0);
 
-  const onMouseDown = useCallback((e: React.MouseEvent) => {
-    e.preventDefault();
-    dragging.current = true;
-    lastX.current = e.clientX;
+  const onMouseDown = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault();
+      dragging.current = true;
+      lastX.current = e.clientX;
 
-    const onMouseMove = (ev: MouseEvent) => {
-      if (!dragging.current) return;
-      const delta = lastX.current - ev.clientX;
-      lastX.current = ev.clientX;
-      onResize(delta);
-    };
+      const onMouseMove = (ev: MouseEvent) => {
+        if (!dragging.current) return;
+        const delta = lastX.current - ev.clientX;
+        lastX.current = ev.clientX;
+        onResize(delta);
+      };
 
-    const onMouseUp = () => {
-      dragging.current = false;
-      document.removeEventListener("mousemove", onMouseMove);
-      document.removeEventListener("mouseup", onMouseUp);
-      document.body.style.cursor = "";
-      document.body.style.userSelect = "";
-    };
+      const onMouseUp = () => {
+        dragging.current = false;
+        document.removeEventListener("mousemove", onMouseMove);
+        document.removeEventListener("mouseup", onMouseUp);
+        document.body.style.cursor = "";
+        document.body.style.userSelect = "";
+      };
 
-    document.body.style.cursor = "col-resize";
-    document.body.style.userSelect = "none";
-    document.addEventListener("mousemove", onMouseMove);
-    document.addEventListener("mouseup", onMouseUp);
-  }, [onResize]);
-
-  return (
-    <div
-      onMouseDown={onMouseDown}
-      className="w-1 shrink-0 cursor-col-resize bg-border hover:bg-primary/30 transition-colors"
-    />
+      document.body.style.cursor = "col-resize";
+      document.body.style.userSelect = "none";
+      document.addEventListener("mousemove", onMouseMove);
+      document.addEventListener("mouseup", onMouseUp);
+    },
+    [onResize],
   );
+
+  return <div onMouseDown={onMouseDown} className="w-1 shrink-0 cursor-col-resize bg-border hover:bg-primary/30 transition-colors" />;
 }
 
 // --- State Cache ---
@@ -426,15 +453,17 @@ function isDesktopStatic(): boolean {
 }
 
 function getCachedState(cwd: string): ChangesState {
-  return stateCache.get(cwd) || {
-    selectedFile: null,
-    checkedFiles: new Set(),
-    commitMsg: "",
-    commitPanelOpen: isDesktopStatic(),
-    pushOnCommit: false,
-    stackedMode: true,
-    chatRatio: DEFAULT_CHAT_RATIO,
-  };
+  return (
+    stateCache.get(cwd) || {
+      selectedFile: null,
+      checkedFiles: new Set(),
+      commitMsg: "",
+      commitPanelOpen: isDesktopStatic(),
+      pushOnCommit: false,
+      stackedMode: true,
+      chatRatio: DEFAULT_CHAT_RATIO,
+    }
+  );
 }
 
 // --- Main Component ---
@@ -474,22 +503,25 @@ export function ChangesView({ cwd, sessionId }: { cwd: string; sessionId?: strin
     stateCache.set(cwd, { selectedFile, checkedFiles, commitMsg, commitPanelOpen, pushOnCommit, stackedMode, chatRatio });
   }, [cwd, selectedFile, checkedFiles, commitMsg, commitPanelOpen, pushOnCommit, stackedMode, chatRatio]);
 
-  const fetchStatus = useCallback((opts?: { gitFetch?: boolean }) => {
-    setLoading(true);
-    setError(null);
-    const params = new URLSearchParams({ cwd });
-    if (opts?.gitFetch) params.set("fetch", "1");
-    fetch(`/api/git/status?${params}`)
-      .then((res) => {
-        if (!res.ok) throw new Error("Failed");
-        return res.json();
-      })
-      .then((data: GitStatus) => {
-        setStatus(data);
-      })
-      .catch(() => setError("Not a git repository"))
-      .finally(() => setLoading(false));
-  }, [cwd]);
+  const fetchStatus = useCallback(
+    (opts?: { gitFetch?: boolean }) => {
+      setLoading(true);
+      setError(null);
+      const params = new URLSearchParams({ cwd });
+      if (opts?.gitFetch) params.set("fetch", "1");
+      fetch(`/api/git/status?${params}`)
+        .then((res) => {
+          if (!res.ok) throw new Error("Failed");
+          return res.json();
+        })
+        .then((data: GitStatus) => {
+          setStatus(data);
+        })
+        .catch(() => setError("Not a git repository"))
+        .finally(() => setLoading(false));
+    },
+    [cwd],
+  );
 
   useEffect(() => {
     fetchStatus();
@@ -511,40 +543,43 @@ export function ChangesView({ cwd, sessionId }: { cwd: string; sessionId?: strin
     return unsub;
   }, [sessionId, subscribe, fetchStatus]);
 
-  const fetchDiff = useCallback((file: string) => {
-    setDiffLoading(true);
-    setDiff(null);
-    setSingleFileDiff(null);
-    fetch(`/api/git/diff?cwd=${encodeURIComponent(cwd)}&file=${encodeURIComponent(file)}`)
-      .then((res) => {
-        if (!res.ok) throw new Error("Failed");
-        return res.json();
-      })
-      .then((data: { diff: string; oldContent?: string; newContent?: string }) => {
-        setDiff(data.diff);
-        try {
-          const parsed = parsePatchFiles(data.diff);
-          if (parsed.length > 0 && parsed[0].files.length > 0) {
-            const meta = parsed[0].files[0];
-            if (data.oldContent != null) meta.oldLines = data.oldContent.split("\n").map((l) => l + "\n");
-            if (data.newContent != null) meta.newLines = data.newContent.split("\n").map((l) => l + "\n");
-            setSingleFileDiff(meta);
+  const fetchDiff = useCallback(
+    (file: string) => {
+      setDiffLoading(true);
+      setDiff(null);
+      setSingleFileDiff(null);
+      fetch(`/api/git/diff?cwd=${encodeURIComponent(cwd)}&file=${encodeURIComponent(file)}`)
+        .then((res) => {
+          if (!res.ok) throw new Error("Failed");
+          return res.json();
+        })
+        .then((data: { diff: string; oldContent?: string; newContent?: string }) => {
+          setDiff(data.diff);
+          try {
+            const parsed = parsePatchFiles(data.diff);
+            if (parsed.length > 0 && parsed[0].files.length > 0) {
+              const meta = parsed[0].files[0];
+              if (data.oldContent != null) meta.oldLines = data.oldContent.split("\n").map((l) => l + "\n");
+              if (data.newContent != null) meta.newLines = data.newContent.split("\n").map((l) => l + "\n");
+              setSingleFileDiff(meta);
+            }
+          } catch {
+            // Fall back to raw diff
           }
-        } catch {
-          // Fall back to raw diff
-        }
-      })
-      .catch(() => setDiff(null))
-      .finally(() => setDiffLoading(false));
-  }, [cwd]);
+        })
+        .catch(() => setDiff(null))
+        .finally(() => setDiffLoading(false));
+    },
+    [cwd],
+  );
 
   // Re-fetch diff for previously selected file on mount (single-file mode)
   useEffect(() => {
     if (selectedFile && !stackedMode) {
       fetchDiff(selectedFile);
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stackedMode, selectedFile, fetchDiff]);
 
   // Auto-select first file when status loads and nothing is selected
   useEffect(() => {
@@ -556,40 +591,46 @@ export function ChangesView({ cwd, sessionId }: { cwd: string; sessionId?: strin
     fetchDiff(first.path);
   }, [status, selectedFile, stackedMode, fetchDiff]);
 
-  const handleFileClick = useCallback((file: GitFileChange) => {
-    if (stackedMode) {
-      setScrollToFile(file.path);
-    } else {
-      setSelectedFile(file.path);
-      fetchDiff(file.path);
-      setContextMenu(null);
-      closeSidebar();
-    }
-  }, [stackedMode, fetchDiff, closeSidebar]);
+  const handleFileClick = useCallback(
+    (file: GitFileChange) => {
+      if (stackedMode) {
+        setScrollToFile(file.path);
+      } else {
+        setSelectedFile(file.path);
+        fetchDiff(file.path);
+        setContextMenu(null);
+        closeSidebar();
+      }
+    },
+    [stackedMode, fetchDiff, closeSidebar],
+  );
 
   const handleContextMenu = useCallback((e: React.MouseEvent, file: GitFileChange) => {
     e.preventDefault();
     setContextMenu({ x: e.clientX, y: e.clientY, file });
   }, []);
 
-  const handleDiscard = useCallback(async (file: GitFileChange) => {
-    setContextMenu(null);
-    try {
-      const res = await fetch("/api/git/discard", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ cwd, file: file.path, status: file.status }),
-      });
-      if (!res.ok) throw new Error("Failed");
-      if (selectedFile === file.path) {
-        setSelectedFile(null);
-        setDiff(null);
+  const handleDiscard = useCallback(
+    async (file: GitFileChange) => {
+      setContextMenu(null);
+      try {
+        const res = await fetch("/api/git/discard", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ cwd, file: file.path, status: file.status }),
+        });
+        if (!res.ok) throw new Error("Failed");
+        if (selectedFile === file.path) {
+          setSelectedFile(null);
+          setDiff(null);
+        }
+        fetchStatus();
+      } catch {
+        // Could show error toast
       }
-      fetchStatus();
-    } catch {
-      // Could show error toast
-    }
-  }, [cwd, selectedFile, fetchStatus]);
+    },
+    [cwd, selectedFile, fetchStatus],
+  );
 
   const handleCommit = useCallback(async () => {
     if (!commitMsg.trim() || checkedFiles.size === 0) return;
@@ -679,9 +720,7 @@ export function ChangesView({ cwd, sessionId }: { cwd: string; sessionId?: strin
   const toggleAll = useCallback(() => {
     if (!status) return;
     const allPaths = status.files.map((f) => f.path);
-    setCheckedFiles((prev) =>
-      prev.size === allPaths.length ? new Set() : new Set(allPaths)
-    );
+    setCheckedFiles((prev) => (prev.size === allPaths.length ? new Set() : new Set(allPaths)));
   }, [status]);
 
   const handleResize = useCallback((delta: number) => {
@@ -693,11 +732,13 @@ export function ChangesView({ cwd, sessionId }: { cwd: string; sessionId?: strin
     setScrollToFile(null);
   }, []);
 
-
-  const handleViewFile = useCallback((filePath: string) => {
-    const fullPath = filePath.startsWith("/") ? filePath : `${cwd}/${filePath}`;
-    router.push(`/files?cwd=${encodeURIComponent(cwd)}&file=${encodeURIComponent(fullPath)}`);
-  }, [cwd, router]);
+  const handleViewFile = useCallback(
+    (filePath: string) => {
+      const fullPath = filePath.startsWith("/") ? filePath : `${cwd}/${filePath}`;
+      router.push(`/files?cwd=${encodeURIComponent(cwd)}&file=${encodeURIComponent(fullPath)}`);
+    },
+    [cwd, router],
+  );
 
   // Push file list into sidebar
   useEffect(() => {
@@ -714,7 +755,7 @@ export function ChangesView({ cwd, sessionId }: { cwd: string; sessionId?: strin
         onContextMenu={handleContextMenu}
         onToggleFile={toggleFile}
         onToggleAll={toggleAll}
-      />
+      />,
     );
     return () => setSidebarContent(null);
   }, [status, selectedFile, checkedFiles, stackedMode, handleFileClick, handleContextMenu, toggleFile, toggleAll, setSidebarContent]);
@@ -763,23 +804,16 @@ export function ChangesView({ cwd, sessionId }: { cwd: string; sessionId?: strin
         {(() => {
           const totalAdd = status.files.reduce((s, f) => s + f.additions, 0);
           const totalDel = status.files.reduce((s, f) => s + f.deletions, 0);
-          return (totalAdd > 0 || totalDel > 0) ? (
+          return totalAdd > 0 || totalDel > 0 ? (
             <span className="text-xs font-mono flex items-center gap-1">
               {totalAdd > 0 && <span className="text-green-500">+{totalAdd}</span>}
               {totalDel > 0 && <span className="text-red-500">-{totalDel}</span>}
             </span>
           ) : null;
         })()}
-        {status.ahead > 0 && (
-          <span className="text-xs text-muted-foreground">
-            {status.ahead} unpushed
-          </span>
-        )}
+        {status.ahead > 0 && <span className="text-xs text-muted-foreground">{status.ahead} unpushed</span>}
         {pushResult && (
-          <span className={cn(
-            "text-xs flex items-center gap-1",
-            pushResult.ok ? "text-green-500" : "text-red-500"
-          )}>
+          <span className={cn("text-xs flex items-center gap-1", pushResult.ok ? "text-green-500" : "text-red-500")}>
             {pushResult.ok && <Check className="h-3 w-3" />}
             {pushResult.message}
           </span>
@@ -792,7 +826,7 @@ export function ChangesView({ cwd, sessionId }: { cwd: string; sessionId?: strin
               onClick={() => setStackedMode(true)}
               className={cn(
                 "rounded px-1.5 py-0.5 text-xs transition-colors",
-                stackedMode ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"
+                stackedMode ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground",
               )}
               title="Stacked view"
             >
@@ -802,7 +836,7 @@ export function ChangesView({ cwd, sessionId }: { cwd: string; sessionId?: strin
               onClick={() => setStackedMode(false)}
               className={cn(
                 "rounded px-1.5 py-0.5 text-xs transition-colors",
-                !stackedMode ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"
+                !stackedMode ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground",
               )}
               title="Single file view"
             >
@@ -811,18 +845,8 @@ export function ChangesView({ cwd, sessionId }: { cwd: string; sessionId?: strin
           </div>
         )}
         {status.ahead > 0 && (
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handlePush}
-            disabled={pushing}
-            className="gap-1.5"
-          >
-            {pushing ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <ArrowUpFromLine className="h-3.5 w-3.5" />
-            )}
+          <Button variant="outline" size="sm" onClick={handlePush} disabled={pushing} className="gap-1.5">
+            {pushing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ArrowUpFromLine className="h-3.5 w-3.5" />}
             Push
           </Button>
         )}
@@ -848,67 +872,61 @@ export function ChangesView({ cwd, sessionId }: { cwd: string; sessionId?: strin
                 onToggleFile={toggleFile}
                 refreshKey={refreshKey}
               />
+            ) : diffLoading ? (
+              <div className="flex items-center justify-center h-full">
+                <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+              </div>
+            ) : selectedFile && diff ? (
+              <div className="p-4">
+                <div className="rounded-lg border overflow-hidden">
+                  {(() => {
+                    const file = status.files.find((f) => f.path === selectedFile);
+                    return file ? (
+                      <div className="sticky top-0 z-10 flex items-center gap-2 px-4 py-1.5 text-sm border-b bg-muted/80 backdrop-blur-sm">
+                        {statusIcon(file.status)}
+                        <span className="font-mono text-xs truncate flex-1 min-w-0 text-left" dir="rtl" title={file.path}>
+                          <bdo dir="ltr">{file.path}</bdo>
+                        </span>
+                        <Checkbox
+                          checked={checkedFiles.has(file.path)}
+                          onChange={() => toggleFile(file.path)}
+                          onClick={(e) => e.stopPropagation()}
+                        />
+                        <button
+                          onClick={() => handleViewFile(file.path)}
+                          className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+                          title="Open in editor"
+                        >
+                          <ExternalLink className="h-3 w-3" />
+                        </button>
+                      </div>
+                    ) : null;
+                  })()}
+                  <DiffErrorBoundary fallback={<pre className="p-4 text-xs text-muted-foreground whitespace-pre-wrap">{diff}</pre>}>
+                    {singleFileDiff ? (
+                      <FileDiff
+                        fileDiff={singleFileDiff}
+                        options={{
+                          theme: { dark: "pierre-dark", light: "pierre-light" },
+                          themeType: isDark() ? "dark" : "light",
+                          overflow: "wrap",
+                          diffStyle: settings.diffStyle,
+                          disableFileHeader: true,
+                          hunkSeparators: "line-info",
+                          expansionLineCount: 20,
+                          unsafeCSS: DIFF_SELECTABLE_CSS,
+                        }}
+                      />
+                    ) : (
+                      <pre className="p-4 text-xs text-muted-foreground whitespace-pre-wrap">{diff}</pre>
+                    )}
+                  </DiffErrorBoundary>
+                </div>
+              </div>
             ) : (
-              <>
-                {diffLoading ? (
-                  <div className="flex items-center justify-center h-full">
-                    <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
-                  </div>
-                ) : selectedFile && diff ? (
-                  <div className="p-4">
-                    <div className="rounded-lg border overflow-hidden">
-                      {(() => {
-                        const file = status.files.find((f) => f.path === selectedFile);
-                        return file ? (
-                          <div
-                            className="sticky top-0 z-10 flex items-center gap-2 px-4 py-1.5 text-sm border-b bg-muted/80 backdrop-blur-sm"
-                          >
-                            {statusIcon(file.status)}
-                            <span className="font-mono text-xs truncate flex-1 min-w-0 text-left" dir="rtl" title={file.path}><bdo dir="ltr">{file.path}</bdo></span>
-                            <Checkbox
-                              checked={checkedFiles.has(file.path)}
-                              onChange={() => toggleFile(file.path)}
-                              onClick={(e) => e.stopPropagation()}
-                            />
-                            <button
-                              onClick={() => handleViewFile(file.path)}
-                              className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
-                              title="Open in editor"
-                            >
-                              <ExternalLink className="h-3 w-3" />
-                            </button>
-                          </div>
-                        ) : null;
-                      })()}
-                      <DiffErrorBoundary fallback={<pre className="p-4 text-xs text-muted-foreground whitespace-pre-wrap">{diff}</pre>}>
-                        {singleFileDiff ? (
-                          <FileDiff
-                            fileDiff={singleFileDiff}
-                            options={{
-                              theme: { dark: "pierre-dark", light: "pierre-light" },
-                              themeType: isDark() ? "dark" : "light",
-                              overflow: "wrap",
-                              diffStyle: settings.diffStyle,
-                              disableFileHeader: true,
-                              hunkSeparators: "line-info",
-                              expansionLineCount: 20,
-                              unsafeCSS: DIFF_SELECTABLE_CSS,
-                            }}
-                          />
-                        ) : (
-                          <pre className="p-4 text-xs text-muted-foreground whitespace-pre-wrap">{diff}</pre>
-                        )}
-                      </DiffErrorBoundary>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="flex items-center justify-center h-full text-sm text-muted-foreground text-center px-4">
-                    {status.files.length > 0
-                      ? "Select a file from the sidebar to view changes"
-                      : "No changes"}
-                  </div>
-                )}
-              </>
+              <div className="flex items-center justify-center h-full text-sm text-muted-foreground text-center px-4">
+                {status.files.length > 0 ? "Select a file from the sidebar to view changes" : "No changes"}
+              </div>
             )}
           </div>
 
@@ -939,11 +957,7 @@ export function ChangesView({ cwd, sessionId }: { cwd: string; sessionId?: strin
                       disabled={generating || checkedFiles.size === 0}
                       className="gap-1.5"
                     >
-                      {generating ? (
-                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                      ) : (
-                        <Sparkles className="h-3.5 w-3.5" />
-                      )}
+                      {generating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
                       {generating ? "Generating..." : "Generate"}
                     </Button>
                     <label className="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer">
@@ -952,10 +966,7 @@ export function ChangesView({ cwd, sessionId }: { cwd: string; sessionId?: strin
                     </label>
                     <div className="flex-1" />
                     {commitResult && (
-                      <span className={cn(
-                        "text-xs flex items-center gap-1",
-                        commitResult.ok ? "text-green-500" : "text-red-500"
-                      )}>
+                      <span className={cn("text-xs flex items-center gap-1", commitResult.ok ? "text-green-500" : "text-red-500")}>
                         {commitResult.ok && <Check className="h-3 w-3" />}
                         {commitResult.message}
                       </span>
@@ -966,11 +977,7 @@ export function ChangesView({ cwd, sessionId }: { cwd: string; sessionId?: strin
                       disabled={committing || !commitMsg.trim() || checkedFiles.size === 0}
                       className="gap-1.5"
                     >
-                      {committing ? (
-                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                      ) : (
-                        <Send className="h-3.5 w-3.5" />
-                      )}
+                      {committing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
                       {pushOnCommit ? "Commit & Push" : "Commit"}
                     </Button>
                   </div>
@@ -984,10 +991,7 @@ export function ChangesView({ cwd, sessionId }: { cwd: string; sessionId?: strin
         {showChat && (
           <>
             <ResizeHandle onResize={handleResize} />
-            <div
-              className="flex flex-col shrink-0 border-l min-h-0"
-              style={{ width: `${chatRatio * 100}%` }}
-            >
+            <div className="flex flex-col shrink-0 border-l min-h-0" style={{ width: `${chatRatio * 100}%` }}>
               <ChatView sessionId={sessionId} cwd={cwd} />
             </div>
           </>

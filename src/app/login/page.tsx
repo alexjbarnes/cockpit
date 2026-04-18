@@ -1,10 +1,10 @@
 "use client";
 
-import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
+import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -76,11 +76,7 @@ export default function LoginPage() {
       <Card className="w-full max-w-sm">
         <CardHeader>
           <CardTitle>Cockpit</CardTitle>
-          <CardDescription>
-            {isSetup
-              ? "Set a password to secure your instance"
-              : "Enter your password to continue"}
-          </CardDescription>
+          <CardDescription>{isSetup ? "Set a password to secure your instance" : "Enter your password to continue"}</CardDescription>
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSubmit} className="space-y-4">
@@ -104,9 +100,7 @@ export default function LoginPage() {
             )}
             {error && <p className="text-sm text-destructive">{error}</p>}
             <Button type="submit" className="w-full" disabled={loading}>
-              {loading
-                ? isSetup ? "Setting up..." : "Logging in..."
-                : isSetup ? "Set password" : "Login"}
+              {loading ? (isSetup ? "Setting up..." : "Logging in...") : isSetup ? "Set password" : "Login"}
             </Button>
           </form>
         </CardContent>

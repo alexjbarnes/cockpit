@@ -1,9 +1,9 @@
 "use client";
 
-import { X, Loader2, MessageSquare } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { Loader2, MessageSquare, X } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { Button } from "@/components/ui/button";
 
 interface BtwOverlayProps {
   question: string;
@@ -34,9 +34,7 @@ export function BtwOverlay({ question, answer, loading, error, onDismiss }: BtwO
               <span>Thinking...</span>
             </div>
           )}
-          {error && (
-            <p className="text-sm text-destructive">{error}</p>
-          )}
+          {error && <p className="text-sm text-destructive">{error}</p>}
           {answer && (
             <div className="text-sm prose prose-sm dark:prose-invert max-w-none border-t pt-2">
               <ReactMarkdown remarkPlugins={[remarkGfm]}>{answer}</ReactMarkdown>

@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
 import { EventEmitter } from "node:events";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("node:child_process", () => ({
   spawn: vi.fn(() => {
@@ -165,7 +165,7 @@ describe("SessionManager", () => {
     it("sets status to running on send", () => {
       const session = manager.createSession("/tmp");
       manager.sendMessage(session.id, "hello");
-      const active = manager.listActiveSessions();
+      const _active = manager.listActiveSessions();
       // Process spawns but we can check status via getSession
       // The session status should be "running" after send
     });
@@ -241,7 +241,6 @@ describe("SessionManager", () => {
       expect(updated?.status).toBe("idle");
     });
   });
-
 
   describe("onStatus", () => {
     it("returns null for unknown session", () => {
@@ -2095,20 +2094,24 @@ describe("SessionManager", () => {
 
     it("extracts todos from TodoWrite tool uses", () => {
       const session = manager.createSession("/tmp");
-      const messages = [{
-        id: "m1",
-        role: "assistant" as const,
-        content: "",
-        toolUses: [{
-          id: "t1",
-          name: "TodoWrite",
-          input: JSON.stringify({ todos: [{ id: "1", content: "Test task", status: "pending" }] }),
-          output: "",
-          status: "done" as const,
-        }],
-        blocks: [],
-        timestamp: Date.now(),
-      }];
+      const messages = [
+        {
+          id: "m1",
+          role: "assistant" as const,
+          content: "",
+          toolUses: [
+            {
+              id: "t1",
+              name: "TodoWrite",
+              input: JSON.stringify({ todos: [{ id: "1", content: "Test task", status: "pending" }] }),
+              output: "",
+              status: "done" as const,
+            },
+          ],
+          blocks: [],
+          timestamp: Date.now(),
+        },
+      ];
       manager.rebuildTodosFromHistory(session.id, messages);
       expect(manager.getTodos(session.id)).toHaveLength(1);
       expect(manager.getTodos(session.id)[0].content).toBe("Test task");
@@ -2322,7 +2325,9 @@ describe("SessionManager", () => {
     it("handles /clear command", () => {
       const session = manager.createSession("/tmp");
       let cleared = false;
-      manager.onClear(session.id, () => { cleared = true; });
+      manager.onClear(session.id, () => {
+        cleared = true;
+      });
       manager.sendMessage(session.id, "/clear");
       expect(cleared).toBe(true);
     });
@@ -2330,7 +2335,9 @@ describe("SessionManager", () => {
     it("handles /reset as alias for /clear", () => {
       const session = manager.createSession("/tmp");
       let cleared = false;
-      manager.onClear(session.id, () => { cleared = true; });
+      manager.onClear(session.id, () => {
+        cleared = true;
+      });
       manager.sendMessage(session.id, "/reset");
       expect(cleared).toBe(true);
     });
@@ -2338,7 +2345,9 @@ describe("SessionManager", () => {
     it("handles /new as alias for /clear", () => {
       const session = manager.createSession("/tmp");
       let cleared = false;
-      manager.onClear(session.id, () => { cleared = true; });
+      manager.onClear(session.id, () => {
+        cleared = true;
+      });
       manager.sendMessage(session.id, "/new");
       expect(cleared).toBe(true);
     });
@@ -2449,11 +2458,24 @@ describe("SessionManager", () => {
       const session = manager.createSession("/tmp");
       const s = (manager as any).sessions.get(session.id)!;
       s.todoItems = [{ content: "existing", status: "pending" }];
-      const messages = [{
-        id: "m1", role: "assistant" as const, content: "",
-        toolUses: [{ id: "t1", name: "TodoWrite", input: JSON.stringify({ todos: [{ content: "new", status: "pending" }] }), output: "", status: "done" as const }],
-        blocks: [], timestamp: Date.now(),
-      }];
+      const messages = [
+        {
+          id: "m1",
+          role: "assistant" as const,
+          content: "",
+          toolUses: [
+            {
+              id: "t1",
+              name: "TodoWrite",
+              input: JSON.stringify({ todos: [{ content: "new", status: "pending" }] }),
+              output: "",
+              status: "done" as const,
+            },
+          ],
+          blocks: [],
+          timestamp: Date.now(),
+        },
+      ];
       manager.rebuildTodosFromHistory(session.id, messages);
       expect(manager.getTodos(session.id)[0].content).toBe("existing");
     });
@@ -2462,14 +2484,29 @@ describe("SessionManager", () => {
       const session = manager.createSession("/tmp");
       const messages = [
         {
-          id: "m1", role: "assistant" as const, content: "",
-          toolUses: [{ id: "t1", name: "TodoWrite", input: JSON.stringify({ todos: [{ content: "old", status: "pending" }] }), output: "", status: "done" as const }],
-          blocks: [], timestamp: Date.now(),
+          id: "m1",
+          role: "assistant" as const,
+          content: "",
+          toolUses: [
+            {
+              id: "t1",
+              name: "TodoWrite",
+              input: JSON.stringify({ todos: [{ content: "old", status: "pending" }] }),
+              output: "",
+              status: "done" as const,
+            },
+          ],
+          blocks: [],
+          timestamp: Date.now(),
         },
         { id: "sys1", role: "system" as const, content: "__compacted__", toolUses: [], blocks: [], timestamp: Date.now() },
         {
-          id: "m2", role: "user" as const, content: "hello",
-          toolUses: [], blocks: [], timestamp: Date.now(),
+          id: "m2",
+          role: "user" as const,
+          content: "hello",
+          toolUses: [],
+          blocks: [],
+          timestamp: Date.now(),
         },
       ];
       manager.rebuildTodosFromHistory(session.id, messages);
@@ -2478,37 +2515,58 @@ describe("SessionManager", () => {
 
     it("handles invalid TodoWrite input gracefully", () => {
       const session = manager.createSession("/tmp");
-      const messages = [{
-        id: "m1", role: "assistant" as const, content: "",
-        toolUses: [{ id: "t1", name: "TodoWrite", input: "not-json", output: "", status: "done" as const }],
-        blocks: [], timestamp: Date.now(),
-      }];
+      const messages = [
+        {
+          id: "m1",
+          role: "assistant" as const,
+          content: "",
+          toolUses: [{ id: "t1", name: "TodoWrite", input: "not-json", output: "", status: "done" as const }],
+          blocks: [],
+          timestamp: Date.now(),
+        },
+      ];
       manager.rebuildTodosFromHistory(session.id, messages);
       expect(manager.getTodos(session.id)).toHaveLength(0);
     });
 
     it("handles TodoWrite with non-array todos", () => {
       const session = manager.createSession("/tmp");
-      const messages = [{
-        id: "m1", role: "assistant" as const, content: "",
-        toolUses: [{ id: "t1", name: "TodoWrite", input: JSON.stringify({ todos: "not-array" }), output: "", status: "done" as const }],
-        blocks: [], timestamp: Date.now(),
-      }];
+      const messages = [
+        {
+          id: "m1",
+          role: "assistant" as const,
+          content: "",
+          toolUses: [{ id: "t1", name: "TodoWrite", input: JSON.stringify({ todos: "not-array" }), output: "", status: "done" as const }],
+          blocks: [],
+          timestamp: Date.now(),
+        },
+      ];
       manager.rebuildTodosFromHistory(session.id, messages);
       expect(manager.getTodos(session.id)).toHaveLength(0);
     });
 
     it("filters out todos without content or status", () => {
       const session = manager.createSession("/tmp");
-      const messages = [{
-        id: "m1", role: "assistant" as const, content: "",
-        toolUses: [{ id: "t1", name: "TodoWrite", input: JSON.stringify({ todos: [
-          { content: "valid", status: "pending" },
-          { content: "", status: "pending" },
-          { content: "no-status" },
-        ] }), output: "", status: "done" as const }],
-        blocks: [], timestamp: Date.now(),
-      }];
+      const messages = [
+        {
+          id: "m1",
+          role: "assistant" as const,
+          content: "",
+          toolUses: [
+            {
+              id: "t1",
+              name: "TodoWrite",
+              input: JSON.stringify({
+                todos: [{ content: "valid", status: "pending" }, { content: "", status: "pending" }, { content: "no-status" }],
+              }),
+              output: "",
+              status: "done" as const,
+            },
+          ],
+          blocks: [],
+          timestamp: Date.now(),
+        },
+      ];
       manager.rebuildTodosFromHistory(session.id, messages);
       expect(manager.getTodos(session.id)).toHaveLength(1);
     });
@@ -2517,11 +2575,24 @@ describe("SessionManager", () => {
       const session = manager.createSession("/tmp");
       const todoEvents: unknown[] = [];
       manager.onTodos(session.id, (todos) => todoEvents.push(todos));
-      const messages = [{
-        id: "m1", role: "assistant" as const, content: "",
-        toolUses: [{ id: "t1", name: "TodoWrite", input: JSON.stringify({ todos: [{ content: "task", status: "in_progress" }] }), output: "", status: "done" as const }],
-        blocks: [], timestamp: Date.now(),
-      }];
+      const messages = [
+        {
+          id: "m1",
+          role: "assistant" as const,
+          content: "",
+          toolUses: [
+            {
+              id: "t1",
+              name: "TodoWrite",
+              input: JSON.stringify({ todos: [{ content: "task", status: "in_progress" }] }),
+              output: "",
+              status: "done" as const,
+            },
+          ],
+          blocks: [],
+          timestamp: Date.now(),
+        },
+      ];
       manager.rebuildTodosFromHistory(session.id, messages);
       expect(todoEvents).toHaveLength(1);
     });
@@ -2659,9 +2730,7 @@ describe("SessionManager", () => {
     it("chains into previous CLI session when buffer exhausted", async () => {
       const session = manager.createSession("/tmp");
       const s = (manager as any).sessions.get(session.id)!;
-      s.transcriptBuffer = [
-        { id: "msg-0", role: "assistant", content: "current", toolUses: [], blocks: [], timestamp: 0 },
-      ];
+      s.transcriptBuffer = [{ id: "msg-0", role: "assistant", content: "current", toolUses: [], blocks: [], timestamp: 0 }];
       s.transcriptByteOffset = 0;
       s.paginationPrevIds = ["prev-session-1"];
       s.bufferCliSessionId = "current-session";
@@ -2673,9 +2742,7 @@ describe("SessionManager", () => {
     it("skips prevIds matching current bufferCliSessionId", async () => {
       const session = manager.createSession("/tmp");
       const s = (manager as any).sessions.get(session.id)!;
-      s.transcriptBuffer = [
-        { id: "msg-0", role: "assistant", content: "current", toolUses: [], blocks: [], timestamp: 0 },
-      ];
+      s.transcriptBuffer = [{ id: "msg-0", role: "assistant", content: "current", toolUses: [], blocks: [], timestamp: 0 }];
       s.transcriptByteOffset = 0;
       s.paginationPrevIds = ["current-session"];
       s.bufferCliSessionId = "current-session";
@@ -2687,9 +2754,7 @@ describe("SessionManager", () => {
     it("reads from disk when byteOffset > 0 and msg not in buffer", async () => {
       const session = manager.createSession("/tmp");
       const s = (manager as any).sessions.get(session.id)!;
-      s.transcriptBuffer = [
-        { id: "msg-0", role: "assistant", content: "current", toolUses: [], blocks: [], timestamp: 0 },
-      ];
+      s.transcriptBuffer = [{ id: "msg-0", role: "assistant", content: "current", toolUses: [], blocks: [], timestamp: 0 }];
       s.transcriptByteOffset = 500;
       s.paginationPrevIds = [];
 
@@ -2701,8 +2766,12 @@ describe("SessionManager", () => {
       const session = manager.createSession("/tmp");
       const s = (manager as any).sessions.get(session.id)!;
       const msgs = Array.from({ length: 5 }, (_, i) => ({
-        id: `msg-${i}`, role: "assistant" as const, content: `m${i}`,
-        toolUses: [], blocks: [], timestamp: 0,
+        id: `msg-${i}`,
+        role: "assistant" as const,
+        content: `m${i}`,
+        toolUses: [],
+        blocks: [],
+        timestamp: 0,
       }));
       s.transcriptBuffer = msgs;
       s.transcriptByteOffset = 0;
@@ -2724,9 +2793,7 @@ describe("SessionManager", () => {
     it("returns content blocks when images are present", () => {
       const session = manager.createSession("/tmp");
       const s = (manager as any).sessions.get(session.id)!;
-      const result = (manager as any).buildContent(s, "check this", [
-        { mediaType: "image/png", data: "base64data" },
-      ]);
+      const result = (manager as any).buildContent(s, "check this", [{ mediaType: "image/png", data: "base64data" }]);
       expect(Array.isArray(result)).toBe(true);
       const blocks = result as Record<string, unknown>[];
       expect(blocks.some((b) => b.type === "image")).toBe(true);
@@ -2758,9 +2825,7 @@ describe("SessionManager", () => {
     it("handles empty text with images", () => {
       const session = manager.createSession("/tmp");
       const s = (manager as any).sessions.get(session.id)!;
-      const result = (manager as any).buildContent(s, "", [
-        { mediaType: "image/png", data: "base64data" },
-      ]);
+      const result = (manager as any).buildContent(s, "", [{ mediaType: "image/png", data: "base64data" }]);
       expect(Array.isArray(result)).toBe(true);
       const blocks = result as Record<string, unknown>[];
       expect(blocks.every((b) => b.type !== "text")).toBe(true);
@@ -2959,7 +3024,7 @@ describe("SessionManager", () => {
     });
 
     it("killProcessGroup handles missing pid", () => {
-      const session = manager.createSession("/tmp");
+      const _session = manager.createSession("/tmp");
       const proc = { pid: undefined, kill: vi.fn() };
 
       expect(() => (manager as any).killProcessGroup(proc)).not.toThrow();

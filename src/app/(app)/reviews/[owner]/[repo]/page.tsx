@@ -1,10 +1,10 @@
 "use client";
 
-import { use, useState, useEffect, useCallback } from "react";
+import { ArrowLeft, CircleDot, CircleX, GitMerge, GitPullRequest, Loader2, RefreshCw, Search } from "lucide-react";
 import { useRouter } from "next/navigation";
+import { use, useCallback, useEffect, useState } from "react";
 import { usePageHeader } from "@/components/app-shell";
 import { Button } from "@/components/ui/button";
-import { Loader2, Search, ArrowLeft, GitPullRequest, CircleDot, GitMerge, CircleX, RefreshCw } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 // Module-level cache: "owner/repo:state" -> PullRequest[]
@@ -66,11 +66,7 @@ function stateIcon(state: string) {
   }
 }
 
-export default function PRListPage({
-  params,
-}: {
-  params: Promise<{ owner: string; repo: string }>;
-}) {
+export default function PRListPage({ params }: { params: Promise<{ owner: string; repo: string }> }) {
   const { owner, repo } = use(params);
   const fullRepo = `${owner}/${repo}`;
   usePageHeader(fullRepo);
@@ -82,35 +78,36 @@ export default function PRListPage({
   const [loading, setLoading] = useState(!prCache.has(`${fullRepo}:open`));
   const [error, setError] = useState<string | null>(null);
 
-  const fetchPRs = useCallback((force = false) => {
-    const key = `${fullRepo}:${state}`;
-    if (!force && prCache.has(key)) {
-      setPrs(prCache.get(key)!);
-      setLoading(false);
-      return;
-    }
-    setLoading(true);
-    setError(null);
-    fetch(`/api/github/prs?repo=${encodeURIComponent(fullRepo)}&state=${state}`)
-      .then((res) => {
-        if (!res.ok) return res.json().then((d) => Promise.reject(d.error));
-        return res.json();
-      })
-      .then((data: PullRequest[]) => {
-        prCache.set(key, data);
-        setPrs(data);
-      })
-      .catch((err) => setError(String(err)))
-      .finally(() => setLoading(false));
-  }, [fullRepo, state]);
+  const fetchPRs = useCallback(
+    (force = false) => {
+      const key = `${fullRepo}:${state}`;
+      if (!force && prCache.has(key)) {
+        setPrs(prCache.get(key)!);
+        setLoading(false);
+        return;
+      }
+      setLoading(true);
+      setError(null);
+      fetch(`/api/github/prs?repo=${encodeURIComponent(fullRepo)}&state=${state}`)
+        .then((res) => {
+          if (!res.ok) return res.json().then((d) => Promise.reject(d.error));
+          return res.json();
+        })
+        .then((data: PullRequest[]) => {
+          prCache.set(key, data);
+          setPrs(data);
+        })
+        .catch((err) => setError(String(err)))
+        .finally(() => setLoading(false));
+    },
+    [fullRepo, state],
+  );
 
   useEffect(() => {
     fetchPRs();
   }, [fetchPRs]);
 
-  const filtered = search
-    ? prs.filter((pr) => pr.title.toLowerCase().includes(search.toLowerCase()))
-    : prs;
+  const filtered = search ? prs.filter((pr) => pr.title.toLowerCase().includes(search.toLowerCase())) : prs;
 
   return (
     <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-4">
@@ -119,18 +116,10 @@ export default function PRListPage({
           <ArrowLeft className="h-4 w-4" />
         </Button>
         <div className="flex gap-1">
-          <Button
-            variant={state === "open" ? "default" : "outline"}
-            size="sm"
-            onClick={() => setState("open")}
-          >
+          <Button variant={state === "open" ? "default" : "outline"} size="sm" onClick={() => setState("open")}>
             Open
           </Button>
-          <Button
-            variant={state === "closed" ? "default" : "outline"}
-            size="sm"
-            onClick={() => setState("closed")}
-          >
+          <Button variant={state === "closed" ? "default" : "outline"} size="sm" onClick={() => setState("closed")}>
             Closed
           </Button>
         </div>
@@ -162,16 +151,10 @@ export default function PRListPage({
         </div>
       )}
 
-      {error && (
-        <div className="rounded-md border border-destructive/50 bg-destructive/10 p-4 text-sm text-destructive">
-          {error}
-        </div>
-      )}
+      {error && <div className="rounded-md border border-destructive/50 bg-destructive/10 p-4 text-sm text-destructive">{error}</div>}
 
       {!loading && !error && filtered.length === 0 && (
-        <div className="text-center py-12 text-sm text-muted-foreground">
-          No pull requests found.
-        </div>
+        <div className="text-center py-12 text-sm text-muted-foreground">No pull requests found.</div>
       )}
 
       {!loading && filtered.length > 0 && (

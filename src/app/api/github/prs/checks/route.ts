@@ -1,12 +1,10 @@
-import { NextRequest, NextResponse } from "next/server";
 import { execFile } from "node:child_process";
-import { validateSession, isAuthDisabled } from "@/server/auth";
+import { NextRequest, NextResponse } from "next/server";
+import { isAuthDisabled, validateSession } from "@/server/auth";
 
 function authenticate(req: NextRequest): boolean {
   if (isAuthDisabled()) return true;
-  const token =
-    req.cookies.get("cockpit_session")?.value ||
-    req.headers.get("authorization")?.replace("Bearer ", "");
+  const token = req.cookies.get("cockpit_session")?.value || req.headers.get("authorization")?.replace("Bearer ", "");
   return !!token && validateSession(token);
 }
 
@@ -29,28 +27,14 @@ export async function GET(req: NextRequest) {
   const number = url.searchParams.get("number");
 
   if (!repo || !number) {
-    return NextResponse.json(
-      { error: "repo and number are required" },
-      { status: 400 },
-    );
+    return NextResponse.json({ error: "repo and number are required" }, { status: 400 });
   }
 
   try {
-    const stdout = await run("gh", [
-      "pr",
-      "checks",
-      number,
-      "-R",
-      repo,
-      "--json",
-      "name,state,conclusion,url,startedAt,completedAt",
-    ]);
+    const stdout = await run("gh", ["pr", "checks", number, "-R", repo, "--json", "name,state,conclusion,url,startedAt,completedAt"]);
     const checks = JSON.parse(stdout);
     return NextResponse.json(checks);
   } catch (err) {
-    return NextResponse.json(
-      { error: String(err) },
-      { status: 500 },
-    );
+    return NextResponse.json({ error: String(err) }, { status: 500 });
   }
 }

@@ -1,12 +1,10 @@
-import { NextRequest, NextResponse } from "next/server";
 import { execFile } from "node:child_process";
-import { validateSession, isAuthDisabled } from "@/server/auth";
+import { NextRequest, NextResponse } from "next/server";
+import { isAuthDisabled, validateSession } from "@/server/auth";
 
 function authenticate(req: NextRequest): boolean {
   if (isAuthDisabled()) return true;
-  const token =
-    req.cookies.get("cockpit_session")?.value ||
-    req.headers.get("authorization")?.replace("Bearer ", "");
+  const token = req.cookies.get("cockpit_session")?.value || req.headers.get("authorization")?.replace("Bearer ", "");
   return !!token && validateSession(token);
 }
 
@@ -30,18 +28,11 @@ export async function GET(req: NextRequest) {
   const ref = url.searchParams.get("ref");
 
   if (!repo || !path || !ref) {
-    return NextResponse.json(
-      { error: "repo, path, and ref are required" },
-      { status: 400 },
-    );
+    return NextResponse.json({ error: "repo, path, and ref are required" }, { status: 400 });
   }
 
   try {
-    const content = await run("gh", [
-      "api",
-      `repos/${repo}/contents/${path}?ref=${ref}`,
-      "--jq", ".content",
-    ]);
+    const content = await run("gh", ["api", `repos/${repo}/contents/${path}?ref=${ref}`, "--jq", ".content"]);
     const decoded = Buffer.from(content.trim(), "base64").toString("utf-8");
     return NextResponse.json({ content: decoded });
   } catch {

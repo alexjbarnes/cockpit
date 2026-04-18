@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import { EventParser } from "@/server/event-parser";
 
 const SYSTEM_INIT = JSON.stringify({
@@ -172,21 +172,14 @@ describe("EventParser", () => {
     expect(events[0].type).toBe("message_done");
     expect(events[0].message).toBeDefined();
     expect(events[0].message!.role).toBe("assistant");
-    expect(events[0].message!.content).toBe(
-      "Here are the files:\n- file1.txt\n- file2.txt"
-    );
+    expect(events[0].message!.content).toBe("Here are the files:\n- file1.txt\n- file2.txt");
   });
 
   it("handles a full conversation flow", () => {
     const parser = new EventParser();
-    const allEvents = [
-      SYSTEM_INIT,
-      ASSISTANT_TOOL_USE,
-      RATE_LIMIT,
-      USER_TOOL_RESULT,
-      ASSISTANT_TEXT,
-      RESULT_SUCCESS,
-    ].flatMap((line) => parser.parseLine(line));
+    const allEvents = [SYSTEM_INIT, ASSISTANT_TOOL_USE, RATE_LIMIT, USER_TOOL_RESULT, ASSISTANT_TEXT, RESULT_SUCCESS].flatMap((line) =>
+      parser.parseLine(line),
+    );
 
     expect(allEvents).toHaveLength(6);
     expect(allEvents[0].type).toBe("init");
@@ -495,10 +488,7 @@ describe("EventParser", () => {
       type: "assistant",
       message: {
         id: "msg_empty_think",
-        content: [
-          { type: "thinking" },
-          { type: "text", text: "Just text" },
-        ],
+        content: [{ type: "thinking" }, { type: "text", text: "Just text" }],
       },
       session_id: "abc",
     });
@@ -585,10 +575,12 @@ describe("EventParser", () => {
 
   it("returns empty for control_response with non-success subtype", () => {
     const parser = new EventParser();
-    const events = parser.parseLine(JSON.stringify({
-      type: "control_response",
-      response: { subtype: "error" },
-    }));
+    const events = parser.parseLine(
+      JSON.stringify({
+        type: "control_response",
+        response: { subtype: "error" },
+      }),
+    );
     expect(events).toEqual([]);
   });
 
@@ -598,14 +590,16 @@ describe("EventParser", () => {
       type: "user",
       message: {
         role: "user",
-        content: [{
-          type: "tool_result",
-          tool_use_id: "toolu_arr",
-          content: [
-            { type: "text", text: "line one" },
-            { type: "text", text: "line two" },
-          ],
-        }],
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "toolu_arr",
+            content: [
+              { type: "text", text: "line one" },
+              { type: "text", text: "line two" },
+            ],
+          },
+        ],
       },
     });
     const events = parser.parseLine(line);
@@ -619,10 +613,12 @@ describe("EventParser", () => {
       type: "user",
       message: {
         role: "user",
-        content: [{
-          type: "tool_result",
-          tool_use_id: "toolu_empty",
-        }],
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "toolu_empty",
+          },
+        ],
       },
     });
     const events = parser.parseLine(line);
@@ -636,13 +632,13 @@ describe("EventParser", () => {
       type: "user",
       message: {
         role: "user",
-        content: [{
-          type: "tool_result",
-          tool_use_id: "toolu_fp",
-          content: [
-            { type: "text", text: "file contents", input: { file_path: "/tmp/test.txt" } },
-          ],
-        }],
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "toolu_fp",
+            content: [{ type: "text", text: "file contents", input: { file_path: "/tmp/test.txt" } }],
+          },
+        ],
       },
     });
     const events = parser.parseLine(line);
@@ -659,74 +655,76 @@ describe("EventParser", () => {
 
   it("emits permission mode from system status", () => {
     const parser = new EventParser();
-    const events = parser.parseLine(JSON.stringify({
-      type: "system",
-      subtype: "status",
-      permissionMode: "bypassPermissions",
-    }));
+    const events = parser.parseLine(
+      JSON.stringify({
+        type: "system",
+        subtype: "status",
+        permissionMode: "bypassPermissions",
+      }),
+    );
     expect(events).toHaveLength(1);
     expect(events[0].text).toBe("__permission_mode::bypassPermissions");
   });
 
   it("marks message_done as interrupted for error_during_execution", () => {
     const parser = new EventParser();
-    const events = parser.parseLine(JSON.stringify({
-      type: "result",
-      subtype: "error_during_execution",
-      result: "Something failed",
-    }));
+    const events = parser.parseLine(
+      JSON.stringify({
+        type: "result",
+        subtype: "error_during_execution",
+        result: "Something failed",
+      }),
+    );
     expect(events).toHaveLength(1);
     expect(events[0].interrupted).toBe(true);
   });
 
   it("tracks assistant model across events", () => {
     const parser = new EventParser();
-    parser.parseLine(JSON.stringify({
-      type: "assistant",
-      message: { id: "m1", model: "claude-sonnet-4-6", content: [{ type: "text", text: "hi" }] },
-    }));
-    const events = parser.parseLine(JSON.stringify({
-      type: "result",
-      result: "done",
-    }));
+    parser.parseLine(
+      JSON.stringify({
+        type: "assistant",
+        message: { id: "m1", model: "claude-sonnet-4-6", content: [{ type: "text", text: "hi" }] },
+      }),
+    );
+    const events = parser.parseLine(
+      JSON.stringify({
+        type: "result",
+        result: "done",
+      }),
+    );
     expect(events[0].message!.model).toBe("claude-sonnet-4-6");
   });
 
   it("parses init with object-format agents", () => {
     const parser = new EventParser();
-    const events = parser.parseLine(JSON.stringify({
-      type: "system",
-      subtype: "init",
-      tools: [],
-      model: "sonnet",
-      agents: [
-        { name: "Explore", description: "search agent" },
-        "Plan",
-      ],
-      mcp_servers: [
-        { name: "server1", status: "connected" },
-      ],
-    }));
+    const events = parser.parseLine(
+      JSON.stringify({
+        type: "system",
+        subtype: "init",
+        tools: [],
+        model: "sonnet",
+        agents: [{ name: "Explore", description: "search agent" }, "Plan"],
+        mcp_servers: [{ name: "server1", status: "connected" }],
+      }),
+    );
     expect(events).toHaveLength(1);
     expect(events[0].type).toBe("init");
-    expect(events[0].initData!.agents).toEqual([
-      { name: "Explore", description: "search agent" },
-      { name: "Plan" },
-    ]);
-    expect(events[0].initData!.mcpServers).toEqual([
-      { name: "server1", status: "connected" },
-    ]);
+    expect(events[0].initData!.agents).toEqual([{ name: "Explore", description: "search agent" }, { name: "Plan" }]);
+    expect(events[0].initData!.mcpServers).toEqual([{ name: "server1", status: "connected" }]);
   });
 
   it("handles tool_result with string content parts", () => {
     const parser = new EventParser();
-    const events = parser.parseLine(JSON.stringify({
-      type: "user",
-      message: {
-        role: "user",
-        content: [{ type: "tool_result", tool_use_id: "t1", content: ["line1", "line2"] }],
-      },
-    }));
+    const events = parser.parseLine(
+      JSON.stringify({
+        type: "user",
+        message: {
+          role: "user",
+          content: [{ type: "tool_result", tool_use_id: "t1", content: ["line1", "line2"] }],
+        },
+      }),
+    );
     const result = events.find((e) => e.type === "tool_result");
     expect(result).toBeTruthy();
     expect(result!.toolOutput).toContain("line1");
@@ -735,20 +733,24 @@ describe("EventParser", () => {
 
   it("extracts filePath from tool input file_path", () => {
     const parser = new EventParser();
-    const events = parser.parseLine(JSON.stringify({
-      type: "user",
-      message: {
-        role: "user",
-        content: [{
-          type: "tool_result",
-          tool_use_id: "t1",
+    const events = parser.parseLine(
+      JSON.stringify({
+        type: "user",
+        message: {
+          role: "user",
           content: [
-            { type: "tool_use", input: { file_path: "/test/file.ts" } },
-            { type: "text", text: "done" },
+            {
+              type: "tool_result",
+              tool_use_id: "t1",
+              content: [
+                { type: "tool_use", input: { file_path: "/test/file.ts" } },
+                { type: "text", text: "done" },
+              ],
+            },
           ],
-        }],
-      },
-    }));
+        },
+      }),
+    );
     const result = events.find((e) => e.type === "tool_result");
     expect(result).toBeTruthy();
     expect(result!.filePath).toBe("/test/file.ts");
@@ -756,20 +758,24 @@ describe("EventParser", () => {
 
   it("extracts filePath from tool input path variant", () => {
     const parser = new EventParser();
-    const events = parser.parseLine(JSON.stringify({
-      type: "user",
-      message: {
-        role: "user",
-        content: [{
-          type: "tool_result",
-          tool_use_id: "t1",
+    const events = parser.parseLine(
+      JSON.stringify({
+        type: "user",
+        message: {
+          role: "user",
           content: [
-            { type: "tool_use", input: { path: "/test" } },
-            { type: "text", text: "files" },
+            {
+              type: "tool_result",
+              tool_use_id: "t1",
+              content: [
+                { type: "tool_use", input: { path: "/test" } },
+                { type: "text", text: "files" },
+              ],
+            },
           ],
-        }],
-      },
-    }));
+        },
+      }),
+    );
     const result = events.find((e) => e.type === "tool_result");
     expect(result).toBeTruthy();
     expect(result!.filePath).toBe("/test");
@@ -777,19 +783,21 @@ describe("EventParser", () => {
 
   it("extracts filePath from filePath variant", () => {
     const parser = new EventParser();
-    const events = parser.parseLine(JSON.stringify({
-      type: "user",
-      message: {
-        role: "user",
-        content: [{
-          type: "tool_result",
-          tool_use_id: "t1",
+    const events = parser.parseLine(
+      JSON.stringify({
+        type: "user",
+        message: {
+          role: "user",
           content: [
-            { type: "tool_use", input: { filePath: "/test/other.ts" } },
+            {
+              type: "tool_result",
+              tool_use_id: "t1",
+              content: [{ type: "tool_use", input: { filePath: "/test/other.ts" } }],
+            },
           ],
-        }],
-      },
-    }));
+        },
+      }),
+    );
     const result = events.find((e) => e.type === "tool_result");
     expect(result).toBeTruthy();
     expect(result!.filePath).toBe("/test/other.ts");

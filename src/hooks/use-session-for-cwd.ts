@@ -1,7 +1,10 @@
-import { useState, useEffect } from "react";
+import { useEffect, useState } from "react";
 import type { SessionGroup } from "@/types";
 
-export function useSessionForCwd(cwd: string, urlSessionId?: string | null): {
+export function useSessionForCwd(
+  cwd: string,
+  urlSessionId?: string | null,
+): {
   sessionId: string | null;
   loading: boolean;
 } {
@@ -19,8 +22,8 @@ export function useSessionForCwd(cwd: string, urlSessionId?: string | null): {
     setLoading(true);
 
     Promise.all([
-      fetch("/api/sessions").then((r) => r.ok ? r.json() : null),
-      fetch("/api/sessions/pinned").then((r) => r.ok ? r.json() : null),
+      fetch("/api/sessions").then((r) => (r.ok ? r.json() : null)),
+      fetch("/api/sessions/pinned").then((r) => (r.ok ? r.json() : null)),
     ])
       .then(([sessionsData, pinnedData]) => {
         if (cancelled) return;
@@ -46,7 +49,9 @@ export function useSessionForCwd(cwd: string, urlSessionId?: string | null): {
         }
       });
 
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [cwd, urlSessionId]);
 
   return { sessionId, loading };
