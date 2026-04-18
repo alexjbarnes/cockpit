@@ -2443,4 +2443,526 @@ describe("SessionManager", () => {
       expect(manager.interrupt("unknown")).toBe(false);
     });
   });
+
+  describe("rebuildTodosFromHistory edge cases", () => {
+    it("does not overwrite existing todos", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      s.todoItems = [{ content: "existing", status: "pending" }];
+      const messages = [{
+        id: "m1", role: "assistant" as const, content: "",
+        toolUses: [{ id: "t1", name: "TodoWrite", input: JSON.stringify({ todos: [{ content: "new", status: "pending" }] }), output: "", status: "done" as const }],
+        blocks: [], timestamp: Date.now(),
+      }];
+      manager.rebuildTodosFromHistory(session.id, messages);
+      expect(manager.getTodos(session.id)[0].content).toBe("existing");
+    });
+
+    it("stops at compact boundary", () => {
+      const session = manager.createSession("/tmp");
+      const messages = [
+        {
+          id: "m1", role: "assistant" as const, content: "",
+          toolUses: [{ id: "t1", name: "TodoWrite", input: JSON.stringify({ todos: [{ content: "old", status: "pending" }] }), output: "", status: "done" as const }],
+          blocks: [], timestamp: Date.now(),
+        },
+        { id: "sys1", role: "system" as const, content: "__compacted__", toolUses: [], blocks: [], timestamp: Date.now() },
+        {
+          id: "m2", role: "user" as const, content: "hello",
+          toolUses: [], blocks: [], timestamp: Date.now(),
+        },
+      ];
+      manager.rebuildTodosFromHistory(session.id, messages);
+      expect(manager.getTodos(session.id)).toHaveLength(0);
+    });
+
+    it("handles invalid TodoWrite input gracefully", () => {
+      const session = manager.createSession("/tmp");
+      const messages = [{
+        id: "m1", role: "assistant" as const, content: "",
+        toolUses: [{ id: "t1", name: "TodoWrite", input: "not-json", output: "", status: "done" as const }],
+        blocks: [], timestamp: Date.now(),
+      }];
+      manager.rebuildTodosFromHistory(session.id, messages);
+      expect(manager.getTodos(session.id)).toHaveLength(0);
+    });
+
+    it("handles TodoWrite with non-array todos", () => {
+      const session = manager.createSession("/tmp");
+      const messages = [{
+        id: "m1", role: "assistant" as const, content: "",
+        toolUses: [{ id: "t1", name: "TodoWrite", input: JSON.stringify({ todos: "not-array" }), output: "", status: "done" as const }],
+        blocks: [], timestamp: Date.now(),
+      }];
+      manager.rebuildTodosFromHistory(session.id, messages);
+      expect(manager.getTodos(session.id)).toHaveLength(0);
+    });
+
+    it("filters out todos without content or status", () => {
+      const session = manager.createSession("/tmp");
+      const messages = [{
+        id: "m1", role: "assistant" as const, content: "",
+        toolUses: [{ id: "t1", name: "TodoWrite", input: JSON.stringify({ todos: [
+          { content: "valid", status: "pending" },
+          { content: "", status: "pending" },
+          { content: "no-status" },
+        ] }), output: "", status: "done" as const }],
+        blocks: [], timestamp: Date.now(),
+      }];
+      manager.rebuildTodosFromHistory(session.id, messages);
+      expect(manager.getTodos(session.id)).toHaveLength(1);
+    });
+
+    it("emits todos event after rebuild", () => {
+      const session = manager.createSession("/tmp");
+      const todoEvents: unknown[] = [];
+      manager.onTodos(session.id, (todos) => todoEvents.push(todos));
+      const messages = [{
+        id: "m1", role: "assistant" as const, content: "",
+        toolUses: [{ id: "t1", name: "TodoWrite", input: JSON.stringify({ todos: [{ content: "task", status: "in_progress" }] }), output: "", status: "done" as const }],
+        blocks: [], timestamp: Date.now(),
+      }];
+      manager.rebuildTodosFromHistory(session.id, messages);
+      expect(todoEvents).toHaveLength(1);
+    });
+  });
+
+  describe("sendMessage with queue pause reset", () => {
+    it("clears paused queue and resets flag on new message", () => {
+      const session = manager.createSession("/tmp");
+      manager.sendMessage(session.id, "first");
+      manager.sendMessage(session.id, "second");
+      manager.pauseQueue(session.id);
+      expect(manager.isQueuePaused(session.id)).toBe(true);
+      expect(manager.getQueuedCount(session.id)).toBe(1);
+      manager.sendMessage(session.id, "new message");
+      expect(manager.isQueuePaused(session.id)).toBe(false);
+      // Old queue cleared, but new message gets re-queued since status is running
+      expect(manager.getQueuedCount(session.id)).toBe(1);
+      expect(manager.getQueuedMessages(session.id)[0].text).toBe("new message");
+    });
+
+    it("emits queued event with count 0 on pause reset", () => {
+      const session = manager.createSession("/tmp");
+      manager.sendMessage(session.id, "first");
+      manager.sendMessage(session.id, "second");
+      manager.pauseQueue(session.id);
+      const counts: number[] = [];
+      manager.onQueued(session.id, (count) => counts.push(count));
+      manager.sendMessage(session.id, "new message");
+      expect(counts).toContain(0);
+    });
+  });
+
+  describe("sendControlRequest", () => {
+    it("rejects when session has no stdin", async () => {
+      const session = manager.createSession("/tmp");
+      await expect(manager.sendControlRequest(session.id, { subtype: "test" })).rejects.toThrow("Session not connected");
+    });
+
+    it("rejects for unknown session", async () => {
+      await expect(manager.sendControlRequest("nonexistent", { subtype: "test" })).rejects.toThrow("Session not connected");
+    });
+  });
+
+  describe("mcpStatus", () => {
+    it("rejects when session has no stdin", async () => {
+      const session = manager.createSession("/tmp");
+      await expect(manager.mcpStatus(session.id)).rejects.toThrow("Session not connected");
+    });
+  });
+
+  describe("updateMcpServerStatus", () => {
+    it("updates server status in initData", () => {
+      const session = manager.createSession("/tmp");
+      manager.setInitData(session.id, {
+        slashCommands: [],
+        skills: [],
+        agents: [],
+        version: "1.0",
+        model: "opus",
+        mcpServers: [{ name: "test-srv", status: "connected" }],
+      });
+      const initEvents: unknown[] = [];
+      manager.onInit(session.id, (data) => initEvents.push(data));
+      (manager as any).updateMcpServerStatus(session.id, "test-srv", "disabled");
+      const s = (manager as any).sessions.get(session.id)!;
+      expect(s.initData.mcpServers[0].status).toBe("disabled");
+      expect(initEvents).toHaveLength(1);
+    });
+
+    it("does nothing when session has no initData", () => {
+      const session = manager.createSession("/tmp");
+      expect(() => (manager as any).updateMcpServerStatus(session.id, "srv", "disabled")).not.toThrow();
+    });
+
+    it("does nothing when server name not found", () => {
+      const session = manager.createSession("/tmp");
+      manager.setInitData(session.id, {
+        slashCommands: [],
+        skills: [],
+        agents: [],
+        version: "1.0",
+        model: "opus",
+        mcpServers: [{ name: "other", status: "connected" }],
+      });
+      (manager as any).updateMcpServerStatus(session.id, "nonexistent", "disabled");
+      const s = (manager as any).sessions.get(session.id)!;
+      expect(s.initData.mcpServers[0].status).toBe("connected");
+    });
+  });
+
+  describe("setModel without stdin (kills process)", () => {
+    it("kills process and resets queue when no stdin", () => {
+      const session = manager.createSession("/tmp");
+      manager.sendMessage(session.id, "first");
+      manager.sendMessage(session.id, "second");
+      const s = (manager as any).sessions.get(session.id)!;
+      s.stdin = null;
+      manager.setModel(session.id, "opus");
+      expect(manager.getQueuedCount(session.id)).toBe(0);
+      expect(manager.isQueuePaused(session.id)).toBe(false);
+    });
+  });
+
+  describe("setThinkingLevel without stdin (kills process)", () => {
+    it("kills process and resets state when no stdin", () => {
+      const session = manager.createSession("/tmp");
+      manager.sendMessage(session.id, "first");
+      const s = (manager as any).sessions.get(session.id)!;
+      s.stdin = null;
+      manager.setThinkingLevel(session.id, "low");
+      expect(manager.getThinkingLevel(session.id)).toBe("low");
+    });
+  });
+
+  describe("destroySession with running process", () => {
+    it("cleans up and removes session with process", () => {
+      const session = manager.createSession("/tmp");
+      manager.sendMessage(session.id, "test");
+      expect(manager.isProcessAlive(session.id)).toBe(true);
+      expect(manager.destroySession(session.id)).toBe(true);
+      expect(manager.listKnownSessions().find((s) => s.id === session.id)).toBeUndefined();
+    });
+  });
+
+  describe("ensureProcess with existing process", () => {
+    it("does nothing when process already exists", () => {
+      const session = manager.createSession("/tmp");
+      manager.sendMessage(session.id, "test");
+      expect(manager.isProcessAlive(session.id)).toBe(true);
+      expect(() => manager.ensureProcess(session.id)).not.toThrow();
+    });
+  });
+
+  describe("getMoreHistory chaining into previous sessions", () => {
+    it("chains into previous CLI session when buffer exhausted", async () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      s.transcriptBuffer = [
+        { id: "msg-0", role: "assistant", content: "current", toolUses: [], blocks: [], timestamp: 0 },
+      ];
+      s.transcriptByteOffset = 0;
+      s.paginationPrevIds = ["prev-session-1"];
+      s.bufferCliSessionId = "current-session";
+
+      const result = await manager.getMoreHistory(session.id, "msg-0");
+      expect(result.hasMore).toBe(false);
+    });
+
+    it("skips prevIds matching current bufferCliSessionId", async () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      s.transcriptBuffer = [
+        { id: "msg-0", role: "assistant", content: "current", toolUses: [], blocks: [], timestamp: 0 },
+      ];
+      s.transcriptByteOffset = 0;
+      s.paginationPrevIds = ["current-session"];
+      s.bufferCliSessionId = "current-session";
+
+      const result = await manager.getMoreHistory(session.id, "msg-0");
+      expect(result).toEqual({ messages: [], hasMore: false });
+    });
+
+    it("reads from disk when byteOffset > 0 and msg not in buffer", async () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      s.transcriptBuffer = [
+        { id: "msg-0", role: "assistant", content: "current", toolUses: [], blocks: [], timestamp: 0 },
+      ];
+      s.transcriptByteOffset = 500;
+      s.paginationPrevIds = [];
+
+      const result = await manager.getMoreHistory(session.id, "msg-0");
+      expect(result.messages).toBeDefined();
+    });
+
+    it("serves from buffer when idx > 0 with prevIds", async () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      const msgs = Array.from({ length: 5 }, (_, i) => ({
+        id: `msg-${i}`, role: "assistant" as const, content: `m${i}`,
+        toolUses: [], blocks: [], timestamp: 0,
+      }));
+      s.transcriptBuffer = msgs;
+      s.transcriptByteOffset = 0;
+      s.paginationPrevIds = ["prev-1"];
+
+      const result = await manager.getMoreHistory(session.id, "msg-3");
+      expect(result.hasMore).toBe(true);
+    });
+  });
+
+  describe("buildContent", () => {
+    it("returns plain text when no images/documents/reminder", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      const result = (manager as any).buildContent(s, "hello");
+      expect(result).toBe("hello");
+    });
+
+    it("returns content blocks when images are present", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      const result = (manager as any).buildContent(s, "check this", [
+        { mediaType: "image/png", data: "base64data" },
+      ]);
+      expect(Array.isArray(result)).toBe(true);
+      const blocks = result as Record<string, unknown>[];
+      expect(blocks.some((b) => b.type === "image")).toBe(true);
+      expect(blocks.some((b) => b.type === "text" && b.text === "check this")).toBe(true);
+    });
+
+    it("returns content blocks when documents are present", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      const result = (manager as any).buildContent(s, "see doc", undefined, [
+        { mediaType: "application/pdf", data: "pdfdata", name: "doc.pdf" },
+      ]);
+      expect(Array.isArray(result)).toBe(true);
+      const blocks = result as Record<string, unknown>[];
+      expect(blocks.some((b) => b.type === "document")).toBe(true);
+    });
+
+    it("includes plan mode reminder when pendingPlanReminder is true", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      s.pendingPlanReminder = true;
+      const result = (manager as any).buildContent(s, "hello");
+      expect(Array.isArray(result)).toBe(true);
+      const blocks = result as Record<string, unknown>[];
+      expect(blocks.some((b) => (b.text as string)?.includes("plan mode"))).toBe(true);
+      expect(s.pendingPlanReminder).toBe(false);
+    });
+
+    it("handles empty text with images", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      const result = (manager as any).buildContent(s, "", [
+        { mediaType: "image/png", data: "base64data" },
+      ]);
+      expect(Array.isArray(result)).toBe(true);
+      const blocks = result as Record<string, unknown>[];
+      expect(blocks.every((b) => b.type !== "text")).toBe(true);
+    });
+  });
+
+  describe("extractUsage", () => {
+    it("extracts usage from assistant message JSON", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      const usages: unknown[] = [];
+      manager.onUsage(session.id, (u) => usages.push(u));
+      const line = JSON.stringify({
+        type: "assistant",
+        message: { usage: { input_tokens: 100, cache_creation_input_tokens: 50, cache_read_input_tokens: 25 } },
+      });
+      (manager as any).extractUsage(s, session.id, line);
+      expect(s.contextUsage).toEqual({ used: 175, total: 200000 });
+      expect(usages).toHaveLength(1);
+    });
+
+    it("extracts contextWindowSize from result message", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      const line = JSON.stringify({
+        type: "result",
+        modelUsage: { "claude-3-5-sonnet": { contextWindow: 128000 } },
+      });
+      (manager as any).extractUsage(s, session.id, line);
+      expect(s.contextWindowSize).toBe(128000);
+    });
+
+    it("skips synthetic responses", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      const line = JSON.stringify({
+        type: "assistant",
+        message: { model: "<synthetic>", usage: { input_tokens: 100 } },
+      });
+      (manager as any).extractUsage(s, session.id, line);
+      expect(s.contextUsage).toBeNull();
+    });
+
+    it("handles invalid JSON gracefully", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      expect(() => (manager as any).extractUsage(s, session.id, "not json")).not.toThrow();
+    });
+  });
+
+  describe("extractContextWindowSize", () => {
+    it("sets context window from model usage", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      (manager as any).extractContextWindowSize(s, {
+        "claude-3-5-sonnet": { contextWindow: 256000 },
+      });
+      expect(s.contextWindowSize).toBe(256000);
+    });
+
+    it("ignores models with zero or missing contextWindow", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      (manager as any).extractContextWindowSize(s, {
+        "model-a": { contextWindow: 0 },
+        "model-b": {},
+      });
+      expect(s.contextWindowSize).toBe(200000);
+    });
+  });
+
+  describe("createSession fallback branches", () => {
+    it("uses cwd when basename is empty (root path)", () => {
+      const session = manager.createSession("/");
+      expect(session.name).toBe("/");
+    });
+
+    it("uses provided name over basename", () => {
+      const session = manager.createSession("/tmp", "custom-name");
+      expect(session.name).toBe("custom-name");
+    });
+  });
+
+  describe("interrupt queue pause branch", () => {
+    it("pauses queue when interrupt is called with queued messages", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      s.process = { pid: 1, kill: vi.fn() };
+      s.stdin = { write: vi.fn() };
+      s.queuedMessages = [{ text: "pending", images: [], documents: [] }];
+
+      manager.interrupt(session.id);
+
+      expect(s.queuePaused).toBe(true);
+    });
+
+    it("does not pause queue when interrupt called with empty queue", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      s.process = { pid: 1, kill: vi.fn() };
+      s.stdin = { write: vi.fn() };
+      s.queuedMessages = [];
+
+      manager.interrupt(session.id);
+
+      expect(s.queuePaused).toBeFalsy();
+    });
+  });
+
+  describe("flushQueuedMessage", () => {
+    it("does not flush when queue is paused", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      s.queuePaused = true;
+      s.queuedMessages = [{ text: "pending", images: [], documents: [] }];
+
+      (manager as any).flushQueuedMessage(s, session.id);
+
+      expect(s.queuedMessages).toHaveLength(1);
+    });
+  });
+
+  describe("setInitData fallback to empty strings", () => {
+    it("uses empty string when no prev data exists for version and model", () => {
+      const session = manager.createSession("/tmp");
+      manager.setInitData(session.id, {
+        slashCommands: [],
+        skills: [],
+        agents: [],
+        version: "",
+        model: "",
+        mcpServers: [],
+      });
+
+      const data = manager.getInitData(session.id);
+      expect(data?.version).toBe("");
+      expect(data?.model).toBe("");
+    });
+  });
+
+  describe("extractUsage edge cases", () => {
+    it("handles usage with only input_tokens (no cache fields)", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      const line = JSON.stringify({
+        type: "assistant",
+        message: { usage: { input_tokens: 500 }, model: "claude-3" },
+      });
+      (manager as any).extractUsage(s, session.id, line);
+      expect(s.contextUsage.used).toBe(500);
+    });
+
+    it("handles usage with zero input_tokens", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      const line = JSON.stringify({
+        type: "assistant",
+        message: { usage: { input_tokens: 0, cache_creation_input_tokens: 200 }, model: "claude-3" },
+      });
+      (manager as any).extractUsage(s, session.id, line);
+      expect(s.contextUsage.used).toBe(200);
+    });
+  });
+
+  describe("setModel with effort level coercion", () => {
+    it("coerces thinking level when switching to a model with restricted efforts", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      s.thinkingLevel = "high";
+
+      manager.setModel(session.id, "haiku");
+
+      expect(s.info.model).toBe("haiku");
+    });
+
+    it("sends model control request when stdin is available", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      s.stdin = { write: vi.fn() };
+
+      manager.setModel(session.id, "haiku");
+
+      expect(s.stdin.write).toHaveBeenCalled();
+      const written = s.stdin.write.mock.calls[0][0];
+      expect(written).toContain("set_model");
+    });
+  });
+
+  describe("endProcess and killProcessGroup", () => {
+    it("endProcess is no-op without process", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      s.process = null;
+
+      expect(() => (manager as any).endProcess(s)).not.toThrow();
+    });
+
+    it("killProcessGroup handles missing pid", () => {
+      const session = manager.createSession("/tmp");
+      const proc = { pid: undefined, kill: vi.fn() };
+
+      expect(() => (manager as any).killProcessGroup(proc)).not.toThrow();
+    });
+  });
 });

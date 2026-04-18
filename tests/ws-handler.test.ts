@@ -1306,4 +1306,1214 @@ describe("WebSocket handler", () => {
       ws.close();
     });
   });
+
+  describe("message:send", () => {
+    function waitForConnect(ws: WebSocket, sessionId: string): Promise<void> {
+      return new Promise((resolve) => {
+        const handler = (data: Buffer) => {
+          const msg = JSON.parse(data.toString());
+          if (msg.type === "session:queued" && msg.sessionId === sessionId) {
+            ws.removeListener("message", handler);
+            resolve();
+          }
+        };
+        ws.on("message", handler);
+        ws.send(JSON.stringify({ type: "session:connect", sessionId }));
+      });
+    }
+
+    it("sends message:ack on message:send", async () => {
+      const session = manager.createSession("/tmp");
+      const ws = await connectWs();
+      await waitForConnect(ws, session.id);
+
+      ws.send(JSON.stringify({
+        type: "message:send",
+        sessionId: session.id,
+        text: "hello",
+      }));
+      const msg = await readMessage(ws);
+      expect(msg.type).toBe("message:ack");
+      expect(msg.sessionId).toBe(session.id);
+      ws.close();
+    });
+  });
+
+  describe("message:cancel_queued", () => {
+    function waitForConnect(ws: WebSocket, sessionId: string): Promise<void> {
+      return new Promise((resolve) => {
+        const handler = (data: Buffer) => {
+          const msg = JSON.parse(data.toString());
+          if (msg.type === "session:queued" && msg.sessionId === sessionId) {
+            ws.removeListener("message", handler);
+            resolve();
+          }
+        };
+        ws.on("message", handler);
+        ws.send(JSON.stringify({ type: "session:connect", sessionId }));
+      });
+    }
+
+    it("responds with session:queued on cancel", async () => {
+      const session = manager.createSession("/tmp");
+      const ws = await connectWs();
+      await waitForConnect(ws, session.id);
+
+      ws.send(JSON.stringify({
+        type: "message:cancel_queued",
+        sessionId: session.id,
+      }));
+      const msg = await readMessage(ws);
+      expect(msg.type).toBe("session:queued");
+      expect(msg.sessionId).toBe(session.id);
+      ws.close();
+    });
+  });
+
+  describe("message:pause_queue and resume_queue", () => {
+    function waitForConnect(ws: WebSocket, sessionId: string): Promise<void> {
+      return new Promise((resolve) => {
+        const handler = (data: Buffer) => {
+          const msg = JSON.parse(data.toString());
+          if (msg.type === "session:queued" && msg.sessionId === sessionId) {
+            ws.removeListener("message", handler);
+            resolve();
+          }
+        };
+        ws.on("message", handler);
+        ws.send(JSON.stringify({ type: "session:connect", sessionId }));
+      });
+    }
+
+    it("pauses queue and sends queued response", async () => {
+      const session = manager.createSession("/tmp");
+      const ws = await connectWs();
+      await waitForConnect(ws, session.id);
+
+      ws.send(JSON.stringify({
+        type: "message:pause_queue",
+        sessionId: session.id,
+      }));
+      const msg = await readMessage(ws);
+      expect(msg.type).toBe("session:queued");
+      expect(msg.paused).toBe(true);
+      ws.close();
+    });
+
+    it("resumes queue and sends queued response", async () => {
+      const session = manager.createSession("/tmp");
+      const ws = await connectWs();
+      await waitForConnect(ws, session.id);
+
+      manager.pauseQueue(session.id);
+      ws.send(JSON.stringify({
+        type: "message:resume_queue",
+        sessionId: session.id,
+      }));
+      const msg = await readMessage(ws);
+      expect(msg.type).toBe("session:queued");
+      expect(msg.paused).toBe(false);
+      ws.close();
+    });
+  });
+
+  describe("message:delete_queued and edit_queued", () => {
+    function waitForConnect(ws: WebSocket, sessionId: string): Promise<void> {
+      return new Promise((resolve) => {
+        const handler = (data: Buffer) => {
+          const msg = JSON.parse(data.toString());
+          if (msg.type === "session:queued" && msg.sessionId === sessionId) {
+            ws.removeListener("message", handler);
+            resolve();
+          }
+        };
+        ws.on("message", handler);
+        ws.send(JSON.stringify({ type: "session:connect", sessionId }));
+      });
+    }
+
+    it("deletes queued message and sends response", async () => {
+      const session = manager.createSession("/tmp");
+      const ws = await connectWs();
+      await waitForConnect(ws, session.id);
+
+      ws.send(JSON.stringify({
+        type: "message:delete_queued",
+        sessionId: session.id,
+        messageId: "nonexistent",
+      }));
+      const msg = await readMessage(ws);
+      expect(msg.type).toBe("session:queued");
+      ws.close();
+    });
+
+    it("edits queued message and sends response with editText", async () => {
+      const session = manager.createSession("/tmp");
+      const ws = await connectWs();
+      await waitForConnect(ws, session.id);
+
+      ws.send(JSON.stringify({
+        type: "message:edit_queued",
+        sessionId: session.id,
+        messageId: "nonexistent",
+      }));
+      const msg = await readMessage(ws);
+      expect(msg.type).toBe("session:queued");
+      ws.close();
+    });
+  });
+
+  describe("session:interrupt", () => {
+    function waitForConnect(ws: WebSocket, sessionId: string): Promise<void> {
+      return new Promise((resolve) => {
+        const handler = (data: Buffer) => {
+          const msg = JSON.parse(data.toString());
+          if (msg.type === "session:queued" && msg.sessionId === sessionId) {
+            ws.removeListener("message", handler);
+            resolve();
+          }
+        };
+        ws.on("message", handler);
+        ws.send(JSON.stringify({ type: "session:connect", sessionId }));
+      });
+    }
+
+    it("sends interrupt to session manager", async () => {
+      const session = manager.createSession("/tmp");
+      const ws = await connectWs();
+      await waitForConnect(ws, session.id);
+
+      ws.send(JSON.stringify({
+        type: "session:interrupt",
+        sessionId: session.id,
+      }));
+      // Interrupt doesn't send a response directly, just test no crash
+      await new Promise((r) => setTimeout(r, 50));
+      ws.close();
+    });
+  });
+
+  describe("session:set_thinking and set_model", () => {
+    function waitForConnect(ws: WebSocket, sessionId: string): Promise<void> {
+      return new Promise((resolve) => {
+        const handler = (data: Buffer) => {
+          const msg = JSON.parse(data.toString());
+          if (msg.type === "session:queued" && msg.sessionId === sessionId) {
+            ws.removeListener("message", handler);
+            resolve();
+          }
+        };
+        ws.on("message", handler);
+        ws.send(JSON.stringify({ type: "session:connect", sessionId }));
+      });
+    }
+
+    it("sets thinking level via WS message", async () => {
+      const session = manager.createSession("/tmp");
+      const ws = await connectWs();
+      await waitForConnect(ws, session.id);
+
+      ws.send(JSON.stringify({
+        type: "session:set_thinking",
+        sessionId: session.id,
+        level: "low",
+      }));
+      await new Promise((r) => setTimeout(r, 50));
+      expect(manager.getThinkingLevel(session.id)).toBe("low");
+      ws.close();
+    });
+
+    it("sets model via WS message", async () => {
+      const session = manager.createSession("/tmp");
+      const ws = await connectWs();
+      await waitForConnect(ws, session.id);
+
+      ws.send(JSON.stringify({
+        type: "session:set_model",
+        sessionId: session.id,
+        model: "opus",
+      }));
+      await new Promise((r) => setTimeout(r, 50));
+      expect(manager.getModel(session.id)).toBe("opus");
+      ws.close();
+    });
+  });
+
+  describe("permission:set_bypass", () => {
+    function waitForConnect(ws: WebSocket, sessionId: string): Promise<void> {
+      return new Promise((resolve) => {
+        const handler = (data: Buffer) => {
+          const msg = JSON.parse(data.toString());
+          if (msg.type === "session:queued" && msg.sessionId === sessionId) {
+            ws.removeListener("message", handler);
+            resolve();
+          }
+        };
+        ws.on("message", handler);
+        ws.send(JSON.stringify({ type: "session:connect", sessionId }));
+      });
+    }
+
+    it("enables bypass via WS message", async () => {
+      const session = manager.createSession("/tmp");
+      const ws = await connectWs();
+      await waitForConnect(ws, session.id);
+
+      ws.send(JSON.stringify({
+        type: "permission:set_bypass",
+        sessionId: session.id,
+        enabled: true,
+      }));
+      await new Promise((r) => setTimeout(r, 50));
+      expect(manager.isBypassActive(session.id)).toBe(true);
+      ws.close();
+    });
+
+    it("disables bypass via WS message", async () => {
+      const session = manager.createSession("/tmp");
+      manager.setBypassAllPermissions(session.id);
+      const ws = await connectWs();
+      await waitForConnect(ws, session.id);
+
+      ws.send(JSON.stringify({
+        type: "permission:set_bypass",
+        sessionId: session.id,
+        enabled: false,
+      }));
+      await new Promise((r) => setTimeout(r, 50));
+      expect(manager.isBypassActive(session.id)).toBe(false);
+      ws.close();
+    });
+  });
+
+  describe("session:set_plan_mode", () => {
+    function waitForConnect(ws: WebSocket, sessionId: string): Promise<void> {
+      return new Promise((resolve) => {
+        const handler = (data: Buffer) => {
+          const msg = JSON.parse(data.toString());
+          if (msg.type === "session:queued" && msg.sessionId === sessionId) {
+            ws.removeListener("message", handler);
+            resolve();
+          }
+        };
+        ws.on("message", handler);
+        ws.send(JSON.stringify({ type: "session:connect", sessionId }));
+      });
+    }
+
+    it("enables plan mode via WS message", async () => {
+      const session = manager.createSession("/tmp");
+      const ws = await connectWs();
+      await waitForConnect(ws, session.id);
+
+      ws.send(JSON.stringify({
+        type: "session:set_plan_mode",
+        sessionId: session.id,
+        enabled: true,
+      }));
+      await new Promise((r) => setTimeout(r, 50));
+      expect(manager.isPlanModeActive(session.id)).toBe(true);
+      ws.close();
+    });
+
+    it("disables plan mode via WS message", async () => {
+      const session = manager.createSession("/tmp");
+      manager.setPlanMode(session.id);
+      const ws = await connectWs();
+      await waitForConnect(ws, session.id);
+
+      ws.send(JSON.stringify({
+        type: "session:set_plan_mode",
+        sessionId: session.id,
+        enabled: false,
+      }));
+      await new Promise((r) => setTimeout(r, 50));
+      expect(manager.isPlanModeActive(session.id)).toBe(false);
+      ws.close();
+    });
+  });
+
+  describe("handleParsedEvent branches via emitter", () => {
+    function waitForConnect(ws: WebSocket, sessionId: string): Promise<void> {
+      return new Promise((resolve) => {
+        const handler = (data: Buffer) => {
+          const msg = JSON.parse(data.toString());
+          if (msg.type === "session:queued" && msg.sessionId === sessionId) {
+            ws.removeListener("message", handler);
+            resolve();
+          }
+        };
+        ws.on("message", handler);
+        ws.send(JSON.stringify({ type: "session:connect", sessionId }));
+      });
+    }
+
+    it("forwards rate_limit events", async () => {
+      const session = manager.createSession("/tmp");
+      const ws = await connectWs();
+      await waitForConnect(ws, session.id);
+
+      const s = (manager as any).sessions.get(session.id)!;
+      s.emitter.emit("event", session.id, {
+        type: "rate_limit",
+        rateLimitInfo: { status: "rate_limited", retryAfterMs: 5000 },
+      });
+      const msg = await readMessage(ws);
+      expect(msg.type).toBe("session:rate_limit");
+      expect(msg.retryAfterMs).toBe(5000);
+      ws.close();
+    });
+
+    it("forwards prompt_suggestion events", async () => {
+      const session = manager.createSession("/tmp");
+      const ws = await connectWs();
+      await waitForConnect(ws, session.id);
+
+      const s = (manager as any).sessions.get(session.id)!;
+      s.emitter.emit("event", session.id, {
+        type: "prompt_suggestion",
+        suggestions: ["try this", "or that"],
+      });
+      const msg = await readMessage(ws);
+      expect(msg.type).toBe("session:suggestions");
+      expect(msg.suggestions).toEqual(["try this", "or that"]);
+      ws.close();
+    });
+
+    it("forwards tool_done events", async () => {
+      const session = manager.createSession("/tmp");
+      const ws = await connectWs();
+      await waitForConnect(ws, session.id);
+
+      const s = (manager as any).sessions.get(session.id)!;
+      s.emitter.emit("event", session.id, {
+        type: "tool_done",
+        toolName: "Bash",
+        toolInput: "ls",
+        toolId: "t1",
+        isMainThread: true,
+      });
+      const msg = await readMessage(ws);
+      expect(msg.type).toBe("assistant:tool_use");
+      expect(msg.name).toBe("Bash");
+      ws.close();
+    });
+
+    it("forwards tool_progress events", async () => {
+      const session = manager.createSession("/tmp");
+      const ws = await connectWs();
+      await waitForConnect(ws, session.id);
+
+      const s = (manager as any).sessions.get(session.id)!;
+      s.emitter.emit("event", session.id, {
+        type: "tool_progress",
+        toolId: "t1",
+        text: "in progress...",
+      });
+      const msg = await readMessage(ws);
+      expect(msg.type).toBe("assistant:tool_progress");
+      expect(msg.content).toBe("in progress...");
+      ws.close();
+    });
+
+    it("forwards tool_children events", async () => {
+      const session = manager.createSession("/tmp");
+      const ws = await connectWs();
+      await waitForConnect(ws, session.id);
+
+      const s = (manager as any).sessions.get(session.id)!;
+      s.emitter.emit("event", session.id, {
+        type: "tool_children",
+        messageId: "m1",
+        toolId: "t1",
+        children: [{ id: "c1", name: "Bash" }],
+      });
+      const msg = await readMessage(ws);
+      expect(msg.type).toBe("assistant:tool_children");
+      expect(msg.toolId).toBe("t1");
+      ws.close();
+    });
+
+    it("forwards task_update events", async () => {
+      const session = manager.createSession("/tmp");
+      const ws = await connectWs();
+      await waitForConnect(ws, session.id);
+
+      const s = (manager as any).sessions.get(session.id)!;
+      s.emitter.emit("event", session.id, {
+        type: "task_update",
+        taskInfo: { taskId: "task-1", toolUseId: "tu-1", status: "progress", description: "doing stuff" },
+      });
+      const msg = await readMessage(ws);
+      expect(msg.type).toBe("session:task_update");
+      const task = msg.task as Record<string, unknown>;
+      expect(task.status).toBe("running");
+      expect(task.activity).toBe("doing stuff");
+      ws.close();
+    });
+
+    it("forwards init events and sets initData", async () => {
+      const session = manager.createSession("/tmp");
+      const ws = await connectWs();
+      await waitForConnect(ws, session.id);
+
+      const s = (manager as any).sessions.get(session.id)!;
+      const initData = {
+        slashCommands: ["/test"],
+        skills: [],
+        agents: [],
+        version: "1.0",
+        model: "opus",
+        mcpServers: [],
+      };
+      s.emitter.emit("event", session.id, {
+        type: "init",
+        initData,
+      });
+      const msg = await readMessage(ws);
+      expect(msg.type).toBe("session:init");
+      ws.close();
+    });
+
+    it("forwards permission_request for AskUserQuestion as question:request", async () => {
+      const session = manager.createSession("/tmp");
+      const ws = await connectWs();
+      await waitForConnect(ws, session.id);
+
+      const s = (manager as any).sessions.get(session.id)!;
+      s.emitter.emit("event", session.id, {
+        type: "permission_request",
+        toolName: "AskUserQuestion",
+        requestId: "req-1",
+        toolInput: "What do you think?",
+        rawToolInput: { questions: ["What do you think?"] },
+      });
+      const msg = await readMessage(ws);
+      expect(msg.type).toBe("question:request");
+      expect(msg.requestId).toBe("req-1");
+      ws.close();
+    });
+
+    it("forwards permission_request for regular tools as permission:request", async () => {
+      const session = manager.createSession("/tmp");
+      const ws = await connectWs();
+      await waitForConnect(ws, session.id);
+
+      const s = (manager as any).sessions.get(session.id)!;
+      s.emitter.emit("event", session.id, {
+        type: "permission_request",
+        toolName: "Bash",
+        requestId: "req-2",
+        toolInput: "rm -rf /",
+        rawToolInput: { command: "rm -rf /" },
+      });
+      const msg = await readMessage(ws);
+      expect(msg.type).toBe("permission:request");
+      expect(msg.toolName).toBe("Bash");
+      ws.close();
+    });
+
+    it("skips rate_limit event without rateLimitInfo", async () => {
+      const session = manager.createSession("/tmp");
+      const ws = await connectWs();
+      await waitForConnect(ws, session.id);
+
+      const s = (manager as any).sessions.get(session.id)!;
+      s.emitter.emit("event", session.id, { type: "rate_limit" });
+      // Should not send anything - verify by emitting another event
+      s.emitter.emit("event", session.id, { type: "text_delta", text: "check" });
+      const msg = await readMessage(ws);
+      expect(msg.type).toBe("assistant:text");
+      ws.close();
+    });
+
+    it("skips prompt_suggestion event without suggestions", async () => {
+      const session = manager.createSession("/tmp");
+      const ws = await connectWs();
+      await waitForConnect(ws, session.id);
+
+      const s = (manager as any).sessions.get(session.id)!;
+      s.emitter.emit("event", session.id, { type: "prompt_suggestion" });
+      s.emitter.emit("event", session.id, { type: "text_delta", text: "check" });
+      const msg = await readMessage(ws);
+      expect(msg.type).toBe("assistant:text");
+      ws.close();
+    });
+
+    it("skips task_update event without taskInfo", async () => {
+      const session = manager.createSession("/tmp");
+      const ws = await connectWs();
+      await waitForConnect(ws, session.id);
+
+      const s = (manager as any).sessions.get(session.id)!;
+      s.emitter.emit("event", session.id, { type: "task_update" });
+      s.emitter.emit("event", session.id, { type: "text_delta", text: "check" });
+      const msg = await readMessage(ws);
+      expect(msg.type).toBe("assistant:text");
+      ws.close();
+    });
+
+    it("skips init event without initData", async () => {
+      const session = manager.createSession("/tmp");
+      const ws = await connectWs();
+      await waitForConnect(ws, session.id);
+
+      const s = (manager as any).sessions.get(session.id)!;
+      s.emitter.emit("event", session.id, { type: "init" });
+      s.emitter.emit("event", session.id, { type: "text_delta", text: "check" });
+      const msg = await readMessage(ws);
+      expect(msg.type).toBe("assistant:text");
+      ws.close();
+    });
+
+    it("forwards message_done with message", async () => {
+      const session = manager.createSession("/tmp");
+      const ws = await connectWs();
+      await waitForConnect(ws, session.id);
+
+      const s = (manager as any).sessions.get(session.id)!;
+      s.emitter.emit("event", session.id, {
+        type: "message_done",
+        message: { id: "m1", role: "assistant", content: "done", toolUses: [], blocks: [] },
+      });
+      const msg = await readMessage(ws);
+      expect(msg.type).toBe("assistant:message_done");
+      ws.close();
+    });
+
+    it("skips message_done without message", async () => {
+      const session = manager.createSession("/tmp");
+      const ws = await connectWs();
+      await waitForConnect(ws, session.id);
+
+      const s = (manager as any).sessions.get(session.id)!;
+      s.emitter.emit("event", session.id, { type: "message_done" });
+      s.emitter.emit("event", session.id, { type: "text_delta", text: "check" });
+      const msg = await readMessage(ws);
+      expect(msg.type).toBe("assistant:text");
+      ws.close();
+    });
+  });
+
+  describe("session:connect with bypass, plan mode, model, thinking level", () => {
+    function collectUntilQueued(ws: WebSocket, sessionId: string): Promise<Record<string, unknown>[]> {
+      return new Promise((resolve) => {
+        const messages: Record<string, unknown>[] = [];
+        const handler = (data: Buffer) => {
+          const msg = JSON.parse(data.toString());
+          messages.push(msg);
+          if (msg.type === "session:queued" && msg.sessionId === sessionId) {
+            ws.removeListener("message", handler);
+            resolve(messages);
+          }
+        };
+        ws.on("message", handler);
+      });
+    }
+
+    it("sends bypass_state::on when bypass is active", async () => {
+      const session = manager.createSession("/tmp");
+      manager.setBypassAllPermissions(session.id);
+      const ws = await connectWs();
+
+      const msgsPromise = collectUntilQueued(ws, session.id);
+      ws.send(JSON.stringify({ type: "session:connect", sessionId: session.id }));
+      const msgs = await msgsPromise;
+
+      const systemMsgs = msgs.filter((m) => m.type === "session:system");
+      expect(systemMsgs.some((m) => m.text === "__bypass_state::on")).toBe(true);
+      ws.close();
+    });
+
+    it("sends plan_state::on when plan mode is active", async () => {
+      const session = manager.createSession("/tmp");
+      manager.setPlanMode(session.id);
+      const ws = await connectWs();
+
+      const msgsPromise = collectUntilQueued(ws, session.id);
+      ws.send(JSON.stringify({ type: "session:connect", sessionId: session.id }));
+      const msgs = await msgsPromise;
+
+      const systemMsgs = msgs.filter((m) => m.type === "session:system");
+      expect(systemMsgs.some((m) => m.text === "__plan_state::on")).toBe(true);
+      ws.close();
+    });
+
+    it("sends __model:: when model is not sonnet", async () => {
+      const session = manager.createSession("/tmp");
+      manager.setModel(session.id, "opus");
+      const ws = await connectWs();
+
+      const msgsPromise = collectUntilQueued(ws, session.id);
+      ws.send(JSON.stringify({ type: "session:connect", sessionId: session.id }));
+      const msgs = await msgsPromise;
+
+      const systemMsgs = msgs.filter((m) => m.type === "session:system");
+      expect(systemMsgs.some((m) => (m.text as string).includes("__model::opus"))).toBe(true);
+      ws.close();
+    });
+
+    it("sends __thinking_level:: when level is not high", async () => {
+      const session = manager.createSession("/tmp");
+      manager.setThinkingLevel(session.id, "low");
+      const ws = await connectWs();
+
+      const msgsPromise = collectUntilQueued(ws, session.id);
+      ws.send(JSON.stringify({ type: "session:connect", sessionId: session.id }));
+      const msgs = await msgsPromise;
+
+      const systemMsgs = msgs.filter((m) => m.type === "session:system");
+      expect(systemMsgs.some((m) => (m.text as string).includes("__thinking_level::low"))).toBe(true);
+      ws.close();
+    });
+
+    it("sends __compact::start when compacting", async () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      s.compacting = true;
+      const ws = await connectWs();
+
+      const msgsPromise = collectUntilQueued(ws, session.id);
+      ws.send(JSON.stringify({ type: "session:connect", sessionId: session.id }));
+      const msgs = await msgsPromise;
+
+      const systemMsgs = msgs.filter((m) => m.type === "session:system");
+      expect(systemMsgs.some((m) => m.text === "__compact::start")).toBe(true);
+      ws.close();
+    });
+
+    it("sends initData when available", async () => {
+      const session = manager.createSession("/tmp");
+      manager.setInitData(session.id, {
+        slashCommands: ["/test"],
+        skills: [],
+        agents: [],
+        version: "1.0",
+        model: "opus",
+        mcpServers: [],
+      });
+      const ws = await connectWs();
+
+      const msgsPromise = collectUntilQueued(ws, session.id);
+      ws.send(JSON.stringify({ type: "session:connect", sessionId: session.id }));
+      const msgs = await msgsPromise;
+
+      expect(msgs.some((m) => m.type === "session:init")).toBe(true);
+      ws.close();
+    });
+
+    it("sends todos when available", async () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      s.todoItems = [{ content: "task 1", status: "pending" }];
+      const ws = await connectWs();
+
+      const msgsPromise = collectUntilQueued(ws, session.id);
+      ws.send(JSON.stringify({ type: "session:connect", sessionId: session.id }));
+      const msgs = await msgsPromise;
+
+      const todoMsgs = msgs.filter((m) => m.type === "session:todos");
+      expect(todoMsgs.length).toBeGreaterThan(0);
+      ws.close();
+    });
+
+    it("re-emits pending permission requests", async () => {
+      const session = manager.createSession("/tmp");
+      manager.addPendingRequest(session.id, {
+        type: "permission",
+        requestId: "perm-1",
+        toolName: "Bash",
+        toolInput: "rm -rf /",
+      });
+      const ws = await connectWs();
+
+      const messages: Record<string, unknown>[] = [];
+      const collected = new Promise<void>((resolve) => {
+        const handler = (data: Buffer) => {
+          const msg = JSON.parse(data.toString());
+          messages.push(msg);
+          if (msg.type === "permission:request") {
+            ws.removeListener("message", handler);
+            resolve();
+          }
+        };
+        ws.on("message", handler);
+      });
+      ws.send(JSON.stringify({ type: "session:connect", sessionId: session.id }));
+      await collected;
+
+      expect(messages.some((m) => m.type === "permission:request")).toBe(true);
+      ws.close();
+    });
+
+    it("re-emits pending question requests", async () => {
+      const session = manager.createSession("/tmp");
+      manager.addPendingRequest(session.id, {
+        type: "question",
+        requestId: "q-1",
+        toolName: "AskUserQuestion",
+        toolInput: "What?",
+      });
+      const ws = await connectWs();
+
+      const messages: Record<string, unknown>[] = [];
+      const collected = new Promise<void>((resolve) => {
+        const handler = (data: Buffer) => {
+          const msg = JSON.parse(data.toString());
+          messages.push(msg);
+          if (msg.type === "question:request") {
+            ws.removeListener("message", handler);
+            resolve();
+          }
+        };
+        ws.on("message", handler);
+      });
+      ws.send(JSON.stringify({ type: "session:connect", sessionId: session.id }));
+      await collected;
+
+      expect(messages.some((m) => m.type === "question:request")).toBe(true);
+      ws.close();
+    });
+  });
+
+  describe("session:connect with lastMessageId", () => {
+    function waitForHistory(ws: WebSocket, sessionId: string): Promise<Record<string, unknown>> {
+      return new Promise((resolve) => {
+        const handler = (data: Buffer) => {
+          const msg = JSON.parse(data.toString());
+          if (msg.type === "history" && msg.sessionId === sessionId) {
+            ws.removeListener("message", handler);
+            resolve(msg);
+          }
+        };
+        ws.on("message", handler);
+      });
+    }
+
+    it("sends full history when lastMessageId is not provided", async () => {
+      const session = manager.createSession("/tmp");
+      const ws = await connectWs();
+
+      const histPromise = waitForHistory(ws, session.id);
+      ws.send(JSON.stringify({ type: "session:connect", sessionId: session.id }));
+      const hist = await histPromise;
+      expect(hist.delta).toBeUndefined();
+      ws.close();
+    });
+  });
+
+  describe("handleParsedEvent fallback values", () => {
+    function waitForConnect(ws: WebSocket, sessionId: string): Promise<void> {
+      return new Promise((resolve) => {
+        const handler = (data: Buffer) => {
+          const msg = JSON.parse(data.toString());
+          if (msg.type === "session:queued" && msg.sessionId === sessionId) {
+            ws.removeListener("message", handler);
+            resolve();
+          }
+        };
+        ws.on("message", handler);
+        ws.send(JSON.stringify({ type: "session:connect", sessionId }));
+      });
+    }
+
+    it("uses empty string fallbacks for thinking event with missing text", async () => {
+      const session = manager.createSession("/tmp");
+      const ws = await connectWs();
+      await waitForConnect(ws, session.id);
+
+      const s = (manager as any).sessions.get(session.id)!;
+      s.emitter.emit("event", session.id, { type: "thinking" });
+      const msg = await readMessage(ws);
+      expect(msg.type).toBe("assistant:thinking");
+      expect(msg.text).toBe("");
+      ws.close();
+    });
+
+    it("uses empty string fallbacks for text_delta with missing text", async () => {
+      const session = manager.createSession("/tmp");
+      const ws = await connectWs();
+      await waitForConnect(ws, session.id);
+
+      const s = (manager as any).sessions.get(session.id)!;
+      s.emitter.emit("event", session.id, { type: "text_delta" });
+      const msg = await readMessage(ws);
+      expect(msg.type).toBe("assistant:text");
+      expect(msg.text).toBe("");
+      ws.close();
+    });
+
+    it("uses empty string fallbacks for tool_use_start with missing fields", async () => {
+      const session = manager.createSession("/tmp");
+      const ws = await connectWs();
+      await waitForConnect(ws, session.id);
+
+      const s = (manager as any).sessions.get(session.id)!;
+      s.emitter.emit("event", session.id, { type: "tool_use_start" });
+      const msg = await readMessage(ws);
+      expect(msg.type).toBe("assistant:tool_use");
+      expect(msg.name).toBe("");
+      expect(msg.input).toBe("");
+      expect(msg.toolId).toBe("");
+      ws.close();
+    });
+
+    it("uses empty string fallbacks for tool_done with missing fields", async () => {
+      const session = manager.createSession("/tmp");
+      const ws = await connectWs();
+      await waitForConnect(ws, session.id);
+
+      const s = (manager as any).sessions.get(session.id)!;
+      s.emitter.emit("event", session.id, { type: "tool_done" });
+      const msg = await readMessage(ws);
+      expect(msg.type).toBe("assistant:tool_use");
+      expect(msg.name).toBe("");
+      expect(msg.input).toBe("");
+      expect(msg.toolId).toBe("");
+      ws.close();
+    });
+
+    it("uses empty string fallbacks for tool_result with missing fields", async () => {
+      const session = manager.createSession("/tmp");
+      const ws = await connectWs();
+      await waitForConnect(ws, session.id);
+
+      const s = (manager as any).sessions.get(session.id)!;
+      s.emitter.emit("event", session.id, { type: "tool_result" });
+      const msg = await readMessage(ws);
+      expect(msg.type).toBe("assistant:tool_result");
+      expect(msg.toolId).toBe("");
+      expect(msg.output).toBe("");
+      ws.close();
+    });
+
+    it("uses empty string/array fallbacks for tool_children with missing fields", async () => {
+      const session = manager.createSession("/tmp");
+      const ws = await connectWs();
+      await waitForConnect(ws, session.id);
+
+      const s = (manager as any).sessions.get(session.id)!;
+      s.emitter.emit("event", session.id, { type: "tool_children" });
+      const msg = await readMessage(ws);
+      expect(msg.type).toBe("assistant:tool_children");
+      expect(msg.messageId).toBe("");
+      expect(msg.toolId).toBe("");
+      expect(msg.children).toEqual([]);
+      ws.close();
+    });
+
+    it("uses empty string fallback for tool_progress with missing fields", async () => {
+      const session = manager.createSession("/tmp");
+      const ws = await connectWs();
+      await waitForConnect(ws, session.id);
+
+      const s = (manager as any).sessions.get(session.id)!;
+      s.emitter.emit("event", session.id, { type: "tool_progress" });
+      const msg = await readMessage(ws);
+      expect(msg.type).toBe("assistant:tool_progress");
+      expect(msg.toolId).toBe("");
+      expect(msg.content).toBe("");
+      ws.close();
+    });
+
+    it("forwards permission_request for ExitPlanMode with planFilePath", async () => {
+      const session = manager.createSession("/tmp");
+      const ws = await connectWs();
+      await waitForConnect(ws, session.id);
+
+      const s = (manager as any).sessions.get(session.id)!;
+      s.emitter.emit("event", session.id, {
+        type: "permission_request",
+        toolName: "ExitPlanMode",
+        requestId: "req-plan",
+        toolInput: "exit plan",
+        rawToolInput: { action: "exit" },
+      });
+      const msg = await readMessage(ws);
+      expect(msg.type).toBe("permission:request");
+      expect(msg.toolName).toBe("ExitPlanMode");
+      expect("planFilePath" in msg).toBe(true);
+      ws.close();
+    });
+
+    it("handles permission_request without requestId or rawToolInput", async () => {
+      const session = manager.createSession("/tmp");
+      const ws = await connectWs();
+      await waitForConnect(ws, session.id);
+
+      const s = (manager as any).sessions.get(session.id)!;
+      s.emitter.emit("event", session.id, {
+        type: "permission_request",
+        toolName: "Bash",
+        toolInput: "ls",
+      });
+      const msg = await readMessage(ws);
+      expect(msg.type).toBe("permission:request");
+      expect(msg.requestId).toBe("");
+      ws.close();
+    });
+
+    it("task_update with non-progress status does not set activity", async () => {
+      const session = manager.createSession("/tmp");
+      const ws = await connectWs();
+      await waitForConnect(ws, session.id);
+
+      const s = (manager as any).sessions.get(session.id)!;
+      s.emitter.emit("event", session.id, {
+        type: "task_update",
+        taskInfo: { taskId: "t1", toolUseId: "tu1", status: "done", description: "finished", summary: "all done" },
+      });
+      const msg = await readMessage(ws);
+      expect(msg.type).toBe("session:task_update");
+      const task = msg.task as Record<string, unknown>;
+      expect(task.status).toBe("done");
+      expect(task.activity).toBeUndefined();
+      expect(task.summary).toBe("all done");
+      ws.close();
+    });
+  });
+
+  describe("session:connect edge cases", () => {
+    function collectUntilQueued(ws: WebSocket, sessionId: string): Promise<Record<string, unknown>[]> {
+      return new Promise((resolve) => {
+        const messages: Record<string, unknown>[] = [];
+        const handler = (data: Buffer) => {
+          const msg = JSON.parse(data.toString());
+          messages.push(msg);
+          if (msg.type === "session:queued" && msg.sessionId === sessionId) {
+            ws.removeListener("message", handler);
+            resolve(messages);
+          }
+        };
+        ws.on("message", handler);
+      });
+    }
+
+    it("sends streaming snapshot when session is running with snapshot", async () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      s.info.status = "running";
+      s.streamingSnapshot = { messageId: "m1", content: "partial", toolUses: [], blocks: [] };
+
+      const ws = await connectWs();
+      const messages: Record<string, unknown>[] = [];
+      const collected = new Promise<void>((resolve) => {
+        const handler = (data: Buffer) => {
+          const msg = JSON.parse(data.toString());
+          messages.push(msg);
+          if (msg.type === "session:queued") {
+            ws.removeListener("message", handler);
+            resolve();
+          }
+        };
+        ws.on("message", handler);
+      });
+      ws.send(JSON.stringify({ type: "session:connect", sessionId: session.id }));
+      await collected;
+
+      expect(messages.some((m) => m.type === "session:streaming_snapshot")).toBe(true);
+      ws.close();
+    });
+
+    it("sends usage when available", async () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      s.contextUsage = { inputTokens: 100, outputTokens: 50, cacheCreation: 0, cacheRead: 0, contextWindow: 200000 };
+
+      const ws = await connectWs();
+      const msgsPromise = collectUntilQueued(ws, session.id);
+      ws.send(JSON.stringify({ type: "session:connect", sessionId: session.id }));
+      const msgs = await msgsPromise;
+
+      expect(msgs.some((m) => m.type === "session:usage")).toBe(true);
+      ws.close();
+    });
+
+    it("connects with cwd using getSessionByCwd", async () => {
+      const session = manager.createSession("/tmp");
+      const ws = await connectWs();
+
+      const msgsPromise = collectUntilQueued(ws, session.id);
+      ws.send(JSON.stringify({ type: "session:connect", sessionId: session.id, cwd: "/tmp" }));
+      const msgs = await msgsPromise;
+
+      expect(msgs.some((m) => m.type === "session:connected")).toBe(true);
+      ws.close();
+    });
+
+    it("sends lastMessageId in connect and gets history response", async () => {
+      const session = manager.createSession("/tmp");
+      const ws = await connectWs();
+
+      const histPromise = new Promise<Record<string, unknown>>((resolve) => {
+        const handler = (data: Buffer) => {
+          const msg = JSON.parse(data.toString());
+          if (msg.type === "history") {
+            ws.removeListener("message", handler);
+            resolve(msg);
+          }
+        };
+        ws.on("message", handler);
+      });
+      ws.send(JSON.stringify({ type: "session:connect", sessionId: session.id, lastMessageId: "nonexistent-id" }));
+      const hist = await histPromise;
+
+      expect(hist.type).toBe("history");
+      expect(Array.isArray(hist.messages)).toBe(true);
+      ws.close();
+    });
+  });
+
+  describe("session:interrupt with queue pause", () => {
+    function waitForConnect(ws: WebSocket, sessionId: string): Promise<void> {
+      return new Promise((resolve) => {
+        const handler = (data: Buffer) => {
+          const msg = JSON.parse(data.toString());
+          if (msg.type === "session:queued" && msg.sessionId === sessionId) {
+            ws.removeListener("message", handler);
+            resolve();
+          }
+        };
+        ws.on("message", handler);
+        ws.send(JSON.stringify({ type: "session:connect", sessionId }));
+      });
+    }
+
+    it("sends queue pause state after interrupt when queue is paused", async () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      s.info.status = "running";
+      s.queuePaused = true;
+
+      const ws = await connectWs();
+      await waitForConnect(ws, session.id);
+
+      ws.send(JSON.stringify({ type: "session:interrupt", sessionId: session.id }));
+      const msg = await readMessage(ws);
+      expect(msg.type).toBe("session:queued");
+      expect(msg.paused).toBe(true);
+      ws.close();
+    });
+  });
+
+  describe("permission:response with allow_always", () => {
+    function waitForConnect(ws: WebSocket, sessionId: string): Promise<void> {
+      return new Promise((resolve) => {
+        const handler = (data: Buffer) => {
+          const msg = JSON.parse(data.toString());
+          if (msg.type === "session:queued" && msg.sessionId === sessionId) {
+            ws.removeListener("message", handler);
+            resolve();
+          }
+        };
+        ws.on("message", handler);
+        ws.send(JSON.stringify({ type: "session:connect", sessionId }));
+      });
+    }
+
+    it("handles allow_always with valid suggestion index", async () => {
+      const session = manager.createSession("/tmp");
+      const ws = await connectWs();
+      await waitForConnect(ws, session.id);
+
+      const s = (manager as any).sessions.get(session.id)!;
+      s.emitter.emit("event", session.id, {
+        type: "permission_request",
+        toolName: "Bash",
+        requestId: "req-sug",
+        toolInput: "ls",
+        rawToolInput: { command: "ls" },
+        permissionSuggestions: [{ tool: "Bash", input: { command: "ls" } }],
+      });
+      const permMsg = await readMessage(ws);
+      expect(permMsg.type).toBe("permission:request");
+
+      ws.send(JSON.stringify({
+        type: "permission:response",
+        sessionId: session.id,
+        requestId: "req-sug",
+        allowed: true,
+        permissionMode: "allow_always",
+        suggestionIndex: 0,
+      }));
+      await new Promise((r) => setTimeout(r, 50));
+      ws.close();
+    });
+
+    it("handles allow_always without suggestion index", async () => {
+      const session = manager.createSession("/tmp");
+      const ws = await connectWs();
+      await waitForConnect(ws, session.id);
+
+      const s = (manager as any).sessions.get(session.id)!;
+      s.emitter.emit("event", session.id, {
+        type: "permission_request",
+        toolName: "Bash",
+        requestId: "req-sug2",
+        toolInput: "ls",
+        rawToolInput: { command: "ls" },
+        permissionSuggestions: [{ tool: "Bash", input: { command: "ls" } }],
+      });
+      await readMessage(ws);
+
+      ws.send(JSON.stringify({
+        type: "permission:response",
+        sessionId: session.id,
+        requestId: "req-sug2",
+        allowed: true,
+        permissionMode: "allow_always",
+      }));
+      await new Promise((r) => setTimeout(r, 50));
+      ws.close();
+    });
+  });
+
+  describe("permission:response and question:response", () => {
+    function waitForConnect(ws: WebSocket, sessionId: string): Promise<void> {
+      return new Promise((resolve) => {
+        const handler = (data: Buffer) => {
+          const msg = JSON.parse(data.toString());
+          if (msg.type === "session:queued" && msg.sessionId === sessionId) {
+            ws.removeListener("message", handler);
+            resolve();
+          }
+        };
+        ws.on("message", handler);
+        ws.send(JSON.stringify({ type: "session:connect", sessionId }));
+      });
+    }
+
+    it("handles permission:response with allow_all mode", async () => {
+      const session = manager.createSession("/tmp");
+      const ws = await connectWs();
+      await waitForConnect(ws, session.id);
+
+      ws.send(JSON.stringify({
+        type: "permission:response",
+        sessionId: session.id,
+        requestId: "req-1",
+        allowed: true,
+        permissionMode: "allow_all",
+      }));
+      await new Promise((r) => setTimeout(r, 50));
+      expect(manager.isBypassActive(session.id)).toBe(true);
+      ws.close();
+    });
+
+    it("handles question:response", async () => {
+      const session = manager.createSession("/tmp");
+      const ws = await connectWs();
+      await waitForConnect(ws, session.id);
+
+      ws.send(JSON.stringify({
+        type: "question:response",
+        sessionId: session.id,
+        requestId: "req-1",
+        answers: ["yes"],
+      }));
+      await new Promise((r) => setTimeout(r, 50));
+      // No crash, question handled
+      ws.close();
+    });
+  });
 });

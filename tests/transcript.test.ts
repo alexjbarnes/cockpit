@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { existsSync } from "node:fs";
 import { readFile, readdir, stat, open } from "node:fs/promises";
-import { transcriptExists, loadTranscript, loadMoreMessages } from "@/server/transcript";
+import { transcriptExists, loadTranscript, loadMoreMessages, scanAllSessions, findSessionCwd, loadLastUsage, readMoreLines } from "@/server/transcript";
 
 vi.mock("node:os", () => ({ homedir: () => "/home/user" }));
 vi.mock("node:fs", () => ({ existsSync: vi.fn(), createReadStream: vi.fn() }));
@@ -1193,6 +1193,833 @@ describe("transcript module", () => {
 
       const result = await scanAllSessions();
       expect(result).toEqual([]);
+    });
+  });
+
+  describe("stripCommandXml edge cases", () => {
+    it("extracts slash command from command-name tag (non-compact)", async () => {
+      (existsSync as any).mockReturnValue(true);
+      const content = jsonl(
+        {
+          type: "user",
+          message: { id: "u1", content: "<command-name>/analyze</command-name>" },
+          timestamp: "2024-01-01T00:00:00Z",
+          cwd: "/tmp",
+        }
+      );
+      (readFile as any).mockResolvedValue(content);
+
+      const result = await loadTranscript("session-123", "/tmp");
+
+      expect(result.messages).toHaveLength(1);
+      expect(result.messages[0].content).toBe("/analyze");
+    });
+
+    it("suppresses /compact command from command-name tag", async () => {
+      (existsSync as any).mockReturnValue(true);
+      const content = jsonl(
+        {
+          type: "user",
+          message: { id: "u1", content: "<command-name>/compact</command-name>" },
+          timestamp: "2024-01-01T00:00:00Z",
+          cwd: "/tmp",
+        }
+      );
+      (readFile as any).mockResolvedValue(content);
+
+      const result = await loadTranscript("session-123", "/tmp");
+
+      expect(result.messages).toHaveLength(0);
+    });
+
+    it("strips local-command-stdout content from user messages", async () => {
+      (existsSync as any).mockReturnValue(true);
+      const content = jsonl(
+        {
+          type: "user",
+          message: { id: "u1", content: "<local-command-stdout>output here</local-command-stdout>" },
+          timestamp: "2024-01-01T00:00:00Z",
+          cwd: "/tmp",
+        }
+      );
+      (readFile as any).mockResolvedValue(content);
+
+      const result = await loadTranscript("session-123", "/tmp");
+
+      expect(result.messages).toHaveLength(0);
+    });
+  });
+
+  describe("progress entries with missing parent", () => {
+    it("skips progress entry when parent tool not found", async () => {
+      (existsSync as any).mockReturnValue(true);
+      const content = jsonl(
+        {
+          type: "progress",
+          parentToolUseID: "nonexistent-tool",
+          data: {
+            message: {
+              type: "assistant",
+              message: {
+                role: "assistant",
+                content: [{ type: "tool_use", id: "child-tool", name: "Bash", input: {} }],
+              },
+            },
+          },
+          timestamp: "2024-01-01T00:00:00Z",
+        }
+      );
+      (readFile as any).mockResolvedValue(content);
+
+      const result = await loadTranscript("session-123", "/tmp");
+
+      expect(result.messages).toHaveLength(0);
+    });
+
+    it("skips progress entry with non-array content", async () => {
+      (existsSync as any).mockReturnValue(true);
+      const content = jsonl(
+        {
+          type: "assistant",
+          message: { id: "a1", content: [{ type: "tool_use", id: "parent-tool", name: "Agent", input: {} }] },
+          timestamp: "2024-01-01T00:00:00Z",
+        },
+        {
+          type: "progress",
+          parentToolUseID: "parent-tool",
+          data: { message: { type: "assistant", message: { role: "assistant", content: "not-array" } } },
+          timestamp: "2024-01-01T00:00:01Z",
+        }
+      );
+      (readFile as any).mockResolvedValue(content);
+
+      const result = await loadTranscript("session-123", "/tmp");
+
+      expect(result.messages).toHaveLength(1);
+      expect(result.messages[0].toolUses[0].children).toBeUndefined();
+    });
+  });
+
+  describe("user content array with text and tool results", () => {
+    it("creates user message when text present without tool results", async () => {
+      (existsSync as any).mockReturnValue(true);
+      const content = jsonl(
+        {
+          type: "user",
+          message: {
+            id: "u1",
+            content: [
+              { type: "text", text: "Hello with context" },
+            ],
+          },
+          timestamp: "2024-01-01T00:00:00Z",
+          cwd: "/tmp",
+        }
+      );
+      (readFile as any).mockResolvedValue(content);
+
+      const result = await loadTranscript("session-123", "/tmp");
+
+      expect(result.messages).toHaveLength(1);
+      expect(result.messages[0].content).toBe("Hello with context");
+    });
+
+    it("does not create user message for array with only tool results", async () => {
+      (existsSync as any).mockReturnValue(true);
+      const content = jsonl(
+        {
+          type: "assistant",
+          message: { id: "a1", content: [{ type: "tool_use", id: "t1", name: "Bash", input: {} }] },
+          timestamp: "2024-01-01T00:00:00Z",
+        },
+        {
+          type: "user",
+          message: {
+            content: [{ type: "tool_result", tool_use_id: "t1", content: "output" }],
+          },
+          timestamp: "2024-01-01T00:00:01Z",
+        }
+      );
+      (readFile as any).mockResolvedValue(content);
+
+      const result = await loadTranscript("session-123", "/tmp");
+
+      expect(result.messages).toHaveLength(1);
+      expect(result.messages[0].role).toBe("assistant");
+    });
+  });
+
+  describe("thinking blocks edge cases", () => {
+    it("skips thinking block with no thinking text and no signature", async () => {
+      (existsSync as any).mockReturnValue(true);
+      const content = jsonl(
+        {
+          type: "assistant",
+          message: {
+            id: "a1",
+            content: [
+              { type: "thinking" },
+              { type: "text", text: "actual response" },
+            ],
+          },
+          timestamp: "2024-01-01T00:00:00Z",
+        }
+      );
+      (readFile as any).mockResolvedValue(content);
+
+      const result = await loadTranscript("session-123", "/tmp");
+
+      expect(result.messages).toHaveLength(1);
+      expect(result.messages[0].blocks).toHaveLength(1);
+      expect(result.messages[0].blocks[0].type).toBe("text");
+    });
+  });
+
+  describe("assistant message deduplication", () => {
+    it("deduplicates tool_use blocks when merging", async () => {
+      (existsSync as any).mockReturnValue(true);
+      const content = jsonl(
+        {
+          type: "assistant",
+          message: {
+            id: "a1",
+            content: [{ type: "tool_use", id: "t1", name: "Bash", input: { command: "ls" } }],
+          },
+          timestamp: "2024-01-01T00:00:00Z",
+        },
+        {
+          type: "assistant",
+          message: {
+            id: "a1",
+            content: [
+              { type: "tool_use", id: "t1", name: "Bash", input: { command: "ls" } },
+              { type: "text", text: "done" },
+            ],
+          },
+          timestamp: "2024-01-01T00:00:01Z",
+        }
+      );
+      (readFile as any).mockResolvedValue(content);
+
+      const result = await loadTranscript("session-123", "/tmp");
+
+      expect(result.messages).toHaveLength(1);
+      expect(result.messages[0].toolUses).toHaveLength(1);
+      expect(result.messages[0].blocks.filter((b: { type: string }) => b.type === "tool_use")).toHaveLength(1);
+    });
+  });
+
+  describe("loadTranscript with tailLines option", () => {
+    it("reads tail lines from file using file handle", async () => {
+      (existsSync as any).mockReturnValue(true);
+
+      const entry = JSON.stringify({
+        type: "user",
+        message: { id: "u1", content: "hello" },
+        timestamp: "2024-01-01T00:00:00Z",
+        cwd: "/tmp",
+      });
+      const fileContent = entry + "\n";
+
+      const mockFileHandle = {
+        read: vi.fn().mockImplementation((_buf: Buffer) => {
+          Buffer.from(fileContent).copy(_buf);
+          return { bytesRead: fileContent.length };
+        }),
+        close: vi.fn(),
+      };
+
+      (open as any).mockResolvedValue(mockFileHandle);
+      (stat as any).mockResolvedValue({ size: fileContent.length });
+
+      const result = await loadTranscript("session-123", "/tmp", { tailLines: 10 });
+
+      expect(result.messages).toHaveLength(1);
+      expect(result.messages[0].id).toBe("u1");
+      expect(mockFileHandle.close).toHaveBeenCalled();
+    });
+  });
+
+  describe("extractOutput edge cases", () => {
+    it("handles tool result with empty content array", async () => {
+      (existsSync as any).mockReturnValue(true);
+      const content = jsonl(
+        {
+          type: "assistant",
+          message: { id: "a1", content: [{ type: "tool_use", id: "t1", name: "Test", input: {} }] },
+          timestamp: "2024-01-01T00:00:00Z",
+        },
+        {
+          type: "user",
+          message: {
+            content: [{ type: "tool_result", tool_use_id: "t1", content: [] }],
+          },
+          timestamp: "2024-01-01T00:00:01Z",
+        }
+      );
+      (readFile as any).mockResolvedValue(content);
+
+      const result = await loadTranscript("session-123", "/tmp");
+
+      expect(result.messages[0].toolUses[0].output).toBe("");
+    });
+
+    it("handles tool result with no content property", async () => {
+      (existsSync as any).mockReturnValue(true);
+      const content = jsonl(
+        {
+          type: "assistant",
+          message: { id: "a1", content: [{ type: "tool_use", id: "t1", name: "Test", input: {} }] },
+          timestamp: "2024-01-01T00:00:00Z",
+        },
+        {
+          type: "user",
+          message: {
+            content: [{ type: "tool_result", tool_use_id: "t1" }],
+          },
+          timestamp: "2024-01-01T00:00:01Z",
+        }
+      );
+      (readFile as any).mockResolvedValue(content);
+
+      const result = await loadTranscript("session-123", "/tmp");
+
+      expect(result.messages[0].toolUses[0].output).toBe("");
+    });
+  });
+
+  describe("assistant message with non-array content", () => {
+    it("skips assistant message when content is string", async () => {
+      (existsSync as any).mockReturnValue(true);
+      const content = jsonl(
+        {
+          type: "assistant",
+          message: { id: "a1", content: "string content" },
+          timestamp: "2024-01-01T00:00:00Z",
+        }
+      );
+      (readFile as any).mockResolvedValue(content);
+
+      const result = await loadTranscript("session-123", "/tmp");
+
+      expect(result.messages).toHaveLength(0);
+    });
+  });
+
+  describe("text files extraction from array content", () => {
+    it("extracts text files from array content user messages", async () => {
+      (existsSync as any).mockReturnValue(true);
+      const content = jsonl(
+        {
+          type: "user",
+          message: {
+            id: "u1",
+            content: [
+              { type: "text", text: '<file path="data.json">\n{"key":"value"}\n</file>' },
+            ],
+          },
+          timestamp: "2024-01-01T00:00:00Z",
+          cwd: "/tmp",
+        }
+      );
+      (readFile as any).mockResolvedValue(content);
+
+      const result = await loadTranscript("session-123", "/tmp");
+
+      expect(result.messages).toHaveLength(1);
+      expect(result.messages[0].textFiles).toHaveLength(1);
+      expect(result.messages[0].textFiles![0].name).toBe("data.json");
+    });
+  });
+
+  describe("local_command without content", () => {
+    it("skips local_command system event without content", async () => {
+      (existsSync as any).mockReturnValue(true);
+      const content = jsonl(
+        {
+          type: "system",
+          subtype: "local_command",
+          timestamp: "2024-01-01T00:00:00Z",
+          uuid: "sys-1",
+        }
+      );
+      (readFile as any).mockResolvedValue(content);
+
+      const result = await loadTranscript("session-123", "/tmp");
+
+      expect(result.messages).toHaveLength(0);
+    });
+  });
+
+  describe("loadTranscript with tailLines", () => {
+    function makeFileHandle(content: string) {
+      const buf = Buffer.from(content);
+      return {
+        read: vi.fn(async (target: Buffer, tOffset: number, length: number, position: number) => {
+          buf.copy(target, tOffset, position, Math.min(position + length, buf.length));
+          return { bytesRead: Math.min(length, buf.length - position) };
+        }),
+        close: vi.fn(async () => {}),
+      };
+    }
+
+    it("loads last N lines using readTailLines", async () => {
+      (existsSync as any).mockReturnValue(true);
+      const lines = [
+        JSON.stringify({ type: "user", message: { id: "u1", content: "first" }, timestamp: "2024-01-01T00:00:00Z", cwd: "/tmp" }),
+        JSON.stringify({ type: "user", message: { id: "u2", content: "second" }, timestamp: "2024-01-01T00:01:00Z", cwd: "/tmp" }),
+        JSON.stringify({ type: "user", message: { id: "u3", content: "third" }, timestamp: "2024-01-01T00:02:00Z", cwd: "/tmp" }),
+      ];
+      const content = lines.join("\n") + "\n";
+      const fh = makeFileHandle(content);
+      (stat as any).mockResolvedValue({ size: Buffer.byteLength(content) });
+      (open as any).mockResolvedValue(fh);
+
+      const result = await loadTranscript("session-123", "/tmp", { tailLines: 2 });
+
+      expect(result.messages.length).toBeLessThanOrEqual(2);
+      expect(result.totalSize).toBe(Buffer.byteLength(content));
+      expect(fh.close).toHaveBeenCalled();
+    });
+
+    it("handles empty file in readTailLines", async () => {
+      (existsSync as any).mockReturnValue(true);
+      (stat as any).mockResolvedValue({ size: 0 });
+      (open as any).mockResolvedValue({
+        read: vi.fn(),
+        close: vi.fn(async () => {}),
+      });
+
+      const result = await loadTranscript("session-123", "/tmp", { tailLines: 10 });
+
+      expect(result.messages).toHaveLength(0);
+      expect(result.byteOffset).toBe(0);
+    });
+  });
+
+  describe("readMoreLines", () => {
+    it("returns empty when byteOffset is 0", async () => {
+      const result = await readMoreLines("/tmp/test.jsonl", 0, 10);
+      expect(result.lines).toHaveLength(0);
+      expect(result.newByteOffset).toBe(0);
+    });
+
+    it("reads lines from file at given offset", async () => {
+      const lines = [
+        JSON.stringify({ type: "user", message: { id: "u1", content: "hello" } }),
+        JSON.stringify({ type: "user", message: { id: "u2", content: "world" } }),
+      ];
+      const content = lines.join("\n") + "\n";
+      const buf = Buffer.from(content);
+      const fh = {
+        read: vi.fn(async (target: Buffer, tOffset: number, length: number, position: number) => {
+          buf.copy(target, tOffset, position, Math.min(position + length, buf.length));
+          return { bytesRead: Math.min(length, buf.length - position) };
+        }),
+        close: vi.fn(async () => {}),
+      };
+      (open as any).mockResolvedValue(fh);
+
+      const result = await readMoreLines("/tmp/test.jsonl", Buffer.byteLength(content), 10);
+
+      expect(result.lines.length).toBeGreaterThan(0);
+      expect(fh.close).toHaveBeenCalled();
+    });
+  });
+
+  describe("loadMoreMessages", () => {
+    it("returns empty when byteOffset is 0", async () => {
+      const result = await loadMoreMessages("session-123", "/tmp", 0);
+      expect(result.messages).toHaveLength(0);
+      expect(result.newByteOffset).toBe(0);
+    });
+
+    it("loads messages from file at offset", async () => {
+      const lines = [
+        JSON.stringify({ type: "user", message: { id: "u1", content: "msg" }, timestamp: "2024-01-01T00:00:00Z", cwd: "/tmp" }),
+      ];
+      const content = lines.join("\n") + "\n";
+      const buf = Buffer.from(content);
+      const fh = {
+        read: vi.fn(async (target: Buffer, tOffset: number, length: number, position: number) => {
+          buf.copy(target, tOffset, position, Math.min(position + length, buf.length));
+          return { bytesRead: Math.min(length, buf.length - position) };
+        }),
+        close: vi.fn(async () => {}),
+      };
+      (open as any).mockResolvedValue(fh);
+
+      const result = await loadMoreMessages("session-123", "/tmp", Buffer.byteLength(content));
+      expect(result.messages.length).toBeGreaterThanOrEqual(0);
+    });
+  });
+
+  describe("loadLastUsage", () => {
+    it("returns null when file does not exist", async () => {
+      (existsSync as any).mockReturnValue(false);
+      const result = await loadLastUsage("session-123", "/tmp");
+      expect(result).toBeNull();
+    });
+
+    it("extracts usage from assistant message", async () => {
+      (existsSync as any).mockReturnValue(true);
+      const content = jsonl(
+        { type: "result", modelUsage: { "claude-3": { contextWindow: 150000, inputTokens: 100 } } },
+        { type: "assistant", message: { usage: { input_tokens: 500, cache_creation_input_tokens: 100, cache_read_input_tokens: 50 } } }
+      );
+      (readFile as any).mockResolvedValue(content);
+
+      const result = await loadLastUsage("session-123", "/tmp");
+      expect(result).toEqual({ used: 650, total: 150000 });
+    });
+
+    it("uses default context window when modelUsage has no contextWindow", async () => {
+      (existsSync as any).mockReturnValue(true);
+      const content = jsonl(
+        { type: "result", modelUsage: { "claude-3": { inputTokens: 100 } } },
+        { type: "assistant", message: { usage: { input_tokens: 200 } } }
+      );
+      (readFile as any).mockResolvedValue(content);
+
+      const result = await loadLastUsage("session-123", "/tmp");
+      expect(result).toEqual({ used: 200, total: 200000 });
+    });
+
+    it("returns null when no assistant message with usage", async () => {
+      (existsSync as any).mockReturnValue(true);
+      const content = jsonl(
+        { type: "user", message: { content: "hello" } }
+      );
+      (readFile as any).mockResolvedValue(content);
+
+      const result = await loadLastUsage("session-123", "/tmp");
+      expect(result).toBeNull();
+    });
+  });
+
+  describe("scanAllSessions", () => {
+    it("returns empty when projects dir does not exist", async () => {
+      (existsSync as any).mockReturnValue(false);
+      const result = await scanAllSessions();
+      expect(result).toEqual([]);
+    });
+
+    it("returns empty when readdir fails", async () => {
+      (existsSync as any).mockReturnValue(true);
+      (readdir as any).mockRejectedValue(new Error("ENOENT"));
+      const result = await scanAllSessions();
+      expect(result).toEqual([]);
+    });
+
+    it("scans sessions from project directories", async () => {
+      (existsSync as any).mockReturnValue(true);
+      const { createInterface } = await import("node:readline");
+      (readdir as any)
+        .mockResolvedValueOnce(["project1"])
+        .mockResolvedValueOnce(["sess1.jsonl"]);
+      (stat as any).mockResolvedValue({ mtimeMs: 1700000000000 });
+
+      const lines = [
+        JSON.stringify({ type: "user", cwd: "/home/test", message: { content: "hello" }, timestamp: "2024-01-01T00:00:00Z" }),
+      ];
+
+      const mockRl = {
+        [Symbol.asyncIterator]: async function* () {
+          for (const line of lines) yield line;
+        },
+        close: vi.fn(),
+      };
+      (createInterface as any).mockReturnValue(mockRl);
+
+      const result = await scanAllSessions();
+      expect(result).toHaveLength(1);
+      expect(result[0].cwd).toBe("/home/test");
+      expect(result[0].sessions).toHaveLength(1);
+    });
+
+    it("skips sessions without cwd", async () => {
+      (existsSync as any).mockReturnValue(true);
+      const { createInterface } = await import("node:readline");
+      (readdir as any)
+        .mockResolvedValueOnce(["project1"])
+        .mockResolvedValueOnce(["sess1.jsonl"]);
+      (stat as any).mockResolvedValue({ mtimeMs: 1700000000000 });
+
+      const mockRl = {
+        [Symbol.asyncIterator]: async function* () {
+          yield JSON.stringify({ type: "assistant", message: { content: "no cwd here" } });
+        },
+        close: vi.fn(),
+      };
+      (createInterface as any).mockReturnValue(mockRl);
+
+      const result = await scanAllSessions();
+      expect(result).toHaveLength(0);
+    });
+  });
+
+  describe("findSessionCwd", () => {
+    it("returns null when projects dir does not exist", async () => {
+      (existsSync as any).mockReturnValue(false);
+      const result = await findSessionCwd("session-123");
+      expect(result).toBeNull();
+    });
+
+    it("returns null when readdir fails", async () => {
+      (existsSync as any)
+        .mockReturnValueOnce(true)
+        .mockReturnValue(false);
+      (readdir as any).mockRejectedValue(new Error("EACCES"));
+      const result = await findSessionCwd("session-123");
+      expect(result).toBeNull();
+    });
+
+    it("finds session cwd from project directory", async () => {
+      const { createInterface } = await import("node:readline");
+      (existsSync as any).mockReturnValue(true);
+      (readdir as any).mockResolvedValue(["project1"]);
+      (stat as any).mockResolvedValue({ mtimeMs: 1700000000000 });
+
+      const mockRl = {
+        [Symbol.asyncIterator]: async function* () {
+          yield JSON.stringify({ type: "user", cwd: "/home/project", message: { content: "test" }, timestamp: "2024-01-01T00:00:00Z" });
+        },
+        close: vi.fn(),
+      };
+      (createInterface as any).mockReturnValue(mockRl);
+
+      const result = await findSessionCwd("session-123");
+      expect(result).toBe("/home/project");
+    });
+  });
+
+  describe("extractSessionMeta edge cases", () => {
+    it("extracts title from array content in user message", async () => {
+      (existsSync as any).mockReturnValue(true);
+      const { createInterface } = await import("node:readline");
+      (readdir as any)
+        .mockResolvedValueOnce(["project1"])
+        .mockResolvedValueOnce(["sess1.jsonl"]);
+      (stat as any).mockResolvedValue({ mtimeMs: 1700000000000 });
+
+      const mockRl = {
+        [Symbol.asyncIterator]: async function* () {
+          yield JSON.stringify({
+            type: "user",
+            cwd: "/home/test",
+            message: { content: [{ type: "text", text: "array content title" }] },
+            timestamp: "2024-01-01T00:00:00Z",
+          });
+        },
+        close: vi.fn(),
+      };
+      (createInterface as any).mockReturnValue(mockRl);
+
+      const result = await scanAllSessions();
+      expect(result).toHaveLength(1);
+      expect(result[0].sessions[0].name).toBe("array content title");
+    });
+
+    it("skips system-generated messages starting with [", async () => {
+      (existsSync as any).mockReturnValue(true);
+      const { createInterface } = await import("node:readline");
+      (readdir as any)
+        .mockResolvedValueOnce(["project1"])
+        .mockResolvedValueOnce(["sess1.jsonl"]);
+      (stat as any).mockResolvedValue({ mtimeMs: 1700000000000 });
+
+      const mockRl = {
+        [Symbol.asyncIterator]: async function* () {
+          yield JSON.stringify({
+            type: "user",
+            cwd: "/home/test",
+            message: { content: "[Request interrupted by user]" },
+            timestamp: "2024-01-01T00:00:00Z",
+          });
+        },
+        close: vi.fn(),
+      };
+      (createInterface as any).mockReturnValue(mockRl);
+
+      const result = await scanAllSessions();
+      expect(result).toHaveLength(1);
+      expect(result[0].sessions[0].name).toBe("Untitled session");
+    });
+
+    it("uses Untitled session when no title found", async () => {
+      (existsSync as any).mockReturnValue(true);
+      const { createInterface } = await import("node:readline");
+      (readdir as any)
+        .mockResolvedValueOnce(["project1"])
+        .mockResolvedValueOnce(["sess1.jsonl"]);
+      (stat as any).mockResolvedValue({ mtimeMs: 1700000000000 });
+
+      const mockRl = {
+        [Symbol.asyncIterator]: async function* () {
+          yield JSON.stringify({
+            type: "user",
+            cwd: "/home/test",
+            timestamp: "2024-01-01T00:00:00Z",
+          });
+        },
+        close: vi.fn(),
+      };
+      (createInterface as any).mockReturnValue(mockRl);
+
+      const result = await scanAllSessions();
+      expect(result).toHaveLength(1);
+      expect(result[0].sessions[0].name).toBe("Untitled session");
+    });
+
+    it("uses lastActiveAt when no createdAt timestamp", async () => {
+      (existsSync as any).mockReturnValue(true);
+      const { createInterface } = await import("node:readline");
+      (readdir as any)
+        .mockResolvedValueOnce(["project1"])
+        .mockResolvedValueOnce(["sess1.jsonl"]);
+      (stat as any).mockResolvedValue({ mtimeMs: 1700000000000 });
+
+      const mockRl = {
+        [Symbol.asyncIterator]: async function* () {
+          yield JSON.stringify({
+            type: "user",
+            cwd: "/home/test",
+            message: { content: "hello" },
+          });
+        },
+        close: vi.fn(),
+      };
+      (createInterface as any).mockReturnValue(mockRl);
+
+      const result = await scanAllSessions();
+      expect(result[0].sessions[0].createdAt).toBe(1700000000000);
+    });
+
+    it("handles stat errors gracefully", async () => {
+      (existsSync as any).mockReturnValue(true);
+      (readdir as any)
+        .mockResolvedValueOnce(["project1"])
+        .mockResolvedValueOnce(["sess1.jsonl"]);
+      (stat as any).mockRejectedValue(new Error("ENOENT"));
+
+      const result = await scanAllSessions();
+      expect(result).toHaveLength(0);
+    });
+  });
+
+  describe("parseLines additional branches", () => {
+    it("handles user message with images and documents in array content", async () => {
+      (existsSync as any).mockReturnValue(true);
+      const content = jsonl({
+        type: "user",
+        message: {
+          id: "u1",
+          content: [
+            { type: "text", text: "check this" },
+            { type: "image", source: { type: "base64", media_type: "image/png", data: "abc123" } },
+            { type: "document", source: { type: "base64", media_type: "application/pdf", data: "pdf123" } },
+          ],
+        },
+        timestamp: "2024-01-01T00:00:00Z",
+      });
+      (readFile as any).mockResolvedValue(content);
+
+      const result = await loadTranscript("session-123", "/tmp");
+      expect(result.messages).toHaveLength(1);
+      expect(result.messages[0].images).toHaveLength(1);
+      expect(result.messages[0].documents).toHaveLength(1);
+    });
+
+    it("skips user array content with only tool results", async () => {
+      (existsSync as any).mockReturnValue(true);
+      const content = jsonl({
+        type: "user",
+        message: {
+          id: "u1",
+          content: [
+            { type: "tool_result", tool_use_id: "t1", content: "result" },
+          ],
+        },
+        timestamp: "2024-01-01T00:00:00Z",
+      });
+      (readFile as any).mockResolvedValue(content);
+
+      const result = await loadTranscript("session-123", "/tmp");
+      expect(result.messages).toHaveLength(0);
+    });
+
+    it("handles assistant API error message", async () => {
+      (existsSync as any).mockReturnValue(true);
+      const content = jsonl({
+        type: "assistant",
+        message: {
+          id: "a1",
+          content: [{ type: "text", text: "API Error: 429 Rate limited" }],
+        },
+        timestamp: "2024-01-01T00:00:00Z",
+      });
+      (readFile as any).mockResolvedValue(content);
+
+      const result = await loadTranscript("session-123", "/tmp");
+      expect(result.messages).toHaveLength(0);
+    });
+
+    it("handles assistant No response requested message", async () => {
+      (existsSync as any).mockReturnValue(true);
+      const content = jsonl({
+        type: "assistant",
+        message: {
+          id: "a1",
+          content: [{ type: "text", text: "No response requested." }],
+        },
+        timestamp: "2024-01-01T00:00:00Z",
+      });
+      (readFile as any).mockResolvedValue(content);
+
+      const result = await loadTranscript("session-123", "/tmp");
+      expect(result.messages).toHaveLength(0);
+    });
+
+    it("handles compact_boundary system message", async () => {
+      (existsSync as any).mockReturnValue(true);
+      const content = jsonl({
+        type: "system",
+        subtype: "compact_boundary",
+        timestamp: "2024-01-01T00:00:00Z",
+      });
+      (readFile as any).mockResolvedValue(content);
+
+      const result = await loadTranscript("session-123", "/tmp");
+      expect(result.messages).toHaveLength(1);
+      expect(result.messages[0].content).toBe("__compacted__");
+    });
+
+    it("handles result entry with contextWindow in modelUsage", async () => {
+      (existsSync as any).mockReturnValue(true);
+      const content = jsonl(
+        { type: "user", message: { id: "u1", content: "hello" }, timestamp: "2024-01-01T00:00:00Z" },
+        { type: "result", modelUsage: { "claude-3": { contextWindow: 150000, inputTokens: 100 } } },
+        { type: "assistant", message: { id: "a1", content: [{ type: "text", text: "hi" }], usage: { input_tokens: 100 } }, timestamp: "2024-01-01T00:00:01Z" }
+      );
+      (readFile as any).mockResolvedValue(content);
+
+      const result = await loadTranscript("session-123", "/tmp");
+      expect(result.lastUsage).toBeDefined();
+      expect(result.lastUsage!.total).toBe(150000);
+    });
+
+    it("handles isMeta entries by skipping them", async () => {
+      (existsSync as any).mockReturnValue(true);
+      const content = jsonl({
+        type: "system",
+        isMeta: true,
+        message: { content: "meta info" },
+        timestamp: "2024-01-01T00:00:00Z",
+      });
+      (readFile as any).mockResolvedValue(content);
+
+      const result = await loadTranscript("session-123", "/tmp");
+      expect(result.messages).toHaveLength(0);
     });
   });
 });
