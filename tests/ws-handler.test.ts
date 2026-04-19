@@ -22,9 +22,7 @@ import type { ParsedEvent } from "@/server/event-parser";
 import { SessionManager } from "@/server/session-manager";
 import { createWebSocketHandler } from "@/server/ws-handler";
 
-// Auth is enabled (default) so we can test rejection and acceptance
 beforeAll(async () => {
-  delete process.env.COCKPIT_DISABLE_AUTH;
   await setupPassword("test-password");
 });
 

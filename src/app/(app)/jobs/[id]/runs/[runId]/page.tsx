@@ -1,13 +1,14 @@
 "use client";
 
-import { ArrowLeft, ChevronDown, ChevronRight, ExternalLink } from "lucide-react";
+import { ArrowLeft, ChevronDown, ChevronRight, FileText, Loader2, X } from "lucide-react";
 import { useParams, useRouter } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { usePageHeader } from "@/components/app-shell";
+import { MessageBubble } from "@/components/message-bubble";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import type { JobRun, JobRunToolUse } from "@/types";
+import type { ChatMessage, JobRun, JobRunToolUse } from "@/types";
 
 function statusBadge(status: string) {
   switch (status) {
@@ -35,13 +36,13 @@ function ToolEntry({ tool }: { tool: JobRunToolUse }) {
         onClick={() => setExpanded(!expanded)}
       >
         {expanded ? <ChevronDown className="h-3 w-3 shrink-0" /> : <ChevronRight className="h-3 w-3 shrink-0" />}
-        <span className="font-mono font-medium">{tool.name}</span>
+        <span className="font-mono font-medium truncate min-w-0">{tool.name}</span>
         {tool.permitted !== undefined && (
           <Badge variant={tool.permitted ? "secondary" : "destructive"} className="text-[10px]">
             {tool.permitted ? "Allowed" : "Denied"}
           </Badge>
         )}
-        {tool.durationMs != null && <span className="text-xs text-muted-foreground ml-auto">{tool.durationMs}ms</span>}
+        {tool.durationMs != null && <span className="text-xs text-muted-foreground ml-auto shrink-0">{tool.durationMs}ms</span>}
       </button>
       {expanded && (
         <div className="border-t px-3 py-2 space-y-2">
@@ -63,6 +64,86 @@ function ToolEntry({ tool }: { tool: JobRunToolUse }) {
   );
 }
 
+function TranscriptModal({
+  jobId,
+  runId,
+  onClose,
+}: {
+  jobId: string;
+  runId: string;
+  onClose: () => void;
+}) {
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const expandedToolIds = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    fetch(`/api/jobs/${jobId}/runs/${runId}/transcript`)
+      .then((res) => {
+        if (!res.ok) throw new Error("Failed to load transcript");
+        return res.json();
+      })
+      .then((data) => {
+        setMessages(data.messages);
+        setLoading(false);
+      })
+      .catch((err) => {
+        setError(err.message);
+        setLoading(false);
+      });
+  }, [jobId, runId]);
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        onClose();
+      }
+    };
+    window.addEventListener("keydown", handler, true);
+    return () => window.removeEventListener("keydown", handler, true);
+  }, [onClose]);
+
+  const handleOverlayClick = useCallback(
+    (e: React.MouseEvent) => {
+      if (e.target === e.currentTarget) onClose();
+    },
+    [onClose],
+  );
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" onClick={handleOverlayClick}>
+      <Card className="w-full max-w-3xl flex flex-col" style={{ maxHeight: "calc(100dvh - 2rem)" }}>
+        <div className="flex items-center justify-between px-4 py-2 border-b shrink-0">
+          <span className="text-sm font-medium text-muted-foreground">Run transcript</span>
+          <Button variant="ghost" size="icon" className="h-6 w-6" onClick={onClose}>
+            <X className="h-4 w-4" />
+          </Button>
+        </div>
+        <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-4">
+          {loading && (
+            <div className="flex justify-center py-12">
+              <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+            </div>
+          )}
+          {error && <div className="text-center text-sm text-red-500 py-12">{error}</div>}
+          {!loading && messages.length === 0 && !error && (
+            <div className="text-center text-sm text-muted-foreground py-12">No transcript found for this run.</div>
+          )}
+          {!loading &&
+            messages.map((msg) => (
+              <div key={msg.id}>
+                <MessageBubble message={msg} expandedToolIds={expandedToolIds} />
+              </div>
+            ))}
+        </div>
+      </Card>
+    </div>
+  );
+}
+
 export default function RunDetailPage() {
   const params = useParams();
   const jobId = params.id as string;
@@ -73,6 +154,7 @@ export default function RunDetailPage() {
 
   const [run, setRun] = useState<JobRun | null>(null);
   const [loading, setLoading] = useState(true);
+  const [showTranscript, setShowTranscript] = useState(false);
 
   const loadRun = useCallback(async () => {
     try {
@@ -143,13 +225,9 @@ export default function RunDetailPage() {
             <span className="text-muted-foreground">Working Directory:</span> <span className="font-mono text-xs">{run.cwd}</span>
           </div>
           <div className="pt-2">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => router.push(`/sessions/${run.sessionId}?cwd=${encodeURIComponent(run.cwd)}`)}
-            >
-              <ExternalLink className="h-3 w-3 mr-1" />
-              View Full Transcript
+            <Button variant="outline" size="sm" onClick={() => setShowTranscript(true)}>
+              <FileText className="h-3 w-3 mr-1" />
+              View Transcript
             </Button>
           </div>
         </CardContent>
@@ -168,6 +246,8 @@ export default function RunDetailPage() {
           </div>
         </CardContent>
       </Card>
+
+      {showTranscript && <TranscriptModal jobId={jobId} runId={runId} onClose={() => setShowTranscript(false)} />}
     </div>
   );
 }

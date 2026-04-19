@@ -48,29 +48,50 @@ export function useJobs() {
   return { jobs, loading, refresh, deleteJob, triggerJob };
 }
 
+const PAGE_SIZE = 25;
+
 export function useJobRuns(jobId: string | null) {
   const [runs, setRuns] = useState<JobRun[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(false);
 
   const refresh = useCallback(() => {
     if (!jobId) {
       setRuns([]);
       setLoading(false);
+      setHasMore(false);
       return;
     }
     setLoading(true);
-    fetch(`/api/jobs/${jobId}/runs?limit=50`)
+    fetch(`/api/jobs/${jobId}/runs?limit=${PAGE_SIZE}`)
       .then((res) => res.json())
-      .then((data: { runs: JobRun[] }) => setRuns(data.runs))
+      .then((data: { runs: JobRun[]; hasMore?: boolean }) => {
+        setRuns(data.runs);
+        setHasMore(data.hasMore ?? false);
+      })
       .catch(() => setRuns([]))
       .finally(() => setLoading(false));
   }, [jobId]);
+
+  const loadMore = useCallback(() => {
+    if (!jobId || loadingMore || !hasMore) return;
+    setLoadingMore(true);
+    fetch(`/api/jobs/${jobId}/runs?limit=${PAGE_SIZE}&offset=${runs.length}`)
+      .then((res) => res.json())
+      .then((data: { runs: JobRun[]; hasMore?: boolean }) => {
+        setRuns((prev) => [...prev, ...data.runs]);
+        setHasMore(data.hasMore ?? false);
+      })
+      .catch(() => {})
+      .finally(() => setLoadingMore(false));
+  }, [jobId, loadingMore, hasMore, runs.length]);
 
   useEffect(() => {
     refresh();
   }, [refresh]);
 
-  return { runs, loading, refresh };
+  return { runs, loading, loadingMore, hasMore, refresh, loadMore };
 }
 
 export function useJobFailureCount() {

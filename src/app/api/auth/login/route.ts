@@ -1,11 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createSession, isAuthDisabled, needsSetup, verifyPassword } from "@/server/auth";
+import { createSession, needsSetup, verifyPassword } from "@/server/auth";
 
 export async function POST(req: NextRequest) {
-  if (isAuthDisabled()) {
-    return NextResponse.json({ ok: true });
-  }
-
   if (needsSetup()) {
     return NextResponse.json({ error: "No password configured. Use /api/auth/setup first." }, { status: 400 });
   }

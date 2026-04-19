@@ -2,10 +2,9 @@ import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import { NextRequest, NextResponse } from "next/server";
-import { isAuthDisabled, validateSession } from "@/server/auth";
+import { validateSession } from "@/server/auth";
 
 function authenticate(req: NextRequest): boolean {
-  if (isAuthDisabled()) return true;
   const token = req.cookies.get("cockpit_session")?.value || req.headers.get("authorization")?.replace("Bearer ", "");
   return !!token && validateSession(token);
 }

@@ -9,6 +9,7 @@ export interface ModelEntry {
   displayName: string;
   description: string;
   supportsExtendedContext: boolean;
+  contextWindow?: number;
   isDefault?: boolean;
 }
 
@@ -20,6 +21,7 @@ export const MODELS: ModelEntry[] = [
     displayName: "Haiku 4.5",
     description: "Fastest",
     supportsExtendedContext: false,
+    contextWindow: 200_000,
     isDefault: true,
   },
   {
@@ -29,6 +31,7 @@ export const MODELS: ModelEntry[] = [
     displayName: "Sonnet 4.6",
     description: "Balanced",
     supportsExtendedContext: true,
+    contextWindow: 200_000,
     isDefault: true,
   },
   {
@@ -38,6 +41,7 @@ export const MODELS: ModelEntry[] = [
     displayName: "Opus 4.6",
     description: "Previous generation",
     supportsExtendedContext: true,
+    contextWindow: 200_000,
   },
   {
     alias: "opus",
@@ -46,6 +50,7 @@ export const MODELS: ModelEntry[] = [
     displayName: "Opus 4.7",
     description: "Most capable",
     supportsExtendedContext: true,
+    contextWindow: 200_000,
     isDefault: true,
   },
 ];

@@ -7,7 +7,7 @@ import { usePageHeader } from "@/components/app-shell";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { type DiffStyle, type ThinkingLevel, useSettings } from "@/hooks/use-settings";
-import { allowedEffortLevels, resolveModel } from "@/lib/models";
+import { allowedEffortLevels, defaultForAlias, type ModelAlias, recommendedEffort, resolveModel, versionsForAlias } from "@/lib/models";
 
 type Theme = "light" | "dark" | "system";
 
@@ -22,30 +22,15 @@ const themeOptions: { value: Theme; label: string }[] = [
   { value: "system", label: "System" },
 ];
 
-const baseModelOptions: { value: string; label: string }[] = [
-  { value: "opus", label: "Opus" },
-  { value: "sonnet", label: "Sonnet" },
-  { value: "haiku", label: "Haiku" },
-];
-
-const contextOptions: { value: string; label: string }[] = [
-  { value: "default", label: "200K" },
-  { value: "1m", label: "1M" },
-];
-
-function baseModel(model: string): string {
-  return model.replace(/\[.*\]$/, "");
+function parseModelString(model: string): { base: string; extended: boolean } {
+  const extended = model.includes("[1m]");
+  const base = model.replace(/\[.*\]$/, "");
+  return { base, extended };
 }
 
-function hasExtendedContext(model: string): boolean {
-  return model.includes("[1m]");
-}
-
-function buildModelId(base: string, extended: boolean): string {
-  if (extended && (base === "opus" || base === "sonnet")) {
-    return `${base}[1m]`;
-  }
-  return base;
+function buildModelString(modelId: string, extended: boolean): string {
+  if (extended) return `${modelId}[1m]`;
+  return modelId;
 }
 
 const thinkingOptions: { value: ThinkingLevel; label: string }[] = [
@@ -85,8 +70,8 @@ function Toggle({ enabled, color, onToggle }: { enabled: boolean; color?: string
 
 function SettingRow({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="flex items-center justify-between px-2 py-2 text-sm">
-      <span>{label}</span>
+    <div className="flex items-start justify-between px-2 py-2 text-sm">
+      <span className="py-1">{label}</span>
       {children}
     </div>
   );
@@ -114,7 +99,7 @@ function ButtonGroup<T extends string>({
   onChange: (v: T) => void;
 }) {
   return (
-    <div className="flex gap-1">
+    <div className="flex flex-wrap gap-1 justify-end">
       {options.map((opt) => (
         <Button key={opt.value} variant={value === opt.value ? "default" : "outline"} size="sm" onClick={() => onChange(opt.value)}>
           {opt.label}
@@ -237,30 +222,80 @@ export default function SettingsPage() {
           <CardTitle className="text-base">Session defaults</CardTitle>
         </CardHeader>
         <CardContent className="space-y-1">
-          <SettingRow label="Model">
-            <ButtonGroup
-              options={baseModelOptions}
-              value={baseModel(settings.model)}
-              onChange={(v) => updateSetting("model", buildModelId(v, hasExtendedContext(settings.model) && v !== "haiku"))}
-            />
-          </SettingRow>
-          {(baseModel(settings.model) === "opus" || baseModel(settings.model) === "sonnet") && (
-            <SettingRow label="Context">
-              <ButtonGroup
-                options={contextOptions}
-                value={hasExtendedContext(settings.model) ? "1m" : "default"}
-                onChange={(v) => updateSetting("model", buildModelId(baseModel(settings.model), v === "1m"))}
-              />
-            </SettingRow>
-          )}
           {(() => {
-            const allowed = new Set(allowedEffortLevels(resolveModel(settings.model)));
-            if (allowed.size === 0) return null;
-            const visible = thinkingOptions.filter((opt) => allowed.has(opt.value));
+            const { base, extended } = parseModelString(settings.model);
+            const entry = resolveModel(base);
+            const selectedAlias = entry?.alias || "sonnet";
+            const versions = versionsForAlias(selectedAlias);
+            const showVersions = versions.length > 1;
+            const effortLevels = allowedEffortLevels(entry);
+            const visibleThinking = thinkingOptions.filter((opt) => effortLevels.includes(opt.value as ThinkingLevel));
+
+            function selectAlias(alias: ModelAlias) {
+              const def = defaultForAlias(alias);
+              if (!def) return;
+              updateSetting("model", def.modelId);
+              const rec = recommendedEffort(def);
+              if (rec) updateSetting("thinkingLevel", rec);
+            }
+
+            function selectVersion(version: string) {
+              const ver = versions.find((m) => m.version === version);
+              if (!ver) return;
+              updateSetting("model", buildModelString(ver.modelId, extended && ver.supportsExtendedContext));
+              const levels = allowedEffortLevels(ver);
+              if (!levels.includes(settings.thinkingLevel)) {
+                const rec = recommendedEffort(ver);
+                if (rec) updateSetting("thinkingLevel", rec);
+              }
+            }
+
             return (
-              <SettingRow label="Thinking level">
-                <ButtonGroup options={visible} value={settings.thinkingLevel} onChange={(v) => updateSetting("thinkingLevel", v)} />
-              </SettingRow>
+              <>
+                <SettingRow label="Model">
+                  <ButtonGroup
+                    options={
+                      [
+                        { value: "haiku", label: "Haiku" },
+                        { value: "sonnet", label: "Sonnet" },
+                        { value: "opus", label: "Opus" },
+                      ] as { value: string; label: string }[]
+                    }
+                    value={selectedAlias}
+                    onChange={(v) => selectAlias(v as ModelAlias)}
+                  />
+                </SettingRow>
+                {showVersions && (
+                  <SettingRow label="Version">
+                    <ButtonGroup
+                      options={versions.map((m) => ({ value: m.version, label: m.version }))}
+                      value={entry?.version || versions[0].version}
+                      onChange={selectVersion}
+                    />
+                  </SettingRow>
+                )}
+                {entry?.supportsExtendedContext && (
+                  <SettingRow label="Context">
+                    <ButtonGroup
+                      options={[
+                        { value: "default", label: "200K" },
+                        { value: "1m", label: "1M" },
+                      ]}
+                      value={extended ? "1m" : "default"}
+                      onChange={(v) => updateSetting("model", buildModelString(entry.modelId, v === "1m"))}
+                    />
+                  </SettingRow>
+                )}
+                {visibleThinking.length > 0 && (
+                  <SettingRow label="Thinking">
+                    <ButtonGroup
+                      options={visibleThinking}
+                      value={settings.thinkingLevel}
+                      onChange={(v) => updateSetting("thinkingLevel", v)}
+                    />
+                  </SettingRow>
+                )}
+              </>
             );
           })()}
           <SettingRow label="Bypass all permissions">

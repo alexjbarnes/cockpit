@@ -15,14 +15,6 @@ const SCRYPT_KEYLEN = 64;
 const SALT_BYTES = 32;
 
 // ---------------------------------------------------------------------------
-// Auth mode
-// ---------------------------------------------------------------------------
-
-export function isAuthDisabled(): boolean {
-  return process.env.COCKPIT_DISABLE_AUTH === "true";
-}
-
-// ---------------------------------------------------------------------------
 // Password hashing
 // ---------------------------------------------------------------------------
 
@@ -66,7 +58,6 @@ function getStoredPassword(): StoredPassword | null {
 }
 
 export function needsSetup(): boolean {
-  if (isAuthDisabled()) return false;
   return getStoredPassword() === null;
 }
 
@@ -121,7 +112,6 @@ export function createSession(): string {
 }
 
 export function validateSession(token: string): boolean {
-  if (isAuthDisabled()) return true;
   const key = getSigningKey();
   if (!key) return false;
 
@@ -170,7 +160,6 @@ export function extractTokenFromQuery(url: string): string | null {
 }
 
 export function isAuthenticated(req: IncomingMessage): boolean {
-  if (isAuthDisabled()) return true;
   const token = extractTokenFromRequest(req);
   return token !== null && validateSession(token);
 }

@@ -1,11 +1,10 @@
 import path from "node:path";
 import { NextRequest, NextResponse } from "next/server";
-import { isAuthDisabled, validateSession } from "@/server/auth";
+import { validateSession } from "@/server/auth";
 import { getSessionManager } from "@/server/singleton";
 import { scanAllSessions } from "@/server/transcript";
 
 function authenticate(req: NextRequest): boolean {
-  if (isAuthDisabled()) return true;
   const token = req.cookies.get("cockpit_session")?.value || req.headers.get("authorization")?.replace("Bearer ", "");
   return !!token && validateSession(token);
 }

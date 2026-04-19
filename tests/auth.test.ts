@@ -12,7 +12,6 @@ function cleanupPasswordFile() {
 describe("auth", () => {
   beforeEach(() => {
     vi.resetModules();
-    delete process.env.COCKPIT_DISABLE_AUTH;
     cleanupPasswordFile();
   });
 
@@ -71,12 +70,6 @@ describe("auth", () => {
     expect(validateSession(token)).toBe(true);
   });
 
-  it("bypasses validation when auth disabled", async () => {
-    process.env.COCKPIT_DISABLE_AUTH = "true";
-    const { validateSession } = await import("@/server/auth");
-    expect(validateSession("anything")).toBe(true);
-  });
-
   it("isAuthenticated returns true when valid token in header", async () => {
     const { setupPassword, createSession, isAuthenticated } = await import("@/server/auth");
     await setupPassword("test");
@@ -93,15 +86,6 @@ describe("auth", () => {
       headers: {},
     } as unknown as import("node:http").IncomingMessage;
     expect(isAuthenticated(req)).toBe(false);
-  });
-
-  it("isAuthenticated returns true when auth is disabled", async () => {
-    process.env.COCKPIT_DISABLE_AUTH = "true";
-    const { isAuthenticated } = await import("@/server/auth");
-    const req = {
-      headers: {},
-    } as unknown as import("node:http").IncomingMessage;
-    expect(isAuthenticated(req)).toBe(true);
   });
 
   it("setSessionCookie sets correct cookie header", async () => {
@@ -167,24 +151,7 @@ describe("auth", () => {
     expect(validateSession("abc.tooshort")).toBe(false);
   });
 
-  it("isAuthDisabled returns false by default", async () => {
-    const { isAuthDisabled } = await import("@/server/auth");
-    expect(isAuthDisabled()).toBe(false);
-  });
-
-  it("isAuthDisabled returns true when env var is set", async () => {
-    process.env.COCKPIT_DISABLE_AUTH = "true";
-    const { isAuthDisabled } = await import("@/server/auth");
-    expect(isAuthDisabled()).toBe(true);
-  });
-
   describe("needsSetup", () => {
-    it("returns false when auth is disabled", async () => {
-      process.env.COCKPIT_DISABLE_AUTH = "true";
-      const { needsSetup } = await import("@/server/auth");
-      expect(needsSetup()).toBe(false);
-    });
-
     it("returns true when no password file exists", async () => {
       const { needsSetup } = await import("@/server/auth");
       expect(needsSetup()).toBe(true);

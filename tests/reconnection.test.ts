@@ -22,7 +22,6 @@ import { SessionManager } from "@/server/session-manager";
 import { createWebSocketHandler } from "@/server/ws-handler";
 
 beforeAll(async () => {
-  delete process.env.COCKPIT_DISABLE_AUTH;
   await setupPassword("test-password");
 });
 

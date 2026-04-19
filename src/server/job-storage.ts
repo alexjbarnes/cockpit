@@ -103,6 +103,19 @@ function pruneRuns(runs: JobRun[], maxCount: number, maxAgeDays: number): void {
   }
 }
 
+export function pruneAllRuns(): void {
+  const jobs = loadJobs();
+  for (const job of jobs) {
+    const runs = loadRuns(job.id);
+    const before = runs.length;
+    pruneRuns(runs, 500, job.retentionDays ?? 90);
+    if (runs.length < before) {
+      ensureDir(RUNS_DIR);
+      writeFileSync(runsFile(job.id), JSON.stringify({ runs }, null, 2) + "\n");
+    }
+  }
+}
+
 export function getLatestRun(jobId: string): JobRun | undefined {
   const runs = loadRuns(jobId);
   if (runs.length === 0) return undefined;

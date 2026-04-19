@@ -1,6 +1,6 @@
 "use client";
 
-import { Plus, Trash2 } from "lucide-react";
+import { Loader2, Play, Plus, Trash2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { usePageHeader } from "@/components/app-shell";
@@ -73,6 +73,7 @@ export default function McpServersPage() {
                 name={server.name}
                 type={server.type}
                 detail={server.command || server.url}
+                scope="user"
                 onClick={() => handleClick(server.name, "user")}
                 onDelete={() => setConfirmDelete({ name: server.name, scope: "user" })}
               />
@@ -93,6 +94,8 @@ export default function McpServersPage() {
                 name={server.name}
                 type={server.type}
                 detail={server.command || server.url}
+                scope="project"
+                cwd={cwd}
                 onClick={() => handleClick(server.name, "project")}
                 onDelete={() => setConfirmDelete({ name: server.name, scope: "project" })}
               />
@@ -156,36 +159,84 @@ function ServerRow({
   name,
   type,
   detail,
+  scope,
+  cwd,
   onClick,
   onDelete,
 }: {
   name: string;
   type: string;
   detail?: string;
+  scope: "user" | "project";
+  cwd?: string;
   onClick: () => void;
   onDelete: () => void;
 }) {
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<{ success: boolean; logs: string } | null>(null);
+
+  async function handleTest(e: React.MouseEvent) {
+    e.stopPropagation();
+    setTesting(true);
+    setTestResult(null);
+    try {
+      const params = new URLSearchParams({ scope });
+      if (scope === "project" && cwd) params.set("cwd", cwd);
+      const res = await fetch(`/api/mcp-servers/${encodeURIComponent(name)}/test?${params}`, { method: "POST" });
+      const data = await res.json();
+      setTestResult(data);
+    } catch {
+      setTestResult({ success: false, logs: "Request failed" });
+    } finally {
+      setTesting(false);
+    }
+  }
+
   return (
-    <div className="flex items-center gap-3 rounded px-2 py-2 hover:bg-muted transition-colors">
-      <button type="button" className="flex-1 text-left min-w-0" onClick={onClick}>
-        <div className="flex items-center gap-2">
-          <span className="font-mono font-bold text-sm">{name}</span>
-          <Badge variant="secondary" className="text-[10px]">
-            {type}
-          </Badge>
+    <div className="rounded px-2 py-2 hover:bg-muted transition-colors">
+      <div className="flex items-center gap-3">
+        <button type="button" className="flex-1 text-left min-w-0" onClick={onClick}>
+          <div className="flex items-center gap-2">
+            <span className="font-mono font-bold text-sm">{name}</span>
+            <Badge variant="secondary" className="text-[10px]">
+              {type}
+            </Badge>
+          </div>
+          {detail && <p className="text-xs text-muted-foreground truncate mt-0.5">{detail}</p>}
+        </button>
+        <div className="flex items-center gap-1 shrink-0">
+          <button
+            type="button"
+            className="p-1 rounded text-muted-foreground hover:text-primary transition-colors"
+            onClick={handleTest}
+            disabled={testing}
+            title="Test connection"
+          >
+            {testing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
+          </button>
+          <button
+            type="button"
+            className="p-1 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
+            onClick={(e) => {
+              e.stopPropagation();
+              onDelete();
+            }}
+          >
+            <Trash2 className="h-4 w-4" />
+          </button>
         </div>
-        {detail && <p className="text-xs text-muted-foreground truncate mt-0.5">{detail}</p>}
-      </button>
-      <button
-        type="button"
-        className="shrink-0 p-1 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
-        onClick={(e) => {
-          e.stopPropagation();
-          onDelete();
-        }}
-      >
-        <Trash2 className="h-4 w-4" />
-      </button>
+      </div>
+      {testResult && (
+        <div
+          className={`mt-2 rounded border p-2 text-xs ${testResult.success ? "border-green-500/30 bg-green-500/5" : "border-red-500/30 bg-red-500/5"}`}
+        >
+          <div className="flex items-center gap-1.5 mb-1">
+            <span className={`inline-block h-2 w-2 rounded-full ${testResult.success ? "bg-green-500" : "bg-red-500"}`} />
+            <span className="font-medium">{testResult.success ? "Connected" : "Failed"}</span>
+          </div>
+          <pre className="whitespace-pre-wrap text-muted-foreground font-mono leading-relaxed">{testResult.logs}</pre>
+        </div>
+      )}
     </div>
   );
 }

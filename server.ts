@@ -1,7 +1,7 @@
 import { createServer } from "node:http";
 import { parse } from "node:url";
 import next from "next";
-import { deletePasswordFile, isAuthDisabled, needsSetup } from "./src/server/auth";
+import { deletePasswordFile, needsSetup } from "./src/server/auth";
 import { JobScheduler } from "./src/server/job-scheduler";
 import { SessionManager } from "./src/server/session-manager";
 import { setJobScheduler, setSessionManager } from "./src/server/singleton";
@@ -39,9 +39,7 @@ async function main() {
 
   server.listen(port, host, () => {
     console.log(`Cockpit running on http://${host}:${port}`);
-    if (isAuthDisabled()) {
-      console.log("Authentication is disabled");
-    } else if (needsSetup()) {
+    if (needsSetup()) {
       console.log("No password set. Visit the UI to create one.");
     }
   });

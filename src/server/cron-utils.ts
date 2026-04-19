@@ -12,18 +12,18 @@ function parseField(field: string, min: number, max: number): number[] {
   const values: number[] = [];
   for (const part of field.split(",")) {
     const stepMatch = part.match(/^(.+)\/(\d+)$/);
-    const step = stepMatch ? parseInt(stepMatch[2], 10) : 1;
+    const step = stepMatch ? Number.parseInt(stepMatch[2], 10) : 1;
     const range = stepMatch ? stepMatch[1] : part;
 
     if (range === "*") {
       for (let i = min; i <= max; i += step) values.push(i);
     } else if (range.includes("-")) {
       const [startStr, endStr] = range.split("-");
-      const start = parseInt(startStr, 10);
-      const end = parseInt(endStr, 10);
+      const start = Number.parseInt(startStr, 10);
+      const end = Number.parseInt(endStr, 10);
       for (let i = start; i <= end; i += step) values.push(i);
     } else {
-      values.push(parseInt(range, 10));
+      values.push(Number.parseInt(range, 10));
     }
   }
   return values;
@@ -137,4 +137,23 @@ export function findMissedRun(cronExpr: string, lastFiredAt: Date, now: Date): b
     candidate.setMinutes(candidate.getMinutes() + 1);
   }
   return false;
+}
+
+export function getJobSchedules(job: { schedule: JobSchedule; schedules?: JobSchedule[] }): JobSchedule[] {
+  return job.schedules?.length ? job.schedules : [job.schedule];
+}
+
+export function describeAllSchedules(schedules: JobSchedule[]): string {
+  return schedules.map(describeSchedule).join("; ");
+}
+
+export function getNextRunTimeAny(schedules: JobSchedule[], after: Date): Date {
+  let earliest: Date | null = null;
+  for (const s of schedules) {
+    const next = getNextRunTime(s, after);
+    if (!earliest || next.getTime() < earliest.getTime()) {
+      earliest = new Date(next.getTime());
+    }
+  }
+  return earliest ?? new Date(after.getTime() + 86400000);
 }
