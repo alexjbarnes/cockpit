@@ -149,6 +149,69 @@ export interface UsageLimits {
   } | null;
 }
 
+// Scheduled Jobs
+
+export type SimpleScheduleFrequency = "hourly" | "daily" | "weekly" | "monthly";
+
+export interface SimpleSchedule {
+  type: "simple";
+  frequency: SimpleScheduleFrequency;
+  time?: string;
+  dayOfWeek?: number;
+  dayOfMonth?: number;
+}
+
+export interface CronSchedule {
+  type: "cron";
+  expression: string;
+}
+
+export type JobSchedule = SimpleSchedule | CronSchedule;
+
+export interface ScheduledJob {
+  id: string;
+  name: string;
+  schedule: JobSchedule;
+  prompt: string;
+  cwd: string;
+  enabled: boolean;
+  createdAt: number;
+  updatedAt: number;
+  model?: string;
+  allowedTools?: string[];
+  mcpServers?: string[];
+  bypassPermissions?: boolean;
+  maxDurationMinutes?: number;
+  retentionDays?: number;
+  skipIfMissed?: boolean;
+}
+
+export type JobRunStatus = "running" | "success" | "failure" | "timeout";
+
+export interface JobRunToolUse {
+  name: string;
+  input: string;
+  output: string;
+  timestamp: number;
+  durationMs?: number;
+  permitted?: boolean;
+}
+
+export interface JobRun {
+  id: string;
+  jobId: string;
+  sessionId: string;
+  status: JobRunStatus;
+  startedAt: number;
+  completedAt?: number;
+  durationMs?: number;
+  error?: string;
+  toolsUsed: JobRunToolUse[];
+  messageCount: number;
+  prompt: string;
+  cwd: string;
+}
+
 // Client -> Server messages
 export type ClientMessage =
   | { type: "session:connect"; sessionId: string; cwd?: string; lastMessageId?: string | null; historyView?: boolean }

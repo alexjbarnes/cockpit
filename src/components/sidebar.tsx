@@ -1,10 +1,11 @@
 "use client";
 
-import { GitPullRequest, Home, Plus, Settings, X } from "lucide-react";
+import { CalendarClock, GitPullRequest, Home, Plus, Settings, X } from "lucide-react";
 import { usePathname, useRouter } from "next/navigation";
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { useShell } from "@/components/app-shell";
 import { Button } from "@/components/ui/button";
+import { useJobFailureCount } from "@/hooks/use-jobs";
 import { useWebSocket } from "@/hooks/use-websocket";
 import { cn } from "@/lib/utils";
 import type { SessionGroup, SessionInfo } from "@/types";
@@ -402,6 +403,12 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
           >
             <GitPullRequest className="h-4 w-4" />
           </Button>
+          <JobsButton
+            onClick={() => {
+              close();
+              router.push("/jobs");
+            }}
+          />
           <Button
             variant="ghost"
             size="icon"
@@ -421,3 +428,20 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
     </>
   );
 });
+
+function JobsButton({ onClick }: { onClick: () => void }) {
+  const { count } = useJobFailureCount();
+
+  return (
+    <Button
+      variant="ghost"
+      size="icon"
+      className="shrink-0 h-8 w-8 text-muted-foreground hover:text-foreground relative"
+      onClick={onClick}
+      title="Scheduled Jobs"
+    >
+      <CalendarClock className="h-4 w-4" />
+      {count > 0 && <span className="absolute top-1 right-1 h-2 w-2 rounded-full bg-red-500" />}
+    </Button>
+  );
+}

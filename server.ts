@@ -2,8 +2,9 @@ import { createServer } from "node:http";
 import { parse } from "node:url";
 import next from "next";
 import { deletePasswordFile, isAuthDisabled, needsSetup } from "./src/server/auth";
+import { JobScheduler } from "./src/server/job-scheduler";
 import { SessionManager } from "./src/server/session-manager";
-import { setSessionManager } from "./src/server/singleton";
+import { setJobScheduler, setSessionManager } from "./src/server/singleton";
 import { createWebSocketHandler } from "./src/server/ws-handler";
 
 const dev = process.env.NODE_ENV !== "production";
@@ -24,6 +25,10 @@ async function main() {
 
   const sessionManager = new SessionManager();
   setSessionManager(sessionManager);
+
+  const jobScheduler = new JobScheduler(sessionManager);
+  setJobScheduler(jobScheduler);
+  jobScheduler.start();
 
   const server = createServer((req, res) => {
     const parsedUrl = parse(req.url || "", true);

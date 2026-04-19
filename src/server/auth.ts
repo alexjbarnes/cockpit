@@ -59,7 +59,7 @@ function readPasswordFile(): StoredPassword | null {
 let cachedPassword: StoredPassword | null | undefined;
 
 function getStoredPassword(): StoredPassword | null {
-  if (cachedPassword === undefined) {
+  if (cachedPassword === undefined || cachedPassword === null) {
     cachedPassword = readPasswordFile();
   }
   return cachedPassword;

@@ -180,11 +180,12 @@ export function ChatView({
     setShowScrollDown(false);
   }, []);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: intentional re-trigger on content changes to auto-scroll
   useEffect(() => {
     if (stickToBottom.current) {
       scrollToBottom();
     }
-  }, [scrollToBottom]);
+  }, [messages, isResponding, pendingQuestions, pendingPermissions, scrollToBottom]);
 
   // Re-scroll when virtual keyboard shows/hides (viewport resize)
   useEffect(() => {
