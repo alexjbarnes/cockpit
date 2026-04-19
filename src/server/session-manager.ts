@@ -1,5 +1,7 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import path from "node:path";
 import { type Writable } from "node:stream";
 import { v4 as uuidv4 } from "uuid";
@@ -463,6 +465,21 @@ export class SessionManager {
 
   listKnownSessions(): SessionInfo[] {
     return Array.from(this.sessions.values()).map((s) => s.info);
+  }
+
+  getKnownMcpServers(): string[] {
+    const names = new Set<string>();
+    for (const session of this.sessions.values()) {
+      for (const server of session.initData?.mcpServers || []) {
+        names.add(server.name);
+      }
+    }
+    if (names.size === 0) {
+      for (const name of loadMcpServerCache()) {
+        names.add(name);
+      }
+    }
+    return Array.from(names);
   }
 
   isProcessAlive(id: string): boolean {
@@ -948,6 +965,9 @@ export class SessionManager {
     };
     session.emitter.emit("init", sessionId, session.initData);
     setSessionPrefs(sessionId, { initData: session.initData });
+    if (session.initData.mcpServers.length > 0) {
+      saveMcpServerCache(this.getKnownMcpServers());
+    }
   }
 
   onInit(id: string, listener: (data: InitData) => void): (() => void) | null {
@@ -1572,5 +1592,26 @@ Additional Cockpit rules beyond the CLI's defaults:
     } catch {
       // Children will show on next session load
     }
+  }
+}
+
+const MCP_CACHE_PATH = path.join(homedir(), ".cockpit", "mcp-servers.json");
+
+function loadMcpServerCache(): string[] {
+  try {
+    if (!existsSync(MCP_CACHE_PATH)) return [];
+    return JSON.parse(readFileSync(MCP_CACHE_PATH, "utf-8")) as string[];
+  } catch {
+    return [];
+  }
+}
+
+function saveMcpServerCache(servers: string[]): void {
+  try {
+    const dir = path.dirname(MCP_CACHE_PATH);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(MCP_CACHE_PATH, JSON.stringify(servers));
+  } catch {
+    // best-effort
   }
 }

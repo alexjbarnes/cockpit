@@ -172,14 +172,17 @@ export interface ScheduledJob {
   id: string;
   name: string;
   schedule: JobSchedule;
+  schedules?: JobSchedule[];
   prompt: string;
   cwd: string;
   enabled: boolean;
   createdAt: number;
   updatedAt: number;
   model?: string;
+  thinkingLevel?: ThinkingLevel;
   allowedTools?: string[];
   mcpServers?: string[];
+  mcpToolFilters?: Record<string, string[]>;
   bypassPermissions?: boolean;
   maxDurationMinutes?: number;
   retentionDays?: number;

@@ -1,6 +1,6 @@
 "use client";
 
-import { CalendarClock, Play, Plus, Trash2 } from "lucide-react";
+import { CalendarClock, Copy, Loader2, Play, Plus, Trash2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { usePageHeader } from "@/components/app-shell";
@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useJobs } from "@/hooks/use-jobs";
-import { describeSchedule, getNextRunTime } from "@/server/cron-utils";
+import { describeAllSchedules, getJobSchedules, getNextRunTimeAny } from "@/server/cron-utils";
 import type { ScheduledJob } from "@/types";
 
 function statusBadge(job: ScheduledJob) {
@@ -20,7 +20,7 @@ function statusBadge(job: ScheduledJob) {
 function formatNextRun(job: ScheduledJob): string {
   if (!job.enabled) return "Disabled";
   try {
-    const next = getNextRunTime(job.schedule, new Date());
+    const next = getNextRunTimeAny(getJobSchedules(job), new Date());
     return next.toLocaleString();
   } catch {
     return "Unknown";
@@ -33,6 +33,7 @@ export default function JobsPage() {
   const { jobs, loading, deleteJob, triggerJob, refresh } = useJobs();
   const router = useRouter();
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  const [triggeringJobs, setTriggeringJobs] = useState<Set<string>>(new Set());
 
   async function handleDelete() {
     if (!confirmDelete) return;
@@ -42,7 +43,13 @@ export default function JobsPage() {
 
   async function handleTrigger(e: React.MouseEvent, jobId: string) {
     e.stopPropagation();
+    setTriggeringJobs((prev) => new Set(prev).add(jobId));
     await triggerJob(jobId);
+    setTriggeringJobs((prev) => {
+      const next = new Set(prev);
+      next.delete(jobId);
+      return next;
+    });
     refresh();
   }
 
@@ -50,7 +57,7 @@ export default function JobsPage() {
     <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-4">
       <div className="flex items-center justify-between">
         <div />
-        <Button size="sm" onClick={() => router.push("/jobs/new")}>
+        <Button size="sm" onClick={() => router.push("/jobs/new/edit")}>
           <Plus className="h-4 w-4 mr-1" />
           New Job
         </Button>
@@ -76,12 +83,31 @@ export default function JobsPage() {
                     <span className="font-medium text-sm truncate">{job.name}</span>
                     {statusBadge(job)}
                   </div>
-                  <p className="text-xs text-muted-foreground">{describeSchedule(job.schedule)}</p>
+                  <p className="text-xs text-muted-foreground">{describeAllSchedules(getJobSchedules(job))}</p>
                   <p className="text-xs text-muted-foreground mt-0.5">Next: {formatNextRun(job)}</p>
                 </div>
                 <div className="flex items-center gap-1 shrink-0">
-                  <Button variant="ghost" size="icon" className="h-8 w-8" title="Run now" onClick={(e) => handleTrigger(e, job.id)}>
-                    <Play className="h-4 w-4" />
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8"
+                    title="Run now"
+                    disabled={triggeringJobs.has(job.id)}
+                    onClick={(e) => handleTrigger(e, job.id)}
+                  >
+                    {triggeringJobs.has(job.id) ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8"
+                    title="Duplicate"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      router.push(`/jobs/new/edit?from=${job.id}`);
+                    }}
+                  >
+                    <Copy className="h-4 w-4" />
                   </Button>
                   <Button
                     variant="ghost"

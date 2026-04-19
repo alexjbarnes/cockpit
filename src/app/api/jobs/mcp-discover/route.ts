@@ -1,12 +1,23 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { NextRequest, NextResponse } from "next/server";
-import { isAuthDisabled, validateSession } from "@/server/auth";
+import { validateSession } from "@/server/auth";
+import { getSessionManager } from "@/server/singleton";
 
 function authenticate(req: NextRequest): boolean {
-  if (isAuthDisabled()) return true;
   const token = req.cookies.get("cockpit_session")?.value || req.headers.get("authorization")?.replace("Bearer ", "");
   return !!token && validateSession(token);
+}
+
+function readMcpServers(filePath: string): string[] {
+  try {
+    if (!existsSync(filePath)) return [];
+    const data = JSON.parse(readFileSync(filePath, "utf-8"));
+    return Object.keys(data.mcpServers || data.servers || {});
+  } catch {
+    return [];
+  }
 }
 
 export async function GET(req: NextRequest) {
@@ -15,16 +26,14 @@ export async function GET(req: NextRequest) {
   }
 
   const cwd = req.nextUrl.searchParams.get("cwd");
-  if (!cwd) {
-    return NextResponse.json({ error: "cwd is required" }, { status: 400 });
-  }
 
-  try {
-    const mcpPath = join(cwd, ".mcp.json");
-    const data = JSON.parse(readFileSync(mcpPath, "utf-8"));
-    const servers = Object.keys(data.mcpServers || data.servers || {});
-    return NextResponse.json({ servers });
-  } catch {
-    return NextResponse.json({ servers: [] });
-  }
+  const globalPath = join(homedir(), ".claude.json");
+  const globalServers = readMcpServers(globalPath);
+
+  const projectServers = cwd ? readMcpServers(join(cwd, ".mcp.json")) : [];
+
+  const runtimeServers = getSessionManager().getKnownMcpServers();
+
+  const all = [...new Set([...globalServers, ...projectServers, ...runtimeServers])];
+  return NextResponse.json({ servers: all });
 }
