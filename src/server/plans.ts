@@ -1,4 +1,4 @@
-import { readdirSync, statSync } from "node:fs";
+import { readFileSync, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -18,6 +18,14 @@ export function findLatestPlanFile(): string | undefined {
       }
     }
     return join(PLANS_DIR, latest);
+  } catch {
+    return undefined;
+  }
+}
+
+export function readPlanFile(path: string): string | undefined {
+  try {
+    return readFileSync(path, "utf-8");
   } catch {
     return undefined;
   }

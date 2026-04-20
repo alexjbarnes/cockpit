@@ -916,7 +916,7 @@ export function InputArea({
             <span className={queuePaused ? "text-yellow-500" : "text-muted-foreground"}>
               {queuedMessages?.length ?? 0} message{(queuedMessages?.length ?? 0) !== 1 ? "s" : ""} {queuePaused ? "paused" : "queued"}
             </span>
-            <span className="text-muted-foreground/50 ml-auto">tap to manage</span>
+            <span className="text-muted-foreground/50 ml-auto">click to manage</span>
           </button>
         )}
         <div className="relative flex items-stretch gap-1">

@@ -1,9 +1,10 @@
 "use client";
 
-import { ClipboardCheck, Send } from "lucide-react";
+import { ClipboardCheck, ClipboardList, Send } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { PendingPermission } from "@/hooks/use-session";
 import type { PermissionMode } from "@/types";
+import { PlanViewModal } from "./plan-view-modal";
 
 interface AllowedPrompt {
   tool: string;
@@ -35,6 +36,7 @@ export function PlanApprovalPrompt({ permission, onRespond, onSendMessage, onSet
   const [selected, setSelected] = useState(0);
   const [showFeedback, setShowFeedback] = useState(false);
   const [feedback, setFeedback] = useState("");
+  const [planModalOpen, setPlanModalOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const feedbackRef = useRef<HTMLTextAreaElement>(null);
 
@@ -137,100 +139,121 @@ export function PlanApprovalPrompt({ permission, onRespond, onSendMessage, onSet
   );
 
   return (
-    <div className="mx-auto max-w-3xl">
-      <div
-        ref={containerRef}
-        tabIndex={-1}
-        onKeyDown={handleKeyDown}
-        className="rounded-lg border border-blue-500/50 bg-blue-500/10 p-4 outline-none"
-      >
-        <div className="flex items-start gap-3">
-          <ClipboardCheck className="h-5 w-5 shrink-0 text-blue-500 mt-0.5" />
-          <div className="flex-1 min-w-0 space-y-3">
-            <div className="text-sm font-medium">Would you like to proceed?</div>
-            {allowedPrompts.length > 0 && (
-              <div className="space-y-1">
-                <div className="text-xs text-muted-foreground">Permissions requested for implementation:</div>
-                <ul className="text-xs text-muted-foreground space-y-0.5">
-                  {allowedPrompts.map((p, i) => (
-                    <li key={i} className="flex items-center gap-1.5 pl-2">
-                      <span className="font-mono text-foreground/70">{p.tool}</span>
-                      <span>{p.prompt}</span>
-                    </li>
-                  ))}
-                </ul>
+    <>
+      <div className="mx-auto max-w-3xl">
+        <div
+          ref={containerRef}
+          tabIndex={-1}
+          onKeyDown={handleKeyDown}
+          className="rounded-lg border border-blue-500/50 bg-blue-500/10 p-4 outline-none"
+        >
+          <div className="flex items-start gap-3">
+            <ClipboardCheck className="h-5 w-5 shrink-0 text-blue-500 mt-0.5" />
+            <div className="flex-1 min-w-0 space-y-3">
+              <div className="flex items-center gap-2">
+                <div className="text-sm font-medium">Would you like to proceed?</div>
+                {permission.planContent && (
+                  <button
+                    onClick={() => setPlanModalOpen(true)}
+                    className="flex items-center gap-1 rounded px-1.5 py-0.5 text-xs text-blue-500 hover:bg-blue-500/10"
+                  >
+                    <ClipboardList className="h-3 w-3" />
+                    View plan
+                  </button>
+                )}
               </div>
-            )}
-            <div className="space-y-0.5">
-              {OPTIONS.map((opt, i) => (
+              {allowedPrompts.length > 0 && (
+                <div className="space-y-1">
+                  <div className="text-xs text-muted-foreground">Permissions requested for implementation:</div>
+                  <ul className="text-xs text-muted-foreground space-y-0.5">
+                    {allowedPrompts.map((p, i) => (
+                      <li key={i} className="flex items-center gap-1.5 pl-2">
+                        <span className="font-mono text-foreground/70">{p.tool}</span>
+                        <span>{p.prompt}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              <div className="space-y-0.5">
+                {OPTIONS.map((opt, i) => (
+                  <button
+                    key={i}
+                    onClick={() => handleProceed(i)}
+                    onMouseEnter={() => setSelected(i)}
+                    className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs transition-colors ${
+                      selected === i ? "bg-blue-600/20 text-foreground" : "text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    <span className="shrink-0 font-mono text-blue-500 w-4">{i + 1}.</span>
+                    <span>{opt.label}</span>
+                    {i === 0 && <span className="ml-auto text-[10px] text-muted-foreground hidden sm:inline">default</span>}
+                  </button>
+                ))}
                 <button
-                  key={i}
-                  onClick={() => handleProceed(i)}
-                  onMouseEnter={() => setSelected(i)}
+                  onClick={() => setShowFeedback(true)}
+                  onMouseEnter={() => setSelected(OPTIONS.length)}
                   className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs transition-colors ${
-                    selected === i ? "bg-blue-600/20 text-foreground" : "text-muted-foreground hover:text-foreground"
+                    selected === OPTIONS.length ? "bg-blue-600/20 text-foreground" : "text-muted-foreground hover:text-foreground"
                   }`}
                 >
-                  <span className="shrink-0 font-mono text-blue-500 w-4">{i + 1}.</span>
-                  <span>{opt.label}</span>
-                  {i === 0 && <span className="ml-auto text-[10px] text-muted-foreground hidden sm:inline">default</span>}
+                  <span className="shrink-0 font-mono text-blue-500 w-4">5.</span>
+                  <span>Tell Claude what to change</span>
                 </button>
-              ))}
-              <button
-                onClick={() => setShowFeedback(true)}
-                onMouseEnter={() => setSelected(OPTIONS.length)}
-                className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs transition-colors ${
-                  selected === OPTIONS.length ? "bg-blue-600/20 text-foreground" : "text-muted-foreground hover:text-foreground"
-                }`}
-              >
-                <span className="shrink-0 font-mono text-blue-500 w-4">5.</span>
-                <span>Tell Claude what to change</span>
-              </button>
-              <button
-                onClick={handleDismiss}
-                onMouseEnter={() => setSelected(OPTIONS.length + 1)}
-                className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs transition-colors ${
-                  selected === OPTIONS.length + 1 ? "bg-blue-600/20 text-foreground" : "text-muted-foreground hover:text-foreground"
-                }`}
-              >
-                <span className="shrink-0 font-mono text-muted-foreground w-4">Esc</span>
-                <span>Dismiss</span>
-              </button>
-            </div>
-            {showFeedback && (
-              <div className="space-y-2">
-                <textarea
-                  ref={feedbackRef}
-                  value={feedback}
-                  onChange={(e) => setFeedback(e.target.value)}
-                  placeholder="Describe what you'd like to change about the plan..."
-                  className="w-full rounded border border-border bg-background px-3 py-2 text-xs resize-none focus:outline-none focus:ring-1 focus:ring-blue-500"
-                  rows={3}
-                />
-                <div className="flex gap-2">
-                  <button
-                    onClick={handleSendFeedback}
-                    disabled={!feedback.trim()}
-                    className="flex items-center gap-1.5 rounded bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    <Send className="h-3 w-3" />
-                    Send feedback
-                  </button>
-                  <button
-                    onClick={() => {
-                      setShowFeedback(false);
-                      containerRef.current?.focus();
-                    }}
-                    className="rounded px-3 py-1.5 text-xs text-muted-foreground hover:bg-muted"
-                  >
-                    Cancel
-                  </button>
-                </div>
+                <button
+                  onClick={handleDismiss}
+                  onMouseEnter={() => setSelected(OPTIONS.length + 1)}
+                  className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs transition-colors ${
+                    selected === OPTIONS.length + 1 ? "bg-blue-600/20 text-foreground" : "text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  <span className="shrink-0 font-mono text-muted-foreground w-4">Esc</span>
+                  <span>Dismiss</span>
+                </button>
               </div>
-            )}
+              {showFeedback && (
+                <div className="space-y-2">
+                  <textarea
+                    ref={feedbackRef}
+                    value={feedback}
+                    onChange={(e) => setFeedback(e.target.value)}
+                    placeholder="Describe what you'd like to change about the plan..."
+                    className="w-full rounded border border-border bg-background px-3 py-2 text-xs resize-none focus:outline-none focus:ring-1 focus:ring-blue-500"
+                    rows={3}
+                  />
+                  <div className="flex gap-2">
+                    <button
+                      onClick={handleSendFeedback}
+                      disabled={!feedback.trim()}
+                      className="flex items-center gap-1.5 rounded bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      <Send className="h-3 w-3" />
+                      Send feedback
+                    </button>
+                    <button
+                      onClick={() => {
+                        setShowFeedback(false);
+                        containerRef.current?.focus();
+                      }}
+                      className="rounded px-3 py-1.5 text-xs text-muted-foreground hover:bg-muted"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
         </div>
       </div>
-    </div>
+      {permission.planContent && permission.planFilePath && (
+        <PlanViewModal
+          open={planModalOpen}
+          onOpenChange={setPlanModalOpen}
+          content={permission.planContent}
+          filePath={permission.planFilePath}
+        />
+      )}
+    </>
   );
 }

@@ -292,16 +292,11 @@ export class EventParser {
     const assistantMessageId = msg.id || undefined;
     const events: ParsedEvent[] = [];
 
-    const thinkingOnly = msg.content.every((b) => b.type === "thinking");
-    let thinkingTokensLeft = thinkingOnly ? (msg.usage?.output_tokens ?? undefined) : undefined;
-
     for (const block of msg.content) {
       if (block.type === "thinking") {
         const redacted = !block.thinking && !!block.signature;
         if (!block.thinking && !redacted) continue;
-        const tokens = thinkingTokensLeft;
-        thinkingTokensLeft = undefined;
-        events.push({ type: "thinking", text: block.thinking ?? "", tokens, redacted, assistantMessageId });
+        events.push({ type: "thinking", text: block.thinking ?? "", redacted, assistantMessageId });
       } else if (block.type === "text" && block.text) {
         events.push({ type: "text_delta", text: block.text, assistantMessageId });
       } else if (block.type === "tool_use") {

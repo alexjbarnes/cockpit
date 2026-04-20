@@ -6,7 +6,7 @@ import { extractTokenFromQuery, validateSession } from "./auth";
 // loadLastUsage no longer needed - usage is returned by loadTranscript
 import { logClientMessage, logParsedEvent, logServerMessage, logStatus } from "./debug-logger";
 import type { ParsedEvent } from "./event-parser";
-import { findLatestPlanFile } from "./plans";
+import { findLatestPlanFile, readPlanFile } from "./plans";
 import { SessionManager } from "./session-manager";
 
 export function createWebSocketHandler(server: HTTPServer, sessionManager: SessionManager): WebSocketServer {
@@ -427,6 +427,7 @@ export function createWebSocketHandler(server: HTTPServer, sessionManager: Sessi
                 };
                 if (req.planFilePath) {
                   permMsg.planFilePath = req.planFilePath;
+                  permMsg.planContent = req.planContent;
                 }
                 send(ws, permMsg);
               }
@@ -799,7 +800,11 @@ function handleParsedEvent(
           suggestions: event.permissionSuggestions as import("@/types").PermissionSuggestion[] | undefined,
         };
         if (toolName === "ExitPlanMode") {
-          permMsg.planFilePath = findLatestPlanFile();
+          const planPath = findLatestPlanFile();
+          if (planPath) {
+            permMsg.planFilePath = planPath;
+            permMsg.planContent = readPlanFile(planPath);
+          }
         }
         send(ws, permMsg);
       }

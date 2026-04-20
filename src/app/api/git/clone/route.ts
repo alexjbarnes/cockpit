@@ -53,7 +53,6 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Parent directory does not exist" }, { status: 400 });
   }
 
-  // Derive repo name from URL if no folder name given
   let repoName = folderName;
   if (!repoName) {
     const urlPath = url.replace(/\.git$/, "").replace(/\/$/, "");

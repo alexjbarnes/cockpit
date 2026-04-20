@@ -24,6 +24,7 @@ export interface PendingPermission {
   input: string;
   suggestions?: import("@/types").PermissionSuggestion[];
   planFilePath?: string;
+  planContent?: string;
 }
 
 export interface PendingQuestion {
@@ -851,6 +852,7 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
               input: msg.input,
               suggestions: msg.suggestions,
               planFilePath: msg.planFilePath,
+              planContent: msg.planContent,
             },
           ]);
           break;

@@ -185,10 +185,9 @@ export function processEvents(
       const last = state.pendingBlocks[state.pendingBlocks.length - 1];
       if (last && last.type === "thinking") {
         last.text += event.text ?? "";
-        if (event.tokens) last.tokens = (last.tokens ?? 0) + event.tokens;
         if (event.redacted) last.redacted = true;
       } else {
-        state.pendingBlocks.push({ type: "thinking", text: event.text ?? "", tokens: event.tokens, redacted: event.redacted });
+        state.pendingBlocks.push({ type: "thinking", text: event.text ?? "", redacted: event.redacted });
       }
     } else if (event.type === "text_delta" && event.text) {
       if (state.agentStack.length > 0) continue;

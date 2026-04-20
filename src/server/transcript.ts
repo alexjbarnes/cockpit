@@ -448,16 +448,11 @@ function parseLines(lines: string[]): { messages: ChatMessage[]; lastUsage: { us
 
       const msgId = entry.message.id || uuidv4();
 
-      const thinkingOnly = content.every((b) => b.type === "thinking");
-      let thinkingTokensLeft = thinkingOnly ? (entry.message.usage?.output_tokens ?? undefined) : undefined;
-
       for (const block of content) {
         if (block.type === "thinking") {
           const redacted = !block.thinking && !!block.signature;
           if (!block.thinking && !redacted) continue;
-          const tokens = thinkingTokensLeft;
-          thinkingTokensLeft = undefined;
-          blocks.push({ type: "thinking", text: block.thinking ?? "", tokens, redacted });
+          blocks.push({ type: "thinking", text: block.thinking ?? "", redacted });
         } else if (block.type === "text" && block.text) {
           const cleaned = stripCliXml(block.text);
           if (cleaned) {

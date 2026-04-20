@@ -312,16 +312,16 @@ function LazyDiff({
       .then(([oldContent, newContent]) => {
         if (cancelled) return;
         if (oldContent != null) {
-          meta!.oldLines = oldContent.split("\n").map((l) => l + "\n");
+          meta!.deletionLines = oldContent.split("\n").map((l) => l + "\n");
         } else {
           console.warn(`[diff] ${file.path}: oldContent is null (base=${pr.baseRefName})`);
         }
         if (newContent != null) {
-          meta!.newLines = newContent.split("\n").map((l) => l + "\n");
+          meta!.additionLines = newContent.split("\n").map((l) => l + "\n");
         } else {
           console.warn(`[diff] ${file.path}: newContent is null (head=${pr.headRefName})`);
         }
-        console.info(`[diff] ${file.path}: oldLines=${!!meta!.oldLines} newLines=${!!meta!.newLines}`);
+        console.info(`[diff] ${file.path}: deletionLines=${!!meta!.deletionLines} additionLines=${!!meta!.additionLines}`);
         setFileDiffMeta(meta);
       })
       .catch((e) => {
@@ -480,7 +480,7 @@ export function PRReviewView({ owner, repo, number }: { owner: string; repo: str
   const [checks, setChecks] = useState<PRCheck[]>([]);
   const [checksOpen, setChecksOpen] = useState(false);
   const [reviewBody, setReviewBody] = useState("");
-  const [reviewSubmitting, setReviewSubmitting] = useState(false);
+  const [reviewSubmitting, setReviewSubmitting] = useState<string | null>(null);
   const [agentReviewStarted, setAgentReviewStarted] = useState(false);
 
   const ws = useWebSocket();
@@ -634,7 +634,7 @@ export function PRReviewView({ owner, repo, number }: { owner: string; repo: str
   const submitReview = useCallback(
     async (action: "approve" | "request-changes" | "comment") => {
       if (action === "request-changes" && !reviewBody.trim()) return;
-      setReviewSubmitting(true);
+      setReviewSubmitting(action);
       try {
         const res = await fetch("/api/github/prs/review", {
           method: "POST",
@@ -648,7 +648,7 @@ export function PRReviewView({ owner, repo, number }: { owner: string; repo: str
           if (updated.ok) setPr(await updated.json());
         }
       } catch {}
-      setReviewSubmitting(false);
+      setReviewSubmitting(null);
     },
     [fullRepo, number, reviewBody],
   );
@@ -904,28 +904,28 @@ export function PRReviewView({ owner, repo, number }: { owner: string; repo: str
               className="w-full text-sm rounded border bg-transparent px-3 py-2 min-h-[60px] resize-y focus:outline-none focus:ring-1 focus:ring-ring"
             />
             <div className="flex items-center gap-2">
-              <Button variant="outline" size="sm" className="text-xs" disabled={reviewSubmitting} onClick={() => submitReview("comment")}>
-                {reviewSubmitting ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : null}
+              <Button variant="outline" size="sm" className="text-xs" disabled={!!reviewSubmitting} onClick={() => submitReview("comment")}>
+                {reviewSubmitting === "comment" ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : null}
                 Comment
               </Button>
               <Button
                 variant="outline"
                 size="sm"
                 className="text-xs text-green-500 border-green-500/30 hover:bg-green-500/10"
-                disabled={reviewSubmitting}
+                disabled={!!reviewSubmitting}
                 onClick={() => submitReview("approve")}
               >
-                {reviewSubmitting ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : null}
+                {reviewSubmitting === "approve" ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : null}
                 Approve
               </Button>
               <Button
                 variant="outline"
                 size="sm"
                 className="text-xs text-red-500 border-red-500/30 hover:bg-red-500/10"
-                disabled={reviewSubmitting || !reviewBody.trim()}
+                disabled={!!reviewSubmitting || !reviewBody.trim()}
                 onClick={() => submitReview("request-changes")}
               >
-                {reviewSubmitting ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : null}
+                {reviewSubmitting === "request-changes" ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : null}
                 Request Changes
               </Button>
             </div>

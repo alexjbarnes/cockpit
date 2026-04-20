@@ -12,8 +12,7 @@
     "declaration": false,
     "paths": {
       "@/*": ["./src/*"]
-    },
-    "baseUrl": "."
+    }
   },
   "include": ["server.ts", "src/server/**/*.ts", "src/types/**/*.ts"],
   "exclude": ["node_modules"]

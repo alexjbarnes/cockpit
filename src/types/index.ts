@@ -261,6 +261,7 @@ export type ServerMessage =
       input: string;
       suggestions?: PermissionSuggestion[];
       planFilePath?: string;
+      planContent?: string;
     }
   | { type: "question:request"; sessionId: string; requestId: string; questions: string }
   | { type: "session:clear"; sessionId: string }
