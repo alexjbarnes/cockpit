@@ -219,10 +219,10 @@ function StackedDiffs({
             if (parsed.length > 0 && parsed[0].files.length > 0) {
               fileDiffMeta = parsed[0].files[0];
               if (data.oldContent != null) {
-                fileDiffMeta.oldLines = data.oldContent.split("\n").map((l) => l + "\n");
+                fileDiffMeta.deletionLines = data.oldContent.split("\n").map((l) => l + "\n");
               }
               if (data.newContent != null) {
-                fileDiffMeta.newLines = data.newContent.split("\n").map((l) => l + "\n");
+                fileDiffMeta.additionLines = data.newContent.split("\n").map((l) => l + "\n");
               }
             }
           } catch {
@@ -559,8 +559,8 @@ export function ChangesView({ cwd, sessionId }: { cwd: string; sessionId?: strin
             const parsed = parsePatchFiles(data.diff);
             if (parsed.length > 0 && parsed[0].files.length > 0) {
               const meta = parsed[0].files[0];
-              if (data.oldContent != null) meta.oldLines = data.oldContent.split("\n").map((l) => l + "\n");
-              if (data.newContent != null) meta.newLines = data.newContent.split("\n").map((l) => l + "\n");
+              if (data.oldContent != null) meta.deletionLines = data.oldContent.split("\n").map((l) => l + "\n");
+              if (data.newContent != null) meta.additionLines = data.newContent.split("\n").map((l) => l + "\n");
               setSingleFileDiff(meta);
             }
           } catch {

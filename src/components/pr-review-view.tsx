@@ -312,16 +312,16 @@ function LazyDiff({
       .then(([oldContent, newContent]) => {
         if (cancelled) return;
         if (oldContent != null) {
-          meta!.oldLines = oldContent.split("\n").map((l) => l + "\n");
+          meta!.deletionLines = oldContent.split("\n").map((l) => l + "\n");
         } else {
           console.warn(`[diff] ${file.path}: oldContent is null (base=${pr.baseRefName})`);
         }
         if (newContent != null) {
-          meta!.newLines = newContent.split("\n").map((l) => l + "\n");
+          meta!.additionLines = newContent.split("\n").map((l) => l + "\n");
         } else {
           console.warn(`[diff] ${file.path}: newContent is null (head=${pr.headRefName})`);
         }
-        console.info(`[diff] ${file.path}: oldLines=${!!meta!.oldLines} newLines=${!!meta!.newLines}`);
+        console.info(`[diff] ${file.path}: deletionLines=${!!meta!.deletionLines} additionLines=${!!meta!.additionLines}`);
         setFileDiffMeta(meta);
       })
       .catch((e) => {
