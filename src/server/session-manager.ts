@@ -21,7 +21,7 @@ import type {
 import { logDiag, logRawLine } from "./debug-logger";
 import { getDefaults } from "./defaults";
 import { EventParser, type ParsedEvent } from "./event-parser";
-import { findLatestPlanFile } from "./plans";
+import { findLatestPlanFile, readPlanFile } from "./plans";
 import { findChainForCliSession, getSessionPrefs, setSessionPrefs } from "./session-prefs";
 import { createStreamState, processEvents } from "./stream-processor";
 import { findSessionCwd, loadMoreMessages, loadTranscript, transcriptExists } from "./transcript";
@@ -39,6 +39,7 @@ export interface PendingRequest {
   toolInput: string;
   rawToolInput?: Record<string, unknown>;
   planFilePath?: string;
+  planContent?: string;
 }
 
 export interface StreamingSnapshot {
@@ -1140,13 +1141,15 @@ export class SessionManager {
       } else if (pa.type === "auto_deny") {
         this.respondToPermission(sessionId, pa.requestId, false, undefined, undefined, pa.denyReason);
       } else {
+        const planPath = pa.toolName === "ExitPlanMode" ? findLatestPlanFile() : undefined;
         session.pendingRequests.set(pa.requestId, {
           type: pa.toolName === "AskUserQuestion" ? "question" : "permission",
           requestId: pa.requestId,
           toolName: pa.toolName,
           toolInput: pa.toolInput || "",
           rawToolInput: pa.rawToolInput,
-          planFilePath: pa.toolName === "ExitPlanMode" ? findLatestPlanFile() : undefined,
+          planFilePath: planPath,
+          planContent: planPath ? readPlanFile(planPath) : undefined,
         });
       }
     }
@@ -1167,7 +1170,6 @@ export class SessionManager {
       if (lastEmit.message.toolUses.some((t: ToolUse) => t.name === "Agent")) {
         this.loadAgentChildren(session, sessionId, lastEmit.message.id, session.info.cwd);
       }
-      this.flushQueuedMessage(session, sessionId);
       if (session.needsRespawnForPermissions) {
         session.needsRespawnForPermissions = false;
         this.killProcess(session);
@@ -1179,6 +1181,7 @@ export class SessionManager {
     if (result.statusChange === "idle") {
       session.info.status = "idle";
       session.emitter.emit("status", sessionId, "idle");
+      this.flushQueuedMessage(session, sessionId);
     }
   }
 
@@ -1572,6 +1575,7 @@ Additional Cockpit rules beyond the CLI's defaults:
       session.info.status = "idle";
       session.emitter.emit("status", sessionId, "idle");
       session.emitter.emit("error", sessionId, err.message);
+      this.flushQueuedMessage(session, sessionId);
     });
   }
 
