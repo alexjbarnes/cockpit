@@ -7,6 +7,7 @@ export interface StreamState {
   agentStack: ToolUse[];
   currentAssistantMsgId: string | null;
   flushedOnMessageDone: boolean;
+  thinkingStartedAt: number | null;
 }
 
 export interface ProcessedResult {
@@ -121,6 +122,7 @@ export function createStreamState(): StreamState {
     agentStack: [],
     currentAssistantMsgId: null,
     flushedOnMessageDone: false,
+    thinkingStartedAt: null,
   };
 }
 
@@ -191,6 +193,16 @@ export function processEvents(
       }
     } else if (event.type === "text_delta" && event.text) {
       if (state.agentStack.length > 0) continue;
+      if (state.thinkingStartedAt !== null && state.pendingBlocks.some((b) => b.type === "thinking")) {
+        const durationMs = Date.now() - state.thinkingStartedAt;
+        state.thinkingStartedAt = null;
+        for (const block of state.pendingBlocks) {
+          if (block.type === "thinking") block.durationMs = durationMs;
+        }
+        result.emit.push({ type: "thinking", durationMs });
+      } else {
+        state.thinkingStartedAt = null;
+      }
       const last = state.pendingBlocks[state.pendingBlocks.length - 1];
       if (last && last.type === "text") {
         last.text += event.text;
@@ -198,6 +210,16 @@ export function processEvents(
         state.pendingBlocks.push({ type: "text", text: event.text });
       }
     } else if (event.type === "tool_use_start") {
+      if (state.thinkingStartedAt !== null && state.pendingBlocks.some((b) => b.type === "thinking")) {
+        const durationMs = Date.now() - state.thinkingStartedAt;
+        state.thinkingStartedAt = null;
+        for (const block of state.pendingBlocks) {
+          if (block.type === "thinking") block.durationMs = durationMs;
+        }
+        result.emit.push({ type: "thinking", durationMs });
+      } else {
+        state.thinkingStartedAt = null;
+      }
       const tool: ToolUse = {
         id: event.toolId || "",
         name: event.toolName || "",
@@ -252,6 +274,7 @@ export function processEvents(
           tool.status = "done";
         }
       }
+      state.thinkingStartedAt = Date.now();
     } else if (event.type === "tool_progress" && event.toolId && event.text) {
       const agent = state.agentStack.find((a) => a.id === event.toolId);
       if (agent) {
@@ -282,6 +305,14 @@ export function processEvents(
       }
       result.systemMessages.push(event.text);
     } else if (event.type === "message_done" && event.message) {
+      if (state.thinkingStartedAt !== null && state.pendingBlocks.some((b) => b.type === "thinking")) {
+        const durationMs = Date.now() - state.thinkingStartedAt;
+        for (const block of state.pendingBlocks) {
+          if (block.type === "thinking") block.durationMs = durationMs;
+        }
+        result.emit.push({ type: "thinking", durationMs });
+      }
+      state.thinkingStartedAt = null;
       if (event.interrupted) {
         if (state.currentAssistantMsgId) {
           event.message.id = state.currentAssistantMsgId;

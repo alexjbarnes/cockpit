@@ -263,6 +263,7 @@ function parseLines(lines: string[]): { messages: ChatMessage[]; lastUsage: { us
   const messages: ChatMessage[] = [];
   const messageById = new Map<string, ChatMessage>();
   const toolUseMap = new Map<string, ToolUse>();
+  let lastUserOrToolResultTs = 0;
   let lastUsage: { used: number; total: number } | null = null;
   let contextWindowSize = 200_000;
 
@@ -366,6 +367,7 @@ function parseLines(lines: string[]): { messages: ChatMessage[]; lastUsage: { us
     }
 
     if (entry.type === "user" && entry.message) {
+      if (entry.timestamp) lastUserOrToolResultTs = new Date(entry.timestamp).getTime();
       const content = entry.message.content;
 
       if (typeof content === "string") {
@@ -447,12 +449,19 @@ function parseLines(lines: string[]): { messages: ChatMessage[]; lastUsage: { us
       let textContent = "";
 
       const msgId = entry.message.id || uuidv4();
+      const entryTs = entry.timestamp ? new Date(entry.timestamp).getTime() : 0;
+      const hasThinking = content.some((b) => b.type === "thinking" && (b.thinking || b.signature));
+
+      let thinkingDurationMs: number | undefined;
+      if (hasThinking && lastUserOrToolResultTs && entryTs > lastUserOrToolResultTs) {
+        thinkingDurationMs = entryTs - lastUserOrToolResultTs;
+      }
 
       for (const block of content) {
         if (block.type === "thinking") {
           const redacted = !block.thinking && !!block.signature;
           if (!block.thinking && !redacted) continue;
-          blocks.push({ type: "thinking", text: block.thinking ?? "", redacted });
+          blocks.push({ type: "thinking", text: block.thinking ?? "", durationMs: thinkingDurationMs, redacted });
         } else if (block.type === "text" && block.text) {
           const cleaned = stripCliXml(block.text);
           if (cleaned) {

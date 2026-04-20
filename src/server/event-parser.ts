@@ -43,6 +43,7 @@ export interface ParsedEvent {
   initData?: InitData;
   isMainThread?: boolean;
   tokens?: number;
+  durationMs?: number;
   redacted?: boolean;
 }
 

@@ -23,7 +23,7 @@ import { getDefaults } from "./defaults";
 import { EventParser, type ParsedEvent } from "./event-parser";
 import { findLatestPlanFile, readPlanFile } from "./plans";
 import { findChainForCliSession, getSessionPrefs, setSessionPrefs } from "./session-prefs";
-import { createStreamState, processEvents } from "./stream-processor";
+import { createStreamState, processEvents, type StreamState } from "./stream-processor";
 import { findSessionCwd, loadMoreMessages, loadTranscript, transcriptExists } from "./transcript";
 
 export interface SessionEvents {
@@ -70,6 +70,7 @@ interface Session {
   needsRespawnForPermissions: boolean;
   compacting: boolean;
   thinkingLevel: ThinkingLevel;
+  streamState: StreamState | null;
   contextUsage: ContextUsage | null;
   contextWindowSize: number;
   todoItems: TodoItem[];
@@ -132,6 +133,7 @@ export class SessionManager {
       needsRespawnForPermissions: false,
       compacting: false,
       thinkingLevel: defaults.thinkingLevel,
+      streamState: null,
       contextUsage: null,
       contextWindowSize: 200_000,
       todoItems: [],
@@ -178,6 +180,7 @@ export class SessionManager {
         needsRespawnForPermissions: false,
         compacting: false,
         thinkingLevel: prefs?.thinkingLevel ?? recommendedEffort(resolveModel(prefs?.model || defaults.model)) ?? defaults.thinkingLevel,
+        streamState: null,
         contextUsage: null,
         contextWindowSize: 200_000,
         todoItems: [],
@@ -1364,6 +1367,7 @@ Additional Cockpit rules beyond the CLI's defaults:
     session.emitter.emit("status", sessionId, "running");
 
     if (session.process && session.stdin) {
+      if (session.streamState) session.streamState.thinkingStartedAt = Date.now();
       const userInput = { type: "user", message: { role: "user", content } };
       session.stdin.write(JSON.stringify(userInput) + "\n");
       return true;
@@ -1478,6 +1482,8 @@ Additional Cockpit rules beyond the CLI's defaults:
     const parser = new EventParser();
     let stderrBuffer = "";
     const streamState = createStreamState();
+    session.streamState = streamState;
+    streamState.thinkingStartedAt = Date.now();
 
     let lineBuffer = "";
     proc.stdout!.on("data", (chunk: Buffer) => {

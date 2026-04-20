@@ -229,7 +229,13 @@ export const MessageBubble = memo(function MessageBubble({
               block.type === "tool_use" ? (
                 <ToolCard key={`tool-${i}`} tool={block.toolUse} expandedToolIds={expandedToolIds} />
               ) : block.type === "thinking" ? (
-                <ThinkingBlock key={`thinking-${i}`} text={block.text} tokens={block.tokens} redacted={block.redacted} />
+                <ThinkingBlock
+                  key={`thinking-${i}`}
+                  text={block.text}
+                  tokens={block.tokens}
+                  durationMs={block.durationMs}
+                  redacted={block.redacted}
+                />
               ) : (
                 <div key={`text-${i}`} className="message-prose prose prose-sm max-w-none dark:prose-invert">
                   <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]} components={markdownComponents}>
@@ -299,17 +305,19 @@ function TextFileBlock({ name, content }: { name: string; content: string }) {
   );
 }
 
-function ThinkingBlock({ text, tokens }: { text: string; tokens?: number; redacted?: boolean }) {
+function ThinkingBlock({ text, tokens, durationMs }: { text: string; tokens?: number; durationMs?: number; redacted?: boolean }) {
   const { settings } = useSettings();
   const [expanded, setExpanded] = useState<boolean | null>(null);
   const isExpanded = expanded ?? settings.thinkingExpanded;
   const hasText = text.length > 0;
   const sizeLabel =
-    tokens != null
-      ? `${tokens.toLocaleString()} token${tokens === 1 ? "" : "s"}`
-      : hasText
-        ? `${text.length.toLocaleString()} chars`
-        : null;
+    durationMs != null
+      ? `${Math.max(1, Math.round(durationMs / 1000))}s`
+      : tokens != null
+        ? `${tokens.toLocaleString()} token${tokens === 1 ? "" : "s"}`
+        : hasText
+          ? `${text.length.toLocaleString()} chars`
+          : null;
 
   return (
     <div className="rounded border border-purple-500/20 bg-purple-500/5">

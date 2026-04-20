@@ -651,6 +651,7 @@ function handleParsedEvent(
         sessionId,
         text: event.text || "",
         tokens: event.tokens,
+        durationMs: event.durationMs,
         redacted: event.redacted,
       });
       break;

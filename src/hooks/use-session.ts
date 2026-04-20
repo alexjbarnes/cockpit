@@ -333,13 +333,20 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
             streamingRef.current = { content: "", toolUses: [], blocks: [] };
           }
           const tBlocks = streamingRef.current.blocks;
-          const lastTBlock = tBlocks[tBlocks.length - 1];
-          if (lastTBlock && lastTBlock.type === "thinking") {
-            lastTBlock.text += msg.text;
-            if (msg.tokens) lastTBlock.tokens = (lastTBlock.tokens ?? 0) + msg.tokens;
-            if (msg.redacted) lastTBlock.redacted = true;
+          if (msg.durationMs) {
+            const lastThinking = [...tBlocks].reverse().find((b) => b.type === "thinking");
+            if (lastThinking && lastThinking.type === "thinking") {
+              lastThinking.durationMs = msg.durationMs;
+            }
           } else {
-            tBlocks.push({ type: "thinking", text: msg.text, tokens: msg.tokens, redacted: msg.redacted });
+            const lastTBlock = tBlocks[tBlocks.length - 1];
+            if (lastTBlock && lastTBlock.type === "thinking") {
+              lastTBlock.text += msg.text;
+              if (msg.tokens) lastTBlock.tokens = (lastTBlock.tokens ?? 0) + msg.tokens;
+              if (msg.redacted) lastTBlock.redacted = true;
+            } else {
+              tBlocks.push({ type: "thinking", text: msg.text, tokens: msg.tokens, redacted: msg.redacted });
+            }
           }
 
           const tStreaming = streamingRef.current;
