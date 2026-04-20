@@ -1,6 +1,7 @@
 "use client";
 
 import { FolderOpen, Menu } from "lucide-react";
+import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { AuthGuard } from "@/components/auth-guard";
@@ -215,7 +216,8 @@ export function AppShell({ children }: { children: ReactNode }) {
                 <Button variant="ghost" size="icon" onClick={toggleSidebar} title="Toggle sidebar (Ctrl+B)" className="md:hidden">
                   <Menu className="h-4 w-4" />
                 </Button>
-                <div className="hidden md:block min-w-0 flex-1 overflow-hidden">
+                <div className="hidden md:flex items-center gap-2 min-w-0 flex-1 overflow-hidden">
+                  <Image src="/icon-192.png" alt="" width={22} height={22} className="shrink-0 dark:invert" />
                   <EditableTitle title={header.title} onRename={header.onRename} />
                 </div>
                 <div className="flex items-center gap-2 shrink-0 ml-auto">

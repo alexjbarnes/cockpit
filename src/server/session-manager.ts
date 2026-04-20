@@ -1151,11 +1151,6 @@ export class SessionManager {
       }
     }
 
-    if (result.statusChange === "idle") {
-      session.info.status = "idle";
-      session.emitter.emit("status", sessionId, "idle");
-    }
-
     if (result.compactDone) {
       session.compacting = false;
       this.emitSystem(session, sessionId, "__compact::done");
@@ -1179,6 +1174,11 @@ export class SessionManager {
         session.info.status = "idle";
         session.emitter.emit("status", sessionId, "idle");
       }
+    }
+
+    if (result.statusChange === "idle") {
+      session.info.status = "idle";
+      session.emitter.emit("status", sessionId, "idle");
     }
   }
 

@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
@@ -75,7 +76,10 @@ export default function LoginPage() {
     <div className="flex min-h-screen items-center justify-center p-4">
       <Card className="w-full max-w-sm">
         <CardHeader>
-          <CardTitle>Cockpit</CardTitle>
+          <CardTitle className="flex items-center gap-2">
+            <Image src="/icon-192.png" alt="" width={28} height={28} className="dark:invert" />
+            Cockpit
+          </CardTitle>
           <CardDescription>{isSetup ? "Set a password to secure your instance" : "Enter your password to continue"}</CardDescription>
         </CardHeader>
         <CardContent>

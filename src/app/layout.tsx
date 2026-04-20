@@ -6,7 +6,10 @@ export const metadata: Metadata = {
   description: "Claude Code Web UI",
   manifest: "/manifest.json",
   icons: {
-    icon: "/icon-192.png",
+    icon: [
+      { url: "/favicon.ico", sizes: "any" },
+      { url: "/icon-192.png", sizes: "192x192", type: "image/png" },
+    ],
     apple: "/icon-192.png",
   },
   appleWebApp: {

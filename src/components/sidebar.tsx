@@ -1,6 +1,7 @@
 "use client";
 
-import { CalendarClock, GitPullRequest, Home, Plus, Settings, X } from "lucide-react";
+import { CalendarClock, GitPullRequest, Plus, Settings, X } from "lucide-react";
+import Image from "next/image";
 import { usePathname, useRouter } from "next/navigation";
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { useShell } from "@/components/app-shell";
@@ -388,7 +389,7 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
             }}
             className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors flex-1 min-w-0"
           >
-            <Home className="h-4 w-4 shrink-0" />
+            <Image src="/icon-192.png" alt="" width={18} height={18} className="shrink-0 dark:invert" />
             All sessions
           </button>
           <Button

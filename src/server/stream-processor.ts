@@ -284,6 +284,19 @@ export function processEvents(
       result.systemMessages.push(event.text);
     } else if (event.type === "message_done" && event.message) {
       if (event.interrupted) {
+        if (state.currentAssistantMsgId) {
+          event.message.id = state.currentAssistantMsgId;
+        }
+        if (state.pendingBlocks.length > 0) {
+          event.message.blocks = [...state.pendingBlocks];
+          event.message.content = state.pendingBlocks
+            .filter((b) => b.type === "text")
+            .map((b) => b.text)
+            .join("");
+        }
+        if (state.pendingToolUses.length > 0 && event.message.toolUses.length === 0) {
+          event.message.toolUses = [...state.pendingToolUses];
+        }
         state.pendingBlocks.length = 0;
         state.pendingToolUses.length = 0;
         state.agentStack.length = 0;

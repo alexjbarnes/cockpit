@@ -907,18 +907,17 @@ export function InputArea({
           </div>
         )}
         {hasQueuedMessage && (
-          <div className="mb-1 flex items-center gap-2 px-9">
-            <span className={`text-xs ${queuePaused ? "text-yellow-500" : "text-muted-foreground"}`}>
+          <button
+            type="button"
+            onClick={() => setQueueModalOpen(true)}
+            className="mb-1 mx-9 flex items-center gap-2 rounded-md border border-dashed px-3 py-1.5 text-xs hover:bg-muted transition-colors cursor-pointer"
+          >
+            <MessageSquare className={`h-3.5 w-3.5 shrink-0 ${queuePaused ? "text-yellow-500" : "text-primary"}`} />
+            <span className={queuePaused ? "text-yellow-500" : "text-muted-foreground"}>
               {queuedMessages?.length ?? 0} message{(queuedMessages?.length ?? 0) !== 1 ? "s" : ""} {queuePaused ? "paused" : "queued"}
             </span>
-            <button
-              onClick={() => setQueueModalOpen(true)}
-              className="rounded p-0.5 text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
-              title="Manage queued messages"
-            >
-              <MessageSquare className="h-3 w-3" />
-            </button>
-          </div>
+            <span className="text-muted-foreground/50 ml-auto">tap to manage</span>
+          </button>
         )}
         <div className="relative flex items-stretch gap-1">
           {showMenu && (
