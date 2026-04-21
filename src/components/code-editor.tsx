@@ -60,7 +60,7 @@ export function CodeEditor({ value, onChange, language, readOnly, className, onS
     if (!containerRef.current) return;
 
     const state = EditorState.create({
-      doc: value,
+      doc: internalValue.current,
       extensions: [
         basicSetup,
         EditorView.lineWrapping,
@@ -93,7 +93,8 @@ export function CodeEditor({ value, onChange, language, readOnly, className, onS
       view.destroy();
       viewRef.current = null;
     };
-  }, [value, readOnly, language]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Sync external value changes
   useEffect(() => {

@@ -227,7 +227,7 @@ export const MessageBubble = memo(function MessageBubble({
           <div className="space-y-2">
             {visibleBlocks.map((block, i) =>
               block.type === "tool_use" ? (
-                <ToolCard key={`tool-${i}`} tool={block.toolUse} expandedToolIds={expandedToolIds} />
+                <ToolCard key={block.toolUse.id} tool={block.toolUse} expandedToolIds={expandedToolIds} />
               ) : block.type === "thinking" ? (
                 <ThinkingBlock
                   key={`thinking-${i}`}
