@@ -84,6 +84,7 @@ interface UseSessionReturn {
   clearRestoredText: () => void;
   dismissBtw: () => void;
   retry: () => void;
+  restartSession: () => void;
 }
 
 export function useSession(sessionId: string, cwd?: string, historyView?: boolean): UseSessionReturn {
@@ -1188,6 +1189,10 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
     send({ type: "message:send", sessionId, text: "Continue from where you left off." });
   }, [send, sessionId]);
 
+  const restartSession = useCallback(() => {
+    send({ type: "session:restart", sessionId });
+  }, [send, sessionId]);
+
   return {
     messages,
     historyLoaded,
@@ -1232,5 +1237,6 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
     clearRestoredText,
     dismissBtw,
     retry,
+    restartSession,
   };
 }

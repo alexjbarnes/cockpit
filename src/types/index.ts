@@ -232,6 +232,7 @@ export type ClientMessage =
   | { type: "session:set_plan_mode"; sessionId: string; enabled: boolean }
   | { type: "session:set_thinking"; sessionId: string; level: ThinkingLevel }
   | { type: "session:set_model"; sessionId: string; model: string }
+  | { type: "session:restart"; sessionId: string }
   | { type: "session:subscribe"; sessionIds: string[] }
   | { type: "question:response"; sessionId: string; requestId: string; answers: Record<string, string> }
   | { type: "message:cancel_queued"; sessionId: string }

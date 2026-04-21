@@ -76,6 +76,7 @@ export function ChatView({
     clearRestoredText,
     dismissBtw,
     retry,
+    restartSession,
   } = useSession(sessionId, cwd, historyView);
   const { settings } = useSettings();
   const { setHeader, setBackgroundTasks, setTodos, setInitData: setShellInitData } = useShell();
@@ -464,6 +465,7 @@ export function ChatView({
           onClearRestoredText={clearRestoredText}
           btw={btw}
           onDismissBtw={dismissBtw}
+          onRestart={restartSession}
         />
       </div>
     </>

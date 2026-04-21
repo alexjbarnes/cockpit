@@ -13,6 +13,7 @@ import {
   MessageSquare,
   Paperclip,
   Plug,
+  RefreshCw,
   Send,
   Settings2,
   ShieldCheck,
@@ -235,6 +236,7 @@ interface InputAreaProps {
   onClearRestoredText?: () => void;
   btw?: { question: string; answer: string | null; loading: boolean; error: string | null } | null;
   onDismissBtw?: () => void;
+  onRestart?: () => void;
 }
 
 const sessionDrafts = new Map<string, string>();
@@ -275,6 +277,7 @@ export function InputArea({
   onClearRestoredText,
   btw,
   onDismissBtw,
+  onRestart,
 }: InputAreaProps) {
   const { connected } = useWebSocket();
   const [text, setText] = useState(() => sessionDrafts.get(sessionId) || "");
@@ -670,7 +673,7 @@ export function InputArea({
 
   return (
     <div
-      className={`border-t bg-background px-1 py-1 ${dragOver ? "ring-2 ring-primary ring-inset" : ""}`}
+      className={`border-t bg-background px-1 pt-2 pb-1 ${dragOver ? "ring-2 ring-primary ring-inset" : ""}`}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
@@ -851,6 +854,16 @@ export function InputArea({
                       </span>
                     </button>
                   )}
+                  <button
+                    onClick={() => {
+                      onRestart?.();
+                      setOptionsOpen(false);
+                    }}
+                    className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs hover:bg-muted transition-colors"
+                  >
+                    <RefreshCw className="h-3.5 w-3.5 text-muted-foreground" />
+                    <span className="text-muted-foreground">Restart process</span>
+                  </button>
                 </div>
               </div>
             );

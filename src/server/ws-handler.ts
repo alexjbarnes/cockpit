@@ -590,6 +590,11 @@ export function createWebSocketHandler(server: HTTPServer, sessionManager: Sessi
           break;
         }
 
+        case "session:restart": {
+          sessionManager.restartSession(msg.sessionId);
+          break;
+        }
+
         case "session:set_plan_mode": {
           if (msg.enabled) {
             sessionManager.setPlanMode(msg.sessionId);

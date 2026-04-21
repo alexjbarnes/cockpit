@@ -499,6 +499,25 @@ export class SessionManager {
     }
   }
 
+  restartSession(sessionId: string): boolean {
+    const session = this.sessions.get(sessionId);
+    if (!session) return false;
+
+    if (session.info.status === "running") {
+      this.emitSystem(session, sessionId, "Cannot restart while running. Interrupt first.");
+      return false;
+    }
+
+    this.killProcess(session);
+    session.pendingRequests.clear();
+    session.streamingSnapshot = null;
+    session.info.status = "idle";
+    session.emitter.emit("status", sessionId, "idle");
+    this.spawnProcess(session, sessionId);
+    this.emitSystem(session, sessionId, "Session restarted — agents and commands reloaded");
+    return true;
+  }
+
   destroySession(id: string): boolean {
     const session = this.sessions.get(id);
     if (!session) return false;
