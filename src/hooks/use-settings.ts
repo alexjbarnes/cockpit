@@ -11,6 +11,9 @@ export interface Settings {
   thinkingLevel: ThinkingLevel;
   bypassAllPermissions: boolean;
   thinkingExpanded: boolean;
+  readExpanded: boolean;
+  editExpanded: boolean;
+  toolCallsExpanded: boolean;
   model: string;
 }
 
@@ -20,6 +23,9 @@ const defaultSettings: Settings = {
   thinkingLevel: "high",
   bypassAllPermissions: false,
   thinkingExpanded: false,
+  readExpanded: false,
+  editExpanded: false,
+  toolCallsExpanded: false,
   model: "sonnet",
 };
 

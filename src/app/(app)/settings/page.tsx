@@ -2,7 +2,7 @@
 
 import { ChevronRight, Download, RefreshCw } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { usePageHeader } from "@/components/app-shell";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -123,8 +123,19 @@ export default function SettingsPage() {
   const [updating, setUpdating] = useState(false);
   const [updateResult, setUpdateResult] = useState<{ ok: boolean; message: string } | null>(null);
   const router = useRouter();
+  const scrollRef = useRef<HTMLDivElement>(null);
 
   usePageHeader("Settings");
+
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const saved = sessionStorage.getItem("settings-scroll");
+    if (saved) el.scrollTop = Number(saved);
+    const onScroll = () => sessionStorage.setItem("settings-scroll", String(el.scrollTop));
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => el.removeEventListener("scroll", onScroll);
+  }, []);
 
   const fetchVersion = useCallback(() => {
     setVersionLoading(true);
@@ -171,6 +182,7 @@ export default function SettingsPage() {
 
   return (
     <div
+      ref={scrollRef}
       className={`flex-1 min-h-0 overflow-y-auto p-4 space-y-4 transition-opacity duration-150 ${settingsLoaded ? "opacity-100" : "opacity-0"}`}
     >
       <Card>
@@ -326,6 +338,36 @@ export default function SettingsPage() {
               ]}
               value={settings.thinkingExpanded ? "expanded" : "collapsed"}
               onChange={(v) => updateSetting("thinkingExpanded", v === "expanded")}
+            />
+          </SettingRow>
+          <SettingRow label="Read results">
+            <ButtonGroup
+              options={[
+                { value: "collapsed" as const, label: "Collapsed" },
+                { value: "expanded" as const, label: "Expanded" },
+              ]}
+              value={settings.readExpanded ? "expanded" : "collapsed"}
+              onChange={(v) => updateSetting("readExpanded", v === "expanded")}
+            />
+          </SettingRow>
+          <SettingRow label="Edit results">
+            <ButtonGroup
+              options={[
+                { value: "collapsed" as const, label: "Collapsed" },
+                { value: "expanded" as const, label: "Expanded" },
+              ]}
+              value={settings.editExpanded ? "expanded" : "collapsed"}
+              onChange={(v) => updateSetting("editExpanded", v === "expanded")}
+            />
+          </SettingRow>
+          <SettingRow label="Tool calls">
+            <ButtonGroup
+              options={[
+                { value: "collapsed" as const, label: "Collapsed" },
+                { value: "expanded" as const, label: "Expanded" },
+              ]}
+              value={settings.toolCallsExpanded ? "expanded" : "collapsed"}
+              onChange={(v) => updateSetting("toolCallsExpanded", v === "expanded")}
             />
           </SettingRow>
         </CardContent>

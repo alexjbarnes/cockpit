@@ -5,6 +5,7 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { shortPath } from "@/lib/path";
 import { cn } from "@/lib/utils";
 import type { ToolUse } from "@/types";
+import { useSettings } from "@/hooks/use-settings";
 import { useShell } from "./app-shell";
 import { CodeBlock, languageFromPath, prehighlight } from "./code-block";
 import { DiffViewer } from "./diff-viewer";
@@ -52,11 +53,19 @@ interface ToolCardProps {
   expandedToolIds?: React.RefObject<Set<string>>;
 }
 
+function settingDefault(toolName: string, settings: ReturnType<typeof useSettings>["settings"]): boolean {
+  const name = toolName.toLowerCase();
+  if (name === "read") return settings.readExpanded;
+  if (name === "edit") return settings.editExpanded;
+  return settings.toolCallsExpanded;
+}
+
 export function ToolCard({ tool, expandedToolIds }: ToolCardProps) {
   const dark = useIsDark();
   const { backgroundTasks } = useShell();
+  const { settings } = useSettings();
   const input = useMemo(() => parseInput(tool.input), [tool.input]);
-  const [expanded, setExpanded] = useState(() => expandedToolIds?.current?.has(tool.id) ?? false);
+  const [expanded, setExpanded] = useState(() => expandedToolIds?.current?.has(tool.id) ?? settingDefault(tool.name, settings));
   const [planModalOpen, setPlanModalOpen] = useState(false);
 
   const filePath = (input.file_path as string) || tool.filePath || "";

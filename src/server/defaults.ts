@@ -11,6 +11,9 @@ export interface AppDefaults {
   diffStyle: DiffStyle;
   dismissKeyboardOnSend: boolean;
   thinkingExpanded: boolean;
+  readExpanded: boolean;
+  editExpanded: boolean;
+  toolCallsExpanded: boolean;
   model: string;
 }
 
@@ -23,6 +26,9 @@ const fallback: AppDefaults = {
   diffStyle: "split",
   dismissKeyboardOnSend: true,
   thinkingExpanded: false,
+  readExpanded: false,
+  editExpanded: false,
+  toolCallsExpanded: false,
   model: "sonnet",
 };
 

@@ -244,7 +244,7 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
     if (open || connected) {
       fetchSessions();
     }
-  }, [open, connected, fetchSessions]);
+  }, [open, connected, pathname, fetchSessions]);
 
   const stopSession = async (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
@@ -415,6 +415,7 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
             size="icon"
             className="shrink-0 h-8 w-8 text-muted-foreground hover:text-foreground"
             onClick={() => {
+              sessionStorage.removeItem("settings-scroll");
               close();
               router.push("/settings");
             }}
