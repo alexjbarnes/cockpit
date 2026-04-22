@@ -1,4 +1,5 @@
-import { execFile } from "node:child_process";
+import { readdir } from "node:fs/promises";
+import { join, relative, sep } from "node:path";
 import { NextRequest, NextResponse } from "next/server";
 import { validateSession } from "@/server/auth";
 
@@ -8,25 +9,36 @@ function authenticate(req: NextRequest): boolean {
 }
 
 const LIMIT = 50;
+const MAX_DEPTH = 5;
+const MAX_FILES = 5000;
 
-const EXCLUDED_DIRS = ["node_modules", ".git", ".next", "dist", "__pycache__", ".venv", "vendor", ".cache", "build", "coverage"];
+const EXCLUDED_DIRS = new Set(["node_modules", ".git", ".next", "dist", "__pycache__", ".venv", "vendor", ".cache", "build", "coverage"]);
 
-function listFiles(cwd: string): Promise<string[]> {
-  const excludes = EXCLUDED_DIRS.flatMap((d) => ["-not", "-path", `*/${d}/*`]);
-  return new Promise((resolve) => {
-    execFile("find", [".", "-maxdepth", "5", "-type", "f", ...excludes], { cwd, maxBuffer: 2 * 1024 * 1024, timeout: 3000 }, (err, stdout) => {
-      if (err) {
-        resolve([]);
-        return;
+async function listFiles(cwd: string): Promise<string[]> {
+  const results: string[] = [];
+
+  async function walk(dir: string, depth: number) {
+    if (depth > MAX_DEPTH || results.length >= MAX_FILES) return;
+    let entries;
+    try {
+      entries = await readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (results.length >= MAX_FILES) return;
+      if (entry.isDirectory()) {
+        if (!EXCLUDED_DIRS.has(entry.name)) {
+          await walk(join(dir, entry.name), depth + 1);
+        }
+      } else if (entry.isFile()) {
+        results.push(relative(cwd, join(dir, entry.name)).split(sep).join("/"));
       }
-      resolve(
-        stdout
-          .split("\n")
-          .filter(Boolean)
-          .map((p) => p.replace(/^\.\//, "")),
-      );
-    });
-  });
+    }
+  }
+
+  await walk(cwd, 0);
+  return results;
 }
 
 export async function GET(req: NextRequest) {
