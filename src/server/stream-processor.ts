@@ -91,6 +91,20 @@ const READ_ONLY_GIT_SUBCOMMANDS = new Set([
   "reflog",
 ]);
 
+const READ_ONLY_GH_PATTERNS = [
+  /^gh\s+pr\s+(list|view|diff|status|checks)\b/,
+  /^gh\s+issue\s+(list|view|status)\b/,
+  /^gh\s+repo\s+(list|view|clone)\b/,
+  /^gh\s+run\s+(list|view|watch)\b/,
+  /^gh\s+search\b/,
+  /^gh\s+api\b(?!.*-X\s*(POST|PUT|PATCH|DELETE))(?!.*--method\s*(POST|PUT|PATCH|DELETE))/,
+];
+
+function isReadOnlyGhCommand(cmd: string): boolean {
+  const trimmed = cmd.trim();
+  return READ_ONLY_GH_PATTERNS.some((re) => re.test(trimmed));
+}
+
 const WRITE_TOOLS = new Set(["Edit", "Write", "Bash", "NotebookEdit"]);
 const USER_FACING_TOOLS = new Set(["ExitPlanMode", "AskUserQuestion", "EnterPlanMode"]);
 
@@ -433,7 +447,7 @@ export function processEvents(
       }
       if (toolName === "Bash" && event.rawToolInput) {
         const cmd = (event.rawToolInput as { command?: string }).command || "";
-        if (cmd.trimStart().startsWith("gh ")) {
+        if (cmd.trimStart().startsWith("gh ") && isReadOnlyGhCommand(cmd)) {
           result.permissionActions.push({ type: "auto_approve", requestId: event.requestId, toolName, rawToolInput: event.rawToolInput });
           continue;
         }

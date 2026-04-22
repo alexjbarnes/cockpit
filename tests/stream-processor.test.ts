@@ -657,7 +657,7 @@ describe("processEvents", () => {
       expect(result.emit).toHaveLength(1);
     });
 
-    it("auto-approves gh commands", () => {
+    it("auto-approves read-only gh commands", () => {
       const state = makeState();
       const events: ParsedEvent[] = [
         makeEvent({
@@ -671,6 +671,22 @@ describe("processEvents", () => {
 
       expect(result.permissionActions[0].type).toBe("auto_approve");
       expect(result.emit).toHaveLength(0);
+    });
+
+    it("requires approval for gh commands that post externally", () => {
+      for (const cmd of ["gh pr review 42 --approve", "gh pr comment 42 --body test", "gh issue comment 1 --body hi"]) {
+        const state = makeState();
+        const events: ParsedEvent[] = [
+          makeEvent({
+            type: "permission_request",
+            requestId: "req-1",
+            toolName: "Bash",
+            rawToolInput: { command: cmd },
+          }),
+        ];
+        const result = processEvents(events, state, defaults);
+        expect(result.permissionActions[0].type).toBe("store");
+      }
     });
 
     describe("plan mode", () => {
