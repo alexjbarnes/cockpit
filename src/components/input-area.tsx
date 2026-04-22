@@ -240,6 +240,7 @@ interface InputAreaProps {
 }
 
 const sessionDrafts = new Map<string, string>();
+const sessionHistories = new Map<string, string[]>();
 
 function getMentionContext(text: string, cursorPos: number): { active: boolean; query: string; start: number } {
   const before = text.slice(0, cursorPos);
@@ -300,6 +301,7 @@ export function InputArea({
     }
   }, [restoredText, onClearRestoredText]);
 
+  const historyIndexRef = useRef(-1);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [optionsOpen, setOptionsOpen] = useState(false);
   const [mentionSelectedIndex, setMentionSelectedIndex] = useState(0);
@@ -369,6 +371,12 @@ export function InputArea({
       pendingDocs.length > 0 ? pendingDocs : undefined,
       pendingTextFiles.length > 0 ? pendingTextFiles : undefined,
     );
+    const history = sessionHistories.get(sessionId) || [];
+    if (history[history.length - 1] !== trimmed) {
+      history.push(trimmed);
+      sessionHistories.set(sessionId, history);
+    }
+    historyIndexRef.current = -1;
     setText("");
     setPendingImages([]);
     setPendingDocs([]);
@@ -460,6 +468,27 @@ export function InputArea({
         return;
       }
 
+      const history = sessionHistories.get(sessionId) || [];
+      if (e.key === "ArrowUp" && !text.trim() && history.length > 0) {
+        e.preventDefault();
+        const idx = historyIndexRef.current === -1 ? history.length - 1 : Math.max(0, historyIndexRef.current - 1);
+        historyIndexRef.current = idx;
+        setText(history[idx]);
+        return;
+      }
+      if (e.key === "ArrowDown" && historyIndexRef.current >= 0) {
+        e.preventDefault();
+        const idx = historyIndexRef.current + 1;
+        if (idx >= history.length) {
+          historyIndexRef.current = -1;
+          setText("");
+        } else {
+          historyIndexRef.current = idx;
+          setText(history[idx]);
+        }
+        return;
+      }
+
       if (e.key === "Enter" && !e.shiftKey && !isPastingRef.current) {
         e.preventDefault();
         handleSend();
@@ -480,6 +509,7 @@ export function InputArea({
       onInterrupt,
       planMode,
       onSetPlanMode,
+      sessionId,
     ],
   );
 
