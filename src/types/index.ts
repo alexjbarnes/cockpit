@@ -68,6 +68,7 @@ export interface BackgroundTask {
   taskId: string;
   toolUseId: string;
   status: "running" | "completed";
+  title?: string;
   description: string;
   activity?: string;
   summary?: string;

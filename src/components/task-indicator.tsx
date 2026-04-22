@@ -65,8 +65,8 @@ export function BackgroundTasksButton({ tasks }: BackgroundTasksButtonProps) {
                       <Loader2 className="h-4 w-4 shrink-0 mt-0.5 animate-spin text-muted-foreground" />
                     )}
                     <div className="min-w-0 flex-1">
-                      <div className="text-sm truncate">{task.description}</div>
-                      {task.activity && task.activity !== task.description && (
+                      <div className="text-sm truncate">{task.title || task.description}</div>
+                      {task.activity && task.activity !== (task.title || task.description) && (
                         <div className="text-xs text-muted-foreground truncate mt-0.5">{task.activity}</div>
                       )}
                       {task.status === "completed" && task.summary && (

@@ -620,6 +620,7 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
                   ? {
                       ...t,
                       status: msg.task.status,
+                      title: t.title || msg.task.title,
                       description: msg.task.description || t.description,
                       activity: msg.task.activity || t.activity,
                       summary: msg.task.summary || t.summary,

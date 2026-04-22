@@ -764,15 +764,17 @@ function handleParsedEvent(
 
     case "task_update":
       if (event.taskInfo) {
+        const isProgress = event.taskInfo.status === "progress";
         send(ws, {
           type: "session:task_update",
           sessionId,
           task: {
             taskId: event.taskInfo.taskId,
             toolUseId: event.taskInfo.toolUseId,
-            status: event.taskInfo.status === "progress" ? "running" : event.taskInfo.status,
+            status: isProgress ? "running" : (event.taskInfo.status as "running" | "completed"),
+            title: isProgress ? undefined : event.taskInfo.description,
             description: event.taskInfo.description,
-            activity: event.taskInfo.status === "progress" ? event.taskInfo.description : undefined,
+            activity: isProgress ? event.taskInfo.description : undefined,
             summary: event.taskInfo.summary,
           },
         });
