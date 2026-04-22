@@ -184,7 +184,15 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
           setUnread(getUnreadSessions());
         }
 
-        setSessions((list) => list.map((s) => (s.id === sessionId ? { ...s, status: status as SessionInfo["status"] } : s)));
+        setSessions((list) =>
+          list
+            .map((s) => (s.id === sessionId ? { ...s, status: status as SessionInfo["status"] } : s))
+            .sort((a, b) => {
+              if (a.status === "running" && b.status !== "running") return -1;
+              if (a.status !== "running" && b.status === "running") return 1;
+              return b.lastActiveAt - a.lastActiveAt;
+            }),
+        );
       } else if (msg.type === "session:info_updated") {
         const { sessionId, info } = msg;
         setSessions((list) => list.map((s) => (s.id === sessionId ? { ...s, name: info.name, model: info.model } : s)));
@@ -208,8 +216,15 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
     const groups: SessionGroup[] = sessionsRes.groups || [];
     const allSessions = groups.flatMap((g) => g.sessions).filter((s) => !s.cwd.endsWith(".cockpit/reviews"));
 
-    // Show union of pinned + running sessions
-    const visible = allSessions.filter((s) => pinned.has(s.id) || s.status === "running").sort((a, b) => b.lastActiveAt - a.lastActiveAt);
+    // Show union of pinned + running + unread sessions
+    const unreadSet = getUnreadSessions();
+    const visible = allSessions
+      .filter((s) => pinned.has(s.id) || s.status === "running" || unreadSet.has(s.id))
+      .sort((a, b) => {
+        if (a.status === "running" && b.status !== "running") return -1;
+        if (a.status !== "running" && b.status === "running") return 1;
+        return b.lastActiveAt - a.lastActiveAt;
+      });
 
     // Clean up pinned IDs that no longer exist on server
     const serverIds = new Set(allSessions.map((s) => s.id));
@@ -254,6 +269,7 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
       clearUnreadSession(id);
       setUnread(getUnreadSessions());
       setSessions((prev) => prev.filter((s) => s.id !== id));
+      if (currentSessionId === id) router.push("/");
     }
   };
 
@@ -263,6 +279,7 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
     clearUnreadSession(id);
     setUnread(getUnreadSessions());
     setSessions((prev) => prev.filter((s) => s.id !== id));
+    if (currentSessionId === id) router.push("/");
   };
 
   const createSession = async (cwd: string, name: string) => {
