@@ -13,13 +13,6 @@ import { cn } from "@/lib/utils";
 import type { ChatMessage } from "@/types";
 import { ToolCard } from "./tool-card";
 
-function friendlyModelName(model: string): string {
-  if (model.includes("opus")) return "Opus";
-  if (model.includes("sonnet")) return "Sonnet";
-  if (model.includes("haiku")) return "Haiku";
-  return model;
-}
-
 const CLI_XML_RE =
   /<(?:task-notification|local-command-caveat|local-command-stdout|command-name|system-reminder)[^>]*>[\s\S]*?<\/(?:task-notification|local-command-caveat|local-command-stdout|command-name|system-reminder)>[\s\S]*/g;
 
@@ -192,9 +185,6 @@ export const MessageBubble = memo(function MessageBubble({
             <ChevronDown className="h-3 w-3" />
             <span className="font-medium">Compaction summary</span>
           </button>
-        )}
-        {!isUser && message.model && (
-          <div className="text-[10px] text-muted-foreground mb-1">{friendlyModelName(message.model)}</div>
         )}
         {isUser ? (
           <>

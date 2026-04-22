@@ -214,7 +214,17 @@ function ToolSummary({ tool, input }: { tool: ToolUse; input: Record<string, unk
   if (name === "Agent") {
     const desc = (input.description as string) || (input.prompt as string) || "";
     const short = desc.length > 60 ? desc.slice(0, 60) + "..." : desc;
-    return short ? <span className="text-muted-foreground truncate">{short}</span> : null;
+    const model = input.model as string | undefined;
+    const agentType = input.subagent_type as string | undefined;
+    const tags = [agentType, model].filter(Boolean);
+    return (
+      <span className="flex items-center gap-1.5 truncate">
+        {short && <span className="text-muted-foreground truncate">{short}</span>}
+        {tags.map((tag) => (
+          <span key={tag} className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">{tag}</span>
+        ))}
+      </span>
+    );
   }
 
   if (name === "EnterPlanMode") {
