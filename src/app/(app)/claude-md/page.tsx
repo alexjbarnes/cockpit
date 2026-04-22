@@ -11,12 +11,6 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { type ClaudeMdFile, useClaudeMd } from "@/hooks/use-claude-md";
 import { pathBasename } from "@/lib/path";
 
-const SCOPE_DESCRIPTION: Record<ClaudeMdFile["scope"], string> = {
-  user: "Applies to all projects",
-  project: "Visible, committed to repo",
-  "project-hidden": "Hidden, not committed",
-};
-
 function scopeLabel(scope: ClaudeMdFile["scope"]): string {
   switch (scope) {
     case "user":
@@ -135,7 +129,6 @@ function FileRow({ file, onClick }: { file: ClaudeMdFile; onClick: () => void })
             {file.scope === "user" ? "Global" : "Project"}
           </Badge>
         </div>
-        <p className="text-xs text-muted-foreground mt-0.5">{SCOPE_DESCRIPTION[file.scope]}</p>
       </div>
     </button>
   );
