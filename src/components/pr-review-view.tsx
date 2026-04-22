@@ -657,14 +657,12 @@ export function PRReviewView({ owner, repo, number }: { owner: string; repo: str
   const startAgentReview = useCallback(() => {
     if (!sessionId || !pr || agentReviewStarted) return;
     setAgentReviewStarted(true);
-    const prompt = [
-      `Review this pull request. Use gh CLI and Read tools to examine the changes.`,
+    const context = [
       `Repository: ${fullRepo}, PR #${number}: ${pr.title}`,
       `Author: ${pr.author.login}, Branch: ${pr.headRefName} -> ${pr.baseRefName}`,
       `Files changed: ${pr.changedFiles} (+${pr.additions} -${pr.deletions})`,
-      `Focus on correctness, bugs, edge cases, and code quality.`,
     ].join("\n");
-    ws.send({ type: "message:send", sessionId, text: prompt });
+    ws.send({ type: "message:send", sessionId, text: `/review\n\n---\n${context}` });
   }, [sessionId, pr, fullRepo, number, ws, agentReviewStarted]);
 
   // Sidebar file list
