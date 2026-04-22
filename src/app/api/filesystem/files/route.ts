@@ -9,42 +9,23 @@ function authenticate(req: NextRequest): boolean {
 
 const LIMIT = 50;
 
-function gitFiles(cwd: string): Promise<string[]> {
-  return new Promise((resolve) => {
-    execFile(
-      "git",
-      ["ls-files", "--cached", "--others", "--exclude-standard"],
-      { cwd, maxBuffer: 2 * 1024 * 1024 },
-      (err, stdout) => {
-        if (err) {
-          resolve([]);
-          return;
-        }
-        resolve(stdout.split("\n").filter(Boolean));
-      },
-    );
-  });
-}
+const EXCLUDED_DIRS = ["node_modules", ".git", ".next", "dist", "__pycache__", ".venv", "vendor", ".cache", "build", "coverage"];
 
-function findFiles(cwd: string): Promise<string[]> {
+function listFiles(cwd: string): Promise<string[]> {
+  const excludes = EXCLUDED_DIRS.flatMap((d) => ["-not", "-path", `*/${d}/*`]);
   return new Promise((resolve) => {
-    execFile(
-      "find",
-      [".", "-maxdepth", "4", "-type", "f", "-not", "-path", "*/node_modules/*", "-not", "-path", "*/.git/*"],
-      { cwd, maxBuffer: 2 * 1024 * 1024, timeout: 3000 },
-      (err, stdout) => {
-        if (err) {
-          resolve([]);
-          return;
-        }
-        resolve(
-          stdout
-            .split("\n")
-            .filter(Boolean)
-            .map((p) => p.replace(/^\.\//, "")),
-        );
-      },
-    );
+    execFile("find", [".", "-maxdepth", "5", "-type", "f", ...excludes], { cwd, maxBuffer: 2 * 1024 * 1024, timeout: 3000 }, (err, stdout) => {
+      if (err) {
+        resolve([]);
+        return;
+      }
+      resolve(
+        stdout
+          .split("\n")
+          .filter(Boolean)
+          .map((p) => p.replace(/^\.\//, "")),
+      );
+    });
   });
 }
 
@@ -57,10 +38,7 @@ export async function GET(req: NextRequest) {
   const cwd = url.searchParams.get("cwd") || process.cwd();
   const query = (url.searchParams.get("query") || "").toLowerCase();
 
-  let lines = await gitFiles(cwd);
-  if (lines.length === 0) {
-    lines = await findFiles(cwd);
-  }
+  const lines = await listFiles(cwd);
 
   if (!query) {
     return NextResponse.json({ files: lines.slice(0, LIMIT) });
