@@ -13,6 +13,13 @@ import { cn } from "@/lib/utils";
 import type { ChatMessage } from "@/types";
 import { ToolCard } from "./tool-card";
 
+function friendlyModelName(model: string): string {
+  if (model.includes("opus")) return "Opus";
+  if (model.includes("sonnet")) return "Sonnet";
+  if (model.includes("haiku")) return "Haiku";
+  return model;
+}
+
 const CLI_XML_RE =
   /<(?:task-notification|local-command-caveat|local-command-stdout|command-name|system-reminder)[^>]*>[\s\S]*?<\/(?:task-notification|local-command-caveat|local-command-stdout|command-name|system-reminder)>[\s\S]*/g;
 
@@ -186,6 +193,9 @@ export const MessageBubble = memo(function MessageBubble({
             <span className="font-medium">Compaction summary</span>
           </button>
         )}
+        {!isUser && message.model && (
+          <div className="text-[10px] text-muted-foreground mb-1">{friendlyModelName(message.model)}</div>
+        )}
         {isUser ? (
           <>
             {message.images && message.images.length > 0 && (
@@ -290,14 +300,14 @@ function TextFileBlock({ name, content }: { name: string; content: string }) {
         <span className="font-medium">{name}</span>
         <span className="text-muted-foreground ml-1">{lineCount} lines</span>
       </button>
-      <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="max-w-3xl max-h-[80vh] flex flex-col" onClose={() => setOpen(false)}>
+      <Dialog open={open} onOpenChange={setOpen} className="max-w-3xl">
+        <DialogContent className="max-h-[80vh] flex flex-col" onClose={() => setOpen(false)}>
           <div className="text-sm font-medium px-1 pb-2 border-b border-border flex items-center gap-1.5">
             <File className="h-3.5 w-3.5 text-blue-400" />
             {name}
           </div>
           <div className="flex-1 min-h-0 overflow-auto">
-            <SyntaxCodeBlock code={content} language={languageFromPath(name)} dark />
+            <SyntaxCodeBlock code={content} language={languageFromPath(name)} dark fullHeight />
           </div>
         </DialogContent>
       </Dialog>
