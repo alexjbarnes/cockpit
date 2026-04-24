@@ -1,7 +1,7 @@
 "use client";
 
 import { ChevronRight, ClipboardList, Loader2 } from "lucide-react";
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { shortPath } from "@/lib/path";
 import { cn } from "@/lib/utils";
 import type { ToolUse } from "@/types";
@@ -63,10 +63,17 @@ function settingDefault(toolName: string, settings: ReturnType<typeof useSetting
 export function ToolCard({ tool, expandedToolIds }: ToolCardProps) {
   const dark = useIsDark();
   const { backgroundTasks } = useShell();
-  const { settings } = useSettings();
+  const { settings, loaded } = useSettings();
   const input = useMemo(() => parseInput(tool.input), [tool.input]);
-  const [expanded, setExpanded] = useState(() => expandedToolIds?.current?.has(tool.id) ?? settingDefault(tool.name, settings));
+  const [expanded, setExpanded] = useState(() => expandedToolIds?.current?.has(tool.id) ?? false);
   const [planModalOpen, setPlanModalOpen] = useState(false);
+  const userToggledRef = useRef(expandedToolIds?.current?.has(tool.id) ?? false);
+
+  useEffect(() => {
+    if (loaded && !userToggledRef.current) {
+      setExpanded(settingDefault(tool.name, settings));
+    }
+  }, [loaded, tool.name, settings]);
 
   const filePath = (input.file_path as string) || tool.filePath || "";
   const planFile = isPlanFile(tool.name, filePath);
@@ -129,6 +136,7 @@ export function ToolCard({ tool, expandedToolIds }: ToolCardProps) {
             if (!hasContent) return;
             const next = !expanded;
             userToggled.current = next;
+            userToggledRef.current = true;
             setExpanded(next);
             if (expandedToolIds?.current) {
               if (next) expandedToolIds.current.add(tool.id);
