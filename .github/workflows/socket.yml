@@ -1,0 +1,31 @@
+name: Socket Security
+
+on:
+  workflow_call:
+
+jobs:
+  socket:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: step-security/harden-runner@8d3c67de8e2fe68ef647c8db1e6a09f647780f40 # v2
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        with:
+          python-version: "3.14"
+      - name: Install Socket CLI
+        run: pip install socketsecurity==2.2.83
+      - name: Run Socket Security Scan
+        env:
+          SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
+          GH_API_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PR_NUMBER=0
+          if [ "${{ github.event_name }}" == "pull_request" ]; then
+            PR_NUMBER=${{ github.event.pull_request.number }}
+          fi
+          socketcli \
+            --target-path $GITHUB_WORKSPACE \
+            --scm github \
+            --pr-number $PR_NUMBER
