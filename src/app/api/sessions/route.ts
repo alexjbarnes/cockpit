@@ -50,7 +50,28 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  return NextResponse.json({ groups });
+  // Filter out scheduled job sessions
+  const JOB_TITLE_PREFIX = "You are running as an autonomous scheduled job";
+  for (const group of groups) {
+    group.sessions = group.sessions.filter(
+      (s) => !s.name?.startsWith("[job] ") && !s.name?.startsWith(JOB_TITLE_PREFIX),
+    );
+  }
+  const filtered = groups.filter(
+    (g) => g.sessions.length > 0 && !g.cwd.endsWith(".cockpit/jobs"),
+  );
+
+  // Re-sort after merging in-memory sessions
+  for (const group of filtered) {
+    group.sessions.sort((a, b) => b.lastActiveAt - a.lastActiveAt);
+  }
+  filtered.sort((a, b) => {
+    const aLatest = a.sessions[0]?.lastActiveAt || 0;
+    const bLatest = b.sessions[0]?.lastActiveAt || 0;
+    return bLatest - aLatest;
+  });
+
+  return NextResponse.json({ groups: filtered });
 }
 
 export async function POST(req: NextRequest) {
