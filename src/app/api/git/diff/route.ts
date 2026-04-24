@@ -69,12 +69,12 @@ export async function GET(req: NextRequest) {
     if (!diff) {
       try {
         const content = await run("git", ["show", `:${file}`], cwd);
-        const lines = content.split("\n");
+        const lines = content.split(/\r?\n/);
         diff = [`--- /dev/null`, `+++ b/${file}`, `@@ -0,0 +1,${lines.length} @@`, ...lines.map((l) => `+${l}`)].join("\n");
       } catch {
         try {
           const content = await readFile(join(cwd, file), "utf-8");
-          const lines = content.split("\n");
+          const lines = content.split(/\r?\n/);
           diff = [`--- /dev/null`, `+++ b/${file}`, `@@ -0,0 +1,${lines.length} @@`, ...lines.map((l) => `+${l}`)].join("\n");
         } catch {
           return NextResponse.json({ error: "File not found" }, { status: 404 });

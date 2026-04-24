@@ -22,7 +22,7 @@ function run(cmd: string, args: string[]): Promise<string> {
 }
 
 function splitDiff(raw: string): { path: string; patch: string }[] {
-  const lines = raw.split("\n");
+  const lines = raw.split(/\r?\n/);
   const files: { path: string; lines: string[] }[] = [];
   let current: { path: string; lines: string[] } | null = null;
 

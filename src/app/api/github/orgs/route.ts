@@ -29,7 +29,7 @@ export async function GET(req: NextRequest) {
     let orgs: string[] = [];
     try {
       const stdout = await run("gh", ["api", "user/orgs", "--jq", ".[].login"]);
-      orgs = stdout.trim().split("\n").filter(Boolean);
+      orgs = stdout.trim().split(/\r?\n/).filter(Boolean);
     } catch {
       // read:org scope may be missing, continue with just the personal account
     }

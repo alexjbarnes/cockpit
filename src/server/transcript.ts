@@ -130,10 +130,10 @@ async function readTailLines(filePath: string, targetCount: number): Promise<{ l
             continue;
           }
         } else {
-          lines = text.slice(firstNewline + 1).split("\n");
+          lines = text.slice(firstNewline + 1).split(/\r?\n/);
         }
       } else {
-        lines = text.split("\n");
+        lines = text.split(/\r?\n/);
       }
 
       lines = lines.filter((l) => l.trim());
@@ -187,10 +187,10 @@ export async function readMoreLines(
             continue;
           }
         } else {
-          lines = text.slice(firstNewline + 1).split("\n");
+          lines = text.slice(firstNewline + 1).split(/\r?\n/);
         }
       } else {
-        lines = text.split("\n");
+        lines = text.split(/\r?\n/);
       }
 
       lines = lines.filter((l) => l.trim());
@@ -217,7 +217,7 @@ export async function loadLastUsage(sessionId: string, cwd: string): Promise<{ u
   if (!existsSync(fp)) return null;
 
   const raw = await readFile(fp, "utf-8");
-  const lines = raw.split("\n").filter((l) => l.trim());
+  const lines = raw.split(/\r?\n/).filter((l) => l.trim());
 
   let lastUsage: { used: number; total: number } | null = null;
   let contextWindowSize = 200_000;
@@ -543,7 +543,7 @@ export async function loadTranscript(sessionId: string, cwd: string, options?: {
     readLabel = `tail(${tailCount})`;
   } else {
     const raw = await readFile(fp, "utf-8");
-    lines = raw.split("\n").filter((l) => l.trim());
+    lines = raw.split(/\r?\n/).filter((l) => l.trim());
     byteOffset = 0;
     totalSize = raw.length;
     readLabel = "full";

@@ -65,7 +65,7 @@ export function languageFromPath(filePath: string): string | undefined {
 
 // Strip `cat -n` style line number prefixes (e.g. "     1\u2192content")
 export function stripLineNumbers(raw: string): { code: string; startLine: number } {
-  const lines = raw.split("\n");
+  const lines = raw.split(/\r?\n/);
   const lineNumPattern = /^\s*(\d+)\u2192(.*)$/;
   const first = lines[0]?.match(lineNumPattern);
   if (!first) return { code: raw, startLine: 1 };

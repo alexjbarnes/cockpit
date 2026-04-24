@@ -77,7 +77,7 @@ export async function GET(req: NextRequest) {
     const statusOut = await run("git", ["status", "--porcelain", "-uall"], cwd);
 
     const filePaths: { path: string; status: string }[] = [];
-    for (const line of statusOut.split("\n")) {
+    for (const line of statusOut.split(/\r?\n/)) {
       if (!line) continue;
       const xy = line.slice(0, 2);
       const filePath = line.slice(3).split(" -> ").pop()!.trim();
@@ -98,7 +98,7 @@ export async function GET(req: NextRequest) {
     }
 
     const statsMap = new Map<string, { additions: number; deletions: number }>();
-    for (const line of diffStats.split("\n")) {
+    for (const line of diffStats.split(/\r?\n/)) {
       if (!line) continue;
       const parts = line.split("\t");
       if (parts.length < 3) continue;

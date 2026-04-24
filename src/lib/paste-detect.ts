@@ -85,7 +85,7 @@ const LABEL_TO_EXT: Record<string, string> = {
 };
 
 export function shouldCollapsePaste(content: string): boolean {
-  return content.split("\n").length >= MIN_LINES;
+  return content.split(/\r?\n/).length >= MIN_LINES;
 }
 
 export function extensionForLabel(label: string): string | undefined {

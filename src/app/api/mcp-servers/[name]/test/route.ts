@@ -128,7 +128,7 @@ async function testStdio(config: McpServerConfig): Promise<{ success: boolean; l
 function extractJson(text: string): string | null {
   const trimmed = text.trim();
   if (trimmed.startsWith("{")) return trimmed;
-  for (const line of trimmed.split("\n")) {
+  for (const line of trimmed.split(/\r?\n/)) {
     const stripped = line.startsWith("data:") ? line.slice(5).trim() : line.trim();
     if (stripped.startsWith("{")) return stripped;
   }

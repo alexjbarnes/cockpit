@@ -275,7 +275,7 @@ export const MessageBubble = memo(function MessageBubble({
 
 function TextFileBlock({ name, content }: { name: string; content: string }) {
   const [open, setOpen] = useState(false);
-  const lineCount = content.split("\n").length;
+  const lineCount = content.split(/\r?\n/).length;
 
   return (
     <>
