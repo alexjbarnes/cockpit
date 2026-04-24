@@ -112,7 +112,7 @@ export class SessionManager {
     }, 15000);
   }
 
-  createSession(cwd: string, name?: string): SessionInfo {
+  createSession(cwd: string, name?: string, options?: { bypassPermissions?: boolean }): SessionInfo {
     const id = uuidv4();
     const now = Date.now();
     const defaults = getDefaults();
@@ -134,7 +134,7 @@ export class SessionManager {
       hasSpawnedBefore: false,
       cliSessionId: id,
       previousCliSessionIds: [],
-      bypassAllPermissions: defaults.bypassAllPermissions,
+      bypassAllPermissions: options?.bypassPermissions ?? defaults.bypassAllPermissions,
       planMode: false,
       needsRespawnForPermissions: false,
       compacting: false,
@@ -1480,6 +1480,8 @@ Additional Cockpit rules beyond the CLI's defaults:
     const env = { ...process.env };
     delete env.CLAUDECODE;
     delete env.CLAUDE_CODE_ENTRYPOINT;
+
+    mkdirSync(session.info.cwd, { recursive: true });
 
     const isWin = process.platform === "win32";
     const proc = spawn("claude", args, {

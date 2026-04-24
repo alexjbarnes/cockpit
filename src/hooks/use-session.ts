@@ -825,8 +825,8 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
             }
             break;
           }
-          // Filter out internal system messages (debug-only events forwarded from event-parser)
-          if (msg.text.startsWith("__system::")) break;
+          // Filter out internal system messages not handled above
+          if (msg.text.startsWith("__")) break;
           const sysMsg: ChatMessage = {
             id: "system-" + Date.now(),
             role: "system",

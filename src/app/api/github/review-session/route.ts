@@ -35,6 +35,6 @@ export async function POST(req: NextRequest) {
     name = name.slice(0, 77) + "...";
   }
 
-  const session = getSessionManager().createSession(reviewsDir, name);
+  const session = getSessionManager().createSession(reviewsDir, name, { bypassPermissions: false });
   return NextResponse.json({ sessionId: session.id, cwd: reviewsDir });
 }

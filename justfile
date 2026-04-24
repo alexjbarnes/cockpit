@@ -9,7 +9,7 @@ kill:
 
 # Start dev server (Next.js dev mode with HMR)
 dev:
-    COCKPIT_DEBUG=1 COCKPIT_TOKEN=test bun --watch --env-file=.env.development server.ts
+    unset GITHUB_TOKEN && COCKPIT_DEBUG=1 COCKPIT_TOKEN=test bun --watch --env-file=.env.development server.ts
 
 # Build for production
 build:
@@ -17,7 +17,7 @@ build:
 
 # Start production server
 start: build
-    NODE_ENV=production COCKPIT_DEBUG=1 bun --env-file=.env.production dist/server.js
+    unset GITHUB_TOKEN && NODE_ENV=production COCKPIT_DEBUG=1 bun --env-file=.env.production dist/server.js
 
 # Type check
 check:
