@@ -26,6 +26,12 @@ import { findChainForCliSession, getSessionPrefs, setSessionPrefs } from "./sess
 import { createStreamState, processEvents, type StreamState } from "./stream-processor";
 import { findSessionCwd, loadMoreMessages, loadTranscript, transcriptExists } from "./transcript";
 
+const smLog = (sessionId: string, msg: string) => {
+  const ts = new Date().toISOString().slice(11, 23);
+  const short = sessionId.slice(0, 8);
+  console.log(`[session:${short}] ${ts} ${msg}`);
+};
+
 export interface SessionEvents {
   event: [sessionId: string, event: ParsedEvent];
   status: [sessionId: string, status: "idle" | "running"];
@@ -1181,6 +1187,12 @@ export class SessionManager {
       this.emitSystem(session, sessionId, "__compact::done");
     }
 
+    if (result.emit.length > 0) {
+      const listeners = session.emitter.listenerCount("event");
+      if (listeners === 0) {
+        smLog(sessionId, `applyProcessedResult: ${result.emit.length} events but 0 event listeners`);
+      }
+    }
     for (const event of result.emit) {
       session.emitter.emit("event", sessionId, event);
     }
@@ -1349,9 +1361,27 @@ Additional Cockpit rules beyond the CLI's defaults:
 </system-reminder>`;
   }
 
+  async recoverSession(id: string): Promise<boolean> {
+    if (this.sessions.has(id)) return true;
+    smLog(id, "recovering session: not in memory, searching disk");
+    const prefs = getSessionPrefs(id);
+    const cwd = (await findSessionCwd(prefs?.cliSessionId || id)) || (await findSessionCwd(id));
+    if (!cwd) {
+      smLog(id, "recovery failed: no transcript found on disk");
+      return false;
+    }
+    this.ensureSession(id, cwd);
+    smLog(id, `recovery succeeded: restored from ${cwd}`);
+    return true;
+  }
+
   sendMessage(sessionId: string, text: string, images?: ImageAttachment[], documents?: DocumentAttachment[]): boolean {
     const session = this.sessions.get(sessionId);
-    if (!session) return false;
+    if (!session) {
+      smLog(sessionId, "sendMessage: session not in memory, returning false");
+      logDiag(sessionId, "send:no-session");
+      return false;
+    }
 
     if (text.startsWith("/")) {
       const handled = this.handleCommand(sessionId, text);
@@ -1507,7 +1537,7 @@ Additional Cockpit rules beyond the CLI's defaults:
     let lineBuffer = "";
     proc.stdout!.on("data", (chunk: Buffer) => {
       lineBuffer += chunk.toString();
-      const lines = lineBuffer.split("\n");
+      const lines = lineBuffer.split(/\r?\n/);
       lineBuffer = lines.pop() || "";
 
       if (lineBuffer.trimStart().startsWith("{") && lineBuffer.trimEnd().endsWith("}")) {

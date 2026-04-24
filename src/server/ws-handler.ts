@@ -68,6 +68,74 @@ export function createWebSocketHandler(server: HTTPServer, sessionManager: Sessi
     // Lightweight status-only subscriptions for sidebar
     let watchCleanups: Array<() => void> = [];
 
+    function subscribeSession(sessionId: string): void {
+      const prev = sessionCleanups.get(sessionId);
+      if (prev) {
+        for (const fn of prev) fn();
+      }
+      const cleanups: Array<() => void> = [];
+      sessionCleanups.set(sessionId, cleanups);
+
+      const unsubEvent = sessionManager.subscribe(sessionId, (event: ParsedEvent) => {
+        logParsedEvent(sessionId, event);
+        handleParsedEvent(ws, sessionId, event, pendingPermissions, sessionManager);
+      });
+      if (unsubEvent) cleanups.push(unsubEvent);
+
+      const unsubStatus = sessionManager.onStatus(sessionId, (status) => {
+        logStatus(sessionId, status);
+        send(ws, { type: "session:status", sessionId, status });
+      });
+      if (unsubStatus) cleanups.push(unsubStatus);
+
+      const unsubError = sessionManager.onError(sessionId, (error) => {
+        send(ws, { type: "session:error", sessionId, error });
+      });
+      if (unsubError) cleanups.push(unsubError);
+
+      const unsubSystem = sessionManager.onSystem(sessionId, (text) => {
+        send(ws, { type: "session:system", sessionId, text });
+      });
+      if (unsubSystem) cleanups.push(unsubSystem);
+
+      const unsubClear = sessionManager.onClear(sessionId, () => {
+        send(ws, { type: "session:clear", sessionId });
+      });
+      if (unsubClear) cleanups.push(unsubClear);
+
+      const unsubInfoUpdated = sessionManager.onInfoUpdated(sessionId, (info) => {
+        send(ws, { type: "session:info_updated", sessionId, info });
+      });
+      if (unsubInfoUpdated) cleanups.push(unsubInfoUpdated);
+
+      const unsubUsage = sessionManager.onUsage(sessionId, (usage) => {
+        send(ws, { type: "session:usage", sessionId, usage });
+      });
+      if (unsubUsage) cleanups.push(unsubUsage);
+
+      const unsubTodos = sessionManager.onTodos(sessionId, (todos) => {
+        send(ws, { type: "session:todos", sessionId, todos });
+      });
+      if (unsubTodos) cleanups.push(unsubTodos);
+
+      const unsubInit = sessionManager.onInit(sessionId, (data) => {
+        send(ws, { type: "session:init", sessionId, data });
+      });
+      if (unsubInit) cleanups.push(unsubInit);
+
+      const unsubQueued = sessionManager.onQueued(sessionId, (count, sentText) => {
+        send(ws, {
+          type: "session:queued",
+          sessionId,
+          count,
+          sentText: sentText ?? undefined,
+          messages: sessionManager.getQueuedMessages(sessionId),
+          paused: sessionManager.isQueuePaused(sessionId),
+        });
+      });
+      if (unsubQueued) cleanups.push(unsubQueued);
+    }
+
     ws.on("message", (data: Buffer) => {
       let msg: ClientMessage;
       try {
@@ -282,79 +350,10 @@ export function createWebSocketHandler(server: HTTPServer, sessionManager: Sessi
               });
             }
 
-            const unsubEvent = sessionManager.subscribe(msg.sessionId, (event: ParsedEvent) => {
-              logParsedEvent(msg.sessionId, event);
-              handleParsedEvent(ws, msg.sessionId, event, pendingPermissions, sessionManager);
-            });
-            if (unsubEvent) cleanups.push(unsubEvent);
-
-            const unsubStatus = sessionManager.onStatus(msg.sessionId, (status) => {
-              logStatus(msg.sessionId, status);
-              send(ws, {
-                type: "session:status",
-                sessionId: msg.sessionId,
-                status,
-              });
-            });
-            if (unsubStatus) cleanups.push(unsubStatus);
-
-            const unsubError = sessionManager.onError(msg.sessionId, (error) => {
-              send(ws, {
-                type: "session:error",
-                sessionId: msg.sessionId,
-                error,
-              });
-            });
-            if (unsubError) cleanups.push(unsubError);
-
-            const unsubSystem = sessionManager.onSystem(msg.sessionId, (text) => {
-              send(ws, {
-                type: "session:system",
-                sessionId: msg.sessionId,
-                text,
-              });
-            });
-            if (unsubSystem) cleanups.push(unsubSystem);
-
-            const unsubClear = sessionManager.onClear(msg.sessionId, () => {
-              send(ws, {
-                type: "session:clear",
-                sessionId: msg.sessionId,
-              });
-            });
-            if (unsubClear) cleanups.push(unsubClear);
-
-            const unsubInfoUpdated = sessionManager.onInfoUpdated(msg.sessionId, (info) => {
-              send(ws, {
-                type: "session:info_updated",
-                sessionId: msg.sessionId,
-                info,
-              });
-            });
-            if (unsubInfoUpdated) cleanups.push(unsubInfoUpdated);
-
-            const unsubUsage = sessionManager.onUsage(msg.sessionId, (usage) => {
-              send(ws, {
-                type: "session:usage",
-                sessionId: msg.sessionId,
-                usage,
-              });
-            });
-            if (unsubUsage) cleanups.push(unsubUsage);
-
-            const unsubTodos = sessionManager.onTodos(msg.sessionId, (todos) => {
-              send(ws, {
-                type: "session:todos",
-                sessionId: msg.sessionId,
-                todos,
-              });
-            });
-            if (unsubTodos) cleanups.push(unsubTodos);
+            subscribeSession(msg.sessionId);
 
             // Rebuild todos from last TodoWrite in history
             const tTodos0 = performance.now();
-            // Use the full transcript buffer (up to 150 messages) for todo rebuild,
-            // not just the 50 sent to the client
             const fullBuffer = sessionManager.getTranscriptBuffer(msg.sessionId);
             sessionManager.rebuildTodosFromHistory(msg.sessionId, fullBuffer.length > 0 ? fullBuffer : session.messages);
             const tTodos1 = performance.now();
@@ -377,15 +376,6 @@ export function createWebSocketHandler(server: HTTPServer, sessionManager: Sessi
               });
             }
 
-            const unsubInit = sessionManager.onInit(msg.sessionId, (data) => {
-              send(ws, {
-                type: "session:init",
-                sessionId: msg.sessionId,
-                data,
-              });
-            });
-            if (unsubInit) cleanups.push(unsubInit);
-
             send(ws, {
               type: "session:queued",
               sessionId: msg.sessionId,
@@ -393,18 +383,6 @@ export function createWebSocketHandler(server: HTTPServer, sessionManager: Sessi
               messages: sessionManager.getQueuedMessages(msg.sessionId),
               paused: sessionManager.isQueuePaused(msg.sessionId),
             });
-
-            const unsubQueued = sessionManager.onQueued(msg.sessionId, (count, sentText) => {
-              send(ws, {
-                type: "session:queued",
-                sessionId: msg.sessionId,
-                count,
-                sentText: sentText ?? undefined,
-                messages: sessionManager.getQueuedMessages(msg.sessionId),
-                paused: sessionManager.isQueuePaused(msg.sessionId),
-              });
-            });
-            if (unsubQueued) cleanups.push(unsubQueued);
 
             // Re-emit any pending permission/question requests that were
             // sent to a previous (now dead) WebSocket connection
@@ -451,9 +429,21 @@ export function createWebSocketHandler(server: HTTPServer, sessionManager: Sessi
         }
 
         case "message:send": {
-          // Ack immediately so the client clears inflight before any WS drop
           send(ws, { type: "message:ack", sessionId: msg.sessionId });
-          sessionManager.sendMessage(msg.sessionId, msg.text, msg.images, msg.documents);
+          if (!sessionCleanups.has(msg.sessionId)) {
+            subscribeSession(msg.sessionId);
+          }
+          const sent = sessionManager.sendMessage(msg.sessionId, msg.text, msg.images, msg.documents);
+          if (!sent) {
+            sessionManager.recoverSession(msg.sessionId).then((recovered) => {
+              if (recovered) {
+                subscribeSession(msg.sessionId);
+                sessionManager.sendMessage(msg.sessionId, msg.text, msg.images, msg.documents);
+              } else {
+                send(ws, { type: "session:error", sessionId: msg.sessionId, error: "Session not found. Try refreshing the page." });
+              }
+            });
+          }
           break;
         }
 

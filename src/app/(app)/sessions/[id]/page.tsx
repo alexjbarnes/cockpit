@@ -17,11 +17,9 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
   useShellSessionId(id);
 
   useEffect(() => {
-    if (!historyView) {
-      pinSession(id);
-    }
+    pinSession(id);
     clearUnreadSession(id);
-  }, [id, historyView]);
+  }, [id]);
 
   return <ChatView sessionId={id} cwd={cwd} initialName={name} historyView={historyView} />;
 }
