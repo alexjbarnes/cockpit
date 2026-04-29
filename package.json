@@ -73,7 +73,8 @@
     "ws": "^8"
   },
   "overrides": {
-    "@tensorflow/tfjs-node": "npm:empty-npm-package@1.0.0"
+    "@tensorflow/tfjs-node": "npm:empty-npm-package@1.0.0",
+    "postcss": "^8.5.12"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.12",
