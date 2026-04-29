@@ -1,0 +1,88 @@
+import path from "node:path";
+import { NextRequest, NextResponse } from "next/server";
+import { validateSession } from "@/server/auth";
+import { getSessionManager } from "@/server/singleton";
+import { scanAllSessions } from "@/server/transcript";
+
+function authenticate(req: NextRequest): boolean {
+  const token = req.cookies.get("cockpit_session")?.value || req.headers.get("authorization")?.replace("Bearer ", "");
+  return !!token && validateSession(token);
+}
+
+export async function GET(req: NextRequest) {
+  if (!authenticate(req)) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const groups = await scanAllSessions();
+
+  // Merge status and name from in-memory sessions
+  const manager = getSessionManager();
+  const active = manager.listActiveSessions();
+  const known = manager.listKnownSessions();
+  const activeMap = new Map(active.map((s) => [s.id, s]));
+  const knownMap = new Map(known.map((s) => [s.id, s]));
+
+  const onDiskIds = new Set<string>();
+  for (const group of groups) {
+    for (const session of group.sessions) {
+      onDiskIds.add(session.id);
+      const running = activeMap.get(session.id);
+      if (running) {
+        session.status = running.status;
+      }
+      const mem = knownMap.get(session.id);
+      if (mem) {
+        session.name = mem.name;
+      }
+    }
+  }
+
+  // Include in-memory sessions that have no transcript file yet
+  for (const mem of known) {
+    if (onDiskIds.has(mem.id)) continue;
+    const group = groups.find((g) => g.cwd === mem.cwd);
+    if (group) {
+      group.sessions.push(mem);
+    } else {
+      const dirName = path.basename(mem.cwd) || mem.cwd;
+      groups.push({ cwd: mem.cwd, dirName, sessions: [mem] });
+    }
+  }
+
+  // Filter out scheduled job sessions
+  const JOB_TITLE_PREFIX = "You are running as an autonomous scheduled job";
+  for (const group of groups) {
+    group.sessions = group.sessions.filter((s) => !s.name?.startsWith("[job] ") && !s.name?.startsWith(JOB_TITLE_PREFIX));
+  }
+  const filtered = groups.filter((g) => g.sessions.length > 0 && !g.cwd.endsWith(".cockpit/jobs"));
+
+  // Re-sort after merging in-memory sessions
+  for (const group of filtered) {
+    group.sessions.sort((a, b) => b.lastActiveAt - a.lastActiveAt);
+  }
+  filtered.sort((a, b) => {
+    const aLatest = a.sessions[0]?.lastActiveAt || 0;
+    const bLatest = b.sessions[0]?.lastActiveAt || 0;
+    return bLatest - aLatest;
+  });
+
+  return NextResponse.json({ groups: filtered });
+}
+
+export async function POST(req: NextRequest) {
+  if (!authenticate(req)) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const body = await req.json();
+  const cwd = body.cwd as string;
+  const name = body.name as string | undefined;
+
+  if (!cwd) {
+    return NextResponse.json({ error: "cwd is required" }, { status: 400 });
+  }
+
+  const session = getSessionManager().createSession(cwd, name);
+  return NextResponse.json({ sessionId: session.id });
+}

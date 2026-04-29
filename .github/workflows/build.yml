@@ -1,0 +1,39 @@
+name: Build and Publish
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  verify-tag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: step-security/harden-runner@8d3c67de8e2fe68ef647c8db1e6a09f647780f40 # v2
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          fetch-depth: 0
+      - name: Verify tag is on main
+        run: git branch -r --contains ${{ github.sha }} | grep -q origin/main
+
+  typecheck:
+    needs: verify-tag
+    uses: ./.github/workflows/typecheck.yml
+  lint:
+    needs: verify-tag
+    uses: ./.github/workflows/lint.yml
+  secrets:
+    needs: verify-tag
+    uses: ./.github/workflows/secrets.yml
+
+  test:
+    needs: [verify-tag, typecheck, lint, secrets]
+    uses: ./.github/workflows/test.yml
+  socket:
+    needs: [verify-tag, typecheck, lint, secrets]
+    uses: ./.github/workflows/socket.yml
+    secrets: inherit

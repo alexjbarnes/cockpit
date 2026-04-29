@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+echo "==> typecheck (next)"
+npx tsc --noEmit
+
+echo "==> typecheck (server)"
+npx tsc --noEmit -p tsconfig.server.json
+
+echo "==> lint"
+npm run lint
+
+echo "==> tests"
+npx vitest run

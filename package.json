@@ -1,0 +1,88 @@
+{
+  "name": "@alexjbarnes/cockpit",
+  "version": "0.1.0",
+  "description": "Web UI for Claude Code",
+  "license": "Apache-2.0",
+  "author": "Alex Barnes (https://github.com/alexjbarnes)",
+  "homepage": "https://github.com/alexjbarnes/cockpit#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/alexjbarnes/cockpit.git"
+  },
+  "bugs": {
+    "url": "https://github.com/alexjbarnes/cockpit/issues"
+  },
+  "keywords": [
+    "claude",
+    "claude-code",
+    "ai",
+    "web-ui"
+  ],
+  "bin": {
+    "cockpit": "./bin/cockpit.js"
+  },
+  "files": [
+    "dist/",
+    ".next/BUILD_ID",
+    ".next/*.json",
+    ".next/*.js",
+    ".next/build/",
+    ".next/server/",
+    ".next/static/",
+    "public/",
+    "bin/",
+    "next.config.ts",
+    "postcss.config.mjs"
+  ],
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "dev": "tsx watch --env-file=.env.development server.ts",
+    "build": "next build && tsc -p tsconfig.server.json && tsc-alias -p tsconfig.server.json",
+    "start": "NODE_ENV=production node --env-file=.env.production dist/server.js",
+    "lint": "biome check src/ tests/ server.ts",
+    "lint:fix": "biome check --fix src/ tests/ server.ts",
+    "format": "biome format --write src/ tests/ server.ts",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "@codemirror/lang-markdown": "^6.5.0",
+    "@codemirror/lang-yaml": "^6.1.3",
+    "@codemirror/theme-one-dark": "^6.1.3",
+    "@dnd-kit/core": "^6.3.1",
+    "@dnd-kit/sortable": "^10.0.0",
+    "@pierre/diffs": "^1.1.16",
+    "@radix-ui/react-slot": "^1.2.4",
+    "@tailwindcss/postcss": "^4",
+    "class-variance-authority": "^0.7",
+    "clsx": "^2",
+    "codemirror": "^6.0.2",
+    "lucide-react": "^1.8.0",
+    "magika": "^1.0.0",
+    "next": "^16.2.4",
+    "react": "^19",
+    "react-dom": "^19",
+    "react-markdown": "^10.1.0",
+    "rehype-highlight": "^7",
+    "remark-gfm": "^4",
+    "shiki": "^4.0.2",
+    "tailwind-merge": "^3.5.0",
+    "tailwindcss": "^4",
+    "uuid": "^14.0.0",
+    "ws": "^8"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.4.12",
+    "@types/node": "^25.6.0",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "@types/uuid": "^11.0.0",
+    "@types/ws": "^8",
+    "@vitest/coverage-v8": "^4.1.4",
+    "tsc-alias": "^1.8.10",
+    "tsx": "^4.19.2",
+    "typescript": "6.0.3",
+    "vitest": "^4.1.4"
+  }
+}

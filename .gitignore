@@ -1,0 +1,15 @@
+node_modules/
+.next/
+dist/
+*.tsbuildinfo
+next-env.d.ts
+.env*
+!.env.example
+Screenshot_*
+data/
+docs/internal/
+changes.md
+fixes.md
+tui-commands.md
+coverage/
+.playwright-mcp/

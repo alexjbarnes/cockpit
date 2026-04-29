@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  typecheck:
+    uses: ./.github/workflows/typecheck.yml
+  lint:
+    uses: ./.github/workflows/lint.yml
+  secrets:
+    uses: ./.github/workflows/secrets.yml
+
+  test:
+    needs: [typecheck, lint, secrets]
+    uses: ./.github/workflows/test.yml
+  socket:
+    needs: [typecheck, lint, secrets]
+    uses: ./.github/workflows/socket.yml
+    secrets: inherit
