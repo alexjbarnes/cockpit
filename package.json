@@ -1,6 +1,6 @@
 {
   "name": "@alexjbarnes/cockpit",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Web UI for Claude Code",
   "license": "Apache-2.0",
   "author": "Alex Barnes (https://github.com/alexjbarnes)",
@@ -39,7 +39,7 @@
   },
   "scripts": {
     "dev": "tsx watch --env-file=.env.development server.ts",
-    "build": "next build && tsc -p tsconfig.server.json && tsc-alias -p tsconfig.server.json",
+    "build": "unset TURBOPACK && next build --webpack && tsc -p tsconfig.server.json && tsc-alias -p tsconfig.server.json",
     "start": "NODE_ENV=production node --env-file=.env.production dist/server.js",
     "lint": "biome check src/ tests/ server.ts",
     "lint:fix": "biome check --fix src/ tests/ server.ts",
@@ -71,6 +71,10 @@
     "tailwindcss": "^4",
     "uuid": "^14.0.0",
     "ws": "^8"
+  },
+  "overrides": {
+    "@tensorflow/tfjs-node": "npm:empty-npm-package@1.0.0",
+    "postcss": "^8.5.12"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.12",

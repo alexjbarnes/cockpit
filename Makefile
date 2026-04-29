@@ -1,10 +1,14 @@
 .PHONY: install-hooks uninstall-hooks kill dev build start check test install debug-log debug-clear
 
+TARBALL_DIR := /tmp/cockpit-tarball-test
+
 # Kill any running cockpit servers
 kill:
 	@-pkill -f "tsx.*server\.ts" 2>/dev/null
 	@-pkill -f "node.*dist/server\.js" 2>/dev/null
+	@-pkill -f "node.*node_modules/@alexjbarnes/cockpit/bin/cockpit.js" 2>/dev/null
 	@-fuser -k 3000/tcp 2>/dev/null
+	@-fuser -k 3001/tcp 2>/dev/null
 	@sleep 0.5
 
 # Start dev server (Next.js dev mode with HMR)
@@ -15,9 +19,17 @@ dev:
 build:
 	npm run build
 
-# Start production server
+# Start production server via a packed tarball (simulates `npx @alexjbarnes/cockpit`)
 start: build
-	unset GITHUB_TOKEN && NODE_ENV=production COCKPIT_DEBUG=1 npm run start
+	@rm -rf $(TARBALL_DIR)
+	@mkdir -p $(TARBALL_DIR)
+	@echo ">>> Packing tarball into $(TARBALL_DIR)"
+	@npm pack --silent --pack-destination $(TARBALL_DIR) >/dev/null
+	@echo ">>> Installing tarball with fresh node_modules"
+	@cd $(TARBALL_DIR) && npm init -y >/dev/null 2>&1 && npm install --silent ./alexjbarnes-cockpit-*.tgz >/dev/null
+	@echo ">>> Running from $(TARBALL_DIR) (PORT defaults to 3001)"
+	@unset GITHUB_TOKEN && COCKPIT_DEBUG=1 \
+	  node $(TARBALL_DIR)/node_modules/@alexjbarnes/cockpit/bin/cockpit.js
 
 # Type check
 check:
