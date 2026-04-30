@@ -84,6 +84,11 @@ export function createWebSocketHandler(server: HTTPServer, sessionManager: Sessi
       });
       if (unsubStatus) cleanups.push(unsubStatus);
 
+      const unsubPending = sessionManager.onPending(sessionId, (count) => {
+        send(ws, { type: "session:pending", sessionId, count });
+      });
+      if (unsubPending) cleanups.push(unsubPending);
+
       const unsubError = sessionManager.onError(sessionId, (error) => {
         send(ws, { type: "session:error", sessionId, error });
       });
@@ -620,6 +625,11 @@ export function createWebSocketHandler(server: HTTPServer, sessionManager: Sessi
               send(ws, { type: "session:status", sessionId: id, status });
             });
             if (unsubStatus) watchCleanups.push(unsubStatus);
+
+            const unsubPending = sessionManager.onPending(id, (count) => {
+              send(ws, { type: "session:pending", sessionId: id, count });
+            });
+            if (unsubPending) watchCleanups.push(unsubPending);
 
             const unsubInfo = sessionManager.onInfoUpdated(id, (info) => {
               send(ws, { type: "session:info_updated", sessionId: id, info });

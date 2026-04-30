@@ -183,7 +183,12 @@ function SortableSessionRow({
         <GripVertical className="h-4 w-4" />
       </button>
       <div className="shrink-0 relative flex items-center justify-center h-4 w-4">
-        {session.status === "running" ? (
+        {(session.pendingRequestCount ?? 0) > 0 ? (
+          <>
+            <div className="absolute h-4 w-4 rounded-full bg-blue-500/20 animate-ping" />
+            <div className="h-2.5 w-2.5 rounded-full bg-blue-500" title="Awaiting your input" />
+          </>
+        ) : session.status === "running" ? (
           <>
             <div className="absolute h-4 w-4 rounded-full bg-yellow-500/20 animate-ping" />
             <div className="h-2.5 w-2.5 rounded-full bg-yellow-500" title="Working" />
@@ -274,6 +279,11 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
         }
 
         setSessions((list) => list.map((s) => (s.id === sessionId ? { ...s, status: status as SessionInfo["status"] } : s)));
+      } else if (msg.type === "session:pending") {
+        const { sessionId, count } = msg;
+        const known = new Set(sessions.map((s) => s.id));
+        if (!known.has(sessionId)) return;
+        setSessions((list) => list.map((s) => (s.id === sessionId ? { ...s, pendingRequestCount: count } : s)));
       } else if (msg.type === "session:info_updated") {
         const { sessionId, info } = msg;
         setSessions((list) => list.map((s) => (s.id === sessionId ? { ...s, name: info.name, model: info.model } : s)));
