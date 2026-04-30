@@ -45,6 +45,7 @@ export interface PendingRequest {
   toolName: string;
   toolInput: string;
   rawToolInput?: Record<string, unknown>;
+  permissionSuggestions?: Record<string, unknown>[];
   planFilePath?: string;
   planContent?: string;
 }
@@ -629,6 +630,10 @@ export class SessionManager {
     return Array.from(session.pendingRequests.values());
   }
 
+  getPendingRequest(sessionId: string, requestId: string): PendingRequest | undefined {
+    return this.sessions.get(sessionId)?.pendingRequests.get(requestId);
+  }
+
   respondToPermission(
     sessionId: string,
     requestId: string,
@@ -1175,6 +1180,7 @@ export class SessionManager {
           toolName: pa.toolName,
           toolInput: pa.toolInput || "",
           rawToolInput: pa.rawToolInput,
+          permissionSuggestions: pa.permissionSuggestions,
           planFilePath: planPath,
           planContent: planPath ? readPlanFile(planPath) : undefined,
         });

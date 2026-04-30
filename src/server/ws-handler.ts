@@ -61,11 +61,6 @@ export function createWebSocketHandler(server: HTTPServer, sessionManager: Sessi
     });
     // Track subscriptions per session so re-connects clean up old listeners
     const sessionCleanups = new Map<string, Array<() => void>>();
-    // Track pending permission requests with tool name and raw input
-    const pendingPermissions = new Map<
-      string,
-      { toolName: string; toolInput: Record<string, unknown>; permissionSuggestions?: Record<string, unknown>[] }
-    >();
     // Lightweight status-only subscriptions for sidebar
     let watchCleanups: Array<() => void> = [];
 
@@ -79,7 +74,7 @@ export function createWebSocketHandler(server: HTTPServer, sessionManager: Sessi
 
       const unsubEvent = sessionManager.subscribe(sessionId, (event: ParsedEvent) => {
         logParsedEvent(sessionId, event);
-        handleParsedEvent(ws, sessionId, event, pendingPermissions, sessionManager);
+        handleParsedEvent(ws, sessionId, event, sessionManager);
       });
       if (unsubEvent) cleanups.push(unsubEvent);
 
@@ -549,8 +544,7 @@ export function createWebSocketHandler(server: HTTPServer, sessionManager: Sessi
         }
 
         case "permission:response": {
-          const pending = pendingPermissions.get(msg.requestId);
-          pendingPermissions.delete(msg.requestId);
+          const pending = sessionManager.getPendingRequest(msg.sessionId, msg.requestId);
           sessionManager.removePendingRequest(msg.sessionId, msg.requestId);
 
           if (msg.permissionMode === "allow_all") {
@@ -569,15 +563,14 @@ export function createWebSocketHandler(server: HTTPServer, sessionManager: Sessi
               suggestions = pending.permissionSuggestions;
             }
           }
-          sessionManager.respondToPermission(msg.sessionId, msg.requestId, msg.allowed, pending?.toolInput, suggestions);
+          sessionManager.respondToPermission(msg.sessionId, msg.requestId, msg.allowed, pending?.rawToolInput, suggestions);
           break;
         }
 
         case "question:response": {
-          const pending = pendingPermissions.get(msg.requestId);
-          pendingPermissions.delete(msg.requestId);
+          const pending = sessionManager.getPendingRequest(msg.sessionId, msg.requestId);
           sessionManager.removePendingRequest(msg.sessionId, msg.requestId);
-          const originalQuestions = (pending?.toolInput as Record<string, unknown>)?.questions;
+          const originalQuestions = pending?.rawToolInput?.questions;
           sessionManager.respondToPermission(msg.sessionId, msg.requestId, true, {
             questions: originalQuestions || [],
             answers: msg.answers,
@@ -653,16 +646,7 @@ export function createWebSocketHandler(server: HTTPServer, sessionManager: Sessi
   return wss;
 }
 
-function handleParsedEvent(
-  ws: WebSocket,
-  sessionId: string,
-  event: ParsedEvent,
-  pendingPermissions: Map<
-    string,
-    { toolName: string; toolInput: Record<string, unknown>; permissionSuggestions?: Record<string, unknown>[] }
-  >,
-  sessionManager: SessionManager,
-): void {
+function handleParsedEvent(ws: WebSocket, sessionId: string, event: ParsedEvent, sessionManager: SessionManager): void {
   switch (event.type) {
     case "thinking":
       send(ws, {
@@ -800,10 +784,6 @@ function handleParsedEvent(
       // before this event reaches us. If we get here, it needs user input.
       const toolName = event.toolName || "";
       const requestId = event.requestId || "";
-
-      if (requestId && event.rawToolInput) {
-        pendingPermissions.set(requestId, { toolName, toolInput: event.rawToolInput, permissionSuggestions: event.permissionSuggestions });
-      }
 
       if (toolName === "AskUserQuestion") {
         send(ws, {
