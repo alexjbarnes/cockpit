@@ -6,6 +6,7 @@ export interface SessionInfo {
   lastActiveAt: number;
   status: "idle" | "running";
   model?: string;
+  pendingRequestCount?: number;
 }
 
 export interface SessionGroup {
@@ -254,6 +255,7 @@ export type ServerMessage =
   | { type: "assistant:message_done"; sessionId: string; message: ChatMessage }
   | { type: "assistant:tool_children"; sessionId: string; messageId: string; toolId: string; children: ToolUse[] }
   | { type: "session:status"; sessionId: string; status: "idle" | "running" }
+  | { type: "session:pending"; sessionId: string; count: number }
   | { type: "session:error"; sessionId: string; error: string }
   | {
       type: "permission:request";

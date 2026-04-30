@@ -30,6 +30,7 @@ export async function GET(req: NextRequest) {
       const running = activeMap.get(session.id);
       if (running) {
         session.status = running.status;
+        session.pendingRequestCount = running.pendingRequestCount;
       }
       const mem = knownMap.get(session.id);
       if (mem) {

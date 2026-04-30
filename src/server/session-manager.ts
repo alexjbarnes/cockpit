@@ -37,6 +37,7 @@ export interface SessionEvents {
   event: [sessionId: string, event: ParsedEvent];
   status: [sessionId: string, status: "idle" | "running"];
   error: [sessionId: string, error: string];
+  pending: [sessionId: string, count: number];
 }
 
 export interface PendingRequest {
@@ -125,6 +126,7 @@ export class SessionManager {
       lastActiveAt: now,
       status: "idle",
       model: defaults.model || undefined,
+      pendingRequestCount: 0,
     };
 
     this.sessions.set(id, {
@@ -174,6 +176,7 @@ export class SessionManager {
           lastActiveAt: now,
           status: "idle",
           model: prefs?.model || defaults.model || undefined,
+          pendingRequestCount: 0,
         },
         process: null,
         stdin: null,
@@ -503,6 +506,7 @@ export class SessionManager {
     if (session && session.info.status === "running" && !session.process) {
       session.info.status = "idle";
       session.pendingRequests.clear();
+      this.notifyPendingChanged(session, id);
     }
   }
 
@@ -517,6 +521,7 @@ export class SessionManager {
 
     this.killProcess(session);
     session.pendingRequests.clear();
+    this.notifyPendingChanged(session, sessionId);
     session.streamingSnapshot = null;
     session.info.status = "idle";
     session.emitter.emit("status", sessionId, "idle");
@@ -558,6 +563,18 @@ export class SessionManager {
 
     session.emitter.on("status", handler);
     return () => session.emitter.off("status", handler);
+  }
+
+  onPending(id: string, listener: (count: number) => void): (() => void) | null {
+    const session = this.sessions.get(id);
+    if (!session) return null;
+
+    const handler = (_sessionId: string, count: number) => {
+      listener(count);
+    };
+
+    session.emitter.on("pending", handler);
+    return () => session.emitter.off("pending", handler);
   }
 
   onError(id: string, listener: (error: string) => void): (() => void) | null {
@@ -613,6 +630,7 @@ export class SessionManager {
     const session = this.sessions.get(sessionId);
     if (session) {
       session.pendingRequests.set(request.requestId, request);
+      this.notifyPendingChanged(session, sessionId);
     }
   }
 
@@ -620,6 +638,7 @@ export class SessionManager {
     const session = this.sessions.get(sessionId);
     if (session) {
       session.pendingRequests.delete(requestId);
+      this.notifyPendingChanged(session, sessionId);
     }
   }
 
@@ -641,6 +660,7 @@ export class SessionManager {
     if (!session?.stdin) return false;
 
     session.pendingRequests.delete(requestId);
+    this.notifyPendingChanged(session, sessionId);
 
     const response = {
       type: "control_response",
@@ -715,6 +735,7 @@ export class SessionManager {
     }
     // Clear orphaned pending requests from the killed process
     session.pendingRequests.clear();
+    this.notifyPendingChanged(session, sessionId);
     this.emitSystem(session, sessionId, "__plan_state::on");
   }
 
@@ -732,6 +753,7 @@ export class SessionManager {
     }
     // Clear orphaned pending requests from the killed process
     session.pendingRequests.clear();
+    this.notifyPendingChanged(session, sessionId);
     this.emitSystem(session, sessionId, "__plan_state::off");
     // Re-sync bypass state with the client so the UI reflects it correctly
     // after the plan-mode process is torn down.
@@ -1127,6 +1149,13 @@ export class SessionManager {
     session.emitter.emit("system", sessionId, text);
   }
 
+  private notifyPendingChanged(session: Session, sessionId: string): void {
+    const count = session.pendingRequests.size;
+    if (session.info.pendingRequestCount === count) return;
+    session.info.pendingRequestCount = count;
+    session.emitter.emit("pending", sessionId, count);
+  }
+
   private applyProcessedResult(session: Session, sessionId: string, result: import("./stream-processor").ProcessedResult): void {
     for (const msg of result.intermediateMessages) {
       session.emitter.emit("event", sessionId, { type: "message_done", message: msg } as ParsedEvent);
@@ -1178,6 +1207,7 @@ export class SessionManager {
           planFilePath: planPath,
           planContent: planPath ? readPlanFile(planPath) : undefined,
         });
+        this.notifyPendingChanged(session, sessionId);
       }
     }
 
