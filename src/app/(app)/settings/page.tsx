@@ -431,6 +431,9 @@ export default function SettingsPage() {
               onChange={(v) => updateSetting("toolCallsExpanded", v === "expanded")}
             />
           </SettingRow>
+          <SettingRow label="Stitch messages across clears">
+            <Toggle enabled={settings.messageStitching} onToggle={() => updateSetting("messageStitching", !settings.messageStitching)} />
+          </SettingRow>
         </CardContent>
       </Card>
       <Card>
