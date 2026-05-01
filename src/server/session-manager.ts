@@ -233,7 +233,8 @@ export class SessionManager {
 
     // Stitch previous session messages across /clear boundaries so the full
     // conversation is visible on refresh instead of only post-clear messages.
-    if (session.previousCliSessionIds.length > 0) {
+    const stitching = getDefaults().messageStitching;
+    if (stitching && session.previousCliSessionIds.length > 0) {
       const currentMessages = messages;
       for (let i = session.previousCliSessionIds.length - 1; i >= 0; i--) {
         const prevId = session.previousCliSessionIds[i];
@@ -261,12 +262,12 @@ export class SessionManager {
     session.transcriptByteOffset = byteOffset;
     session.transcriptTotalSize = totalSize;
     // Fresh pagination copy so getMoreHistory doesn't consume the canonical list
-    session.paginationPrevIds = [...session.previousCliSessionIds];
+    session.paginationPrevIds = stitching ? [...session.previousCliSessionIds] : [];
 
     // Send last 50 to client, keep rest in buffer
     const PAGE = 50;
     const clientMessages = messages.length > PAGE ? messages.slice(-PAGE) : messages;
-    const hasMore = messages.length > PAGE || byteOffset > 0 || session.previousCliSessionIds.length > 0;
+    const hasMore = messages.length > PAGE || byteOffset > 0 || (stitching && session.previousCliSessionIds.length > 0);
 
     const defaultName = path.basename(session.info.cwd) || session.info.cwd;
     if (session.info.name === defaultName && messages.length > 0) {
@@ -291,7 +292,8 @@ export class SessionManager {
 
     // Stitch previous session messages across /clear boundaries so the full
     // conversation is visible on refresh instead of only post-clear messages.
-    if (session.previousCliSessionIds.length > 0) {
+    const stitching = getDefaults().messageStitching;
+    if (stitching && session.previousCliSessionIds.length > 0) {
       const currentMessages = messages;
       for (let i = session.previousCliSessionIds.length - 1; i >= 0; i--) {
         const prevId = session.previousCliSessionIds[i];
@@ -319,12 +321,12 @@ export class SessionManager {
     session.transcriptByteOffset = byteOffset;
     session.transcriptTotalSize = totalSize;
     // Fresh pagination copy so getMoreHistory doesn't consume the canonical list
-    session.paginationPrevIds = [...session.previousCliSessionIds];
+    session.paginationPrevIds = stitching ? [...session.previousCliSessionIds] : [];
 
     // Send last 50 to client, keep rest in buffer
     const PAGE = 50;
     const clientMessages = messages.length > PAGE ? messages.slice(-PAGE) : messages;
-    const hasMore = messages.length > PAGE || byteOffset > 0 || session.previousCliSessionIds.length > 0;
+    const hasMore = messages.length > PAGE || byteOffset > 0 || (stitching && session.previousCliSessionIds.length > 0);
 
     // Derive title from first user message if name is still the default
     const defaultName = path.basename(cwd) || cwd;
@@ -349,7 +351,7 @@ export class SessionManager {
     const result = await loadTranscript(cliId, cwd, { tailLines: 150 });
     let { messages, lastUsage } = result;
 
-    if (prevIds.length > 0) {
+    if (getDefaults().messageStitching && prevIds.length > 0) {
       const currentMessages = messages;
       for (let i = prevIds.length - 1; i >= 0; i--) {
         const prevResult = await loadTranscript(prevIds[i], cwd, { tailLines: 150 });
@@ -705,6 +707,7 @@ export class SessionManager {
     // Don't change CLI mode while in plan mode; bypass will restore on plan exit
     if (!session.planMode) {
       this.sendPermissionMode(session, sessionId, "bypassPermissions");
+      this.scheduleRespawnForPermissions(session);
     }
     this.emitSystem(session, sessionId, "__bypass_state::on");
   }
@@ -716,8 +719,23 @@ export class SessionManager {
     setSessionPrefs(sessionId, { bypassAllPermissions: false });
     if (!session.planMode) {
       this.sendPermissionMode(session, sessionId, "default");
+      this.scheduleRespawnForPermissions(session);
     }
     this.emitSystem(session, sessionId, "__bypass_state::off");
+  }
+
+  // Runtime set_permission_mode is unreliable when the CLI was spawned without
+  // the target mode. Respawning the process picks up --permission-mode from
+  // session state, guaranteeing the next message runs in the right mode.
+  // If a message is in flight, defer until message_done so we don't orphan it.
+  private scheduleRespawnForPermissions(session: Session): void {
+    if (!session.process) return;
+    if (session.info.status === "idle") {
+      this.killProcess(session);
+      session.hasSpawnedBefore = transcriptExists(session.cliSessionId, session.info.cwd);
+    } else {
+      session.needsRespawnForPermissions = true;
+    }
   }
 
   isBypassActive(sessionId: string): boolean {
