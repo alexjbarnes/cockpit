@@ -224,7 +224,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                   <SearchButton />
                   {cwd && <TodoIndicator todos={todos} />}
                   {cwd && <BackgroundTasksButton tasks={backgroundTasks} />}
-                  {cwd && <UsageButton />}
+                  <UsageButton />
                   {cwd && <GitStatusButton cwd={cwd} />}
                   {cwd && <FileBrowserButton cwd={cwd} />}
                 </div>
