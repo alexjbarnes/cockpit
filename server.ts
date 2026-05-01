@@ -31,6 +31,7 @@ function getLanAddresses(): string[] {
 function logStartupBanner(): void {
   console.log(`Cockpit listening on ${host}:${port}`);
   console.log("");
+  console.log("Connect via:");
 
   const isWildcard = host === "0.0.0.0" || host === "::";
   const isLoopback = host === "127.0.0.1" || host === "localhost" || host === "::1";
