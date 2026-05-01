@@ -26,6 +26,7 @@ import { ChatView } from "@/components/chat-view";
 import { DIFF_SELECTABLE_CSS, DiffErrorBoundary } from "@/components/diff-viewer";
 import { pinSession } from "@/components/sidebar";
 import { Button } from "@/components/ui/button";
+import { UsageButton } from "@/components/usage-modal";
 import { useIsDesktop } from "@/hooks/use-is-desktop";
 import { useSettings } from "@/hooks/use-settings";
 import { cn } from "@/lib/utils";
@@ -834,6 +835,7 @@ export function PRReviewView({ owner, repo, number }: { owner: string; repo: str
           <span className="text-green-500">+{pr.additions}</span>
           <span className="text-red-500">-{pr.deletions}</span>
           <span>{pr.changedFiles} files</span>
+          <UsageButton className="h-7 w-7" />
           <a
             href={pr.url}
             target="_blank"

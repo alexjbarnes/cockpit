@@ -48,7 +48,7 @@ function LimitBar({ label, limit }: { label: string; limit: UsageLimit }) {
   );
 }
 
-export function UsageButton() {
+export function UsageButton({ className }: { className?: string }) {
   const [open, setOpen] = useState(false);
   const { usage, loading, error, refresh } = useUsage();
 
@@ -66,7 +66,7 @@ export function UsageButton() {
 
   return (
     <>
-      <Button variant="ghost" size="icon" onClick={() => setOpen(true)} title="Account usage">
+      <Button variant="ghost" size="icon" onClick={() => setOpen(true)} title="Account usage" className={className}>
         <BarChart3 className={`h-4 w-4 ${usage ? iconColorClass(worst) : ""}`} />
       </Button>
       {open && (
