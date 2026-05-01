@@ -12,7 +12,7 @@ import { Button } from "@/components/ui/button";
 import { useJobFailureCount } from "@/hooks/use-jobs";
 import { useWebSocket } from "@/hooks/use-websocket";
 import { cn } from "@/lib/utils";
-import type { SessionGroup, SessionInfo } from "@/types";
+import type { SessionInfo } from "@/types";
 import { NewSessionDialog } from "./new-session-dialog";
 
 const SIDEBAR_WIDTH_KEY = "cockpit_sidebar_width";
@@ -294,19 +294,25 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
   const fetchSessions = useCallback(async () => {
     setUnread(getUnreadSessions());
 
-    const [pinnedIds, sessionsRes] = await Promise.all([
-      fetchPinnedIds(),
-      fetch("/api/sessions")
-        .then((r) => (r.ok ? r.json() : null))
-        .catch(() => null),
-    ]);
+    const pinnedIds = await fetchPinnedIds();
+    if (pinnedIds.length === 0) {
+      setSessions([]);
+      return;
+    }
 
-    if (!sessionsRes) return;
-    const groups: SessionGroup[] = sessionsRes.groups || [];
-    const allSessions = groups.flatMap((g) => g.sessions).filter((s) => !s.cwd.endsWith(".cockpit/reviews"));
+    const idsParam = pinnedIds.join(",");
+    const res = await fetch(`/api/sessions/by-ids?ids=${encodeURIComponent(idsParam)}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .catch(() => null);
 
-    // Build O(1) lookup, then walk pinnedIds in order, dropping orphans
-    const byId = new Map(allSessions.map((s) => [s.id, s]));
+    if (!res) return;
+
+    const fetchedSessions: SessionInfo[] = (res.sessions || []).filter((s: SessionInfo) => !s.cwd.endsWith(".cockpit/reviews"));
+    const foundIds: string[] = Array.isArray(res.foundIds) ? res.foundIds : fetchedSessions.map((s) => s.id);
+    const foundSet = new Set(foundIds);
+
+    // Preserve the user's pinned ordering
+    const byId = new Map(fetchedSessions.map((s) => [s.id, s]));
     const visible: SessionInfo[] = [];
     const survivingIds: string[] = [];
     for (const id of pinnedIds) {
@@ -317,8 +323,9 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
       }
     }
 
-    // Persist orphan cleanup if any pinned ids were dropped
-    if (survivingIds.length !== pinnedIds.length) {
+    // Drop pins whose session files no longer exist (server confirms via foundIds)
+    const hasOrphans = pinnedIds.some((id) => !foundSet.has(id));
+    if (hasOrphans) {
       fetch("/api/sessions/pinned", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },

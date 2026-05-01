@@ -753,6 +753,7 @@ export async function scanAllSessions(): Promise<SessionGroup[]> {
       cwd,
       dirName: path.basename(cwd) || cwd,
       sessions,
+      totalSessionCount: sessions.length,
     });
   }
 
@@ -763,4 +764,91 @@ export async function scanAllSessions(): Promise<SessionGroup[]> {
   });
 
   return result;
+}
+
+function metaToSessionInfo(meta: SessionMeta): SessionInfo {
+  return {
+    id: meta.id,
+    name: meta.title,
+    cwd: meta.cwd,
+    createdAt: meta.createdAt,
+    lastActiveAt: meta.lastActiveAt,
+    status: "idle",
+  };
+}
+
+export async function scanSessionsForCwd(targetCwd: string): Promise<SessionInfo[]> {
+  const projectsDir = path.join(homedir(), ".claude", "projects");
+  if (!existsSync(projectsDir)) return [];
+
+  let projectDirs: string[];
+  try {
+    projectDirs = await readdir(projectsDir);
+  } catch {
+    return [];
+  }
+
+  const results: SessionInfo[] = [];
+
+  for (const dir of projectDirs) {
+    const dirPath = path.join(projectsDir, dir);
+    let files: string[];
+    try {
+      files = await readdir(dirPath);
+    } catch {
+      continue;
+    }
+
+    const jsonlFiles = files.filter((f) => f.endsWith(".jsonl"));
+    const metas = await Promise.all(jsonlFiles.map((f) => extractSessionMeta(path.join(dirPath, f))));
+
+    for (const meta of metas) {
+      if (meta && meta.cwd === targetCwd) {
+        results.push(metaToSessionInfo(meta));
+      }
+    }
+  }
+
+  results.sort((a, b) => b.lastActiveAt - a.lastActiveAt);
+  return results;
+}
+
+export async function scanSessionsByIds(ids: string[]): Promise<SessionInfo[]> {
+  if (ids.length === 0) return [];
+  const projectsDir = path.join(homedir(), ".claude", "projects");
+  if (!existsSync(projectsDir)) return [];
+
+  let projectDirs: string[];
+  try {
+    projectDirs = await readdir(projectsDir);
+  } catch {
+    return [];
+  }
+
+  const idSet = new Set(ids);
+  const results: SessionInfo[] = [];
+
+  for (const dir of projectDirs) {
+    if (idSet.size === 0) break;
+    const dirPath = path.join(projectsDir, dir);
+    let files: string[];
+    try {
+      files = await readdir(dirPath);
+    } catch {
+      continue;
+    }
+
+    const matching = files.filter((f) => f.endsWith(".jsonl") && idSet.has(f.slice(0, -".jsonl".length)));
+    if (matching.length === 0) continue;
+
+    const metas = await Promise.all(matching.map((f) => extractSessionMeta(path.join(dirPath, f))));
+    for (const meta of metas) {
+      if (meta) {
+        results.push(metaToSessionInfo(meta));
+        idSet.delete(meta.id);
+      }
+    }
+  }
+
+  return results;
 }

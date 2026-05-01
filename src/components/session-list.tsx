@@ -52,8 +52,27 @@ function DirectoryGroup({
   onCreateSession: (cwd: string) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const latestAt = group.sessions[0]?.lastActiveAt || 0;
-  const runningCount = group.sessions.filter((s) => s.status === "running").length;
+  const [fullSessions, setFullSessions] = useState<SessionInfo[] | null>(null);
+  const [loadingAll, setLoadingAll] = useState(false);
+
+  const displaySessions = fullSessions || group.sessions;
+  const truncated = displaySessions.length < group.totalSessionCount;
+  const latestAt = displaySessions[0]?.lastActiveAt || 0;
+  const runningCount = displaySessions.filter((s) => s.status === "running").length;
+
+  const loadAll = async () => {
+    if (loadingAll) return;
+    setLoadingAll(true);
+    try {
+      const res = await fetch(`/api/sessions/group?cwd=${encodeURIComponent(group.cwd)}`);
+      if (res.ok) {
+        const data = await res.json();
+        setFullSessions(data.sessions || []);
+      }
+    } finally {
+      setLoadingAll(false);
+    }
+  };
 
   return (
     <div className="rounded-lg border bg-card">
@@ -70,7 +89,7 @@ function DirectoryGroup({
             <span className="text-xs bg-primary text-primary-foreground px-1.5 py-0.5 rounded">{runningCount} running</span>
           )}
           <span className="text-xs text-muted-foreground">{timeAgo(latestAt)}</span>
-          <span className="text-xs text-muted-foreground">{group.sessions.length}</span>
+          <span className="text-xs text-muted-foreground">{group.totalSessionCount}</span>
           <button
             onClick={(e) => {
               e.stopPropagation();
@@ -94,9 +113,18 @@ function DirectoryGroup({
       </div>
       {expanded && (
         <div className="px-3 pb-3 space-y-1">
-          {group.sessions.map((s) => (
+          {displaySessions.map((s) => (
             <SessionCard key={s.id} session={s} onClick={() => onSelectSession(s)} />
           ))}
+          {truncated && (
+            <button
+              onClick={loadAll}
+              disabled={loadingAll}
+              className="w-full text-xs text-muted-foreground hover:text-foreground py-2 rounded hover:bg-accent/50 transition-colors disabled:opacity-50"
+            >
+              {loadingAll ? "Loading..." : `Load all ${group.totalSessionCount} sessions`}
+            </button>
+          )}
         </div>
       )}
     </div>

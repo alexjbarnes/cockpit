@@ -4,6 +4,8 @@ import { validateSession } from "@/server/auth";
 import { getSessionManager } from "@/server/singleton";
 import { scanAllSessions } from "@/server/transcript";
 
+const SESSIONS_PER_GROUP_LIMIT = 20;
+
 function authenticate(req: NextRequest): boolean {
   const token = req.cookies.get("cockpit_session")?.value || req.headers.get("authorization")?.replace("Bearer ", "");
   return !!token && validateSession(token);
@@ -47,7 +49,7 @@ export async function GET(req: NextRequest) {
       group.sessions.push(mem);
     } else {
       const dirName = path.basename(mem.cwd) || mem.cwd;
-      groups.push({ cwd: mem.cwd, dirName, sessions: [mem] });
+      groups.push({ cwd: mem.cwd, dirName, sessions: [mem], totalSessionCount: 1 });
     }
   }
 
@@ -67,6 +69,15 @@ export async function GET(req: NextRequest) {
     const bLatest = b.sessions[0]?.lastActiveAt || 0;
     return bLatest - aLatest;
   });
+
+  // Truncate the visible list per group; clients fetch the full list for
+  // one directory via /api/sessions/group?cwd=... when the user expands it.
+  for (const group of filtered) {
+    group.totalSessionCount = group.sessions.length;
+    if (group.sessions.length > SESSIONS_PER_GROUP_LIMIT) {
+      group.sessions = group.sessions.slice(0, SESSIONS_PER_GROUP_LIMIT);
+    }
+  }
 
   return NextResponse.json({ groups: filtered });
 }

@@ -13,6 +13,7 @@ export interface SessionGroup {
   cwd: string;
   dirName: string;
   sessions: SessionInfo[];
+  totalSessionCount: number;
 }
 
 export interface ToolUse {
