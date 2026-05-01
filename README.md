@@ -79,6 +79,14 @@ Tested on Linux and macOS. Windows is unverified.
 | `HOST` | Bind address | `0.0.0.0` |
 | `COCKPIT_RESET_PASSWORD` | Set to `true` to reset password on next startup | `false` |
 
+## Remote access
+
+Cockpit binds to `0.0.0.0` by default. On the host machine, open `http://localhost:3001`. From other devices on the same LAN, use the host's local IP (the startup log prints usable URLs).
+
+To reach Cockpit from outside your LAN, prefer [Tailscale](https://tailscale.com/) over port forwarding. Tailscale gives every device a private IP on a flat network without opening router ports or exposing the server publicly.
+
+To restrict Cockpit to the host machine only, set `HOST=127.0.0.1`.
+
 ## Documentation
 
 - [Sessions](docs/sessions.md): chat, sidebar, attachments, plan mode, diffs, file view, todos, search, session linking

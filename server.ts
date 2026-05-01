@@ -1,4 +1,5 @@
 import { createServer } from "node:http";
+import { networkInterfaces } from "node:os";
 import { parse } from "node:url";
 import next from "next";
 import { deletePasswordFile, needsSetup } from "./src/server/auth";
@@ -13,6 +14,44 @@ const host = process.env.HOST || "0.0.0.0";
 
 const app = next({ dev, hostname: host, port });
 const handle = app.getRequestHandler();
+
+function getLanAddresses(): string[] {
+  const addresses: string[] = [];
+  const ifaces = networkInterfaces();
+  for (const name of Object.keys(ifaces)) {
+    for (const iface of ifaces[name] || []) {
+      if (iface.family === "IPv4" && !iface.internal) {
+        addresses.push(iface.address);
+      }
+    }
+  }
+  return addresses;
+}
+
+function logStartupBanner(): void {
+  console.log(`Cockpit listening on ${host}:${port}`);
+  console.log("");
+
+  const isWildcard = host === "0.0.0.0" || host === "::";
+  const isLoopback = host === "127.0.0.1" || host === "localhost" || host === "::1";
+
+  if (isWildcard) {
+    console.log(`  Local:    http://localhost:${port}`);
+    const network = getLanAddresses();
+    if (network.length > 0) {
+      console.log(`  Network:  http://${network[0]}:${port}`);
+      for (let i = 1; i < network.length; i++) {
+        console.log(`            http://${network[i]}:${port}`);
+      }
+    }
+  } else if (isLoopback) {
+    console.log(`  Local:    http://localhost:${port}`);
+  } else {
+    console.log(`  Network:  http://${host}:${port}`);
+  }
+
+  console.log("");
+}
 
 async function main() {
   // Handle password reset flag
@@ -38,7 +77,7 @@ async function main() {
   createWebSocketHandler(server, sessionManager);
 
   server.listen(port, host, () => {
-    console.log(`Cockpit running on http://${host}:${port}`);
+    logStartupBanner();
     if (needsSetup()) {
       console.log("No password set. Visit the UI to create one.");
     }
