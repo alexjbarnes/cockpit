@@ -186,20 +186,23 @@ export function QuestionPrompt({ questions, requestId, onSubmit }: QuestionPromp
                   );
                 })}
                 {!submitted ? (
-                  <button
-                    onClick={() => selectOther(q.question)}
-                    className={`flex w-full items-start gap-2.5 rounded-md px-2.5 py-2 text-xs text-left transition-colors ${
-                      isOtherSelected ? "bg-primary/10" : "hover:bg-muted/50 cursor-pointer"
-                    }`}
-                  >
-                    {isOtherSelected ? (
-                      <Check className="h-3.5 w-3.5 shrink-0 mt-0.5 text-primary" />
-                    ) : (
-                      <Circle className="h-3.5 w-3.5 shrink-0 mt-0.5 text-muted-foreground/40" />
-                    )}
-                    <div className="min-w-0 flex-1">
-                      <div className={isOtherSelected ? "font-medium text-foreground" : "text-foreground"}>Other</div>
-                      {isOtherSelected && (
+                  <div className={`rounded-md transition-colors ${isOtherSelected ? "bg-primary/10" : "hover:bg-muted/50"}`}>
+                    <button
+                      type="button"
+                      onClick={() => selectOther(q.question)}
+                      className="flex w-full items-start gap-2.5 px-2.5 py-2 text-xs text-left cursor-pointer"
+                    >
+                      {isOtherSelected ? (
+                        <Check className="h-3.5 w-3.5 shrink-0 mt-0.5 text-primary" />
+                      ) : (
+                        <Circle className="h-3.5 w-3.5 shrink-0 mt-0.5 text-muted-foreground/40" />
+                      )}
+                      <div className="min-w-0 flex-1">
+                        <div className={isOtherSelected ? "font-medium text-foreground" : "text-foreground"}>Other</div>
+                      </div>
+                    </button>
+                    {isOtherSelected && (
+                      <div className="px-2.5 pb-2 pl-9">
                         <input
                           ref={(el) => {
                             otherInputRefs.current[q.question] = el;
@@ -208,15 +211,17 @@ export function QuestionPrompt({ questions, requestId, onSubmit }: QuestionPromp
                           value={otherTexts[q.question] || ""}
                           onChange={(e) => setOtherTexts((prev) => ({ ...prev, [q.question]: e.target.value }))}
                           onKeyDown={(e) => {
-                            if (e.key === "Enter" && allAnswered) handleSubmit();
+                            if (e.key === "Enter") {
+                              e.preventDefault();
+                              handleSubmit();
+                            }
                           }}
-                          onClick={(e) => e.stopPropagation()}
                           placeholder="Tell Claude what to do instead..."
-                          className="mt-1 w-full rounded border border-border bg-background px-2 py-1 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                          className="w-full rounded border border-border bg-background px-2 py-1 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
                         />
-                      )}
-                    </div>
-                  </button>
+                      </div>
+                    )}
+                  </div>
                 ) : (
                   isOtherSelected && (
                     <div className="flex w-full items-start gap-2.5 rounded-md px-2.5 py-2 text-xs bg-primary/10">
