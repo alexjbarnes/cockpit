@@ -360,12 +360,14 @@ function BashContent({ input, tool }: { input: Record<string, unknown>; tool: To
   return (
     <div className="space-y-1">
       {command && (
-        <div className="font-mono text-muted-foreground">
+        <div className="font-mono text-muted-foreground break-all">
           <span className="text-foreground/60">$</span> {command}
         </div>
       )}
       {tool.output && (
-        <pre className="overflow-x-auto rounded bg-muted/50 p-2 text-[11px] leading-relaxed max-h-64 overflow-y-auto">{tool.output}</pre>
+        <pre className="whitespace-pre-wrap break-all rounded bg-muted/50 p-2 text-[11px] leading-relaxed max-h-64 overflow-y-auto">
+          {tool.output}
+        </pre>
       )}
     </div>
   );
