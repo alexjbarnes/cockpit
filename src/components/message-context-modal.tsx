@@ -11,10 +11,15 @@ import { MessageBubble } from "./message-bubble";
 interface MessageContextModalProps {
   timestamp: number;
   onClose: () => void;
+  sessionId?: string;
+  cwd?: string;
 }
 
-export function MessageContextModal({ timestamp, onClose }: MessageContextModalProps) {
-  const { sessionId, cwd } = useShell();
+export function MessageContextModal(props: MessageContextModalProps) {
+  const { timestamp, onClose } = props;
+  const shell = useShell();
+  const sessionId = props.sessionId ?? shell.sessionId;
+  const cwd = props.cwd ?? shell.cwd;
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [targetId, setTargetId] = useState<string>("");
   const [loading, setLoading] = useState(true);

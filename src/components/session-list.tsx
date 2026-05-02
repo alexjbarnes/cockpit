@@ -3,9 +3,11 @@
 import { ChevronRight, Folder, Plus, Star } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useWebSocket } from "@/hooks/use-websocket";
 import type { SessionGroup, SessionInfo } from "@/types";
+import { GlobalSearchButton } from "./global-search-modal";
 import { NewSessionDialog } from "./new-session-dialog";
 import { SessionCard } from "./session-card";
 import { pinSession } from "./sidebar";
@@ -89,7 +91,9 @@ function DirectoryGroup({
             <span className="text-xs bg-primary text-primary-foreground px-1.5 py-0.5 rounded">{runningCount} running</span>
           )}
           <span className="text-xs text-muted-foreground">{timeAgo(latestAt)}</span>
-          <span className="text-xs text-muted-foreground">{group.totalSessionCount}</span>
+          <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
+            {group.totalSessionCount} session{group.totalSessionCount !== 1 ? "s" : ""}
+          </Badge>
           <button
             onClick={(e) => {
               e.stopPropagation();
@@ -204,6 +208,7 @@ export function SessionList() {
   return (
     <div className="mx-auto max-w-lg p-4 pb-24 space-y-3">
       <h1 className="text-2xl font-bold">Sessions</h1>
+      <GlobalSearchButton />
 
       {groups.length === 0 && loaded && <p className="text-sm text-muted-foreground">No sessions found. Create one to get started.</p>}
 

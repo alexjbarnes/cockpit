@@ -61,6 +61,20 @@ export interface ChatMessage {
   model?: string;
 }
 
+export interface GlobalSearchResult {
+  sessionId: string;
+  sessionName: string;
+  cwd: string;
+  dirName: string;
+  messageId: string;
+  role: "user" | "assistant";
+  timestamp: number;
+  preview: string;
+  matchStart: number;
+  matchLength: number;
+  fullContent: string;
+}
+
 export interface ContextUsage {
   used: number;
   total: number;

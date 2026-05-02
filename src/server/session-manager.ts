@@ -504,6 +504,11 @@ export class SessionManager {
     return !!session?.process;
   }
 
+  hasRunningProcess(id: string): boolean {
+    const session = this.sessions.get(id);
+    return !!session?.process;
+  }
+
   fixStaleStatus(id: string): void {
     const session = this.sessions.get(id);
     if (session && session.info.status === "running" && !session.process) {
@@ -1219,6 +1224,11 @@ export class SessionManager {
         this.respondToPermission(sessionId, pa.requestId, true, pa.rawToolInput);
       } else if (pa.type === "auto_deny") {
         this.respondToPermission(sessionId, pa.requestId, false, undefined, undefined, pa.denyReason);
+      } else if (session.bypassAllPermissions && !session.planMode) {
+        // CLI was spawned without bypass capability (e.g. after exiting plan
+        // mode) but the session has bypass enabled. Auto-approve server-side
+        // until the process respawns with the right flags.
+        this.respondToPermission(sessionId, pa.requestId, true, pa.rawToolInput);
       } else {
         const planPath = pa.toolName === "ExitPlanMode" ? findLatestPlanFile() : undefined;
         session.pendingRequests.set(pa.requestId, {
@@ -1428,6 +1438,23 @@ Additional Cockpit rules beyond the CLI's defaults:
     return true;
   }
 
+  private estimateMessageTokens(text: string, images?: ImageAttachment[], documents?: DocumentAttachment[]): number {
+    let tokens = Math.ceil(text.length / 4);
+    if (images) tokens += images.length * 2000;
+    if (documents) tokens += documents.reduce((sum, d) => sum + Math.ceil(d.data.length / 5), 0);
+    return tokens;
+  }
+
+  private shouldPreCompact(session: Session, text: string, images?: ImageAttachment[], documents?: DocumentAttachment[]): boolean {
+    if (!session.contextUsage) return false;
+    if (session.compacting) return false;
+    if (text.trim().toLowerCase().startsWith("/compact")) return false;
+    if (text.trim().startsWith("/")) return false;
+    const estimate = this.estimateMessageTokens(text, images, documents);
+    const { used, total } = session.contextUsage;
+    return used + estimate > total * 0.85;
+  }
+
   sendMessage(sessionId: string, text: string, images?: ImageAttachment[], documents?: DocumentAttachment[]): boolean {
     const session = this.sessions.get(sessionId);
     if (!session) {
@@ -1445,6 +1472,26 @@ Additional Cockpit rules beyond the CLI's defaults:
         session.compacting = true;
         this.emitSystem(session, sessionId, "__compact::start");
       }
+    }
+
+    // If the message would likely overflow the context window, compact first
+    // and queue the message for delivery after compaction finishes.
+    if (session.info.status !== "running" && this.shouldPreCompact(session, text, images, documents)) {
+      this.log(sessionId, "pre-send compact: message would exceed 85% of context window");
+      logDiag(sessionId, "compact:pre-send");
+      session.queuedMessages.push({ id: `q-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, text, images, documents });
+      session.emitter.emit("queued", sessionId, session.queuedMessages.length);
+      session.compacting = true;
+      this.emitSystem(session, sessionId, "__compact::start");
+      session.info.status = "running";
+      session.emitter.emit("status", sessionId, "running");
+      if (session.process && session.stdin) {
+        const compactInput = { type: "user", message: { role: "user", content: "/compact" } };
+        session.stdin.write(JSON.stringify(compactInput) + "\n");
+      } else {
+        this.spawnProcess(session, sessionId, "/compact");
+      }
+      return true;
     }
 
     const content = this.buildContent(session, text, images, documents);

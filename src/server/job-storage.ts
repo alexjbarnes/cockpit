@@ -122,16 +122,13 @@ export function getLatestRun(jobId: string): JobRun | undefined {
   return runs.reduce((latest, r) => (r.startedAt > latest.startedAt ? r : latest));
 }
 
-export function getRecentFailureCount(withinMs: number = 24 * 60 * 60 * 1000): number {
+export function getRecentFailureCount(): number {
   const jobs = loadJobs();
-  const cutoff = Date.now() - withinMs;
   let count = 0;
   for (const job of jobs) {
-    const runs = loadRuns(job.id);
-    for (const run of runs) {
-      if (run.startedAt >= cutoff && (run.status === "failure" || run.status === "timeout")) {
-        count++;
-      }
+    const latest = getLatestRun(job.id);
+    if (latest && (latest.status === "failure" || latest.status === "timeout")) {
+      count++;
     }
   }
   return count;

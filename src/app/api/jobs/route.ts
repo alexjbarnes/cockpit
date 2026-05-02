@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { v4 as uuidv4 } from "uuid";
 import { validateSession } from "@/server/auth";
-import { loadJobs, saveJob } from "@/server/job-storage";
+import { getLatestRun, loadJobs, saveJob } from "@/server/job-storage";
 import { getJobScheduler } from "@/server/singleton";
 import type { ScheduledJob } from "@/types";
 
@@ -14,7 +14,15 @@ export async function GET(req: NextRequest) {
   if (!authenticate(req)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
-  const jobs = loadJobs();
+  const jobs = loadJobs().map((job) => {
+    const latest = getLatestRun(job.id);
+    return {
+      ...job,
+      lastRunStatus: latest?.status,
+      lastRunAt: latest?.startedAt,
+      lastRunError: latest?.error,
+    };
+  });
   return NextResponse.json({ jobs });
 }
 

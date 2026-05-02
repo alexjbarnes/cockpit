@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowLeft, ChevronDown, ChevronRight, FileText, Loader2, X } from "lucide-react";
+import { ArrowLeft, ChevronDown, ChevronRight, FileText, Loader2, MessageSquare, X } from "lucide-react";
 import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { usePageHeader } from "@/components/app-shell";
@@ -216,10 +216,18 @@ export default function RunDetailPage() {
           <div>
             <span className="text-muted-foreground">Working Directory:</span> <span className="font-mono text-xs">{run.cwd}</span>
           </div>
-          <div className="pt-2">
+          <div className="pt-2 flex gap-2">
             <Button variant="outline" size="sm" onClick={() => setShowTranscript(true)}>
               <FileText className="h-3 w-3 mr-1" />
               View Transcript
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => router.push(`/sessions/${run.sessionId}?cwd=${encodeURIComponent(run.cwd)}`)}
+            >
+              <MessageSquare className="h-3 w-3 mr-1" />
+              Continue Session
             </Button>
           </div>
         </CardContent>

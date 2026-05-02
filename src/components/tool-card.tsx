@@ -348,7 +348,7 @@ function ReadContent({ input, tool, dark }: { input: Record<string, unknown>; to
 
   return (
     <div className="space-y-1">
-      {filePath && <div className="font-mono text-muted-foreground">{filePath}</div>}
+      {filePath && <div className="font-mono text-muted-foreground break-all">{filePath}</div>}
       {tool.output && <CodeBlock code={tool.output} language={lang} dark={dark} />}
     </div>
   );
