@@ -381,7 +381,7 @@ export class JobScheduler {
         if (job.inboxOutput && lastAssistantText) {
           const inbox = parseInboxBlock(lastAssistantText);
           if (inbox) {
-            addInboxMessage({ ...inbox, jobId: job.id, jobName: job.name, runId: run.id });
+            addInboxMessage({ ...inbox, jobId: job.id, jobName: job.name, runId: run.id, notifyProviders: job.notifyProviders });
           }
         }
         if (finalStatus === "failure" || finalStatus === "timeout") {
@@ -392,6 +392,7 @@ export class JobScheduler {
             jobId: job.id,
             jobName: job.name,
             runId: run.id,
+            notifyProviders: job.notifyProviders,
           });
         }
 

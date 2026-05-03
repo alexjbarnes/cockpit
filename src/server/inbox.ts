@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { v4 as uuidv4 } from "uuid";
 import type { InboxMessage, InboxPriority } from "@/types";
+import { dispatchNotification } from "./notifications";
 
 const INBOX_DIR = path.join(homedir(), ".cockpit");
 const INBOX_FILE = path.join(INBOX_DIR, "inbox.jsonl");
@@ -44,6 +45,7 @@ export function addInboxMessage(msg: {
   jobId?: string;
   jobName?: string;
   runId?: string;
+  notifyProviders?: string[];
 }): InboxMessage {
   const messages = readAll();
   const entry: InboxMessage = {
@@ -59,6 +61,14 @@ export function addInboxMessage(msg: {
   };
   messages.push(entry);
   writeAll(messages);
+  dispatchNotification({
+    title: entry.title,
+    body: entry.body,
+    priority: entry.priority,
+    source: "inbox",
+    url: `/inbox/${entry.id}`,
+    providerIds: msg.notifyProviders,
+  });
   return entry;
 }
 

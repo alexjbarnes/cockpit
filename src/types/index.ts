@@ -205,6 +205,7 @@ export interface ScheduledJob {
   retentionDays?: number;
   skipIfMissed?: boolean;
   inboxOutput?: boolean;
+  notifyProviders?: string[];
 }
 
 export type JobRunStatus = "running" | "success" | "failure" | "timeout";
@@ -246,6 +247,44 @@ export interface InboxMessage {
   priority: InboxPriority;
   createdAt: number;
   read: boolean;
+}
+
+// Notifications
+export interface NotificationPayload {
+  title: string;
+  body: string;
+  url?: string;
+  priority: InboxPriority;
+  source: string;
+  providerIds?: string[];
+}
+
+export interface TelegramConfig {
+  botToken: string;
+  chatId: string;
+}
+
+export interface NtfyConfig {
+  serverUrl: string;
+  topic: string;
+  token?: string;
+}
+
+export interface NotificationProviderEntry {
+  id: string;
+  type: "telegram" | "ntfy";
+  enabled: boolean;
+  name: string;
+  config: TelegramConfig | NtfyConfig;
+  filter?: {
+    priorities?: InboxPriority[];
+    sources?: string[];
+  };
+}
+
+export interface NotificationSettings {
+  baseUrl?: string;
+  providers: NotificationProviderEntry[];
 }
 
 // Client -> Server messages

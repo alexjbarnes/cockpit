@@ -488,6 +488,14 @@ export default function SettingsPage() {
       </Card>
       <Card>
         <CardHeader>
+          <CardTitle className="text-base">Notifications</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-0.5">
+          <NavRow label="External providers" onClick={() => router.push("/settings/notifications")} />
+        </CardContent>
+      </Card>
+      <Card>
+        <CardHeader>
           <CardTitle className="text-base">Customization</CardTitle>
         </CardHeader>
         <CardContent className="space-y-0.5">

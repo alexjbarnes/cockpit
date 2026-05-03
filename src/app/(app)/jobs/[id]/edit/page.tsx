@@ -178,6 +178,8 @@ export default function JobEditPage() {
   const [skipIfMissed, setSkipIfMissed] = useState(false);
   const [retentionDays, setRetentionDays] = useState(90);
   const [inboxOutput, setInboxOutput] = useState(false);
+  const [notifyProviders, setNotifyProviders] = useState<string[]>([]);
+  const [availableProviders, setAvailableProviders] = useState<{ id: string; name: string; type: string }[]>([]);
 
   const [showDirPicker, setShowDirPicker] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -245,6 +247,7 @@ export default function JobEditPage() {
     setSkipIfMissed(job.skipIfMissed ?? false);
     setRetentionDays(job.retentionDays ?? 90);
     setInboxOutput(job.inboxOutput ?? false);
+    setNotifyProviders(job.notifyProviders || []);
   }, []);
 
   const loadJob = useCallback(async () => {
@@ -275,6 +278,15 @@ export default function JobEditPage() {
       .catch(() => setAvailableMcp([]));
   }, [cwd]);
 
+  useEffect(() => {
+    fetch("/api/notifications")
+      .then((r) => r.json())
+      .then((data: { providers: { id: string; name: string; type: string; enabled: boolean }[] }) =>
+        setAvailableProviders((data.providers || []).filter((p) => p.enabled)),
+      )
+      .catch(() => setAvailableProviders([]));
+  }, []);
+
   async function handleSave() {
     setSaving(true);
     const supportsExtended = selectedEntry?.supportsExtendedContext ?? false;
@@ -297,6 +309,7 @@ export default function JobEditPage() {
       skipIfMissed,
       retentionDays,
       inboxOutput,
+      notifyProviders: notifyProviders.length > 0 ? notifyProviders : undefined,
     };
 
     try {
@@ -726,6 +739,28 @@ export default function JobEditPage() {
               </div>
               <Toggle checked={inboxOutput} onChange={setInboxOutput} />
             </div>
+            {inboxOutput && availableProviders.length > 0 && (
+              <div className="mt-4 pt-4 border-t">
+                <label className="text-sm font-medium">External notifications</label>
+                <p className="text-xs text-muted-foreground mt-0.5 mb-2">Also send to these providers when a message is delivered.</p>
+                <div className="space-y-1.5">
+                  {availableProviders.map((p) => (
+                    <label key={p.id} className="flex items-center gap-2 text-sm cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={notifyProviders.includes(p.id)}
+                        onChange={(e) =>
+                          setNotifyProviders((prev) => (e.target.checked ? [...prev, p.id] : prev.filter((x) => x !== p.id)))
+                        }
+                        className="rounded border-input"
+                      />
+                      <span>{p.name}</span>
+                      <span className="text-xs text-muted-foreground">({p.type})</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            )}
           </CardContent>
         </Card>
 
