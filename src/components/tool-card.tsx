@@ -144,7 +144,7 @@ export function ToolCard({ tool, expandedToolIds }: ToolCardProps) {
             }
           }}
           className={cn(
-            "flex w-full items-center gap-2 px-3 py-1.5 text-left",
+            "flex w-full items-start gap-2 px-3 py-1.5 text-left",
             hasContent && "cursor-pointer hover:bg-muted/50",
             !hasContent && "cursor-default",
           )}
@@ -226,13 +226,17 @@ function ToolSummary({ tool, input }: { tool: ToolUse; input: Record<string, unk
     const agentType = input.subagent_type as string | undefined;
     const tags = [agentType, model].filter(Boolean);
     return (
-      <span className="flex items-center gap-1.5 truncate">
+      <span className="flex flex-col gap-0.5 min-w-0">
         {short && <span className="text-muted-foreground truncate">{short}</span>}
-        {tags.map((tag) => (
-          <span key={tag} className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
-            {tag}
+        {tags.length > 0 && (
+          <span className="flex items-center gap-1.5">
+            {tags.map((tag) => (
+              <span key={tag} className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                {tag}
+              </span>
+            ))}
           </span>
-        ))}
+        )}
       </span>
     );
   }
