@@ -3,7 +3,7 @@
 import { DndContext, type DragEndEvent, PointerSensor, useSensor, useSensors } from "@dnd-kit/core";
 import { arrayMove, SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { CalendarClock, GitPullRequest, GripVertical, Plus, Settings, X } from "lucide-react";
+import { CalendarClock, GitPullRequest, GripVertical, Inbox, Plus, Settings, X } from "lucide-react";
 import Image from "next/image";
 import { usePathname, useRouter } from "next/navigation";
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
@@ -510,6 +510,12 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
               router.push("/jobs");
             }}
           />
+          <InboxButton
+            onClick={() => {
+              close();
+              router.push("/inbox");
+            }}
+          />
           <Button
             variant="ghost"
             size="icon"
@@ -544,6 +550,36 @@ function JobsButton({ onClick }: { onClick: () => void }) {
     >
       <CalendarClock className="h-4 w-4" />
       {count > 0 && <span className="absolute top-1 right-1 h-2 w-2 rounded-full bg-red-500" />}
+    </Button>
+  );
+}
+
+function InboxButton({ onClick }: { onClick: () => void }) {
+  const [unread, setUnread] = useState(0);
+  const pathname = usePathname();
+
+  useEffect(() => {
+    const check = () => {
+      fetch("/api/inbox?count=true")
+        .then((r) => r.json())
+        .then((d) => setUnread(d.unread || 0))
+        .catch(() => {});
+    };
+    check();
+    const interval = setInterval(check, 15_000);
+    return () => clearInterval(interval);
+  }, [pathname]);
+
+  return (
+    <Button
+      variant="ghost"
+      size="icon"
+      className="shrink-0 h-8 w-8 text-muted-foreground hover:text-foreground relative"
+      onClick={onClick}
+      title="Inbox"
+    >
+      <Inbox className="h-4 w-4" />
+      {unread > 0 && <span className="absolute top-1 right-1 h-2 w-2 rounded-full bg-blue-500" />}
     </Button>
   );
 }

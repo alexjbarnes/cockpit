@@ -177,6 +177,7 @@ function JobDirGroup({
   onDuplicate,
   onDelete,
   onClickJob,
+  onCreateJob,
   defaultExpanded,
 }: {
   group: JobGroupData;
@@ -185,6 +186,7 @@ function JobDirGroup({
   onDuplicate: (e: React.MouseEvent, id: string) => void;
   onDelete: (e: React.MouseEvent, id: string) => void;
   onClickJob: (id: string) => void;
+  onCreateJob: (cwd: string) => void;
   defaultExpanded: boolean;
 }) {
   const [expanded, setExpanded] = useState(defaultExpanded);
@@ -207,6 +209,16 @@ function JobDirGroup({
           <span className="text-xs text-muted-foreground">
             {group.jobs.length} job{group.jobs.length !== 1 ? "s" : ""}
           </span>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onCreateJob(group.cwd);
+            }}
+            className="p-1 rounded hover:bg-accent"
+            title="New job in this folder"
+          >
+            <Plus className="h-3.5 w-3.5 text-muted-foreground" />
+          </button>
         </div>
       </div>
       {expanded && (
@@ -267,15 +279,7 @@ export default function JobsPage() {
   }
 
   return (
-    <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-4">
-      <div className="flex items-center justify-between">
-        <div />
-        <Button size="sm" onClick={() => router.push("/jobs/new/edit")}>
-          <Plus className="h-4 w-4 mr-1" />
-          New Job
-        </Button>
-      </div>
-
+    <div className="flex-1 min-h-0 overflow-y-auto p-4 pb-24 space-y-4">
       {loading && <p className="text-sm text-muted-foreground">Loading jobs...</p>}
 
       {!loading && jobs.length === 0 && (
@@ -308,9 +312,17 @@ export default function JobsPage() {
                 onDuplicate={handleDuplicate}
                 onDelete={handleDeleteClick}
                 onClickJob={(id) => router.push(`/jobs/${id}`)}
+                onCreateJob={(cwd) => router.push(`/jobs/new/edit?cwd=${encodeURIComponent(cwd)}`)}
                 defaultExpanded={groups.length <= 3}
               />
             ))}
+      </div>
+
+      <div className="fixed bottom-6 right-6">
+        <Button size="lg" className="rounded-full shadow-lg" onClick={() => router.push("/jobs/new/edit")}>
+          <Plus className="h-5 w-5 mr-1" />
+          New Job
+        </Button>
       </div>
 
       <Dialog open={!!confirmDelete} onOpenChange={() => setConfirmDelete(null)}>

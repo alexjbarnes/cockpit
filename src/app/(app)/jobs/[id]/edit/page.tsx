@@ -149,12 +149,13 @@ export default function JobEditPage() {
   const id = params.id as string;
   const isNew = id === "new";
   const duplicateFrom = isNew ? searchParams.get("from") : null;
+  const initialCwd = isNew ? searchParams.get("cwd") : null;
   const router = useRouter();
 
   usePageHeader(duplicateFrom ? "Duplicate Job" : isNew ? "New Job" : "Edit Job");
 
   const [name, setName] = useState("");
-  const [cwd, setCwd] = useState("");
+  const [cwd, setCwd] = useState(initialCwd || "");
   const [prompt, setPrompt] = useState("");
   const [enabled, setEnabled] = useState(true);
 
@@ -176,6 +177,7 @@ export default function JobEditPage() {
   const [availableMcp, setAvailableMcp] = useState<string[]>([]);
   const [skipIfMissed, setSkipIfMissed] = useState(false);
   const [retentionDays, setRetentionDays] = useState(90);
+  const [inboxOutput, setInboxOutput] = useState(false);
 
   const [showDirPicker, setShowDirPicker] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -242,6 +244,7 @@ export default function JobEditPage() {
     setMcpToolFilters(job.mcpToolFilters || {});
     setSkipIfMissed(job.skipIfMissed ?? false);
     setRetentionDays(job.retentionDays ?? 90);
+    setInboxOutput(job.inboxOutput ?? false);
   }, []);
 
   const loadJob = useCallback(async () => {
@@ -293,6 +296,7 @@ export default function JobEditPage() {
       mcpToolFilters: Object.keys(mcpToolFilters).length > 0 ? mcpToolFilters : undefined,
       skipIfMissed,
       retentionDays,
+      inboxOutput,
     };
 
     try {
@@ -704,6 +708,23 @@ export default function JobEditPage() {
             <div className="flex items-center justify-between">
               <label className="text-sm font-medium">Enabled</label>
               <Toggle checked={enabled} onChange={setEnabled} />
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium">Output</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <label className="text-sm font-medium">Send to Inbox</label>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  The agent will format its final output as a structured message delivered to your Cockpit inbox.
+                </p>
+              </div>
+              <Toggle checked={inboxOutput} onChange={setInboxOutput} />
             </div>
           </CardContent>
         </Card>

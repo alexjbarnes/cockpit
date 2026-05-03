@@ -57,6 +57,7 @@ export async function POST(req: NextRequest) {
     maxDurationMinutes: body.maxDurationMinutes ?? 30,
     retentionDays: body.retentionDays ?? 90,
     skipIfMissed: body.skipIfMissed ?? false,
+    inboxOutput: body.inboxOutput ?? false,
   };
 
   saveJob(job);

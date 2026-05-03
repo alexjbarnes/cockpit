@@ -1,11 +1,13 @@
 "use client";
 
+import { Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import type { SessionInfo } from "@/types";
 
 interface SessionCardProps {
   session: SessionInfo;
   onClick: () => void;
+  onDelete?: (e: React.MouseEvent) => void;
 }
 
 function timeAgo(ts: number): string {
@@ -20,11 +22,11 @@ function timeAgo(ts: number): string {
   return new Date(ts).toLocaleDateString();
 }
 
-export function SessionCard({ session, onClick }: SessionCardProps) {
+export function SessionCard({ session, onClick, onDelete }: SessionCardProps) {
   return (
     <button
       onClick={onClick}
-      className="w-full flex items-center gap-3 px-3 py-2 text-left rounded-md hover:bg-accent/50 transition-colors"
+      className="w-full flex items-center gap-3 px-3 py-2 text-left rounded-md hover:bg-accent/50 transition-colors group"
     >
       <span className="text-sm truncate flex-1">{session.name}</span>
       <div className="flex items-center gap-2 shrink-0">
@@ -34,6 +36,19 @@ export function SessionCard({ session, onClick }: SessionCardProps) {
           </Badge>
         )}
         <span className="text-xs text-muted-foreground">{timeAgo(session.lastActiveAt)}</span>
+        {onDelete && session.status !== "running" && (
+          <span
+            role="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onDelete(e);
+            }}
+            className="p-1 rounded hover:bg-destructive/10 opacity-0 group-hover:opacity-100 transition-opacity"
+            title="Delete session"
+          >
+            <Trash2 className="h-3.5 w-3.5 text-muted-foreground hover:text-destructive" />
+          </span>
+        )}
       </div>
     </button>
   );

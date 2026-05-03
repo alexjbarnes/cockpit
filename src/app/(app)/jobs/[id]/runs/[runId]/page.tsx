@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowLeft, ChevronDown, ChevronRight, FileText, Loader2, MessageSquare, X } from "lucide-react";
+import { ArrowLeft, ChevronDown, ChevronRight, ChevronUp, FileText, Loader2, MessageSquare, X } from "lucide-react";
 import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { usePageHeader } from "@/components/app-shell";
@@ -9,6 +9,31 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import type { ChatMessage, JobRun, JobRunToolUse } from "@/types";
+
+const MAX_PROMPT_LINES = 8;
+
+function CollapsiblePrompt({ prompt }: { prompt: string }) {
+  const [expanded, setExpanded] = useState(false);
+  const lines = prompt.split("\n");
+  const needsCollapse = lines.length > MAX_PROMPT_LINES;
+  const displayText = needsCollapse && !expanded ? lines.slice(0, MAX_PROMPT_LINES).join("\n") : prompt;
+
+  return (
+    <div className="mt-2">
+      <span className="text-muted-foreground">Prompt:</span>
+      <pre className="mt-1 text-xs bg-muted rounded p-2 whitespace-pre-wrap">{displayText}</pre>
+      {needsCollapse && (
+        <button
+          onClick={() => setExpanded(!expanded)}
+          className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground mt-1 transition-colors"
+        >
+          {expanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+          {expanded ? "Show less" : `Show all ${lines.length} lines`}
+        </button>
+      )}
+    </div>
+  );
+}
 
 function statusBadge(status: string) {
   switch (status) {
@@ -209,10 +234,7 @@ export default function RunDetailPage() {
             </div>
           </div>
           {run.error && <div className="mt-2 p-2 rounded bg-destructive/10 text-destructive text-xs">{run.error}</div>}
-          <div className="mt-2">
-            <span className="text-muted-foreground">Prompt:</span>
-            <pre className="mt-1 text-xs bg-muted rounded p-2 whitespace-pre-wrap">{run.prompt}</pre>
-          </div>
+          <CollapsiblePrompt prompt={run.prompt} />
           <div>
             <span className="text-muted-foreground">Working Directory:</span> <span className="font-mono text-xs">{run.cwd}</span>
           </div>

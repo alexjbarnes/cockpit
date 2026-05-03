@@ -204,6 +204,7 @@ export interface ScheduledJob {
   maxDurationMinutes?: number;
   retentionDays?: number;
   skipIfMissed?: boolean;
+  inboxOutput?: boolean;
 }
 
 export type JobRunStatus = "running" | "success" | "failure" | "timeout";
@@ -230,6 +231,21 @@ export interface JobRun {
   messageCount: number;
   prompt: string;
   cwd: string;
+}
+
+// Inbox
+export type InboxPriority = "info" | "warning" | "error";
+
+export interface InboxMessage {
+  id: string;
+  jobId?: string;
+  jobName?: string;
+  runId?: string;
+  title: string;
+  body: string;
+  priority: InboxPriority;
+  createdAt: number;
+  read: boolean;
 }
 
 // Client -> Server messages

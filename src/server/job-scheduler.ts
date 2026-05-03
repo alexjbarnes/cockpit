@@ -4,6 +4,7 @@ import path from "node:path";
 import { v4 as uuidv4 } from "uuid";
 import type { JobRun, JobRunToolUse, ScheduledJob } from "@/types";
 import { findMissedRun, getJobSchedules, matchesCron, scheduleToCron } from "./cron-utils";
+import { addInboxMessage, parseInboxBlock } from "./inbox";
 import { getLatestRun, loadJobs, loadRuns, pruneAllRuns, saveRun } from "./job-storage";
 import type { SessionManager } from "./session-manager";
 import { countTranscriptMessages } from "./transcript";
@@ -28,6 +29,25 @@ function buildJobPrompt(job: ScheduledJob): string {
     if (tools.length > 0) parts.push(`Allowed tools: ${tools.join(", ")}`);
     if (servers.length > 0) parts.push(`Allowed MCP servers: ${servers.join(", ")}`);
     if (tools.length === 0 && servers.length === 0) parts.push("No tools or MCP servers are allowed.");
+  }
+
+  if (job.cwd) {
+    const storageDir = path.join(SCRATCHPAD_DIR, job.id);
+    parts.push("");
+    parts.push(`Storage: If you need to persist any files between runs (state, cache, data), save them in ${storageDir}`);
+    parts.push("Do not store persistent files in the working directory as it is a git repository.");
+  }
+
+  if (job.inboxOutput) {
+    parts.push("");
+    parts.push("Output: Your final message MUST include a cockpit-inbox block with your results.");
+    parts.push("Format it as a fenced code block tagged cockpit-inbox containing a JSON object:");
+    parts.push("");
+    parts.push("```cockpit-inbox");
+    parts.push(JSON.stringify({ title: "Short descriptive title", body: "Markdown body with your full output", priority: "info" }));
+    parts.push("```");
+    parts.push("");
+    parts.push('The body field supports full markdown. Set priority to "info", "warning", or "error" as appropriate.');
   }
 
   parts.push("", "Task:", job.prompt);
@@ -227,10 +247,8 @@ export class JobScheduler {
 
   async executeJob(job: ScheduledJob): Promise<JobRun> {
     const runId = uuidv4();
-    const jobCwd = job.cwd || SCRATCHPAD_DIR;
-    if (!job.cwd) {
-      mkdirSync(SCRATCHPAD_DIR, { recursive: true });
-    }
+    const jobCwd = job.cwd || path.join(SCRATCHPAD_DIR, job.id);
+    mkdirSync(path.join(SCRATCHPAD_DIR, job.id), { recursive: true });
     const sessionInfo = this.sessionManager.createSession(jobCwd, `[job] ${job.name}`, {
       bypassPermissions: !!job.bypassPermissions,
     });
@@ -252,6 +270,7 @@ export class JobScheduler {
     this.runningJobs.set(job.id, run);
 
     const toolTracker = new Map<string, JobRunToolUse>();
+    let lastAssistantText = "";
 
     const unsubEvent = this.sessionManager.subscribe(sessionId, (event) => {
       if (event.type === "tool_use_start" && event.toolId) {
@@ -271,6 +290,16 @@ export class JobScheduler {
         }
       } else if (event.type === "message_done") {
         run.messageCount++;
+        if (event.message) {
+          let text = event.message.content;
+          if (!text && event.message.blocks) {
+            text = event.message.blocks
+              .filter((b): b is { type: "text"; text: string } => b.type === "text")
+              .map((b) => b.text)
+              .join("\n");
+          }
+          if (text) lastAssistantText = text;
+        }
       } else if (event.type === "permission_request" && event.requestId) {
         if (job.bypassPermissions) {
           this.sessionManager.respondToPermission(sessionId, event.requestId, true, event.rawToolInput);
@@ -348,6 +377,24 @@ export class JobScheduler {
         if (transcriptCount > run.messageCount) run.messageCount = transcriptCount;
 
         saveRun(run);
+
+        if (job.inboxOutput && lastAssistantText) {
+          const inbox = parseInboxBlock(lastAssistantText);
+          if (inbox) {
+            addInboxMessage({ ...inbox, jobId: job.id, jobName: job.name, runId: run.id });
+          }
+        }
+        if (finalStatus === "failure" || finalStatus === "timeout") {
+          addInboxMessage({
+            title: `Job failed: ${job.name}`,
+            body: `**Status:** ${finalStatus}\n\n${run.error || "Job failed with no error message"}`,
+            priority: "error",
+            jobId: job.id,
+            jobName: job.name,
+            runId: run.id,
+          });
+        }
+
         this.runningJobs.delete(job.id);
         resolve(run);
       };

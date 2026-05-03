@@ -1,5 +1,5 @@
 import { createReadStream, existsSync, readFileSync } from "node:fs";
-import { open, readdir, readFile, stat } from "node:fs/promises";
+import { open, readdir, readFile, stat, unlink } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline";
@@ -64,6 +64,13 @@ function getTranscriptPath(sessionId: string, cwd: string): string {
 
 export function transcriptExists(sessionId: string, cwd: string): boolean {
   return existsSync(getTranscriptPath(sessionId, cwd));
+}
+
+export async function deleteTranscript(sessionId: string, cwd: string): Promise<boolean> {
+  const fp = getTranscriptPath(sessionId, cwd);
+  if (!existsSync(fp)) return false;
+  await unlink(fp);
+  return true;
 }
 
 export function countTranscriptMessages(sessionId: string, cwd: string): number {
