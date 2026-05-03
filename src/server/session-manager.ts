@@ -226,15 +226,17 @@ export class SessionManager {
       this.ensureSession(id, cwd);
       session = this.sessions.get(id)!;
     }
-    const result = await loadTranscript(session.cliSessionId, session.info.cwd, { tailLines: 150 });
+    const stitching = getDefaults().messageStitching;
+    const willStitch = stitching && session.previousCliSessionIds.length > 0;
+    // Load full current session when stitching to avoid losing middle messages.
+    // Without stitching, tail-read is fine because byteOffset stays pointing at
+    // the current session's file for backward pagination.
+    const result = await loadTranscript(session.cliSessionId, session.info.cwd, willStitch ? undefined : { tailLines: 150 });
     let { messages, byteOffset, totalSize, lastUsage } = result;
 
     session.bufferCliSessionId = session.cliSessionId;
 
-    // Stitch previous session messages across /clear boundaries so the full
-    // conversation is visible on refresh instead of only post-clear messages.
-    const stitching = getDefaults().messageStitching;
-    if (stitching && session.previousCliSessionIds.length > 0) {
+    if (willStitch) {
       const currentMessages = messages;
       for (let i = session.previousCliSessionIds.length - 1; i >= 0; i--) {
         const prevId = session.previousCliSessionIds[i];
@@ -285,15 +287,14 @@ export class SessionManager {
   ): Promise<{ info: SessionInfo; messages: ChatMessage[]; hasMore: boolean; lastUsage: { used: number; total: number } | null } | null> {
     this.ensureSession(id, cwd);
     const session = this.sessions.get(id)!;
-    const result = await loadTranscript(session.cliSessionId, cwd, { tailLines: 150 });
+    const stitching = getDefaults().messageStitching;
+    const willStitch = stitching && session.previousCliSessionIds.length > 0;
+    const result = await loadTranscript(session.cliSessionId, cwd, willStitch ? undefined : { tailLines: 150 });
     let { messages, byteOffset, totalSize, lastUsage } = result;
 
     session.bufferCliSessionId = session.cliSessionId;
 
-    // Stitch previous session messages across /clear boundaries so the full
-    // conversation is visible on refresh instead of only post-clear messages.
-    const stitching = getDefaults().messageStitching;
-    if (stitching && session.previousCliSessionIds.length > 0) {
+    if (willStitch) {
       const currentMessages = messages;
       for (let i = session.previousCliSessionIds.length - 1; i >= 0; i--) {
         const prevId = session.previousCliSessionIds[i];
@@ -348,10 +349,11 @@ export class SessionManager {
     const chain = findChainForCliSession(cliId);
     const prevIds = chain ? chain.truncatedPrevIds : [];
 
-    const result = await loadTranscript(cliId, cwd, { tailLines: 150 });
+    const willStitch = getDefaults().messageStitching && prevIds.length > 0;
+    const result = await loadTranscript(cliId, cwd, willStitch ? undefined : { tailLines: 150 });
     let { messages, lastUsage } = result;
 
-    if (getDefaults().messageStitching && prevIds.length > 0) {
+    if (willStitch) {
       const currentMessages = messages;
       for (let i = prevIds.length - 1; i >= 0; i--) {
         const prevResult = await loadTranscript(prevIds[i], cwd, { tailLines: 150 });
