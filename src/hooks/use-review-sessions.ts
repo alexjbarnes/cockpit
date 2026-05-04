@@ -12,6 +12,8 @@ export interface ReviewSession {
   number: number;
   title: string;
   lastActiveAt: number;
+  status: "idle" | "running";
+  pendingRequestCount: number;
 }
 
 const REVIEW_NAME_RE = /^Review:\s*(?:(.+?)\/)?(.+?)#(\d+)(?:\s+-\s+(.*))?$/;
@@ -27,6 +29,8 @@ function parseReviewSession(s: SessionInfo): ReviewSession | null {
     number: parseInt(match[3], 10),
     title: match[4] || "",
     lastActiveAt: s.lastActiveAt,
+    status: s.status,
+    pendingRequestCount: s.pendingRequestCount ?? 0,
   };
 }
 

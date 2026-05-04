@@ -85,6 +85,47 @@ function fileStatusIcon(path: string, prFiles: PRFile[]) {
   return <FileEdit className="h-3.5 w-3.5 text-yellow-500 shrink-0" />;
 }
 
+const DESC_MAX_LINES = 10;
+
+function PRDescription({ body, open, onToggle }: { body: string; open: boolean; onToggle: () => void }) {
+  const [expanded, setExpanded] = useState(false);
+  const lines = body.split("\n");
+  const needsTruncation = lines.length > DESC_MAX_LINES;
+  const displayText = !expanded && needsTruncation ? lines.slice(0, DESC_MAX_LINES).join("\n") : body;
+
+  return (
+    <div className="border-b">
+      <button
+        onClick={onToggle}
+        className="flex items-center gap-2 w-full px-4 py-2 text-sm text-muted-foreground hover:text-foreground transition-colors"
+      >
+        {open ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+        Description
+      </button>
+      {open && (
+        <div className="px-4 pb-3">
+          <div
+            className={cn(
+              "text-sm prose prose-sm dark:prose-invert max-w-none whitespace-pre-wrap",
+              !expanded && needsTruncation && "line-clamp-[10]",
+            )}
+          >
+            {displayText}
+          </div>
+          {needsTruncation && (
+            <button
+              onClick={() => setExpanded((v) => !v)}
+              className="mt-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+            >
+              {expanded ? "Show less" : `Show more (${lines.length} lines)`}
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function isDeletedFile(patch: string): boolean {
   return /^deleted file mode/m.test(patch);
 }
@@ -864,20 +905,7 @@ export function PRReviewView({ owner, repo, number }: { owner: string; repo: str
         {/* Diff column */}
         <div className="flex-1 min-w-0 overflow-y-auto">
           {/* PR description */}
-          {pr.body && (
-            <div className="border-b">
-              <button
-                onClick={() => setDescriptionOpen((v) => !v)}
-                className="flex items-center gap-2 w-full px-4 py-2 text-sm text-muted-foreground hover:text-foreground transition-colors"
-              >
-                {descriptionOpen ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
-                Description
-              </button>
-              {descriptionOpen && (
-                <div className="px-4 pb-3 text-sm prose prose-sm dark:prose-invert max-w-none whitespace-pre-wrap">{pr.body}</div>
-              )}
-            </div>
-          )}
+          {pr.body && <PRDescription body={pr.body} open={descriptionOpen} onToggle={() => setDescriptionOpen((v) => !v)} />}
 
           {/* Labels */}
           {pr.labels.length > 0 && (

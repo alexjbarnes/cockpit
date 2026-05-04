@@ -360,6 +360,7 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
     }
   }, [send]);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: pathname triggers refetch on navigation
   useEffect(() => {
     if (open || connected) {
       fetchSessions();
@@ -501,7 +502,7 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
             )}
           </SidebarSection>
 
-          <DynamicSections sections={sidebarSections} />
+          <DynamicSections sections={sidebarSections} exclude={REVIEW_ADJACENT_SECTIONS} />
 
           {cwd && !sidebarSections.has("file-tree") && (
             <SidebarSection id="files" title="Session Files" defaultOpen={false}>
@@ -512,6 +513,12 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
           {cwd && !sidebarSections.has("git-changes") && <SidebarChanges cwd={cwd} sessionId={shellSessionId} />}
 
           <RecentReviewsSection onNavigate={close} />
+
+          {sidebarSections.has("pr-files") && (
+            <SidebarSection id="pr-files" title={sidebarSections.get("pr-files")!.title} badge={sidebarSections.get("pr-files")!.badge}>
+              {sidebarSections.get("pr-files")!.content}
+            </SidebarSection>
+          )}
         </div>
 
         <div className="border-t px-3 py-2 flex items-center justify-end gap-2">
@@ -547,17 +554,6 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
     </>
   );
 });
-
-function timeAgo(ms: number): string {
-  const sec = Math.floor((Date.now() - ms) / 1000);
-  if (sec < 60) return "just now";
-  const min = Math.floor(sec / 60);
-  if (min < 60) return `${min}m ago`;
-  const hr = Math.floor(min / 60);
-  if (hr < 24) return `${hr}h ago`;
-  const days = Math.floor(hr / 24);
-  return `${days}d ago`;
-}
 
 const DISMISSED_REVIEWS_KEY = "cockpit_dismissed_reviews";
 
@@ -628,26 +624,37 @@ function RecentReviewsSection({ onNavigate }: { onNavigate: () => void }) {
                 goToReview(r);
               }
             }}
-            className="w-full flex items-center gap-2 px-3 py-1.5 text-left text-sm hover:bg-accent/50 transition-colors cursor-pointer"
+            className="w-full flex items-center gap-2 px-3 py-2 text-left text-sm hover:bg-accent/50 transition-colors cursor-pointer"
           >
-            <GitPullRequest className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-            <div className="flex-1 min-w-0">
-              <div className="truncate">
-                <span className="font-medium">
-                  {r.repo}#{r.number}
-                </span>
-                {r.title && <span className="text-muted-foreground ml-1.5">{r.title}</span>}
-              </div>
+            <div className="shrink-0 relative flex items-center justify-center h-4 w-4">
+              {r.pendingRequestCount > 0 ? (
+                <>
+                  <div className="absolute h-4 w-4 rounded-full bg-blue-500/20 animate-ping" />
+                  <div className="h-2.5 w-2.5 rounded-full bg-blue-500" title="Awaiting input" />
+                </>
+              ) : r.status === "running" ? (
+                <>
+                  <div className="absolute h-4 w-4 rounded-full bg-yellow-500/20 animate-ping" />
+                  <div className="h-2.5 w-2.5 rounded-full bg-yellow-500" title="Working" />
+                </>
+              ) : (
+                <div className="h-2.5 w-2.5 rounded-full bg-muted-foreground/30" />
+              )}
             </div>
-            <span className="shrink-0 text-xs text-muted-foreground">{timeAgo(r.lastActiveAt)}</span>
+            <div className="flex-1 min-w-0">
+              <div className="truncate font-medium">
+                {r.repo}#{r.number}
+              </div>
+              {r.title && <div className="truncate text-xs text-muted-foreground">{r.title}</div>}
+            </div>
             <Button
               variant="ghost"
               size="icon"
-              className="h-5 w-5 shrink-0 text-muted-foreground hover:text-red-500"
+              className="h-8 w-8 shrink-0 text-red-500 hover:text-red-600 hover:bg-red-500/10"
               onClick={(e) => dismissReview(e, r.id)}
               title="Dismiss"
             >
-              <X className="h-3 w-3" />
+              <X className="h-4 w-4" />
             </Button>
           </div>
         ))
@@ -656,8 +663,16 @@ function RecentReviewsSection({ onNavigate }: { onNavigate: () => void }) {
   );
 }
 
-function DynamicSections({ sections }: { sections: Map<string, SidebarSectionConfig> }) {
-  const sorted = useMemo(() => Array.from(sections.values()).sort((a, b) => (a.order ?? 50) - (b.order ?? 50)), [sections]);
+const REVIEW_ADJACENT_SECTIONS = new Set(["pr-files"]);
+
+function DynamicSections({ sections, exclude }: { sections: Map<string, SidebarSectionConfig>; exclude?: Set<string> }) {
+  const sorted = useMemo(
+    () =>
+      Array.from(sections.values())
+        .filter((s) => !exclude?.has(s.id))
+        .sort((a, b) => (a.order ?? 50) - (b.order ?? 50)),
+    [sections, exclude],
+  );
 
   return (
     <>
@@ -703,6 +718,7 @@ function SidebarChanges({ cwd, sessionId }: { cwd: string; sessionId?: string })
   const [branch, setBranch] = useState("");
   const [files, setFiles] = useState<Array<{ path: string; status: string; additions: number; deletions: number }>>([]);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: pathname triggers refetch on navigation
   useEffect(() => {
     let cancelled = false;
     const fetchStatus = () => {
@@ -784,6 +800,7 @@ function InboxButton({ onClick }: { onClick: () => void }) {
   const [unread, setUnread] = useState(0);
   const pathname = usePathname();
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: pathname triggers refetch on navigation
   useEffect(() => {
     const check = () => {
       fetch("/api/inbox?count=true")
