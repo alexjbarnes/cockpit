@@ -34,7 +34,7 @@ function relativePath(cwd: string, filePath: string): string {
 }
 
 export function FilesView({ cwd, initialFile }: { cwd: string; initialFile?: string | null }) {
-  const { setSidebarContent, closeSidebar } = useShell();
+  const { setSidebarSection, removeSidebarSection, closeSidebar } = useShell();
   const [selectedFile, setSelectedFile] = useState<string | null>(() => initialFile || selectedFileCache.get(cwd) || null);
   const [fileData, setFileData] = useState<FileContent | null>(null);
   const [loading, setLoading] = useState(false);
@@ -75,11 +75,15 @@ export function FilesView({ cwd, initialFile }: { cwd: string; initialFile?: str
     [cwd, closeSidebar],
   );
 
-  // Push file tree into sidebar
   useEffect(() => {
-    setSidebarContent(<FileTree cwd={cwd} selectedFile={selectedFile} onSelectFile={handleSelectFile} />);
-    return () => setSidebarContent(null);
-  }, [cwd, selectedFile, handleSelectFile, setSidebarContent]);
+    setSidebarSection({
+      id: "file-tree",
+      title: "Files",
+      content: <FileTree cwd={cwd} selectedFile={selectedFile} onSelectFile={handleSelectFile} />,
+      order: 30,
+    });
+    return () => removeSidebarSection("file-tree");
+  }, [cwd, selectedFile, handleSelectFile, setSidebarSection, removeSidebarSection]);
 
   // Fetch file content when selection changes
   useEffect(() => {

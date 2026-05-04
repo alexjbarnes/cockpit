@@ -470,7 +470,7 @@ function getCachedState(cwd: string): ChangesState {
 
 export function ChangesView({ cwd, sessionId }: { cwd: string; sessionId?: string | null }) {
   const { settings } = useSettings();
-  const { setSidebarContent, closeSidebar } = useShell();
+  const { setSidebarSection, removeSidebarSection, closeSidebar } = useShell();
   const { subscribe } = useWebSocket();
   const router = useRouter();
   const isDesktop = useIsDesktop();
@@ -740,25 +740,41 @@ export function ChangesView({ cwd, sessionId }: { cwd: string; sessionId?: strin
     [cwd, router],
   );
 
-  // Push file list into sidebar
   useEffect(() => {
     if (!status || status.files.length === 0) {
-      setSidebarContent(null);
+      removeSidebarSection("git-changes");
       return;
     }
-    setSidebarContent(
-      <FileList
-        files={status.files}
-        selectedFile={stackedMode ? null : selectedFile}
-        checkedFiles={checkedFiles}
-        onFileClick={handleFileClick}
-        onContextMenu={handleContextMenu}
-        onToggleFile={toggleFile}
-        onToggleAll={toggleAll}
-      />,
-    );
-    return () => setSidebarContent(null);
-  }, [status, selectedFile, checkedFiles, stackedMode, handleFileClick, handleContextMenu, toggleFile, toggleAll, setSidebarContent]);
+    setSidebarSection({
+      id: "git-changes",
+      title: "Changes",
+      order: 20,
+      badge: String(status.files.length),
+      content: (
+        <FileList
+          files={status.files}
+          selectedFile={stackedMode ? null : selectedFile}
+          checkedFiles={checkedFiles}
+          onFileClick={handleFileClick}
+          onContextMenu={handleContextMenu}
+          onToggleFile={toggleFile}
+          onToggleAll={toggleAll}
+        />
+      ),
+    });
+    return () => removeSidebarSection("git-changes");
+  }, [
+    status,
+    selectedFile,
+    checkedFiles,
+    stackedMode,
+    handleFileClick,
+    handleContextMenu,
+    toggleFile,
+    toggleAll,
+    setSidebarSection,
+    removeSidebarSection,
+  ]);
 
   // Close context menu on click outside
   useEffect(() => {

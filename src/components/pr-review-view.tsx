@@ -455,7 +455,7 @@ export function PRReviewView({ owner, repo, number }: { owner: string; repo: str
   const prKey = `${fullRepo}#${number}`;
 
   const { settings } = useSettings();
-  const { setSidebarContent } = useShell();
+  const { setSidebarSection, removeSidebarSection } = useShell();
   const router = useRouter();
   const isDesktop = useIsDesktop();
 
@@ -667,67 +667,69 @@ export function PRReviewView({ owner, repo, number }: { owner: string; repo: str
   // Sidebar file list
   useEffect(() => {
     if (fileDiffs.length === 0) {
-      setSidebarContent(null);
+      removeSidebarSection("pr-files");
       return;
     }
 
-    setSidebarContent(
-      <>
-        <div className="sticky top-0 bg-background flex items-center justify-between px-3 py-2 border-b z-10">
-          <span className="text-sm font-bold">Files</span>
-          <span className="text-xs text-muted-foreground">{fileDiffs.length} changed</span>
-        </div>
-        {fileDiffs.map((file) => (
-          <div
-            key={file.path}
-            className={cn(
-              "flex items-center gap-2 px-3 py-1.5 text-sm cursor-pointer border-b last:border-b-0 hover:bg-muted/50",
-              viewedFiles.has(file.path) && "opacity-50",
-            )}
-            onClick={() => {
-              if (collapsedFiles.has(file.path)) toggleCollapse(file.path);
-              setScrollToFile(file.path);
-            }}
-          >
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                toggleViewed(file.path);
-                if (!viewedFiles.has(file.path) && !collapsedFiles.has(file.path)) {
-                  toggleCollapse(file.path);
-                }
-              }}
+    setSidebarSection({
+      id: "pr-files",
+      title: "PR Files",
+      order: 20,
+      badge: String(fileDiffs.length),
+      content: (
+        <>
+          {fileDiffs.map((file) => (
+            <div
+              key={file.path}
               className={cn(
-                "h-4 w-4 shrink-0 rounded border flex items-center justify-center transition-colors",
-                viewedFiles.has(file.path)
-                  ? "border-primary bg-primary text-primary-foreground"
-                  : "border-muted-foreground/40 bg-transparent hover:border-muted-foreground/60",
+                "flex items-center gap-2 px-3 py-1.5 text-sm cursor-pointer border-b last:border-b-0 hover:bg-muted/50",
+                viewedFiles.has(file.path) && "opacity-50",
               )}
+              onClick={() => {
+                if (collapsedFiles.has(file.path)) toggleCollapse(file.path);
+                setScrollToFile(file.path);
+              }}
             >
-              {viewedFiles.has(file.path) && <Check className="h-3 w-3" strokeWidth={3} />}
-            </button>
-            {fileStatusIcon(file.path, pr?.files || [])}
-            <span className="font-mono text-xs truncate flex-1 min-w-0 text-left" dir="rtl" title={file.path}>
-              <bdo dir="ltr">{file.path}</bdo>
-            </span>
-            {pr?.files &&
-              (() => {
-                const f = pr.files.find((pf) => pf.path === file.path);
-                if (!f) return null;
-                return (
-                  <span className="text-xs font-mono shrink-0 flex gap-1">
-                    {f.additions > 0 && <span className="text-green-500">+{f.additions}</span>}
-                    {f.deletions > 0 && <span className="text-red-500">-{f.deletions}</span>}
-                  </span>
-                );
-              })()}
-          </div>
-        ))}
-      </>,
-    );
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  toggleViewed(file.path);
+                  if (!viewedFiles.has(file.path) && !collapsedFiles.has(file.path)) {
+                    toggleCollapse(file.path);
+                  }
+                }}
+                className={cn(
+                  "h-4 w-4 shrink-0 rounded border flex items-center justify-center transition-colors",
+                  viewedFiles.has(file.path)
+                    ? "border-primary bg-primary text-primary-foreground"
+                    : "border-muted-foreground/40 bg-transparent hover:border-muted-foreground/60",
+                )}
+              >
+                {viewedFiles.has(file.path) && <Check className="h-3 w-3" strokeWidth={3} />}
+              </button>
+              {fileStatusIcon(file.path, pr?.files || [])}
+              <span className="font-mono text-xs truncate flex-1 min-w-0 text-left" dir="rtl" title={file.path}>
+                <bdo dir="ltr">{file.path}</bdo>
+              </span>
+              {pr?.files &&
+                (() => {
+                  const f = pr.files.find((pf) => pf.path === file.path);
+                  if (!f) return null;
+                  return (
+                    <span className="text-xs font-mono shrink-0 flex gap-1">
+                      {f.additions > 0 && <span className="text-green-500">+{f.additions}</span>}
+                      {f.deletions > 0 && <span className="text-red-500">-{f.deletions}</span>}
+                    </span>
+                  );
+                })()}
+            </div>
+          ))}
+        </>
+      ),
+    });
 
-    return () => setSidebarContent(null);
-  }, [fileDiffs, pr, viewedFiles, collapsedFiles, setSidebarContent, toggleViewed, toggleCollapse]);
+    return () => removeSidebarSection("pr-files");
+  }, [fileDiffs, pr, viewedFiles, collapsedFiles, setSidebarSection, removeSidebarSection, toggleViewed, toggleCollapse]);
 
   if (loading) {
     return (

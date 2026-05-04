@@ -58,6 +58,16 @@ export async function GET(req: NextRequest) {
   for (const group of groups) {
     group.sessions = group.sessions.filter((s) => !s.name?.startsWith("[job] ") && !s.name?.startsWith(JOB_TITLE_PREFIX));
   }
+
+  const typeParam = req.nextUrl.searchParams.get("type");
+  if (typeParam === "reviews") {
+    const reviewGroups = groups.filter((g) => g.cwd.includes(".cockpit/reviews"));
+    const allReviews = reviewGroups.flatMap((g) => g.sessions);
+    allReviews.sort((a, b) => b.lastActiveAt - a.lastActiveAt);
+    const limit = Math.min(parseInt(req.nextUrl.searchParams.get("limit") || "10", 10), 50);
+    return NextResponse.json({ sessions: allReviews.slice(0, limit) });
+  }
+
   const filtered = groups.filter((g) => g.sessions.length > 0 && !g.cwd.endsWith(".cockpit/jobs"));
 
   // Re-sort after merging in-memory sessions

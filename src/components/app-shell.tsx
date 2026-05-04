@@ -1,11 +1,9 @@
 "use client";
 
-import { FolderOpen, Menu } from "lucide-react";
+import { Menu } from "lucide-react";
 import Image from "next/image";
-import { useRouter } from "next/navigation";
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { AuthGuard } from "@/components/auth-guard";
-import { GitStatusButton } from "@/components/git-status-modal";
 import { SearchButton } from "@/components/search-modal";
 import { Sidebar, type SidebarHandle } from "@/components/sidebar";
 import { BackgroundTasksButton } from "@/components/task-indicator";
@@ -14,6 +12,14 @@ import { Button } from "@/components/ui/button";
 import { UsageButton } from "@/components/usage-modal";
 import { WebSocketProvider } from "@/hooks/use-websocket";
 import type { BackgroundTask, InitData, TodoItem } from "@/types";
+
+export interface SidebarSectionConfig {
+  id: string;
+  title: string;
+  content: ReactNode;
+  order?: number;
+  badge?: string;
+}
 
 interface HeaderConfig {
   title: string;
@@ -32,8 +38,9 @@ interface ShellContextValue {
   setTodos: (todos: TodoItem[]) => void;
   initData: InitData | null;
   setInitData: (data: InitData | null) => void;
-  sidebarContent: ReactNode | null;
-  setSidebarContent: (content: ReactNode | null) => void;
+  sidebarSections: Map<string, SidebarSectionConfig>;
+  setSidebarSection: (section: SidebarSectionConfig) => void;
+  removeSidebarSection: (id: string) => void;
   closeSidebar: () => void;
 }
 
@@ -49,8 +56,9 @@ const ShellContext = createContext<ShellContextValue>({
   setTodos: () => {},
   initData: null,
   setInitData: () => {},
-  sidebarContent: null,
-  setSidebarContent: () => {},
+  sidebarSections: new Map(),
+  setSidebarSection: () => {},
+  removeSidebarSection: () => {},
   closeSidebar: () => {},
 });
 
@@ -79,15 +87,6 @@ export function useShellSessionId(id: string | undefined) {
     setSessionId(id);
     return () => setSessionId(undefined);
   }, [id, setSessionId]);
-}
-
-function FileBrowserButton({ cwd }: { cwd: string }) {
-  const router = useRouter();
-  return (
-    <Button variant="ghost" size="icon" onClick={() => router.push(`/files?cwd=${encodeURIComponent(cwd)}`)} title="Browse files">
-      <FolderOpen className="h-4 w-4" />
-    </Button>
-  );
 }
 
 function EditableTitle({ title, onRename }: { title: string; onRename?: (name: string) => void }) {
@@ -151,10 +150,23 @@ export function AppShell({ children }: { children: ReactNode }) {
   const [backgroundTasks, setBackgroundTasks] = useState<BackgroundTask[]>([]);
   const [todos, setTodos] = useState<TodoItem[]>([]);
   const [initData, setInitData] = useState<InitData | null>(null);
-  const [sidebarContent, setSidebarContentState] = useState<ReactNode | null>(null);
+  const [sidebarSectionsMap, setSidebarSectionsMap] = useState<Map<string, SidebarSectionConfig>>(new Map());
 
-  const setSidebarContent = useCallback((content: ReactNode | null) => {
-    setSidebarContentState(content);
+  const setSidebarSection = useCallback((section: SidebarSectionConfig) => {
+    setSidebarSectionsMap((prev) => {
+      const next = new Map(prev);
+      next.set(section.id, section);
+      return next;
+    });
+  }, []);
+
+  const removeSidebarSection = useCallback((id: string) => {
+    setSidebarSectionsMap((prev) => {
+      if (!prev.has(id)) return prev;
+      const next = new Map(prev);
+      next.delete(id);
+      return next;
+    });
   }, []);
 
   const setHeader = useCallback((config: HeaderConfig) => {
@@ -204,8 +216,9 @@ export function AppShell({ children }: { children: ReactNode }) {
             setTodos,
             initData,
             setInitData,
-            sidebarContent,
-            setSidebarContent,
+            sidebarSections: sidebarSectionsMap,
+            setSidebarSection,
+            removeSidebarSection,
             closeSidebar,
           }}
         >
@@ -225,8 +238,6 @@ export function AppShell({ children }: { children: ReactNode }) {
                   {cwd && <TodoIndicator todos={todos} />}
                   {cwd && <BackgroundTasksButton tasks={backgroundTasks} />}
                   <UsageButton />
-                  {cwd && <GitStatusButton cwd={cwd} />}
-                  {cwd && <FileBrowserButton cwd={cwd} />}
                 </div>
               </header>
               <main className="flex-1 min-h-0 min-w-0 flex flex-col">{children}</main>
