@@ -684,7 +684,7 @@ export class SessionManager {
         response: allowed
           ? {
               behavior: "allow" as const,
-              ...(toolInput ? { updatedInput: toolInput } : {}),
+              updatedInput: toolInput ?? {},
               ...(permissionSuggestions?.length ? { updatedPermissions: permissionSuggestions } : {}),
             }
           : { behavior: "deny" as const, message: denyReason ?? "User denied" },

@@ -303,13 +303,13 @@ export default function JobEditPage() {
       thinkingLevel: thinkingLevel || undefined,
       maxDurationMinutes: maxDuration,
       bypassPermissions,
-      allowedTools: allowedTools.length > 0 ? allowedTools : undefined,
-      mcpServers: mcpServers.length > 0 ? mcpServers : undefined,
-      mcpToolFilters: Object.keys(mcpToolFilters).length > 0 ? mcpToolFilters : undefined,
+      allowedTools,
+      mcpServers,
+      mcpToolFilters,
       skipIfMissed,
       retentionDays,
       inboxOutput,
-      notifyProviders: notifyProviders.length > 0 ? notifyProviders : undefined,
+      notifyProviders,
     };
 
     try {

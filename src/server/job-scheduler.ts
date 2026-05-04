@@ -4,7 +4,7 @@ import path from "node:path";
 import { v4 as uuidv4 } from "uuid";
 import type { JobRun, JobRunToolUse, ScheduledJob } from "@/types";
 import { findMissedRun, getJobSchedules, matchesCron, scheduleToCron } from "./cron-utils";
-import { addInboxMessage, parseInboxBlock } from "./inbox";
+import { addInboxMessage, parseErrorBlock, parseInboxBlock } from "./inbox";
 import { getLatestRun, loadJobs, loadRuns, pruneAllRuns, saveRun } from "./job-storage";
 import type { SessionManager } from "./session-manager";
 import { countTranscriptMessages } from "./transcript";
@@ -14,7 +14,15 @@ const SCRATCHPAD_DIR = path.join(homedir(), ".cockpit", "jobs");
 const JOB_PROMPT_HEADER = [
   "You are running as an autonomous scheduled job. There is no human operator in this session.",
   "Do not ask clarifying questions. Do not wait for user input. Make reasonable assumptions and proceed.",
-  "Complete the task fully, then stop. If you cannot complete the task, explain why in your final message.",
+  "Complete the task fully, then stop.",
+  "",
+  "Error reporting: If you cannot complete the task due to permission errors, tool failures, missing data, or any other reason,",
+  "your final message MUST include a cockpit-error block explaining the failure.",
+  "Format it as a fenced code block tagged cockpit-error containing a JSON object:",
+  "",
+  "```cockpit-error",
+  '{"error":"Brief description of what went wrong","details":"Longer explanation of which tools failed and why"}',
+  "```",
 ].join("\n");
 
 function buildJobPrompt(job: ScheduledJob): string {
@@ -40,7 +48,8 @@ function buildJobPrompt(job: ScheduledJob): string {
 
   if (job.inboxOutput) {
     parts.push("");
-    parts.push("Output: Your final message MUST include a cockpit-inbox block with your results.");
+    parts.push("Output: When you have results to report, include a cockpit-inbox block in your final message.");
+    parts.push("If there is nothing to report (e.g. no new data to process), do NOT include an inbox block.");
     parts.push("Format it as a fenced code block tagged cockpit-inbox containing a JSON object:");
     parts.push("");
     parts.push("```cockpit-inbox");
@@ -308,7 +317,8 @@ export class JobScheduler {
           const inputStr = event.toolInput || "";
           const mcpResult = isMcpToolAllowed(toolName, inputStr, enabledServers, job.mcpToolFilters);
           const allowed = mcpResult !== null ? mcpResult : isToolAllowed(toolName, inputStr, job.allowedTools || []);
-          this.sessionManager.respondToPermission(sessionId, event.requestId, allowed, allowed ? event.rawToolInput : undefined);
+          console.log(`[scheduler] permission: ${toolName} mcpResult=${mcpResult} allowed=${allowed} servers=[${[...enabledServers]}]`);
+          this.sessionManager.respondToPermission(sessionId, event.requestId, allowed, allowed ? (event.rawToolInput ?? {}) : undefined);
 
           const permEntry: JobRunToolUse = {
             name: toolName,
@@ -365,13 +375,22 @@ export class JobScheduler {
         unsubError?.();
         initCleanup?.();
 
-        run.status = finalStatus;
         run.completedAt = Date.now();
         run.durationMs = run.completedAt - run.startedAt;
         if (finalStatus === "timeout") {
           run.error = `Exceeded max duration of ${job.maxDurationMinutes || 30} minutes`;
           this.sessionManager.destroySession(sessionId);
         }
+
+        if (finalStatus === "success" && lastAssistantText) {
+          const errorBlock = parseErrorBlock(lastAssistantText);
+          if (errorBlock) {
+            finalStatus = "failure";
+            run.error = errorBlock.details ? `${errorBlock.error}: ${errorBlock.details}` : errorBlock.error;
+          }
+        }
+
+        run.status = finalStatus;
 
         const transcriptCount = countTranscriptMessages(sessionId, jobCwd);
         if (transcriptCount > run.messageCount) run.messageCount = transcriptCount;

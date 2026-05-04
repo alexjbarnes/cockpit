@@ -113,3 +113,17 @@ export function parseInboxBlock(text: string): { title: string; body: string; pr
     return null;
   }
 }
+
+const ERROR_BLOCK_RE = /```cockpit-error\s*\n([\s\S]*?)\n```/;
+
+export function parseErrorBlock(text: string): { error: string; details?: string } | null {
+  const match = ERROR_BLOCK_RE.exec(text);
+  if (!match) return null;
+  try {
+    const parsed = JSON.parse(match[1]);
+    if (typeof parsed.error !== "string") return null;
+    return { error: parsed.error, details: parsed.details };
+  } catch {
+    return null;
+  }
+}
