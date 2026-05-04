@@ -24,7 +24,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { usePageHeader, useShell } from "@/components/app-shell";
 import { ChatView } from "@/components/chat-view";
 import { DIFF_SELECTABLE_CSS, DiffErrorBoundary } from "@/components/diff-viewer";
-import { pinSession } from "@/components/sidebar";
+import { pinReview } from "@/components/sidebar";
 import { Button } from "@/components/ui/button";
 import { useIsDesktop } from "@/hooks/use-is-desktop";
 import { useSettings } from "@/hooks/use-settings";
@@ -591,7 +591,7 @@ export function PRReviewView({ owner, repo, number }: { owner: string; repo: str
             setSessionId(existingId);
             const data = await res.json();
             setReviewsCwd(data.session?.cwd || null);
-            pinSession(existingId);
+            pinReview(existingId);
             setSessionLoading(false);
             return;
           }
@@ -610,7 +610,7 @@ export function PRReviewView({ owner, repo, number }: { owner: string; repo: str
           setSessionId(data.sessionId);
           setReviewsCwd(data.cwd);
           setSessionMapping(prKey, data.sessionId);
-          pinSession(data.sessionId);
+          pinReview(data.sessionId);
         }
       } catch {}
       setSessionLoading(false);

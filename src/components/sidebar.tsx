@@ -24,7 +24,6 @@ import { FileTree } from "@/components/file-tree";
 import { SidebarSection } from "@/components/sidebar-section";
 import { Button } from "@/components/ui/button";
 import { useJobFailureCount } from "@/hooks/use-jobs";
-import { type ReviewSession, useReviewSessions } from "@/hooks/use-review-sessions";
 import { useWebSocket } from "@/hooks/use-websocket";
 import { cn } from "@/lib/utils";
 import type { SessionInfo } from "@/types";
@@ -115,6 +114,60 @@ async function fetchPinnedIds(): Promise<string[]> {
   } catch {
     return [];
   }
+}
+
+// Server-side pinned reviews API helpers
+export async function pinReview(id: string): Promise<void> {
+  await fetch("/api/reviews/pinned", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ add: id }),
+  }).catch(() => {});
+}
+
+async function unpinReview(id: string): Promise<void> {
+  await fetch("/api/reviews/pinned", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ remove: id }),
+  }).catch(() => {});
+}
+
+async function fetchPinnedReviewIds(): Promise<string[]> {
+  try {
+    const res = await fetch("/api/reviews/pinned");
+    if (!res.ok) return [];
+    const data = await res.json();
+    return Array.isArray(data.pinned) ? data.pinned : [];
+  } catch {
+    return [];
+  }
+}
+
+interface ReviewSession {
+  id: string;
+  owner: string;
+  repo: string;
+  number: number;
+  title: string;
+  status: "idle" | "running";
+  pendingRequestCount: number;
+}
+
+const REVIEW_NAME_RE = /^Review:\s*(?:(.+?)\/)?(.+?)#(\d+)(?:\s+-\s+(.*))?$/;
+
+function parseReviewSession(s: SessionInfo): ReviewSession | null {
+  const match = REVIEW_NAME_RE.exec(s.name);
+  if (!match) return null;
+  return {
+    id: s.id,
+    owner: match[1] || "",
+    repo: match[2],
+    number: parseInt(match[3], 10),
+    title: match[4] || "",
+    status: s.status,
+    pendingRequestCount: s.pendingRequestCount ?? 0,
+  };
 }
 
 function getUnreadSessions(): Set<string> {
@@ -555,22 +608,71 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
   );
 });
 
-const DISMISSED_REVIEWS_KEY = "cockpit_dismissed_reviews";
-
-function getDismissedReviews(): Set<string> {
-  try {
-    const raw = localStorage.getItem(DISMISSED_REVIEWS_KEY);
-    if (raw) return new Set(JSON.parse(raw));
-  } catch {}
-  return new Set();
-}
-
 function RecentReviewsSection({ onNavigate }: { onNavigate: () => void }) {
-  const { sessions } = useReviewSessions();
   const router = useRouter();
-  const [dismissed, setDismissed] = useState<Set<string>>(() => getDismissedReviews());
+  const pathname = usePathname();
+  const { subscribe, send } = useWebSocket();
+  const [reviews, setReviews] = useState<ReviewSession[]>([]);
 
-  const visible = sessions.filter((r) => !dismissed.has(r.id));
+  const fetchReviews = useCallback(async () => {
+    const pinnedIds = await fetchPinnedReviewIds();
+    if (pinnedIds.length === 0) {
+      setReviews([]);
+      return;
+    }
+
+    const res = await fetch(`/api/sessions/by-ids?ids=${encodeURIComponent(pinnedIds.join(","))}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .catch(() => null);
+    if (!res) return;
+
+    const sessions: SessionInfo[] = res.sessions || [];
+    const foundIds: string[] = Array.isArray(res.foundIds) ? res.foundIds : sessions.map((s: SessionInfo) => s.id);
+    const foundSet = new Set(foundIds);
+
+    const byId = new Map(sessions.map((s) => [s.id, s]));
+    const visible: ReviewSession[] = [];
+    const survivingIds: string[] = [];
+    for (const id of pinnedIds) {
+      const s = byId.get(id);
+      if (s) {
+        const parsed = parseReviewSession(s);
+        if (parsed) visible.push(parsed);
+        survivingIds.push(id);
+      }
+    }
+
+    if (pinnedIds.some((id) => !foundSet.has(id))) {
+      fetch("/api/reviews/pinned", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pinned: survivingIds }),
+      }).catch(() => {});
+    }
+
+    setReviews(visible);
+
+    if (visible.length > 0) {
+      send({ type: "session:subscribe", sessionIds: visible.map((r) => r.id) });
+    }
+  }, [send]);
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: pathname triggers refetch on navigation
+  useEffect(() => {
+    fetchReviews();
+  }, [pathname, fetchReviews]);
+
+  useEffect(() => {
+    return subscribe((msg) => {
+      if (msg.type === "session:status") {
+        const { sessionId, status } = msg;
+        setReviews((list) => list.map((r) => (r.id === sessionId ? { ...r, status: status as ReviewSession["status"] } : r)));
+      } else if (msg.type === "session:pending") {
+        const { sessionId, count } = msg;
+        setReviews((list) => list.map((r) => (r.id === sessionId ? { ...r, pendingRequestCount: count } : r)));
+      }
+    });
+  }, [subscribe]);
 
   const goToReview = (r: ReviewSession) => {
     onNavigate();
@@ -581,19 +683,17 @@ function RecentReviewsSection({ onNavigate }: { onNavigate: () => void }) {
     }
   };
 
-  const dismissReview = (e: React.MouseEvent, id: string) => {
+  const removeReview = (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
-    const next = new Set(dismissed);
-    next.add(id);
-    setDismissed(next);
-    localStorage.setItem(DISMISSED_REVIEWS_KEY, JSON.stringify([...next]));
+    setReviews((list) => list.filter((r) => r.id !== id));
+    unpinReview(id);
   };
 
   return (
     <SidebarSection
       id="reviews"
       title="Reviews"
-      badge={visible.length > 0 ? String(visible.length) : undefined}
+      badge={reviews.length > 0 ? String(reviews.length) : undefined}
       actions={
         <Button
           variant="ghost"
@@ -609,10 +709,10 @@ function RecentReviewsSection({ onNavigate }: { onNavigate: () => void }) {
         </Button>
       }
     >
-      {visible.length === 0 ? (
-        <p className="px-3 py-3 text-sm text-muted-foreground">No recent reviews.</p>
+      {reviews.length === 0 ? (
+        <p className="px-3 py-3 text-sm text-muted-foreground">No pinned reviews.</p>
       ) : (
-        visible.map((r) => (
+        reviews.map((r) => (
           <div
             key={r.id}
             role="button"
@@ -651,8 +751,8 @@ function RecentReviewsSection({ onNavigate }: { onNavigate: () => void }) {
               variant="ghost"
               size="icon"
               className="h-8 w-8 shrink-0 text-red-500 hover:text-red-600 hover:bg-red-500/10"
-              onClick={(e) => dismissReview(e, r.id)}
-              title="Dismiss"
+              onClick={(e) => removeReview(e, r.id)}
+              title="Remove"
             >
               <X className="h-4 w-4" />
             </Button>
