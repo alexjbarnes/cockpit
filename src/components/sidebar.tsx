@@ -557,13 +557,13 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
 
           <DynamicSections sections={sidebarSections} exclude={REVIEW_ADJACENT_SECTIONS} />
 
+          {cwd && !sidebarSections.has("git-changes") && <SidebarChanges cwd={cwd} sessionId={shellSessionId} />}
+
           {cwd && !sidebarSections.has("file-tree") && (
             <SidebarSection id="files" title="Session Files" defaultOpen={false}>
               <SidebarFileTree cwd={cwd} />
             </SidebarSection>
           )}
-
-          {cwd && !sidebarSections.has("git-changes") && <SidebarChanges cwd={cwd} sessionId={shellSessionId} />}
 
           <RecentReviewsSection onNavigate={close} />
 

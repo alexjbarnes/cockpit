@@ -92,7 +92,7 @@ export function dispatchNotification(payload: NotificationPayload): void {
   const settings = getNotificationSettings();
   for (const entry of settings.providers) {
     if (!entry.enabled) continue;
-    if (payload.providerIds?.length) {
+    if (payload.providerIds) {
       if (!payload.providerIds.includes(entry.id)) continue;
     } else {
       if (!matchesFilter(entry, payload)) continue;
