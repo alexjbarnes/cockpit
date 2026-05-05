@@ -816,6 +816,7 @@ function SidebarChanges({ cwd, sessionId }: { cwd: string; sessionId?: string })
   const router = useRouter();
   const pathname = usePathname();
   const [branch, setBranch] = useState("");
+  const [error, setError] = useState<string | null>(null);
   const [files, setFiles] = useState<Array<{ path: string; status: string; additions: number; deletions: number }>>([]);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: pathname triggers refetch on navigation
@@ -823,14 +824,23 @@ function SidebarChanges({ cwd, sessionId }: { cwd: string; sessionId?: string })
     let cancelled = false;
     const fetchStatus = () => {
       fetch(`/api/git/status?cwd=${encodeURIComponent(cwd)}`)
-        .then((r) => (r.ok ? r.json() : null))
-        .then((data) => {
-          if (!cancelled && data) {
-            setFiles(data.files || []);
-            setBranch(data.branch || "");
-          }
+        .then((r) => {
+          if (!r.ok) throw new Error("Not a git repository");
+          return r.json();
         })
-        .catch(() => {});
+        .then((data) => {
+          if (cancelled) return;
+          setFiles(data.files || []);
+          setBranch(data.branch || "");
+          setError(null);
+        })
+        .catch((err) => {
+          if (!cancelled) {
+            setFiles([]);
+            setBranch("");
+            setError(err instanceof Error ? err.message : "Failed to load");
+          }
+        });
     };
     fetchStatus();
     const interval = setInterval(fetchStatus, 30_000);
@@ -840,41 +850,52 @@ function SidebarChanges({ cwd, sessionId }: { cwd: string; sessionId?: string })
     };
   }, [cwd, pathname]);
 
-  if (files.length === 0) return null;
-
   const sessionParam = sessionId ? `&sessionId=${encodeURIComponent(sessionId)}` : "";
   const totalAdded = files.reduce((sum, f) => sum + f.additions, 0);
   const totalDeleted = files.reduce((sum, f) => sum + f.deletions, 0);
 
   return (
-    <SidebarSection id="session-changes" title="Session Changes" badge={String(files.length)} defaultOpen={false}>
-      <div className="px-3 py-1.5 text-xs text-muted-foreground flex items-center gap-2 border-b">
-        {branch && (
-          <>
-            <span>Branch:</span>
-            <span className="font-mono font-bold text-foreground">{branch}</span>
-            <span className="mx-0.5">·</span>
-          </>
-        )}
-        <span>{files.length} changed</span>
-        {totalAdded > 0 && <span className="text-green-500">+{totalAdded}</span>}
-        {totalDeleted > 0 && <span className="text-red-500">-{totalDeleted}</span>}
-      </div>
-      {files.map((file) => (
-        <button
-          key={file.path}
-          type="button"
-          onClick={() => router.push(`/changes?cwd=${encodeURIComponent(cwd)}${sessionParam}`)}
-          className="w-full flex items-center gap-2 px-3 py-1 text-left text-xs hover:bg-accent/50 transition-colors"
-        >
-          {changeStatusIcon(file.status)}
-          <span className="font-mono truncate flex-1 min-w-0">{file.path}</span>
-          <span className="shrink-0 flex gap-1 text-[10px] font-mono">
-            {file.additions > 0 && <span className="text-green-500">+{file.additions}</span>}
-            {file.deletions > 0 && <span className="text-red-500">-{file.deletions}</span>}
-          </span>
-        </button>
-      ))}
+    <SidebarSection
+      id="session-changes"
+      title="Session Changes"
+      badge={files.length > 0 ? String(files.length) : undefined}
+      defaultOpen={false}
+    >
+      {error ? (
+        <p className="px-3 py-3 text-sm text-muted-foreground">{error}</p>
+      ) : files.length === 0 ? (
+        <p className="px-3 py-3 text-sm text-muted-foreground">Working tree clean</p>
+      ) : (
+        <>
+          <div className="px-3 py-1.5 text-xs text-muted-foreground flex items-center gap-2 border-b">
+            {branch && (
+              <>
+                <span>Branch:</span>
+                <span className="font-mono font-bold text-foreground">{branch}</span>
+                <span className="mx-0.5">·</span>
+              </>
+            )}
+            <span>{files.length} changed</span>
+            {totalAdded > 0 && <span className="text-green-500">+{totalAdded}</span>}
+            {totalDeleted > 0 && <span className="text-red-500">-{totalDeleted}</span>}
+          </div>
+          {files.map((file) => (
+            <button
+              key={file.path}
+              type="button"
+              onClick={() => router.push(`/changes?cwd=${encodeURIComponent(cwd)}${sessionParam}`)}
+              className="w-full flex items-center gap-2 px-3 py-1 text-left text-xs hover:bg-accent/50 transition-colors"
+            >
+              {changeStatusIcon(file.status)}
+              <span className="font-mono truncate flex-1 min-w-0">{file.path}</span>
+              <span className="shrink-0 flex gap-1 text-[10px] font-mono">
+                {file.additions > 0 && <span className="text-green-500">+{file.additions}</span>}
+                {file.deletions > 0 && <span className="text-red-500">-{file.deletions}</span>}
+              </span>
+            </button>
+          ))}
+        </>
+      )}
     </SidebarSection>
   );
 }
