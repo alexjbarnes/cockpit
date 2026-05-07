@@ -24,6 +24,9 @@ Existing sessions keep their own settings. Defaults only apply to new sessions.
 - Theme. Light, Dark, or System.
 - Diff style. Split (side by side) or inline.
 - Collapsible sections. Toggle whether thinking blocks, read results, edit results, and tool calls collapse by default.
+- Message stitching. On by default. When enabled, the chat view loads messages from previous CLI sessions within the same Cockpit session, keeping full visual history across `/clear` boundaries. Turn off to show only the current CLI session's messages.
+- Reviews. On by default. Shows the Reviews section in the sidebar and enables PR review features. Turn off to hide reviews entirely.
+- Dismiss keyboard on send. On by default. Automatically dismisses the on-screen keyboard on mobile after sending a message.
 
 ## Claude version
 
@@ -76,6 +79,31 @@ Each hook is a shell command. Scopes: Global, Project, Local (project-local, not
 
 The editor is CodeMirror with markdown support. Save writes through to the actual file Claude reads.
 
+## Notifications
+
+The notifications page at `/settings/notifications` configures external alerts for Cockpit events like scheduled job completions and inbox messages.
+
+Two providers are supported:
+
+- **Telegram.** Requires a bot token and chat ID. Create a bot via BotFather, then use `getUpdates` to find your chat ID.
+- **ntfy.sh.** Requires a server URL and topic. Optionally provide an access token for private topics.
+
+Each provider can be enabled or disabled independently. Providers support priority filtering (info, warning, error) so you can limit alerts to failures only.
+
+A base URL setting lets you configure the URL prefix for clickable links in notification messages (useful when running Cockpit behind a reverse proxy or on a remote server).
+
+Use the Test button to send a test notification to each configured provider.
+
+Configuration is stored in `~/.cockpit/notifications.json`.
+
+## Inbox
+
+The inbox at `/inbox` collects messages from scheduled job completions and system events. Each message has a title, body, priority level (info, warning, error), and timestamp.
+
+The inbox button in the sidebar shows an unread count badge. From the inbox page you can mark all as read or clear all messages.
+
+Inbox messages are stored in `~/.cockpit/inbox.jsonl`. When a message arrives, it is also dispatched to any configured notification providers.
+
 ## Environment variables
 
 | Variable | Purpose | Default |
@@ -91,6 +119,8 @@ Claude Code's own environment variables (`ANTHROPIC_API_KEY`, etc.) are read by 
 | Path | Used for |
 |---|---|
 | `~/.cockpit/password.json` | Password hash |
+| `~/.cockpit/notifications.json` | Notification provider config |
+| `~/.cockpit/inbox.jsonl` | Inbox messages |
 | `~/.claude/cockpit/pinned_sessions.json` | Pinned session list |
 | `~/.claude/plans/` | Plan files written by Claude |
 | `~/.claude/agents/` | Global agents |
