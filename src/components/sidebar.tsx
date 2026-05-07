@@ -5,6 +5,7 @@ import { arrayMove, SortableContext, useSortable, verticalListSortingStrategy } 
 import { CSS } from "@dnd-kit/utilities";
 import {
   CalendarClock,
+  ExternalLink,
   FileEdit,
   FileMinus,
   FilePlus,
@@ -789,12 +790,17 @@ function DynamicSections({ sections, exclude }: { sections: Map<string, SidebarS
 
 function SidebarFileTree({ cwd }: { cwd: string }) {
   const router = useRouter();
+  const { tabActions } = useShell();
 
   const handleSelect = useCallback(
     (filePath: string) => {
-      router.push(`/files?cwd=${encodeURIComponent(cwd)}&file=${encodeURIComponent(filePath)}`);
+      if (tabActions) {
+        tabActions.openFile(filePath);
+      } else {
+        router.push(`/files?cwd=${encodeURIComponent(cwd)}&file=${encodeURIComponent(filePath)}`);
+      }
     },
-    [router, cwd],
+    [router, cwd, tabActions],
   );
 
   return <FileTree cwd={cwd} selectedFile={null} onSelectFile={handleSelect} />;
@@ -817,6 +823,7 @@ function changeStatusIcon(status: string) {
 function SidebarChanges({ cwd, sessionId }: { cwd: string; sessionId?: string }) {
   const router = useRouter();
   const pathname = usePathname();
+  const { tabActions } = useShell();
   const [branch, setBranch] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [files, setFiles] = useState<Array<{ path: string; status: string; additions: number; deletions: number }>>([]);
@@ -880,12 +887,33 @@ function SidebarChanges({ cwd, sessionId }: { cwd: string; sessionId?: string })
             <span>{files.length} changed</span>
             {totalAdded > 0 && <span className="text-green-500">+{totalAdded}</span>}
             {totalDeleted > 0 && <span className="text-red-500">-{totalDeleted}</span>}
+            <div className="flex-1" />
+            <button
+              type="button"
+              title="Open commit view"
+              onClick={() => {
+                if (tabActions) {
+                  tabActions.openChanges();
+                } else {
+                  router.push(`/changes?cwd=${encodeURIComponent(cwd)}${sessionParam}`);
+                }
+              }}
+              className="hover:text-foreground transition-colors"
+            >
+              <ExternalLink className="h-3 w-3" />
+            </button>
           </div>
           {files.map((file) => (
             <button
               key={file.path}
               type="button"
-              onClick={() => router.push(`/changes?cwd=${encodeURIComponent(cwd)}${sessionParam}`)}
+              onClick={() => {
+                if (tabActions) {
+                  tabActions.openDiff(file.path);
+                } else {
+                  router.push(`/changes?cwd=${encodeURIComponent(cwd)}${sessionParam}`);
+                }
+              }}
               className="w-full flex items-center gap-2 px-3 py-1 text-left text-xs hover:bg-accent/50 transition-colors"
             >
               {changeStatusIcon(file.status)}

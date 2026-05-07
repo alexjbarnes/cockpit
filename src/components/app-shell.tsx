@@ -26,6 +26,12 @@ interface HeaderConfig {
   onRename?: (name: string) => void;
 }
 
+export interface TabActions {
+  openFile: (filePath: string) => void;
+  openDiff: (filePath: string) => void;
+  openChanges: () => void;
+}
+
 interface ShellContextValue {
   setHeader: (config: HeaderConfig) => void;
   cwd: string | undefined;
@@ -42,6 +48,8 @@ interface ShellContextValue {
   setSidebarSection: (section: SidebarSectionConfig) => void;
   removeSidebarSection: (id: string) => void;
   closeSidebar: () => void;
+  tabActions: TabActions | null;
+  setTabActions: (actions: TabActions | null) => void;
 }
 
 const ShellContext = createContext<ShellContextValue>({
@@ -60,6 +68,8 @@ const ShellContext = createContext<ShellContextValue>({
   setSidebarSection: () => {},
   removeSidebarSection: () => {},
   closeSidebar: () => {},
+  tabActions: null,
+  setTabActions: () => {},
 });
 
 export function useShell() {
@@ -149,6 +159,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   const [todos, setTodos] = useState<TodoItem[]>([]);
   const [initData, setInitData] = useState<InitData | null>(null);
   const [sidebarSectionsMap, setSidebarSectionsMap] = useState<Map<string, SidebarSectionConfig>>(new Map());
+  const [tabActions, setTabActionsState] = useState<TabActions | null>(null);
 
   const setSidebarSection = useCallback((section: SidebarSectionConfig) => {
     setSidebarSectionsMap((prev) => {
@@ -187,6 +198,10 @@ export function AppShell({ children }: { children: ReactNode }) {
     sidebarRef.current?.close();
   }, []);
 
+  const setTabActions = useCallback((actions: TabActions | null) => {
+    setTabActionsState(actions);
+  }, []);
+
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === "b") {
@@ -218,6 +233,8 @@ export function AppShell({ children }: { children: ReactNode }) {
             setSidebarSection,
             removeSidebarSection,
             closeSidebar,
+            tabActions,
+            setTabActions,
           }}
         >
           <div className="fixed inset-0 flex">

@@ -27,6 +27,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useShell } from "@/components/app-shell";
 import { ChatView } from "@/components/chat-view";
 import { DIFF_SELECTABLE_CSS, DiffErrorBoundary } from "@/components/diff-viewer";
+import { ResizeHandle } from "@/components/resize-handle";
 import { Button } from "@/components/ui/button";
 import { useIsDesktop } from "@/hooks/use-is-desktop";
 import { useSettings } from "@/hooks/use-settings";
@@ -407,44 +408,6 @@ function StackedDiffs({
   );
 }
 
-// --- Resize Handle ---
-
-function ResizeHandle({ onResize }: { onResize: (delta: number) => void }) {
-  const dragging = useRef(false);
-  const lastX = useRef(0);
-
-  const onMouseDown = useCallback(
-    (e: React.MouseEvent) => {
-      e.preventDefault();
-      dragging.current = true;
-      lastX.current = e.clientX;
-
-      const onMouseMove = (ev: MouseEvent) => {
-        if (!dragging.current) return;
-        const delta = lastX.current - ev.clientX;
-        lastX.current = ev.clientX;
-        onResize(delta);
-      };
-
-      const onMouseUp = () => {
-        dragging.current = false;
-        document.removeEventListener("mousemove", onMouseMove);
-        document.removeEventListener("mouseup", onMouseUp);
-        document.body.style.cursor = "";
-        document.body.style.userSelect = "";
-      };
-
-      document.body.style.cursor = "col-resize";
-      document.body.style.userSelect = "none";
-      document.addEventListener("mousemove", onMouseMove);
-      document.addEventListener("mouseup", onMouseUp);
-    },
-    [onResize],
-  );
-
-  return <div onMouseDown={onMouseDown} className="w-1 shrink-0 cursor-col-resize bg-border hover:bg-primary/30 transition-colors" />;
-}
-
 // --- State Cache ---
 
 interface ChangesState {
@@ -481,9 +444,25 @@ function getCachedState(cwd: string): ChangesState {
   );
 }
 
+export function isFileChecked(cwd: string, path: string): boolean {
+  return getCachedState(cwd).checkedFiles.has(path);
+}
+
+export function toggleFileChecked(cwd: string, path: string): boolean {
+  const state = getCachedState(cwd);
+  const next = new Set(state.checkedFiles);
+  if (next.has(path)) {
+    next.delete(path);
+  } else {
+    next.add(path);
+  }
+  stateCache.set(cwd, { ...state, checkedFiles: next });
+  return next.has(path);
+}
+
 // --- Main Component ---
 
-export function ChangesView({ cwd, sessionId }: { cwd: string; sessionId?: string | null }) {
+export function ChangesView({ cwd, sessionId, embeddedChat = true }: { cwd: string; sessionId?: string | null; embeddedChat?: boolean }) {
   const { settings } = useSettings();
   const { setSidebarSection, removeSidebarSection, closeSidebar } = useShell();
   const { subscribe } = useWebSocket();
@@ -822,7 +801,7 @@ export function ChangesView({ cwd, sessionId }: { cwd: string; sessionId?: strin
 
   if (!status) return null;
 
-  const showChat = isDesktop && !!sessionId;
+  const showChat = embeddedChat && isDesktop && !!sessionId;
 
   return (
     <div className="flex flex-col flex-1 min-h-0">

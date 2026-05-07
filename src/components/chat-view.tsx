@@ -8,6 +8,7 @@ import { useSettings } from "@/hooks/use-settings";
 import { useWebSocket } from "@/hooks/use-websocket";
 import { pathBasename } from "@/lib/path";
 import { splitAtQuestion } from "@/lib/split-question-blocks";
+import { cn } from "@/lib/utils";
 import { useShell } from "./app-shell";
 import { InputArea } from "./input-area";
 import { MessageBubble } from "./message-bubble";
@@ -27,6 +28,7 @@ export function ChatView({
   initialContext,
   historyView,
   onSendMessage,
+  className,
 }: {
   sessionId: string;
   cwd?: string;
@@ -34,6 +36,7 @@ export function ChatView({
   initialContext?: string;
   historyView?: boolean;
   onSendMessage?: (fn: (text: string) => void) => void;
+  className?: string;
 }) {
   const {
     messages,
@@ -302,7 +305,7 @@ export function ChatView({
   }, [copySelected, uniqueMessages]);
 
   return (
-    <>
+    <div className={cn("flex flex-col flex-1 min-h-0", className)}>
       <div
         ref={scrollRef}
         data-chat-scroll
@@ -492,6 +495,6 @@ export function ChatView({
           onRestart={restartSession}
         />
       </div>
-    </>
+    </div>
   );
 }

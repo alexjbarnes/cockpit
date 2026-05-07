@@ -33,7 +33,15 @@ function relativePath(cwd: string, filePath: string): string {
   return filePath;
 }
 
-export function FilesView({ cwd, initialFile }: { cwd: string; initialFile?: string | null }) {
+export function FilesView({
+  cwd,
+  initialFile,
+  manageSidebar = true,
+}: {
+  cwd: string;
+  initialFile?: string | null;
+  manageSidebar?: boolean;
+}) {
   const { setSidebarSection, removeSidebarSection, closeSidebar } = useShell();
   const [selectedFile, setSelectedFile] = useState<string | null>(() => initialFile || selectedFileCache.get(cwd) || null);
   const [fileData, setFileData] = useState<FileContent | null>(null);
@@ -76,6 +84,7 @@ export function FilesView({ cwd, initialFile }: { cwd: string; initialFile?: str
   );
 
   useEffect(() => {
+    if (!manageSidebar) return;
     setSidebarSection({
       id: "file-tree",
       title: "Files",
@@ -83,7 +92,7 @@ export function FilesView({ cwd, initialFile }: { cwd: string; initialFile?: str
       order: 30,
     });
     return () => removeSidebarSection("file-tree");
-  }, [cwd, selectedFile, handleSelectFile, setSidebarSection, removeSidebarSection]);
+  }, [cwd, selectedFile, handleSelectFile, setSidebarSection, removeSidebarSection, manageSidebar]);
 
   // Fetch file content when selection changes
   useEffect(() => {

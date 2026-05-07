@@ -187,14 +187,19 @@ function saveScrollPosition() {
 }
 
 function FilePathIcon({ filePath }: { filePath: string }) {
+  const { tabActions } = useShell();
   const href = useFileViewerHref(filePath);
   const router = useRouter();
   return (
     <button
       onClick={(e) => {
         e.stopPropagation();
-        saveScrollPosition();
-        router.push(href);
+        if (tabActions) {
+          tabActions.openFile(filePath);
+        } else {
+          saveScrollPosition();
+          router.push(href);
+        }
       }}
       title={filePath}
       className="shrink-0 text-muted-foreground hover:text-foreground"
@@ -205,6 +210,7 @@ function FilePathIcon({ filePath }: { filePath: string }) {
 }
 
 function FilePathLink({ filePath, children }: { filePath: string; children: React.ReactNode }) {
+  const { tabActions } = useShell();
   const href = useFileViewerHref(filePath);
   const router = useRouter();
   return (
@@ -212,8 +218,12 @@ function FilePathLink({ filePath, children }: { filePath: string; children: Reac
       href={href}
       onClick={(e) => {
         e.preventDefault();
-        saveScrollPosition();
-        router.push(href);
+        if (tabActions) {
+          tabActions.openFile(filePath);
+        } else {
+          saveScrollPosition();
+          router.push(href);
+        }
       }}
       title={filePath}
       className="font-mono text-muted-foreground break-all hover:underline"
