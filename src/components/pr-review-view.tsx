@@ -49,6 +49,9 @@ interface PRDetails {
   changedFiles: number;
   headRefName: string;
   baseRefName: string;
+  headRefOid?: string;
+  baseRefOid?: string;
+  mergeBaseSha?: string;
   state: string;
   isDraft: boolean;
   labels: { name: string; color: string }[];
@@ -347,19 +350,22 @@ function LazyDiff({
       return;
     }
 
-    // Fetch old (base) and new (head) file contents in parallel
-    Promise.all([fetchFileContent(repo, file.path, pr.baseRefName), fetchFileContent(repo, file.path, pr.headRefName)])
+    const baseRef = pr.mergeBaseSha || pr.baseRefOid || pr.baseRefName;
+    const headRef = pr.headRefOid || pr.headRefName;
+
+    // Fetch old (merge base) and new (head) file contents in parallel
+    Promise.all([fetchFileContent(repo, file.path, baseRef), fetchFileContent(repo, file.path, headRef)])
       .then(([oldContent, newContent]) => {
         if (cancelled) return;
         if (oldContent != null) {
           meta!.deletionLines = oldContent.split(/\r?\n/).map((l) => l + "\n");
         } else {
-          console.warn(`[diff] ${file.path}: oldContent is null (base=${pr.baseRefName})`);
+          console.warn(`[diff] ${file.path}: oldContent is null (base=${baseRef})`);
         }
         if (newContent != null) {
           meta!.additionLines = newContent.split(/\r?\n/).map((l) => l + "\n");
         } else {
-          console.warn(`[diff] ${file.path}: newContent is null (head=${pr.headRefName})`);
+          console.warn(`[diff] ${file.path}: newContent is null (head=${headRef})`);
         }
         console.info(`[diff] ${file.path}: deletionLines=${!!meta!.deletionLines} additionLines=${!!meta!.additionLines}`);
         setFileDiffMeta(meta);

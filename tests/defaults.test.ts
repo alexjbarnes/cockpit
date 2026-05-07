@@ -33,6 +33,7 @@ describe("defaults", () => {
       toolCallsExpanded: false,
       model: "sonnet",
       messageStitching: true,
+      reviewsEnabled: true,
     });
   });
 
@@ -59,6 +60,7 @@ describe("defaults", () => {
       toolCallsExpanded: false,
       model: "opus",
       messageStitching: true,
+      reviewsEnabled: true,
     });
   });
 

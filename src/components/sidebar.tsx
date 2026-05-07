@@ -24,6 +24,7 @@ import { FileTree } from "@/components/file-tree";
 import { SidebarSection } from "@/components/sidebar-section";
 import { Button } from "@/components/ui/button";
 import { useJobFailureCount } from "@/hooks/use-jobs";
+import { useSettings } from "@/hooks/use-settings";
 import { useWebSocket } from "@/hooks/use-websocket";
 import { cn } from "@/lib/utils";
 import type { SessionInfo } from "@/types";
@@ -291,6 +292,7 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
   const pathname = usePathname();
   const { send, subscribe, connected } = useWebSocket();
   const { sidebarSections, cwd, sessionId: shellSessionId } = useShell();
+  const { settings } = useSettings();
   const [open, setOpen] = useState(false);
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
   const [unread, setUnread] = useState<Set<string>>(new Set());
@@ -565,9 +567,9 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
             </SidebarSection>
           )}
 
-          <RecentReviewsSection onNavigate={close} />
+          {settings.reviewsEnabled && <RecentReviewsSection onNavigate={close} />}
 
-          {sidebarSections.has("pr-files") && (
+          {settings.reviewsEnabled && sidebarSections.has("pr-files") && (
             <SidebarSection id="pr-files" title={sidebarSections.get("pr-files")!.title} badge={sidebarSections.get("pr-files")!.badge}>
               {sidebarSections.get("pr-files")!.content}
             </SidebarSection>

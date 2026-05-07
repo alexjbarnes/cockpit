@@ -76,16 +76,14 @@ export function usePageHeader(title: string) {
 export function useShellCwd(cwd: string | undefined) {
   const { setCwd } = useShell();
   useEffect(() => {
-    setCwd(cwd);
-    return () => setCwd(undefined);
+    if (cwd) setCwd(cwd);
   }, [cwd, setCwd]);
 }
 
 export function useShellSessionId(id: string | undefined) {
   const { setSessionId } = useShell();
   useEffect(() => {
-    setSessionId(id);
-    return () => setSessionId(undefined);
+    if (id) setSessionId(id);
   }, [id, setSessionId]);
 }
 

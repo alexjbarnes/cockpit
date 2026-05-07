@@ -488,6 +488,16 @@ export default function SettingsPage() {
       </Card>
       <Card>
         <CardHeader>
+          <CardTitle className="text-base">Sidebar</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <SettingRow label="Reviews" hint="Show the Reviews section in the sidebar for tracking PR reviews">
+            <Toggle enabled={settings.reviewsEnabled} onToggle={() => updateSetting("reviewsEnabled", !settings.reviewsEnabled)} />
+          </SettingRow>
+        </CardContent>
+      </Card>
+      <Card>
+        <CardHeader>
           <CardTitle className="text-base">Notifications</CardTitle>
         </CardHeader>
         <CardContent className="space-y-0.5">
