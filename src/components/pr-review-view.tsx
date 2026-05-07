@@ -80,6 +80,24 @@ function isDark(): boolean {
   return document.documentElement.classList.contains("dark");
 }
 
+function reindexForFullContent(meta: FileDiffMetadata, oldContent: string, newContent: string) {
+  const oldLines = oldContent.split(/\r?\n/).map((l) => l + "\n");
+  const newLines = newContent.split(/\r?\n/).map((l) => l + "\n");
+  for (const hunk of meta.hunks) {
+    const delDelta = hunk.deletionStart - 1 - hunk.deletionLineIndex;
+    const addDelta = hunk.additionStart - 1 - hunk.additionLineIndex;
+    hunk.deletionLineIndex = hunk.deletionStart - 1;
+    hunk.additionLineIndex = hunk.additionStart - 1;
+    for (const content of hunk.hunkContent) {
+      content.deletionLineIndex += delDelta;
+      content.additionLineIndex += addDelta;
+    }
+  }
+  meta.deletionLines = oldLines;
+  meta.additionLines = newLines;
+  meta.isPartial = false;
+}
+
 function fileStatusIcon(path: string, prFiles: PRFile[]) {
   const f = prFiles.find((pf) => pf.path === path);
   if (!f) return <FileEdit className="h-3.5 w-3.5 text-yellow-500 shrink-0" />;
@@ -357,22 +375,14 @@ function LazyDiff({
     Promise.all([fetchFileContent(repo, file.path, baseRef), fetchFileContent(repo, file.path, headRef)])
       .then(([oldContent, newContent]) => {
         if (cancelled) return;
-        if (oldContent != null) {
-          meta!.deletionLines = oldContent.split(/\r?\n/).map((l) => l + "\n");
-        } else {
-          console.warn(`[diff] ${file.path}: oldContent is null (base=${baseRef})`);
+        if (oldContent != null && newContent != null) {
+          reindexForFullContent(meta!, oldContent, newContent);
         }
-        if (newContent != null) {
-          meta!.additionLines = newContent.split(/\r?\n/).map((l) => l + "\n");
-        } else {
-          console.warn(`[diff] ${file.path}: newContent is null (head=${headRef})`);
-        }
-        console.info(`[diff] ${file.path}: deletionLines=${!!meta!.deletionLines} additionLines=${!!meta!.additionLines}`);
-        meta!.isPartial = !(oldContent != null && newContent != null);
         setFileDiffMeta(meta);
       })
       .catch((e) => {
         console.error(`[diff] fetch failed for ${file.path}:`, e);
+        setFileDiffMeta(meta);
       });
 
     return () => {
