@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowLeft, Loader2, Pencil, Play, Trash2 } from "lucide-react";
+import { ArrowLeft, ChevronDown, ChevronUp, Loader2, Pencil, Play, Trash2 } from "lucide-react";
 import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { usePageHeader } from "@/components/app-shell";
@@ -12,6 +12,35 @@ import { useJobRuns } from "@/hooks/use-jobs";
 import { findModelById } from "@/lib/models";
 import { describeAllSchedules, getJobSchedules } from "@/server/cron-utils";
 import type { ScheduledJob } from "@/types";
+
+const MAX_PROMPT_LINES = 8;
+
+function PromptCard({ prompt }: { prompt: string }) {
+  const [expanded, setExpanded] = useState(false);
+  const lines = prompt.split("\n");
+  const needsCollapse = lines.length > MAX_PROMPT_LINES;
+  const displayText = needsCollapse && !expanded ? lines.slice(0, MAX_PROMPT_LINES).join("\n") : prompt;
+
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <CardTitle className="text-sm font-medium">Prompt</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <pre className="text-sm whitespace-pre-wrap break-all font-mono bg-muted rounded p-3">{displayText}</pre>
+        {needsCollapse && (
+          <button
+            onClick={() => setExpanded(!expanded)}
+            className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground mt-2 transition-colors"
+          >
+            {expanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+            {expanded ? "Show less" : `Show all ${lines.length} lines`}
+          </button>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
 
 function runStatusBadge(status: string) {
   switch (status) {
@@ -121,14 +150,7 @@ export default function JobDetailPage() {
           </Button>
         </div>
 
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium">Prompt</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <pre className="text-sm whitespace-pre-wrap break-all font-mono bg-muted rounded p-3">{job.prompt}</pre>
-          </CardContent>
-        </Card>
+        <PromptCard prompt={job.prompt} />
 
         <Card>
           <CardContent className="pt-4">

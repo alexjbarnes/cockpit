@@ -17,11 +17,13 @@ Three things follow:
 2. **Many Claude Code sessions running at once.** Switch between projects without juggling tmux panes. Sessions live on the server, so closing the browser does not kill them. The chat view stitches across `/clear` so long threads keep their full visual history.
 3. **Cron-driven Claude Code.** Schedule a prompt, walk away. Each run produces a transcript that renders the same as a live session.
 
-Inside a session: a diff viewer for code changes (split or inline), a file viewer with syntax highlighting, message search across the full transcript, and plan-mode approvals when Claude proposes a plan.
+Inside a session: a diff viewer for code changes (split or inline), a file viewer with syntax highlighting, global search across all sessions (Ctrl+Shift+F), and plan-mode approvals when Claude proposes a plan. The sidebar shows collapsible sections for sessions, reviews, file changes, and file trees, with status beacons so you can tell at a glance which sessions are working, waiting, or idle.
 
 It also takes care of things you usually hand-edit: agents, skills, hooks, MCP servers, CLAUDE.md memory. All editable from the UI.
 
-PR reviews are a first-class flow. Pick an org, pick a repo, pick a PR. Cockpit reads the diff via the GitHub CLI and starts a Claude session scoped to it. Diff on one side, chat on the other.
+PR reviews are a first-class flow. Pick an org, pick a repo, pick a PR. Cockpit reads the diff via the GitHub CLI and starts a Claude session scoped to it. Diff on one side, chat on the other. Active reviews pin to the sidebar alongside your sessions.
+
+Scheduled jobs post results to an inbox with optional push notifications via Telegram or ntfy.sh.
 
 Run it on your laptop the way you'd run the TUI. Or run it on a home server and reach it from your phone. Same UI either way.
 
@@ -60,7 +62,7 @@ npm install -g @alexjbarnes/cockpit
 cockpit
 ```
 
-Open http://localhost:3001 and set a password on first run.
+The startup log prints usable connection URLs (local and network). Open http://localhost:3001 and set a password on first run.
 
 ## Prerequisites
 
@@ -79,12 +81,20 @@ Tested on Linux and macOS. Windows is unverified.
 | `HOST` | Bind address | `0.0.0.0` |
 | `COCKPIT_RESET_PASSWORD` | Set to `true` to reset password on next startup | `false` |
 
+## Remote access
+
+Cockpit binds to `0.0.0.0` by default. On the host machine, open `http://localhost:3001`. From other devices on the same LAN, use the host's local IP (the startup log prints usable URLs).
+
+To reach Cockpit from outside your LAN, prefer [Tailscale](https://tailscale.com/) over port forwarding. Tailscale gives every device a private IP on a flat network without opening router ports or exposing the server publicly.
+
+To restrict Cockpit to the host machine only, set `HOST=127.0.0.1`.
+
 ## Documentation
 
 - [Sessions](docs/sessions.md): chat, sidebar, attachments, plan mode, diffs, file view, todos, search, session linking
 - [PR reviews](docs/pr-reviews.md): GitHub PR browsing and review sessions
 - [Scheduled jobs](docs/scheduled-jobs.md): cron-driven Claude Code runs
-- [Settings](docs/settings.md): auth, models, themes, agents, skills, hooks, MCP servers, CLAUDE.md
+- [Settings](docs/settings.md): auth, models, themes, notifications, inbox, agents, skills, hooks, MCP servers, CLAUDE.md
 
 ## Development
 

@@ -6,11 +6,29 @@ The session is the unit of conversation in Cockpit. You can run many in parallel
 
 The home page lists every session known to Cockpit, grouped by working directory. Each row shows the session name, working directory, model in use, last activity time, and an unread indicator. Pinned sessions surface at the top so the conversations you care about stay one tap away.
 
-Click a row to open it. The menu icon opens rename, pin, and delete actions.
+The list is paginated. Large session counts no longer lock the browser.
+
+Click a row to open it. The menu icon opens rename, pin, and delete actions. Delete removes the session and its transcript permanently.
 
 ## Sidebar
 
-The sidebar shows open sessions and pinned ones. Click any session to switch without losing your place in the current one. The sidebar collapses on mobile, where the bottom nav handles primary navigation.
+The sidebar is split into collapsible sections. Each section header shows a title, an item count badge, and a chevron to expand or collapse. Section open/closed state is persisted across page loads.
+
+Sections:
+
+- **Sessions.** Pinned and active sessions. Click any row to switch. Drag to reorder pinned sessions.
+- **Reviews.** Pinned PR reviews. Each row shows repo, PR number, title, and a status beacon. Hide this section entirely with the Reviews toggle in Settings.
+- **Changes.** Git status for the active session's working directory. Shows modified, added, and deleted files. If the session has no changes or the status fetch fails, the section shows an error state instead of disappearing.
+- **Files.** File tree for the active session's working directory.
+
+Status beacons on session and review rows:
+
+- Blue (pulsing): waiting for user input
+- Yellow (pulsing): Claude is working
+- Green: new unread response
+- Gray: idle
+
+The sidebar collapses on mobile, where the bottom nav handles primary navigation.
 
 ## Chat view
 
@@ -113,7 +131,7 @@ Open files referenced by Claude or browse the working directory. Files render wi
 
 ## Usage
 
-The header shows live token usage for the current session and your overall API spend. Click for a breakdown by model and message.
+The usage button in the header is visible on every page, including PR reviews. Click for a breakdown of token usage by model and message for the current session, plus your overall API spend.
 
 ## Background tasks
 
@@ -145,6 +163,12 @@ The todo indicator surfaces Claude's current task list in the chat. As Claude ma
 Open the search modal from the toolbar. Matches highlight in place. Search runs server-side over the stitched transcript, so it covers pre-clear messages too.
 
 Multi-select messages and use the selection toolbar to copy a slice of the conversation to your clipboard.
+
+## Global search
+
+Ctrl+Shift+F (Cmd+Shift+F on Mac) opens a search modal that searches across all sessions. Results show the matching message with role, timestamp, session name, and working directory. Click a result to jump to that session.
+
+The search runs server-side across transcript files. Results are paginated.
 
 ## Mobile
 

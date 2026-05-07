@@ -16,21 +16,31 @@ Filter PRs by status (open, closed, merged, draft). Search across title and body
 
 Opening a PR creates a Claude Code session at `~/.cockpit/reviews/`. The diff is fetched from GitHub via the `gh` CLI, not by cloning the repo. The first message Claude receives is `/review` with the PR context attached, so it starts a structured review immediately.
 
-Review sessions are kept out of the main sessions list to avoid clutter. Resume them from the Reviews page on any device.
+Review sessions are kept out of the main sessions list to avoid clutter. Resume them from the Reviews page or the sidebar on any device. Active reviews are pinned to the sidebar's Reviews section with status beacons showing whether Claude is working, waiting for input, or idle.
 
 ## Review UI
 
 The review view splits into three regions:
 
-- File tree of changed files
+- Sidebar with PR description, changed files, and reviews
 - Diff for the active file
 - Chat panel for talking with Claude about the change
 
-Diff rendering uses the same component as the chat view (split or inline per Settings). Click a file in the tree to jump to it. The chat panel stays scoped to the active file.
+The PR description is collapsible. Long descriptions truncate to 10 lines with a "Show more" toggle.
+
+Changed files list below the description. Each file shows an icon for its change type (added, modified, deleted). Files you have viewed are dimmed with a checkmark. Click a file to load its diff.
+
+Diffs load lazily as files come into view. Full file content is fetched from GitHub so the diff renders with complete context, not just the patch hunks. The diff uses the merge base SHA for accurate comparison, falling back to the base branch ref when the merge base is unavailable.
+
+Diff rendering uses the same component as the chat view (split or inline per Settings).
 
 ## Check status
 
 Cockpit polls PR check runs and surfaces failures inline. Use this to see if CI broke before reviewing further.
+
+## Visibility
+
+The Reviews section in the sidebar and the Reviews page can be hidden entirely with the "Reviews" toggle in Settings. Useful if you don't use GitHub PRs.
 
 ## Authentication
 

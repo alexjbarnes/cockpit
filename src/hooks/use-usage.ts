@@ -15,6 +15,7 @@ const MIN_FETCH_INTERVAL = 30 * 1000;
 
 let cachedUsage: UsageLimits | null = null;
 let lastFetchTime = 0;
+let lastError: string | null = null;
 let inflightRequest: Promise<UsageLimits | null> | null = null;
 
 async function fetchUsage(force = false): Promise<UsageLimits | null> {
@@ -30,12 +31,17 @@ async function fetchUsage(force = false): Promise<UsageLimits | null> {
   inflightRequest = (async () => {
     try {
       const res = await fetch("/api/usage");
-      if (!res.ok) return null;
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || `HTTP ${res.status}`);
+      }
       const data = await res.json();
       cachedUsage = data;
       lastFetchTime = Date.now();
+      lastError = null;
       return data as UsageLimits;
-    } catch {
+    } catch (err) {
+      lastError = err instanceof Error ? err.message : "Unknown error";
       return null;
     } finally {
       inflightRequest = null;
@@ -59,7 +65,7 @@ export function useUsage(): UseUsageResult {
       setUsage(data);
       setError(null);
     } else if (!cachedUsage) {
-      setError("Failed to load usage data");
+      setError(lastError || "Failed to load usage data");
     }
     setLoading(false);
   }, []);

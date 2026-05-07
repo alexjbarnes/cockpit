@@ -27,19 +27,6 @@ interface PullRequest {
   state: string;
 }
 
-function timeAgo(dateStr: string): string {
-  const seconds = Math.floor((Date.now() - new Date(dateStr).getTime()) / 1000);
-  if (seconds < 60) return "just now";
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.floor(hours / 24);
-  if (days < 30) return `${days}d ago`;
-  const months = Math.floor(days / 30);
-  return `${months}mo ago`;
-}
-
 function reviewBadge(decision: string) {
   switch (decision) {
     case "APPROVED":
@@ -173,14 +160,12 @@ export default function PRListPage({ params }: { params: Promise<{ owner: string
                 )}
                 {reviewBadge(pr.reviewDecision)}
               </div>
-              <div className="flex items-center gap-3 mt-1.5 text-xs text-muted-foreground">
+              <div className="flex items-center gap-3 mt-1.5 text-xs text-muted-foreground flex-wrap">
                 <span>#{pr.number}</span>
                 <span>{pr.author.login}</span>
-                <span>{pr.headRefName}</span>
-                <span className="text-green-500">+{pr.additions}</span>
-                <span className="text-red-500">-{pr.deletions}</span>
-                <span>{pr.changedFiles} files</span>
-                <span className="ml-auto">{timeAgo(pr.createdAt)}</span>
+                <span className="truncate max-w-[200px]">{pr.headRefName}</span>
+                <span className="text-green-500 shrink-0">+{pr.additions}</span>
+                <span className="text-red-500 shrink-0">-{pr.deletions}</span>
               </div>
               {pr.labels.length > 0 && (
                 <div className="flex gap-1 mt-1.5 flex-wrap">

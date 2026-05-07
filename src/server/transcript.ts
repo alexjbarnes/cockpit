@@ -1,5 +1,5 @@
-import { createReadStream, existsSync } from "node:fs";
-import { open, readdir, readFile, stat } from "node:fs/promises";
+import { createReadStream, existsSync, readFileSync } from "node:fs";
+import { open, readdir, readFile, stat, unlink } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline";
@@ -8,6 +8,7 @@ import type {
   ChatMessage,
   ContentBlock,
   DocumentAttachment,
+  GlobalSearchResult,
   ImageAttachment,
   SessionGroup,
   SessionInfo,
@@ -63,6 +64,30 @@ function getTranscriptPath(sessionId: string, cwd: string): string {
 
 export function transcriptExists(sessionId: string, cwd: string): boolean {
   return existsSync(getTranscriptPath(sessionId, cwd));
+}
+
+export async function deleteTranscript(sessionId: string, cwd: string): Promise<boolean> {
+  const fp = getTranscriptPath(sessionId, cwd);
+  if (!existsSync(fp)) return false;
+  await unlink(fp);
+  return true;
+}
+
+export function countTranscriptMessages(sessionId: string, cwd: string): number {
+  const fp = getTranscriptPath(sessionId, cwd);
+  if (!existsSync(fp)) return 0;
+  try {
+    const raw = readFileSync(fp, "utf-8");
+    let count = 0;
+    for (const line of raw.split("\n")) {
+      if (line.includes('"role"') && (line.includes('"assistant"') || line.includes('"user"'))) {
+        count++;
+      }
+    }
+    return count;
+  } catch {
+    return 0;
+  }
 }
 
 const CLI_XML_RE =
@@ -151,9 +176,6 @@ async function readTailLines(filePath: string, targetCount: number): Promise<{ l
 
       // Not enough lines, double chunk and retry
       chunkSize *= 2;
-      if (chunkSize >= totalSize) {
-        return { lines, byteOffset: 0, totalSize };
-      }
     }
   } finally {
     await fh.close();
@@ -204,9 +226,6 @@ export async function readMoreLines(
       }
 
       chunkSize *= 2;
-      if (chunkSize >= byteOffset) {
-        return { lines, newByteOffset: 0 };
-      }
     }
   } finally {
     await fh.close();
@@ -753,6 +772,7 @@ export async function scanAllSessions(): Promise<SessionGroup[]> {
       cwd,
       dirName: path.basename(cwd) || cwd,
       sessions,
+      totalSessionCount: sessions.length,
     });
   }
 
@@ -763,4 +783,265 @@ export async function scanAllSessions(): Promise<SessionGroup[]> {
   });
 
   return result;
+}
+
+function metaToSessionInfo(meta: SessionMeta): SessionInfo {
+  return {
+    id: meta.id,
+    name: meta.title,
+    cwd: meta.cwd,
+    createdAt: meta.createdAt,
+    lastActiveAt: meta.lastActiveAt,
+    status: "idle",
+  };
+}
+
+export async function scanSessionsForCwd(targetCwd: string): Promise<SessionInfo[]> {
+  const projectsDir = path.join(homedir(), ".claude", "projects");
+  if (!existsSync(projectsDir)) return [];
+
+  let projectDirs: string[];
+  try {
+    projectDirs = await readdir(projectsDir);
+  } catch {
+    return [];
+  }
+
+  const results: SessionInfo[] = [];
+
+  for (const dir of projectDirs) {
+    const dirPath = path.join(projectsDir, dir);
+    let files: string[];
+    try {
+      files = await readdir(dirPath);
+    } catch {
+      continue;
+    }
+
+    const jsonlFiles = files.filter((f) => f.endsWith(".jsonl"));
+    const metas = await Promise.all(jsonlFiles.map((f) => extractSessionMeta(path.join(dirPath, f))));
+
+    for (const meta of metas) {
+      if (meta && meta.cwd === targetCwd) {
+        results.push(metaToSessionInfo(meta));
+      }
+    }
+  }
+
+  results.sort((a, b) => b.lastActiveAt - a.lastActiveAt);
+  return results;
+}
+
+export async function scanSessionsByIds(ids: string[]): Promise<SessionInfo[]> {
+  if (ids.length === 0) return [];
+  const projectsDir = path.join(homedir(), ".claude", "projects");
+  if (!existsSync(projectsDir)) return [];
+
+  let projectDirs: string[];
+  try {
+    projectDirs = await readdir(projectsDir);
+  } catch {
+    return [];
+  }
+
+  const idSet = new Set(ids);
+  const results: SessionInfo[] = [];
+
+  for (const dir of projectDirs) {
+    if (idSet.size === 0) break;
+    const dirPath = path.join(projectsDir, dir);
+    let files: string[];
+    try {
+      files = await readdir(dirPath);
+    } catch {
+      continue;
+    }
+
+    const matching = files.filter((f) => f.endsWith(".jsonl") && idSet.has(f.slice(0, -".jsonl".length)));
+    if (matching.length === 0) continue;
+
+    const metas = await Promise.all(matching.map((f) => extractSessionMeta(path.join(dirPath, f))));
+    for (const meta of metas) {
+      if (meta) {
+        results.push(metaToSessionInfo(meta));
+        idSet.delete(meta.id);
+      }
+    }
+  }
+
+  return results;
+}
+
+interface TranscriptFileInfo {
+  filePath: string;
+  sessionId: string;
+  mtimeMs: number;
+}
+
+export async function listAllTranscriptFiles(): Promise<TranscriptFileInfo[]> {
+  const projectsDir = path.join(homedir(), ".claude", "projects");
+  if (!existsSync(projectsDir)) return [];
+
+  let projectDirs: string[];
+  try {
+    projectDirs = await readdir(projectsDir);
+  } catch {
+    return [];
+  }
+
+  const results: TranscriptFileInfo[] = [];
+
+  for (const dir of projectDirs) {
+    if (dir.includes(".cockpit")) continue;
+    const dirPath = path.join(projectsDir, dir);
+    let files: string[];
+    try {
+      files = await readdir(dirPath);
+    } catch {
+      continue;
+    }
+
+    for (const f of files) {
+      if (!f.endsWith(".jsonl")) continue;
+      const filePath = path.join(dirPath, f);
+      try {
+        const s = await stat(filePath);
+        results.push({ filePath, sessionId: f.slice(0, -6), mtimeMs: s.mtimeMs });
+      } catch {}
+    }
+  }
+
+  results.sort((a, b) => b.mtimeMs - a.mtimeMs);
+  return results;
+}
+
+export async function globalSearch(
+  query: string,
+  limit: number,
+  offset = 0,
+): Promise<{ results: GlobalSearchResult[]; totalFilesSearched: number; truncated: boolean }> {
+  const MAX_FILES = 500;
+  const MAX_PARSED_BASE = 30;
+  const MAX_PER_FILE = 10;
+  const effectiveLimit = Math.min(limit, 100);
+  const lowerQuery = query.toLowerCase();
+
+  // When paginating, allow parsing more files to reach the offset
+  const maxParsed = MAX_PARSED_BASE + Math.ceil(offset / MAX_PER_FILE);
+
+  const files = await listAllTranscriptFiles();
+  const searchFiles = files.slice(0, MAX_FILES);
+
+  const results: GlobalSearchResult[] = [];
+  let totalFound = 0;
+  let filesParsed = 0;
+  let truncated = false;
+
+  for (const file of searchFiles) {
+    if (results.length >= effectiveLimit || filesParsed >= maxParsed) {
+      truncated = true;
+      break;
+    }
+
+    let raw: string;
+    try {
+      raw = await readFile(file.filePath, "utf-8");
+    } catch {
+      continue;
+    }
+
+    if (!raw.toLowerCase().includes(lowerQuery)) continue;
+
+    filesParsed++;
+    const lines = raw.split(/\r?\n/).filter((l) => l.trim());
+    const { messages } = parseLines(lines);
+
+    let cwd = "";
+    let sessionTitle = "";
+    for (let j = 0; j < Math.min(lines.length, 50); j++) {
+      try {
+        const entry: TranscriptEntry = JSON.parse(lines[j]);
+        if (entry.type === "user" && entry.cwd && !cwd) cwd = entry.cwd;
+        if (entry.type === "user" && entry.message && !sessionTitle) {
+          const content = entry.message.content;
+          let candidate = "";
+          if (typeof content === "string") candidate = content;
+          else if (Array.isArray(content)) {
+            const tb = content.find((b: TranscriptBlock) => b.type === "text" && b.text);
+            if (tb?.text) candidate = tb.text;
+          }
+          if (candidate && !candidate.startsWith("[") && !candidate.startsWith("<")) {
+            sessionTitle = candidate.slice(0, 120);
+          }
+        }
+        if (cwd && sessionTitle) break;
+      } catch {}
+    }
+
+    if (!cwd) continue;
+    if (cwd.endsWith(".cockpit/reviews") || cwd.endsWith(".cockpit/jobs")) continue;
+
+    const dirName = path.basename(cwd) || cwd;
+    let fileResults = 0;
+
+    for (let i = 0; i < messages.length; i++) {
+      if (fileResults >= MAX_PER_FILE || results.length >= effectiveLimit) break;
+
+      const msg = messages[i];
+      if (msg.role !== "user" && msg.role !== "assistant") continue;
+
+      if (i > 0 && messages[i - 1].content === "__compacted__") continue;
+      if (i > 1 && messages[i - 2].content === "__compacted__") continue;
+
+      let text = "";
+      if (msg.blocks && msg.blocks.length > 0) {
+        text = msg.blocks
+          .filter((b) => b.type === "text")
+          .map((b) => b.text)
+          .join("\n");
+      }
+      if (!text && typeof msg.content === "string") {
+        text = msg.content;
+      }
+      if (!text) continue;
+
+      const matchIndex = text.toLowerCase().indexOf(lowerQuery);
+      if (matchIndex === -1) continue;
+
+      totalFound++;
+      fileResults++;
+
+      if (totalFound <= offset) continue;
+
+      const previewStart = Math.max(0, matchIndex - 100);
+      const previewEnd = Math.min(text.length, matchIndex + query.length + 100);
+      let preview = text.slice(previewStart, previewEnd);
+      let matchStart = matchIndex - previewStart;
+
+      if (previewStart > 0) {
+        preview = "..." + preview;
+        matchStart += 3;
+      }
+      if (previewEnd < text.length) {
+        preview = preview + "...";
+      }
+
+      results.push({
+        sessionId: file.sessionId,
+        sessionName: sessionTitle || "Untitled session",
+        cwd,
+        dirName,
+        messageId: msg.id,
+        role: msg.role as "user" | "assistant",
+        timestamp: msg.timestamp,
+        preview,
+        matchStart,
+        matchLength: query.length,
+        fullContent: text.length > 2000 ? text.slice(0, 2000) + "..." : text,
+      });
+    }
+  }
+
+  results.sort((a, b) => b.timestamp - a.timestamp);
+  return { results, totalFilesSearched: searchFiles.length, truncated };
 }

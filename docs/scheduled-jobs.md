@@ -71,6 +71,12 @@ Click a run to open the transcript in the same chat view used for live sessions.
 
 Failed runs (Claude errored, hit a permission denial, ran out of context) are flagged in the run list. Open the transcript to see what happened and adjust the prompt or schedule.
 
+## Notifications
+
+Job completions are sent to the inbox and, if configured, to external notification providers (Telegram, ntfy.sh). See [Settings](settings.md#notifications) for provider setup.
+
+The inbox message includes the job name, run status, duration, and a link to the transcript.
+
 ## MCP discovery
 
 The MCP discovery endpoint scans for MCP servers reachable from the job's working directory. Useful when you want a job to use project-specific MCP servers without hardcoding them in the job config.

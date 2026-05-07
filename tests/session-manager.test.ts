@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -3028,6 +3029,858 @@ describe("SessionManager", () => {
       const proc = { pid: undefined, kill: vi.fn() };
 
       expect(() => (manager as any).killProcessGroup(proc)).not.toThrow();
+    });
+  });
+
+  describe("sendMessage branches", () => {
+    it("returns false for unknown session", () => {
+      expect(manager.sendMessage("nonexistent", "hello")).toBe(false);
+    });
+
+    it("queues message when session is running", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      s.info.status = "running";
+      s.process = { pid: 123 };
+      s.stdin = { write: vi.fn() };
+
+      const result = manager.sendMessage(session.id, "queued msg");
+      expect(result).toBe(true);
+      expect(s.queuedMessages).toHaveLength(1);
+      expect(s.queuedMessages[0].text).toBe("queued msg");
+    });
+
+    it("clears paused queue when new message sent while paused", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      s.queuePaused = true;
+      s.queuedMessages = [{ id: "q-old", text: "old" }];
+
+      manager.sendMessage(session.id, "new message");
+      expect(s.queuePaused).toBe(false);
+      expect(s.queuedMessages).toHaveLength(0);
+    });
+
+    it("writes to stdin when process exists and session is idle", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      s.process = { pid: 123 };
+      s.stdin = { write: vi.fn() };
+      s.streamState = { thinkingStartedAt: 0 };
+
+      const result = manager.sendMessage(session.id, "hello");
+      expect(result).toBe(true);
+      expect(s.stdin.write).toHaveBeenCalled();
+      expect(s.info.status).toBe("running");
+    });
+
+    it("triggers pre-compact when message would exceed 85% context", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      s.contextUsage = { used: 180000, total: 200000 };
+      s.process = { pid: 123 };
+      s.stdin = { write: vi.fn() };
+
+      const result = manager.sendMessage(session.id, "big message");
+      expect(result).toBe(true);
+      expect(s.compacting).toBe(true);
+      expect(s.queuedMessages).toHaveLength(1);
+    });
+
+    it("pre-compact spawns process when no stdin available", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      s.contextUsage = { used: 180000, total: 200000 };
+      s.process = null;
+      s.stdin = null;
+
+      const result = manager.sendMessage(session.id, "big message");
+      expect(result).toBe(true);
+      expect(s.compacting).toBe(true);
+    });
+
+    it("does not pre-compact when already compacting", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      s.contextUsage = { used: 180000, total: 200000 };
+      s.compacting = true;
+
+      manager.sendMessage(session.id, "msg");
+      expect(s.queuedMessages).toHaveLength(0);
+    });
+
+    it("does not pre-compact for /compact command", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      s.contextUsage = { used: 180000, total: 200000 };
+
+      manager.sendMessage(session.id, "/compact");
+      expect(s.compacting).toBe(true);
+    });
+
+    it("does not pre-compact for any slash command", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      s.contextUsage = { used: 180000, total: 200000 };
+
+      manager.sendMessage(session.id, "/help");
+    });
+
+    it("does not pre-compact without contextUsage", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      s.contextUsage = null;
+
+      manager.sendMessage(session.id, "hello");
+      expect(s.queuedMessages).toHaveLength(0);
+    });
+  });
+
+  describe("estimateMessageTokens", () => {
+    it("estimates based on text length", () => {
+      manager.createSession("/tmp");
+      const result = (manager as any).estimateMessageTokens("hello world");
+      expect(result).toBe(Math.ceil(11 / 4));
+    });
+
+    it("adds tokens for images", () => {
+      const result = (manager as any).estimateMessageTokens("hi", [{ data: "base64" }]);
+      expect(result).toBeGreaterThan(Math.ceil(2 / 4));
+    });
+
+    it("adds tokens for documents", () => {
+      const result = (manager as any).estimateMessageTokens("hi", undefined, [{ data: "a".repeat(100) }]);
+      expect(result).toBe(Math.ceil(2 / 4) + Math.ceil(100 / 5));
+    });
+  });
+
+  describe("handleTodoWrite", () => {
+    it("parses valid todo input and emits", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      const emitted: unknown[] = [];
+      s.emitter.on("todos", (_id: string, todos: unknown) => emitted.push(todos));
+
+      const input = JSON.stringify({ todos: [{ content: "task1", status: "pending" }] });
+      (manager as any).handleTodoWrite(s, session.id, input);
+
+      expect(s.todoItems).toHaveLength(1);
+      expect(s.todoItems[0].content).toBe("task1");
+      expect(emitted).toHaveLength(1);
+    });
+
+    it("ignores invalid JSON", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      (manager as any).handleTodoWrite(s, session.id, "not json");
+      expect(s.todoItems).toHaveLength(0);
+    });
+
+    it("ignores non-array todos field", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      (manager as any).handleTodoWrite(s, session.id, JSON.stringify({ todos: "bad" }));
+      expect(s.todoItems).toHaveLength(0);
+    });
+
+    it("filters out items without content or status", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      const input = JSON.stringify({
+        todos: [{ content: "valid", status: "pending" }, { content: "", status: "pending" }, { content: "no status" }],
+      });
+      (manager as any).handleTodoWrite(s, session.id, input);
+      expect(s.todoItems).toHaveLength(1);
+    });
+
+    it("preserves activeForm field", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      const input = JSON.stringify({
+        todos: [{ content: "task", status: "in_progress", activeForm: "doing stuff" }],
+      });
+      (manager as any).handleTodoWrite(s, session.id, input);
+      expect(s.todoItems[0].activeForm).toBe("doing stuff");
+    });
+  });
+
+  describe("getKnownMcpServers", () => {
+    it("returns servers from session initData", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      s.initData = { mcpServers: [{ name: "server1" }, { name: "server2" }] };
+
+      expect(manager.getKnownMcpServers()).toEqual(["server1", "server2"]);
+    });
+
+    it("deduplicates server names across sessions", () => {
+      const s1 = manager.createSession("/tmp/a");
+      const s2 = manager.createSession("/tmp/b");
+      const sess1 = (manager as any).sessions.get(s1.id)!;
+      const sess2 = (manager as any).sessions.get(s2.id)!;
+      sess1.initData = { mcpServers: [{ name: "shared" }] };
+      sess2.initData = { mcpServers: [{ name: "shared" }, { name: "unique" }] };
+
+      const servers = manager.getKnownMcpServers();
+      expect(servers).toContain("shared");
+      expect(servers).toContain("unique");
+      expect(servers.filter((n: string) => n === "shared")).toHaveLength(1);
+    });
+  });
+
+  describe("getMoreHistory", () => {
+    it("returns empty for unknown session", async () => {
+      const result = await manager.getMoreHistory("nonexistent", "msg-1");
+      expect(result).toEqual({ messages: [], hasMore: false });
+    });
+
+    it("serves from buffer when message found in buffer", async () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      const msgs = Array.from({ length: 60 }, (_, i) => ({
+        id: `msg-${i}`,
+        role: "user",
+        content: `message ${i}`,
+      }));
+      s.transcriptBuffer = msgs;
+      s.transcriptByteOffset = 0;
+      s.paginationPrevIds = [];
+
+      const result = await manager.getMoreHistory(session.id, "msg-55");
+      expect(result.messages.length).toBeGreaterThan(0);
+      expect(result.messages.length).toBeLessThanOrEqual(50);
+    });
+
+    it("returns hasMore=true when buffer has more before the page", async () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      const msgs = Array.from({ length: 100 }, (_, i) => ({
+        id: `msg-${i}`,
+        role: "user",
+        content: `message ${i}`,
+      }));
+      s.transcriptBuffer = msgs;
+      s.transcriptByteOffset = 0;
+      s.paginationPrevIds = [];
+
+      const result = await manager.getMoreHistory(session.id, "msg-99");
+      expect(result.hasMore).toBe(true);
+    });
+
+    it("returns hasMore=true when byteOffset > 0", async () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      s.transcriptBuffer = [
+        { id: "msg-0", role: "user", content: "a" },
+        { id: "msg-1", role: "user", content: "b" },
+      ];
+      s.transcriptByteOffset = 500;
+      s.paginationPrevIds = [];
+
+      const result = await manager.getMoreHistory(session.id, "msg-1");
+      expect(result.hasMore).toBe(true);
+    });
+
+    it("returns hasMore=true when paginationPrevIds remain", async () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      s.transcriptBuffer = [
+        { id: "msg-0", role: "user", content: "a" },
+        { id: "msg-1", role: "user", content: "b" },
+      ];
+      s.transcriptByteOffset = 0;
+      s.paginationPrevIds = ["prev-session-1"];
+
+      const result = await manager.getMoreHistory(session.id, "msg-1");
+      expect(result.hasMore).toBe(true);
+    });
+  });
+
+  describe("recoverSession", () => {
+    it("returns true for session already in memory", async () => {
+      const session = manager.createSession("/tmp");
+      expect(await manager.recoverSession(session.id)).toBe(true);
+    });
+
+    it("returns false when no transcript found on disk", async () => {
+      expect(await manager.recoverSession("unknown-session")).toBe(false);
+    });
+  });
+
+  describe("flushQueuedMessage", () => {
+    it("sends next queued message when session goes idle", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      s.queuedMessages = [{ id: "q-1", text: "queued" }];
+      s.info.status = "idle";
+      s.process = { pid: 123 };
+      s.stdin = { write: vi.fn() };
+      s.streamState = { thinkingStartedAt: 0 };
+
+      (manager as any).flushQueuedMessage(s, session.id);
+      expect(s.queuedMessages).toHaveLength(0);
+    });
+
+    it("does nothing when queue is empty", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      s.queuedMessages = [];
+
+      (manager as any).flushQueuedMessage(s, session.id);
+      expect(s.info.status).toBe("idle");
+    });
+
+    it("does nothing when queue is paused", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      s.queuedMessages = [{ id: "q-1", text: "queued" }];
+      s.queuePaused = true;
+
+      (manager as any).flushQueuedMessage(s, session.id);
+      expect(s.queuedMessages).toHaveLength(1);
+    });
+  });
+
+  describe("applyProcessedResult branches", () => {
+    it("handles permission mode change to plan", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      const emitted: string[] = [];
+      s.emitter.on("system", (_id: string, text: string) => emitted.push(text));
+
+      const result = {
+        intermediateMessages: [],
+        emit: [],
+        systemMessages: ["__permission_mode::plan"],
+        errors: [],
+        todoInputs: [],
+        permissionActions: [],
+        statusChange: null,
+        compactDone: false,
+        snapshot: null,
+      };
+      (manager as any).applyProcessedResult(s, session.id, result);
+      expect(s.planMode).toBe(true);
+      expect(emitted).toContain("__plan_state::on");
+    });
+
+    it("handles permission mode change away from plan", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      s.planMode = true;
+      const emitted: string[] = [];
+      s.emitter.on("system", (_id: string, text: string) => emitted.push(text));
+
+      const result = {
+        intermediateMessages: [],
+        emit: [],
+        systemMessages: ["__permission_mode::default"],
+        errors: [],
+        todoInputs: [],
+        permissionActions: [],
+        statusChange: null,
+        compactDone: false,
+        snapshot: null,
+      };
+      (manager as any).applyProcessedResult(s, session.id, result);
+      expect(s.planMode).toBe(false);
+      expect(emitted).toContain("__plan_state::off");
+      expect(s.needsRespawnForPermissions).toBe(true);
+    });
+
+    it("forwards non-permission system messages", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      const emitted: string[] = [];
+      s.emitter.on("system", (_id: string, text: string) => emitted.push(text));
+
+      const result = {
+        intermediateMessages: [],
+        emit: [],
+        systemMessages: ["some other system message"],
+        errors: [],
+        todoInputs: [],
+        permissionActions: [],
+        statusChange: null,
+        compactDone: false,
+        snapshot: null,
+      };
+      (manager as any).applyProcessedResult(s, session.id, result);
+      expect(emitted).toContain("some other system message");
+    });
+
+    it("emits errors from result", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      const emitted: string[] = [];
+      s.emitter.on("error", (_id: string, err: string) => emitted.push(err));
+
+      const result = {
+        intermediateMessages: [],
+        emit: [],
+        systemMessages: [],
+        errors: ["something broke"],
+        todoInputs: [],
+        permissionActions: [],
+        statusChange: null,
+        compactDone: false,
+        snapshot: null,
+      };
+      (manager as any).applyProcessedResult(s, session.id, result);
+      expect(emitted).toContain("something broke");
+    });
+
+    it("handles todoInputs", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+
+      const result = {
+        intermediateMessages: [],
+        emit: [],
+        systemMessages: [],
+        errors: [],
+        todoInputs: [JSON.stringify({ todos: [{ content: "do this", status: "pending" }] })],
+        permissionActions: [],
+        statusChange: null,
+        compactDone: false,
+        snapshot: null,
+      };
+      (manager as any).applyProcessedResult(s, session.id, result);
+      expect(s.todoItems).toHaveLength(1);
+    });
+
+    it("handles auto_approve permission action", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      s.process = { pid: 123 };
+      s.stdin = { write: vi.fn() };
+
+      const result = {
+        intermediateMessages: [],
+        emit: [],
+        systemMessages: [],
+        errors: [],
+        todoInputs: [],
+        permissionActions: [{ type: "auto_approve", requestId: "req-1", toolName: "Read", rawToolInput: {} }],
+        statusChange: null,
+        compactDone: false,
+        snapshot: null,
+      };
+      (manager as any).applyProcessedResult(s, session.id, result);
+      expect(s.stdin.write).toHaveBeenCalled();
+    });
+
+    it("handles auto_deny permission action", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      s.process = { pid: 123 };
+      s.stdin = { write: vi.fn() };
+
+      const result = {
+        intermediateMessages: [],
+        emit: [],
+        systemMessages: [],
+        errors: [],
+        todoInputs: [],
+        permissionActions: [{ type: "auto_deny", requestId: "req-1", toolName: "Write", denyReason: "blocked" }],
+        statusChange: null,
+        compactDone: false,
+        snapshot: null,
+      };
+      (manager as any).applyProcessedResult(s, session.id, result);
+      expect(s.stdin.write).toHaveBeenCalled();
+    });
+
+    it("stores pending request for normal permission action", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+
+      const result = {
+        intermediateMessages: [],
+        emit: [],
+        systemMessages: [],
+        errors: [],
+        todoInputs: [],
+        permissionActions: [
+          {
+            type: "request",
+            requestId: "req-1",
+            toolName: "Bash",
+            toolInput: "rm -rf /",
+            rawToolInput: { command: "rm -rf /" },
+          },
+        ],
+        statusChange: null,
+        compactDone: false,
+        snapshot: null,
+      };
+      (manager as any).applyProcessedResult(s, session.id, result);
+      expect(s.pendingRequests.has("req-1")).toBe(true);
+    });
+
+    it("auto-approves when bypass active and not plan mode", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      s.bypassAllPermissions = true;
+      s.planMode = false;
+      s.process = { pid: 123 };
+      s.stdin = { write: vi.fn() };
+
+      const result = {
+        intermediateMessages: [],
+        emit: [],
+        systemMessages: [],
+        errors: [],
+        todoInputs: [],
+        permissionActions: [{ type: "request", requestId: "req-1", toolName: "Bash", rawToolInput: { command: "ls" } }],
+        statusChange: null,
+        compactDone: false,
+        snapshot: null,
+      };
+      (manager as any).applyProcessedResult(s, session.id, result);
+      expect(s.stdin.write).toHaveBeenCalled();
+      expect(s.pendingRequests.has("req-1")).toBe(false);
+    });
+
+    it("handles compactDone flag", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      s.compacting = true;
+      const emitted: string[] = [];
+      s.emitter.on("system", (_id: string, text: string) => emitted.push(text));
+
+      const result = {
+        intermediateMessages: [],
+        emit: [],
+        systemMessages: [],
+        errors: [],
+        todoInputs: [],
+        permissionActions: [],
+        statusChange: null,
+        compactDone: true,
+        snapshot: null,
+      };
+      (manager as any).applyProcessedResult(s, session.id, result);
+      expect(s.compacting).toBe(false);
+      expect(emitted).toContain("__compact::done");
+    });
+
+    it("sets status to idle on statusChange", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      s.info.status = "running";
+
+      const result = {
+        intermediateMessages: [],
+        emit: [],
+        systemMessages: [],
+        errors: [],
+        todoInputs: [],
+        permissionActions: [],
+        statusChange: "idle",
+        compactDone: false,
+        snapshot: null,
+      };
+      (manager as any).applyProcessedResult(s, session.id, result);
+      expect(s.info.status).toBe("idle");
+    });
+
+    it("stores pending request for AskUserQuestion as question type", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+
+      const result = {
+        intermediateMessages: [],
+        emit: [],
+        systemMessages: [],
+        errors: [],
+        todoInputs: [],
+        permissionActions: [
+          {
+            type: "request",
+            requestId: "req-q",
+            toolName: "AskUserQuestion",
+            toolInput: "What?",
+            rawToolInput: { questions: ["What?"] },
+          },
+        ],
+        statusChange: null,
+        compactDone: false,
+        snapshot: null,
+      };
+      (manager as any).applyProcessedResult(s, session.id, result);
+      const pending = s.pendingRequests.get("req-q");
+      expect(pending.type).toBe("question");
+    });
+
+    it("handles message_done emit with needsRespawnForPermissions", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      s.needsRespawnForPermissions = true;
+      const fakeProc = new EventEmitter();
+      Object.assign(fakeProc, { pid: 123, kill: vi.fn() });
+      s.process = fakeProc;
+      s.stdin = { write: vi.fn() };
+
+      const result = {
+        intermediateMessages: [],
+        emit: [{ type: "message_done", message: { id: "m1", toolUses: [] } }],
+        systemMessages: [],
+        errors: [],
+        todoInputs: [],
+        permissionActions: [],
+        statusChange: null,
+        compactDone: false,
+        snapshot: null,
+      };
+      (manager as any).applyProcessedResult(s, session.id, result);
+      expect(s.needsRespawnForPermissions).toBe(false);
+      expect(s.process).toBeNull();
+    });
+
+    it("no-ops permission mode set to plan when already in plan mode", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      s.planMode = true;
+      const emitted: string[] = [];
+      s.emitter.on("system", (_id: string, text: string) => emitted.push(text));
+
+      const result = {
+        intermediateMessages: [],
+        emit: [],
+        systemMessages: ["__permission_mode::plan"],
+        errors: [],
+        todoInputs: [],
+        permissionActions: [],
+        statusChange: null,
+        compactDone: false,
+        snapshot: null,
+      };
+      (manager as any).applyProcessedResult(s, session.id, result);
+      expect(emitted).not.toContain("__plan_state::on");
+    });
+
+    it("no-ops permission mode != plan when not in plan mode", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      s.planMode = false;
+      const emitted: string[] = [];
+      s.emitter.on("system", (_id: string, text: string) => emitted.push(text));
+
+      const result = {
+        intermediateMessages: [],
+        emit: [],
+        systemMessages: ["__permission_mode::default"],
+        errors: [],
+        todoInputs: [],
+        permissionActions: [],
+        statusChange: null,
+        compactDone: false,
+        snapshot: null,
+      };
+      (manager as any).applyProcessedResult(s, session.id, result);
+      expect(emitted).not.toContain("__plan_state::off");
+    });
+  });
+
+  describe("spawnProcess branches", () => {
+    it("passes plan mode flags when planMode is true", () => {
+      const mockSpawn = vi.mocked(spawn);
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      s.planMode = true;
+
+      (manager as any).spawnProcess(s, session.id);
+      const args = mockSpawn.mock.calls[mockSpawn.mock.calls.length - 1][1] as string[];
+      expect(args).toContain("--permission-mode");
+      expect(args[args.indexOf("--permission-mode") + 1]).toBe("plan");
+      expect(args).not.toContain("--allow-dangerously-skip-permissions");
+    });
+
+    it("passes bypass flags when bypassAllPermissions is true", () => {
+      const mockSpawn = vi.mocked(spawn);
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      s.bypassAllPermissions = true;
+      s.planMode = false;
+
+      (manager as any).spawnProcess(s, session.id);
+      const args = mockSpawn.mock.calls[mockSpawn.mock.calls.length - 1][1] as string[];
+      expect(args).toContain("--permission-mode");
+      expect(args[args.indexOf("--permission-mode") + 1]).toBe("bypassPermissions");
+      expect(args).toContain("--allow-dangerously-skip-permissions");
+    });
+
+    it("passes --resume when hasSpawnedBefore is true", () => {
+      const mockSpawn = vi.mocked(spawn);
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      s.hasSpawnedBefore = true;
+
+      (manager as any).spawnProcess(s, session.id);
+      const args = mockSpawn.mock.calls[mockSpawn.mock.calls.length - 1][1] as string[];
+      expect(args).toContain("--resume");
+    });
+
+    it("passes --session-id when not previously spawned", () => {
+      const mockSpawn = vi.mocked(spawn);
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      s.hasSpawnedBefore = false;
+
+      (manager as any).spawnProcess(s, session.id);
+      const args = mockSpawn.mock.calls[mockSpawn.mock.calls.length - 1][1] as string[];
+      expect(args).toContain("--session-id");
+    });
+
+    it("passes model flag when info.model is set", () => {
+      const mockSpawn = vi.mocked(spawn);
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      s.info.model = "opus";
+
+      (manager as any).spawnProcess(s, session.id);
+      const args = mockSpawn.mock.calls[mockSpawn.mock.calls.length - 1][1] as string[];
+      expect(args).toContain("--model");
+      expect(args[args.indexOf("--model") + 1]).toBe("opus");
+    });
+  });
+
+  describe("process close and error handling", () => {
+    it("clears todos when all completed on process close", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      s.todoItems = [
+        { content: "task1", status: "completed" },
+        { content: "task2", status: "completed" },
+      ];
+
+      const mockSpawn = vi.mocked(spawn);
+      (manager as any).spawnProcess(s, session.id);
+      const proc = mockSpawn.mock.results[mockSpawn.mock.results.length - 1].value;
+      proc.emit("close", 0, null);
+
+      expect(s.todoItems).toHaveLength(0);
+    });
+
+    it("does not clear todos when some are pending", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      s.todoItems = [
+        { content: "task1", status: "completed" },
+        { content: "task2", status: "pending" },
+      ];
+
+      const mockSpawn = vi.mocked(spawn);
+      (manager as any).spawnProcess(s, session.id);
+      const proc = mockSpawn.mock.results[mockSpawn.mock.results.length - 1].value;
+      proc.emit("close", 0, null);
+
+      expect(s.todoItems).toHaveLength(2);
+    });
+
+    it("emits error on non-zero exit with stderr", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      const errors: string[] = [];
+      s.emitter.on("error", (_id: string, err: string) => errors.push(err));
+
+      const mockSpawn = vi.mocked(spawn);
+      (manager as any).spawnProcess(s, session.id);
+      const proc = mockSpawn.mock.results[mockSpawn.mock.results.length - 1].value;
+      proc.stderr.emit("data", Buffer.from("fatal error"));
+      proc.emit("close", 1, null);
+
+      expect(errors).toContain("fatal error");
+    });
+
+    it("handles compacting flag on close", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      s.compacting = true;
+      const emitted: string[] = [];
+      s.emitter.on("system", (_id: string, text: string) => emitted.push(text));
+
+      const mockSpawn = vi.mocked(spawn);
+      (manager as any).spawnProcess(s, session.id);
+      const proc = mockSpawn.mock.results[mockSpawn.mock.results.length - 1].value;
+      proc.emit("close", 0, null);
+
+      expect(s.compacting).toBe(false);
+      expect(emitted).toContain("__compact::done");
+    });
+
+    it("emits error on process error event", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      const errors: string[] = [];
+      s.emitter.on("error", (_id: string, err: string) => errors.push(err));
+
+      const mockSpawn = vi.mocked(spawn);
+      (manager as any).spawnProcess(s, session.id);
+      const proc = mockSpawn.mock.results[mockSpawn.mock.results.length - 1].value;
+      proc.emit("error", new Error("spawn failed"));
+
+      expect(errors).toContain("spawn failed");
+      expect(s.process).toBeNull();
+      expect(s.info.status).toBe("idle");
+    });
+  });
+
+  describe("stdout processing branches", () => {
+    it("handles incomplete JSON buffering", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+
+      const mockSpawn = vi.mocked(spawn);
+      (manager as any).spawnProcess(s, session.id);
+      const proc = mockSpawn.mock.results[mockSpawn.mock.results.length - 1].value;
+
+      proc.stdout.emit("data", Buffer.from('{"type":"assi'));
+      proc.stdout.emit("data", Buffer.from('stant","message":{}}\n'));
+    });
+
+    it("handles control_response callback", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      const cb = vi.fn();
+      s.controlCallbacks.set("req-123", cb);
+
+      const mockSpawn = vi.mocked(spawn);
+      (manager as any).spawnProcess(s, session.id);
+      const proc = mockSpawn.mock.results[mockSpawn.mock.results.length - 1].value;
+
+      const line = JSON.stringify({ type: "control_response", request_id: "req-123", response: { ok: true } });
+      proc.stdout.emit("data", Buffer.from(line + "\n"));
+
+      expect(cb).toHaveBeenCalledWith({ ok: true });
+    });
+
+    it("processes remaining lineBuffer on close", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+
+      const mockSpawn = vi.mocked(spawn);
+      (manager as any).spawnProcess(s, session.id);
+      const proc = mockSpawn.mock.results[mockSpawn.mock.results.length - 1].value;
+
+      proc.stdout.emit("data", Buffer.from('{"type":"result"}'));
+      proc.emit("close", 0, null);
+    });
+
+    it("skips close cleanup if newer process is running", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+
+      const mockSpawn = vi.mocked(spawn);
+      (manager as any).spawnProcess(s, session.id);
+      const firstProc = mockSpawn.mock.results[mockSpawn.mock.results.length - 1].value;
+
+      const fakeNewProcess = { pid: 99998 };
+      s.process = fakeNewProcess;
+
+      firstProc.emit("close", 0, null);
+      expect(s.process).toBe(fakeNewProcess);
     });
   });
 });

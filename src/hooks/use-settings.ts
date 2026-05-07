@@ -15,6 +15,8 @@ export interface Settings {
   editExpanded: boolean;
   toolCallsExpanded: boolean;
   model: string;
+  messageStitching: boolean;
+  reviewsEnabled: boolean;
 }
 
 const defaultSettings: Settings = {
@@ -27,6 +29,8 @@ const defaultSettings: Settings = {
   editExpanded: false,
   toolCallsExpanded: false,
   model: "sonnet",
+  messageStitching: true,
+  reviewsEnabled: true,
 };
 
 export function useSettings() {

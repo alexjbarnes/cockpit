@@ -983,7 +983,7 @@ export function InputArea({
           <button
             type="button"
             onClick={() => setQueueModalOpen(true)}
-            className="mb-1 mx-9 flex items-center gap-2 rounded-md border border-dashed px-3 py-1.5 text-xs hover:bg-muted transition-colors cursor-pointer"
+            className="mb-2 mx-9 flex items-center gap-2 rounded-md border border-dashed px-3 py-1.5 text-xs hover:bg-muted transition-colors cursor-pointer"
           >
             <MessageSquare className={`h-3.5 w-3.5 shrink-0 ${queuePaused ? "text-yellow-500" : "text-primary"}`} />
             <span className={queuePaused ? "text-yellow-500" : "text-muted-foreground"}>

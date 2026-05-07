@@ -24,7 +24,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { usePageHeader, useShell } from "@/components/app-shell";
 import { ChatView } from "@/components/chat-view";
 import { DIFF_SELECTABLE_CSS, DiffErrorBoundary } from "@/components/diff-viewer";
-import { pinSession } from "@/components/sidebar";
+import { pinReview } from "@/components/sidebar";
 import { Button } from "@/components/ui/button";
 import { useIsDesktop } from "@/hooks/use-is-desktop";
 import { useSettings } from "@/hooks/use-settings";
@@ -49,6 +49,9 @@ interface PRDetails {
   changedFiles: number;
   headRefName: string;
   baseRefName: string;
+  headRefOid?: string;
+  baseRefOid?: string;
+  mergeBaseSha?: string;
   state: string;
   isDraft: boolean;
   labels: { name: string; color: string }[];
@@ -77,12 +80,71 @@ function isDark(): boolean {
   return document.documentElement.classList.contains("dark");
 }
 
+function reindexForFullContent(meta: FileDiffMetadata, oldContent: string, newContent: string) {
+  const oldLines = oldContent.split(/\r?\n/).map((l) => l + "\n");
+  const newLines = newContent.split(/\r?\n/).map((l) => l + "\n");
+  for (const hunk of meta.hunks) {
+    const delDelta = hunk.deletionStart - 1 - hunk.deletionLineIndex;
+    const addDelta = hunk.additionStart - 1 - hunk.additionLineIndex;
+    hunk.deletionLineIndex = hunk.deletionStart - 1;
+    hunk.additionLineIndex = hunk.additionStart - 1;
+    for (const content of hunk.hunkContent) {
+      content.deletionLineIndex += delDelta;
+      content.additionLineIndex += addDelta;
+    }
+  }
+  meta.deletionLines = oldLines;
+  meta.additionLines = newLines;
+  meta.isPartial = false;
+}
+
 function fileStatusIcon(path: string, prFiles: PRFile[]) {
   const f = prFiles.find((pf) => pf.path === path);
   if (!f) return <FileEdit className="h-3.5 w-3.5 text-yellow-500 shrink-0" />;
   if (f.deletions === 0 && f.additions > 0) return <FilePlus className="h-3.5 w-3.5 text-green-500 shrink-0" />;
   if (f.additions === 0 && f.deletions > 0) return <FileMinus className="h-3.5 w-3.5 text-red-500 shrink-0" />;
   return <FileEdit className="h-3.5 w-3.5 text-yellow-500 shrink-0" />;
+}
+
+const DESC_MAX_LINES = 10;
+
+function PRDescription({ body, open, onToggle }: { body: string; open: boolean; onToggle: () => void }) {
+  const [expanded, setExpanded] = useState(false);
+  const lines = body.split("\n");
+  const needsTruncation = lines.length > DESC_MAX_LINES;
+  const displayText = !expanded && needsTruncation ? lines.slice(0, DESC_MAX_LINES).join("\n") : body;
+
+  return (
+    <div className="border-b">
+      <button
+        onClick={onToggle}
+        className="flex items-center gap-2 w-full px-4 py-2 text-sm text-muted-foreground hover:text-foreground transition-colors"
+      >
+        {open ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+        Description
+      </button>
+      {open && (
+        <div className="px-4 pb-3">
+          <div
+            className={cn(
+              "text-sm prose prose-sm dark:prose-invert max-w-none whitespace-pre-wrap",
+              !expanded && needsTruncation && "line-clamp-[10]",
+            )}
+          >
+            {displayText}
+          </div>
+          {needsTruncation && (
+            <button
+              onClick={() => setExpanded((v) => !v)}
+              className="mt-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+            >
+              {expanded ? "Show less" : `Show more (${lines.length} lines)`}
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function isDeletedFile(patch: string): boolean {
@@ -306,25 +368,21 @@ function LazyDiff({
       return;
     }
 
-    // Fetch old (base) and new (head) file contents in parallel
-    Promise.all([fetchFileContent(repo, file.path, pr.baseRefName), fetchFileContent(repo, file.path, pr.headRefName)])
+    const baseRef = pr.mergeBaseSha || pr.baseRefOid || pr.baseRefName;
+    const headRef = pr.headRefOid || pr.headRefName;
+
+    // Fetch old (merge base) and new (head) file contents in parallel
+    Promise.all([fetchFileContent(repo, file.path, baseRef), fetchFileContent(repo, file.path, headRef)])
       .then(([oldContent, newContent]) => {
         if (cancelled) return;
-        if (oldContent != null) {
-          meta!.deletionLines = oldContent.split(/\r?\n/).map((l) => l + "\n");
-        } else {
-          console.warn(`[diff] ${file.path}: oldContent is null (base=${pr.baseRefName})`);
+        if (oldContent != null && newContent != null) {
+          reindexForFullContent(meta!, oldContent, newContent);
         }
-        if (newContent != null) {
-          meta!.additionLines = newContent.split(/\r?\n/).map((l) => l + "\n");
-        } else {
-          console.warn(`[diff] ${file.path}: newContent is null (head=${pr.headRefName})`);
-        }
-        console.info(`[diff] ${file.path}: deletionLines=${!!meta!.deletionLines} additionLines=${!!meta!.additionLines}`);
         setFileDiffMeta(meta);
       })
       .catch((e) => {
         console.error(`[diff] fetch failed for ${file.path}:`, e);
+        setFileDiffMeta(meta);
       });
 
     return () => {
@@ -455,7 +513,7 @@ export function PRReviewView({ owner, repo, number }: { owner: string; repo: str
   const prKey = `${fullRepo}#${number}`;
 
   const { settings } = useSettings();
-  const { setSidebarContent } = useShell();
+  const { setSidebarSection, removeSidebarSection } = useShell();
   const router = useRouter();
   const isDesktop = useIsDesktop();
 
@@ -550,7 +608,7 @@ export function PRReviewView({ owner, repo, number }: { owner: string; repo: str
             setSessionId(existingId);
             const data = await res.json();
             setReviewsCwd(data.session?.cwd || null);
-            pinSession(existingId);
+            pinReview(existingId);
             setSessionLoading(false);
             return;
           }
@@ -569,7 +627,7 @@ export function PRReviewView({ owner, repo, number }: { owner: string; repo: str
           setSessionId(data.sessionId);
           setReviewsCwd(data.cwd);
           setSessionMapping(prKey, data.sessionId);
-          pinSession(data.sessionId);
+          pinReview(data.sessionId);
         }
       } catch {}
       setSessionLoading(false);
@@ -667,67 +725,69 @@ export function PRReviewView({ owner, repo, number }: { owner: string; repo: str
   // Sidebar file list
   useEffect(() => {
     if (fileDiffs.length === 0) {
-      setSidebarContent(null);
+      removeSidebarSection("pr-files");
       return;
     }
 
-    setSidebarContent(
-      <>
-        <div className="sticky top-0 bg-background flex items-center justify-between px-3 py-2 border-b z-10">
-          <span className="text-sm font-bold">Files</span>
-          <span className="text-xs text-muted-foreground">{fileDiffs.length} changed</span>
-        </div>
-        {fileDiffs.map((file) => (
-          <div
-            key={file.path}
-            className={cn(
-              "flex items-center gap-2 px-3 py-1.5 text-sm cursor-pointer border-b last:border-b-0 hover:bg-muted/50",
-              viewedFiles.has(file.path) && "opacity-50",
-            )}
-            onClick={() => {
-              if (collapsedFiles.has(file.path)) toggleCollapse(file.path);
-              setScrollToFile(file.path);
-            }}
-          >
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                toggleViewed(file.path);
-                if (!viewedFiles.has(file.path) && !collapsedFiles.has(file.path)) {
-                  toggleCollapse(file.path);
-                }
-              }}
+    setSidebarSection({
+      id: "pr-files",
+      title: "PR Files",
+      order: 20,
+      badge: String(fileDiffs.length),
+      content: (
+        <>
+          {fileDiffs.map((file) => (
+            <div
+              key={file.path}
               className={cn(
-                "h-4 w-4 shrink-0 rounded border flex items-center justify-center transition-colors",
-                viewedFiles.has(file.path)
-                  ? "border-primary bg-primary text-primary-foreground"
-                  : "border-muted-foreground/40 bg-transparent hover:border-muted-foreground/60",
+                "flex items-center gap-2 px-3 py-1.5 text-sm cursor-pointer border-b last:border-b-0 hover:bg-muted/50",
+                viewedFiles.has(file.path) && "opacity-50",
               )}
+              onClick={() => {
+                if (collapsedFiles.has(file.path)) toggleCollapse(file.path);
+                setScrollToFile(file.path);
+              }}
             >
-              {viewedFiles.has(file.path) && <Check className="h-3 w-3" strokeWidth={3} />}
-            </button>
-            {fileStatusIcon(file.path, pr?.files || [])}
-            <span className="font-mono text-xs truncate flex-1 min-w-0 text-left" dir="rtl" title={file.path}>
-              <bdo dir="ltr">{file.path}</bdo>
-            </span>
-            {pr?.files &&
-              (() => {
-                const f = pr.files.find((pf) => pf.path === file.path);
-                if (!f) return null;
-                return (
-                  <span className="text-xs font-mono shrink-0 flex gap-1">
-                    {f.additions > 0 && <span className="text-green-500">+{f.additions}</span>}
-                    {f.deletions > 0 && <span className="text-red-500">-{f.deletions}</span>}
-                  </span>
-                );
-              })()}
-          </div>
-        ))}
-      </>,
-    );
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  toggleViewed(file.path);
+                  if (!viewedFiles.has(file.path) && !collapsedFiles.has(file.path)) {
+                    toggleCollapse(file.path);
+                  }
+                }}
+                className={cn(
+                  "h-4 w-4 shrink-0 rounded border flex items-center justify-center transition-colors",
+                  viewedFiles.has(file.path)
+                    ? "border-primary bg-primary text-primary-foreground"
+                    : "border-muted-foreground/40 bg-transparent hover:border-muted-foreground/60",
+                )}
+              >
+                {viewedFiles.has(file.path) && <Check className="h-3 w-3" strokeWidth={3} />}
+              </button>
+              {fileStatusIcon(file.path, pr?.files || [])}
+              <span className="font-mono text-xs truncate flex-1 min-w-0 text-left" dir="rtl" title={file.path}>
+                <bdo dir="ltr">{file.path}</bdo>
+              </span>
+              {pr?.files &&
+                (() => {
+                  const f = pr.files.find((pf) => pf.path === file.path);
+                  if (!f) return null;
+                  return (
+                    <span className="text-xs font-mono shrink-0 flex gap-1">
+                      {f.additions > 0 && <span className="text-green-500">+{f.additions}</span>}
+                      {f.deletions > 0 && <span className="text-red-500">-{f.deletions}</span>}
+                    </span>
+                  );
+                })()}
+            </div>
+          ))}
+        </>
+      ),
+    });
 
-    return () => setSidebarContent(null);
-  }, [fileDiffs, pr, viewedFiles, collapsedFiles, setSidebarContent, toggleViewed, toggleCollapse]);
+    return () => removeSidebarSection("pr-files");
+  }, [fileDiffs, pr, viewedFiles, collapsedFiles, setSidebarSection, removeSidebarSection, toggleViewed, toggleCollapse]);
 
   if (loading) {
     return (
@@ -862,20 +922,7 @@ export function PRReviewView({ owner, repo, number }: { owner: string; repo: str
         {/* Diff column */}
         <div className="flex-1 min-w-0 overflow-y-auto">
           {/* PR description */}
-          {pr.body && (
-            <div className="border-b">
-              <button
-                onClick={() => setDescriptionOpen((v) => !v)}
-                className="flex items-center gap-2 w-full px-4 py-2 text-sm text-muted-foreground hover:text-foreground transition-colors"
-              >
-                {descriptionOpen ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
-                Description
-              </button>
-              {descriptionOpen && (
-                <div className="px-4 pb-3 text-sm prose prose-sm dark:prose-invert max-w-none whitespace-pre-wrap">{pr.body}</div>
-              )}
-            </div>
-          )}
+          {pr.body && <PRDescription body={pr.body} open={descriptionOpen} onToggle={() => setDescriptionOpen((v) => !v)} />}
 
           {/* Labels */}
           {pr.labels.length > 0 && (

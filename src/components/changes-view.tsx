@@ -103,6 +103,24 @@ function isDark(): boolean {
   return document.documentElement.classList.contains("dark");
 }
 
+function reindexForFullContent(meta: FileDiffMetadata, oldContent: string, newContent: string) {
+  const oldLines = oldContent.split(/\r?\n/).map((l) => l + "\n");
+  const newLines = newContent.split(/\r?\n/).map((l) => l + "\n");
+  for (const hunk of meta.hunks) {
+    const delDelta = hunk.deletionStart - 1 - hunk.deletionLineIndex;
+    const addDelta = hunk.additionStart - 1 - hunk.additionLineIndex;
+    hunk.deletionLineIndex = hunk.deletionStart - 1;
+    hunk.additionLineIndex = hunk.additionStart - 1;
+    for (const content of hunk.hunkContent) {
+      content.deletionLineIndex += delDelta;
+      content.additionLineIndex += addDelta;
+    }
+  }
+  meta.deletionLines = oldLines;
+  meta.additionLines = newLines;
+  meta.isPartial = false;
+}
+
 interface FileListProps {
   files: GitFileChange[];
   selectedFile: string | null;
@@ -218,11 +236,8 @@ function StackedDiffs({
             const parsed = parsePatchFiles(data.diff);
             if (parsed.length > 0 && parsed[0].files.length > 0) {
               fileDiffMeta = parsed[0].files[0];
-              if (data.oldContent != null) {
-                fileDiffMeta.deletionLines = data.oldContent.split(/\r?\n/).map((l) => l + "\n");
-              }
-              if (data.newContent != null) {
-                fileDiffMeta.additionLines = data.newContent.split(/\r?\n/).map((l) => l + "\n");
+              if (data.oldContent != null && data.newContent != null) {
+                reindexForFullContent(fileDiffMeta, data.oldContent, data.newContent);
               }
             }
           } catch {
@@ -470,7 +485,7 @@ function getCachedState(cwd: string): ChangesState {
 
 export function ChangesView({ cwd, sessionId }: { cwd: string; sessionId?: string | null }) {
   const { settings } = useSettings();
-  const { setSidebarContent, closeSidebar } = useShell();
+  const { setSidebarSection, removeSidebarSection, closeSidebar } = useShell();
   const { subscribe } = useWebSocket();
   const router = useRouter();
   const isDesktop = useIsDesktop();
@@ -559,8 +574,9 @@ export function ChangesView({ cwd, sessionId }: { cwd: string; sessionId?: strin
             const parsed = parsePatchFiles(data.diff);
             if (parsed.length > 0 && parsed[0].files.length > 0) {
               const meta = parsed[0].files[0];
-              if (data.oldContent != null) meta.deletionLines = data.oldContent.split(/\r?\n/).map((l) => l + "\n");
-              if (data.newContent != null) meta.additionLines = data.newContent.split(/\r?\n/).map((l) => l + "\n");
+              if (data.oldContent != null && data.newContent != null) {
+                reindexForFullContent(meta, data.oldContent, data.newContent);
+              }
               setSingleFileDiff(meta);
             }
           } catch {
@@ -740,25 +756,41 @@ export function ChangesView({ cwd, sessionId }: { cwd: string; sessionId?: strin
     [cwd, router],
   );
 
-  // Push file list into sidebar
   useEffect(() => {
     if (!status || status.files.length === 0) {
-      setSidebarContent(null);
+      removeSidebarSection("git-changes");
       return;
     }
-    setSidebarContent(
-      <FileList
-        files={status.files}
-        selectedFile={stackedMode ? null : selectedFile}
-        checkedFiles={checkedFiles}
-        onFileClick={handleFileClick}
-        onContextMenu={handleContextMenu}
-        onToggleFile={toggleFile}
-        onToggleAll={toggleAll}
-      />,
-    );
-    return () => setSidebarContent(null);
-  }, [status, selectedFile, checkedFiles, stackedMode, handleFileClick, handleContextMenu, toggleFile, toggleAll, setSidebarContent]);
+    setSidebarSection({
+      id: "git-changes",
+      title: "Changes",
+      order: 20,
+      badge: String(status.files.length),
+      content: (
+        <FileList
+          files={status.files}
+          selectedFile={stackedMode ? null : selectedFile}
+          checkedFiles={checkedFiles}
+          onFileClick={handleFileClick}
+          onContextMenu={handleContextMenu}
+          onToggleFile={toggleFile}
+          onToggleAll={toggleAll}
+        />
+      ),
+    });
+    return () => removeSidebarSection("git-changes");
+  }, [
+    status,
+    selectedFile,
+    checkedFiles,
+    stackedMode,
+    handleFileClick,
+    handleContextMenu,
+    toggleFile,
+    toggleAll,
+    setSidebarSection,
+    removeSidebarSection,
+  ]);
 
   // Close context menu on click outside
   useEffect(() => {

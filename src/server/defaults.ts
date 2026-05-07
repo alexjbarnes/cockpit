@@ -15,6 +15,8 @@ export interface AppDefaults {
   editExpanded: boolean;
   toolCallsExpanded: boolean;
   model: string;
+  messageStitching: boolean;
+  reviewsEnabled: boolean;
 }
 
 const PREFS_DIR = join(homedir(), ".cockpit");
@@ -30,6 +32,8 @@ const fallback: AppDefaults = {
   editExpanded: false,
   toolCallsExpanded: false,
   model: "sonnet",
+  messageStitching: true,
+  reviewsEnabled: true,
 };
 
 export function getDefaults(): AppDefaults {

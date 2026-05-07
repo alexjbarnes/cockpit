@@ -3,11 +3,15 @@ import { open, readdir, readFile, stat } from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   findSessionCwd,
+  globalSearch,
+  listAllTranscriptFiles,
   loadLastUsage,
   loadMoreMessages,
   loadTranscript,
   readMoreLines,
   scanAllSessions,
+  scanSessionsByIds,
+  scanSessionsForCwd,
   transcriptExists,
 } from "@/server/transcript";
 
@@ -1948,6 +1952,370 @@ describe("transcript module", () => {
 
       const result = await loadTranscript("session-123", "/tmp");
       expect(result.messages).toHaveLength(0);
+    });
+  });
+
+  describe("scanSessionsForCwd", () => {
+    it("returns empty when projects dir does not exist", async () => {
+      (existsSync as any).mockReturnValue(false);
+      const result = await scanSessionsForCwd("/tmp/project");
+      expect(result).toEqual([]);
+    });
+
+    it("returns empty when readdir fails", async () => {
+      (existsSync as any).mockReturnValue(true);
+      (readdir as any).mockRejectedValueOnce(new Error("fail"));
+      const result = await scanSessionsForCwd("/tmp/project");
+      expect(result).toEqual([]);
+    });
+
+    it("returns sessions matching the target cwd", async () => {
+      const { createReadStream } = await import("node:fs");
+      const { createInterface } = await import("node:readline");
+
+      (existsSync as any).mockReturnValue(true);
+      (readdir as any).mockResolvedValueOnce(["proj-a"]).mockResolvedValueOnce(["s1.jsonl", "s2.jsonl"]);
+      (stat as any).mockResolvedValue({ mtimeMs: 5000 });
+
+      const makeRl = (cwd: string) => {
+        const lines = [JSON.stringify({ type: "user", cwd, message: { content: "hello" }, timestamp: "2024-01-01T00:00:00Z" })];
+        let i = 0;
+        return {
+          [Symbol.asyncIterator]: () => ({
+            next: () => {
+              if (i < lines.length) return Promise.resolve({ value: lines[i++], done: false });
+              return Promise.resolve({ value: undefined, done: true });
+            },
+          }),
+          close: vi.fn(),
+        };
+      };
+
+      (createReadStream as any).mockReturnValue({});
+      (createInterface as any).mockReturnValueOnce(makeRl("/tmp/project")).mockReturnValueOnce(makeRl("/other/dir"));
+
+      const result = await scanSessionsForCwd("/tmp/project");
+      expect(result).toHaveLength(1);
+      expect(result[0].cwd).toBe("/tmp/project");
+      expect(result[0].id).toBe("s1");
+    });
+
+    it("skips dirs that fail readdir", async () => {
+      const { createReadStream } = await import("node:fs");
+      const { createInterface } = await import("node:readline");
+
+      (existsSync as any).mockReturnValue(true);
+      (readdir as any)
+        .mockResolvedValueOnce(["proj-a", "proj-b"])
+        .mockRejectedValueOnce(new Error("no access"))
+        .mockResolvedValueOnce(["s1.jsonl"]);
+      (stat as any).mockResolvedValue({ mtimeMs: 3000 });
+
+      const makeRl = (cwd: string) => {
+        const lines = [JSON.stringify({ type: "user", cwd, message: { content: "hi" }, timestamp: "2024-01-01T00:00:00Z" })];
+        let i = 0;
+        return {
+          [Symbol.asyncIterator]: () => ({
+            next: () => {
+              if (i < lines.length) return Promise.resolve({ value: lines[i++], done: false });
+              return Promise.resolve({ value: undefined, done: true });
+            },
+          }),
+          close: vi.fn(),
+        };
+      };
+
+      (createReadStream as any).mockReturnValue({});
+      (createInterface as any).mockReturnValueOnce(makeRl("/tmp/project"));
+
+      const result = await scanSessionsForCwd("/tmp/project");
+      expect(result).toHaveLength(1);
+    });
+  });
+
+  describe("scanSessionsByIds", () => {
+    it("returns empty for empty ids array", async () => {
+      const result = await scanSessionsByIds([]);
+      expect(result).toEqual([]);
+    });
+
+    it("returns empty when projects dir does not exist", async () => {
+      (existsSync as any).mockReturnValue(false);
+      const result = await scanSessionsByIds(["sess-1"]);
+      expect(result).toEqual([]);
+    });
+
+    it("returns empty when readdir fails", async () => {
+      (existsSync as any).mockReturnValue(true);
+      (readdir as any).mockRejectedValueOnce(new Error("fail"));
+      const result = await scanSessionsByIds(["sess-1"]);
+      expect(result).toEqual([]);
+    });
+
+    it("finds sessions by id across project dirs", async () => {
+      const { createReadStream } = await import("node:fs");
+      const { createInterface } = await import("node:readline");
+
+      (existsSync as any).mockReturnValue(true);
+      (readdir as any).mockResolvedValueOnce(["proj-a"]).mockResolvedValueOnce(["sess-1.jsonl", "sess-2.jsonl"]);
+      (stat as any).mockResolvedValue({ mtimeMs: 4000 });
+
+      const makeRl = (cwd: string) => {
+        const lines = [JSON.stringify({ type: "user", cwd, message: { content: "hi" }, timestamp: "2024-01-01T00:00:00Z" })];
+        let i = 0;
+        return {
+          [Symbol.asyncIterator]: () => ({
+            next: () => {
+              if (i < lines.length) return Promise.resolve({ value: lines[i++], done: false });
+              return Promise.resolve({ value: undefined, done: true });
+            },
+          }),
+          close: vi.fn(),
+        };
+      };
+
+      (createReadStream as any).mockReturnValue({});
+      (createInterface as any).mockReturnValueOnce(makeRl("/tmp/a")).mockReturnValueOnce(makeRl("/tmp/b"));
+
+      const result = await scanSessionsByIds(["sess-1"]);
+      expect(result).toHaveLength(1);
+      expect(result[0].id).toBe("sess-1");
+    });
+
+    it("skips project dirs that fail readdir", async () => {
+      (existsSync as any).mockReturnValue(true);
+      (readdir as any).mockResolvedValueOnce(["proj-a", "proj-b"]).mockRejectedValueOnce(new Error("denied")).mockResolvedValueOnce([]);
+
+      const result = await scanSessionsByIds(["sess-1"]);
+      expect(result).toEqual([]);
+    });
+  });
+
+  describe("listAllTranscriptFiles", () => {
+    it("returns empty when projects dir does not exist", async () => {
+      (existsSync as any).mockReturnValue(false);
+      const result = await listAllTranscriptFiles();
+      expect(result).toEqual([]);
+    });
+
+    it("returns empty when readdir fails", async () => {
+      (existsSync as any).mockReturnValue(true);
+      (readdir as any).mockRejectedValueOnce(new Error("fail"));
+      const result = await listAllTranscriptFiles();
+      expect(result).toEqual([]);
+    });
+
+    it("lists jsonl files sorted by mtime descending", async () => {
+      (existsSync as any).mockReturnValue(true);
+      (readdir as any).mockResolvedValueOnce(["proj-a"]).mockResolvedValueOnce(["s1.jsonl", "s2.jsonl", "readme.txt"]);
+      (stat as any).mockResolvedValueOnce({ mtimeMs: 1000 }).mockResolvedValueOnce({ mtimeMs: 5000 });
+
+      const result = await listAllTranscriptFiles();
+      expect(result).toHaveLength(2);
+      expect(result[0].sessionId).toBe("s2");
+      expect(result[0].mtimeMs).toBe(5000);
+      expect(result[1].sessionId).toBe("s1");
+      expect(result[1].mtimeMs).toBe(1000);
+    });
+
+    it("skips .cockpit directories", async () => {
+      (existsSync as any).mockReturnValue(true);
+      (readdir as any)
+        .mockResolvedValueOnce(["proj-a", ".cockpit-jobs"])
+        .mockResolvedValueOnce(["s1.jsonl"])
+        .mockResolvedValueOnce(["s2.jsonl"]);
+      (stat as any).mockResolvedValue({ mtimeMs: 2000 });
+
+      const result = await listAllTranscriptFiles();
+      expect(result).toHaveLength(1);
+      expect(result[0].sessionId).toBe("s1");
+    });
+
+    it("skips files that fail stat", async () => {
+      (existsSync as any).mockReturnValue(true);
+      (readdir as any).mockImplementation((p: string) => {
+        if (p.endsWith("projects")) return Promise.resolve(["proj-a"]);
+        return Promise.resolve(["s1.jsonl", "s2.jsonl"]);
+      });
+      (stat as any).mockRejectedValueOnce(new Error("no access")).mockResolvedValueOnce({ mtimeMs: 3000 });
+
+      const result = await listAllTranscriptFiles();
+      expect(result).toHaveLength(1);
+      expect(result[0].sessionId).toBe("s2");
+    });
+
+    it("skips dirs that fail readdir", async () => {
+      (existsSync as any).mockReturnValue(true);
+      (readdir as any).mockImplementation((p: string) => {
+        if (p.endsWith("projects")) return Promise.resolve(["proj-a", "proj-b"]);
+        if (p.includes("proj-a")) return Promise.reject(new Error("no"));
+        return Promise.resolve(["s1.jsonl"]);
+      });
+      (stat as any).mockResolvedValue({ mtimeMs: 1000 });
+
+      const result = await listAllTranscriptFiles();
+      expect(result).toHaveLength(1);
+    });
+  });
+
+  describe("globalSearch", () => {
+    function setupListFiles(files: string[]) {
+      (existsSync as any).mockReturnValue(true);
+      (readdir as any).mockImplementation((p: string) => {
+        if (p.endsWith("projects")) return Promise.resolve(["proj-a"]);
+        return Promise.resolve(files);
+      });
+      (stat as any).mockResolvedValue({ mtimeMs: 5000 });
+    }
+
+    it("returns empty when no transcript files exist", async () => {
+      (existsSync as any).mockReturnValue(false);
+      const result = await globalSearch("hello", 50);
+      expect(result.results).toEqual([]);
+      expect(result.truncated).toBe(false);
+    });
+
+    it("finds matching messages across files", async () => {
+      setupListFiles(["sess1.jsonl"]);
+
+      const transcript = [
+        JSON.stringify({ type: "user", cwd: "/tmp/project", message: { content: "first message" }, timestamp: "2024-01-01T00:00:00Z" }),
+        JSON.stringify({
+          type: "assistant",
+          message: { content: [{ type: "text", text: "hello world response" }] },
+          timestamp: "2024-01-01T00:01:00Z",
+        }),
+      ].join("\n");
+
+      (readFile as any).mockResolvedValue(transcript);
+
+      const result = await globalSearch("hello world", 50);
+      expect(result.results).toHaveLength(1);
+      expect(result.results[0].role).toBe("assistant");
+      expect(result.results[0].sessionId).toBe("sess1");
+      expect(result.results[0].cwd).toBe("/tmp/project");
+      expect(result.results[0].preview).toContain("hello world");
+    });
+
+    it("skips files that don't contain the query", async () => {
+      setupListFiles(["s1.jsonl", "s2.jsonl"]);
+
+      const matchFile = [
+        JSON.stringify({
+          type: "user",
+          cwd: "/tmp/project",
+          message: { content: "needle in haystack" },
+          timestamp: "2024-01-01T00:00:00Z",
+        }),
+      ].join("\n");
+      const noMatchFile = [
+        JSON.stringify({ type: "user", cwd: "/tmp/project", message: { content: "nothing here" }, timestamp: "2024-01-01T00:00:00Z" }),
+      ].join("\n");
+
+      (readFile as any).mockImplementation((p: string) => {
+        if (p.includes("s1")) return Promise.resolve(matchFile);
+        return Promise.resolve(noMatchFile);
+      });
+
+      const result = await globalSearch("needle", 50);
+      expect(result.results).toHaveLength(1);
+    });
+
+    it("skips sessions in cockpit internal dirs", async () => {
+      setupListFiles(["s1.jsonl"]);
+
+      const transcript = [
+        JSON.stringify({
+          type: "user",
+          cwd: "/home/user/.cockpit/jobs",
+          message: { content: "search term" },
+          timestamp: "2024-01-01T00:00:00Z",
+        }),
+      ].join("\n");
+
+      (readFile as any).mockResolvedValue(transcript);
+
+      const result = await globalSearch("search term", 50);
+      expect(result.results).toEqual([]);
+    });
+
+    it("respects limit", async () => {
+      setupListFiles(["s1.jsonl"]);
+
+      const lines = [];
+      lines.push(JSON.stringify({ type: "user", cwd: "/tmp/project", message: { content: "hello" }, timestamp: "2024-01-01T00:00:00Z" }));
+      for (let i = 0; i < 5; i++) {
+        lines.push(
+          JSON.stringify({
+            type: "assistant",
+            message: { content: [{ type: "text", text: `match hello ${i}` }] },
+            timestamp: "2024-01-01T00:01:00Z",
+          }),
+        );
+      }
+      (readFile as any).mockResolvedValue(lines.join("\n"));
+
+      const result = await globalSearch("hello", 2);
+      expect(result.results).toHaveLength(2);
+    });
+
+    it("supports offset for pagination", async () => {
+      setupListFiles(["s1.jsonl"]);
+
+      const lines = [];
+      lines.push(JSON.stringify({ type: "user", cwd: "/tmp/project", message: { content: "hello" }, timestamp: "2024-01-01T00:00:00Z" }));
+      for (let i = 0; i < 5; i++) {
+        lines.push(
+          JSON.stringify({
+            type: "assistant",
+            message: { content: [{ type: "text", text: `match hello ${i}` }] },
+            timestamp: `2024-01-01T00:0${i}:00Z`,
+          }),
+        );
+      }
+      (readFile as any).mockResolvedValue(lines.join("\n"));
+
+      const result = await globalSearch("hello", 50, 2);
+      expect(result.results.length).toBeLessThanOrEqual(4);
+    });
+
+    it("case-insensitive matching", async () => {
+      setupListFiles(["s1.jsonl"]);
+
+      const transcript = [
+        JSON.stringify({ type: "user", cwd: "/tmp/project", message: { content: "Hello World" }, timestamp: "2024-01-01T00:00:00Z" }),
+      ].join("\n");
+      (readFile as any).mockResolvedValue(transcript);
+
+      const result = await globalSearch("hello world", 50);
+      expect(result.results).toHaveLength(1);
+    });
+
+    it("handles file read errors gracefully", async () => {
+      setupListFiles(["s1.jsonl"]);
+      (readFile as any).mockRejectedValue(new Error("read error"));
+
+      const result = await globalSearch("hello", 50);
+      expect(result.results).toEqual([]);
+    });
+
+    it("skips compaction summary messages", async () => {
+      setupListFiles(["s1.jsonl"]);
+
+      const transcript = [
+        JSON.stringify({ type: "user", cwd: "/tmp/project", message: { content: "hello" }, timestamp: "2024-01-01T00:00:00Z" }),
+        JSON.stringify({ type: "user", message: { content: "__compacted__" }, timestamp: "2024-01-01T00:01:00Z" }),
+        JSON.stringify({
+          type: "assistant",
+          message: { content: [{ type: "text", text: "compacted summary with hello" }] },
+          timestamp: "2024-01-01T00:01:01Z",
+        }),
+      ].join("\n");
+      (readFile as any).mockResolvedValue(transcript);
+
+      const result = await globalSearch("hello", 50);
+      expect(result.results).toHaveLength(1);
+      expect(result.results[0].role).toBe("user");
     });
   });
 });

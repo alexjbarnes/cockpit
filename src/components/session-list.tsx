@@ -1,11 +1,14 @@
 "use client";
 
-import { ChevronRight, Folder, Plus, Star } from "lucide-react";
+import { ChevronRight, Folder, Plus, Star, Trash2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useWebSocket } from "@/hooks/use-websocket";
 import type { SessionGroup, SessionInfo } from "@/types";
+import { GlobalSearchButton } from "./global-search-modal";
 import { NewSessionDialog } from "./new-session-dialog";
 import { SessionCard } from "./session-card";
 import { pinSession } from "./sidebar";
@@ -44,16 +47,39 @@ function DirectoryGroup({
   onToggleFavorite,
   onSelectSession,
   onCreateSession,
+  onDeleteSession,
+  onDeleteAll,
 }: {
   group: SessionGroup;
   isFavorite: boolean;
   onToggleFavorite: () => void;
   onSelectSession: (session: SessionInfo) => void;
   onCreateSession: (cwd: string) => void;
+  onDeleteSession: (session: SessionInfo) => void;
+  onDeleteAll: (group: SessionGroup) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const latestAt = group.sessions[0]?.lastActiveAt || 0;
-  const runningCount = group.sessions.filter((s) => s.status === "running").length;
+  const [fullSessions, setFullSessions] = useState<SessionInfo[] | null>(null);
+  const [loadingAll, setLoadingAll] = useState(false);
+
+  const displaySessions = fullSessions || group.sessions;
+  const truncated = displaySessions.length < group.totalSessionCount;
+  const latestAt = displaySessions[0]?.lastActiveAt || 0;
+  const runningCount = displaySessions.filter((s) => s.status === "running").length;
+
+  const loadAll = async () => {
+    if (loadingAll) return;
+    setLoadingAll(true);
+    try {
+      const res = await fetch(`/api/sessions/group?cwd=${encodeURIComponent(group.cwd)}`);
+      if (res.ok) {
+        const data = await res.json();
+        setFullSessions(data.sessions || []);
+      }
+    } finally {
+      setLoadingAll(false);
+    }
+  };
 
   return (
     <div className="rounded-lg border bg-card">
@@ -70,33 +96,40 @@ function DirectoryGroup({
             <span className="text-xs bg-primary text-primary-foreground px-1.5 py-0.5 rounded">{runningCount} running</span>
           )}
           <span className="text-xs text-muted-foreground">{timeAgo(latestAt)}</span>
-          <span className="text-xs text-muted-foreground">{group.sessions.length}</span>
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onCreateSession(group.cwd);
-            }}
-            className="p-1 rounded hover:bg-accent"
-            title="New session in this folder"
-          >
-            <Plus className="h-3.5 w-3.5 text-muted-foreground" />
-          </button>
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onToggleFavorite();
-            }}
-            className="p-1 rounded hover:bg-accent"
-          >
-            <Star className={`h-3.5 w-3.5 ${isFavorite ? "fill-yellow-400 text-yellow-400" : "text-muted-foreground"}`} />
-          </button>
+          <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
+            {group.totalSessionCount} session{group.totalSessionCount !== 1 ? "s" : ""}
+          </Badge>
         </div>
       </div>
       {expanded && (
         <div className="px-3 pb-3 space-y-1">
-          {group.sessions.map((s) => (
-            <SessionCard key={s.id} session={s} onClick={() => onSelectSession(s)} />
+          <div className="flex items-center justify-end gap-1 pb-1">
+            <button
+              onClick={() => onDeleteAll(group)}
+              className="p-1 rounded hover:bg-destructive/10"
+              title="Delete all sessions in this folder"
+            >
+              <Trash2 className="h-3.5 w-3.5 text-muted-foreground hover:text-destructive" />
+            </button>
+            <button onClick={() => onCreateSession(group.cwd)} className="p-1 rounded hover:bg-accent" title="New session in this folder">
+              <Plus className="h-3.5 w-3.5 text-muted-foreground" />
+            </button>
+            <button onClick={() => onToggleFavorite()} className="p-1 rounded hover:bg-accent">
+              <Star className={`h-3.5 w-3.5 ${isFavorite ? "fill-yellow-400 text-yellow-400" : "text-muted-foreground"}`} />
+            </button>
+          </div>
+          {displaySessions.map((s) => (
+            <SessionCard key={s.id} session={s} onClick={() => onSelectSession(s)} onDelete={() => onDeleteSession(s)} />
           ))}
+          {truncated && (
+            <button
+              onClick={loadAll}
+              disabled={loadingAll}
+              className="w-full text-xs text-muted-foreground hover:text-foreground py-2 rounded hover:bg-accent/50 transition-colors disabled:opacity-50"
+            >
+              {loadingAll ? "Loading..." : `Load all ${group.totalSessionCount} sessions`}
+            </button>
+          )}
         </div>
       )}
     </div>
@@ -111,6 +144,11 @@ export function SessionList() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [loaded, setLoaded] = useState(!!cachedGroups);
   const hasFetchedRef = useRef(false);
+
+  const [deleteTarget, setDeleteTarget] = useState<{ type: "single"; session: SessionInfo } | { type: "bulk"; group: SessionGroup } | null>(
+    null,
+  );
+  const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
     setFavorites(loadFavorites());
@@ -170,12 +208,61 @@ export function SessionList() {
     router.push(`/sessions/${session.id}?cwd=${encodeURIComponent(session.cwd)}&historyView=true`);
   };
 
+  const handleDeleteConfirm = async () => {
+    if (!deleteTarget) return;
+    setDeleting(true);
+
+    if (deleteTarget.type === "single") {
+      const { session } = deleteTarget;
+      await fetch(`/api/sessions/${session.id}?cwd=${encodeURIComponent(session.cwd)}`, { method: "DELETE" });
+    } else {
+      const { group } = deleteTarget;
+      let allSessions = group.sessions;
+      if (group.totalSessionCount > group.sessions.length) {
+        const res = await fetch(`/api/sessions/group?cwd=${encodeURIComponent(group.cwd)}`);
+        if (res.ok) {
+          const data = await res.json();
+          allSessions = data.sessions || allSessions;
+        }
+      }
+      const sessions = allSessions.filter((s: SessionInfo) => s.status !== "running").map((s: SessionInfo) => ({ id: s.id, cwd: s.cwd }));
+      if (sessions.length > 0) {
+        await fetch("/api/sessions/bulk-delete", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ sessions }),
+        });
+      }
+    }
+
+    setDeleteTarget(null);
+    setDeleting(false);
+    fetchSessions();
+  };
+
+  const deleteDialogTitle = deleteTarget?.type === "single" ? "Delete Session" : "Delete All Sessions";
+  const deleteDialogMessage =
+    deleteTarget?.type === "single"
+      ? "Permanently delete this session and its transcript? This cannot be undone."
+      : (() => {
+          const group = (deleteTarget as { type: "bulk"; group: SessionGroup })?.group;
+          if (!group) return "";
+          const runningCount = group.sessions.filter((s) => s.status === "running").length;
+          const deletable = group.totalSessionCount - runningCount;
+          let msg = `Permanently delete ${deletable} session${deletable !== 1 ? "s" : ""} in "${group.dirName}"? This cannot be undone.`;
+          if (runningCount > 0) {
+            msg += ` ${runningCount} running session${runningCount !== 1 ? "s" : ""} will be skipped.`;
+          }
+          return msg;
+        })();
+
   const favoriteGroups = groups.filter((g) => favorites.has(g.cwd));
   const otherGroups = groups.filter((g) => !favorites.has(g.cwd));
 
   return (
-    <div className="mx-auto max-w-lg p-4 space-y-3">
+    <div className="mx-auto max-w-lg p-4 pb-24 space-y-3">
       <h1 className="text-2xl font-bold">Sessions</h1>
+      <GlobalSearchButton />
 
       {groups.length === 0 && loaded && <p className="text-sm text-muted-foreground">No sessions found. Create one to get started.</p>}
 
@@ -187,6 +274,8 @@ export function SessionList() {
           onToggleFavorite={() => toggleFavorite(group.cwd)}
           onSelectSession={navigateToSession}
           onCreateSession={(cwd) => createSession(cwd, "")}
+          onDeleteSession={(s) => setDeleteTarget({ type: "single", session: s })}
+          onDeleteAll={(g) => setDeleteTarget({ type: "bulk", group: g })}
         />
       ))}
 
@@ -200,6 +289,8 @@ export function SessionList() {
           onToggleFavorite={() => toggleFavorite(group.cwd)}
           onSelectSession={navigateToSession}
           onCreateSession={(cwd) => createSession(cwd, "")}
+          onDeleteSession={(s) => setDeleteTarget({ type: "single", session: s })}
+          onDeleteAll={(g) => setDeleteTarget({ type: "bulk", group: g })}
         />
       ))}
 
@@ -210,6 +301,23 @@ export function SessionList() {
         </Button>
       </div>
       <NewSessionDialog open={dialogOpen} onOpenChange={setDialogOpen} onSubmit={createSession} />
+
+      <Dialog open={!!deleteTarget} onOpenChange={() => setDeleteTarget(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{deleteDialogTitle}</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground mb-4">{deleteDialogMessage}</p>
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" onClick={() => setDeleteTarget(null)} disabled={deleting}>
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={handleDeleteConfirm} disabled={deleting}>
+              {deleting ? "Deleting..." : "Delete"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

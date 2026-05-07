@@ -226,14 +226,17 @@ export class SessionManager {
       this.ensureSession(id, cwd);
       session = this.sessions.get(id)!;
     }
-    const result = await loadTranscript(session.cliSessionId, session.info.cwd, { tailLines: 150 });
+    const stitching = getDefaults().messageStitching;
+    const willStitch = stitching && session.previousCliSessionIds.length > 0;
+    // Load full current session when stitching to avoid losing middle messages.
+    // Without stitching, tail-read is fine because byteOffset stays pointing at
+    // the current session's file for backward pagination.
+    const result = await loadTranscript(session.cliSessionId, session.info.cwd, willStitch ? undefined : { tailLines: 150 });
     let { messages, byteOffset, totalSize, lastUsage } = result;
 
     session.bufferCliSessionId = session.cliSessionId;
 
-    // Stitch previous session messages across /clear boundaries so the full
-    // conversation is visible on refresh instead of only post-clear messages.
-    if (session.previousCliSessionIds.length > 0) {
+    if (willStitch) {
       const currentMessages = messages;
       for (let i = session.previousCliSessionIds.length - 1; i >= 0; i--) {
         const prevId = session.previousCliSessionIds[i];
@@ -261,12 +264,12 @@ export class SessionManager {
     session.transcriptByteOffset = byteOffset;
     session.transcriptTotalSize = totalSize;
     // Fresh pagination copy so getMoreHistory doesn't consume the canonical list
-    session.paginationPrevIds = [...session.previousCliSessionIds];
+    session.paginationPrevIds = stitching ? [...session.previousCliSessionIds] : [];
 
     // Send last 50 to client, keep rest in buffer
     const PAGE = 50;
     const clientMessages = messages.length > PAGE ? messages.slice(-PAGE) : messages;
-    const hasMore = messages.length > PAGE || byteOffset > 0 || session.previousCliSessionIds.length > 0;
+    const hasMore = messages.length > PAGE || byteOffset > 0 || (stitching && session.previousCliSessionIds.length > 0);
 
     const defaultName = path.basename(session.info.cwd) || session.info.cwd;
     if (session.info.name === defaultName && messages.length > 0) {
@@ -284,14 +287,14 @@ export class SessionManager {
   ): Promise<{ info: SessionInfo; messages: ChatMessage[]; hasMore: boolean; lastUsage: { used: number; total: number } | null } | null> {
     this.ensureSession(id, cwd);
     const session = this.sessions.get(id)!;
-    const result = await loadTranscript(session.cliSessionId, cwd, { tailLines: 150 });
+    const stitching = getDefaults().messageStitching;
+    const willStitch = stitching && session.previousCliSessionIds.length > 0;
+    const result = await loadTranscript(session.cliSessionId, cwd, willStitch ? undefined : { tailLines: 150 });
     let { messages, byteOffset, totalSize, lastUsage } = result;
 
     session.bufferCliSessionId = session.cliSessionId;
 
-    // Stitch previous session messages across /clear boundaries so the full
-    // conversation is visible on refresh instead of only post-clear messages.
-    if (session.previousCliSessionIds.length > 0) {
+    if (willStitch) {
       const currentMessages = messages;
       for (let i = session.previousCliSessionIds.length - 1; i >= 0; i--) {
         const prevId = session.previousCliSessionIds[i];
@@ -319,12 +322,12 @@ export class SessionManager {
     session.transcriptByteOffset = byteOffset;
     session.transcriptTotalSize = totalSize;
     // Fresh pagination copy so getMoreHistory doesn't consume the canonical list
-    session.paginationPrevIds = [...session.previousCliSessionIds];
+    session.paginationPrevIds = stitching ? [...session.previousCliSessionIds] : [];
 
     // Send last 50 to client, keep rest in buffer
     const PAGE = 50;
     const clientMessages = messages.length > PAGE ? messages.slice(-PAGE) : messages;
-    const hasMore = messages.length > PAGE || byteOffset > 0 || session.previousCliSessionIds.length > 0;
+    const hasMore = messages.length > PAGE || byteOffset > 0 || (stitching && session.previousCliSessionIds.length > 0);
 
     // Derive title from first user message if name is still the default
     const defaultName = path.basename(cwd) || cwd;
@@ -346,10 +349,11 @@ export class SessionManager {
     const chain = findChainForCliSession(cliId);
     const prevIds = chain ? chain.truncatedPrevIds : [];
 
-    const result = await loadTranscript(cliId, cwd, { tailLines: 150 });
+    const willStitch = getDefaults().messageStitching && prevIds.length > 0;
+    const result = await loadTranscript(cliId, cwd, willStitch ? undefined : { tailLines: 150 });
     let { messages, lastUsage } = result;
 
-    if (prevIds.length > 0) {
+    if (willStitch) {
       const currentMessages = messages;
       for (let i = prevIds.length - 1; i >= 0; i--) {
         const prevResult = await loadTranscript(prevIds[i], cwd, { tailLines: 150 });
@@ -498,6 +502,11 @@ export class SessionManager {
   }
 
   isProcessAlive(id: string): boolean {
+    const session = this.sessions.get(id);
+    return !!session?.process;
+  }
+
+  hasRunningProcess(id: string): boolean {
     const session = this.sessions.get(id);
     return !!session?.process;
   }
@@ -675,7 +684,7 @@ export class SessionManager {
         response: allowed
           ? {
               behavior: "allow" as const,
-              ...(toolInput ? { updatedInput: toolInput } : {}),
+              updatedInput: toolInput ?? {},
               ...(permissionSuggestions?.length ? { updatedPermissions: permissionSuggestions } : {}),
             }
           : { behavior: "deny" as const, message: denyReason ?? "User denied" },
@@ -705,6 +714,7 @@ export class SessionManager {
     // Don't change CLI mode while in plan mode; bypass will restore on plan exit
     if (!session.planMode) {
       this.sendPermissionMode(session, sessionId, "bypassPermissions");
+      this.scheduleRespawnForPermissions(session);
     }
     this.emitSystem(session, sessionId, "__bypass_state::on");
   }
@@ -716,8 +726,23 @@ export class SessionManager {
     setSessionPrefs(sessionId, { bypassAllPermissions: false });
     if (!session.planMode) {
       this.sendPermissionMode(session, sessionId, "default");
+      this.scheduleRespawnForPermissions(session);
     }
     this.emitSystem(session, sessionId, "__bypass_state::off");
+  }
+
+  // Runtime set_permission_mode is unreliable when the CLI was spawned without
+  // the target mode. Respawning the process picks up --permission-mode from
+  // session state, guaranteeing the next message runs in the right mode.
+  // If a message is in flight, defer until message_done so we don't orphan it.
+  private scheduleRespawnForPermissions(session: Session): void {
+    if (!session.process) return;
+    if (session.info.status === "idle") {
+      this.killProcess(session);
+      session.hasSpawnedBefore = transcriptExists(session.cliSessionId, session.info.cwd);
+    } else {
+      session.needsRespawnForPermissions = true;
+    }
   }
 
   isBypassActive(sessionId: string): boolean {
@@ -1201,6 +1226,11 @@ export class SessionManager {
         this.respondToPermission(sessionId, pa.requestId, true, pa.rawToolInput);
       } else if (pa.type === "auto_deny") {
         this.respondToPermission(sessionId, pa.requestId, false, undefined, undefined, pa.denyReason);
+      } else if (session.bypassAllPermissions && !session.planMode) {
+        // CLI was spawned without bypass capability (e.g. after exiting plan
+        // mode) but the session has bypass enabled. Auto-approve server-side
+        // until the process respawns with the right flags.
+        this.respondToPermission(sessionId, pa.requestId, true, pa.rawToolInput);
       } else {
         const planPath = pa.toolName === "ExitPlanMode" ? findLatestPlanFile() : undefined;
         session.pendingRequests.set(pa.requestId, {
@@ -1410,6 +1440,23 @@ Additional Cockpit rules beyond the CLI's defaults:
     return true;
   }
 
+  private estimateMessageTokens(text: string, images?: ImageAttachment[], documents?: DocumentAttachment[]): number {
+    let tokens = Math.ceil(text.length / 4);
+    if (images) tokens += images.length * 2000;
+    if (documents) tokens += documents.reduce((sum, d) => sum + Math.ceil(d.data.length / 5), 0);
+    return tokens;
+  }
+
+  private shouldPreCompact(session: Session, text: string, images?: ImageAttachment[], documents?: DocumentAttachment[]): boolean {
+    if (!session.contextUsage) return false;
+    if (session.compacting) return false;
+    if (text.trim().toLowerCase().startsWith("/compact")) return false;
+    if (text.trim().startsWith("/")) return false;
+    const estimate = this.estimateMessageTokens(text, images, documents);
+    const { used, total } = session.contextUsage;
+    return used + estimate > total * 0.85;
+  }
+
   sendMessage(sessionId: string, text: string, images?: ImageAttachment[], documents?: DocumentAttachment[]): boolean {
     const session = this.sessions.get(sessionId);
     if (!session) {
@@ -1427,6 +1474,26 @@ Additional Cockpit rules beyond the CLI's defaults:
         session.compacting = true;
         this.emitSystem(session, sessionId, "__compact::start");
       }
+    }
+
+    // If the message would likely overflow the context window, compact first
+    // and queue the message for delivery after compaction finishes.
+    if (session.info.status !== "running" && this.shouldPreCompact(session, text, images, documents)) {
+      this.log(sessionId, "pre-send compact: message would exceed 85% of context window");
+      logDiag(sessionId, "compact:pre-send");
+      session.queuedMessages.push({ id: `q-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, text, images, documents });
+      session.emitter.emit("queued", sessionId, session.queuedMessages.length);
+      session.compacting = true;
+      this.emitSystem(session, sessionId, "__compact::start");
+      session.info.status = "running";
+      session.emitter.emit("status", sessionId, "running");
+      if (session.process && session.stdin) {
+        const compactInput = { type: "user", message: { role: "user", content: "/compact" } };
+        session.stdin.write(JSON.stringify(compactInput) + "\n");
+      } else {
+        this.spawnProcess(session, sessionId, "/compact");
+      }
+      return true;
     }
 
     const content = this.buildContent(session, text, images, documents);

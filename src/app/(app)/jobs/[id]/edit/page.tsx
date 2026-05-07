@@ -149,12 +149,13 @@ export default function JobEditPage() {
   const id = params.id as string;
   const isNew = id === "new";
   const duplicateFrom = isNew ? searchParams.get("from") : null;
+  const initialCwd = isNew ? searchParams.get("cwd") : null;
   const router = useRouter();
 
   usePageHeader(duplicateFrom ? "Duplicate Job" : isNew ? "New Job" : "Edit Job");
 
   const [name, setName] = useState("");
-  const [cwd, setCwd] = useState("");
+  const [cwd, setCwd] = useState(initialCwd || "");
   const [prompt, setPrompt] = useState("");
   const [enabled, setEnabled] = useState(true);
 
@@ -176,6 +177,9 @@ export default function JobEditPage() {
   const [availableMcp, setAvailableMcp] = useState<string[]>([]);
   const [skipIfMissed, setSkipIfMissed] = useState(false);
   const [retentionDays, setRetentionDays] = useState(90);
+  const [inboxOutput, setInboxOutput] = useState(false);
+  const [notifyProviders, setNotifyProviders] = useState<string[]>([]);
+  const [availableProviders, setAvailableProviders] = useState<{ id: string; name: string; type: string }[]>([]);
 
   const [showDirPicker, setShowDirPicker] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -242,6 +246,8 @@ export default function JobEditPage() {
     setMcpToolFilters(job.mcpToolFilters || {});
     setSkipIfMissed(job.skipIfMissed ?? false);
     setRetentionDays(job.retentionDays ?? 90);
+    setInboxOutput(job.inboxOutput ?? false);
+    setNotifyProviders(job.notifyProviders || []);
   }, []);
 
   const loadJob = useCallback(async () => {
@@ -272,6 +278,15 @@ export default function JobEditPage() {
       .catch(() => setAvailableMcp([]));
   }, [cwd]);
 
+  useEffect(() => {
+    fetch("/api/notifications")
+      .then((r) => r.json())
+      .then((data: { providers: { id: string; name: string; type: string; enabled: boolean }[] }) =>
+        setAvailableProviders((data.providers || []).filter((p) => p.enabled)),
+      )
+      .catch(() => setAvailableProviders([]));
+  }, []);
+
   async function handleSave() {
     setSaving(true);
     const supportsExtended = selectedEntry?.supportsExtendedContext ?? false;
@@ -288,11 +303,13 @@ export default function JobEditPage() {
       thinkingLevel: thinkingLevel || undefined,
       maxDurationMinutes: maxDuration,
       bypassPermissions,
-      allowedTools: allowedTools.length > 0 ? allowedTools : undefined,
-      mcpServers: mcpServers.length > 0 ? mcpServers : undefined,
-      mcpToolFilters: Object.keys(mcpToolFilters).length > 0 ? mcpToolFilters : undefined,
+      allowedTools,
+      mcpServers,
+      mcpToolFilters,
       skipIfMissed,
       retentionDays,
+      inboxOutput,
+      notifyProviders,
     };
 
     try {
@@ -705,6 +722,45 @@ export default function JobEditPage() {
               <label className="text-sm font-medium">Enabled</label>
               <Toggle checked={enabled} onChange={setEnabled} />
             </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium">Output</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <label className="text-sm font-medium">Send to Inbox</label>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  The agent will format its final output as a structured message delivered to your Cockpit inbox.
+                </p>
+              </div>
+              <Toggle checked={inboxOutput} onChange={setInboxOutput} />
+            </div>
+            {inboxOutput && availableProviders.length > 0 && (
+              <div className="mt-4 pt-4 border-t">
+                <label className="text-sm font-medium">External notifications</label>
+                <p className="text-xs text-muted-foreground mt-0.5 mb-2">Also send to these providers when a message is delivered.</p>
+                <div className="space-y-1.5">
+                  {availableProviders.map((p) => (
+                    <label key={p.id} className="flex items-center gap-2 text-sm cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={notifyProviders.includes(p.id)}
+                        onChange={(e) =>
+                          setNotifyProviders((prev) => (e.target.checked ? [...prev, p.id] : prev.filter((x) => x !== p.id)))
+                        }
+                        className="rounded border-input"
+                      />
+                      <span>{p.name}</span>
+                      <span className="text-xs text-muted-foreground">({p.type})</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            )}
           </CardContent>
         </Card>
 

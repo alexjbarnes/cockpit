@@ -13,6 +13,7 @@ export interface SessionGroup {
   cwd: string;
   dirName: string;
   sessions: SessionInfo[];
+  totalSessionCount: number;
 }
 
 export interface ToolUse {
@@ -58,6 +59,20 @@ export interface ChatMessage {
   documents?: DocumentAttachment[];
   textFiles?: TextFileAttachment[];
   model?: string;
+}
+
+export interface GlobalSearchResult {
+  sessionId: string;
+  sessionName: string;
+  cwd: string;
+  dirName: string;
+  messageId: string;
+  role: "user" | "assistant";
+  timestamp: number;
+  preview: string;
+  matchStart: number;
+  matchLength: number;
+  fullContent: string;
 }
 
 export interface ContextUsage {
@@ -189,6 +204,8 @@ export interface ScheduledJob {
   maxDurationMinutes?: number;
   retentionDays?: number;
   skipIfMissed?: boolean;
+  inboxOutput?: boolean;
+  notifyProviders?: string[];
 }
 
 export type JobRunStatus = "running" | "success" | "failure" | "timeout";
@@ -215,6 +232,59 @@ export interface JobRun {
   messageCount: number;
   prompt: string;
   cwd: string;
+}
+
+// Inbox
+export type InboxPriority = "info" | "warning" | "error";
+
+export interface InboxMessage {
+  id: string;
+  jobId?: string;
+  jobName?: string;
+  runId?: string;
+  title: string;
+  body: string;
+  priority: InboxPriority;
+  createdAt: number;
+  read: boolean;
+}
+
+// Notifications
+export interface NotificationPayload {
+  title: string;
+  body: string;
+  url?: string;
+  priority: InboxPriority;
+  source: string;
+  providerIds?: string[];
+}
+
+export interface TelegramConfig {
+  botToken: string;
+  chatId: string;
+}
+
+export interface NtfyConfig {
+  serverUrl: string;
+  topic: string;
+  token?: string;
+}
+
+export interface NotificationProviderEntry {
+  id: string;
+  type: "telegram" | "ntfy";
+  enabled: boolean;
+  name: string;
+  config: TelegramConfig | NtfyConfig;
+  filter?: {
+    priorities?: InboxPriority[];
+    sources?: string[];
+  };
+}
+
+export interface NotificationSettings {
+  baseUrl?: string;
+  providers: NotificationProviderEntry[];
 }
 
 // Client -> Server messages

@@ -37,9 +37,24 @@ export async function GET(req: NextRequest) {
       "-R",
       repo,
       "--json",
-      "title,body,author,number,additions,deletions,files,changedFiles,headRefName,baseRefName,state,isDraft,labels,reviewDecision,createdAt,updatedAt,url",
+      "title,body,author,number,additions,deletions,files,changedFiles,headRefName,baseRefName,headRefOid,baseRefOid,state,isDraft,labels,reviewDecision,createdAt,updatedAt,url",
     ]);
     const pr = JSON.parse(stdout);
+
+    if (pr.baseRefOid && pr.headRefOid) {
+      try {
+        const mergeBaseOut = await run("gh", [
+          "api",
+          `repos/${repo}/compare/${pr.baseRefOid}...${pr.headRefOid}`,
+          "--jq",
+          ".merge_base_commit.sha",
+        ]);
+        pr.mergeBaseSha = mergeBaseOut.trim();
+      } catch {
+        pr.mergeBaseSha = pr.baseRefOid;
+      }
+    }
+
     return NextResponse.json(pr);
   } catch (err) {
     return NextResponse.json({ error: String(err) }, { status: 500 });

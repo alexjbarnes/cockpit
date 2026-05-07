@@ -6,7 +6,12 @@ import remarkGfm from "remark-gfm";
 import { MarkdownCodeBlock } from "@/components/markdown-code-block";
 import { cn } from "@/lib/utils";
 
-const fullComponents = { pre: MarkdownCodeBlock };
+function ExternalLink(props: React.AnchorHTMLAttributes<HTMLAnchorElement>) {
+  return <a {...props} target="_blank" rel="noopener noreferrer" />;
+}
+
+const fullComponents = { pre: MarkdownCodeBlock, a: ExternalLink };
+const liteComponents = { a: ExternalLink };
 const FULL_PROSE = "message-prose prose prose-sm max-w-none dark:prose-invert";
 const LITE_PROSE = "prose prose-sm max-w-none dark:prose-invert";
 
@@ -20,7 +25,9 @@ export function MarkdownRender({ content, variant = "full", className }: Markdow
   if (variant === "lite") {
     return (
       <div className={cn(LITE_PROSE, className)}>
-        <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
+        <ReactMarkdown remarkPlugins={[remarkGfm]} components={liteComponents}>
+          {content}
+        </ReactMarkdown>
       </div>
     );
   }

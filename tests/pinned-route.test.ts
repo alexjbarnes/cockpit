@@ -115,4 +115,88 @@ describe("PATCH /api/sessions/pinned", () => {
     const res = await PATCH(makeReq({ add: 42 }));
     expect(res.status).toBe(400);
   });
+
+  it("rejects non-string remove value", async () => {
+    const fs = await import("node:fs/promises");
+    vi.mocked(fs.readFile).mockResolvedValue('["a"]');
+    const { PATCH } = await import("@/app/api/sessions/pinned/route");
+    const res = await PATCH(makeReq({ remove: 123 }));
+    expect(res.status).toBe(400);
+  });
+});
+
+describe("GET /api/sessions/pinned", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.clearAllMocks();
+  });
+
+  it("returns pinned session list", async () => {
+    const fs = await import("node:fs/promises");
+    vi.mocked(fs.readFile).mockResolvedValue('["sess-1","sess-2"]');
+    const { GET } = await import("@/app/api/sessions/pinned/route");
+    const req = new NextRequest("http://localhost/api/sessions/pinned", {
+      headers: { cookie: "cockpit_session=valid" },
+    });
+    const res = await GET(req);
+    const body = await res.json();
+    expect(body.pinned).toEqual(["sess-1", "sess-2"]);
+  });
+
+  it("returns empty array when file does not exist", async () => {
+    const fs = await import("node:fs/promises");
+    vi.mocked(fs.readFile).mockRejectedValue(new Error("ENOENT"));
+    const { GET } = await import("@/app/api/sessions/pinned/route");
+    const req = new NextRequest("http://localhost/api/sessions/pinned", {
+      headers: { cookie: "cockpit_session=valid" },
+    });
+    const res = await GET(req);
+    const body = await res.json();
+    expect(body.pinned).toEqual([]);
+  });
+});
+
+describe("PUT /api/sessions/pinned", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.clearAllMocks();
+  });
+
+  it("replaces the full pinned list", async () => {
+    const fs = await import("node:fs/promises");
+    vi.mocked(fs.writeFile).mockResolvedValue(undefined);
+    vi.mocked(fs.mkdir).mockResolvedValue(undefined as never);
+    const { PUT } = await import("@/app/api/sessions/pinned/route");
+    const req = new NextRequest("http://localhost/api/sessions/pinned", {
+      method: "PUT",
+      body: JSON.stringify({ pinned: ["x", "y"] }),
+      headers: { cookie: "cockpit_session=valid", "content-type": "application/json" },
+    });
+    const res = await PUT(req);
+    const body = await res.json();
+    expect(body.ok).toBe(true);
+    expect(vi.mocked(fs.writeFile)).toHaveBeenCalled();
+  });
+
+  it("rejects invalid pinned format", async () => {
+    const { PUT } = await import("@/app/api/sessions/pinned/route");
+    const req = new NextRequest("http://localhost/api/sessions/pinned", {
+      method: "PUT",
+      body: JSON.stringify({ pinned: "not-array" }),
+      headers: { cookie: "cockpit_session=valid", "content-type": "application/json" },
+    });
+    const res = await PUT(req);
+    expect(res.status).toBe(400);
+  });
+
+  it("rejects pinned array with non-string elements", async () => {
+    const { PUT } = await import("@/app/api/sessions/pinned/route");
+    const req = new NextRequest("http://localhost/api/sessions/pinned", {
+      method: "PUT",
+      body: JSON.stringify({ pinned: ["a", 123] }),
+      headers: { cookie: "cockpit_session=valid", "content-type": "application/json" },
+    });
+    const res = await PUT(req);
+    expect(res.status).toBe(400);
+  });
 });

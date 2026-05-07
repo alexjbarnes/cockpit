@@ -4,18 +4,64 @@ import path from "node:path";
 import { v4 as uuidv4 } from "uuid";
 import type { JobRun, JobRunToolUse, ScheduledJob } from "@/types";
 import { findMissedRun, getJobSchedules, matchesCron, scheduleToCron } from "./cron-utils";
-import { getLatestRun, loadJobs, pruneAllRuns, saveRun } from "./job-storage";
+import { addInboxMessage, parseErrorBlock, parseInboxBlock } from "./inbox";
+import { getLatestRun, loadJobs, loadRuns, pruneAllRuns, saveRun } from "./job-storage";
 import type { SessionManager } from "./session-manager";
+import { countTranscriptMessages } from "./transcript";
 
 const SCRATCHPAD_DIR = path.join(homedir(), ".cockpit", "jobs");
 
-const JOB_PROMPT_PREFIX = [
+const JOB_PROMPT_HEADER = [
   "You are running as an autonomous scheduled job. There is no human operator in this session.",
   "Do not ask clarifying questions. Do not wait for user input. Make reasonable assumptions and proceed.",
-  "Complete the task fully, then stop. If you cannot complete the task, explain why in your final message.",
+  "Complete the task fully, then stop.",
   "",
-  "Task:",
+  "Error reporting: If you cannot complete the task due to permission errors, tool failures, missing data, or any other reason,",
+  "your final message MUST include a cockpit-error block explaining the failure.",
+  "Format it as a fenced code block tagged cockpit-error containing a JSON object:",
+  "",
+  "```cockpit-error",
+  '{"error":"Brief description of what went wrong","details":"Longer explanation of which tools failed and why"}',
+  "```",
 ].join("\n");
+
+function buildJobPrompt(job: ScheduledJob): string {
+  const parts = [JOB_PROMPT_HEADER, ""];
+
+  if (job.bypassPermissions) {
+    parts.push("Permissions: All tools and MCP servers are available.");
+  } else {
+    const tools = job.allowedTools || [];
+    const servers = job.mcpServers || [];
+    parts.push("Permissions: Only the tools and MCP servers listed below are allowed. Do not attempt to use any others.");
+    if (tools.length > 0) parts.push(`Allowed tools: ${tools.join(", ")}`);
+    if (servers.length > 0) parts.push(`Allowed MCP servers: ${servers.join(", ")}`);
+    if (tools.length === 0 && servers.length === 0) parts.push("No tools or MCP servers are allowed.");
+  }
+
+  if (job.cwd) {
+    const storageDir = path.join(SCRATCHPAD_DIR, job.id);
+    parts.push("");
+    parts.push(`Storage: If you need to persist any files between runs (state, cache, data), save them in ${storageDir}`);
+    parts.push("Do not store persistent files in the working directory as it is a git repository.");
+  }
+
+  if (job.inboxOutput) {
+    parts.push("");
+    parts.push("Output: When you have results to report, include a cockpit-inbox block in your final message.");
+    parts.push("If there is nothing to report (e.g. no new data to process), do NOT include an inbox block.");
+    parts.push("Format it as a fenced code block tagged cockpit-inbox containing a JSON object:");
+    parts.push("");
+    parts.push("```cockpit-inbox");
+    parts.push(JSON.stringify({ title: "Short descriptive title", body: "Markdown body with your full output", priority: "info" }));
+    parts.push("```");
+    parts.push("");
+    parts.push('The body field supports full markdown. Set priority to "info", "warning", or "error" as appropriate.');
+  }
+
+  parts.push("", "Task:", job.prompt);
+  return parts.join("\n");
+}
 
 const SHELL_OPERATORS = /(?:;|&&|\|\||>|<|`|\$\(|<\()/;
 const BACKGROUND_AMPERSAND = /(?:^|[^|])&(?!&)/;
@@ -50,33 +96,44 @@ function isToolAllowed(toolName: string, toolInput: string, rules: string[]): bo
   return false;
 }
 
+function normalizeMcpName(name: string): string {
+  return name.replace(/[^a-zA-Z0-9]/g, "_");
+}
+
 function isMcpToolAllowed(
   toolName: string,
   toolInput: string,
   enabledServers: Set<string>,
   mcpToolFilters?: Record<string, string[]>,
 ): boolean | null {
-  const match = toolName.match(/^mcp__([^_]+)__(.+)$/);
-  if (!match) return null;
-  const [, server, tool] = match;
-  if (!enabledServers.has(server)) return false;
-  if (!mcpToolFilters || !(server in mcpToolFilters)) return true;
-  const filters = mcpToolFilters[server];
-  for (const filter of filters) {
-    if (filter === tool) return true;
-    if (filter.includes(":")) {
-      let parsed: { server?: string; tool?: string };
-      try {
-        parsed = JSON.parse(toolInput) as { server?: string; tool?: string };
-      } catch {
-        continue;
-      }
-      const [filterServer, filterTool] = filter.split(":", 2);
-      if (parsed.server === filterServer) {
-        if (filterTool === "*" || parsed.tool === filterTool) return true;
+  if (!toolName.startsWith("mcp__")) return null;
+  const remainder = toolName.slice(5);
+
+  for (const serverName of enabledServers) {
+    const normalized = normalizeMcpName(serverName);
+    const prefix = `${normalized}__`;
+    if (!remainder.startsWith(prefix)) continue;
+    const tool = remainder.slice(prefix.length);
+    if (!mcpToolFilters || !(serverName in mcpToolFilters)) return true;
+    const filters = mcpToolFilters[serverName];
+    for (const filter of filters) {
+      if (filter === tool) return true;
+      if (filter.includes(":")) {
+        let parsed: { server?: string; tool?: string };
+        try {
+          parsed = JSON.parse(toolInput) as { server?: string; tool?: string };
+        } catch {
+          continue;
+        }
+        const [filterServer, filterTool] = filter.split(":", 2);
+        if (parsed.server === filterServer) {
+          if (filterTool === "*" || parsed.tool === filterTool) return true;
+        }
       }
     }
+    return false;
   }
+
   return false;
 }
 
@@ -122,17 +179,20 @@ export class JobScheduler {
 
   private recoverState(): void {
     pruneAllRuns();
+    const now = Date.now();
     const jobs = loadJobs();
     for (const job of jobs) {
       const latest = getLatestRun(job.id);
       if (latest) {
         this.lastFiredAt.set(job.id, new Date(latest.startedAt));
-        if (latest.status === "running") {
-          latest.status = "failure";
-          latest.error = "Server restarted while job was running";
-          latest.completedAt = Date.now();
-          latest.durationMs = latest.completedAt - latest.startedAt;
-          saveRun(latest);
+      }
+      for (const run of loadRuns(job.id)) {
+        if (run.status === "running") {
+          run.status = "failure";
+          run.error = "Server restarted while job was running";
+          run.completedAt = now;
+          run.durationMs = now - run.startedAt;
+          saveRun(run);
         }
       }
     }
@@ -146,6 +206,19 @@ export class JobScheduler {
     if (nowMs - this.lastPruneAt >= 3_600_000) {
       this.lastPruneAt = nowMs;
       pruneAllRuns();
+    }
+
+    for (const [jobId, run] of this.runningJobs) {
+      if (!this.sessionManager.hasRunningProcess(run.sessionId)) {
+        console.log(`[scheduler] run ${run.id} for job ${jobId} has no running process, marking as failure`);
+        run.status = "failure";
+        run.error = "Session process exited unexpectedly";
+        run.completedAt = Date.now();
+        run.durationMs = run.completedAt - run.startedAt;
+        if (run.cwd) run.messageCount = countTranscriptMessages(run.sessionId, run.cwd);
+        saveRun(run);
+        this.runningJobs.delete(jobId);
+      }
     }
 
     const jobs = loadJobs();
@@ -183,11 +256,11 @@ export class JobScheduler {
 
   async executeJob(job: ScheduledJob): Promise<JobRun> {
     const runId = uuidv4();
-    const jobCwd = job.cwd || SCRATCHPAD_DIR;
-    if (!job.cwd) {
-      mkdirSync(SCRATCHPAD_DIR, { recursive: true });
-    }
-    const sessionInfo = this.sessionManager.createSession(jobCwd, `[job] ${job.name}`);
+    const jobCwd = job.cwd || path.join(SCRATCHPAD_DIR, job.id);
+    mkdirSync(path.join(SCRATCHPAD_DIR, job.id), { recursive: true });
+    const sessionInfo = this.sessionManager.createSession(jobCwd, `[job] ${job.name}`, {
+      bypassPermissions: !!job.bypassPermissions,
+    });
     const sessionId = sessionInfo.id;
 
     const run: JobRun = {
@@ -206,6 +279,7 @@ export class JobScheduler {
     this.runningJobs.set(job.id, run);
 
     const toolTracker = new Map<string, JobRunToolUse>();
+    let lastAssistantText = "";
 
     const unsubEvent = this.sessionManager.subscribe(sessionId, (event) => {
       if (event.type === "tool_use_start" && event.toolId) {
@@ -225,13 +299,26 @@ export class JobScheduler {
         }
       } else if (event.type === "message_done") {
         run.messageCount++;
+        if (event.message) {
+          let text = event.message.content;
+          if (!text && event.message.blocks) {
+            text = event.message.blocks
+              .filter((b): b is { type: "text"; text: string } => b.type === "text")
+              .map((b) => b.text)
+              .join("\n");
+          }
+          if (text) lastAssistantText = text;
+        }
       } else if (event.type === "permission_request" && event.requestId) {
-        if (!job.bypassPermissions) {
+        if (job.bypassPermissions) {
+          this.sessionManager.respondToPermission(sessionId, event.requestId, true, event.rawToolInput);
+        } else {
           const toolName = event.toolName || "unknown";
           const inputStr = event.toolInput || "";
           const mcpResult = isMcpToolAllowed(toolName, inputStr, enabledServers, job.mcpToolFilters);
           const allowed = mcpResult !== null ? mcpResult : isToolAllowed(toolName, inputStr, job.allowedTools || []);
-          this.sessionManager.respondToPermission(sessionId, event.requestId, allowed);
+          console.log(`[scheduler] permission: ${toolName} mcpResult=${mcpResult} allowed=${allowed} servers=[${[...enabledServers]}]`);
+          this.sessionManager.respondToPermission(sessionId, event.requestId, allowed, allowed ? (event.rawToolInput ?? {}) : undefined);
 
           const permEntry: JobRunToolUse = {
             name: toolName,
@@ -288,7 +375,6 @@ export class JobScheduler {
         unsubError?.();
         initCleanup?.();
 
-        run.status = finalStatus;
         run.completedAt = Date.now();
         run.durationMs = run.completedAt - run.startedAt;
         if (finalStatus === "timeout") {
@@ -296,12 +382,44 @@ export class JobScheduler {
           this.sessionManager.destroySession(sessionId);
         }
 
+        if (finalStatus === "success" && lastAssistantText) {
+          const errorBlock = parseErrorBlock(lastAssistantText);
+          if (errorBlock) {
+            finalStatus = "failure";
+            run.error = errorBlock.details ? `${errorBlock.error}: ${errorBlock.details}` : errorBlock.error;
+          }
+        }
+
+        run.status = finalStatus;
+
+        const transcriptCount = countTranscriptMessages(sessionId, jobCwd);
+        if (transcriptCount > run.messageCount) run.messageCount = transcriptCount;
+
         saveRun(run);
+
+        if (job.inboxOutput && lastAssistantText) {
+          const inbox = parseInboxBlock(lastAssistantText);
+          if (inbox) {
+            addInboxMessage({ ...inbox, jobId: job.id, jobName: job.name, runId: run.id, notifyProviders: job.notifyProviders });
+          }
+        }
+        if (finalStatus === "failure" || finalStatus === "timeout") {
+          addInboxMessage({
+            title: `Job failed: ${job.name}`,
+            body: `**Status:** ${finalStatus}\n\n${run.error || "Job failed with no error message"}`,
+            priority: "error",
+            jobId: job.id,
+            jobName: job.name,
+            runId: run.id,
+            notifyProviders: job.notifyProviders,
+          });
+        }
+
         this.runningJobs.delete(job.id);
         resolve(run);
       };
 
-      this.sessionManager.sendMessage(sessionId, `${JOB_PROMPT_PREFIX}\n${job.prompt}`);
+      this.sessionManager.sendMessage(sessionId, buildJobPrompt(job));
     });
   }
 }

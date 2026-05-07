@@ -18,12 +18,13 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
   const wsRef = useRef<WebSocket | null>(null);
   const handlersRef = useRef<Set<MessageHandler>>(new Set());
   const reconnectTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
-  const reconnectDelay = useRef(1000);
+  const reconnectDelay = useRef(500);
   const queueRef = useRef<ClientMessage[]>([]);
   const connectingRef = useRef(false);
   const mountedRef = useRef(true);
 
   const connectRef = useRef<() => void>(undefined);
+  const cachedToken = useRef<string | null>(null);
   const pongTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const awaitingPong = useRef(false);
   const healthTimer = useRef<ReturnType<typeof setInterval>>(undefined);
@@ -50,23 +51,27 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
     const t0 = performance.now();
     console.log("[ws] connecting...");
 
-    let token: string;
-    try {
-      const res = await fetch("/api/auth/ws-token");
-      if (!res.ok) {
-        console.warn(`[ws] ws-token fetch failed (${res.status})`);
+    let token = cachedToken.current;
+    if (!token) {
+      try {
+        const res = await fetch("/api/auth/ws-token");
+        if (!res.ok) {
+          console.warn(`[ws] ws-token fetch failed (${res.status})`);
+          connectingRef.current = false;
+          scheduleReconnect();
+          return;
+        }
+        const data = await res.json();
+        token = data.token;
+        console.log(`[ws] token fetched in ${(performance.now() - t0).toFixed(0)}ms`);
+      } catch (err) {
+        console.warn("[ws] ws-token fetch error:", err);
         connectingRef.current = false;
         scheduleReconnect();
         return;
       }
-      const data = await res.json();
-      token = data.token;
-      console.log(`[ws] token fetched in ${(performance.now() - t0).toFixed(0)}ms`);
-    } catch (err) {
-      console.warn("[ws] ws-token fetch error:", err);
-      connectingRef.current = false;
-      scheduleReconnect();
-      return;
+    } else {
+      console.log("[ws] using cached token");
     }
 
     if (wsRef.current || !mountedRef.current) {
@@ -85,7 +90,8 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
     ws.onopen = () => {
       console.log(`[ws] connected in ${(performance.now() - t0).toFixed(0)}ms`);
       setConnected(true);
-      reconnectDelay.current = 1000;
+      cachedToken.current = token;
+      reconnectDelay.current = 500;
       for (const queued of queueRef.current) {
         ws.send(JSON.stringify(queued));
       }
@@ -98,7 +104,6 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
         clearTimeout(pongTimer.current);
         awaitingPong.current = false;
       }
-      // Server acknowledged receipt of our message
       if (msg.type === "message:ack" && inflightRef.current.length > 0) {
         inflightRef.current = [];
       }
@@ -108,19 +113,21 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
     };
 
     ws.onclose = (event) => {
-      console.log(`[ws] closed (code=${event.code}), scheduling reconnect`);
+      console.log(`[ws] closed (code=${event.code}), reconnecting immediately`);
       setConnected(false);
       if (wsRef.current === ws) {
         wsRef.current = null;
       }
-      // Re-queue any unacknowledged message sends for retry
       if (inflightRef.current.length > 0) {
         queueRef.current.push(...inflightRef.current);
         inflightRef.current = [];
       }
-      // Always reset delay on close so reconnection is fast
-      reconnectDelay.current = 1000;
-      scheduleReconnect();
+      // Auth failure: clear cached token so next attempt re-fetches
+      if (event.code === 1008 || event.code === 4401) {
+        cachedToken.current = null;
+      }
+      reconnectDelay.current = 500;
+      connectRef.current?.();
     };
 
     ws.onerror = () => {
@@ -155,11 +162,11 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
       wsRef.current = null;
     }
     setConnected(false);
-    reconnectDelay.current = 1000;
+    reconnectDelay.current = 500;
     connectRef.current?.();
   }, []);
 
-  // Periodic health check: while page is visible, verify connection every 10s.
+  // Periodic health check: while page is visible, verify connection every 3s.
   // Mobile browsers aggressively kill WebSockets even for visible pages.
   useEffect(() => {
     const startHealthCheck = () => {
@@ -171,7 +178,7 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
         if (!wsRef.current && !connectingRef.current) {
           console.log("[ws] health: no connection, forcing reconnect");
           clearTimeout(reconnectTimer.current);
-          reconnectDelay.current = 1000;
+          reconnectDelay.current = 500;
           connectRef.current?.();
           return;
         }
@@ -201,8 +208,8 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
         pongTimer.current = setTimeout(() => {
           awaitingPong.current = false;
           tearDownAndReconnect();
-        }, 5000);
-      }, 5000);
+        }, 2000);
+      }, 3000);
     };
 
     const onVisibilityChange = () => {
@@ -214,7 +221,7 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
         if (!wsRef.current && !connectingRef.current) {
           console.log("[ws] no connection on visibility, reconnecting now");
           clearTimeout(reconnectTimer.current);
-          reconnectDelay.current = 1000;
+          reconnectDelay.current = 500;
           connectRef.current?.();
           return;
         }
