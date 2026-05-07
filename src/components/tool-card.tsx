@@ -1,6 +1,7 @@
 "use client";
 
-import { ChevronRight, ClipboardList, Loader2 } from "lucide-react";
+import { ChevronRight, ClipboardList, ExternalLink, Loader2 } from "lucide-react";
+import { useRouter } from "next/navigation";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSettings } from "@/hooks/use-settings";
 import { shortPath } from "@/lib/path";
@@ -173,6 +174,55 @@ export function ToolCard({ tool, expandedToolIds }: ToolCardProps) {
   );
 }
 
+function useFileViewerHref(filePath: string) {
+  const { cwd } = useShell();
+  return `/files?cwd=${encodeURIComponent(cwd || "")}&file=${encodeURIComponent(filePath)}`;
+}
+
+function saveScrollPosition() {
+  const el = document.querySelector("[data-chat-scroll]");
+  if (el) {
+    sessionStorage.setItem("cockpit:scrollPos:" + window.location.pathname, String(el.scrollTop));
+  }
+}
+
+function FilePathIcon({ filePath }: { filePath: string }) {
+  const href = useFileViewerHref(filePath);
+  const router = useRouter();
+  return (
+    <button
+      onClick={(e) => {
+        e.stopPropagation();
+        saveScrollPosition();
+        router.push(href);
+      }}
+      title={filePath}
+      className="shrink-0 text-muted-foreground hover:text-foreground"
+    >
+      <ExternalLink className="h-3 w-3" />
+    </button>
+  );
+}
+
+function FilePathLink({ filePath, children }: { filePath: string; children: React.ReactNode }) {
+  const href = useFileViewerHref(filePath);
+  const router = useRouter();
+  return (
+    <a
+      href={href}
+      onClick={(e) => {
+        e.preventDefault();
+        saveScrollPosition();
+        router.push(href);
+      }}
+      title={filePath}
+      className="font-mono text-muted-foreground break-all hover:underline"
+    >
+      {children}
+    </a>
+  );
+}
+
 function ToolSummary({ tool, input }: { tool: ToolUse; input: Record<string, unknown> }) {
   const name = tool.name;
 
@@ -181,9 +231,12 @@ function ToolSummary({ tool, input }: { tool: ToolUse; input: Record<string, unk
     if (!fp) return null;
     const plan = isPlanFile(name, fp);
     return (
-      <span className="text-muted-foreground truncate">
-        {shortPath(fp)}
-        {plan ? " (plan edit)" : ""}
+      <span className="flex items-center gap-1.5 min-w-0">
+        <span className="text-muted-foreground truncate">
+          {shortPath(fp)}
+          {plan ? " (plan edit)" : ""}
+        </span>
+        <FilePathIcon filePath={fp} />
       </span>
     );
   }
@@ -195,12 +248,22 @@ function ToolSummary({ tool, input }: { tool: ToolUse; input: Record<string, unk
     if (isPlanFile(name, fp) && content) {
       return <span className="text-blue-500 truncate">View plan</span>;
     }
-    return <span className="text-muted-foreground truncate">{shortPath(fp)}</span>;
+    return (
+      <span className="flex items-center gap-1.5 min-w-0">
+        <span className="text-muted-foreground truncate">{shortPath(fp)}</span>
+        <FilePathIcon filePath={fp} />
+      </span>
+    );
   }
 
   if (name === "Read" || name === "read") {
     const fp = (input.file_path as string) || tool.filePath || "";
-    return fp ? <span className="text-muted-foreground truncate">{shortPath(fp)}</span> : null;
+    return fp ? (
+      <span className="flex items-center gap-1.5 min-w-0">
+        <span className="text-muted-foreground truncate">{shortPath(fp)}</span>
+        <FilePathIcon filePath={fp} />
+      </span>
+    ) : null;
   }
 
   if (name === "Bash" || name === "bash") {
@@ -335,7 +398,7 @@ function WriteContent({ input, tool, dark }: { input: Record<string, unknown>; t
 
   return (
     <div className="space-y-1">
-      {filePath && <div className="font-mono text-muted-foreground">{filePath}</div>}
+      {filePath && <FilePathLink filePath={filePath}>{filePath}</FilePathLink>}
       {content && <CodeBlock code={content} language={lang} dark={dark} />}
       {tool.output && (
         <pre className="overflow-x-auto rounded bg-muted/50 p-2 text-[11px] leading-relaxed max-h-32 overflow-y-auto text-muted-foreground">
@@ -352,7 +415,7 @@ function ReadContent({ input, tool, dark }: { input: Record<string, unknown>; to
 
   return (
     <div className="space-y-1">
-      {filePath && <div className="font-mono text-muted-foreground break-all">{filePath}</div>}
+      {filePath && <FilePathLink filePath={filePath}>{filePath}</FilePathLink>}
       {tool.output && <CodeBlock code={tool.output} language={lang} dark={dark} />}
     </div>
   );

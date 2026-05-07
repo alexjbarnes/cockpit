@@ -190,6 +190,23 @@ export function ChatView({
     }
   }, [messages, isResponding, pendingQuestions, pendingPermissions, scrollToBottom]);
 
+  // Restore scroll position when navigating back from the file viewer
+  useEffect(() => {
+    if (!historyLoaded) return;
+    const key = "cockpit:scrollPos:" + window.location.pathname;
+    const saved = sessionStorage.getItem(key);
+    if (!saved) return;
+    sessionStorage.removeItem(key);
+    const pos = Number(saved);
+    const el = scrollRef.current;
+    if (el && pos > 0) {
+      stickToBottom.current = false;
+      requestAnimationFrame(() => {
+        el.scrollTop = pos;
+      });
+    }
+  }, [historyLoaded]);
+
   // Re-scroll when virtual keyboard shows/hides (viewport resize)
   useEffect(() => {
     const vv = window.visualViewport;
@@ -288,6 +305,7 @@ export function ChatView({
     <>
       <div
         ref={scrollRef}
+        data-chat-scroll
         tabIndex={isTouch ? undefined : -1}
         className="flex-1 min-h-0 overflow-y-auto p-4 outline-none"
         onScroll={handleScroll}
