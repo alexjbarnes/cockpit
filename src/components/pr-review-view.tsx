@@ -368,6 +368,7 @@ function LazyDiff({
           console.warn(`[diff] ${file.path}: newContent is null (head=${headRef})`);
         }
         console.info(`[diff] ${file.path}: deletionLines=${!!meta!.deletionLines} additionLines=${!!meta!.additionLines}`);
+        meta!.isPartial = !(oldContent != null && newContent != null);
         setFileDiffMeta(meta);
       })
       .catch((e) => {
