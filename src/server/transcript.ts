@@ -112,12 +112,13 @@ function stripCommandXml(text: string): string {
   if (trimmed.startsWith("<task-notification>")) return "";
   if (trimmed.startsWith("<local-command-caveat>")) return "";
   if (trimmed.startsWith("<local-command-stdout>")) return "";
-  if (trimmed.startsWith("<command-name>")) {
+  if (trimmed.startsWith("<command-name>") || trimmed.startsWith("<command-message>") || trimmed.startsWith("<command-args>")) {
     const match = trimmed.match(/<command-name>(\/[^<]+)<\/command-name>/);
     if (match) {
       if (match[1] === "/compact") return "";
       return match[1];
     }
+    return "";
   }
   return text;
 }

@@ -11,7 +11,7 @@ import type { ChatMessage } from "@/types";
 import { ToolCard } from "./tool-card";
 
 const CLI_XML_RE =
-  /<(?:task-notification|local-command-caveat|local-command-stdout|command-name|system-reminder)[^>]*>[\s\S]*?<\/(?:task-notification|local-command-caveat|local-command-stdout|command-name|system-reminder)>[\s\S]*/g;
+  /<(?:task-notification|local-command-caveat|local-command-stdout|command-name|command-message|command-args|system-reminder)[^>]*>[\s\S]*?<\/(?:task-notification|local-command-caveat|local-command-stdout|command-name|command-message|command-args|system-reminder)>[\s\S]*/g;
 
 function stripCliXml(text: string): string {
   return text.replace(CLI_XML_RE, "").trim();
