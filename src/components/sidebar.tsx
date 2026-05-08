@@ -304,6 +304,10 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
     setWidth(getSavedWidth());
   }, []);
 
+  useEffect(() => {
+    router.prefetch("/sessions/_");
+  }, [router]);
+
   const handleResize = useCallback((delta: number) => {
     setWidth((prev) => {
       const next = Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, prev + delta));

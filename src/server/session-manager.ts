@@ -1221,16 +1221,22 @@ export class SessionManager {
       this.handleTodoWrite(session, sessionId, todoInput);
     }
 
+    // After exiting plan mode the CLI process is killed and respawned with the
+    // correct --permission-mode flag (see needsRespawnForPermissions). Between
+    // the plan exit and the message_done that triggers the respawn, the old
+    // process may still send permission_request events. The server auto-approves
+    // these so the CLI isn't blocked, but we must also suppress the events from
+    // reaching the UI -- otherwise the user sees phantom permission prompts that
+    // don't actually gate anything.
+    const bypassedRequestIds = new Set<string>();
     for (const pa of result.permissionActions) {
       if (pa.type === "auto_approve") {
         this.respondToPermission(sessionId, pa.requestId, true, pa.rawToolInput);
       } else if (pa.type === "auto_deny") {
         this.respondToPermission(sessionId, pa.requestId, false, undefined, undefined, pa.denyReason);
       } else if (session.bypassAllPermissions && !session.planMode) {
-        // CLI was spawned without bypass capability (e.g. after exiting plan
-        // mode) but the session has bypass enabled. Auto-approve server-side
-        // until the process respawns with the right flags.
         this.respondToPermission(sessionId, pa.requestId, true, pa.rawToolInput);
+        bypassedRequestIds.add(pa.requestId);
       } else {
         const planPath = pa.toolName === "ExitPlanMode" ? findLatestPlanFile() : undefined;
         session.pendingRequests.set(pa.requestId, {
@@ -1259,6 +1265,8 @@ export class SessionManager {
       }
     }
     for (const event of result.emit) {
+      // Skip phantom permission events that were already bypass-approved above
+      if (event.type === "permission_request" && event.requestId && bypassedRequestIds.has(event.requestId)) continue;
       session.emitter.emit("event", sessionId, event);
     }
 

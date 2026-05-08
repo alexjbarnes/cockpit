@@ -155,12 +155,14 @@ export function ToolCard({ tool, expandedToolIds }: ToolCardProps) {
           ) : (
             <ChevronRight className={cn("h-3 w-3 shrink-0 text-muted-foreground transition-transform", expanded && "rotate-90")} />
           )}
-          <span className="font-mono font-medium">{tool.name}</span>
-          {tool.name === "Agent" &&
-            (tool.status === "running" || backgroundTasks.some((t) => t.toolUseId === tool.id && t.status === "running")) && (
-              <Loader2 className="h-3 w-3 shrink-0 animate-spin text-muted-foreground" />
-            )}
-          <ToolSummary tool={tool} input={input} />
+          {tool.name === "Agent" ? (
+            <AgentHeader tool={tool} input={input} backgroundTasks={backgroundTasks} />
+          ) : (
+            <>
+              <span className="font-mono font-medium">{tool.name}</span>
+              <ToolSummary tool={tool} input={input} />
+            </>
+          )}
         </button>
 
         {expanded && hasContent && (
@@ -233,6 +235,38 @@ function FilePathLink({ filePath, children }: { filePath: string; children: Reac
   );
 }
 
+function AgentHeader({
+  tool,
+  input,
+  backgroundTasks,
+}: {
+  tool: ToolUse;
+  input: Record<string, unknown>;
+  backgroundTasks: Array<{ toolUseId: string; status: string }>;
+}) {
+  const desc = (input.description as string) || (input.prompt as string) || "";
+  const short = desc.length > 80 ? desc.slice(0, 80) + "..." : desc;
+  const model = input.model as string | undefined;
+  const agentType = input.subagent_type as string | undefined;
+  const tags = [agentType, model].filter(Boolean);
+  const spinning = tool.status === "running" || backgroundTasks.some((t) => t.toolUseId === tool.id && t.status === "running");
+
+  return (
+    <div className="flex flex-col gap-0.5 min-w-0 flex-1">
+      <div className="flex items-center gap-2">
+        <span className="font-mono font-medium">Agent</span>
+        {spinning && <Loader2 className="h-3 w-3 shrink-0 animate-spin text-muted-foreground" />}
+        {tags.map((tag) => (
+          <span key={tag} className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+            {tag}
+          </span>
+        ))}
+      </div>
+      {short && <span className="text-muted-foreground truncate">{short}</span>}
+    </div>
+  );
+}
+
 function ToolSummary({ tool, input }: { tool: ToolUse; input: Record<string, unknown> }) {
   const name = tool.name;
 
@@ -290,28 +324,6 @@ function ToolSummary({ tool, input }: { tool: ToolUse; input: Record<string, unk
   if (name === "Glob" || name === "glob") {
     const pattern = (input.pattern as string) || "";
     return pattern ? <span className="font-mono text-muted-foreground truncate">{pattern}</span> : null;
-  }
-
-  if (name === "Agent") {
-    const desc = (input.description as string) || (input.prompt as string) || "";
-    const short = desc.length > 60 ? desc.slice(0, 60) + "..." : desc;
-    const model = input.model as string | undefined;
-    const agentType = input.subagent_type as string | undefined;
-    const tags = [agentType, model].filter(Boolean);
-    return (
-      <span className="flex flex-col gap-0.5 min-w-0">
-        {short && <span className="text-muted-foreground truncate">{short}</span>}
-        {tags.length > 0 && (
-          <span className="flex items-center gap-1.5">
-            {tags.map((tag) => (
-              <span key={tag} className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
-                {tag}
-              </span>
-            ))}
-          </span>
-        )}
-      </span>
-    );
   }
 
   if (name === "EnterPlanMode") {

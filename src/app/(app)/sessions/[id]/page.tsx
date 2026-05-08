@@ -13,6 +13,10 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
   const name = searchParams.get("name") || undefined;
   const historyView = searchParams.get("historyView") === "true";
 
+  useEffect(() => {
+    console.log(`[session-page] mounted ${id.slice(0, 8)} at ${performance.now().toFixed(0)}ms`);
+  }, [id]);
+
   useShellCwd(cwd || undefined);
   useShellSessionId(id);
 
