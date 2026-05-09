@@ -3,6 +3,11 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { InitData, ThinkingLevel } from "@/types";
 
+export interface PersistedTab {
+  type: "file" | "diff" | "changes";
+  filePath?: string;
+}
+
 export interface SessionPrefs {
   name?: string;
   thinkingLevel?: ThinkingLevel;
@@ -12,6 +17,8 @@ export interface SessionPrefs {
   initData?: InitData;
   cliSessionId?: string;
   previousCliSessionIds?: string[];
+  openTabs?: PersistedTab[];
+  activeTabId?: string;
 }
 
 const PREFS_DIR = join(homedir(), ".cockpit");

@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useCallback, useContext, useEffect, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { pathBasename } from "@/lib/path";
 
 interface ChatTab {
@@ -68,12 +68,86 @@ const DEFAULT_STATE: TabState = {
   splitTabId: null,
 };
 
+interface PersistedTab {
+  type: "file" | "diff" | "changes";
+  filePath?: string;
+}
+
+function deserializeTabs(persisted: PersistedTab[]): Tab[] {
+  const tabs: Tab[] = [CHAT_TAB];
+  for (const p of persisted) {
+    if (p.type === "changes") {
+      tabs.push(CHANGES_TAB);
+    } else if (p.type === "file" && p.filePath) {
+      tabs.push({ type: "file", id: fileTabId(p.filePath), filePath: p.filePath, label: pathBasename(p.filePath) || p.filePath });
+    } else if (p.type === "diff" && p.filePath) {
+      tabs.push({ type: "diff", id: diffTabId(p.filePath), filePath: p.filePath, label: pathBasename(p.filePath) || p.filePath });
+    }
+  }
+  return tabs;
+}
+
+function serializeTabs(tabs: Tab[]): PersistedTab[] {
+  const out: PersistedTab[] = [];
+  for (const t of tabs) {
+    if (t.type === "chat") continue;
+    if (t.type === "changes") {
+      out.push({ type: "changes" });
+    } else {
+      out.push({ type: t.type, filePath: t.filePath });
+    }
+  }
+  return out;
+}
+
 export function TabProvider({ sessionId, children }: { sessionId: string; children: React.ReactNode }) {
   const [state, setState] = useState<TabState>(() => stateCache.get(sessionId) || DEFAULT_STATE);
+  const loadedForRef = useRef<string | null>(stateCache.has(sessionId) ? sessionId : null);
+  const saveTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
 
   useEffect(() => {
+    if (loadedForRef.current === sessionId) return;
+    if (stateCache.has(sessionId)) {
+      setState(stateCache.get(sessionId)!);
+      loadedForRef.current = sessionId;
+      return;
+    }
+    let cancelled = false;
+    fetch(`/api/sessions/${sessionId}/tabs`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (cancelled) return;
+        if (data?.openTabs?.length) {
+          const tabs = deserializeTabs(data.openTabs);
+          const activeTabId = data.activeTabId && tabs.some((t: Tab) => t.id === data.activeTabId) ? data.activeTabId : "chat";
+          const loaded = { tabs, activeTabId, splitTabId: null };
+          setState(loaded);
+          stateCache.set(sessionId, loaded);
+        }
+        loadedForRef.current = sessionId;
+      })
+      .catch(() => {
+        loadedForRef.current = sessionId;
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionId]);
+
+  useEffect(() => {
+    if (loadedForRef.current !== sessionId) return;
     stateCache.set(sessionId, state);
-  }, [sessionId, state]);
+    clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(() => {
+      const openTabs = serializeTabs(state.tabs);
+      fetch(`/api/sessions/${sessionId}/tabs`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ openTabs, activeTabId: state.activeTabId }),
+      }).catch(() => {});
+    }, 300);
+    return () => clearTimeout(saveTimer.current);
+  }, [sessionId, state.tabs, state.activeTabId]);
 
   const openFile = useCallback((filePath: string) => {
     const id = fileTabId(filePath);

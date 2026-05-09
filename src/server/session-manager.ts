@@ -166,6 +166,12 @@ export class SessionManager {
     let session = this.sessions.get(id);
     if (!session) {
       const prefs = getSessionPrefs(id);
+      const cliId = prefs?.cliSessionId || id;
+      const prevIds = prefs?.previousCliSessionIds || [];
+      const short = id.slice(0, 8);
+      debugLog(
+        `[session:${short}] ensureSession: cliSessionId=${cliId.slice(0, 8)}, prevIds=[${prevIds.map((p) => p.slice(0, 8)).join(",")}], hasPrefs=${!!prefs}`,
+      );
       const defaults = getDefaults();
       const now = Date.now();
       session = {
@@ -183,8 +189,8 @@ export class SessionManager {
         stdin: null,
         emitter: new EventEmitter(),
         hasSpawnedBefore: true,
-        cliSessionId: prefs?.cliSessionId || id,
-        previousCliSessionIds: prefs?.previousCliSessionIds || [],
+        cliSessionId: cliId,
+        previousCliSessionIds: prevIds,
         bypassAllPermissions: prefs?.bypassAllPermissions ?? defaults.bypassAllPermissions,
         planMode: prefs?.planMode ?? false,
         pendingPlanReminder: prefs?.planMode ?? false,
@@ -204,7 +210,7 @@ export class SessionManager {
         transcriptBuffer: [],
         transcriptByteOffset: 0,
         transcriptTotalSize: 0,
-        bufferCliSessionId: prefs?.cliSessionId || id,
+        bufferCliSessionId: cliId,
         paginationPrevIds: [],
       };
       this.sessions.set(id, session);
@@ -237,24 +243,22 @@ export class SessionManager {
     session.bufferCliSessionId = session.cliSessionId;
 
     if (willStitch) {
-      const currentMessages = messages;
       for (let i = session.previousCliSessionIds.length - 1; i >= 0; i--) {
         const prevId = session.previousCliSessionIds[i];
         const prevResult = await loadTranscript(prevId, session.info.cwd, { tailLines: 150 });
         if (prevResult.messages.length > 0) {
           const marker: ChatMessage = {
-            id: "clear-boundary-" + Date.now(),
+            id: `clear-boundary-${i}`,
             role: "system" as const,
             content: "__context_reset__",
             toolUses: [],
             blocks: [],
             timestamp: Date.now(),
           };
-          messages = [...prevResult.messages, marker, ...currentMessages];
+          messages = [...prevResult.messages, marker, ...messages];
           byteOffset = prevResult.byteOffset;
           lastUsage = lastUsage || prevResult.lastUsage;
           session.bufferCliSessionId = prevId;
-          break;
         }
       }
     }
@@ -295,24 +299,22 @@ export class SessionManager {
     session.bufferCliSessionId = session.cliSessionId;
 
     if (willStitch) {
-      const currentMessages = messages;
       for (let i = session.previousCliSessionIds.length - 1; i >= 0; i--) {
         const prevId = session.previousCliSessionIds[i];
         const prevResult = await loadTranscript(prevId, cwd, { tailLines: 150 });
         if (prevResult.messages.length > 0) {
           const marker: ChatMessage = {
-            id: "clear-boundary-" + Date.now(),
+            id: `clear-boundary-${i}`,
             role: "system" as const,
             content: "__context_reset__",
             toolUses: [],
             blocks: [],
             timestamp: Date.now(),
           };
-          messages = [...prevResult.messages, marker, ...currentMessages];
+          messages = [...prevResult.messages, marker, ...messages];
           byteOffset = prevResult.byteOffset;
           lastUsage = lastUsage || prevResult.lastUsage;
           session.bufferCliSessionId = prevId;
-          break;
         }
       }
     }
@@ -354,21 +356,19 @@ export class SessionManager {
     let { messages, lastUsage } = result;
 
     if (willStitch) {
-      const currentMessages = messages;
       for (let i = prevIds.length - 1; i >= 0; i--) {
         const prevResult = await loadTranscript(prevIds[i], cwd, { tailLines: 150 });
         if (prevResult.messages.length > 0) {
           const marker: ChatMessage = {
-            id: "clear-boundary-" + Date.now(),
+            id: `clear-boundary-${i}`,
             role: "system" as const,
             content: "__context_reset__",
             toolUses: [],
             blocks: [],
             timestamp: Date.now(),
           };
-          messages = [...prevResult.messages, marker, ...currentMessages];
+          messages = [...prevResult.messages, marker, ...messages];
           lastUsage = lastUsage || prevResult.lastUsage;
-          break;
         }
       }
     }

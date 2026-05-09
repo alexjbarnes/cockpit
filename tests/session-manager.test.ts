@@ -17,6 +17,7 @@ vi.mock("node:child_process", () => ({
 }));
 
 vi.mock("@/server/debug-logger", () => ({
+  debugLog: vi.fn(),
   logRawLine: vi.fn(),
   logDiag: vi.fn(),
   logParsedEvent: vi.fn(),

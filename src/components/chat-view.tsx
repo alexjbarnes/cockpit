@@ -236,10 +236,11 @@ export function ChatView({
   // making the scroll handler think the user scrolled up.
   useEffect(() => {
     if (isTouch) return;
+    const el = scrollRef.current;
     const handler = () => {
       if (document.activeElement?.closest("textarea, input, [contenteditable]")) return;
-      if (document.activeElement === scrollRef.current) return;
-      scrollRef.current?.focus({ preventScroll: true });
+      if (document.activeElement === el) return;
+      el?.focus({ preventScroll: true });
       if (stickToBottom.current) scrollToBottom();
     };
     const visHandler = () => {
@@ -247,11 +248,11 @@ export function ChatView({
         scrollToBottom();
       }
     };
-    document.addEventListener("pointermove", handler);
+    el?.addEventListener("pointermove", handler);
     window.addEventListener("focus", handler);
     document.addEventListener("visibilitychange", visHandler);
     return () => {
-      document.removeEventListener("pointermove", handler);
+      el?.removeEventListener("pointermove", handler);
       window.removeEventListener("focus", handler);
       document.removeEventListener("visibilitychange", visHandler);
     };
