@@ -31,7 +31,7 @@ function timeAgo(ts: number): string {
 }
 
 export default function InboxPage() {
-  usePageHeader("Inbox");
+  usePageHeader("Inbox", { hideActions: true });
 
   const router = useRouter();
   const [messages, setMessages] = useState<InboxMessage[]>([]);

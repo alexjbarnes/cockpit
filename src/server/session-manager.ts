@@ -1256,6 +1256,12 @@ export class SessionManager {
     if (result.compactDone) {
       session.compacting = false;
       this.emitSystem(session, sessionId, "__compact::done");
+      const postCompactEstimate: ContextUsage = {
+        used: Math.round(session.contextWindowSize * 0.1),
+        total: session.contextWindowSize,
+      };
+      session.contextUsage = postCompactEstimate;
+      session.emitter.emit("usage", sessionId, postCompactEstimate);
     }
 
     if (result.emit.length > 0) {
@@ -1727,6 +1733,12 @@ Additional Cockpit rules beyond the CLI's defaults:
         logDiag(sessionId, "compact:done-on-close");
         session.compacting = false;
         this.emitSystem(session, sessionId, "__compact::done");
+        const postCompactEstimate: ContextUsage = {
+          used: Math.round(session.contextWindowSize * 0.1),
+          total: session.contextWindowSize,
+        };
+        session.contextUsage = postCompactEstimate;
+        session.emitter.emit("usage", sessionId, postCompactEstimate);
       }
 
       if (session.todoItems.length > 0 && session.todoItems.every((t) => t.status === "completed")) {

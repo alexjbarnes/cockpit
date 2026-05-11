@@ -10,13 +10,13 @@ import { cn } from "@/lib/utils";
 function tabIcon(tab: Tab) {
   switch (tab.type) {
     case "chat":
-      return <MessageSquare className="h-3 w-3 shrink-0" />;
+      return <MessageSquare className="h-3 w-3 md:h-3.5 md:w-3.5 shrink-0" />;
     case "file":
-      return <FileText className="h-3 w-3 shrink-0" />;
+      return <FileText className="h-3 w-3 md:h-3.5 md:w-3.5 shrink-0" />;
     case "diff":
-      return <FileDiff className="h-3 w-3 shrink-0" />;
+      return <FileDiff className="h-3 w-3 md:h-3.5 md:w-3.5 shrink-0" />;
     case "changes":
-      return <GitBranch className="h-3 w-3 shrink-0" />;
+      return <GitBranch className="h-3 w-3 md:h-3.5 md:w-3.5 shrink-0" />;
   }
 }
 
@@ -105,7 +105,7 @@ export function TabBar({ splitRatio }: TabBarProps) {
       onDrop={draggable ? handleDrop : undefined}
       onClick={onClick}
       className={cn(
-        "flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium whitespace-nowrap border-b-2 transition-colors group",
+        "flex items-center gap-1.5 px-3 py-1.5 md:px-4 md:py-2.5 text-xs md:text-sm font-medium whitespace-nowrap border-b-2 transition-colors group",
         active ? "border-primary text-foreground" : "border-transparent text-muted-foreground hover:text-foreground",
         draggable && "cursor-grab active:cursor-grabbing",
       )}
@@ -128,7 +128,7 @@ export function TabBar({ splitRatio }: TabBarProps) {
           }}
           className="ml-0.5 rounded p-0.5 hover:bg-muted"
         >
-          <X className="h-2.5 w-2.5" />
+          <X className="h-2.5 w-2.5 md:h-3 md:w-3" />
         </span>
       )}
     </button>
@@ -151,11 +151,11 @@ export function TabBar({ splitRatio }: TabBarProps) {
         }}
         title={splitTabId ? "Close split view" : "Split view"}
         className={cn(
-          "ml-auto shrink-0 flex items-center justify-center px-2 py-1.5 text-muted-foreground hover:text-foreground transition-colors",
+          "ml-auto shrink-0 flex items-center justify-center px-2 py-1.5 md:px-3 md:py-2.5 text-muted-foreground hover:text-foreground transition-colors",
           splitTabId && "text-primary",
         )}
       >
-        <Columns2 className="h-3.5 w-3.5" />
+        <Columns2 className="h-3.5 w-3.5 md:h-4 md:w-4" />
       </button>
     ) : null;
 

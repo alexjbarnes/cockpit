@@ -25,6 +25,7 @@ export interface SidebarSectionConfig {
 interface HeaderConfig {
   title: string;
   onRename?: (name: string) => void;
+  hideActions?: boolean;
 }
 
 export interface TabActions {
@@ -77,11 +78,12 @@ export function useShell() {
   return useContext(ShellContext);
 }
 
-export function usePageHeader(title: string) {
+export function usePageHeader(title: string, options?: { hideActions?: boolean }) {
   const { setHeader } = useShell();
+  const hideActions = options?.hideActions;
   useEffect(() => {
-    setHeader({ title });
-  }, [title, setHeader]);
+    setHeader({ title, hideActions });
+  }, [title, hideActions, setHeader]);
 }
 
 export function useShellCwd(cwd: string | undefined) {
@@ -249,12 +251,14 @@ export function AppShell({ children }: { children: ReactNode }) {
                   <Image src="/icon-192.png" alt="" width={22} height={22} className="shrink-0 dark:invert" />
                   <EditableTitle title={header.title} onRename={header.onRename} />
                 </div>
-                <div className="flex items-center gap-2 shrink-0 ml-auto">
-                  <SearchButton />
-                  {cwd && <TodoIndicator todos={todos} />}
-                  {cwd && <BackgroundTasksButton tasks={backgroundTasks} />}
-                  <UsageButton />
-                </div>
+                {!header.hideActions && (
+                  <div className="flex items-center gap-2 shrink-0 ml-auto">
+                    <SearchButton />
+                    {cwd && <TodoIndicator todos={todos} />}
+                    {cwd && <BackgroundTasksButton tasks={backgroundTasks} />}
+                    <UsageButton />
+                  </div>
+                )}
               </header>
               <main className="flex-1 min-h-0 min-w-0 flex flex-col">{children}</main>
             </div>

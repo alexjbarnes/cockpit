@@ -25,7 +25,7 @@ function formatDate(ts: number): string {
 }
 
 export default function InboxMessagePage() {
-  usePageHeader("Inbox");
+  usePageHeader("Inbox", { hideActions: true });
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
   const [message, setMessage] = useState<InboxMessage | null>(null);
