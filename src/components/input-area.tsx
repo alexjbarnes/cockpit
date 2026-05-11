@@ -36,6 +36,7 @@ import { allowedEffortLevels, defaultForAlias, findModelById, type ModelAlias, t
 import { detectLanguage, extensionForLabel, shouldCollapsePaste } from "@/lib/paste-detect";
 import type { ContextUsage, DocumentAttachment, ImageAttachment, InitData, TextFileAttachment, ThinkingLevel } from "@/types";
 import { ContextIndicator } from "./context-indicator";
+import { PromptHistoryModal } from "./prompt-history-modal";
 import { QueueModal } from "./queue-modal";
 
 const aliases: { value: ModelAlias; label: string }[] = [
@@ -207,6 +208,7 @@ const FILE_ACCEPT = ["image/*", ".pdf", ...Array.from(TEXT_EXTENSIONS)].join(","
 
 interface InputAreaProps {
   sessionId: string;
+  promptHistory?: string[];
   onSend: (text: string, images?: ImageAttachment[], documents?: DocumentAttachment[], textFiles?: TextFileAttachment[]) => void;
   onInterrupt: () => void;
   isResponding: boolean;
@@ -239,7 +241,6 @@ interface InputAreaProps {
 }
 
 const sessionDrafts = new Map<string, string>();
-const sessionHistories = new Map<string, string[]>();
 
 function getMentionContext(text: string, cursorPos: number): { active: boolean; query: string; start: number } {
   const before = text.slice(0, cursorPos);
@@ -257,6 +258,7 @@ function getSlashContext(text: string, cursorPos: number): { active: boolean; qu
 
 export function InputArea({
   sessionId,
+  promptHistory = [],
   onSend,
   onInterrupt,
   isResponding,
@@ -307,7 +309,7 @@ export function InputArea({
     }
   }, [restoredText, onClearRestoredText]);
 
-  const historyIndexRef = useRef(-1);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [optionsOpen, setOptionsOpen] = useState(false);
   const [mentionSelectedIndex, setMentionSelectedIndex] = useState(0);
@@ -392,12 +394,6 @@ export function InputArea({
       pendingDocs.length > 0 ? pendingDocs : undefined,
       pendingTextFiles.length > 0 ? pendingTextFiles : undefined,
     );
-    const history = sessionHistories.get(sessionId) || [];
-    if (history[history.length - 1] !== trimmed) {
-      history.push(trimmed);
-      sessionHistories.set(sessionId, history);
-    }
-    historyIndexRef.current = -1;
     setText("");
     setPendingImages([]);
     setPendingDocs([]);
@@ -411,7 +407,7 @@ export function InputArea({
         textareaRef.current.focus();
       }
     }
-  }, [text, hasAttachments, pendingImages, pendingDocs, pendingTextFiles, onSend, dismissKeyboard, connected, sessionId]);
+  }, [text, hasAttachments, pendingImages, pendingDocs, pendingTextFiles, onSend, dismissKeyboard, connected]);
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -499,24 +495,9 @@ export function InputArea({
         return;
       }
 
-      const history = sessionHistories.get(sessionId) || [];
-      if (e.key === "ArrowUp" && !text.trim() && history.length > 0) {
+      if (e.key === "ArrowUp" && !text.trim() && promptHistory.length > 0) {
         e.preventDefault();
-        const idx = historyIndexRef.current === -1 ? history.length - 1 : Math.max(0, historyIndexRef.current - 1);
-        historyIndexRef.current = idx;
-        setText(history[idx]);
-        return;
-      }
-      if (e.key === "ArrowDown" && historyIndexRef.current >= 0) {
-        e.preventDefault();
-        const idx = historyIndexRef.current + 1;
-        if (idx >= history.length) {
-          historyIndexRef.current = -1;
-          setText("");
-        } else {
-          historyIndexRef.current = idx;
-          setText(history[idx]);
-        }
+        setHistoryOpen(true);
         return;
       }
 
@@ -541,7 +522,7 @@ export function InputArea({
       onInterrupt,
       planMode,
       onSetPlanMode,
-      sessionId,
+      promptHistory,
     ],
   );
 
@@ -1123,6 +1104,19 @@ export function InputArea({
         onResume={onResumeQueue ?? (() => {})}
       />
       <McpStatusModal open={mcpOpen} onOpenChange={setMcpOpen} sessionId={sessionId} initData={initData} />
+      <PromptHistoryModal
+        open={historyOpen}
+        prompts={promptHistory}
+        onSelect={(prompt) => {
+          setHistoryOpen(false);
+          setText(prompt);
+          requestAnimationFrame(() => textareaRef.current?.focus());
+        }}
+        onClose={() => {
+          setHistoryOpen(false);
+          requestAnimationFrame(() => textareaRef.current?.focus());
+        }}
+      />
     </div>
   );
 }

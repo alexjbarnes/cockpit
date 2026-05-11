@@ -108,6 +108,20 @@ export function ChatView({
     });
   }, [messages]);
 
+  const promptHistory = useMemo(() => {
+    const seen = new Set<string>();
+    const prompts: string[] = [];
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i];
+      if (m.role !== "user" || !m.content.trim()) continue;
+      if (m.content.startsWith("/") || m.content.startsWith("[")) continue;
+      if (seen.has(m.content)) continue;
+      seen.add(m.content);
+      prompts.push(m.content);
+    }
+    return prompts;
+  }, [messages]);
+
   const totalMessages = uniqueMessages.length;
   const startIndex = Math.max(0, totalMessages - renderWindow);
   const visibleMessages = useMemo(() => uniqueMessages.slice(startIndex), [uniqueMessages, startIndex]);
@@ -466,6 +480,7 @@ export function ChatView({
       <div className="shrink-0">
         <InputArea
           sessionId={sessionId}
+          promptHistory={promptHistory}
           onSend={handleSend}
           onInterrupt={interrupt}
           isResponding={isResponding}
