@@ -22,9 +22,11 @@ interface FileTreeProps {
 // Module-level cache: directory path -> children nodes
 const childrenCache = new Map<string, TreeNode[]>();
 
-async function fetchChildren(dirPath: string): Promise<TreeNode[]> {
-  const cached = childrenCache.get(dirPath);
-  if (cached) return cached;
+async function fetchChildren(dirPath: string, forceRefresh = false): Promise<TreeNode[]> {
+  if (!forceRefresh) {
+    const cached = childrenCache.get(dirPath);
+    if (cached) return cached;
+  }
 
   const params = new URLSearchParams({
     path: dirPath,
@@ -32,7 +34,7 @@ async function fetchChildren(dirPath: string): Promise<TreeNode[]> {
     showHidden: "true",
   });
   const res = await fetch(`/api/filesystem/browse?${params}`);
-  if (!res.ok) return [];
+  if (!res.ok) return childrenCache.get(dirPath) || [];
   const data = await res.json();
   const nodes: TreeNode[] = (data.entries || []).map((e: { name: string; path: string; type: "file" | "directory" }) => ({
     name: e.name,
@@ -41,6 +43,14 @@ async function fetchChildren(dirPath: string): Promise<TreeNode[]> {
   }));
   childrenCache.set(dirPath, nodes);
   return nodes;
+}
+
+function nodesChanged(a: TreeNode[], b: TreeNode[]): boolean {
+  if (a.length !== b.length) return true;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i].path !== b[i].path || a[i].type !== b[i].type) return true;
+  }
+  return false;
 }
 
 // Module-level cache for expanded state per cwd
@@ -62,6 +72,7 @@ function TreeRow({
   onSelectFile,
   expandedSet,
   onToggleExpand,
+  refreshTick,
 }: {
   node: TreeNode;
   depth: number;
@@ -69,6 +80,7 @@ function TreeRow({
   onSelectFile: (path: string) => void;
   expandedSet: Set<string>;
   onToggleExpand: (path: string) => void;
+  refreshTick: number;
 }) {
   const isDir = node.type === "directory";
   const isExpanded = expandedSet.has(node.path);
@@ -105,6 +117,12 @@ function TreeRow({
       }
     }
   }, [isDir, isExpanded, children.length, loading, node.path]);
+
+  useEffect(() => {
+    if (!isDir || !isExpanded || refreshTick === 0) return;
+    const cached = childrenCache.get(node.path);
+    if (cached) setChildren(cached);
+  }, [isDir, isExpanded, node.path, refreshTick]);
 
   return (
     <>
@@ -150,6 +168,7 @@ function TreeRow({
             onSelectFile={onSelectFile}
             expandedSet={expandedSet}
             onToggleExpand={onToggleExpand}
+            refreshTick={refreshTick}
           />
         ))}
     </>
@@ -160,7 +179,10 @@ export function FileTree({ cwd, selectedFile, onSelectFile }: FileTreeProps) {
   const [roots, setRoots] = useState<TreeNode[]>(childrenCache.get(cwd) || []);
   const [loading, setLoading] = useState(roots.length === 0);
   const [expanded, setExpanded] = useState<Set<string>>(() => getExpandedSet(cwd));
+  const [refreshTick, setRefreshTick] = useState(0);
   const cwdRef = useRef(cwd);
+  const expandedRef = useRef(expanded);
+  expandedRef.current = expanded;
 
   useEffect(() => {
     cwdRef.current = cwd;
@@ -179,6 +201,40 @@ export function FileTree({ cwd, selectedFile, onSelectFile }: FileTreeProps) {
       });
     }
   }, [cwd]);
+
+  useEffect(() => {
+    let active = true;
+    let timer: ReturnType<typeof setTimeout>;
+
+    const poll = async () => {
+      if (!active) return;
+      const dirs = [cwdRef.current, ...expandedRef.current];
+      let changed = false;
+
+      for (const dir of dirs) {
+        if (!active) return;
+        const old = childrenCache.get(dir);
+        const fresh = await fetchChildren(dir, true);
+        if (!active) return;
+        if (!old || nodesChanged(old, fresh)) {
+          changed = true;
+        }
+      }
+
+      if (changed && active) {
+        setRoots(childrenCache.get(cwdRef.current) || []);
+        setRefreshTick((t) => t + 1);
+      }
+
+      if (active) timer = setTimeout(poll, 3000);
+    };
+
+    timer = setTimeout(poll, 3000);
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
+  }, []);
 
   const toggleExpand = useCallback(
     (path: string) => {
@@ -219,6 +275,7 @@ export function FileTree({ cwd, selectedFile, onSelectFile }: FileTreeProps) {
           onSelectFile={onSelectFile}
           expandedSet={expanded}
           onToggleExpand={toggleExpand}
+          refreshTick={refreshTick}
         />
       ))}
     </div>

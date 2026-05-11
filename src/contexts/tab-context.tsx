@@ -45,6 +45,7 @@ export interface TabContextValue {
   closeTab: (tabId: string) => void;
   setActiveTab: (tabId: string) => void;
   setSplitTab: (tabId: string | null) => void;
+  moveTab: (tabId: string, toIndex: number) => void;
 }
 
 const TabContext = createContext<TabContextValue | null>(null);
@@ -134,6 +135,7 @@ export function TabProvider({ sessionId, children }: { sessionId: string; childr
     };
   }, [sessionId]);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: specific sub-properties avoid re-saving on every render
   useEffect(() => {
     if (loadedForRef.current !== sessionId) return;
     stateCache.set(sessionId, state);
@@ -217,6 +219,19 @@ export function TabProvider({ sessionId, children }: { sessionId: string; childr
     setState((prev) => ({ ...prev, splitTabId: tabId }));
   }, []);
 
+  const moveTab = useCallback((tabId: string, toIndex: number) => {
+    setState((prev) => {
+      const fromIdx = prev.tabs.findIndex((t) => t.id === tabId);
+      if (fromIdx < 1 || fromIdx === toIndex) return prev;
+      const tabs = [...prev.tabs];
+      const [tab] = tabs.splice(fromIdx, 1);
+      const adjusted = toIndex > fromIdx ? toIndex - 1 : toIndex;
+      const clamped = Math.max(1, Math.min(tabs.length, adjusted));
+      tabs.splice(clamped, 0, tab);
+      return { ...prev, tabs };
+    });
+  }, []);
+
   return (
     <TabContext.Provider
       value={{
@@ -229,6 +244,7 @@ export function TabProvider({ sessionId, children }: { sessionId: string; childr
         closeTab,
         setActiveTab,
         setSplitTab,
+        moveTab,
       }}
     >
       {children}

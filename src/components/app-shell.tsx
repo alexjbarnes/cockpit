@@ -19,6 +19,7 @@ export interface SidebarSectionConfig {
   content: ReactNode;
   order?: number;
   badge?: string;
+  actions?: ReactNode;
 }
 
 interface HeaderConfig {

@@ -21,9 +21,11 @@ import {
 import { usePathname, useRouter } from "next/navigation";
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { type SidebarSectionConfig, useShell } from "@/components/app-shell";
+import { FilePicker } from "@/components/file-picker";
 import { FileTree } from "@/components/file-tree";
 import { SidebarSection } from "@/components/sidebar-section";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useJobFailureCount } from "@/hooks/use-jobs";
 import { useSettings } from "@/hooks/use-settings";
 import { useWebSocket } from "@/hooks/use-websocket";
@@ -566,17 +568,22 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
 
           {cwd && !sidebarSections.has("git-changes") && <SidebarChanges cwd={cwd} sessionId={shellSessionId} />}
 
-          {cwd && !sidebarSections.has("file-tree") && (
-            <SidebarSection id="files" title="Session Files" defaultOpen={false}>
-              <SidebarFileTree cwd={cwd} />
-            </SidebarSection>
-          )}
+          {cwd && !sidebarSections.has("file-tree") && <SidebarFileTree cwd={cwd} />}
 
           {settings.reviewsEnabled && <RecentReviewsSection onNavigate={close} />}
 
-          {settings.reviewsEnabled && sidebarSections.has("pr-files") && (
-            <SidebarSection id="pr-files" title={sidebarSections.get("pr-files")!.title} badge={sidebarSections.get("pr-files")!.badge}>
-              {sidebarSections.get("pr-files")!.content}
+          {settings.reviewsEnabled && (
+            <SidebarSection
+              id="pr-files"
+              title={sidebarSections.get("pr-files")?.title || "PR Files"}
+              badge={sidebarSections.get("pr-files")?.badge}
+              defaultOpen={false}
+            >
+              {sidebarSections.has("pr-files") ? (
+                sidebarSections.get("pr-files")!.content
+              ) : (
+                <div className="px-3 py-3 text-xs text-muted-foreground">No PR open</div>
+              )}
             </SidebarSection>
           )}
         </div>
@@ -784,7 +791,7 @@ function DynamicSections({ sections, exclude }: { sections: Map<string, SidebarS
   return (
     <>
       {sorted.map((section) => (
-        <SidebarSection key={section.id} id={section.id} title={section.title} badge={section.badge}>
+        <SidebarSection key={section.id} id={section.id} title={section.title} badge={section.badge} actions={section.actions}>
           {section.content}
         </SidebarSection>
       ))}
@@ -792,9 +799,14 @@ function DynamicSections({ sections, exclude }: { sections: Map<string, SidebarS
   );
 }
 
+function isMobile() {
+  return typeof window !== "undefined" && window.innerWidth < 768;
+}
+
 function SidebarFileTree({ cwd }: { cwd: string }) {
   const router = useRouter();
-  const { tabActions } = useShell();
+  const { tabActions, closeSidebar } = useShell();
+  const [pickerOpen, setPickerOpen] = useState(false);
 
   const handleSelect = useCallback(
     (filePath: string) => {
@@ -803,11 +815,45 @@ function SidebarFileTree({ cwd }: { cwd: string }) {
       } else {
         router.push(`/files?cwd=${encodeURIComponent(cwd)}&file=${encodeURIComponent(filePath)}`);
       }
+      if (isMobile()) closeSidebar();
     },
-    [router, cwd, tabActions],
+    [router, cwd, tabActions, closeSidebar],
   );
 
-  return <FileTree cwd={cwd} selectedFile={null} onSelectFile={handleSelect} />;
+  const handlePickFile = useCallback(
+    (filePath: string) => {
+      handleSelect(filePath);
+      setPickerOpen(false);
+    },
+    [handleSelect],
+  );
+
+  return (
+    <SidebarSection
+      id="files"
+      title="Session Files"
+      defaultOpen={false}
+      actions={
+        <button
+          onClick={() => setPickerOpen(true)}
+          title="Open file"
+          className="flex items-center justify-center rounded p-0.5 hover:bg-accent text-muted-foreground"
+        >
+          <Plus className="h-3.5 w-3.5" />
+        </button>
+      }
+    >
+      <FileTree cwd={cwd} selectedFile={null} onSelectFile={handleSelect} />
+      <Dialog open={pickerOpen} onOpenChange={setPickerOpen}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Open File</DialogTitle>
+          </DialogHeader>
+          <FilePicker startPath={cwd} onSelect={handlePickFile} onCancel={() => setPickerOpen(false)} />
+        </DialogContent>
+      </Dialog>
+    </SidebarSection>
+  );
 }
 
 function changeStatusIcon(status: string) {

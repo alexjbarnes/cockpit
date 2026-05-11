@@ -5,6 +5,7 @@ import { v4 as uuidv4 } from "uuid";
 import type { JobRun, JobRunToolUse, ScheduledJob } from "@/types";
 import { findMissedRun, getJobSchedules, matchesCron, scheduleToCron } from "./cron-utils";
 import { addInboxMessage, parseErrorBlock, parseInboxBlock } from "./inbox";
+import { acquireJobLock, clearStaleLocks, releaseJobLock } from "./job-lock";
 import { getLatestRun, loadJobs, loadRuns, pruneAllRuns, saveRun } from "./job-storage";
 import type { SessionManager } from "./session-manager";
 import { countTranscriptMessages } from "./transcript";
@@ -159,6 +160,9 @@ export class JobScheduler {
       clearInterval(this.timer);
       this.timer = null;
     }
+    for (const jobId of this.runningJobs.keys()) {
+      releaseJobLock(jobId);
+    }
     console.log("[scheduler] stopped");
   }
 
@@ -178,6 +182,7 @@ export class JobScheduler {
   }
 
   private recoverState(): void {
+    clearStaleLocks();
     pruneAllRuns();
     const now = Date.now();
     const jobs = loadJobs();
@@ -218,6 +223,7 @@ export class JobScheduler {
         if (run.cwd) run.messageCount = countTranscriptMessages(run.sessionId, run.cwd);
         saveRun(run);
         this.runningJobs.delete(jobId);
+        releaseJobLock(jobId);
       }
     }
 
@@ -256,6 +262,12 @@ export class JobScheduler {
 
   async executeJob(job: ScheduledJob): Promise<JobRun> {
     const runId = uuidv4();
+
+    if (!acquireJobLock(job.id, runId)) {
+      console.log(`[scheduler] skipping job ${job.name}: another process holds the lock`);
+      throw new Error("Could not acquire job lock - another process is running this job");
+    }
+
     const jobCwd = job.cwd || path.join(SCRATCHPAD_DIR, job.id);
     mkdirSync(path.join(SCRATCHPAD_DIR, job.id), { recursive: true });
     const sessionInfo = this.sessionManager.createSession(jobCwd, `[job] ${job.name}`, {
@@ -416,6 +428,7 @@ export class JobScheduler {
         }
 
         this.runningJobs.delete(job.id);
+        releaseJobLock(job.id);
         resolve(run);
       };
 

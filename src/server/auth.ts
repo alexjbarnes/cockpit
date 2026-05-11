@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, unlink, writeFile } from "node:fs/promises";
+import { open as fsOpen, mkdir, rename, unlink } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { homedir } from "node:os";
 import path from "node:path";
@@ -40,10 +40,16 @@ function readPasswordFile(): StoredPassword | null {
   if (!existsSync(PASSWORD_FILE)) return null;
   try {
     const raw = require("node:fs").readFileSync(PASSWORD_FILE, "utf-8");
+    if (!raw.trim()) {
+      console.warn("[auth] password.json exists but is empty (likely corrupted by interrupted write)");
+      return null;
+    }
     const data = JSON.parse(raw) as StoredPassword;
     if (data.hash && data.salt) return data;
+    console.warn("[auth] password.json missing hash/salt fields");
     return null;
-  } catch {
+  } catch (err) {
+    console.error("[auth] failed to read password.json:", err);
     return null;
   }
 }
@@ -69,7 +75,12 @@ export async function setupPassword(password: string): Promise<void> {
     hash: hash.toString("hex"),
     salt: salt.toString("hex"),
   };
-  await writeFile(PASSWORD_FILE, JSON.stringify(data), "utf-8");
+  const tmpFile = `${PASSWORD_FILE}.tmp.${process.pid}.${Date.now()}`;
+  const fh = await fsOpen(tmpFile, "w");
+  await fh.writeFile(JSON.stringify(data), "utf-8");
+  await fh.sync();
+  await fh.close();
+  await rename(tmpFile, PASSWORD_FILE);
   cachedPassword = data;
 }
 

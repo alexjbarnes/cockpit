@@ -17,7 +17,7 @@ const UPDATE_COMMANDS: Record<InstallMethod, string> = {
   yarn: "yarn global add @anthropic-ai/claude-code",
   fnm: "npm install -g @anthropic-ai/claude-code",
   nvm: "npm install -g @anthropic-ai/claude-code",
-  binary: "Download from https://claude.ai/code",
+  binary: "claude update",
 };
 
 // Anthropic-hosted release pointer used by Claude Code itself (src/utils/autoUpdater.ts).
@@ -101,10 +101,6 @@ export async function GET() {
 
 export async function POST() {
   const method = await detectInstallMethod();
-  if (method === "binary") {
-    return NextResponse.json({ error: "Manual update required for standalone binary installs" }, { status: 400 });
-  }
-
   const cmd = UPDATE_COMMANDS[method];
   const [bin, ...args] = cmd.split(" ");
 

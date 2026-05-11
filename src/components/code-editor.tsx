@@ -56,6 +56,7 @@ export function CodeEditor({ value, onChange, language, readOnly, className, onS
   onChangeRef.current = onChange;
   onSaveRef.current = onSave;
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: mount-only; language/readOnly use compartments for live reconfiguration
   useEffect(() => {
     if (!containerRef.current) return;
 
@@ -93,7 +94,6 @@ export function CodeEditor({ value, onChange, language, readOnly, className, onS
       view.destroy();
       viewRef.current = null;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Sync external value changes

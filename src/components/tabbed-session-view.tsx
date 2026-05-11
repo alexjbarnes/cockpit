@@ -76,7 +76,7 @@ function TabbedContent({ sessionId, cwd, initialName, historyView }: TabbedSessi
     const rightTabId = splitTabId;
     return (
       <>
-        <TabBar />
+        <TabBar splitRatio={isSplit ? splitRatio : undefined} />
         <div ref={containerRef} className="flex-1 min-h-0 flex flex-row">
           <div className="flex flex-col min-w-0 min-h-0" style={{ width: `${(1 - splitRatio) * 100}%` }}>
             <ChatView sessionId={sessionId} cwd={cwd} initialName={initialName} historyView={historyView} />
@@ -92,7 +92,7 @@ function TabbedContent({ sessionId, cwd, initialName, historyView }: TabbedSessi
 
   return (
     <>
-      <TabBar />
+      <TabBar splitRatio={isSplit ? splitRatio : undefined} />
       <ChatView
         sessionId={sessionId}
         cwd={cwd}

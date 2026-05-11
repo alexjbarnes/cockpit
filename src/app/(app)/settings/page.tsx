@@ -1,6 +1,6 @@
 "use client";
 
-import { ChevronRight, Download, Info, RefreshCw } from "lucide-react";
+import { ChevronDown, ChevronRight, Download, ExternalLink, Info, RefreshCw } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { usePageHeader } from "@/components/app-shell";
@@ -152,6 +152,24 @@ interface VersionInfo {
 interface CockpitVersionInfo {
   installed: string;
   latest: string;
+  installMethod: "npm" | "npx" | "dev";
+  updateCommand: string | null;
+}
+
+interface ChangelogRelease {
+  version: string;
+  date: string;
+  sections: Array<{ heading: string; items: string[] }>;
+}
+
+interface ClaudeCodeRelease {
+  version: string;
+  items: string[];
+}
+
+function formatReleaseDate(dateStr: string): string {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
 }
 
 export default function SettingsPage() {
@@ -163,6 +181,15 @@ export default function SettingsPage() {
   const [updateResult, setUpdateResult] = useState<{ ok: boolean; message: string } | null>(null);
   const [cockpitVersion, setCockpitVersion] = useState<CockpitVersionInfo | null>(null);
   const [cockpitVersionLoading, setCockpitVersionLoading] = useState(true);
+  const [cockpitUpdating, setCockpitUpdating] = useState(false);
+  const [cockpitUpdateResult, setCockpitUpdateResult] = useState<{ ok: boolean; message: string } | null>(null);
+  const [changelogReleases, setChangelogReleases] = useState<ChangelogRelease[]>([]);
+  const [changelogRepo, setChangelogRepo] = useState("");
+  const [changelogExpanded, setChangelogExpanded] = useState(false);
+  const [expandedVersions, setExpandedVersions] = useState<Set<string>>(new Set());
+  const [ccReleases, setCcReleases] = useState<ClaudeCodeRelease[]>([]);
+  const [ccChangelogExpanded, setCcChangelogExpanded] = useState(false);
+  const [ccExpandedVersions, setCcExpandedVersions] = useState<Set<string>>(new Set());
   const router = useRouter();
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -209,6 +236,20 @@ export default function SettingsPage() {
     fetchCockpitVersion();
   }, [fetchCockpitVersion]);
 
+  useEffect(() => {
+    fetch("/api/version/cockpit/changelog")
+      .then((res) => res.json())
+      .then((data: { releases: ChangelogRelease[]; repo: string }) => {
+        setChangelogReleases(data.releases || []);
+        setChangelogRepo(data.repo || "");
+      })
+      .catch(() => {});
+    fetch("/api/version/changelog")
+      .then((res) => res.json())
+      .then((data: { releases: ClaudeCodeRelease[] }) => setCcReleases(data.releases || []))
+      .catch(() => {});
+  }, []);
+
   const triggerUpdate = useCallback(async () => {
     setUpdating(true);
     setUpdateResult(null);
@@ -227,6 +268,25 @@ export default function SettingsPage() {
       setUpdating(false);
     }
   }, [fetchVersion]);
+
+  const triggerCockpitUpdate = useCallback(async () => {
+    setCockpitUpdating(true);
+    setCockpitUpdateResult(null);
+    try {
+      const res = await fetch("/api/version/cockpit", { method: "POST" });
+      const data = await res.json();
+      if (res.ok) {
+        setCockpitUpdateResult({ ok: true, message: "Updated. Restart Cockpit to use the new version." });
+        fetchCockpitVersion();
+      } else {
+        setCockpitUpdateResult({ ok: false, message: data.error || "Update failed" });
+      }
+    } catch {
+      setCockpitUpdateResult({ ok: false, message: "Update failed" });
+    } finally {
+      setCockpitUpdating(false);
+    }
+  }, [fetchCockpitVersion]);
 
   const selectTheme = useCallback((t: Theme) => {
     setTheme(t);
@@ -284,6 +344,69 @@ export default function SettingsPage() {
               <p className={`text-xs px-2 ${updateResult.ok ? "text-green-500" : "text-destructive"}`}>{updateResult.message}</p>
             )}
           </div>
+          {ccReleases.length > 0 && (
+            <>
+              <div className="border-t mt-3 pt-3">
+                <button
+                  onClick={() => setCcChangelogExpanded(!ccChangelogExpanded)}
+                  className="flex items-center justify-between w-full text-left px-2"
+                >
+                  <span className="text-sm font-medium">What's New</span>
+                  <ChevronDown
+                    className={`h-4 w-4 text-muted-foreground transition-transform ${ccChangelogExpanded ? "rotate-180" : ""}`}
+                  />
+                </button>
+              </div>
+              {ccChangelogExpanded && (
+                <div className="mt-2 space-y-1">
+                  {ccReleases.slice(0, 10).map((release) => {
+                    const open = ccExpandedVersions.has(release.version);
+                    return (
+                      <div key={release.version}>
+                        <button
+                          onClick={() => {
+                            setCcExpandedVersions((prev) => {
+                              const next = new Set(prev);
+                              if (next.has(release.version)) next.delete(release.version);
+                              else next.add(release.version);
+                              return next;
+                            });
+                          }}
+                          className="flex items-center justify-between w-full text-left px-2 py-1.5 rounded hover:bg-muted transition-colors"
+                        >
+                          <span className="text-sm font-semibold">{release.version}</span>
+                          <ChevronDown className={`h-3.5 w-3.5 text-muted-foreground transition-transform ${open ? "rotate-180" : ""}`} />
+                        </button>
+                        {open && (
+                          <div className="px-2 pb-2">
+                            <ul className="space-y-1.5 text-sm mt-1">
+                              {release.items.map((item, i) => (
+                                <li key={i} className="flex gap-2">
+                                  <span className="text-muted-foreground mt-0.5 shrink-0">•</span>
+                                  <span className="break-words min-w-0">{item}</span>
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                  <div className="px-2 pt-2">
+                    <a
+                      href="https://github.com/anthropics/claude-code/blob/main/CHANGELOG.md"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 text-sm text-primary hover:underline"
+                    >
+                      Full changelog
+                      <ExternalLink className="h-3 w-3" />
+                    </a>
+                  </div>
+                </div>
+              )}
+            </>
+          )}
         </CardContent>
       </Card>
       <Card>
@@ -314,14 +437,103 @@ export default function SettingsPage() {
               const outdated = cockpitVersion.installed.localeCompare(cockpitVersion.latest, undefined, { numeric: true }) < 0;
               return outdated ? (
                 <div className="space-y-2 px-2">
-                  <p className="text-xs text-amber-500">Update available</p>
-                  <p className="text-xs text-muted-foreground font-mono break-all">npm install -g @alexjbarnes/cockpit</p>
+                  <div className="flex items-center justify-between">
+                    <p className="text-xs text-amber-500">Update available</p>
+                    {cockpitVersion.installMethod === "npm" && (
+                      <Button size="sm" variant="outline" onClick={triggerCockpitUpdate} disabled={cockpitUpdating}>
+                        <Download className="h-3.5 w-3.5 mr-1" />
+                        {cockpitUpdating ? "Updating..." : "Update"}
+                      </Button>
+                    )}
+                  </div>
+                  {cockpitVersion.updateCommand && (
+                    <p className="text-xs text-muted-foreground font-mono break-all">{cockpitVersion.updateCommand}</p>
+                  )}
+                  {cockpitVersion.installMethod === "npx" && (
+                    <p className="text-xs text-muted-foreground">Restart to get the latest version</p>
+                  )}
                 </div>
               ) : (
                 <p className="text-xs text-green-500 px-2">Up to date</p>
               );
             })()}
+            {cockpitUpdateResult && (
+              <p className={`text-xs px-2 ${cockpitUpdateResult.ok ? "text-green-500" : "text-destructive"}`}>
+                {cockpitUpdateResult.message}
+              </p>
+            )}
           </div>
+          {changelogReleases.length > 0 && (
+            <>
+              <div className="border-t mt-3 pt-3">
+                <button
+                  onClick={() => setChangelogExpanded(!changelogExpanded)}
+                  className="flex items-center justify-between w-full text-left px-2"
+                >
+                  <span className="text-sm font-medium">What's New</span>
+                  <ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform ${changelogExpanded ? "rotate-180" : ""}`} />
+                </button>
+              </div>
+              {changelogExpanded && (
+                <div className="mt-2 space-y-1">
+                  {changelogReleases.slice(0, 10).map((release) => {
+                    const open = expandedVersions.has(release.version);
+                    return (
+                      <div key={release.version}>
+                        <button
+                          onClick={() => {
+                            setExpandedVersions((prev) => {
+                              const next = new Set(prev);
+                              if (next.has(release.version)) next.delete(release.version);
+                              else next.add(release.version);
+                              return next;
+                            });
+                          }}
+                          className="flex items-center justify-between w-full text-left px-2 py-1.5 rounded hover:bg-muted transition-colors"
+                        >
+                          <div>
+                            <span className="text-sm font-semibold">Version {release.version}</span>
+                            <span className="text-xs text-muted-foreground ml-2">{formatReleaseDate(release.date)}</span>
+                          </div>
+                          <ChevronDown className={`h-3.5 w-3.5 text-muted-foreground transition-transform ${open ? "rotate-180" : ""}`} />
+                        </button>
+                        {open && (
+                          <div className="px-2 pb-2">
+                            {release.sections.map((section) => (
+                              <div key={section.heading} className="mt-2">
+                                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-1">{section.heading}</p>
+                                <ul className="space-y-1.5 text-sm">
+                                  {section.items.map((item, i) => (
+                                    <li key={i} className="flex gap-2">
+                                      <span className="text-muted-foreground mt-0.5 shrink-0">•</span>
+                                      <span className="break-words min-w-0">{item.replace(/\*\*/g, "")}</span>
+                                    </li>
+                                  ))}
+                                </ul>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                  {changelogRepo && (
+                    <div className="px-2 pt-2">
+                      <a
+                        href={`https://github.com/${changelogRepo}/blob/main/CHANGELOG.md`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 text-sm text-primary hover:underline"
+                      >
+                        Full changelog
+                        <ExternalLink className="h-3 w-3" />
+                      </a>
+                    </div>
+                  )}
+                </div>
+              )}
+            </>
+          )}
         </CardContent>
       </Card>
       <Card>
