@@ -96,9 +96,9 @@ describe("pagination with message stitching", () => {
         makeMsg(`prev-${i}`, i % 2 === 0 ? "user" : "assistant", `prev msg ${i}`, 1000 + i),
       );
 
-      mockLoadTranscript.mockImplementation((sessionId: string, _cwd: string, options?: { targetMessages?: number }) => {
+      mockLoadTranscript.mockImplementation((sessionId: string, _cwd: string, options?: { tailLines?: number }) => {
         if (sessionId === s.cliSessionId) {
-          if (options?.targetMessages) {
+          if (options?.tailLines) {
             // Tail-limited: would only return last ~50 messages and have byteOffset > 0
             const tail = currentMessages.slice(-50);
             return Promise.resolve({ messages: tail, byteOffset: 500, totalSize: 2000, lastUsage: null });
@@ -157,7 +157,7 @@ describe("pagination with message stitching", () => {
       expect(result!.messages[49].id).toBe("curr-79");
     });
 
-    it("loads current session without targetMessages when stitching applies", async () => {
+    it("loads current session WITHOUT tailLines when stitching applies", async () => {
       const session = manager.createSession("/tmp/project");
       const s = (manager as any).sessions.get(session.id)!;
       s.previousCliSessionIds = ["prev-session-1"];
@@ -166,13 +166,13 @@ describe("pagination with message stitching", () => {
 
       await manager.getSession(session.id);
 
-      // First call should be for the current session WITHOUT targetMessages
+      // First call should be for the current session WITHOUT tailLines
       const firstCall = mockLoadTranscript.mock.calls[0];
       expect(firstCall[0]).toBe(s.cliSessionId);
       expect(firstCall[2]).toBeUndefined(); // no options = full load
     });
 
-    it("loads current session with targetMessages when no stitching needed", async () => {
+    it("loads current session WITH tailLines when no stitching needed", async () => {
       const session = manager.createSession("/tmp/project");
       const s = (manager as any).sessions.get(session.id)!;
       s.previousCliSessionIds = []; // no previous sessions
@@ -181,12 +181,12 @@ describe("pagination with message stitching", () => {
 
       await manager.getSession(session.id);
 
-      // Should use targetMessages since no stitching
+      // Should use tailLines since no stitching
       const firstCall = mockLoadTranscript.mock.calls[0];
-      expect(firstCall[2]).toEqual({ targetMessages: 50 });
+      expect(firstCall[2]).toEqual({ tailLines: 150 });
     });
 
-    it("loads current session with targetMessages when stitching disabled", async () => {
+    it("loads current session WITH tailLines when stitching disabled", async () => {
       mockGetDefaults.mockReturnValue({
         thinkingLevel: "high",
         bypassAllPermissions: false,
@@ -206,7 +206,7 @@ describe("pagination with message stitching", () => {
       await manager.getSession(session.id);
 
       const firstCall = mockLoadTranscript.mock.calls[0];
-      expect(firstCall[2]).toEqual({ targetMessages: 50 });
+      expect(firstCall[2]).toEqual({ tailLines: 150 });
     });
   });
 
@@ -365,7 +365,7 @@ describe("pagination with message stitching", () => {
 
       const firstCall = mockLoadTranscript.mock.calls[0];
       expect(firstCall[0]).toBe(s.cliSessionId);
-      expect(firstCall[2]).toBeUndefined(); // full load, no targetMessages
+      expect(firstCall[2]).toBeUndefined(); // full load, no tailLines
     });
 
     it("preserves all current session messages in buffer", async () => {

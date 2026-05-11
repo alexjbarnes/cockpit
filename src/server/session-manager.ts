@@ -237,7 +237,7 @@ export class SessionManager {
     // Load full current session when stitching to avoid losing middle messages.
     // Without stitching, tail-read is fine because byteOffset stays pointing at
     // the current session's file for backward pagination.
-    const result = await loadTranscript(session.cliSessionId, session.info.cwd, willStitch ? undefined : { targetMessages: 50 });
+    const result = await loadTranscript(session.cliSessionId, session.info.cwd, willStitch ? undefined : { tailLines: 150 });
     let { messages, byteOffset, totalSize, lastUsage } = result;
 
     session.bufferCliSessionId = session.cliSessionId;
@@ -245,7 +245,7 @@ export class SessionManager {
     if (willStitch) {
       for (let i = session.previousCliSessionIds.length - 1; i >= 0; i--) {
         const prevId = session.previousCliSessionIds[i];
-        const prevResult = await loadTranscript(prevId, session.info.cwd, { targetMessages: 50 });
+        const prevResult = await loadTranscript(prevId, session.info.cwd, { tailLines: 150 });
         if (prevResult.messages.length > 0) {
           const marker: ChatMessage = {
             id: `clear-boundary-${i}`,
@@ -293,7 +293,7 @@ export class SessionManager {
     const session = this.sessions.get(id)!;
     const stitching = getDefaults().messageStitching;
     const willStitch = stitching && session.previousCliSessionIds.length > 0;
-    const result = await loadTranscript(session.cliSessionId, cwd, willStitch ? undefined : { targetMessages: 50 });
+    const result = await loadTranscript(session.cliSessionId, cwd, willStitch ? undefined : { tailLines: 150 });
     let { messages, byteOffset, totalSize, lastUsage } = result;
 
     session.bufferCliSessionId = session.cliSessionId;
@@ -301,7 +301,7 @@ export class SessionManager {
     if (willStitch) {
       for (let i = session.previousCliSessionIds.length - 1; i >= 0; i--) {
         const prevId = session.previousCliSessionIds[i];
-        const prevResult = await loadTranscript(prevId, cwd, { targetMessages: 50 });
+        const prevResult = await loadTranscript(prevId, cwd, { tailLines: 150 });
         if (prevResult.messages.length > 0) {
           const marker: ChatMessage = {
             id: `clear-boundary-${i}`,
@@ -352,12 +352,12 @@ export class SessionManager {
     const prevIds = chain ? chain.truncatedPrevIds : [];
 
     const willStitch = getDefaults().messageStitching && prevIds.length > 0;
-    const result = await loadTranscript(cliId, cwd, willStitch ? undefined : { targetMessages: 50 });
+    const result = await loadTranscript(cliId, cwd, willStitch ? undefined : { tailLines: 150 });
     let { messages, lastUsage } = result;
 
     if (willStitch) {
       for (let i = prevIds.length - 1; i >= 0; i--) {
-        const prevResult = await loadTranscript(prevIds[i], cwd, { targetMessages: 50 });
+        const prevResult = await loadTranscript(prevIds[i], cwd, { tailLines: 150 });
         if (prevResult.messages.length > 0) {
           const marker: ChatMessage = {
             id: `clear-boundary-${i}`,
@@ -425,7 +425,7 @@ export class SessionManager {
         return { messages: [], hasMore: false };
       }
       const prevId = prevIds[prevIds.length - 1];
-      const prevResult = await loadTranscript(prevId, session.info.cwd, { targetMessages: 50 });
+      const prevResult = await loadTranscript(prevId, session.info.cwd, { tailLines: 150 });
       prevIds.pop();
       session.transcriptByteOffset = prevResult.byteOffset;
       session.bufferCliSessionId = prevId;
@@ -443,7 +443,7 @@ export class SessionManager {
     }
 
     const cwd = session.info.cwd;
-    const result = await loadMoreMessages(session.bufferCliSessionId, cwd, session.transcriptByteOffset);
+    const result = await loadMoreMessages(session.bufferCliSessionId, cwd, session.transcriptByteOffset, 150);
     session.transcriptByteOffset = result.newByteOffset;
 
     // Prepend to buffer

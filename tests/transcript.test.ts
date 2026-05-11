@@ -1367,8 +1367,8 @@ describe("transcript module", () => {
     });
   });
 
-  describe("loadTranscript with targetMessages option", () => {
-    it("reads tail of file using file handle", async () => {
+  describe("loadTranscript with tailLines option", () => {
+    it("reads tail lines from file using file handle", async () => {
       (existsSync as any).mockReturnValue(true);
 
       const entry = JSON.stringify({
@@ -1390,7 +1390,7 @@ describe("transcript module", () => {
       (open as any).mockResolvedValue(mockFileHandle);
       (stat as any).mockResolvedValue({ size: fileContent.length });
 
-      const result = await loadTranscript("session-123", "/tmp", { targetMessages: 10 });
+      const result = await loadTranscript("session-123", "/tmp", { tailLines: 10 });
 
       expect(result.messages).toHaveLength(1);
       expect(result.messages[0].id).toBe("u1");
@@ -1501,7 +1501,7 @@ describe("transcript module", () => {
     });
   });
 
-  describe("loadTranscript with targetMessages", () => {
+  describe("loadTranscript with tailLines", () => {
     function makeFileHandle(content: string) {
       const buf = Buffer.from(content);
       return {
@@ -1513,7 +1513,7 @@ describe("transcript module", () => {
       };
     }
 
-    it("reads enough lines to produce targetMessages parsed messages", async () => {
+    it("loads last N lines using readTailLines", async () => {
       (existsSync as any).mockReturnValue(true);
       const lines = [
         JSON.stringify({ type: "user", message: { id: "u1", content: "first" }, timestamp: "2024-01-01T00:00:00Z", cwd: "/tmp" }),
@@ -1525,14 +1525,14 @@ describe("transcript module", () => {
       (stat as any).mockResolvedValue({ size: Buffer.byteLength(content) });
       (open as any).mockResolvedValue(fh);
 
-      const result = await loadTranscript("session-123", "/tmp", { targetMessages: 2 });
+      const result = await loadTranscript("session-123", "/tmp", { tailLines: 2 });
 
-      expect(result.messages.length).toBeGreaterThanOrEqual(2);
+      expect(result.messages.length).toBeLessThanOrEqual(2);
       expect(result.totalSize).toBe(Buffer.byteLength(content));
       expect(fh.close).toHaveBeenCalled();
     });
 
-    it("handles empty file", async () => {
+    it("handles empty file in readTailLines", async () => {
       (existsSync as any).mockReturnValue(true);
       (stat as any).mockResolvedValue({ size: 0 });
       (open as any).mockResolvedValue({
@@ -1540,7 +1540,7 @@ describe("transcript module", () => {
         close: vi.fn(async () => {}),
       });
 
-      const result = await loadTranscript("session-123", "/tmp", { targetMessages: 10 });
+      const result = await loadTranscript("session-123", "/tmp", { tailLines: 10 });
 
       expect(result.messages).toHaveLength(0);
       expect(result.byteOffset).toBe(0);
