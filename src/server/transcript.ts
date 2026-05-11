@@ -541,69 +541,78 @@ function parseLines(lines: string[]): { messages: ChatMessage[]; lastUsage: { us
   return { messages, lastUsage };
 }
 
-const TAIL_LINES = 150;
-const _PAGE_SIZE = 50;
+const INITIAL_LINE_ESTIMATE = 150;
+const MAX_LINE_ESTIMATE = 10_000;
 
-export async function loadTranscript(sessionId: string, cwd: string, options?: { tailLines?: number }): Promise<TranscriptResult> {
+export async function loadTranscript(sessionId: string, cwd: string, options?: { targetMessages?: number }): Promise<TranscriptResult> {
   const fp = getTranscriptPath(sessionId, cwd);
   if (!existsSync(fp)) return { messages: [], byteOffset: 0, totalSize: 0, lastUsage: null };
 
   const t0 = performance.now();
-  const tailCount = options?.tailLines;
+  const target = options?.targetMessages;
 
+  if (!target) {
+    const raw = await readFile(fp, "utf-8");
+    const lines = raw.split(/\r?\n/).filter((l) => l.trim());
+    const { messages, lastUsage } = parseLines(lines);
+    const elapsed = performance.now() - t0;
+    const sid = sessionId.slice(0, 8);
+    debugLog(`[transcript:${sid}] full: ${lines.length} lines, ${messages.length} msgs | ${elapsed.toFixed(0)}ms`);
+    return { messages, byteOffset: 0, totalSize: raw.length, lastUsage };
+  }
+
+  let lineEstimate = INITIAL_LINE_ESTIMATE;
   let lines: string[];
   let byteOffset: number;
   let totalSize: number;
-  let readLabel: string;
 
-  if (tailCount) {
-    const result = await readTailLines(fp, tailCount);
+  while (true) {
+    const result = await readTailLines(fp, lineEstimate);
     lines = result.lines;
     byteOffset = result.byteOffset;
     totalSize = result.totalSize;
-    readLabel = `tail(${tailCount})`;
-  } else {
-    const raw = await readFile(fp, "utf-8");
-    lines = raw.split(/\r?\n/).filter((l) => l.trim());
-    byteOffset = 0;
-    totalSize = raw.length;
-    readLabel = "full";
+
+    const { messages, lastUsage } = parseLines(lines);
+
+    if (messages.length >= target || byteOffset === 0 || lineEstimate >= MAX_LINE_ESTIMATE) {
+      const elapsed = performance.now() - t0;
+      const sid = sessionId.slice(0, 8);
+      debugLog(`[transcript:${sid}] tail(${lineEstimate} lines -> ${messages.length} msgs, target ${target}) | ${elapsed.toFixed(0)}ms`);
+      return { messages, byteOffset, totalSize, lastUsage };
+    }
+
+    lineEstimate = Math.min(lineEstimate * 2, MAX_LINE_ESTIMATE);
   }
-  const tRead = performance.now();
-
-  const { messages, lastUsage } = parseLines(lines);
-  const tParse = performance.now();
-
-  const sid = sessionId.slice(0, 8);
-  debugLog(
-    `[transcript:${sid}] ${readLabel}: ${lines.length} lines, ${messages.length} msgs | read=${(tRead - t0).toFixed(0)}ms parse=${(tParse - tRead).toFixed(0)}ms total=${(tParse - t0).toFixed(0)}ms`,
-  );
-
-  return { messages, byteOffset, totalSize, lastUsage };
 }
 
 export async function loadMoreMessages(
   sessionId: string,
   cwd: string,
   byteOffset: number,
-  targetLines?: number,
+  targetMessages = 50,
 ): Promise<{ messages: ChatMessage[]; newByteOffset: number }> {
   if (byteOffset <= 0) return { messages: [], newByteOffset: 0 };
 
   const fp = getTranscriptPath(sessionId, cwd);
   const t0 = performance.now();
-  const { lines, newByteOffset } = await readMoreLines(fp, byteOffset, targetLines || TAIL_LINES);
-  const tRead = performance.now();
 
-  const { messages } = parseLines(lines);
-  const tParse = performance.now();
+  let lineEstimate = INITIAL_LINE_ESTIMATE;
 
-  const sid = sessionId.slice(0, 8);
-  debugLog(
-    `[transcript:${sid}] more: ${lines.length} lines, ${messages.length} msgs | read=${(tRead - t0).toFixed(0)}ms parse=${(tParse - tRead).toFixed(0)}ms`,
-  );
+  while (true) {
+    const { lines, newByteOffset } = await readMoreLines(fp, byteOffset, lineEstimate);
+    const { messages } = parseLines(lines);
 
-  return { messages, newByteOffset };
+    if (messages.length >= targetMessages || newByteOffset === 0 || lineEstimate >= MAX_LINE_ESTIMATE) {
+      const elapsed = performance.now() - t0;
+      const sid = sessionId.slice(0, 8);
+      debugLog(
+        `[transcript:${sid}] more(${lineEstimate} lines -> ${messages.length} msgs, target ${targetMessages}) | ${elapsed.toFixed(0)}ms`,
+      );
+      return { messages, newByteOffset };
+    }
+
+    lineEstimate = Math.min(lineEstimate * 2, MAX_LINE_ESTIMATE);
+  }
 }
 
 function extractOutput(block: TranscriptBlock): string {
