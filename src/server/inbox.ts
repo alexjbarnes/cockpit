@@ -72,11 +72,11 @@ export function addInboxMessage(msg: {
   return entry;
 }
 
-export function markRead(id: string): boolean {
+export function markRead(id: string, read = true): boolean {
   const messages = readAll();
   const msg = messages.find((m) => m.id === id);
   if (!msg) return false;
-  msg.read = true;
+  msg.read = read;
   writeAll(messages);
   return true;
 }

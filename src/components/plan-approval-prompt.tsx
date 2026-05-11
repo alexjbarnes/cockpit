@@ -13,6 +13,7 @@ interface AllowedPrompt {
 
 interface PlanApprovalPromptProps {
   permission: PendingPermission;
+  bypassActive: boolean;
   onRespond: (requestId: string, allowed: boolean, permissionMode?: PermissionMode, suggestionIndex?: number) => void;
   onSendMessage: (text: string) => void;
   onSetBypass: (enabled: boolean) => void;
@@ -25,14 +26,27 @@ interface PlanOption {
   autoAccept: boolean;
 }
 
-const OPTIONS: PlanOption[] = [
+const ALL_OPTIONS: PlanOption[] = [
   { label: "Yes, clear context and auto-accept edits", clearContext: true, autoAccept: true },
   { label: "Yes, clear context and manually approve edits", clearContext: true, autoAccept: false },
   { label: "Yes, auto-accept edits", clearContext: false, autoAccept: true },
   { label: "Yes, manually approve edits", clearContext: false, autoAccept: false },
 ];
 
-export function PlanApprovalPrompt({ permission, onRespond, onSendMessage, onSetBypass, onSetPlanMode }: PlanApprovalPromptProps) {
+const BYPASS_OPTIONS: PlanOption[] = [
+  { label: "Yes, clear context and implement", clearContext: true, autoAccept: true },
+  { label: "Yes, continue implementing", clearContext: false, autoAccept: true },
+];
+
+export function PlanApprovalPrompt({
+  permission,
+  bypassActive,
+  onRespond,
+  onSendMessage,
+  onSetBypass,
+  onSetPlanMode,
+}: PlanApprovalPromptProps) {
+  const options = bypassActive ? BYPASS_OPTIONS : ALL_OPTIONS;
   const [selected, setSelected] = useState(0);
   const [showFeedback, setShowFeedback] = useState(false);
   const [feedback, setFeedback] = useState("");
@@ -62,7 +76,7 @@ export function PlanApprovalPrompt({ permission, onRespond, onSendMessage, onSet
 
   const handleProceed = useCallback(
     (optionIndex: number) => {
-      const opt = OPTIONS[optionIndex];
+      const opt = options[optionIndex];
       if (opt.autoAccept) {
         onSetBypass(true);
       }
@@ -82,7 +96,7 @@ export function PlanApprovalPrompt({ permission, onRespond, onSendMessage, onSet
         onRespond(permission.requestId, true, "allow");
       }
     },
-    [permission.requestId, permission.planFilePath, onRespond, onSendMessage, onSetBypass, onSetPlanMode],
+    [options, permission.requestId, permission.planFilePath, onRespond, onSendMessage, onSetBypass, onSetPlanMode],
   );
 
   const handleDismiss = useCallback(() => {
@@ -123,19 +137,19 @@ export function PlanApprovalPrompt({ permission, onRespond, onSendMessage, onSet
         setSelected((s) => Math.max(0, s - 1));
       } else if (e.key === "ArrowDown" || e.key === "j") {
         e.preventDefault();
-        setSelected((s) => Math.min(OPTIONS.length + 1, s + 1));
+        setSelected((s) => Math.min(options.length + 1, s + 1));
       } else if (e.key === "Enter") {
         e.preventDefault();
-        if (selected === OPTIONS.length) {
+        if (selected === options.length) {
           setShowFeedback(true);
-        } else if (selected === OPTIONS.length + 1) {
+        } else if (selected === options.length + 1) {
           handleDismiss();
         } else {
           handleProceed(selected);
         }
       }
     },
-    [showFeedback, selected, handleProceed, handleSendFeedback, handleDismiss],
+    [options, showFeedback, selected, handleProceed, handleSendFeedback, handleDismiss],
   );
 
   return (
@@ -176,7 +190,7 @@ export function PlanApprovalPrompt({ permission, onRespond, onSendMessage, onSet
                 </div>
               )}
               <div className="space-y-0.5">
-                {OPTIONS.map((opt, i) => (
+                {options.map((opt, i) => (
                   <button
                     key={i}
                     onClick={() => handleProceed(i)}
@@ -192,19 +206,19 @@ export function PlanApprovalPrompt({ permission, onRespond, onSendMessage, onSet
                 ))}
                 <button
                   onClick={() => setShowFeedback(true)}
-                  onMouseEnter={() => setSelected(OPTIONS.length)}
+                  onMouseEnter={() => setSelected(options.length)}
                   className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs transition-colors ${
-                    selected === OPTIONS.length ? "bg-blue-600/20 text-foreground" : "text-muted-foreground hover:text-foreground"
+                    selected === options.length ? "bg-blue-600/20 text-foreground" : "text-muted-foreground hover:text-foreground"
                   }`}
                 >
-                  <span className="shrink-0 font-mono text-blue-500 w-4">5.</span>
+                  <span className="shrink-0 font-mono text-blue-500 w-4">{options.length + 1}.</span>
                   <span>Tell Claude what to change</span>
                 </button>
                 <button
                   onClick={handleDismiss}
-                  onMouseEnter={() => setSelected(OPTIONS.length + 1)}
+                  onMouseEnter={() => setSelected(options.length + 1)}
                   className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs transition-colors ${
-                    selected === OPTIONS.length + 1 ? "bg-blue-600/20 text-foreground" : "text-muted-foreground hover:text-foreground"
+                    selected === options.length + 1 ? "bg-blue-600/20 text-foreground" : "text-muted-foreground hover:text-foreground"
                   }`}
                 >
                   <span className="shrink-0 font-mono text-muted-foreground w-4">Esc</span>

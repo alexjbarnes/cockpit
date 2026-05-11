@@ -423,6 +423,7 @@ export function ChatView({
               <PlanApprovalPrompt
                 key={p.requestId}
                 permission={p}
+                bypassActive={bypassActive}
                 onRespond={respondToPermission}
                 onSendMessage={sendMessage}
                 onSetBypass={setBypassAll}
