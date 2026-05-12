@@ -16,6 +16,8 @@ import {
   FileMinus,
   FilePlus,
   GitBranch,
+  Layers,
+  List,
   Loader2,
   XCircle,
 } from "lucide-react";
@@ -393,7 +395,7 @@ function LazyDiff({
   const handleMarkViewed = (e: React.MouseEvent) => {
     e.stopPropagation();
     onToggleViewed();
-    if (!collapsed) onToggleCollapse();
+    if (!viewed && !collapsed) onToggleCollapse();
   };
 
   const diffOptions = {
@@ -529,6 +531,8 @@ export function PRReviewView({ owner, repo, number }: { owner: string; repo: str
   const [viewedFiles, setViewedFilesState] = useState<Set<string>>(() => getViewedFiles(prKey));
 
   const [collapsedFiles, setCollapsedFiles] = useState<Set<string>>(new Set());
+  const [stackedMode, setStackedMode] = useState(true);
+  const [selectedFile, setSelectedFile] = useState<string | null>(null);
 
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [reviewsCwd, setReviewsCwd] = useState<string | null>(null);
@@ -658,20 +662,6 @@ export function PRReviewView({ owner, repo, number }: { owner: string; repo: str
     [prKey],
   );
 
-  // Mark as viewed (always adds, never removes)
-  const markViewed = useCallback(
-    (path: string) => {
-      setViewedFilesState((prev) => {
-        if (prev.has(path)) return prev;
-        const next = new Set(prev);
-        next.add(path);
-        setViewedFiles(prKey, next);
-        return next;
-      });
-    },
-    [prKey],
-  );
-
   // Toggle collapse
   const toggleCollapse = useCallback((path: string) => {
     setCollapsedFiles((prev) => {
@@ -742,10 +732,15 @@ export function PRReviewView({ owner, repo, number }: { owner: string; repo: str
               className={cn(
                 "flex items-center gap-2 px-3 py-1.5 text-sm cursor-pointer border-b last:border-b-0 hover:bg-muted/50",
                 viewedFiles.has(file.path) && "opacity-50",
+                !stackedMode && selectedFile === file.path && "bg-muted",
               )}
               onClick={() => {
-                if (collapsedFiles.has(file.path)) toggleCollapse(file.path);
-                setScrollToFile(file.path);
+                if (stackedMode) {
+                  if (collapsedFiles.has(file.path)) toggleCollapse(file.path);
+                  setScrollToFile(file.path);
+                } else {
+                  setSelectedFile(file.path);
+                }
               }}
             >
               <button
@@ -787,7 +782,18 @@ export function PRReviewView({ owner, repo, number }: { owner: string; repo: str
     });
 
     return () => removeSidebarSection("pr-files");
-  }, [fileDiffs, pr, viewedFiles, collapsedFiles, setSidebarSection, removeSidebarSection, toggleViewed, toggleCollapse]);
+  }, [
+    fileDiffs,
+    pr,
+    viewedFiles,
+    collapsedFiles,
+    stackedMode,
+    selectedFile,
+    setSidebarSection,
+    removeSidebarSection,
+    toggleViewed,
+    toggleCollapse,
+  ]);
 
   if (loading) {
     return (
@@ -891,6 +897,33 @@ export function PRReviewView({ owner, repo, number }: { owner: string; repo: str
           </div>
         )}
         <div className="flex items-center gap-2 ml-auto text-xs text-muted-foreground">
+          {fileDiffs.length > 0 && (
+            <div className="flex items-center gap-0.5 rounded-md border p-0.5">
+              <button
+                onClick={() => setStackedMode(true)}
+                className={cn(
+                  "rounded px-1.5 py-0.5 text-xs transition-colors",
+                  stackedMode ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground",
+                )}
+                title="Stacked view"
+              >
+                <Layers className="h-3.5 w-3.5" />
+              </button>
+              <button
+                onClick={() => {
+                  setStackedMode(false);
+                  if (!selectedFile && fileDiffs.length > 0) setSelectedFile(fileDiffs[0].path);
+                }}
+                className={cn(
+                  "rounded px-1.5 py-0.5 text-xs transition-colors",
+                  !stackedMode ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground",
+                )}
+                title="Single file view"
+              >
+                <List className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          )}
           <span className="text-green-500">+{pr.additions}</span>
           <span className="text-red-500">-{pr.deletions}</span>
           <span>{pr.changedFiles} files</span>
@@ -975,25 +1008,48 @@ export function PRReviewView({ owner, repo, number }: { owner: string; repo: str
             </div>
           </div>
 
-          {/* Stacked diffs */}
+          {/* Diffs */}
           <div className="p-4 space-y-3">
             {fileDiffs.length === 0 && <div className="text-center py-12 text-sm text-muted-foreground">No changes</div>}
-            {fileDiffs.map((file) => (
-              <LazyDiff
-                key={file.path}
-                file={file}
-                pr={pr}
-                repo={fullRepo}
-                settings={settings}
-                viewed={viewedFiles.has(file.path)}
-                collapsed={collapsedFiles.has(file.path)}
-                onToggleViewed={() => markViewed(file.path)}
-                onToggleCollapse={() => toggleCollapse(file.path)}
-                sectionRef={(el) => {
-                  if (el) sectionRefs.current.set(file.path, el);
-                }}
-              />
-            ))}
+            {stackedMode
+              ? fileDiffs.map((file) => (
+                  <LazyDiff
+                    key={file.path}
+                    file={file}
+                    pr={pr}
+                    repo={fullRepo}
+                    settings={settings}
+                    viewed={viewedFiles.has(file.path)}
+                    collapsed={collapsedFiles.has(file.path)}
+                    onToggleViewed={() => toggleViewed(file.path)}
+                    onToggleCollapse={() => toggleCollapse(file.path)}
+                    sectionRef={(el) => {
+                      if (el) sectionRefs.current.set(file.path, el);
+                    }}
+                  />
+                ))
+              : selectedFile
+                ? (() => {
+                    const file = fileDiffs.find((f) => f.path === selectedFile);
+                    if (!file) return <div className="text-center py-12 text-sm text-muted-foreground">File not found</div>;
+                    return (
+                      <LazyDiff
+                        key={file.path}
+                        file={file}
+                        pr={pr}
+                        repo={fullRepo}
+                        settings={settings}
+                        viewed={viewedFiles.has(file.path)}
+                        collapsed={false}
+                        onToggleViewed={() => toggleViewed(file.path)}
+                        onToggleCollapse={() => {}}
+                        sectionRef={() => {}}
+                      />
+                    );
+                  })()
+                : fileDiffs.length > 0 && (
+                    <div className="text-center py-12 text-sm text-muted-foreground">Select a file from the sidebar</div>
+                  )}
           </div>
         </div>
 

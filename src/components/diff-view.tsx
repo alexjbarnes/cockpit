@@ -6,9 +6,9 @@ import { FileDiff } from "@pierre/diffs/react";
 import { Check, ExternalLink, FileEdit, FileMinus, FilePlus, FileSymlink, Loader2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
-import { isFileChecked, toggleFileChecked } from "@/components/changes-view";
 import { DIFF_SELECTABLE_CSS, DiffErrorBoundary } from "@/components/diff-viewer";
 import { useSettings } from "@/hooks/use-settings";
+import { useCheckedFiles } from "@/lib/checked-files";
 import { cn } from "@/lib/utils";
 
 function isDark(): boolean {
@@ -60,7 +60,8 @@ export function DiffView({ cwd, filePath }: DiffViewProps) {
   const [diff, setDiff] = useState<string | null>(null);
   const [fileDiff, setFileDiff] = useState<FileDiffMetadata | null>(null);
   const [fileStatus, setFileStatus] = useState<string>("modified");
-  const [checked, setChecked] = useState(() => isFileChecked(cwd, filePath));
+  const { checkedFiles, toggleFile } = useCheckedFiles(cwd);
+  const checked = checkedFiles.has(filePath);
 
   const fetchDiff = useCallback(() => {
     setLoading(true);
@@ -97,9 +98,8 @@ export function DiffView({ cwd, filePath }: DiffViewProps) {
   }, [fetchDiff]);
 
   const handleToggle = useCallback(() => {
-    const next = toggleFileChecked(cwd, filePath);
-    setChecked(next);
-  }, [cwd, filePath]);
+    toggleFile(filePath);
+  }, [toggleFile, filePath]);
 
   const handleViewFile = useCallback(() => {
     const fullPath = filePath.startsWith("/") ? filePath : `${cwd}/${filePath}`;

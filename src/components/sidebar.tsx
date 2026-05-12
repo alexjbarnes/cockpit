@@ -5,6 +5,7 @@ import { arrayMove, SortableContext, useSortable, verticalListSortingStrategy } 
 import { CSS } from "@dnd-kit/utilities";
 import {
   CalendarClock,
+  Check,
   ExternalLink,
   FileEdit,
   FileMinus,
@@ -29,6 +30,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { useJobFailureCount } from "@/hooks/use-jobs";
 import { useSettings } from "@/hooks/use-settings";
 import { useWebSocket } from "@/hooks/use-websocket";
+import { useCheckedFiles } from "@/lib/checked-files";
 import { cn } from "@/lib/utils";
 import type { SessionInfo } from "@/types";
 import { NewSessionDialog } from "./new-session-dialog";
@@ -121,12 +123,22 @@ async function fetchPinnedIds(): Promise<string[]> {
 }
 
 // Server-side pinned reviews API helpers
+const pinListeners = new Set<() => void>();
+
+export function onPinChange(cb: () => void): () => void {
+  pinListeners.add(cb);
+  return () => {
+    pinListeners.delete(cb);
+  };
+}
+
 export async function pinReview(id: string): Promise<void> {
   await fetch("/api/reviews/pinned", {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ add: id }),
   }).catch(() => {});
+  for (const cb of pinListeners) cb();
 }
 
 async function unpinReview(id: string): Promise<void> {
@@ -677,6 +689,10 @@ function RecentReviewsSection({ onNavigate }: { onNavigate: () => void }) {
   }, [pathname, fetchReviews]);
 
   useEffect(() => {
+    return onPinChange(() => fetchReviews());
+  }, [fetchReviews]);
+
+  useEffect(() => {
     return subscribe((msg) => {
       if (msg.type === "session:status") {
         const { sessionId, status } = msg;
@@ -874,6 +890,7 @@ function SidebarChanges({ cwd, sessionId }: { cwd: string; sessionId?: string })
   const router = useRouter();
   const pathname = usePathname();
   const { tabActions } = useShell();
+  const { checkedFiles, toggleFile } = useCheckedFiles(cwd);
   const [branch, setBranch] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [files, setFiles] = useState<Array<{ path: string; status: string; additions: number; deletions: number }>>([]);
@@ -954,25 +971,43 @@ function SidebarChanges({ cwd, sessionId }: { cwd: string; sessionId?: string })
             </button>
           </div>
           {files.map((file) => (
-            <button
-              key={file.path}
-              type="button"
-              onClick={() => {
-                if (tabActions) {
-                  tabActions.openDiff(file.path);
-                } else {
-                  router.push(`/changes?cwd=${encodeURIComponent(cwd)}${sessionParam}`);
-                }
-              }}
-              className="w-full flex items-center gap-2 px-3 py-1 text-left text-xs hover:bg-accent/50 transition-colors"
-            >
-              {changeStatusIcon(file.status)}
-              <span className="font-mono truncate flex-1 min-w-0">{file.path}</span>
-              <span className="shrink-0 flex gap-1 text-[10px] font-mono">
-                {file.additions > 0 && <span className="text-green-500">+{file.additions}</span>}
-                {file.deletions > 0 && <span className="text-red-500">-{file.deletions}</span>}
-              </span>
-            </button>
+            <div key={file.path} className="flex items-center gap-1 px-3 py-1 text-xs hover:bg-accent/50 transition-colors">
+              <button
+                type="button"
+                role="checkbox"
+                aria-checked={checkedFiles.has(file.path)}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  toggleFile(file.path);
+                }}
+                className={cn(
+                  "h-3.5 w-3.5 shrink-0 rounded-full border flex items-center justify-center transition-colors",
+                  checkedFiles.has(file.path)
+                    ? "border-primary bg-primary text-primary-foreground"
+                    : "border-muted-foreground/30 bg-transparent hover:border-muted-foreground/50",
+                )}
+              >
+                {checkedFiles.has(file.path) && <Check className="h-2 w-2" strokeWidth={3} />}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (tabActions) {
+                    tabActions.openDiff(file.path);
+                  } else {
+                    router.push(`/changes?cwd=${encodeURIComponent(cwd)}${sessionParam}`);
+                  }
+                }}
+                className="flex items-center gap-2 flex-1 min-w-0 text-left"
+              >
+                {changeStatusIcon(file.status)}
+                <span className="font-mono truncate flex-1 min-w-0">{file.path}</span>
+                <span className="shrink-0 flex gap-1 text-[10px] font-mono">
+                  {file.additions > 0 && <span className="text-green-500">+{file.additions}</span>}
+                  {file.deletions > 0 && <span className="text-red-500">-{file.deletions}</span>}
+                </span>
+              </button>
+            </div>
           ))}
         </>
       )}

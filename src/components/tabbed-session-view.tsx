@@ -140,7 +140,7 @@ function TabbedContent({ sessionId, cwd, initialName, historyView }: TabbedSessi
             ))}
             {leftHasChanges && (
               <div className={cn("flex flex-col flex-1 min-h-0", activeTabId !== "changes" && "hidden")}>
-                <ChangesView cwd={cwd} sessionId={sessionId} embeddedChat={false} />
+                <ChangesView cwd={cwd} sessionId={sessionId} embeddedChat={false} manageSidebar={false} />
               </div>
             )}
           </div>
@@ -163,7 +163,7 @@ function TabbedContent({ sessionId, cwd, initialName, historyView }: TabbedSessi
             ))}
             {rightHasChanges && (
               <div className={cn("flex flex-col flex-1 min-h-0", splitTabId !== "changes" && "hidden")}>
-                <ChangesView cwd={cwd} sessionId={sessionId} embeddedChat={false} />
+                <ChangesView cwd={cwd} sessionId={sessionId} embeddedChat={false} manageSidebar={false} />
               </div>
             )}
           </div>
@@ -194,7 +194,7 @@ function TabbedContent({ sessionId, cwd, initialName, historyView }: TabbedSessi
       ))}
       {hasChanges && (
         <div className={cn("flex flex-col flex-1 min-h-0", activeTabId !== "changes" && "hidden")}>
-          <ChangesView cwd={cwd} sessionId={sessionId} embeddedChat={false} />
+          <ChangesView cwd={cwd} sessionId={sessionId} embeddedChat={false} manageSidebar={false} />
         </div>
       )}
     </>
