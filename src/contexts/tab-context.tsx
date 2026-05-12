@@ -33,12 +33,14 @@ interface TabState {
   tabs: Tab[];
   activeTabId: string;
   splitTabId: string | null;
+  rightPaneTabIds: string[];
 }
 
 export interface TabContextValue {
   tabs: Tab[];
   activeTabId: string;
   splitTabId: string | null;
+  rightPaneTabIds: string[];
   openFile: (filePath: string) => void;
   openDiff: (filePath: string) => void;
   openChanges: () => void;
@@ -46,6 +48,7 @@ export interface TabContextValue {
   setActiveTab: (tabId: string) => void;
   setSplitTab: (tabId: string | null) => void;
   moveTab: (tabId: string, toIndex: number) => void;
+  moveTabToPane: (tabId: string, pane: "left" | "right") => void;
 }
 
 const TabContext = createContext<TabContextValue | null>(null);
@@ -67,6 +70,7 @@ const DEFAULT_STATE: TabState = {
   tabs: [CHAT_TAB],
   activeTabId: "chat",
   splitTabId: null,
+  rightPaneTabIds: [],
 };
 
 interface PersistedTab {
@@ -121,7 +125,7 @@ export function TabProvider({ sessionId, children }: { sessionId: string; childr
         if (data?.openTabs?.length) {
           const tabs = deserializeTabs(data.openTabs);
           const activeTabId = data.activeTabId && tabs.some((t: Tab) => t.id === data.activeTabId) ? data.activeTabId : "chat";
-          const loaded = { tabs, activeTabId, splitTabId: null };
+          const loaded: TabState = { tabs, activeTabId, splitTabId: null, rightPaneTabIds: [] };
           setState(loaded);
           stateCache.set(sessionId, loaded);
         }
@@ -203,11 +207,14 @@ export function TabProvider({ sessionId, children }: { sessionId: string; childr
       const next = prev.tabs.filter((t) => t.id !== tabId);
       let activeTabId = prev.activeTabId;
       if (activeTabId === tabId) {
-        const nearIdx = Math.min(idx, next.length - 1);
-        activeTabId = next[nearIdx].id;
+        const leftTabs = next.filter((t) => !prev.rightPaneTabIds.includes(t.id));
+        const nearIdx = Math.min(idx, leftTabs.length - 1);
+        activeTabId = leftTabs[Math.max(0, nearIdx)]?.id || "chat";
       }
-      const splitTabId = prev.splitTabId === tabId ? null : prev.splitTabId;
-      return { tabs: next, activeTabId, splitTabId };
+      const rightPaneTabIds = prev.rightPaneTabIds.filter((id) => id !== tabId);
+      let splitTabId = prev.splitTabId === tabId ? rightPaneTabIds[0] || null : prev.splitTabId;
+      if (rightPaneTabIds.length === 0) splitTabId = null;
+      return { tabs: next, activeTabId, splitTabId, rightPaneTabIds };
     });
   }, []);
 
@@ -216,7 +223,13 @@ export function TabProvider({ sessionId, children }: { sessionId: string; childr
   }, []);
 
   const setSplitTab = useCallback((tabId: string | null) => {
-    setState((prev) => ({ ...prev, splitTabId: tabId }));
+    setState((prev) => {
+      if (tabId === null) {
+        return { ...prev, splitTabId: null, rightPaneTabIds: [] };
+      }
+      const rightPaneTabIds = prev.rightPaneTabIds.includes(tabId) ? prev.rightPaneTabIds : [...prev.rightPaneTabIds, tabId];
+      return { ...prev, splitTabId: tabId, rightPaneTabIds };
+    });
   }, []);
 
   const moveTab = useCallback((tabId: string, toIndex: number) => {
@@ -232,12 +245,37 @@ export function TabProvider({ sessionId, children }: { sessionId: string; childr
     });
   }, []);
 
+  const moveTabToPane = useCallback((tabId: string, pane: "left" | "right") => {
+    if (tabId === "chat") return;
+    setState((prev) => {
+      const isRight = prev.rightPaneTabIds.includes(tabId);
+      if (pane === "right" && !isRight) {
+        const rightPaneTabIds = [...prev.rightPaneTabIds, tabId];
+        let activeTabId = prev.activeTabId;
+        if (activeTabId === tabId) {
+          const leftTabs = prev.tabs.filter((t) => !rightPaneTabIds.includes(t.id));
+          activeTabId = leftTabs[0]?.id || "chat";
+        }
+        return { ...prev, rightPaneTabIds, activeTabId, splitTabId: prev.splitTabId || tabId };
+      }
+      if (pane === "left" && isRight) {
+        const rightPaneTabIds = prev.rightPaneTabIds.filter((id) => id !== tabId);
+        let splitTabId = prev.splitTabId;
+        if (splitTabId === tabId) splitTabId = rightPaneTabIds[0] || null;
+        if (rightPaneTabIds.length === 0) splitTabId = null;
+        return { ...prev, rightPaneTabIds, splitTabId, activeTabId: tabId };
+      }
+      return prev;
+    });
+  }, []);
+
   return (
     <TabContext.Provider
       value={{
         tabs: state.tabs,
         activeTabId: state.activeTabId,
         splitTabId: state.splitTabId,
+        rightPaneTabIds: state.rightPaneTabIds,
         openFile,
         openDiff,
         openChanges,
@@ -245,6 +283,7 @@ export function TabProvider({ sessionId, children }: { sessionId: string; childr
         setActiveTab,
         setSplitTab,
         moveTab,
+        moveTabToPane,
       }}
     >
       {children}

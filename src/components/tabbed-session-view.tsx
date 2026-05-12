@@ -40,7 +40,7 @@ function TabbedContent({ sessionId, cwd, initialName, historyView }: TabbedSessi
     return () => setTabActions(null);
   }, [tabs.openFile, tabs.openDiff, tabs.openChanges, setTabActions]);
 
-  const { activeTabId, splitTabId, tabs: tabList } = tabs;
+  const { activeTabId, splitTabId, rightPaneTabIds, tabs: tabList } = tabs;
   const isSplit = isDesktop && splitTabId !== null;
 
   const handleResize = useCallback((delta: number) => {
@@ -72,18 +72,100 @@ function TabbedContent({ sessionId, cwd, initialName, historyView }: TabbedSessi
   const diffTabs = tabList.filter((t): t is Tab & { type: "diff" } => t.type === "diff");
   const hasChanges = tabList.some((t) => t.type === "changes");
 
+  const handlePaneDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+  }, []);
+
+  const handleLeftPaneDrop = useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault();
+      const tabId = e.dataTransfer.getData("text/plain");
+      if (!tabId || tabId === "chat") return;
+      if (rightPaneTabIds.includes(tabId)) {
+        tabs.moveTabToPane(tabId, "left");
+      }
+    },
+    [tabs, rightPaneTabIds],
+  );
+
+  const handleRightPaneDrop = useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault();
+      const tabId = e.dataTransfer.getData("text/plain");
+      if (!tabId || tabId === "chat") return;
+      if (!rightPaneTabIds.includes(tabId)) {
+        tabs.moveTabToPane(tabId, "right");
+      } else {
+        tabs.setSplitTab(tabId);
+      }
+    },
+    [tabs, rightPaneTabIds],
+  );
+
   if (isSplit) {
-    const rightTabId = splitTabId;
+    const leftFileTabs = fileTabs.filter((t) => !rightPaneTabIds.includes(t.id));
+    const leftDiffTabs = diffTabs.filter((t) => !rightPaneTabIds.includes(t.id));
+    const leftHasChanges = hasChanges && !rightPaneTabIds.includes("changes");
+    const rightFileTabs = fileTabs.filter((t) => rightPaneTabIds.includes(t.id));
+    const rightDiffTabs = diffTabs.filter((t) => rightPaneTabIds.includes(t.id));
+    const rightHasChanges = hasChanges && rightPaneTabIds.includes("changes");
+
     return (
       <>
         <TabBar splitRatio={isSplit ? splitRatio : undefined} />
         <div ref={containerRef} className="flex-1 min-h-0 flex flex-row">
-          <div className="flex flex-col min-w-0 min-h-0" style={{ width: `${(1 - splitRatio) * 100}%` }}>
-            <ChatView sessionId={sessionId} cwd={cwd} initialName={initialName} historyView={historyView} />
+          <div
+            className="flex flex-col min-w-0 min-h-0"
+            style={{ width: `${(1 - splitRatio) * 100}%` }}
+            onDragOver={handlePaneDragOver}
+            onDrop={handleLeftPaneDrop}
+          >
+            <ChatView
+              sessionId={sessionId}
+              cwd={cwd}
+              initialName={initialName}
+              historyView={historyView}
+              className={cn(activeTabId !== "chat" && "hidden")}
+            />
+            {leftFileTabs.map((tab) => (
+              <div key={tab.id} className={cn("flex flex-col flex-1 min-h-0", activeTabId !== tab.id && "hidden")}>
+                <FilesView cwd={cwd} initialFile={tab.filePath} manageSidebar={false} />
+              </div>
+            ))}
+            {leftDiffTabs.map((tab) => (
+              <div key={tab.id} className={cn("flex flex-col flex-1 min-h-0", activeTabId !== tab.id && "hidden")}>
+                <DiffView cwd={cwd} filePath={tab.filePath} />
+              </div>
+            ))}
+            {leftHasChanges && (
+              <div className={cn("flex flex-col flex-1 min-h-0", activeTabId !== "changes" && "hidden")}>
+                <ChangesView cwd={cwd} sessionId={sessionId} embeddedChat={false} />
+              </div>
+            )}
           </div>
           <ResizeHandle onResize={handleResize} />
-          <div className="flex flex-col min-w-0 min-h-0" style={{ width: `${splitRatio * 100}%` }}>
-            {renderTabContent(rightTabId, fileTabs, diffTabs, hasChanges, cwd, sessionId)}
+          <div
+            className="flex flex-col min-w-0 min-h-0"
+            style={{ width: `${splitRatio * 100}%` }}
+            onDragOver={handlePaneDragOver}
+            onDrop={handleRightPaneDrop}
+          >
+            {rightFileTabs.map((tab) => (
+              <div key={tab.id} className={cn("flex flex-col flex-1 min-h-0", splitTabId !== tab.id && "hidden")}>
+                <FilesView cwd={cwd} initialFile={tab.filePath} manageSidebar={false} />
+              </div>
+            ))}
+            {rightDiffTabs.map((tab) => (
+              <div key={tab.id} className={cn("flex flex-col flex-1 min-h-0", splitTabId !== tab.id && "hidden")}>
+                <DiffView cwd={cwd} filePath={tab.filePath} />
+              </div>
+            ))}
+            {rightHasChanges && (
+              <div className={cn("flex flex-col flex-1 min-h-0", splitTabId !== "changes" && "hidden")}>
+                <ChangesView cwd={cwd} sessionId={sessionId} embeddedChat={false} />
+              </div>
+            )}
           </div>
         </div>
       </>
@@ -117,26 +199,4 @@ function TabbedContent({ sessionId, cwd, initialName, historyView }: TabbedSessi
       )}
     </>
   );
-}
-
-function renderTabContent(
-  tabId: string,
-  fileTabs: Array<Tab & { type: "file" }>,
-  diffTabs: Array<Tab & { type: "diff" }>,
-  hasChanges: boolean,
-  cwd: string,
-  sessionId: string,
-) {
-  const fileTab = fileTabs.find((t) => t.id === tabId);
-  if (fileTab) {
-    return <FilesView cwd={cwd} initialFile={fileTab.filePath} manageSidebar={false} />;
-  }
-  const diffTab = diffTabs.find((t) => t.id === tabId);
-  if (diffTab) {
-    return <DiffView cwd={cwd} filePath={diffTab.filePath} />;
-  }
-  if (tabId === "changes" && hasChanges) {
-    return <ChangesView cwd={cwd} sessionId={sessionId} embeddedChat={false} />;
-  }
-  return null;
 }

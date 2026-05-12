@@ -42,6 +42,7 @@ export function ChatView({
     messages,
     historyLoaded,
     isResponding,
+    errorActive,
     pendingPermissions,
     pendingQuestions,
     modelPicker,
@@ -277,7 +278,7 @@ export function ChatView({
   // so this only fires when focus is elsewhere.
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (e.key !== "Escape" || !isResponding) return;
+      if (e.key !== "Escape" || !(isResponding || errorActive)) return;
       if (document.querySelector(".fixed.inset-0.z-50")) return;
       const tag = (e.target as HTMLElement)?.tagName;
       if (tag === "TEXTAREA" || tag === "INPUT") return;
@@ -286,7 +287,7 @@ export function ChatView({
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [isResponding, interrupt]);
+  }, [isResponding, errorActive, interrupt]);
 
   const contextInjected = useRef(false);
   const handleSend = useCallback(
@@ -408,13 +409,14 @@ export function ChatView({
               </div>
             );
           })}
-          {isResponding && pendingPermissions.length === 0 && !pendingQuestions.some((q) => !q.answered) && (
+          {(isResponding || errorActive) && pendingPermissions.length === 0 && !pendingQuestions.some((q) => !q.answered) && (
             <div className="flex items-center gap-2 text-muted-foreground">
               <Loader2 className="h-4 w-4 animate-spin" />
+              {errorActive && !isResponding && <span className="text-xs text-red-500">API error, retrying...</span>}
               {rateLimitStatus && <span className="text-xs">Rate limited, retrying...</span>}
             </div>
           )}
-          {apiError && !isResponding && (
+          {apiError && !isResponding && !errorActive && (
             <div className="flex w-full justify-start">
               <div className="max-w-[85%] rounded-lg border border-red-500/30 bg-red-500/5 px-4 py-3">
                 <div className="flex items-center gap-2 text-red-500 mb-1">
@@ -483,7 +485,7 @@ export function ChatView({
           promptHistory={promptHistory}
           onSend={handleSend}
           onInterrupt={interrupt}
-          isResponding={isResponding}
+          isResponding={isResponding || errorActive}
           bypassActive={bypassActive}
           onSetBypass={setBypassAll}
           planMode={planMode}

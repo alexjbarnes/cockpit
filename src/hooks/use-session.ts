@@ -44,6 +44,7 @@ interface UseSessionReturn {
   messages: ChatMessage[];
   historyLoaded: boolean;
   isResponding: boolean;
+  errorActive: boolean;
   pendingPermissions: PendingPermission[];
   pendingQuestions: PendingQuestion[];
   modelPicker: string | null;
@@ -116,6 +117,8 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
   const [queuedMessages, setQueuedMessages] = useState<Array<{ id: string; text: string }>>([]);
   const [queuePaused, setQueuePaused] = useState(false);
   const [restoredText, setRestoredText] = useState<string | null>(null);
+  const [errorActive, setErrorActive] = useState(false);
+  const errorTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const isRespondingRef = useRef(false);
   const messagesRef = useRef<ChatMessage[]>([]);
   const currentModelRef = useRef(currentModel);
@@ -656,7 +659,11 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
           const nowRunning = msg.status === "running";
           setIsResponding(nowRunning);
           isRespondingRef.current = nowRunning;
-          if (nowRunning) setApiError(null);
+          if (nowRunning) {
+            setApiError(null);
+            setErrorActive(false);
+            clearTimeout(errorTimerRef.current);
+          }
           if (msg.status === "idle") {
             streamingRef.current = null;
             agentStackRef.current = [];
@@ -681,9 +688,13 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
           streamingRef.current = null;
           agentStackRef.current = [];
           const err = (msg.error as string) || "Unknown error";
-          // Extract the human-readable message from JSON if present
           const match = err.match(/"message"\s*:\s*"([^"]+)"/);
           setApiError(match ? match[1] : err.slice(0, 200));
+          if (/\(HTTP 529\)/.test(err) || /API Error: 529\b/.test(err)) {
+            setErrorActive(true);
+            clearTimeout(errorTimerRef.current);
+            errorTimerRef.current = setTimeout(() => setErrorActive(false), 15_000);
+          }
           break;
         }
 
@@ -1198,6 +1209,7 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
     messages,
     historyLoaded,
     isResponding,
+    errorActive,
     pendingPermissions,
     pendingQuestions,
     modelPicker,
