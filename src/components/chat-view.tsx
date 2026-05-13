@@ -524,6 +524,7 @@ export function ChatView({
           btw={btw}
           onDismissBtw={dismissBtw}
           onRestart={restartSession}
+          providers={providers}
         />
       </div>
     </div>

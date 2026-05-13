@@ -34,7 +34,7 @@ import { useWebSocket } from "@/hooks/use-websocket";
 import type { SlashCommand } from "@/lib/commands";
 import { allowedEffortLevels, defaultForAlias, findModelById, type ModelAlias, type ModelEntry, versionsForAlias } from "@/lib/models";
 import { detectLanguage, extensionForLabel, shouldCollapsePaste } from "@/lib/paste-detect";
-import type { ContextUsage, DocumentAttachment, ImageAttachment, InitData, TextFileAttachment, ThinkingLevel } from "@/types";
+import type { ContextUsage, DocumentAttachment, ImageAttachment, InitData, Provider, TextFileAttachment, ThinkingLevel } from "@/types";
 import { ContextIndicator } from "./context-indicator";
 import { PromptHistoryModal } from "./prompt-history-modal";
 import { QueueModal } from "./queue-modal";
@@ -238,6 +238,7 @@ interface InputAreaProps {
   btw?: { question: string; answer: string | null; loading: boolean; error: string | null } | null;
   onDismissBtw?: () => void;
   onRestart?: () => void;
+  providers?: Provider[];
 }
 
 const sessionDrafts = new Map<string, string>();
@@ -287,6 +288,7 @@ export function InputArea({
   btw,
   onDismissBtw,
   onRestart,
+  providers,
 }: InputAreaProps) {
   const { connected } = useWebSocket();
   const [text, setText] = useState(() => sessionDrafts.get(sessionId) || "");
@@ -835,7 +837,16 @@ export function InputArea({
                     </div>
                   )}
                   {(() => {
-                    const allowed = new Set(allowedEffortLevels(parsed.entry));
+                    const providerEffort = (() => {
+                      if (!providers || !currentModel) return [];
+                      const base = currentModel.replace(/\[.*\]$/, "");
+                      for (const p of providers) {
+                        const m = p.models.find((pm) => pm.modelId === base);
+                        if (m) return m.effortLevels;
+                      }
+                      return [];
+                    })();
+                    const allowed = new Set(providerEffort.length > 0 ? providerEffort : allowedEffortLevels(parsed.entry));
                     if (allowed.size === 0) return null;
                     const visible = thinkingLevels.filter((opt) => allowed.has(opt.value));
                     return (
