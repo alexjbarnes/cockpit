@@ -1,4 +1,4 @@
-import type { ThinkingLevel } from "@/types";
+import type { ProviderModel, ThinkingLevel } from "@/types";
 
 export type ModelAlias = "opus" | "sonnet" | "haiku";
 
@@ -97,4 +97,14 @@ export function coerceEffort(level: ThinkingLevel, entry: ModelEntry | null | un
   if (allowed.length === 0) return null;
   if (allowed.includes(level)) return level;
   return recommendedEffort(entry) ?? allowed[allowed.length - 1] ?? null;
+}
+
+export function toProviderModels(): ProviderModel[] {
+  return MODELS.map((m) => ({
+    modelId: m.modelId,
+    displayName: m.displayName,
+    effortLevels: allowedEffortLevels(m),
+    supportsExtendedContext: m.supportsExtendedContext,
+    defaultEffort: recommendedEffort(m) ?? undefined,
+  }));
 }

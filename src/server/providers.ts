@@ -1,0 +1,110 @@
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { v4 as uuidv4 } from "uuid";
+import { toProviderModels } from "@/lib/models";
+import type { Provider, ProviderModel } from "@/types";
+
+const PREFS_DIR = join(homedir(), ".cockpit");
+const PROVIDERS_FILE = join(PREFS_DIR, "providers.json");
+
+function buildAnthropicProvider(): Provider {
+  return {
+    id: "anthropic",
+    name: "Anthropic",
+    envVars: {},
+    models: toProviderModels(),
+    isBuiltin: true,
+  };
+}
+
+let cache: Provider[] | null = null;
+
+function loadCustom(): Provider[] {
+  try {
+    return JSON.parse(readFileSync(PROVIDERS_FILE, "utf-8"));
+  } catch {
+    return [];
+  }
+}
+
+function saveCustom(providers: Provider[]): void {
+  try {
+    mkdirSync(PREFS_DIR, { recursive: true });
+    writeFileSync(PROVIDERS_FILE, JSON.stringify(providers, null, 2) + "\n");
+  } catch {
+    // best effort
+  }
+}
+
+export function getProviders(): Provider[] {
+  if (!cache) {
+    cache = [buildAnthropicProvider(), ...loadCustom()];
+  }
+  return cache;
+}
+
+export function getProvider(id: string): Provider | undefined {
+  return getProviders().find((p) => p.id === id);
+}
+
+export function addProvider(provider: Omit<Provider, "id">): Provider {
+  const newProvider: Provider = { ...provider, id: uuidv4() };
+  const all = getProviders();
+  const custom = all.filter((p) => !p.isBuiltin);
+  custom.push(newProvider);
+  saveCustom(custom);
+  cache = [buildAnthropicProvider(), ...custom];
+  return newProvider;
+}
+
+export function updateProvider(id: string, partial: Partial<Provider>): Provider {
+  if (id === "anthropic") throw new Error("Cannot modify built-in provider");
+  const all = getProviders();
+  const custom = all.filter((p) => !p.isBuiltin);
+  const idx = custom.findIndex((p) => p.id === id);
+  if (idx === -1) throw new Error(`Provider not found: ${id}`);
+  custom[idx] = { ...custom[idx], ...partial, id };
+  saveCustom(custom);
+  cache = [buildAnthropicProvider(), ...custom];
+  return custom[idx];
+}
+
+export function deleteProvider(id: string): void {
+  if (id === "anthropic") throw new Error("Cannot delete built-in provider");
+  const all = getProviders();
+  const custom = all.filter((p) => !p.isBuiltin && p.id !== id);
+  if (custom.length === all.filter((p) => !p.isBuiltin).length) {
+    throw new Error(`Provider not found: ${id}`);
+  }
+  saveCustom(custom);
+  cache = [buildAnthropicProvider(), ...custom];
+}
+
+export function setProviders(providers: Provider[]): void {
+  const custom = providers.filter((p) => !p.isBuiltin);
+  saveCustom(custom);
+  cache = [buildAnthropicProvider(), ...custom];
+}
+
+export function resolveProviderModel(modelId: string): { provider: Provider; model: ProviderModel } | null {
+  if (!modelId) return null;
+
+  const colon = modelId.indexOf(":");
+  if (colon > 0) {
+    const providerId = modelId.slice(0, colon);
+    const bareModel = modelId.slice(colon + 1);
+    const provider = getProvider(providerId);
+    if (provider) {
+      const model = provider.models.find((m) => m.modelId === bareModel);
+      if (model) return { provider, model };
+    }
+    return null;
+  }
+
+  for (const provider of getProviders()) {
+    const model = provider.models.find((m) => m.modelId === modelId);
+    if (model) return { provider, model };
+  }
+  return null;
+}
