@@ -17,6 +17,7 @@ import { PermissionPrompt } from "./permission-prompt";
 import { PlanApprovalPrompt } from "./plan-approval-prompt";
 import { parseQuestionsFromInput, QuestionCard, QuestionPrompt } from "./question-card";
 import { SelectionToolbar } from "./selection-toolbar";
+import type { Provider } from "@/types";
 
 const INITIAL_WINDOW = 50;
 const WINDOW_INCREMENT = 30;
@@ -96,8 +97,17 @@ export function ChatView({
   const { selectedIds, selectionMode, enterSelection, toggleSelect, clearSelection, copySelected } = useMessageSelection();
   const expandedToolIdsRef = useRef<Set<string>>(new Set());
   const [isTouch, setIsTouch] = useState(false);
+  const [providers, setProviders] = useState<Provider[]>([]);
   useEffect(() => {
     setIsTouch(matchMedia("(pointer: coarse)").matches);
+  }, []);
+  useEffect(() => {
+    fetch("/api/providers")
+      .then((res) => res.json())
+      .then((data) => {
+        if (Array.isArray(data)) setProviders(data);
+      })
+      .catch(() => {});
   }, []);
 
   const uniqueMessages = useMemo(() => {
@@ -460,7 +470,9 @@ export function ChatView({
                 </div>
               </div>
             ))}
-          {modelPicker !== null && <ModelPicker currentModel={modelPicker} activeModelId={activeModelId} onSelect={selectModel} />}
+          {modelPicker !== null && (
+            <ModelPicker currentModel={modelPicker} activeModelId={activeModelId} onSelect={selectModel} providers={providers} />
+          )}
           <div />
         </div>
       </div>
