@@ -18,7 +18,7 @@ import {
   versionsForAlias,
 } from "@/lib/models";
 import { describeSchedule, getJobSchedules } from "@/server/cron-utils";
-import type { JobSchedule, ScheduledJob, SimpleSchedule, SimpleScheduleFrequency, ThinkingLevel } from "@/types";
+import type { JobSchedule, Provider, ScheduledJob, SimpleSchedule, SimpleScheduleFrequency, ThinkingLevel } from "@/types";
 
 const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
@@ -180,6 +180,7 @@ export default function JobEditPage() {
   const [inboxOutput, setInboxOutput] = useState(false);
   const [notifyProviders, setNotifyProviders] = useState<string[]>([]);
   const [availableProviders, setAvailableProviders] = useState<{ id: string; name: string; type: string }[]>([]);
+  const [providers, setProviders] = useState<Provider[]>([]);
 
   const [showDirPicker, setShowDirPicker] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -189,7 +190,15 @@ export default function JobEditPage() {
   const selectedAlias = selectedEntry?.alias || null;
   const availableVersions = selectedAlias ? versionsForAlias(selectedAlias) : [];
   const showVersions = availableVersions.length > 1;
-  const effortLevels = selectedEntry ? allowedEffortLevels(selectedEntry) : [];
+  const providerEffort = (() => {
+    const base = modelId.replace(/\[.*\]$/, "");
+    for (const p of providers) {
+      const m = p.models.find((pm) => pm.modelId === base);
+      if (m) return m.effortLevels;
+    }
+    return [];
+  })();
+  const effortLevels = providerEffort.length > 0 ? providerEffort : selectedEntry ? allowedEffortLevels(selectedEntry) : [];
   const toolSuggestions = COMMON_TOOLS.filter((t) => !allowedTools.includes(t));
 
   function selectAlias(alias: ModelAlias) {
@@ -207,7 +216,14 @@ export default function JobEditPage() {
     const entry = versionsForAlias(selectedAlias).find((m) => m.version === version);
     if (entry) {
       setModelId(entry.modelId);
-      const levels = allowedEffortLevels(entry);
+      const provLevels = (() => {
+        for (const p of providers) {
+          const m = p.models.find((pm) => pm.modelId === entry.modelId);
+          if (m) return m.effortLevels;
+        }
+        return [];
+      })();
+      const levels = provLevels.length > 0 ? provLevels : allowedEffortLevels(entry);
       if (thinkingLevel && !levels.includes(thinkingLevel as ThinkingLevel)) {
         setThinkingLevel(recommendedEffort(entry) || "");
       }
@@ -285,6 +301,15 @@ export default function JobEditPage() {
         setAvailableProviders((data.providers || []).filter((p) => p.enabled)),
       )
       .catch(() => setAvailableProviders([]));
+  }, []);
+
+  useEffect(() => {
+    fetch("/api/providers")
+      .then((res) => res.json())
+      .then((data) => {
+        if (Array.isArray(data)) setProviders(data);
+      })
+      .catch(() => {});
   }, []);
 
   async function handleSave() {
