@@ -370,3 +370,25 @@ export type ServerMessage =
     }
   | { type: "message:ack"; sessionId: string }
   | { type: "pong" };
+
+export interface ModelSlots {
+  main?: string;
+  subagent?: string;
+  fast?: string;
+}
+
+export interface ProviderModel {
+  modelId: string;
+  displayName: string;
+  effortLevels: ThinkingLevel[];
+  supportsExtendedContext?: boolean;
+  defaultEffort?: ThinkingLevel;
+}
+
+export interface Provider {
+  id: string;
+  name: string;
+  envVars: Record<string, string>;
+  models: ProviderModel[];
+  isBuiltin?: boolean;
+}
