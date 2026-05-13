@@ -47,7 +47,7 @@ vi.mock("@/server/defaults", () => ({
     diffStyle: "split",
     dismissKeyboardOnSend: true,
     thinkingExpanded: false,
-    model: "sonnet",
+    modelSlots: { main: "sonnet" },
   }),
 }));
 

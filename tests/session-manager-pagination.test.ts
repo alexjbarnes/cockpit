@@ -75,7 +75,7 @@ describe("pagination with message stitching", () => {
       diffStyle: "split",
       dismissKeyboardOnSend: true,
       thinkingExpanded: false,
-      model: "sonnet",
+      modelSlots: { main: "sonnet" },
       messageStitching: true,
     });
     mockTranscriptExists.mockReturnValue(false);
@@ -193,7 +193,7 @@ describe("pagination with message stitching", () => {
         diffStyle: "split",
         dismissKeyboardOnSend: true,
         thinkingExpanded: false,
-        model: "sonnet",
+        modelSlots: { main: "sonnet" },
         messageStitching: false,
       });
 

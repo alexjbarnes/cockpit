@@ -1,11 +1,11 @@
 "use client";
 
 import { Check } from "lucide-react";
-import type { Provider, ThinkingLevel } from "@/types";
+import type { Provider } from "@/types";
 
 interface ModelPickerProps {
   currentModel: string;
-  activeModelId: string | null;
+  activeModelId?: string | null;
   onSelect: (model: string) => void;
   providers: Provider[];
   slot?: "main" | "subagent" | "fast";
@@ -59,7 +59,7 @@ function buildRows(providers: Provider[]): PickerRow[] {
   return rows;
 }
 
-export function ModelPicker({ currentModel, activeModelId, onSelect, providers, slot }: ModelPickerProps) {
+export function ModelPicker({ currentModel, onSelect, providers, slot }: ModelPickerProps) {
   const rows = buildRows(providers);
   const currentBase = baseModel(currentModel);
   const currentExtended = hasExtendedContext(currentModel);

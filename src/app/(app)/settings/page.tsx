@@ -7,8 +7,8 @@ import { usePageHeader } from "@/components/app-shell";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { type DiffStyle, type ThinkingLevel, useSettings } from "@/hooks/use-settings";
-import type { Provider, ProviderModel } from "@/types";
 import { allowedEffortLevels, defaultForAlias, type ModelAlias, recommendedEffort, resolveModel, versionsForAlias } from "@/lib/models";
+import type { Provider, ProviderModel } from "@/types";
 
 type Theme = "light" | "dark" | "system";
 

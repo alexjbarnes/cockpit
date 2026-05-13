@@ -6,6 +6,7 @@ import path from "node:path";
 import { type Writable } from "node:stream";
 import { v4 as uuidv4 } from "uuid";
 import { allowedEffortLevels, coerceEffort, recommendedEffort, resolveModel } from "@/lib/models";
+import { resolveProviderModel } from "@/server/providers";
 import type {
   ChatMessage,
   ContentBlock,
@@ -21,7 +22,6 @@ import type {
 } from "@/types";
 import { debugLog, isDebugEnabled, logDiag, logRawLine } from "./debug-logger";
 import { getDefaults } from "./defaults";
-import { resolveProviderModel } from "@/server/providers";
 import { EventParser, type ParsedEvent } from "./event-parser";
 import { findLatestPlanFile, readPlanFile } from "./plans";
 import { findChainForCliSession, getSessionPrefs, setSessionPrefs } from "./session-prefs";

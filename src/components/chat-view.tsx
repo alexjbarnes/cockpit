@@ -9,6 +9,7 @@ import { useWebSocket } from "@/hooks/use-websocket";
 import { pathBasename } from "@/lib/path";
 import { splitAtQuestion } from "@/lib/split-question-blocks";
 import { cn } from "@/lib/utils";
+import type { Provider } from "@/types";
 import { useShell } from "./app-shell";
 import { InputArea } from "./input-area";
 import { MessageBubble } from "./message-bubble";
@@ -17,7 +18,6 @@ import { PermissionPrompt } from "./permission-prompt";
 import { PlanApprovalPrompt } from "./plan-approval-prompt";
 import { parseQuestionsFromInput, QuestionCard, QuestionPrompt } from "./question-card";
 import { SelectionToolbar } from "./selection-toolbar";
-import type { Provider } from "@/types";
 
 const INITIAL_WINDOW = 50;
 const WINDOW_INCREMENT = 30;
