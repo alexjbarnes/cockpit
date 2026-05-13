@@ -593,6 +593,11 @@ export function createWebSocketHandler(server: HTTPServer, sessionManager: Sessi
           break;
         }
 
+        case "session:set_model_slot": {
+          sessionManager.setModelSlot(msg.sessionId, msg.slot, msg.modelId);
+          break;
+        }
+
         case "permission:set_bypass": {
           if (msg.enabled) {
             sessionManager.setBypassAllPermissions(msg.sessionId);

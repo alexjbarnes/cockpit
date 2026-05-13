@@ -74,6 +74,7 @@ interface UseSessionReturn {
   respondToQuestion: (requestId: string, answers: Record<string, string>) => void;
   selectModel: (model: string) => void;
   setModel: (model: string) => void;
+  setModelSlot: (slot: "main" | "subagent" | "fast", modelId: string) => void;
   setBypassAll: (enabled: boolean) => void;
   setPlanMode: (enabled: boolean) => void;
   setThinkingLevel: (level: ThinkingLevel) => void;
@@ -1115,6 +1116,14 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
     [send, sessionId],
   );
 
+  const setModelSlot = useCallback(
+    (slot: "main" | "subagent" | "fast", modelId: string) => {
+      if (slot === "main") setCurrentModel(modelId);
+      send({ type: "session:set_model_slot", sessionId, slot, modelId });
+    },
+    [send, sessionId],
+  );
+
   const setBypassAll = useCallback(
     (enabled: boolean) => {
       setBypassActive(enabled);
@@ -1239,6 +1248,7 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
     respondToQuestion,
     selectModel,
     setModel,
+    setModelSlot,
     setBypassAll,
     setPlanMode,
     setThinkingLevel,
