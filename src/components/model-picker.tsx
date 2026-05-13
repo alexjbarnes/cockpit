@@ -43,7 +43,7 @@ function buildRows(providers: Provider[]): PickerRow[] {
         providerName: provider.name,
         extended: false,
       });
-      if (model.supportsExtendedContext) {
+      if (model.supportsExtendedContext && !/\[.*\]$/.test(model.modelId)) {
         rows.push({
           key: `${provider.id}::${model.modelId}[1m]`,
           value: `${model.modelId}[1m]`,

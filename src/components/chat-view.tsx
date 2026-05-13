@@ -511,7 +511,6 @@ export function ChatView({
           cwd={cwd}
           onCompact={handleCompact}
           initData={initData}
-          activeModelId={activeModelId}
           hasQueuedMessage={hasQueuedMessage}
           queuedMessages={queuedMessages}
           queuePaused={queuePaused}

@@ -226,7 +226,6 @@ interface InputAreaProps {
   cwd?: string;
   onCompact?: () => void;
   initData?: InitData | null;
-  activeModelId?: string | null;
   hasQueuedMessage?: boolean;
   queuedMessages?: Array<{ id: string; text: string }>;
   queuePaused?: boolean;
@@ -277,7 +276,6 @@ export function InputArea({
   cwd,
   onCompact,
   initData,
-  activeModelId,
   hasQueuedMessage,
   queuedMessages,
   queuePaused,
@@ -315,6 +313,7 @@ export function InputArea({
   const [historyOpen, setHistoryOpen] = useState(false);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [optionsOpen, setOptionsOpen] = useState(false);
+  const [viewProvider, setViewProvider] = useState<string>("anthropic");
   const [mentionSelectedIndex, setMentionSelectedIndex] = useState(0);
   const [cursorPos, setCursorPos] = useState(0);
   const [pendingImages, setPendingImages] = useState<ImageAttachment[]>([]);
@@ -752,9 +751,6 @@ export function InputArea({
         {optionsOpen &&
           (() => {
             const parsed = parseCurrentModel(currentModel);
-            const versionEntries = parsed.alias ? versionsForAlias(parsed.alias) : [];
-            const showVersionRow = versionEntries.length > 1;
-            const supportsExtended = parsed.entry?.supportsExtendedContext ?? false;
             return (
               <div
                 className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
@@ -762,7 +758,7 @@ export function InputArea({
                   if (e.target === e.currentTarget) setOptionsOpen(false);
                 }}
               >
-                <div className="w-full max-w-md mx-4 rounded-lg border bg-background p-4 shadow-lg space-y-1">
+                <div className="w-full max-w-md mx-4 rounded-lg border bg-background p-4 shadow-lg space-y-1 max-h-[80vh] overflow-y-auto">
                   <div className="flex items-center justify-between pb-2">
                     <div className="flex items-center gap-2">
                       <Settings2 className="h-4 w-4" />
@@ -775,101 +771,131 @@ export function InputArea({
                       <X className="h-4 w-4" />
                     </button>
                   </div>
-                  <div className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs">
-                    <Cpu className="h-3.5 w-3.5 text-muted-foreground" />
-                    <span className="text-muted-foreground">Model</span>
-                    {activeModelId && <span className="text-[10px] font-mono text-muted-foreground/70 truncate">{activeModelId}</span>}
-                    <div className="ml-auto flex gap-1">
-                      {aliases.map((opt) => (
-                        <button
-                          key={opt.value}
-                          onClick={() => onSetModel(valueForAlias(opt.value, parsed.extended && opt.value !== "haiku"))}
-                          className={`rounded px-2 py-0.5 text-xs transition-colors ${
-                            parsed.alias === opt.value
-                              ? "bg-primary text-primary-foreground"
-                              : "bg-muted text-muted-foreground hover:text-foreground"
-                          }`}
-                        >
-                          {opt.label}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                  {showVersionRow && (
-                    <div className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs">
-                      <Layers className="h-3.5 w-3.5 text-muted-foreground" />
-                      <span className="text-muted-foreground">Version</span>
-                      <div className="ml-auto flex gap-1">
-                        {versionEntries.map((entry) => (
-                          <button
-                            key={entry.modelId}
-                            onClick={() => onSetModel(valueForEntry(entry, parsed.extended && entry.supportsExtendedContext))}
-                            className={`rounded px-2 py-0.5 text-xs transition-colors ${
-                              parsed.entry?.modelId === entry.modelId
-                                ? "bg-primary text-primary-foreground"
-                                : "bg-muted text-muted-foreground hover:text-foreground"
-                            }`}
+                  {(() => {
+                    const allProviders = [
+                      { id: "anthropic", name: "Anthropic" },
+                      ...(providers || []).filter((p) => !p.isBuiltin).map((p) => ({ id: p.id, name: p.name })),
+                    ];
+                    const vEntries = parsed.alias ? versionsForAlias(parsed.alias) : [];
+                    const showVRow = vEntries.length > 1;
+                    const supportsExt = parsed.entry?.supportsExtendedContext ?? false;
+
+                    return (
+                      <>
+                        {/* Provider selector */}
+                        <div className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs">
+                          <Cpu className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                          <span className="text-muted-foreground">Provider</span>
+                          <select
+                            value={viewProvider}
+                            onChange={(e) => setViewProvider(e.target.value)}
+                            className="ml-auto rounded border border-input bg-background px-2 py-1 text-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                           >
-                            {entry.version}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                  {supportsExtended && parsed.entry && (
-                    <div className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs">
-                      <Maximize2 className="h-3.5 w-3.5 text-muted-foreground" />
-                      <span className="text-muted-foreground">Context</span>
-                      <div className="ml-auto flex gap-1">
-                        {contextSizes.map((opt) => (
-                          <button
-                            key={opt.value}
-                            onClick={() => onSetModel(valueForEntry(parsed.entry!, opt.value === "1m"))}
-                            className={`rounded px-2 py-0.5 text-xs transition-colors ${
-                              (opt.value === "1m") === parsed.extended
-                                ? "bg-primary text-primary-foreground"
-                                : "bg-muted text-muted-foreground hover:text-foreground"
-                            }`}
-                          >
-                            {opt.label}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                  {/* Custom provider model rows */}
-                  {providers
-                    ?.filter((p) => !p.isBuiltin)
-                    .map((provider) =>
-                      provider.models.length > 0 ? (
-                        <div key={provider.id} className="space-y-1 pt-2 border-t border-border">
-                          <div className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider px-2">{provider.name}</div>
-                          {provider.models.map((model) => {
-                            const base = currentModel.replace(/\[.*\]$/, "");
-                            const selected = base === model.modelId;
-                            return (
-                              <button
-                                key={model.modelId}
-                                onClick={() => onSetModel(model.modelId)}
-                                className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs transition-colors ${
-                                  selected ? "bg-primary/10 text-primary" : "hover:bg-muted text-foreground"
-                                }`}
-                              >
-                                <div className="w-3 shrink-0">{selected && <Check className="h-3 w-3" />}</div>
-                                <span className="font-mono font-medium">{model.modelId}</span>
-                                <span className="text-muted-foreground ml-auto">{model.displayName}</span>
-                              </button>
-                            );
-                          })}
+                            {allProviders.map((p) => (
+                              <option key={p.id} value={p.id}>
+                                {p.name}
+                              </option>
+                            ))}
+                          </select>
                         </div>
-                      ) : null,
-                    )}
+
+                        {/* Models for selected provider */}
+                        {viewProvider === "anthropic" ? (
+                          <>
+                            {aliases.map((opt) => {
+                              const entry = defaultForAlias(opt.value);
+                              const selected = parsed.alias === opt.value;
+                              return (
+                                <button
+                                  key={opt.value}
+                                  onClick={() => onSetModel(valueForAlias(opt.value, parsed.extended && opt.value !== "haiku"))}
+                                  className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs transition-colors ${
+                                    selected ? "bg-primary/10 text-primary" : "hover:bg-muted text-foreground"
+                                  }`}
+                                >
+                                  <div className="w-3 shrink-0">{selected && <Check className="h-3 w-3" />}</div>
+                                  <span className="font-mono font-medium">{opt.label}</span>
+                                  {entry && <span className="text-muted-foreground ml-auto">{entry.modelId}</span>}
+                                </button>
+                              );
+                            })}
+                            {showVRow && (
+                              <div className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs">
+                                <Layers className="h-3.5 w-3.5 text-muted-foreground" />
+                                <span className="text-muted-foreground">Version</span>
+                                <div className="ml-auto flex gap-1">
+                                  {vEntries.map((entry) => (
+                                    <button
+                                      key={entry.modelId}
+                                      onClick={() => onSetModel(valueForEntry(entry, parsed.extended && entry.supportsExtendedContext))}
+                                      className={`rounded px-2 py-0.5 text-xs transition-colors ${
+                                        parsed.entry?.modelId === entry.modelId
+                                          ? "bg-primary text-primary-foreground"
+                                          : "bg-muted text-muted-foreground hover:text-foreground"
+                                      }`}
+                                    >
+                                      {entry.version}
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                            {supportsExt && parsed.entry && (
+                              <div className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs">
+                                <Maximize2 className="h-3.5 w-3.5 text-muted-foreground" />
+                                <span className="text-muted-foreground">Context</span>
+                                <div className="ml-auto flex gap-1">
+                                  {contextSizes.map((opt) => (
+                                    <button
+                                      key={opt.value}
+                                      onClick={() => onSetModel(valueForEntry(parsed.entry!, opt.value === "1m"))}
+                                      className={`rounded px-2 py-0.5 text-xs transition-colors ${
+                                        (opt.value === "1m") === parsed.extended
+                                          ? "bg-primary text-primary-foreground"
+                                          : "bg-muted text-muted-foreground hover:text-foreground"
+                                      }`}
+                                    >
+                                      {opt.label}
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                          </>
+                        ) : (
+                          (() => {
+                            const provider = providers?.find((p) => p.id === viewProvider);
+                            if (!provider) return null;
+                            return (
+                              <div className="space-y-1">
+                                {provider.models.map((model) => {
+                                  const selected = currentModel === model.modelId;
+                                  return (
+                                    <button
+                                      key={model.modelId}
+                                      onClick={() => onSetModel(model.modelId)}
+                                      className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs transition-colors ${
+                                        selected ? "bg-primary/10 text-primary" : "hover:bg-muted text-foreground"
+                                      }`}
+                                    >
+                                      <div className="w-3 shrink-0">{selected && <Check className="h-3 w-3" />}</div>
+                                      <span className="font-mono font-medium">{model.modelId}</span>
+                                      <span className="text-muted-foreground ml-auto">{model.displayName}</span>
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            );
+                          })()
+                        )}
+                      </>
+                    );
+                  })()}
                   {(() => {
                     const providerEffort = (() => {
                       if (!providers || !currentModel) return [];
-                      const base = currentModel.replace(/\[.*\]$/, "");
                       for (const p of providers) {
-                        const m = p.models.find((pm) => pm.modelId === base);
+                        const m = p.models.find((pm) => pm.modelId === currentModel);
                         if (m) return m.effortLevels;
                       }
                       return [];
@@ -1044,7 +1070,20 @@ export function InputArea({
               size="icon"
               variant="ghost"
               className={`h-8 w-8 ${bypassActive ? "text-orange-500" : ""}`}
-              onClick={() => setOptionsOpen((v) => !v)}
+              onClick={() =>
+                setOptionsOpen((v) => {
+                  if (!v) {
+                    const p = parseCurrentModel(currentModel);
+                    if (!p.alias) {
+                      const prov = providers?.find((x) => x.models.some((m) => m.modelId === currentModel));
+                      setViewProvider(prov?.id ?? "anthropic");
+                    } else {
+                      setViewProvider("anthropic");
+                    }
+                  }
+                  return !v;
+                })
+              }
             >
               <Settings2 className="h-4 w-4" />
             </Button>

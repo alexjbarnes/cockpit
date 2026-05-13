@@ -1,6 +1,6 @@
 "use client";
 
-import { ChevronDown, ChevronRight, Download, ExternalLink, Info, Plus, RefreshCw, Trash2, X } from "lucide-react";
+import { ChevronDown, ChevronRight, Download, ExternalLink, Info, Plus, RefreshCw } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { usePageHeader } from "@/components/app-shell";
@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { type DiffStyle, type ThinkingLevel, useSettings } from "@/hooks/use-settings";
 import { allowedEffortLevels, defaultForAlias, type ModelAlias, recommendedEffort, resolveModel, versionsForAlias } from "@/lib/models";
-import type { Provider, ProviderModel } from "@/types";
+import type { Provider } from "@/types";
 
 type Theme = "light" | "dark" | "system";
 
@@ -173,196 +173,6 @@ function formatReleaseDate(dateStr: string): string {
   return new Date(y, m - 1, d).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
 }
 
-function ProviderEditor({
-  provider,
-  isNew,
-  onSave,
-  onCancel,
-}: {
-  provider: Provider;
-  isNew: boolean;
-  onSave: (provider: Provider) => void;
-  onCancel: () => void;
-}) {
-  const [name, setName] = useState(provider.name);
-  const [envVars, setEnvVars] = useState<[string, string][]>(Object.entries(provider.envVars));
-  const [models, setModels] = useState<ProviderModel[]>(provider.models);
-  const [newEnvKey, setNewEnvKey] = useState("");
-  const [newEnvVal, setNewEnvVal] = useState("");
-  const [newModelId, setNewModelId] = useState("");
-  const [newModelName, setNewModelName] = useState("");
-  const [newModelEffort, setNewModelEffort] = useState<ThinkingLevel[]>([]);
-  const [newModelExtCtx, setNewModelExtCtx] = useState(false);
-
-  const allEffortLevels: ThinkingLevel[] = ["low", "medium", "high", "xhigh", "max"];
-
-  return (
-    <div className="rounded-md border border-primary/50 p-3 space-y-3">
-      <div className="text-sm font-medium">{isNew ? "Add provider" : `Edit ${provider.name}`}</div>
-      <div className="space-y-2">
-        <label className="text-xs text-muted-foreground">Name</label>
-        <input
-          className="w-full rounded border border-input bg-background px-2 py-1 text-sm"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder="Provider name"
-        />
-      </div>
-      <div className="space-y-2">
-        <label className="text-xs text-muted-foreground">Environment variables</label>
-        {envVars.map(([key, value], i) => (
-          <div key={i} className="flex items-center gap-1">
-            <input
-              className="flex-1 rounded border border-input bg-background px-2 py-1 text-xs font-mono"
-              value={key}
-              onChange={(e) => {
-                const next = [...envVars];
-                next[i] = [e.target.value, value];
-                setEnvVars(next);
-              }}
-            />
-            <span className="text-xs">=</span>
-            <input
-              className="flex-1 rounded border border-input bg-background px-2 py-1 text-xs font-mono"
-              type="password"
-              value={value}
-              onChange={(e) => {
-                const next = [...envVars];
-                next[i] = [key, e.target.value];
-                setEnvVars(next);
-              }}
-            />
-            <button onClick={() => setEnvVars(envVars.filter((_, j) => j !== i))} className="text-muted-foreground hover:text-foreground">
-              <X className="h-3 w-3" />
-            </button>
-          </div>
-        ))}
-        <div className="flex items-center gap-1">
-          <input
-            className="flex-1 rounded border border-input bg-background px-2 py-1 text-xs font-mono"
-            value={newEnvKey}
-            onChange={(e) => setNewEnvKey(e.target.value)}
-            placeholder="KEY"
-          />
-          <span className="text-xs">=</span>
-          <input
-            className="flex-1 rounded border border-input bg-background px-2 py-1 text-xs font-mono"
-            type="password"
-            value={newEnvVal}
-            onChange={(e) => setNewEnvVal(e.target.value)}
-            placeholder="value"
-          />
-          <button
-            onClick={() => {
-              if (newEnvKey.trim()) {
-                setEnvVars([...envVars, [newEnvKey.trim(), newEnvVal]]);
-                setNewEnvKey("");
-                setNewEnvVal("");
-              }
-            }}
-            className="text-muted-foreground hover:text-foreground"
-          >
-            <Plus className="h-3 w-3" />
-          </button>
-        </div>
-      </div>
-      <div className="space-y-2">
-        <label className="text-xs text-muted-foreground">Models</label>
-        {models.map((model, i) => (
-          <div key={i} className="flex items-center gap-2 text-xs">
-            <span className="font-mono">{model.modelId}</span>
-            <span className="text-muted-foreground">{model.displayName}</span>
-            {model.effortLevels.length > 0 && <span className="text-muted-foreground">({model.effortLevels.join(", ")})</span>}
-            <button
-              onClick={() => setModels(models.filter((_, j) => j !== i))}
-              className="ml-auto text-muted-foreground hover:text-foreground"
-            >
-              <X className="h-3 w-3" />
-            </button>
-          </div>
-        ))}
-        <div className="space-y-1 rounded border border-dashed border-input p-2">
-          <div className="flex gap-1">
-            <input
-              className="flex-1 rounded border border-input bg-background px-2 py-1 text-xs font-mono"
-              value={newModelId}
-              onChange={(e) => setNewModelId(e.target.value)}
-              placeholder="model-id"
-            />
-            <input
-              className="flex-1 rounded border border-input bg-background px-2 py-1 text-xs"
-              value={newModelName}
-              onChange={(e) => setNewModelName(e.target.value)}
-              placeholder="Display name"
-            />
-          </div>
-          <div className="flex items-center gap-1 flex-wrap">
-            <span className="text-xs text-muted-foreground">Thinking:</span>
-            {allEffortLevels.map((level) => (
-              <button
-                key={level}
-                onClick={() => {
-                  setNewModelEffort((prev) => (prev.includes(level) ? prev.filter((l) => l !== level) : [...prev, level]));
-                }}
-                className={`rounded px-1.5 py-0.5 text-xs ${
-                  newModelEffort.includes(level) ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"
-                }`}
-              >
-                {level}
-              </button>
-            ))}
-            <label className="flex items-center gap-1 ml-2 text-xs text-muted-foreground">
-              <input type="checkbox" checked={newModelExtCtx} onChange={(e) => setNewModelExtCtx(e.target.checked)} />
-              1M context
-            </label>
-          </div>
-          <button
-            onClick={() => {
-              if (newModelId.trim()) {
-                setModels([
-                  ...models,
-                  {
-                    modelId: newModelId.trim(),
-                    displayName: newModelName.trim() || newModelId.trim(),
-                    effortLevels: newModelEffort,
-                    supportsExtendedContext: newModelExtCtx,
-                  },
-                ]);
-                setNewModelId("");
-                setNewModelName("");
-                setNewModelEffort([]);
-                setNewModelExtCtx(false);
-              }
-            }}
-            className="text-xs text-primary hover:underline"
-          >
-            + Add model
-          </button>
-        </div>
-      </div>
-      <div className="flex gap-2 pt-1">
-        <Button
-          size="sm"
-          onClick={() => {
-            onSave({
-              ...provider,
-              name,
-              envVars: Object.fromEntries(envVars),
-              models,
-            });
-          }}
-          disabled={!name.trim()}
-        >
-          {isNew ? "Create" : "Save"}
-        </Button>
-        <Button variant="outline" size="sm" onClick={onCancel}>
-          Cancel
-        </Button>
-      </div>
-    </div>
-  );
-}
-
 export default function SettingsPage() {
   const { settings, updateSetting, loaded: settingsLoaded } = useSettings();
   const [theme, setTheme] = useState<Theme>("system");
@@ -382,9 +192,6 @@ export default function SettingsPage() {
   const [ccChangelogExpanded, setCcChangelogExpanded] = useState(false);
   const [ccExpandedVersions, setCcExpandedVersions] = useState<Set<string>>(new Set());
   const [providers, setProviders] = useState<Provider[]>([]);
-  const [expandedProvider, setExpandedProvider] = useState<string | null>(null);
-  const [editingProvider, setEditingProvider] = useState<Provider | null>(null);
-  const [newProvider, setNewProvider] = useState(false);
   const router = useRouter();
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -844,117 +651,39 @@ export default function SettingsPage() {
         <CardHeader>
           <div className="flex items-center justify-between">
             <CardTitle className="text-base">Providers</CardTitle>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => {
-                setNewProvider(true);
-                setEditingProvider({ id: "", name: "", envVars: {}, models: [] });
-              }}
-            >
+            <Button variant="ghost" size="sm" onClick={() => router.push("/settings/providers/new")}>
               <Plus className="h-4 w-4 mr-1" /> Add
             </Button>
           </div>
         </CardHeader>
-        <CardContent className="space-y-2">
+        <CardContent className="space-y-1">
           {providers.map((provider) => (
-            <div key={provider.id} className="rounded-md border border-border">
-              <button
-                className="flex w-full items-center gap-2 p-3 text-left text-sm hover:bg-muted/50"
-                onClick={() => setExpandedProvider(expandedProvider === provider.id ? null : provider.id)}
-              >
-                {expandedProvider === provider.id ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
-                <span className="font-medium">{provider.name}</span>
-                {provider.isBuiltin && <span className="text-xs text-muted-foreground">(built-in)</span>}
-                <span className="ml-auto text-xs text-muted-foreground">
-                  {provider.models.length} model{provider.models.length !== 1 ? "s" : ""}
-                </span>
-              </button>
-              {expandedProvider === provider.id && (
-                <div className="border-t px-3 pb-3 pt-2 space-y-2">
-                  {Object.keys(provider.envVars).length > 0 && (
-                    <div>
-                      <div className="text-xs font-medium text-muted-foreground mb-1">Environment variables</div>
-                      {Object.entries(provider.envVars).map(([key, value]) => (
-                        <div key={key} className="flex items-center gap-2 text-xs font-mono">
-                          <span>{key}</span>
-                          <span className="text-muted-foreground">=</span>
-                          <span className="text-muted-foreground truncate">
-                            {value.length > 20 ? `${value.slice(0, 8)}...${value.slice(-4)}` : value}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                  <div>
-                    <div className="text-xs font-medium text-muted-foreground mb-1">Models</div>
-                    {provider.models.map((model) => (
-                      <div key={model.modelId} className="flex items-center gap-2 text-xs py-0.5">
-                        <span className="font-mono">{model.modelId}</span>
-                        <span className="text-muted-foreground">{model.displayName}</span>
-                        {model.effortLevels.length > 0 && (
-                          <span className="text-muted-foreground ml-auto">thinking: {model.effortLevels.join(", ")}</span>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                  {!provider.isBuiltin && (
-                    <div className="flex gap-2 pt-1">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => {
-                          setEditingProvider(provider);
-                          setNewProvider(false);
-                        }}
-                      >
-                        Edit
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="text-destructive"
-                        onClick={async () => {
-                          await fetch(`/api/providers/${provider.id}`, { method: "DELETE" });
-                          fetchProviders();
-                        }}
-                      >
-                        <Trash2 className="h-3 w-3 mr-1" /> Delete
-                      </Button>
-                    </div>
-                  )}
-                </div>
+            <div key={provider.id} className="flex items-center gap-2 px-2 py-2 text-sm">
+              <span className="font-medium">{provider.name}</span>
+              {provider.isBuiltin && <span className="text-xs text-muted-foreground">(built-in)</span>}
+              <span className="ml-auto text-xs text-muted-foreground">
+                {provider.models.length} model{provider.models.length !== 1 ? "s" : ""}
+              </span>
+              {!provider.isBuiltin && (
+                <>
+                  <Button variant="outline" size="sm" onClick={() => router.push(`/settings/providers/${provider.id}`)}>
+                    Edit
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="text-destructive"
+                    onClick={async () => {
+                      await fetch(`/api/providers/${provider.id}`, { method: "DELETE" });
+                      fetchProviders();
+                    }}
+                  >
+                    Delete
+                  </Button>
+                </>
               )}
             </div>
           ))}
-          {(editingProvider || newProvider) && (
-            <ProviderEditor
-              provider={editingProvider!}
-              isNew={newProvider}
-              onSave={async (provider) => {
-                if (newProvider) {
-                  await fetch("/api/providers", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify(provider),
-                  });
-                } else {
-                  await fetch(`/api/providers/${provider.id}`, {
-                    method: "PUT",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify(provider),
-                  });
-                }
-                setEditingProvider(null);
-                setNewProvider(false);
-                fetchProviders();
-              }}
-              onCancel={() => {
-                setEditingProvider(null);
-                setNewProvider(false);
-              }}
-            />
-          )}
         </CardContent>
       </Card>
       <Card>
