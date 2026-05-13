@@ -2,6 +2,7 @@
 
 import {
   Brain,
+  Check,
   ChevronRight,
   Cpu,
   Eye,
@@ -836,6 +837,33 @@ export function InputArea({
                       </div>
                     </div>
                   )}
+                  {/* Custom provider model rows */}
+                  {providers
+                    ?.filter((p) => !p.isBuiltin)
+                    .map((provider) =>
+                      provider.models.length > 0 ? (
+                        <div key={provider.id} className="space-y-1 pt-2 border-t border-border">
+                          <div className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider px-2">{provider.name}</div>
+                          {provider.models.map((model) => {
+                            const base = currentModel.replace(/\[.*\]$/, "");
+                            const selected = base === model.modelId;
+                            return (
+                              <button
+                                key={model.modelId}
+                                onClick={() => onSetModel(model.modelId)}
+                                className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs transition-colors ${
+                                  selected ? "bg-primary/10 text-primary" : "hover:bg-muted text-foreground"
+                                }`}
+                              >
+                                <div className="w-3 shrink-0">{selected && <Check className="h-3 w-3" />}</div>
+                                <span className="font-mono font-medium">{model.modelId}</span>
+                                <span className="text-muted-foreground ml-auto">{model.displayName}</span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      ) : null,
+                    )}
                   {(() => {
                     const providerEffort = (() => {
                       if (!providers || !currentModel) return [];
