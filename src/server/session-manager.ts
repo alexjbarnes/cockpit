@@ -13,6 +13,7 @@ import type {
   DocumentAttachment,
   ImageAttachment,
   InitData,
+  ModelSlots,
   SessionInfo,
   ThinkingLevel,
   TodoItem,
@@ -20,6 +21,7 @@ import type {
 } from "@/types";
 import { debugLog, isDebugEnabled, logDiag, logRawLine } from "./debug-logger";
 import { getDefaults } from "./defaults";
+import { resolveProviderModel } from "@/server/providers";
 import { EventParser, type ParsedEvent } from "./event-parser";
 import { findLatestPlanFile, readPlanFile } from "./plans";
 import { findChainForCliSession, getSessionPrefs, setSessionPrefs } from "./session-prefs";
@@ -89,6 +91,7 @@ interface Session {
   streamingSnapshot: StreamingSnapshot | null;
   queuedMessages: QueuedMessage[];
   queuePaused: boolean;
+  modelSlots: ModelSlots;
   transcriptBuffer: ChatMessage[];
   transcriptByteOffset: number;
   transcriptTotalSize: number;
@@ -119,6 +122,7 @@ export class SessionManager {
     const id = uuidv4();
     const now = Date.now();
     const defaults = getDefaults();
+    const modelSlots: ModelSlots = { main: defaults.modelSlots.main ?? "sonnet" };
     const info: SessionInfo = {
       id,
       name: name || path.basename(cwd) || cwd,
@@ -126,7 +130,7 @@ export class SessionManager {
       createdAt: now,
       lastActiveAt: now,
       status: "idle",
-      model: defaults.model || undefined,
+      model: modelSlots.main,
       pendingRequestCount: 0,
     };
 
@@ -152,6 +156,7 @@ export class SessionManager {
       streamingSnapshot: null,
       queuedMessages: [],
       queuePaused: false,
+      modelSlots,
       transcriptBuffer: [],
       transcriptByteOffset: 0,
       transcriptTotalSize: 0,
@@ -174,6 +179,8 @@ export class SessionManager {
       );
       const defaults = getDefaults();
       const now = Date.now();
+      const modelSlots: ModelSlots =
+        prefs?.modelSlots ?? (prefs?.model ? { main: prefs.model } : { main: defaults.modelSlots.main ?? "sonnet" });
       session = {
         info: {
           id,
@@ -182,7 +189,7 @@ export class SessionManager {
           createdAt: now,
           lastActiveAt: now,
           status: "idle",
-          model: prefs?.model || defaults.model || undefined,
+          model: modelSlots.main,
           pendingRequestCount: 0,
         },
         process: null,
@@ -196,7 +203,10 @@ export class SessionManager {
         pendingPlanReminder: prefs?.planMode ?? false,
         needsRespawnForPermissions: false,
         compacting: false,
-        thinkingLevel: prefs?.thinkingLevel ?? recommendedEffort(resolveModel(prefs?.model || defaults.model)) ?? defaults.thinkingLevel,
+        thinkingLevel:
+          prefs?.thinkingLevel ??
+          recommendedEffort(resolveModel((prefs?.model || defaults.modelSlots.main) ?? "sonnet")) ??
+          defaults.thinkingLevel,
         streamState: null,
         contextUsage: null,
         contextWindowSize: 200_000,
@@ -207,6 +217,7 @@ export class SessionManager {
         streamingSnapshot: null,
         queuedMessages: [],
         queuePaused: false,
+        modelSlots,
         transcriptBuffer: [],
         transcriptByteOffset: 0,
         transcriptTotalSize: 0,
@@ -808,7 +819,8 @@ export class SessionManager {
     const contextChanged = has1m(session.info.model) !== has1m(model);
 
     session.info.model = model;
-    setSessionPrefs(sessionId, { model });
+    session.modelSlots = { ...session.modelSlots, main: model };
+    setSessionPrefs(sessionId, { model, modelSlots: session.modelSlots });
 
     const nextEntry = resolveModel(model);
     const coerced = coerceEffort(session.thinkingLevel, nextEntry);
@@ -842,6 +854,27 @@ export class SessionManager {
       session.emitter.emit("status", sessionId, "idle");
     }
     this.emitInfoUpdated(session, sessionId);
+  }
+
+  setModelSlot(sessionId: string, slot: "main" | "subagent" | "fast", modelId: string): void {
+    const session = this.sessions.get(sessionId);
+    if (!session) return;
+
+    const slots = { ...session.modelSlots };
+    slots[slot] = modelId;
+    session.modelSlots = slots;
+    setSessionPrefs(sessionId, { modelSlots: slots });
+
+    if (slot === "main") {
+      this.setModel(sessionId, modelId);
+    } else {
+      this.killProcess(session);
+      session.queuedMessages.length = 0;
+      session.queuePaused = false;
+      session.info.status = "idle";
+      session.emitter.emit("status", sessionId, "idle");
+      this.emitInfoUpdated(session, sessionId);
+    }
   }
 
   getModel(sessionId: string): string {
@@ -1598,12 +1631,21 @@ Additional Cockpit rules beyond the CLI's defaults:
     delete env.CLAUDECODE;
     delete env.CLAUDE_CODE_ENTRYPOINT;
 
+    const resolved = resolveProviderModel(session.info.model ?? "sonnet");
+    if (resolved) {
+      Object.assign(env, resolved.provider.envVars);
+    }
+
     // Claude Code defaults to a model's full context window (1M for Opus 4.7,
     // Sonnet 4.6) when no [1m] suffix is present, ignoring the suffix as the
     // gate. CLAUDE_CODE_DISABLE_1M_CONTEXT is the only switch that forces 200K
-    // back regardless of model capability — set it when the user picked 200K.
+    // back regardless of model capability -- set it when the user picked 200K.
     if (session.info.model && !/\[1m\]/i.test(session.info.model)) {
       env.CLAUDE_CODE_DISABLE_1M_CONTEXT = "1";
+    }
+
+    if (session.modelSlots.subagent && session.modelSlots.subagent !== session.modelSlots.main) {
+      env.ANTHROPIC_SMALL_FAST_MODEL = session.modelSlots.subagent;
     }
 
     mkdirSync(session.info.cwd, { recursive: true });

@@ -1,7 +1,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { InitData, ThinkingLevel } from "@/types";
+import type { InitData, ModelSlots, ThinkingLevel } from "@/types";
 
 export interface PersistedTab {
   type: "file" | "diff" | "changes";
@@ -14,6 +14,7 @@ export interface SessionPrefs {
   bypassAllPermissions?: boolean;
   planMode?: boolean;
   model?: string;
+  modelSlots?: ModelSlots;
   initData?: InitData;
   cliSessionId?: string;
   previousCliSessionIds?: string[];
