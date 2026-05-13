@@ -31,7 +31,7 @@ describe("defaults", () => {
       readExpanded: false,
       editExpanded: false,
       toolCallsExpanded: false,
-      model: "sonnet",
+      modelSlots: { main: "sonnet" },
       messageStitching: true,
       reviewsEnabled: true,
     });
@@ -58,10 +58,31 @@ describe("defaults", () => {
       readExpanded: false,
       editExpanded: false,
       toolCallsExpanded: false,
-      model: "opus",
+      modelSlots: { main: "opus" },
       messageStitching: true,
       reviewsEnabled: true,
     });
+  });
+
+  it("migrates legacy model field to modelSlots on read", async () => {
+    const fs = await import("node:fs");
+    vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify({ model: "opus" }));
+
+    const { getDefaults } = await import("@/server/defaults");
+    const defaults = getDefaults();
+
+    expect(defaults.modelSlots).toEqual({ main: "opus" });
+    expect((defaults as unknown as Record<string, unknown>).model).toBeUndefined();
+  });
+
+  it("preserves modelSlots when already present", async () => {
+    const fs = await import("node:fs");
+    vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify({ modelSlots: { main: "opus", subagent: "haiku" } }));
+
+    const { getDefaults } = await import("@/server/defaults");
+    const defaults = getDefaults();
+
+    expect(defaults.modelSlots).toEqual({ main: "opus", subagent: "haiku" });
   });
 
   it("setDefaults merges partial with current and writes file", async () => {
@@ -73,7 +94,7 @@ describe("defaults", () => {
     const { setDefaults } = await import("@/server/defaults");
     const result = setDefaults({ thinkingExpanded: true });
 
-    expect(result.model).toBe("opus");
+    expect(result.modelSlots).toEqual({ main: "opus" });
     expect(result.thinkingExpanded).toBe(true);
     expect(fs.mkdirSync).toHaveBeenCalled();
     expect(fs.writeFileSync).toHaveBeenCalled();
@@ -87,8 +108,8 @@ describe("defaults", () => {
     });
 
     const { setDefaults } = await import("@/server/defaults");
-    const result = setDefaults({ model: "haiku" });
+    const result = setDefaults({ modelSlots: { main: "haiku" } });
 
-    expect(result.model).toBe("haiku");
+    expect(result.modelSlots).toEqual({ main: "haiku" });
   });
 });

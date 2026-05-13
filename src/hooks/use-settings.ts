@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import type { ModelSlots } from "@/types";
 
 export type DiffStyle = "split" | "unified";
 export type ThinkingLevel = "low" | "medium" | "high" | "xhigh" | "max";
@@ -14,7 +15,7 @@ export interface Settings {
   readExpanded: boolean;
   editExpanded: boolean;
   toolCallsExpanded: boolean;
-  model: string;
+  modelSlots: ModelSlots;
   messageStitching: boolean;
   reviewsEnabled: boolean;
 }
@@ -28,7 +29,7 @@ const defaultSettings: Settings = {
   readExpanded: false,
   editExpanded: false,
   toolCallsExpanded: false,
-  model: "sonnet",
+  modelSlots: { main: "sonnet" },
   messageStitching: true,
   reviewsEnabled: true,
 };
@@ -41,6 +42,10 @@ export function useSettings() {
     fetch("/api/defaults")
       .then((res) => res.json())
       .then((data) => {
+        if (data.model && !data.modelSlots) {
+          data.modelSlots = { main: data.model };
+          delete data.model;
+        }
         setSettings({ ...defaultSettings, ...data });
         setLoaded(true);
       })
