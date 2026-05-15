@@ -1,7 +1,8 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { Tab } from "@/contexts/tab-context";
+import type { Tab, TerminalTab } from "@/contexts/tab-context";
 import { TabProvider, useTabContext } from "@/contexts/tab-context";
 import { useIsDesktop } from "@/hooks/use-is-desktop";
 import { cn } from "@/lib/utils";
@@ -12,6 +13,8 @@ import { DiffView } from "./diff-view";
 import { FilesView } from "./files-view";
 import { ResizeHandle } from "./resize-handle";
 import { TabBar } from "./tab-bar";
+
+const TerminalPanel = dynamic(() => import("./terminal-panel").then((m) => m.TerminalPanel), { ssr: false });
 
 interface TabbedSessionViewProps {
   sessionId: string;
@@ -36,9 +39,9 @@ function TabbedContent({ sessionId, cwd, initialName, historyView }: TabbedSessi
   const [splitRatio, setSplitRatio] = useState(0.5);
 
   useEffect(() => {
-    setTabActions({ openFile: tabs.openFile, openDiff: tabs.openDiff, openChanges: tabs.openChanges });
+    setTabActions({ openFile: tabs.openFile, openDiff: tabs.openDiff, openChanges: tabs.openChanges, openTerminal: tabs.openTerminal });
     return () => setTabActions(null);
-  }, [tabs.openFile, tabs.openDiff, tabs.openChanges, setTabActions]);
+  }, [tabs.openFile, tabs.openDiff, tabs.openChanges, tabs.openTerminal, setTabActions]);
 
   const { activeTabId, splitTabId, rightPaneTabIds, tabs: tabList } = tabs;
   const isSplit = isDesktop && splitTabId !== null;
@@ -55,7 +58,7 @@ function TabbedContent({ sessionId, cwd, initialName, historyView }: TabbedSessi
   }, []);
 
   useEffect(() => {
-    const onKeyDown = (e: KeyboardEvent) => {
+    const onKeyDown = async (e: KeyboardEvent) => {
       const mod = e.metaKey || e.ctrlKey;
       if (mod && e.key === "w") {
         if (tabs.activeTabId !== "chat") {
@@ -63,13 +66,28 @@ function TabbedContent({ sessionId, cwd, initialName, historyView }: TabbedSessi
           tabs.closeTab(tabs.activeTabId);
         }
       }
+      if (mod && e.key === "`") {
+        e.preventDefault();
+        try {
+          const res = await fetch("/api/terminal", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ cwd }),
+          });
+          if (res.ok) {
+            const { terminalId } = await res.json();
+            tabs.openTerminal(terminalId);
+          }
+        } catch {}
+      }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [tabs]);
+  }, [tabs, cwd]);
 
   const fileTabs = tabList.filter((t): t is Tab & { type: "file" } => t.type === "file");
   const diffTabs = tabList.filter((t): t is Tab & { type: "diff" } => t.type === "diff");
+  const terminalTabs = tabList.filter((t): t is TerminalTab => t.type === "terminal");
   const hasChanges = tabList.some((t) => t.type === "changes");
 
   const handlePaneDragOver = useCallback((e: React.DragEvent) => {
@@ -106,9 +124,11 @@ function TabbedContent({ sessionId, cwd, initialName, historyView }: TabbedSessi
   if (isSplit) {
     const leftFileTabs = fileTabs.filter((t) => !rightPaneTabIds.includes(t.id));
     const leftDiffTabs = diffTabs.filter((t) => !rightPaneTabIds.includes(t.id));
+    const leftTerminalTabs = terminalTabs.filter((t) => !rightPaneTabIds.includes(t.id));
     const leftHasChanges = hasChanges && !rightPaneTabIds.includes("changes");
     const rightFileTabs = fileTabs.filter((t) => rightPaneTabIds.includes(t.id));
     const rightDiffTabs = diffTabs.filter((t) => rightPaneTabIds.includes(t.id));
+    const rightTerminalTabs = terminalTabs.filter((t) => rightPaneTabIds.includes(t.id));
     const rightHasChanges = hasChanges && rightPaneTabIds.includes("changes");
 
     return (
@@ -143,6 +163,11 @@ function TabbedContent({ sessionId, cwd, initialName, historyView }: TabbedSessi
                 <ChangesView cwd={cwd} sessionId={sessionId} embeddedChat={false} manageSidebar={false} />
               </div>
             )}
+            {leftTerminalTabs.map((tab) => (
+              <div key={tab.id} className={cn("flex flex-col flex-1 min-h-0 min-w-0", activeTabId !== tab.id && "hidden")}>
+                <TerminalPanel terminalId={tab.terminalId} cwd={cwd} active={activeTabId === tab.id} />
+              </div>
+            ))}
           </div>
           <ResizeHandle onResize={handleResize} />
           <div
@@ -166,6 +191,11 @@ function TabbedContent({ sessionId, cwd, initialName, historyView }: TabbedSessi
                 <ChangesView cwd={cwd} sessionId={sessionId} embeddedChat={false} manageSidebar={false} />
               </div>
             )}
+            {rightTerminalTabs.map((tab) => (
+              <div key={tab.id} className={cn("flex flex-col flex-1 min-h-0 min-w-0", splitTabId !== tab.id && "hidden")}>
+                <TerminalPanel terminalId={tab.terminalId} cwd={cwd} active={splitTabId === tab.id} />
+              </div>
+            ))}
           </div>
         </div>
       </>
@@ -197,6 +227,11 @@ function TabbedContent({ sessionId, cwd, initialName, historyView }: TabbedSessi
           <ChangesView cwd={cwd} sessionId={sessionId} embeddedChat={false} manageSidebar={false} />
         </div>
       )}
+      {terminalTabs.map((tab) => (
+        <div key={tab.id} className={cn("flex flex-col flex-1 min-h-0 min-w-0", activeTabId !== tab.id && "hidden")}>
+          <TerminalPanel terminalId={tab.terminalId} cwd={cwd} active={activeTabId === tab.id} />
+        </div>
+      ))}
     </>
   );
 }

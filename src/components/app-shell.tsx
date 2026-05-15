@@ -1,6 +1,6 @@
 "use client";
 
-import { Menu } from "lucide-react";
+import { Menu, Terminal } from "lucide-react";
 import Image from "next/image";
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { AuthGuard } from "@/components/auth-guard";
@@ -32,6 +32,7 @@ export interface TabActions {
   openFile: (filePath: string) => void;
   openDiff: (filePath: string) => void;
   openChanges: () => void;
+  openTerminal?: (terminalId: string, label?: string) => void;
 }
 
 interface ShellContextValue {
@@ -153,6 +154,34 @@ function EditableTitle({ title, onRename }: { title: string; onRename?: (name: s
   );
 }
 
+function NewTerminalButton({ cwd }: { cwd: string }) {
+  const { tabActions } = useShell();
+  const [creating, setCreating] = useState(false);
+
+  const handleClick = useCallback(async () => {
+    if (!tabActions?.openTerminal) return;
+    setCreating(true);
+    try {
+      const res = await fetch("/api/terminal", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cwd }),
+      });
+      if (!res.ok) return;
+      const { terminalId } = await res.json();
+      tabActions.openTerminal(terminalId);
+    } finally {
+      setCreating(false);
+    }
+  }, [cwd, tabActions]);
+
+  return (
+    <Button variant="ghost" size="icon" onClick={handleClick} disabled={creating} title="New terminal (Ctrl+`)">
+      <Terminal className="h-4 w-4" />
+    </Button>
+  );
+}
+
 export function AppShell({ children }: { children: ReactNode }) {
   const sidebarRef = useRef<SidebarHandle>(null);
   const [header, setHeaderState] = useState<HeaderConfig>({ title: "Cockpit" });
@@ -253,6 +282,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                 </div>
                 {!header.hideActions && (
                   <div className="flex items-center gap-2 shrink-0 ml-auto">
+                    {cwd && <NewTerminalButton cwd={cwd} />}
                     <SearchButton />
                     {cwd && <TodoIndicator todos={todos} />}
                     {cwd && <BackgroundTasksButton tasks={backgroundTasks} />}

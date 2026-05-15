@@ -9,14 +9,105 @@ import type { ParsedEvent } from "./event-parser";
 import { findLatestPlanFile, readPlanFile } from "./plans";
 import { extractTodosFromHistory, SessionManager } from "./session-manager";
 import { getSessionPrefs } from "./session-prefs";
+import type { TerminalManager } from "./terminal-manager";
 
-export function createWebSocketHandler(server: HTTPServer, sessionManager: SessionManager): WebSocketServer {
+const RESIZE_PREFIX = "\x01R";
+
+function setupTerminalWebSocket(terminalWss: WebSocketServer, terminalManager: TerminalManager): void {
+  const heartbeat = setInterval(() => {
+    for (const ws of terminalWss.clients) {
+      const ext = ws as WebSocket & { isAlive?: boolean };
+      if (ext.isAlive === false) {
+        ws.terminate();
+        continue;
+      }
+      ext.isAlive = false;
+      ws.ping();
+    }
+  }, 30000);
+
+  terminalWss.on("close", () => {
+    clearInterval(heartbeat);
+  });
+
+  terminalWss.on("connection", (ws: WebSocket, req: IncomingMessage) => {
+    const ext = ws as WebSocket & { isAlive?: boolean };
+    ext.isAlive = true;
+    ws.on("pong", () => {
+      ext.isAlive = true;
+    });
+
+    const url = new URL(req.url || "", "http://localhost");
+    const terminalId = url.searchParams.get("terminalId");
+    if (!terminalId) {
+      ws.close(1008, "Missing terminalId");
+      return;
+    }
+
+    const terminal = terminalManager.getTerminal(terminalId);
+    if (!terminal) {
+      console.log(`[terminal-ws] terminal not found: ${terminalId.slice(0, 8)}`);
+      ws.close(1008, "Terminal not found");
+      return;
+    }
+
+    const wantsReplay = url.searchParams.get("replay") !== "0";
+    console.log(`[terminal-ws] connected: ${terminalId.slice(0, 8)} replay=${wantsReplay}`);
+
+    terminalManager.attachClient(terminalId, (data) => {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(data);
+      }
+    });
+
+    if (!wantsReplay) {
+      const delta = terminalManager.getDelta(terminalId);
+      if (delta) {
+        console.log(`[terminal-ws] sending delta: ${delta.length}b`);
+        ws.send(delta);
+      }
+    }
+
+    let bufferSent = !wantsReplay;
+
+    ws.on("message", (data: Buffer) => {
+      const str = data.toString();
+      if (str.startsWith(RESIZE_PREFIX)) {
+        const parts = str.slice(RESIZE_PREFIX.length).split(";");
+        const cols = parseInt(parts[0], 10);
+        const rows = parseInt(parts[1], 10);
+        const replayBuffer = !bufferSent ? terminalManager.getBuffer(terminalId) : null;
+        if (cols > 0 && rows > 0) {
+          terminalManager.resizeTerminal(terminalId, cols, rows);
+        }
+        if (!bufferSent) {
+          bufferSent = true;
+          if (replayBuffer) {
+            ws.send("\x1b[2J\x1b[3J\x1b[H" + replayBuffer);
+          }
+        }
+        return;
+      }
+      terminalManager.writeToTerminal(terminalId, str);
+    });
+
+    ws.on("close", () => {
+      console.log(`[terminal-ws] disconnected: ${terminalId.slice(0, 8)}`);
+      terminalManager.detachClient(terminalId);
+    });
+  });
+}
+
+export function createWebSocketHandler(
+  server: HTTPServer,
+  sessionManager: SessionManager,
+  terminalManager: TerminalManager,
+): WebSocketServer {
   const wss = new WebSocketServer({ noServer: true });
+  const terminalWss = new WebSocketServer({ noServer: true });
 
-  // Server-side heartbeat: detect dead connections every 30s.
-  // Without this, zombie connections persist for hours (TCP keepalive default)
-  // and can cause CLI process stdout backpressure when send() buffers data
-  // into a dead socket's TCP buffer.
+  setupTerminalWebSocket(terminalWss, terminalManager);
+
   const heartbeat = setInterval(() => {
     for (const ws of wss.clients) {
       const ext = ws as WebSocket & { isAlive?: boolean };
@@ -35,8 +126,22 @@ export function createWebSocketHandler(server: HTTPServer, sessionManager: Sessi
 
   server.on("upgrade", (req: IncomingMessage, socket: Duplex, head: Buffer) => {
     const url = req.url || "";
+
+    if (url.startsWith("/ws/terminal")) {
+      const token = extractTokenFromQuery(url);
+      if (!token || !validateSession(token)) {
+        socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
+        socket.destroy();
+        return;
+      }
+      terminalWss.handleUpgrade(req, socket, head, (ws) => {
+        terminalWss.emit("connection", ws, req);
+      });
+      return;
+    }
+
     if (!url.startsWith("/ws")) {
-      return; // Let Next.js handle other upgrades (e.g. HMR)
+      return;
     }
 
     const token = extractTokenFromQuery(url);

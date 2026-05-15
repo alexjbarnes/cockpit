@@ -1,6 +1,6 @@
 "use client";
 
-import { Columns2, FileDiff, FileText, GitBranch, MessageSquare, X } from "lucide-react";
+import { Columns2, FileDiff, FileText, GitBranch, MessageSquare, Terminal, X } from "lucide-react";
 import { useRef, useState } from "react";
 import type { Tab } from "@/contexts/tab-context";
 import { useTabContext } from "@/contexts/tab-context";
@@ -17,6 +17,8 @@ function tabIcon(tab: Tab) {
       return <FileDiff className="h-3 w-3 md:h-3.5 md:w-3.5 shrink-0" />;
     case "changes":
       return <GitBranch className="h-3 w-3 md:h-3.5 md:w-3.5 shrink-0" />;
+    case "terminal":
+      return <Terminal className="h-3 w-3 md:h-3.5 md:w-3.5 shrink-0" />;
   }
 }
 
@@ -29,6 +31,8 @@ function tabLabel(tab: Tab): string {
       return tab.label;
     case "changes":
       return "Changes";
+    case "terminal":
+      return tab.label;
   }
 }
 
@@ -75,7 +79,6 @@ export function TabBar({ splitRatio }: TabBarProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const leftPaneRef = useRef<HTMLDivElement>(null);
   const rightPaneRef = useRef<HTMLDivElement>(null);
-
   if (!tabs || tabs.tabs.length <= 1) return null;
 
   const { activeTabId, splitTabId, rightPaneTabIds, setActiveTab, closeTab, setSplitTab, moveTab, moveTabToPane } = tabs;

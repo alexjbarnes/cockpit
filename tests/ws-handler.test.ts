@@ -25,6 +25,7 @@ vi.mock("@/server/plans", () => ({
 import { createSession as createAuthSession, setupPassword } from "@/server/auth";
 import type { ParsedEvent } from "@/server/event-parser";
 import { SessionManager } from "@/server/session-manager";
+import { TerminalManager } from "@/server/terminal-manager";
 import { createWebSocketHandler } from "@/server/ws-handler";
 
 beforeAll(async () => {
@@ -42,7 +43,7 @@ describe("WebSocket handler", () => {
       new Promise<void>((resolve) => {
         manager = new SessionManager();
         server = createServer();
-        createWebSocketHandler(server, manager);
+        createWebSocketHandler(server, manager, new TerminalManager());
         validToken = createAuthSession();
         server.listen(0, () => {
           const addr = server.address();

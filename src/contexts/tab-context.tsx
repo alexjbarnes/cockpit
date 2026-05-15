@@ -27,7 +27,14 @@ interface ChangesTab {
   id: "changes";
 }
 
-export type Tab = ChatTab | FileTab | DiffTab | ChangesTab;
+export interface TerminalTab {
+  type: "terminal";
+  id: string;
+  terminalId: string;
+  label: string;
+}
+
+export type Tab = ChatTab | FileTab | DiffTab | ChangesTab | TerminalTab;
 
 interface TabState {
   tabs: Tab[];
@@ -44,6 +51,7 @@ export interface TabContextValue {
   openFile: (filePath: string) => void;
   openDiff: (filePath: string) => void;
   openChanges: () => void;
+  openTerminal: (terminalId: string, label?: string) => void;
   closeTab: (tabId: string) => void;
   setActiveTab: (tabId: string) => void;
   setSplitTab: (tabId: string | null) => void;
@@ -64,6 +72,10 @@ function diffTabId(filePath: string): string {
   return "diff::" + filePath;
 }
 
+function terminalTabId(terminalId: string): string {
+  return "terminal::" + terminalId;
+}
+
 const stateCache = new Map<string, TabState>();
 
 const DEFAULT_STATE: TabState = {
@@ -74,8 +86,10 @@ const DEFAULT_STATE: TabState = {
 };
 
 interface PersistedTab {
-  type: "file" | "diff" | "changes";
+  type: "file" | "diff" | "changes" | "terminal";
   filePath?: string;
+  terminalId?: string;
+  label?: string;
 }
 
 function deserializeTabs(persisted: PersistedTab[]): Tab[] {
@@ -87,6 +101,8 @@ function deserializeTabs(persisted: PersistedTab[]): Tab[] {
       tabs.push({ type: "file", id: fileTabId(p.filePath), filePath: p.filePath, label: pathBasename(p.filePath) || p.filePath });
     } else if (p.type === "diff" && p.filePath) {
       tabs.push({ type: "diff", id: diffTabId(p.filePath), filePath: p.filePath, label: pathBasename(p.filePath) || p.filePath });
+    } else if (p.type === "terminal" && p.terminalId) {
+      tabs.push({ type: "terminal", id: terminalTabId(p.terminalId), terminalId: p.terminalId, label: p.label || "Terminal" });
     }
   }
   return tabs;
@@ -98,6 +114,8 @@ function serializeTabs(tabs: Tab[]): PersistedTab[] {
     if (t.type === "chat") continue;
     if (t.type === "changes") {
       out.push({ type: "changes" });
+    } else if (t.type === "terminal") {
+      out.push({ type: "terminal", terminalId: t.terminalId, label: t.label });
     } else {
       out.push({ type: t.type, filePath: t.filePath });
     }
@@ -199,9 +217,25 @@ export function TabProvider({ sessionId, children }: { sessionId: string; childr
     });
   }, []);
 
+  const openTerminal = useCallback((termId: string, label?: string) => {
+    const id = terminalTabId(termId);
+    setState((prev) => {
+      const existing = prev.tabs.find((t) => t.id === id);
+      if (existing) {
+        return { ...prev, activeTabId: id };
+      }
+      const tab: TerminalTab = { type: "terminal", id, terminalId: termId, label: label || "Terminal" };
+      return { ...prev, tabs: [...prev.tabs, tab], activeTabId: id };
+    });
+  }, []);
+
   const closeTab = useCallback((tabId: string) => {
     if (tabId === "chat") return;
     setState((prev) => {
+      const closingTab = prev.tabs.find((t) => t.id === tabId);
+      if (closingTab?.type === "terminal") {
+        fetch(`/api/terminal/${closingTab.terminalId}`, { method: "DELETE" }).catch(() => {});
+      }
       const idx = prev.tabs.findIndex((t) => t.id === tabId);
       if (idx < 0) return prev;
       const next = prev.tabs.filter((t) => t.id !== tabId);
@@ -279,6 +313,7 @@ export function TabProvider({ sessionId, children }: { sessionId: string; childr
         openFile,
         openDiff,
         openChanges,
+        openTerminal,
         closeTab,
         setActiveTab,
         setSplitTab,
