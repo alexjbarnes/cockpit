@@ -1,14 +1,16 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 
 let cached: string | null = null;
 
 /**
  * Resolve the absolute path to `bin/cockpit-hook-bridge.mjs`.
  *
- * In dev: `server.ts` runs from the repo root, so `bin/` is a sibling.
- * In prod: `dist/server.js` runs from `<pkg>/dist/`, so `bin/` is one level up.
+ * cockpit always runs from its package root: in dev `tsx` runs from the repo
+ * root; in prod `bin/cockpit.js` chdirs to the package root before importing
+ * `dist/server.js`. So `bin/cockpit-hook-bridge.mjs` lives at
+ * `process.cwd()/bin/cockpit-hook-bridge.mjs` in both cases.
+ *
  * Allow override via COCKPIT_HOOK_BRIDGE_BIN for tests and packaging quirks.
  */
 export function resolveHookBridgePath(): string {
@@ -20,18 +22,10 @@ export function resolveHookBridgePath(): string {
     return override;
   }
 
-  const here = path.dirname(fileURLToPath(import.meta.url));
-  const candidates = [
-    path.resolve(here, "..", "..", "..", "bin", "cockpit-hook-bridge.mjs"),
-    path.resolve(here, "..", "..", "bin", "cockpit-hook-bridge.mjs"),
-    path.resolve(here, "..", "bin", "cockpit-hook-bridge.mjs"),
-    path.resolve(process.cwd(), "bin", "cockpit-hook-bridge.mjs"),
-  ];
-  for (const c of candidates) {
-    if (existsSync(c)) {
-      cached = c;
-      return c;
-    }
+  const candidate = path.resolve(process.cwd(), "bin", "cockpit-hook-bridge.mjs");
+  if (existsSync(candidate)) {
+    cached = candidate;
+    return candidate;
   }
-  throw new Error(`cockpit-hook-bridge.mjs not found. Searched: ${candidates.join(", ")}`);
+  throw new Error(`cockpit-hook-bridge.mjs not found at ${candidate}`);
 }
