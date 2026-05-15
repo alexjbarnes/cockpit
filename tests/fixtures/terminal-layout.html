@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html class="dark">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content" />
+<title>Terminal Layout Fixture</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.css" />
+<style>
+  /* Reset, mirrors app shell */
+  html, body { margin: 0; padding: 0; height: 100%; }
+  body {
+    background: #1e1e1e;
+    color: #d4d4d4;
+    font-family: ui-sans-serif, system-ui, sans-serif;
+  }
+  /* Mimic the app shell: fixed inset-0 anchors the layout to the viewport */
+  .app-shell {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+  }
+  /* Tab bar placeholder (~36px like the real one) */
+  .tab-bar {
+    flex: 0 0 auto;
+    height: 36px;
+    background: #2a2a2a;
+    border-bottom: 1px solid rgba(255,255,255,0.1);
+    display: flex;
+    align-items: center;
+    padding: 0 12px;
+    font-size: 12px;
+    color: #aaa;
+  }
+  /* Slot that wraps TerminalPanel — matches tabbed-session-view wrapper */
+  .terminal-tab-wrap {
+    display: flex;
+    flex-direction: column;
+    flex: 1 1 0;
+    min-height: 0;
+    min-width: 0;
+  }
+  /* === EXACT terminal-panel.tsx classes (Tailwind translated) === */
+  /* Outer: flex flex-col flex-1 min-h-0 [pb-10 when kbOpen] */
+  .tp-outer {
+    display: flex;
+    flex-direction: column;
+    flex: 1 1 0;
+    min-height: 0;
+  }
+  /* pb-10 removed — toolbar's shrink-0 already reserves its slot */
+  /* Terminal area: flex-1 min-h-0 relative overflow-hidden bg-[#1e1e1e] */
+  .tp-term-area {
+    flex: 1 1 0;
+    min-height: 0;
+    position: relative;
+    overflow: hidden;
+    background: #1e1e1e;
+  }
+  /* xterm container: absolute inset-0 */
+  .tp-term-container {
+    position: absolute;
+    inset: 0;
+  }
+  /* Toolbar: shrink-0 relative z-10 flex items-center gap-1.5 px-2 py-1.5 border-t border-border/50 bg-[#1e1e1e] */
+  .tp-toolbar {
+    flex: 0 0 auto;
+    position: relative;
+    z-index: 10;
+    display: flex;
+    align-items: center;
+    gap: 0.375rem;
+    padding: 0.375rem 0.5rem;
+    border-top: 1px solid rgba(255,255,255,0.1);
+    background: #1e1e1e;
+  }
+  .tp-toolbar.hidden { display: none; }
+  .tp-key {
+    padding: 0.375rem 0.75rem;
+    font-size: 0.75rem;
+    font-weight: 500;
+    border-radius: 0.375rem;
+    background: rgba(255,255,255,0.1);
+    color: #aaa;
+    user-select: none;
+  }
+  .tp-sep { width: 1px; height: 20px; background: rgba(255,255,255,0.1); }
+
+  /* Probe overlay for visual debugging */
+  .probe {
+    position: fixed;
+    top: 4px;
+    right: 4px;
+    background: rgba(0,0,0,0.7);
+    color: #0f0;
+    padding: 4px 8px;
+    font: 10px monospace;
+    z-index: 9999;
+    pointer-events: none;
+    white-space: pre;
+  }
+</style>
+</head>
+<body>
+<div class="app-shell">
+  <div class="tab-bar">terminal · /tmp/work</div>
+  <div class="terminal-tab-wrap">
+    <div id="tp-outer" class="tp-outer">
+      <div id="tp-term-area" class="tp-term-area">
+        <div id="tp-term-container" class="tp-term-container"></div>
+      </div>
+      <div id="tp-toolbar" class="tp-toolbar hidden">
+        <div class="tp-key">Esc</div>
+        <div class="tp-key">Ctrl</div>
+        <div class="tp-key">Tab</div>
+        <div class="tp-sep"></div>
+        <div class="tp-key">&larr;</div>
+        <div class="tp-key">&uarr;</div>
+        <div class="tp-key">&darr;</div>
+        <div class="tp-key">&rarr;</div>
+      </div>
+    </div>
+  </div>
+</div>
+<div id="probe" class="probe"></div>
+
+<script type="module">
+  const { Terminal } = await import("https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/+esm");
+  const { FitAddon } = await import("https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/+esm");
+
+  const term = new Terminal({
+    cursorBlink: true,
+    fontSize: 14,
+    fontFamily: "'Menlo','Consolas','DejaVu Sans Mono','Courier New',monospace",
+    theme: { background: "#1e1e1e", foreground: "#d4d4d4", cursor: "#aeafad" },
+  });
+  const fit = new FitAddon();
+  term.loadAddon(fit);
+  term.open(document.getElementById("tp-term-container"));
+  fit.fit();
+
+  // Write a known pattern so we can detect cut-off rows visually
+  for (let i = 1; i <= 60; i++) {
+    term.writeln(`row-${String(i).padStart(2, "0")}: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`);
+  }
+  term.write("PROMPT$ ");
+
+  // ===== Layout mode controls =====
+  const outer = document.getElementById("tp-outer");
+  const toolbar = document.getElementById("tp-toolbar");
+  const probe = document.getElementById("probe");
+
+  // Track full height like the real component does
+  let fullHeight = window.innerHeight;
+  function setKbOpen(open) {
+    outer.classList.toggle("kb-open", open);
+    toolbar.classList.toggle("hidden", !open);
+    fit.fit();
+    updateProbe();
+  }
+
+  function updateProbe() {
+    const tArea = document.getElementById("tp-term-area").getBoundingClientRect();
+    const tb = toolbar.getBoundingClientRect();
+    const tc = document.getElementById("tp-term-container").getBoundingClientRect();
+    const canvas = document.querySelector(".xterm canvas, .xterm .xterm-rows");
+    const cBox = canvas ? canvas.getBoundingClientRect() : null;
+    probe.textContent =
+      `vp=${window.innerWidth}x${window.innerHeight}\n` +
+      `termArea=${Math.round(tArea.top)}-${Math.round(tArea.bottom)} (${Math.round(tArea.height)})\n` +
+      `toolbar=${toolbar.classList.contains("hidden") ? "hidden" : Math.round(tb.top) + "-" + Math.round(tb.bottom) + " (" + Math.round(tb.height) + ")"}\n` +
+      `xterm rows=${term.rows} cols=${term.cols}\n` +
+      (cBox ? `canvas=${Math.round(cBox.top)}-${Math.round(cBox.bottom)} (${Math.round(cBox.height)})` : "no canvas");
+  }
+
+  window.addEventListener("resize", () => {
+    fullHeight = Math.max(fullHeight, window.innerHeight);
+    const open = window.innerHeight < fullHeight * 0.75;
+    setKbOpen(open);
+  });
+
+  // Expose helpers for Playwright
+  window.__fixture = {
+    setKbOpen,
+    getMetrics() {
+      const tArea = document.getElementById("tp-term-area").getBoundingClientRect();
+      const tb = toolbar.getBoundingClientRect();
+      const tc = document.getElementById("tp-term-container").getBoundingClientRect();
+      const canvas = document.querySelector(".xterm canvas, .xterm .xterm-rows");
+      const cBox = canvas ? canvas.getBoundingClientRect() : null;
+      return {
+        viewport: { w: window.innerWidth, h: window.innerHeight },
+        termArea: { top: tArea.top, bottom: tArea.bottom, height: tArea.height },
+        toolbar: toolbar.classList.contains("hidden")
+          ? null
+          : { top: tb.top, bottom: tb.bottom, height: tb.height },
+        termContainer: { top: tc.top, bottom: tc.bottom, height: tc.height },
+        canvas: cBox ? { top: cBox.top, bottom: cBox.bottom, height: cBox.height } : null,
+        xterm: { rows: term.rows, cols: term.cols },
+      };
+    },
+    setOuterPad(px) {
+      outer.style.paddingBottom = px + "px";
+      fit.fit();
+      updateProbe();
+    },
+  };
+
+  updateProbe();
+  document.body.dataset.ready = "1";
+</script>
+</body>
+</html>

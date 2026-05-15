@@ -61,6 +61,12 @@ export function TerminalPanel({ terminalId, cwd: _cwd, active = true }: Terminal
   }, [active]);
 
   useEffect(() => {
+    if (fitRef.current) {
+      fitRef.current.fit();
+    }
+  }, [kbOpen]);
+
+  useEffect(() => {
     let cancelled = false;
     let term: import("@xterm/xterm").Terminal | null = null;
     let fit: import("@xterm/addon-fit").FitAddon | null = null;
@@ -269,8 +275,8 @@ export function TerminalPanel({ terminalId, cwd: _cwd, active = true }: Terminal
   }
 
   return (
-    <div className={cn("flex flex-col flex-1 min-h-0", kbOpen && "pb-10")}>
-      <div className="flex-1 min-h-0 relative overflow-hidden">
+    <div className="flex flex-col flex-1 min-h-0">
+      <div className="flex-1 min-h-0 relative overflow-hidden bg-[#1e1e1e]">
         <div ref={containerRef} className="absolute inset-0" />
       </div>
       {!isDesktop && kbOpen && (
