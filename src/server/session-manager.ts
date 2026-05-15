@@ -24,9 +24,17 @@ import { debugLog, isDebugEnabled, logDiag, logRawLine } from "./debug-logger";
 import { getDefaults } from "./defaults";
 import { EventParser, type ParsedEvent } from "./event-parser";
 import { findLatestPlanFile, readPlanFile } from "./plans";
+import { PtyRuntime } from "./pty-runtime";
 import { findChainForCliSession, getSessionPrefs, setSessionPrefs } from "./session-prefs";
+import { getHookRouter } from "./singleton";
 import { createStreamState, processEvents, type StreamState } from "./stream-processor";
 import { findSessionCwd, loadMoreMessages, loadTranscript, transcriptExists } from "./transcript";
+
+type SessionRuntime = "stream" | "pty";
+
+function defaultRuntime(): SessionRuntime {
+  return process.env.COCKPIT_PTY_RUNTIME === "1" ? "pty" : "stream";
+}
 
 const smLog = (sessionId: string, msg: string) => {
   if (!isDebugEnabled()) return;
@@ -99,6 +107,11 @@ interface Session {
   /** Pagination-only copy of previousCliSessionIds, consumed by getMoreHistory
    *  without affecting the canonical list used for stitching on reconnect. */
   paginationPrevIds: string[];
+  /** "stream" spawns `claude -p` (current default). "pty" spawns interactive
+   *  claude through node-pty + hooks. Selectable per session via env at
+   *  creation time; future revisions may expose this on SessionInfo. */
+  runtime: SessionRuntime;
+  ptyRuntime: PtyRuntime | null;
 }
 
 export class SessionManager {
@@ -107,9 +120,9 @@ export class SessionManager {
     // Periodically check for sessions stuck in "running" with a dead process
     setInterval(() => {
       for (const [id, session] of this.sessions) {
-        if (session.info.status === "running" && !session.process) {
+        if (session.info.status === "running" && !session.process && !session.ptyRuntime?.isAlive) {
           const short = id.slice(0, 8);
-          debugLog(`[session:${short}] stale check: status=running but process=null, correcting to idle`);
+          debugLog(`[session:${short}] stale check: status=running but no live process, correcting to idle`);
           logDiag(id, "idle:stale-check");
           session.info.status = "idle";
           session.emitter.emit("status", id, "idle");
@@ -162,6 +175,8 @@ export class SessionManager {
       transcriptTotalSize: 0,
       bufferCliSessionId: id,
       paginationPrevIds: [],
+      runtime: defaultRuntime(),
+      ptyRuntime: null,
     });
 
     return info;
@@ -223,6 +238,8 @@ export class SessionManager {
         transcriptTotalSize: 0,
         bufferCliSessionId: cliId,
         paginationPrevIds: [],
+        runtime: defaultRuntime(),
+        ptyRuntime: null,
       };
       this.sessions.set(id, session);
     }
@@ -514,17 +531,17 @@ export class SessionManager {
 
   isProcessAlive(id: string): boolean {
     const session = this.sessions.get(id);
-    return !!session?.process;
+    return !!session?.process || !!session?.ptyRuntime?.isAlive;
   }
 
   hasRunningProcess(id: string): boolean {
     const session = this.sessions.get(id);
-    return !!session?.process;
+    return !!session?.process || !!session?.ptyRuntime?.isAlive;
   }
 
   fixStaleStatus(id: string): void {
     const session = this.sessions.get(id);
-    if (session && session.info.status === "running" && !session.process) {
+    if (session && session.info.status === "running" && !session.process && !session.ptyRuntime?.isAlive) {
       session.info.status = "idle";
       session.pendingRequests.clear();
       this.notifyPendingChanged(session, id);
@@ -556,6 +573,11 @@ export class SessionManager {
     if (!session) return false;
     if (session.process) {
       this.endProcess(session, "session_destroyed");
+    }
+    if (session.ptyRuntime) {
+      const runtime = session.ptyRuntime;
+      session.ptyRuntime = null;
+      runtime.kill().catch(() => {});
     }
     session.emitter.removeAllListeners();
     this.sessions.delete(id);
@@ -612,17 +634,30 @@ export class SessionManager {
 
   interrupt(id: string): boolean {
     const session = this.sessions.get(id);
-    if (!session?.process) {
-      logDiag(id, "interrupt:no-process", { hasSession: !!session });
+    if (!session) {
+      logDiag(id, "interrupt:no-process", { hasSession: false });
       return false;
     }
 
     // Pause the queue atomically with the interrupt so
     // flushQueuedMessage (called on message_done) becomes a no-op.
-    // This prevents a race where message_done fires before a
-    // separate pause_queue WS message can arrive.
     if (session.queuedMessages.length > 0) {
       session.queuePaused = true;
+    }
+
+    if (session.runtime === "pty") {
+      if (!session.ptyRuntime?.isAlive) {
+        logDiag(id, "interrupt:no-pty");
+        return false;
+      }
+      logDiag(id, "interrupt:pty-esc");
+      session.ptyRuntime.interrupt();
+      return true;
+    }
+
+    if (!session.process) {
+      logDiag(id, "interrupt:no-process", { hasSession: true });
+      return false;
     }
 
     // Send a control_request interrupt via stdin instead of SIGINT.
@@ -682,7 +717,19 @@ export class SessionManager {
     denyReason?: string,
   ): boolean {
     const session = this.sessions.get(sessionId);
-    if (!session?.stdin) return false;
+    if (!session) return false;
+
+    if (session.runtime === "pty") {
+      if (!session.ptyRuntime?.isAlive) return false;
+      session.pendingRequests.delete(requestId);
+      this.notifyPendingChanged(session, sessionId);
+      return session.ptyRuntime.notifyPermissionDecision(
+        requestId,
+        allowed ? { behavior: "allow" } : { behavior: "deny", message: denyReason ?? "User denied" },
+      );
+    }
+
+    if (!session.stdin) return false;
 
     session.pendingRequests.delete(requestId);
     this.notifyPendingChanged(session, sessionId);
@@ -1205,6 +1252,11 @@ export class SessionManager {
       session.process = null;
       session.stdin = null;
     }
+    if (session.ptyRuntime) {
+      const runtime = session.ptyRuntime;
+      session.ptyRuntime = null;
+      runtime.kill().catch(() => {});
+    }
     session.compacting = false;
   }
 
@@ -1560,9 +1612,22 @@ Additional Cockpit rules beyond the CLI's defaults:
       return true;
     }
 
-    logDiag(sessionId, "running:send", { hasProcess: !!session.process, hasStdin: !!session.stdin });
+    logDiag(sessionId, "running:send", {
+      hasProcess: !!session.process,
+      hasStdin: !!session.stdin,
+      runtime: session.runtime,
+      ptyAlive: !!session.ptyRuntime?.isAlive,
+    });
     session.info.status = "running";
     session.emitter.emit("status", sessionId, "running");
+
+    if (session.runtime === "pty" && session.ptyRuntime?.isAlive) {
+      if (session.streamState) session.streamState.thinkingStartedAt = Date.now();
+      session.ptyRuntime.sendText(text).catch((err) => {
+        this.log(sessionId, `pty sendText failed: ${err instanceof Error ? err.message : String(err)}`);
+      });
+      return true;
+    }
 
     if (session.process && session.stdin) {
       if (session.streamState) session.streamState.thinkingStartedAt = Date.now();
@@ -1595,6 +1660,11 @@ Additional Cockpit rules beyond the CLI's defaults:
     images?: ImageAttachment[],
     documents?: DocumentAttachment[],
   ): void {
+    if (session.runtime === "pty") {
+      this.spawnPtyProcess(session, sessionId, text);
+      return;
+    }
+
     this.log(sessionId, `spawning CLI process (resume=${session.hasSpawnedBefore}, model=${session.info.model || "sonnet"})`);
     const args = ["-p", "--verbose", "--output-format", "stream-json", "--input-format", "stream-json"];
 
@@ -1807,6 +1877,96 @@ Additional Cockpit rules beyond the CLI's defaults:
       session.emitter.emit("error", sessionId, err.message);
       this.flushQueuedMessage(session, sessionId);
     });
+  }
+
+  private spawnPtyProcess(session: Session, sessionId: string, text?: string): void {
+    const hookRouter = getHookRouter();
+    if (!hookRouter) {
+      const msg = "PTY runtime requires the hook router; server boot did not register one";
+      this.log(sessionId, msg);
+      session.info.status = "idle";
+      session.emitter.emit("status", sessionId, "idle");
+      session.emitter.emit("error", sessionId, msg);
+      return;
+    }
+
+    this.log(sessionId, `spawning PTY claude (resume=${session.hasSpawnedBefore}, model=${session.info.model || "sonnet"})`);
+    mkdirSync(session.info.cwd, { recursive: true });
+
+    const streamState = createStreamState();
+    session.streamState = streamState;
+    streamState.thinkingStartedAt = Date.now();
+
+    const extraArgs: string[] = [];
+    if (session.hasSpawnedBefore || transcriptExists(session.cliSessionId, session.info.cwd)) {
+      extraArgs.push("--resume", session.cliSessionId);
+    } else {
+      extraArgs.push("--session-id", session.cliSessionId);
+    }
+    if (session.info.model) extraArgs.push("--model", session.info.model);
+    if (allowedEffortLevels(resolveModel(session.info.model)).length > 0) {
+      extraArgs.push("--effort", session.thinkingLevel);
+    }
+    if (session.planMode) {
+      extraArgs.push("--permission-mode", "plan");
+    } else if (session.bypassAllPermissions) {
+      extraArgs.push("--permission-mode", "bypassPermissions");
+    }
+
+    const extraEnv: Record<string, string> = {};
+    const resolved = resolveProviderModel(session.info.model ?? "sonnet");
+    if (resolved) Object.assign(extraEnv, resolved.provider.envVars);
+    if (session.info.model && !/\[1m\]/i.test(session.info.model)) {
+      extraEnv.CLAUDE_CODE_DISABLE_1M_CONTEXT = "1";
+    }
+    if (session.modelSlots.subagent && session.modelSlots.subagent !== session.modelSlots.main) {
+      extraEnv.ANTHROPIC_SMALL_FAST_MODEL = session.modelSlots.subagent;
+    }
+
+    const runtime = new PtyRuntime({
+      sessionId,
+      cwd: session.info.cwd,
+      hookRouter,
+      extraArgs,
+      extraEnv,
+      onEvents: (events) => {
+        const result = processEvents(events, streamState, { planMode: session.planMode, compacting: session.compacting });
+        this.applyProcessedResult(session, sessionId, result);
+      },
+      onError: (err) => {
+        this.log(sessionId, `pty runtime error: ${err}`);
+        session.emitter.emit("error", sessionId, err);
+      },
+      onExit: ({ exitCode, signal }) => {
+        this.log(sessionId, `PTY claude exited (code=${exitCode}, signal=${signal ?? "none"})`);
+        if (session.ptyRuntime !== runtime) return;
+        session.ptyRuntime = null;
+        session.streamingSnapshot = null;
+        logDiag(sessionId, "idle:pty-exit", { exitCode, flushedOnMessageDone: streamState.flushedOnMessageDone });
+        session.info.status = "idle";
+        session.emitter.emit("status", sessionId, "idle");
+        if (!streamState.flushedOnMessageDone) {
+          this.flushQueuedMessage(session, sessionId);
+        }
+      },
+    });
+
+    session.ptyRuntime = runtime;
+    session.hasSpawnedBefore = true;
+
+    runtime
+      .start(text)
+      .then(() => {
+        this.log(sessionId, `PTY claude ready (pid=${runtime.pid})`);
+      })
+      .catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        this.log(sessionId, `pty runtime start failed: ${msg}`);
+        session.ptyRuntime = null;
+        session.info.status = "idle";
+        session.emitter.emit("status", sessionId, "idle");
+        session.emitter.emit("error", sessionId, msg);
+      });
   }
 
   private async loadAgentChildren(session: Session, sessionId: string, messageId: string, cwd: string): Promise<void> {
