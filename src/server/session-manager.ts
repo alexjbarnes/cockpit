@@ -30,7 +30,7 @@ import { getHookRouter } from "./singleton";
 import { createStreamState, processEvents, type StreamState } from "./stream-processor";
 import { findSessionCwd, loadMoreMessages, loadTranscript, transcriptExists } from "./transcript";
 
-type SessionRuntime = "stream" | "pty";
+export type SessionRuntime = "stream" | "pty";
 
 function defaultRuntime(): SessionRuntime {
   return process.env.COCKPIT_PTY_RUNTIME === "1" ? "pty" : "stream";
@@ -131,7 +131,7 @@ export class SessionManager {
     }, 15000);
   }
 
-  createSession(cwd: string, name?: string, options?: { bypassPermissions?: boolean }): SessionInfo {
+  createSession(cwd: string, name?: string, options?: { bypassPermissions?: boolean; runtime?: SessionRuntime }): SessionInfo {
     const id = uuidv4();
     const now = Date.now();
     const defaults = getDefaults();
@@ -175,7 +175,7 @@ export class SessionManager {
       transcriptTotalSize: 0,
       bufferCliSessionId: id,
       paginationPrevIds: [],
-      runtime: defaultRuntime(),
+      runtime: options?.runtime ?? defaultRuntime(),
       ptyRuntime: null,
     });
 

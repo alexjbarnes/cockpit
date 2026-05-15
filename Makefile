@@ -28,7 +28,7 @@ start: build
 	@echo ">>> Installing tarball with fresh node_modules"
 	@cd $(TARBALL_DIR) && npm init -y >/dev/null 2>&1 && npm install --silent ./alexjbarnes-cockpit-*.tgz >/dev/null
 	@echo ">>> Running from $(TARBALL_DIR) (PORT defaults to 3001)"
-	@unset GITHUB_TOKEN && COCKPIT_DEBUG=1 \
+	@unset GITHUB_TOKEN && COCKPIT_DEBUG=1 COCKPIT_PTY_RUNTIME=1 \
 	  node $(TARBALL_DIR)/node_modules/@alexjbarnes/cockpit/bin/cockpit.js
 
 # Type check

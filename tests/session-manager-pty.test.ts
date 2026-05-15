@@ -35,7 +35,6 @@ describe.skipIf(!CLAUDE_AVAILABLE)("SessionManager + PTY runtime", () => {
   let workDir: string;
 
   beforeAll(async () => {
-    process.env.COCKPIT_PTY_RUNTIME = "1";
     hookRouter = new HookRouter();
     await hookRouter.start();
     setHookRouter(hookRouter);
@@ -47,11 +46,10 @@ describe.skipIf(!CLAUDE_AVAILABLE)("SessionManager + PTY runtime", () => {
   afterAll(async () => {
     await hookRouter.stop();
     if (existsSync(workDir)) rmSync(workDir, { recursive: true, force: true });
-    delete process.env.COCKPIT_PTY_RUNTIME;
   });
 
   it("creates a pty-runtime session, drives it through the hook pipeline, returns to idle", async () => {
-    const info = manager.createSession(workDir, "pty-test");
+    const info = manager.createSession(workDir, "pty-test", { runtime: "pty" });
 
     const events: ParsedEvent[] = [];
     let stopResolve!: () => void;
