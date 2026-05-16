@@ -172,18 +172,18 @@ export class PtyRuntime {
         if (msgDoneIdx !== -1) {
           try {
             const loaded = await loadLastAssistantMessage(this.opts.cliSessionId, this.opts.cwd);
-            if (loaded && loaded.blocks.length > 0) {
-              // Keep the hook-assembled message's fresh UUID so the client dedup
-              // check doesn't mistake it for an already-seen history message.
-              // Inject transcript blocks for accurate text/tool interleaving.
-              const hookMsg = events[msgDoneIdx].message!;
+            const hookMsg = events[msgDoneIdx].message!;
+            // Only use transcript blocks when loaded content matches the Stop
+            // payload — proves the JSONL caught up to the current turn.
+            // Without this guard a stale transcript (previous turn) overwrites
+            // the correct response with old content.
+            if (loaded && loaded.blocks.length > 0 && loaded.content === hookMsg.content) {
               events[msgDoneIdx] = {
                 type: "message_done",
                 message: {
                   ...hookMsg,
                   blocks: loaded.blocks,
                   toolUses: loaded.toolUses.length > 0 ? loaded.toolUses : hookMsg.toolUses,
-                  content: loaded.content || hookMsg.content,
                 },
                 clearPending: true,
               };
