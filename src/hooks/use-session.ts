@@ -303,8 +303,8 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
         case "session:transcript": {
           const transcriptMsgs = msg.messages as ChatMessage[];
           setMessages((prev) => {
-            const transcriptIds = new Set(transcriptMsgs.map((m) => m.id));
-            const optimistic = prev.filter((m) => m.id.startsWith("user-") && !transcriptIds.has(m.id));
+            const transcriptUserContent = new Set(transcriptMsgs.filter((m) => m.role === "user").map((m) => m.content));
+            const optimistic = prev.filter((m) => m.id.startsWith("user-") && !transcriptUserContent.has(m.content));
             return [...transcriptMsgs, ...optimistic];
           });
           break;
