@@ -9,7 +9,7 @@ export class TranscriptWatcher {
   private watcher: FSWatcher | null = null;
   private polling = false;
   private timer: ReturnType<typeof setTimeout> | null = null;
-  private lastCount = 0;
+  private lastSize = 0;
   private stopped = false;
   private readonly filePath: string;
 
@@ -76,24 +76,14 @@ export class TranscriptWatcher {
   private async reload(): Promise<void> {
     try {
       const result = await loadTranscript(this.sessionId, this.cwd, { tailLines: 150 });
-      const count = result.messages.length;
-      const changed =
-        count !== this.lastCount || (count > 0 && result.messages[count - 1].blocks.length !== this.lastBlockCount(result.messages));
-      if (changed) {
-        this.lastCount = count;
+      if (result.totalSize !== this.lastSize) {
+        this.lastSize = result.totalSize;
         this.onUpdate(result.messages);
       }
     } catch {
-      // file may be mid-write; next tick will catch up
+      if (!this.stopped) {
+        this.timer = setTimeout(() => this.reload(), 100);
+      }
     }
-  }
-
-  private _lastBlockLen = 0;
-  private lastBlockCount(messages: ChatMessage[]): number {
-    const last = messages[messages.length - 1];
-    const len = last?.blocks?.length ?? 0;
-    const prev = this._lastBlockLen;
-    this._lastBlockLen = len;
-    return prev;
   }
 }
