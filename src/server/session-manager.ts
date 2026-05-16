@@ -1,6 +1,6 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import { type Writable } from "node:stream";
@@ -112,6 +112,7 @@ interface Session {
    *  creation time; future revisions may expose this on SessionInfo. */
   runtime: SessionRuntime;
   ptyRuntime: PtyRuntime | null;
+  attachmentPaths: string[];
 }
 
 export class SessionManager {
@@ -179,6 +180,7 @@ export class SessionManager {
       paginationPrevIds: [],
       runtime: rt,
       ptyRuntime: null,
+      attachmentPaths: [],
     });
 
     setSessionPrefs(id, { runtime: rt });
@@ -246,6 +248,7 @@ export class SessionManager {
         paginationPrevIds: [],
         runtime: restoredRuntime,
         ptyRuntime: null,
+        attachmentPaths: [],
       };
       this.sessions.set(id, session);
     }
@@ -585,6 +588,7 @@ export class SessionManager {
       session.ptyRuntime = null;
       runtime.kill().catch(() => {});
     }
+    this.cleanupAttachments(session);
     session.emitter.removeAllListeners();
     this.sessions.delete(id);
     return true;
@@ -1517,6 +1521,51 @@ export class SessionManager {
     return false;
   }
 
+  private static readonly MEDIA_EXT: Record<string, string> = {
+    "image/png": ".png",
+    "image/jpeg": ".jpg",
+    "image/gif": ".gif",
+    "image/webp": ".webp",
+    "application/pdf": ".pdf",
+  };
+
+  private writeAttachments(images?: ImageAttachment[], documents?: DocumentAttachment[]): string[] {
+    if (!images?.length && !documents?.length) return [];
+    const dir = path.join(homedir(), ".cache", "cockpit", "attachments");
+    mkdirSync(dir, { recursive: true });
+    const paths: string[] = [];
+    for (const img of images ?? []) {
+      const ext = SessionManager.MEDIA_EXT[img.mediaType] || ".png";
+      const p = path.join(dir, `${uuidv4()}${ext}`);
+      writeFileSync(p, Buffer.from(img.data, "base64"));
+      paths.push(p);
+    }
+    for (const doc of documents ?? []) {
+      const ext = SessionManager.MEDIA_EXT[doc.mediaType] || ".pdf";
+      const p = path.join(dir, `${uuidv4()}${ext}`);
+      writeFileSync(p, Buffer.from(doc.data, "base64"));
+      paths.push(p);
+    }
+    return paths;
+  }
+
+  private cleanupAttachments(session: Session): void {
+    for (const p of session.attachmentPaths) {
+      try {
+        unlinkSync(p);
+      } catch {
+        // file already cleaned up
+      }
+    }
+    session.attachmentPaths = [];
+  }
+
+  private buildPtyText(text: string, attachmentPaths: string[]): string {
+    if (attachmentPaths.length === 0) return text;
+    const refs = attachmentPaths.map((p) => `[Attached image: ${p}]`).join("\n");
+    return `${refs}\n${text}`;
+  }
+
   private buildContent(
     session: Session,
     text: string,
@@ -1652,7 +1701,11 @@ Additional Cockpit rules beyond the CLI's defaults:
 
     if (session.runtime === "pty" && session.ptyRuntime?.isAlive) {
       if (session.streamState) session.streamState.thinkingStartedAt = Date.now();
-      session.ptyRuntime.sendText(text).catch((err) => {
+      this.cleanupAttachments(session);
+      const attachments = this.writeAttachments(images, documents);
+      session.attachmentPaths.push(...attachments);
+      const ptyText = this.buildPtyText(text, attachments);
+      session.ptyRuntime.sendText(ptyText).catch((err) => {
         this.log(sessionId, `pty sendText failed: ${err instanceof Error ? err.message : String(err)}`);
       });
       return true;
@@ -1690,7 +1743,7 @@ Additional Cockpit rules beyond the CLI's defaults:
     documents?: DocumentAttachment[],
   ): void {
     if (session.runtime === "pty") {
-      this.spawnPtyProcess(session, sessionId, text);
+      this.spawnPtyProcess(session, sessionId, text, images, documents);
       return;
     }
 
@@ -1908,7 +1961,13 @@ Additional Cockpit rules beyond the CLI's defaults:
     });
   }
 
-  private spawnPtyProcess(session: Session, sessionId: string, text?: string): void {
+  private spawnPtyProcess(
+    session: Session,
+    sessionId: string,
+    text?: string,
+    images?: ImageAttachment[],
+    documents?: DocumentAttachment[],
+  ): void {
     if (session.ptyRuntime?.isAlive) {
       const existing = session.ptyRuntime;
       session.ptyRuntime = null;
@@ -1990,8 +2049,13 @@ Additional Cockpit rules beyond the CLI's defaults:
     session.ptyRuntime = runtime;
     session.hasSpawnedBefore = true;
 
+    this.cleanupAttachments(session);
+    const attachments = this.writeAttachments(images, documents);
+    session.attachmentPaths.push(...attachments);
+    const ptyText = text ? this.buildPtyText(text, attachments) : text;
+
     runtime
-      .start(text)
+      .start(ptyText)
       .then(() => {
         this.log(sessionId, `PTY claude ready (pid=${runtime.pid})`);
       })
