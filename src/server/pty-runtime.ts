@@ -172,8 +172,21 @@ export class PtyRuntime {
         if (msgDoneIdx !== -1) {
           try {
             const loaded = await loadLastAssistantMessage(this.opts.cliSessionId, this.opts.cwd);
-            if (loaded) {
-              events[msgDoneIdx] = { type: "message_done", message: loaded, clearPending: true };
+            if (loaded && loaded.blocks.length > 0) {
+              // Keep the hook-assembled message's fresh UUID so the client dedup
+              // check doesn't mistake it for an already-seen history message.
+              // Inject transcript blocks for accurate text/tool interleaving.
+              const hookMsg = events[msgDoneIdx].message!;
+              events[msgDoneIdx] = {
+                type: "message_done",
+                message: {
+                  ...hookMsg,
+                  blocks: loaded.blocks,
+                  toolUses: loaded.toolUses.length > 0 ? loaded.toolUses : hookMsg.toolUses,
+                  content: loaded.content || hookMsg.content,
+                },
+                clearPending: true,
+              };
             }
           } catch {
             // fall back to hook-assembled message
