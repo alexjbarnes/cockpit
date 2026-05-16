@@ -9,6 +9,7 @@ export interface ParsedEvent {
     | "tool_done"
     | "tool_result"
     | "message_done"
+    | "streaming_snapshot"
     | "permission_request"
     | "system_message"
     | "tool_children"

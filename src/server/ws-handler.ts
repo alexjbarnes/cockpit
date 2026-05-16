@@ -834,6 +834,19 @@ function handleParsedEvent(ws: WebSocket, sessionId: string, event: ParsedEvent,
       }
       break;
 
+    case "streaming_snapshot":
+      if (event.message) {
+        send(ws, {
+          type: "session:streaming_snapshot",
+          sessionId,
+          messageId: event.message.id,
+          content: event.message.content,
+          toolUses: event.message.toolUses,
+          blocks: event.message.blocks,
+        });
+      }
+      break;
+
     case "tool_children":
       send(ws, {
         type: "assistant:tool_children",

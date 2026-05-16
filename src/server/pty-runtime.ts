@@ -44,7 +44,6 @@ export class PtyRuntime {
   private settingsPath: string | null = null;
   private readonly pendingPermissions = new Map<string, (decision: PermissionDecision) => void>();
   private exited = false;
-  private emittedTextLength = 0;
 
   constructor(opts: PtyRuntimeOptions) {
     this.opts = opts;
@@ -154,8 +153,8 @@ export class PtyRuntime {
           try {
             const loaded = await loadLastAssistantMessage(this.opts.cliSessionId, this.opts.cwd);
             if (loaded) {
-              const textEvents = this.extractNewTextBeforeTool(loaded, toolId);
-              if (textEvents.length > 0) this.emit(textEvents);
+              const snapshot = this.buildLiveSnapshot(loaded, toolId);
+              if (snapshot) this.emit([{ type: "streaming_snapshot", message: snapshot }]);
             }
           } catch {
             // fall through
@@ -180,7 +179,6 @@ export class PtyRuntime {
             // fall back to hook-assembled message
           }
         }
-        this.emittedTextLength = 0;
         this.emit(events);
       },
       onUserPromptSubmit: (payload) => {
@@ -193,22 +191,20 @@ export class PtyRuntime {
     };
   }
 
-  private extractNewTextBeforeTool(message: ChatMessage, toolId: string): ParsedEvent[] {
-    let text = "";
-    let found = false;
-    for (const block of message.blocks) {
-      if (block.type === "tool_use" && block.toolUse.id === toolId) {
-        found = true;
-        break;
+  private buildLiveSnapshot(message: ChatMessage, currentToolId: string): ChatMessage | null {
+    // Guard: if JSONL hasn't caught up yet, the current tool won't be in the message.
+    const hasCurrentTool = message.blocks.some((b) => b.type === "tool_use" && b.toolUse.id === currentToolId);
+    if (!hasCurrentTool) return null;
+
+    // Mark the current tool as running — transcript records it as "done" before the result arrives.
+    const blocks = message.blocks.map((b) => {
+      if (b.type === "tool_use" && b.toolUse.id === currentToolId) {
+        return { ...b, toolUse: { ...b.toolUse, status: "running" as const, output: "" } };
       }
-      if (block.type === "text") text += block.text;
-    }
-    // If the tool isn't in this message the JSONL hasn't caught up yet; emit nothing.
-    if (!found) return [];
-    if (text.length <= this.emittedTextLength) return [];
-    const newText = text.slice(this.emittedTextLength);
-    this.emittedTextLength = text.length;
-    return [{ type: "text_delta", text: newText }];
+      return b;
+    });
+    const toolUses = message.toolUses.map((t) => (t.id === currentToolId ? { ...t, status: "running" as const, output: "" } : t));
+    return { ...message, blocks, toolUses };
   }
 
   private handlePermissionRequest(payload: Record<string, unknown>): Promise<PermissionDecision> {
