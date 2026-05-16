@@ -1,4 +1,4 @@
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { resolveHookBridgePath } from "./hook-bridge-path";
@@ -31,11 +31,31 @@ export interface HookSettingsArtifact {
  */
 export async function prepareHookSettings(opts: HookSettingsOptions): Promise<HookSettingsArtifact> {
   const bridge = resolveHookBridgePath();
+  const base = await loadUserSettings();
+  const hooks = buildHooksBlock(bridge);
+  const existingHooks = (base.hooks ?? {}) as Record<string, unknown[]>;
+  for (const [event, entries] of Object.entries(existingHooks)) {
+    if (Array.isArray(entries) && entries.length > 0) {
+      if (hooks[event as HookEvent]) {
+        hooks[event as HookEvent] = [...entries, ...hooks[event as HookEvent]] as (typeof hooks)[HookEvent];
+      }
+    }
+  }
+
+  const baseAllow = Array.isArray((base.permissions as Record<string, unknown>)?.allow)
+    ? (base.permissions as Record<string, string[]>).allow
+    : [];
+  const baseDeny = Array.isArray((base.permissions as Record<string, unknown>)?.deny)
+    ? (base.permissions as Record<string, string[]>).deny
+    : [];
+
   const settings = {
-    hooks: buildHooksBlock(bridge),
+    ...base,
+    hooks,
     permissions: {
-      allow: opts.allowList ?? [],
-      deny: opts.denyList ?? [],
+      ...((base.permissions as Record<string, unknown>) ?? {}),
+      allow: [...baseAllow, ...(opts.allowList ?? [])],
+      deny: [...baseDeny, ...(opts.denyList ?? [])],
     },
   };
 
@@ -83,6 +103,42 @@ interface HookCommand {
 function shellQuote(p: string): string {
   if (!/[\s"'\\$`]/.test(p)) return p;
   return `'${p.replace(/'/g, "'\\''")}'`;
+}
+
+const USER_SETTINGS_PATHS = [path.join(homedir(), ".claude", "settings.json"), path.join(homedir(), ".claude", "settings.local.json")];
+
+async function loadUserSettings(): Promise<Record<string, unknown>> {
+  let merged: Record<string, unknown> = {};
+  for (const p of USER_SETTINGS_PATHS) {
+    try {
+      const raw = await readFile(p, "utf-8");
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        merged = deepMerge(merged, parsed as Record<string, unknown>);
+      }
+    } catch {
+      // file missing or malformed
+    }
+  }
+  return merged;
+}
+
+function deepMerge(target: Record<string, unknown>, source: Record<string, unknown>): Record<string, unknown> {
+  const result = { ...target };
+  for (const key of Object.keys(source)) {
+    const tVal = target[key];
+    const sVal = source[key];
+    if (isPlainObject(tVal) && isPlainObject(sVal)) {
+      result[key] = deepMerge(tVal as Record<string, unknown>, sVal as Record<string, unknown>);
+    } else {
+      result[key] = sVal;
+    }
+  }
+  return result;
+}
+
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return v !== null && typeof v === "object" && !Array.isArray(v);
 }
 
 let settingsDirCache: string | null = null;

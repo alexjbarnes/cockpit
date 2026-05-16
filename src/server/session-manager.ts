@@ -28,6 +28,7 @@ import { PtyRuntime } from "./pty-runtime";
 import { findChainForCliSession, getSessionPrefs, type SessionRuntime, setSessionPrefs } from "./session-prefs";
 import { getHookRouter } from "./singleton";
 import { createStreamState, processEvents, type StreamState } from "./stream-processor";
+import { TodoWatcher } from "./todo-watcher";
 import { findSessionCwd, loadMoreMessages, loadTranscript, transcriptExists } from "./transcript";
 import { TranscriptWatcher } from "./transcript-watcher";
 
@@ -114,6 +115,7 @@ interface Session {
   runtime: SessionRuntime;
   ptyRuntime: PtyRuntime | null;
   transcriptWatcher: TranscriptWatcher | null;
+  todoWatcher: TodoWatcher | null;
   attachmentPaths: string[];
 }
 
@@ -183,6 +185,7 @@ export class SessionManager {
       runtime: rt,
       ptyRuntime: null,
       transcriptWatcher: null,
+      todoWatcher: null,
       attachmentPaths: [],
     });
 
@@ -252,6 +255,7 @@ export class SessionManager {
         runtime: restoredRuntime,
         ptyRuntime: null,
         transcriptWatcher: null,
+        todoWatcher: null,
         attachmentPaths: [],
       };
       this.sessions.set(id, session);
@@ -599,6 +603,10 @@ export class SessionManager {
     if (session.transcriptWatcher) {
       session.transcriptWatcher.stop();
       session.transcriptWatcher = null;
+    }
+    if (session.todoWatcher) {
+      session.todoWatcher.stop();
+      session.todoWatcher = null;
     }
     this.cleanupAttachments(session);
     session.emitter.removeAllListeners();
@@ -1198,36 +1206,27 @@ export class SessionManager {
     return () => session.emitter.off("init", handler);
   }
 
-  private handleTodoWrite(session: Session, sessionId: string, toolInput: string): void {
-    try {
-      const input = JSON.parse(toolInput);
-      const todos = input.todos;
-      if (!Array.isArray(todos)) return;
-      session.todoItems = todos
-        .filter((t: Record<string, unknown>) => t.content && t.status)
-        .map((t: Record<string, unknown>) => ({
-          content: t.content as string,
-          status: t.status as TodoItem["status"],
-          activeForm: (t.activeForm as string) || undefined,
-        }));
-      session.emitter.emit("todos", sessionId, [...session.todoItems]);
-    } catch {
-      // invalid input, ignore
-    }
-  }
-
-  rebuildTodosFromHistory(sessionId: string, messages: ChatMessage[]): void {
+  loadTodosFromFiles(sessionId: string): void {
     const session = this.sessions.get(sessionId);
     if (!session) return;
-
-    // If there's already a live todo state (set during the current process),
-    // don't overwrite it from history.
     if (session.todoItems.length > 0) return;
-
-    const todos = extractTodosFromHistory(messages);
+    const watcher = new TodoWatcher(session.cliSessionId, () => {});
+    const todos = watcher.readOnce();
     if (todos.length === 0) return;
     session.todoItems = todos;
     session.emitter.emit("todos", sessionId, [...session.todoItems]);
+  }
+
+  private startTodoWatcher(session: Session, sessionId: string): void {
+    if (session.todoWatcher) {
+      session.todoWatcher.stop();
+    }
+    const watcher = new TodoWatcher(session.cliSessionId, (todos) => {
+      session.todoItems = todos;
+      session.emitter.emit("todos", sessionId, [...todos]);
+    });
+    session.todoWatcher = watcher;
+    watcher.start();
   }
 
   private extractUsage(session: Session, sessionId: string, line: string): void {
@@ -1351,10 +1350,6 @@ export class SessionManager {
 
     for (const errMsg of result.errors) {
       session.emitter.emit("error", sessionId, errMsg);
-    }
-
-    for (const todoInput of result.todoInputs) {
-      this.handleTodoWrite(session, sessionId, todoInput);
     }
 
     // After exiting plan mode the CLI process is killed and respawned with the
@@ -1835,6 +1830,8 @@ Additional Cockpit rules beyond the CLI's defaults:
     session.hasSpawnedBefore = true;
     this.log(sessionId, `CLI process spawned (pid=${proc.pid})`);
 
+    this.startTodoWatcher(session, sessionId);
+
     // Send initialize control request before the first user message to get
     // model capabilities, account info, and command metadata from the CLI.
     const initRequest = {
@@ -2083,6 +2080,8 @@ Additional Cockpit rules beyond the CLI's defaults:
     });
     session.transcriptWatcher = watcher;
 
+    this.startTodoWatcher(session, sessionId);
+
     runtime
       .start(ptyText)
       .then(() => {
@@ -2138,32 +2137,4 @@ function saveMcpServerCache(servers: string[]): void {
   } catch {
     // best-effort
   }
-}
-
-// Walk messages newest-first, stop at the most recent /clear boundary, and
-// pull todos from the last TodoWrite call. Pure function so the history-view
-// branch can use it without an in-memory session.
-export function extractTodosFromHistory(messages: ChatMessage[]): TodoItem[] {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const msg = messages[i];
-    if (msg.role === "system" && msg.content === "__compacted__") return [];
-    if (msg.role !== "assistant") continue;
-    for (let j = msg.toolUses.length - 1; j >= 0; j--) {
-      if (msg.toolUses[j].name !== "TodoWrite") continue;
-      try {
-        const input = JSON.parse(msg.toolUses[j].input);
-        if (!Array.isArray(input.todos)) return [];
-        return input.todos
-          .filter((t: Record<string, unknown>) => t.content && t.status)
-          .map((t: Record<string, unknown>) => ({
-            content: t.content as string,
-            status: t.status as TodoItem["status"],
-            activeForm: (t.activeForm as string) || undefined,
-          }));
-      } catch {
-        return [];
-      }
-    }
-  }
-  return [];
 }

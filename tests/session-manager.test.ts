@@ -2090,34 +2090,9 @@ describe("SessionManager", () => {
     });
   });
 
-  describe("rebuildTodosFromHistory", () => {
+  describe("loadTodosFromFiles", () => {
     it("does nothing for unknown session", () => {
-      expect(() => manager.rebuildTodosFromHistory("nonexistent", [])).not.toThrow();
-    });
-
-    it("extracts todos from TodoWrite tool uses", () => {
-      const session = manager.createSession("/tmp");
-      const messages = [
-        {
-          id: "m1",
-          role: "assistant" as const,
-          content: "",
-          toolUses: [
-            {
-              id: "t1",
-              name: "TodoWrite",
-              input: JSON.stringify({ todos: [{ id: "1", content: "Test task", status: "pending" }] }),
-              output: "",
-              status: "done" as const,
-            },
-          ],
-          blocks: [],
-          timestamp: Date.now(),
-        },
-      ];
-      manager.rebuildTodosFromHistory(session.id, messages);
-      expect(manager.getTodos(session.id)).toHaveLength(1);
-      expect(manager.getTodos(session.id)[0].content).toBe("Test task");
+      expect(() => manager.loadTodosFromFiles("nonexistent")).not.toThrow();
     });
   });
 
@@ -2453,151 +2428,6 @@ describe("SessionManager", () => {
 
     it("returns false for unknown session", () => {
       expect(manager.interrupt("unknown")).toBe(false);
-    });
-  });
-
-  describe("rebuildTodosFromHistory edge cases", () => {
-    it("does not overwrite existing todos", () => {
-      const session = manager.createSession("/tmp");
-      const s = (manager as any).sessions.get(session.id)!;
-      s.todoItems = [{ content: "existing", status: "pending" }];
-      const messages = [
-        {
-          id: "m1",
-          role: "assistant" as const,
-          content: "",
-          toolUses: [
-            {
-              id: "t1",
-              name: "TodoWrite",
-              input: JSON.stringify({ todos: [{ content: "new", status: "pending" }] }),
-              output: "",
-              status: "done" as const,
-            },
-          ],
-          blocks: [],
-          timestamp: Date.now(),
-        },
-      ];
-      manager.rebuildTodosFromHistory(session.id, messages);
-      expect(manager.getTodos(session.id)[0].content).toBe("existing");
-    });
-
-    it("stops at compact boundary", () => {
-      const session = manager.createSession("/tmp");
-      const messages = [
-        {
-          id: "m1",
-          role: "assistant" as const,
-          content: "",
-          toolUses: [
-            {
-              id: "t1",
-              name: "TodoWrite",
-              input: JSON.stringify({ todos: [{ content: "old", status: "pending" }] }),
-              output: "",
-              status: "done" as const,
-            },
-          ],
-          blocks: [],
-          timestamp: Date.now(),
-        },
-        { id: "sys1", role: "system" as const, content: "__compacted__", toolUses: [], blocks: [], timestamp: Date.now() },
-        {
-          id: "m2",
-          role: "user" as const,
-          content: "hello",
-          toolUses: [],
-          blocks: [],
-          timestamp: Date.now(),
-        },
-      ];
-      manager.rebuildTodosFromHistory(session.id, messages);
-      expect(manager.getTodos(session.id)).toHaveLength(0);
-    });
-
-    it("handles invalid TodoWrite input gracefully", () => {
-      const session = manager.createSession("/tmp");
-      const messages = [
-        {
-          id: "m1",
-          role: "assistant" as const,
-          content: "",
-          toolUses: [{ id: "t1", name: "TodoWrite", input: "not-json", output: "", status: "done" as const }],
-          blocks: [],
-          timestamp: Date.now(),
-        },
-      ];
-      manager.rebuildTodosFromHistory(session.id, messages);
-      expect(manager.getTodos(session.id)).toHaveLength(0);
-    });
-
-    it("handles TodoWrite with non-array todos", () => {
-      const session = manager.createSession("/tmp");
-      const messages = [
-        {
-          id: "m1",
-          role: "assistant" as const,
-          content: "",
-          toolUses: [{ id: "t1", name: "TodoWrite", input: JSON.stringify({ todos: "not-array" }), output: "", status: "done" as const }],
-          blocks: [],
-          timestamp: Date.now(),
-        },
-      ];
-      manager.rebuildTodosFromHistory(session.id, messages);
-      expect(manager.getTodos(session.id)).toHaveLength(0);
-    });
-
-    it("filters out todos without content or status", () => {
-      const session = manager.createSession("/tmp");
-      const messages = [
-        {
-          id: "m1",
-          role: "assistant" as const,
-          content: "",
-          toolUses: [
-            {
-              id: "t1",
-              name: "TodoWrite",
-              input: JSON.stringify({
-                todos: [{ content: "valid", status: "pending" }, { content: "", status: "pending" }, { content: "no-status" }],
-              }),
-              output: "",
-              status: "done" as const,
-            },
-          ],
-          blocks: [],
-          timestamp: Date.now(),
-        },
-      ];
-      manager.rebuildTodosFromHistory(session.id, messages);
-      expect(manager.getTodos(session.id)).toHaveLength(1);
-    });
-
-    it("emits todos event after rebuild", () => {
-      const session = manager.createSession("/tmp");
-      const todoEvents: unknown[] = [];
-      manager.onTodos(session.id, (todos) => todoEvents.push(todos));
-      const messages = [
-        {
-          id: "m1",
-          role: "assistant" as const,
-          content: "",
-          toolUses: [
-            {
-              id: "t1",
-              name: "TodoWrite",
-              input: JSON.stringify({ todos: [{ content: "task", status: "in_progress" }] }),
-              output: "",
-              status: "done" as const,
-            },
-          ],
-          blocks: [],
-          timestamp: Date.now(),
-        },
-      ];
-      manager.rebuildTodosFromHistory(session.id, messages);
-      expect(todoEvents).toHaveLength(1);
     });
   });
 
@@ -3156,56 +2986,6 @@ describe("SessionManager", () => {
     });
   });
 
-  describe("handleTodoWrite", () => {
-    it("parses valid todo input and emits", () => {
-      const session = manager.createSession("/tmp");
-      const s = (manager as any).sessions.get(session.id)!;
-      const emitted: unknown[] = [];
-      s.emitter.on("todos", (_id: string, todos: unknown) => emitted.push(todos));
-
-      const input = JSON.stringify({ todos: [{ content: "task1", status: "pending" }] });
-      (manager as any).handleTodoWrite(s, session.id, input);
-
-      expect(s.todoItems).toHaveLength(1);
-      expect(s.todoItems[0].content).toBe("task1");
-      expect(emitted).toHaveLength(1);
-    });
-
-    it("ignores invalid JSON", () => {
-      const session = manager.createSession("/tmp");
-      const s = (manager as any).sessions.get(session.id)!;
-      (manager as any).handleTodoWrite(s, session.id, "not json");
-      expect(s.todoItems).toHaveLength(0);
-    });
-
-    it("ignores non-array todos field", () => {
-      const session = manager.createSession("/tmp");
-      const s = (manager as any).sessions.get(session.id)!;
-      (manager as any).handleTodoWrite(s, session.id, JSON.stringify({ todos: "bad" }));
-      expect(s.todoItems).toHaveLength(0);
-    });
-
-    it("filters out items without content or status", () => {
-      const session = manager.createSession("/tmp");
-      const s = (manager as any).sessions.get(session.id)!;
-      const input = JSON.stringify({
-        todos: [{ content: "valid", status: "pending" }, { content: "", status: "pending" }, { content: "no status" }],
-      });
-      (manager as any).handleTodoWrite(s, session.id, input);
-      expect(s.todoItems).toHaveLength(1);
-    });
-
-    it("preserves activeForm field", () => {
-      const session = manager.createSession("/tmp");
-      const s = (manager as any).sessions.get(session.id)!;
-      const input = JSON.stringify({
-        todos: [{ content: "task", status: "in_progress", activeForm: "doing stuff" }],
-      });
-      (manager as any).handleTodoWrite(s, session.id, input);
-      expect(s.todoItems[0].activeForm).toBe("doing stuff");
-    });
-  });
-
   describe("getKnownMcpServers", () => {
     it("returns servers from session initData", () => {
       const session = manager.createSession("/tmp");
@@ -3355,7 +3135,7 @@ describe("SessionManager", () => {
         emit: [],
         systemMessages: ["__permission_mode::plan"],
         errors: [],
-        todoInputs: [],
+
         permissionActions: [],
         statusChange: null,
         compactDone: false,
@@ -3378,7 +3158,7 @@ describe("SessionManager", () => {
         emit: [],
         systemMessages: ["__permission_mode::default"],
         errors: [],
-        todoInputs: [],
+
         permissionActions: [],
         statusChange: null,
         compactDone: false,
@@ -3401,7 +3181,7 @@ describe("SessionManager", () => {
         emit: [],
         systemMessages: ["some other system message"],
         errors: [],
-        todoInputs: [],
+
         permissionActions: [],
         statusChange: null,
         compactDone: false,
@@ -3422,7 +3202,7 @@ describe("SessionManager", () => {
         emit: [],
         systemMessages: [],
         errors: ["something broke"],
-        todoInputs: [],
+
         permissionActions: [],
         statusChange: null,
         compactDone: false,
@@ -3430,25 +3210,6 @@ describe("SessionManager", () => {
       };
       (manager as any).applyProcessedResult(s, session.id, result);
       expect(emitted).toContain("something broke");
-    });
-
-    it("handles todoInputs", () => {
-      const session = manager.createSession("/tmp");
-      const s = (manager as any).sessions.get(session.id)!;
-
-      const result = {
-        intermediateMessages: [],
-        emit: [],
-        systemMessages: [],
-        errors: [],
-        todoInputs: [JSON.stringify({ todos: [{ content: "do this", status: "pending" }] })],
-        permissionActions: [],
-        statusChange: null,
-        compactDone: false,
-        snapshot: null,
-      };
-      (manager as any).applyProcessedResult(s, session.id, result);
-      expect(s.todoItems).toHaveLength(1);
     });
 
     it("handles auto_approve permission action", () => {
@@ -3462,7 +3223,7 @@ describe("SessionManager", () => {
         emit: [],
         systemMessages: [],
         errors: [],
-        todoInputs: [],
+
         permissionActions: [{ type: "auto_approve", requestId: "req-1", toolName: "Read", rawToolInput: {} }],
         statusChange: null,
         compactDone: false,
@@ -3483,7 +3244,7 @@ describe("SessionManager", () => {
         emit: [],
         systemMessages: [],
         errors: [],
-        todoInputs: [],
+
         permissionActions: [{ type: "auto_deny", requestId: "req-1", toolName: "Write", denyReason: "blocked" }],
         statusChange: null,
         compactDone: false,
@@ -3502,7 +3263,7 @@ describe("SessionManager", () => {
         emit: [],
         systemMessages: [],
         errors: [],
-        todoInputs: [],
+
         permissionActions: [
           {
             type: "request",
@@ -3533,7 +3294,7 @@ describe("SessionManager", () => {
         emit: [],
         systemMessages: [],
         errors: [],
-        todoInputs: [],
+
         permissionActions: [{ type: "request", requestId: "req-1", toolName: "Bash", rawToolInput: { command: "ls" } }],
         statusChange: null,
         compactDone: false,
@@ -3556,7 +3317,7 @@ describe("SessionManager", () => {
         emit: [],
         systemMessages: [],
         errors: [],
-        todoInputs: [],
+
         permissionActions: [],
         statusChange: null,
         compactDone: true,
@@ -3577,7 +3338,7 @@ describe("SessionManager", () => {
         emit: [],
         systemMessages: [],
         errors: [],
-        todoInputs: [],
+
         permissionActions: [],
         statusChange: "idle",
         compactDone: false,
@@ -3596,7 +3357,7 @@ describe("SessionManager", () => {
         emit: [],
         systemMessages: [],
         errors: [],
-        todoInputs: [],
+
         permissionActions: [
           {
             type: "request",
@@ -3629,7 +3390,7 @@ describe("SessionManager", () => {
         emit: [{ type: "message_done", message: { id: "m1", toolUses: [] } }],
         systemMessages: [],
         errors: [],
-        todoInputs: [],
+
         permissionActions: [],
         statusChange: null,
         compactDone: false,
@@ -3652,7 +3413,7 @@ describe("SessionManager", () => {
         emit: [],
         systemMessages: ["__permission_mode::plan"],
         errors: [],
-        todoInputs: [],
+
         permissionActions: [],
         statusChange: null,
         compactDone: false,
@@ -3674,7 +3435,7 @@ describe("SessionManager", () => {
         emit: [],
         systemMessages: ["__permission_mode::default"],
         errors: [],
-        todoInputs: [],
+
         permissionActions: [],
         statusChange: null,
         compactDone: false,

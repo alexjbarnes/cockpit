@@ -23,7 +23,6 @@ export interface ProcessedResult {
     blocks: ContentBlock[];
   } | null;
   permissionActions: PermissionAction[];
-  todoInputs: string[];
   compactDone: boolean;
 }
 
@@ -168,7 +167,6 @@ export function processEvents(
     intermediateMessages: [],
     snapshot: null,
     permissionActions: [],
-    todoInputs: [],
     compactDone: false,
   };
 
@@ -233,10 +231,6 @@ export function processEvents(
       };
 
       const isAgent = tool.name === "Agent";
-
-      if (tool.name === "TodoWrite") {
-        result.todoInputs.push(tool.input);
-      }
 
       const isFromMainThread = event.assistantMessageId === state.currentAssistantMsgId;
       event.isMainThread = isFromMainThread;

@@ -7,7 +7,7 @@ import { extractTokenFromQuery, validateSession } from "./auth";
 import { debugLog, logClientMessage, logParsedEvent, logServerMessage, logStatus } from "./debug-logger";
 import type { ParsedEvent } from "./event-parser";
 import { findLatestPlanFile, readPlanFile } from "./plans";
-import { extractTodosFromHistory, SessionManager } from "./session-manager";
+import { SessionManager } from "./session-manager";
 import { getSessionPrefs } from "./session-prefs";
 import type { TerminalManager } from "./terminal-manager";
 
@@ -308,10 +308,6 @@ export function createWebSocketHandler(
               if (prefs?.initData) {
                 send(ws, { type: "session:init", sessionId: msg.sessionId, data: prefs.initData });
               }
-              const historyTodos = extractTodosFromHistory(result.messages);
-              if (historyTodos.length > 0) {
-                send(ws, { type: "session:todos", sessionId: msg.sessionId, todos: historyTodos });
-              }
             });
             break;
           }
@@ -485,12 +481,7 @@ export function createWebSocketHandler(
 
             subscribeSession(msg.sessionId);
 
-            // Rebuild todos from last TodoWrite in history
-            const tTodos0 = performance.now();
-            const fullBuffer = sessionManager.getTranscriptBuffer(msg.sessionId);
-            sessionManager.rebuildTodosFromHistory(msg.sessionId, fullBuffer.length > 0 ? fullBuffer : session.messages);
-            const tTodos1 = performance.now();
-            debugLog(`[ws:${wsId}] session ${sid} rebuildTodos in ${(tTodos1 - tTodos0).toFixed(0)}ms`);
+            sessionManager.loadTodosFromFiles(msg.sessionId);
             const currentTodos = sessionManager.getTodos(msg.sessionId);
             if (currentTodos.length > 0) {
               send(ws, {
