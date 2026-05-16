@@ -41,6 +41,8 @@ interface ShellContextValue {
   setCwd: (cwd: string | undefined) => void;
   sessionId: string | undefined;
   setSessionId: (id: string | undefined) => void;
+  runtime: "pty" | "stream";
+  setRuntime: (runtime: "pty" | "stream") => void;
   backgroundTasks: BackgroundTask[];
   setBackgroundTasks: (tasks: BackgroundTask[]) => void;
   todos: TodoItem[];
@@ -61,6 +63,8 @@ const ShellContext = createContext<ShellContextValue>({
   setCwd: () => {},
   sessionId: undefined,
   setSessionId: () => {},
+  runtime: "stream",
+  setRuntime: () => {},
   backgroundTasks: [],
   setBackgroundTasks: () => {},
   todos: [],
@@ -191,6 +195,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   const [todos, setTodos] = useState<TodoItem[]>([]);
   const [initData, setInitData] = useState<InitData | null>(null);
   const [sidebarSectionsMap, setSidebarSectionsMap] = useState<Map<string, SidebarSectionConfig>>(new Map());
+  const [runtime, setRuntimeState] = useState<"pty" | "stream">("stream");
   const [tabActions, setTabActionsState] = useState<TabActions | null>(null);
 
   const setSidebarSection = useCallback((section: SidebarSectionConfig) => {
@@ -230,6 +235,10 @@ export function AppShell({ children }: { children: ReactNode }) {
     sidebarRef.current?.close();
   }, []);
 
+  const setRuntime = useCallback((val: "pty" | "stream") => {
+    setRuntimeState(val);
+  }, []);
+
   const setTabActions = useCallback((actions: TabActions | null) => {
     setTabActionsState(actions);
   }, []);
@@ -255,6 +264,8 @@ export function AppShell({ children }: { children: ReactNode }) {
             setCwd,
             sessionId,
             setSessionId,
+            runtime,
+            setRuntime,
             backgroundTasks,
             setBackgroundTasks,
             todos,
@@ -285,7 +296,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                     {cwd && <NewTerminalButton cwd={cwd} />}
                     <SearchButton />
                     {cwd && <TodoIndicator todos={todos} />}
-                    {cwd && <BackgroundTasksButton tasks={backgroundTasks} />}
+                    {cwd && runtime !== "pty" && <BackgroundTasksButton tasks={backgroundTasks} />}
                     <UsageButton />
                   </div>
                 )}

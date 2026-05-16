@@ -88,7 +88,7 @@ export function ChatView({
     restartSession,
   } = useSession(sessionId, cwd, historyView);
   const { settings } = useSettings();
-  const { setHeader, setBackgroundTasks, setTodos, setInitData: setShellInitData } = useShell();
+  const { setHeader, setBackgroundTasks, setTodos, setInitData: setShellInitData, setRuntime: setShellRuntime } = useShell();
   const scrollRef = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);
   const [showScrollDown, setShowScrollDown] = useState(false);
@@ -171,6 +171,10 @@ export function ChatView({
   useEffect(() => {
     setShellInitData(initData);
   }, [initData, setShellInitData]);
+
+  useEffect(() => {
+    setShellRuntime(currentRuntime);
+  }, [currentRuntime, setShellRuntime]);
 
   // Preserve scroll position after expanding the window
   useLayoutEffect(() => {

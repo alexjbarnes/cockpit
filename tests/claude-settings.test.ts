@@ -1,4 +1,6 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanupHookSettings, prepareHookSettings } from "@/server/claude-settings";
 import { resolveHookBridgePath } from "@/server/hook-bridge-path";
@@ -109,14 +111,32 @@ describe("prepareHookSettings", () => {
     const sessionId = "test-session-5";
     cleanupIds.push(sessionId);
 
-    const { settingsPath } = await prepareHookSettings({
-      sessionId,
-      hookUrl: "http://127.0.0.1:1",
-      hookToken: "tok",
-    });
+    const fixtureDir = join(homedir(), ".claude");
+    const fixturePath = join(fixtureDir, "settings.local.json");
+    const hadFixture = existsSync(fixturePath);
+    const originalContent = hadFixture ? readFileSync(fixturePath, "utf-8") : null;
 
-    const parsed = JSON.parse(readFileSync(settingsPath, "utf-8")) as Record<string, unknown>;
-    const hasEnvOrPlugins = "env" in parsed || "enabledPlugins" in parsed;
-    expect(hasEnvOrPlugins).toBe(true);
+    mkdirSync(fixtureDir, { recursive: true });
+    writeFileSync(fixturePath, JSON.stringify({ env: { TEST_MERGE: "1" } }));
+
+    try {
+      const { settingsPath } = await prepareHookSettings({
+        sessionId,
+        hookUrl: "http://127.0.0.1:1",
+        hookToken: "tok",
+      });
+
+      const parsed = JSON.parse(readFileSync(settingsPath, "utf-8")) as Record<string, unknown>;
+      expect(parsed).toHaveProperty("env");
+      expect((parsed.env as Record<string, string>).TEST_MERGE).toBe("1");
+    } finally {
+      if (originalContent !== null) {
+        writeFileSync(fixturePath, originalContent);
+      } else {
+        try {
+          unlinkSync(fixturePath);
+        } catch {}
+      }
+    }
   });
 });
