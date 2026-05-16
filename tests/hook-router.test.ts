@@ -154,4 +154,105 @@ describe("HookRouter + bridge round-trip", () => {
   it("resolves the bridge path to the same file the tests run against", () => {
     expect(resolveHookBridgePath()).toBe(BRIDGE_PATH);
   });
+
+  it("returns 405 for non-POST requests", async () => {
+    const res = await fetch(url, { method: "GET" });
+    expect(res.status).toBe(405);
+  });
+
+  it("returns 404 for unknown URL paths", async () => {
+    const res = await fetch(`${url}/unknown`, { method: "POST", body: "{}" });
+    expect(res.status).toBe(404);
+  });
+
+  it("returns 400 when session or token headers are missing", async () => {
+    const res = await fetch(`${url}/hook/Stop`, { method: "POST", body: "{}" });
+    expect(res.status).toBe(400);
+  });
+
+  it("returns 400 for invalid JSON body", async () => {
+    const sessionId = "session-bad-json";
+    const token = router.register(sessionId, { onStop: () => {} });
+    const res = await fetch(`${url}/hook/Stop`, {
+      method: "POST",
+      headers: { "x-cockpit-session": sessionId, "x-cockpit-token": token, "content-type": "application/json" },
+      body: "not json",
+    });
+    expect(res.status).toBe(400);
+    router.unregister(sessionId);
+  });
+
+  it("returns 500 when the handler throws", async () => {
+    const sessionId = "session-throw";
+    const token = router.register(sessionId, {
+      onStop: () => {
+        throw new Error("handler crash");
+      },
+    });
+    const res = await fetch(`${url}/hook/Stop`, {
+      method: "POST",
+      headers: { "x-cockpit-session": sessionId, "x-cockpit-token": token, "content-type": "application/json" },
+      body: "{}",
+    });
+    expect(res.status).toBe(500);
+    const body = await res.json();
+    expect(body.exitCode).toBe(1);
+    router.unregister(sessionId);
+  });
+
+  it("defaults to allow when no PermissionRequest handler is registered", async () => {
+    const sessionId = "session-no-perm";
+    const token = router.register(sessionId, { onStop: () => {} });
+    const res = await fetch(`${url}/hook/PermissionRequest`, {
+      method: "POST",
+      headers: { "x-cockpit-session": sessionId, "x-cockpit-token": token, "content-type": "application/json" },
+      body: JSON.stringify({ tool_name: "Bash" }),
+    });
+    expect(res.status).toBe(200);
+    const data = (await res.json()) as { stdout: string };
+    const parsed = JSON.parse(data.stdout);
+    expect(parsed.hookSpecificOutput.hookEventName).toBe("PermissionRequest");
+    expect(parsed.hookSpecificOutput.decision).toEqual({ behavior: "allow" });
+    router.unregister(sessionId);
+  });
+
+  it("dispatches PreToolUse to the registered handler", async () => {
+    const sessionId = "session-pre";
+    let received: unknown;
+    const token = router.register(sessionId, {
+      onPreToolUse(payload) {
+        received = payload;
+      },
+    });
+    const res = await fetch(`${url}/hook/PreToolUse`, {
+      method: "POST",
+      headers: { "x-cockpit-session": sessionId, "x-cockpit-token": token, "content-type": "application/json" },
+      body: JSON.stringify({ tool_name: "Read" }),
+    });
+    expect(res.status).toBe(200);
+    expect(received).toEqual({ tool_name: "Read" });
+    router.unregister(sessionId);
+  });
+
+  it("unregister closes pending responses so bridge doesn't hang", async () => {
+    const sessionId = "session-pending";
+    const token = router.register(sessionId, {
+      onPermissionRequest: () => new Promise<PermissionDecision>(() => {}), // never resolves
+    });
+
+    const bridgePromise = runBridge(
+      ["PermissionRequest"],
+      { COCKPIT_HOOK_URL: url, COCKPIT_HOOK_TOKEN: token, COCKPIT_SESSION_ID: sessionId },
+      JSON.stringify({ tool_name: "Bash" }),
+    );
+
+    // Give the bridge time to connect and start waiting
+    await new Promise((r) => setTimeout(r, 100));
+
+    router.unregister(sessionId);
+
+    const res = await bridgePromise;
+    expect(res.exitCode).toBe(0);
+    expect(res.stdout).toContain("deny");
+  });
 });

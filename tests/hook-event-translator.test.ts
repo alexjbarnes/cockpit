@@ -30,6 +30,22 @@ describe("translateHookEvent", () => {
         toolInput: "",
       });
     });
+
+    it("emits __permission_mode::plan system_message for EnterPlanMode tool", () => {
+      const events = translateHookEvent("PreToolUse", {
+        tool_name: "EnterPlanMode",
+        tool_use_id: "toolu_plan",
+        tool_input: {},
+      });
+
+      expect(events).toHaveLength(2);
+      expect(events[0].type).toBe("tool_use_start");
+      expect(events[0]).toMatchObject({ toolName: "EnterPlanMode", toolId: "toolu_plan" });
+      expect(events[1]).toEqual({
+        type: "system_message",
+        text: "__permission_mode::plan",
+      });
+    });
   });
 
   describe("PostToolUse", () => {
@@ -111,6 +127,23 @@ describe("translateHookEvent", () => {
         tool_response: { stdout: "out", stderr: "" },
       });
       expect(events[0].toolOutput).toBe("out");
+    });
+
+    it("emits __permission_mode::standard system_message for ExitPlanMode tool", () => {
+      const events = translateHookEvent("PostToolUse", {
+        tool_name: "ExitPlanMode",
+        tool_use_id: "toolu_exit",
+        tool_input: {},
+        tool_response: { content: "plan submitted" },
+      });
+
+      expect(events).toHaveLength(2);
+      expect(events[0].type).toBe("tool_result");
+      expect(events[0]).toMatchObject({ toolId: "toolu_exit" });
+      expect(events[1]).toEqual({
+        type: "system_message",
+        text: "__permission_mode::standard",
+      });
     });
   });
 
