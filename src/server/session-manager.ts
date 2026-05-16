@@ -929,7 +929,14 @@ export class SessionManager {
     setSessionPrefs(sessionId, { model, modelSlots: session.modelSlots });
 
     const nextEntry = resolveModel(model);
-    const coerced = coerceEffort(session.thinkingLevel, nextEntry);
+    const coerced = nextEntry
+      ? coerceEffort(session.thinkingLevel, nextEntry)
+      : (() => {
+          const levels = this.modelEffortLevels(model);
+          if (levels.length === 0) return null;
+          if (levels.includes(session.thinkingLevel)) return session.thinkingLevel;
+          return levels[levels.length - 1];
+        })();
     const levelChanged = coerced !== null && coerced !== session.thinkingLevel;
     if (levelChanged) {
       session.thinkingLevel = coerced;
@@ -944,7 +951,7 @@ export class SessionManager {
         request: { subtype: "set_model", model },
       };
       session.stdin.write(JSON.stringify(request) + "\n");
-      if (allowedEffortLevels(nextEntry).length > 0) {
+      if (this.modelEffortLevels(model).length > 0) {
         const effortRequest = {
           type: "control_request",
           request_id: `effort-${Date.now()}`,
@@ -993,7 +1000,7 @@ export class SessionManager {
     session.thinkingLevel = level;
     setSessionPrefs(sessionId, { thinkingLevel: level });
 
-    const supportsEffort = allowedEffortLevels(resolveModel(session.info.model)).length > 0;
+    const supportsEffort = this.modelEffortLevels(session.info.model).length > 0;
     if (session.stdin && supportsEffort) {
       const request = {
         type: "control_request",
@@ -1750,6 +1757,16 @@ Additional Cockpit rules beyond the CLI's defaults:
     this.spawnProcess(session, sessionId);
   }
 
+  /** Check effort levels for built-in models or custom provider models. */
+  private modelEffortLevels(modelId: string | null | undefined): ThinkingLevel[] {
+    if (!modelId) return [];
+    const builtin = resolveModel(modelId);
+    if (builtin) return allowedEffortLevels(builtin);
+    const resolved = resolveProviderModel(modelId);
+    if (resolved) return resolved.model.effortLevels;
+    return [];
+  }
+
   private spawnProcess(
     session: Session,
     sessionId: string,
@@ -1790,7 +1807,7 @@ Additional Cockpit rules beyond the CLI's defaults:
       args.push("--model", session.info.model);
     }
 
-    if (allowedEffortLevels(resolveModel(session.info.model)).length > 0) {
+    if (this.modelEffortLevels(session.info.model).length > 0) {
       args.push("--effort", session.thinkingLevel);
     }
 
@@ -2015,7 +2032,7 @@ Additional Cockpit rules beyond the CLI's defaults:
       extraArgs.push("--session-id", session.cliSessionId);
     }
     if (session.info.model) extraArgs.push("--model", session.info.model);
-    if (allowedEffortLevels(resolveModel(session.info.model)).length > 0) {
+    if (this.modelEffortLevels(session.info.model).length > 0) {
       extraArgs.push("--effort", session.thinkingLevel);
     }
     if (session.planMode) {

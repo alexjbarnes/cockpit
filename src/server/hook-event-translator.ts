@@ -39,8 +39,7 @@ function translatePreToolUse(payload: Record<string, unknown>): ParsedEvent[] {
   const toolName = stringOr(payload.tool_name, "unknown");
   const toolInput = payload.tool_input as Record<string, unknown> | undefined;
   const toolId = stringOr(payload.tool_use_id, "");
-
-  return [
+  const events: ParsedEvent[] = [
     {
       type: "tool_use_start",
       toolName,
@@ -48,16 +47,20 @@ function translatePreToolUse(payload: Record<string, unknown>): ParsedEvent[] {
       toolInput: toolInput ? JSON.stringify(toolInput) : "",
     },
   ];
+  if (toolName === "EnterPlanMode") {
+    events.push({ type: "system_message", text: "__permission_mode::plan" });
+  }
+  return events;
 }
 
 function translatePostToolUse(payload: Record<string, unknown>): ParsedEvent[] {
+  const toolName = stringOr(payload.tool_name, "unknown");
   const toolId = stringOr(payload.tool_use_id, "");
   const toolInput = payload.tool_input as Record<string, unknown> | undefined;
   const response = payload.tool_response;
   const output = extractToolOutput(response);
   const filePath = extractFilePath(toolInput);
-
-  return [
+  const events: ParsedEvent[] = [
     {
       type: "tool_result",
       toolId: toolId || undefined,
@@ -65,6 +68,10 @@ function translatePostToolUse(payload: Record<string, unknown>): ParsedEvent[] {
       filePath,
     },
   ];
+  if (toolName === "ExitPlanMode") {
+    events.push({ type: "system_message", text: "__permission_mode::standard" });
+  }
+  return events;
 }
 
 function translateStop(payload: Record<string, unknown>): ParsedEvent[] {
