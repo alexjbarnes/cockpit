@@ -316,7 +316,16 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
             const transcriptUserContent = new Set(transcriptMsgs.filter((m) => m.role === "user").map((m) => stripAttachments(m.content)));
             const optimistic = prev.filter((m) => m.id.startsWith("user-") && !transcriptUserContent.has(stripAttachments(m.content)));
             const localSystem = prev.filter((m) => m.role === "system");
-            return [...transcriptMsgs, ...localSystem, ...optimistic];
+            const enriched = transcriptMsgs.map((m) => {
+              if (m.role !== "user" || m.images?.length) return m;
+              const stripped = stripAttachments(m.content);
+              const match = prev.find(
+                (p) => p.role === "user" && (p.images?.length || p.documents?.length) && stripAttachments(p.content) === stripped,
+              );
+              if (!match) return m;
+              return { ...m, content: match.content, images: match.images, documents: match.documents, textFiles: match.textFiles };
+            });
+            return [...enriched, ...localSystem, ...optimistic];
           });
           break;
         }
