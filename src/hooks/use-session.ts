@@ -323,12 +323,13 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
             timestamp: Date.now(),
           };
           setMessages((prev) => {
-            // Remove both the old streaming placeholder and any history
-            // message with the same ID as the snapshot. The transcript
-            // may contain a stale version of this message (from an
-            // intermediate emission) while the snapshot has the latest
-            // in-progress state including new tool calls.
-            const filtered = prev.filter((m) => m.id !== "streaming" && m.id !== msg.messageId);
+            const withoutStreaming = prev.filter((m) => m.id !== "streaming");
+            // Only remove a stale transcript message if it belongs to the
+            // CURRENT turn (appears after the last user message). Previous
+            // turns' messages must survive even if their transcript ID
+            // matches the snapshot's messageId during a brief JSONL race.
+            const lastUserIdx = withoutStreaming.findLastIndex((m) => m.role === "user");
+            const filtered = withoutStreaming.filter((m, i) => m.id !== msg.messageId || i <= lastUserIdx);
             return [...filtered, streamMsg];
           });
           break;
