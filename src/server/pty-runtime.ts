@@ -1,12 +1,15 @@
+import type { ChatMessage } from "@/types";
 import { cleanupHookSettings, prepareHookSettings } from "./claude-settings";
 import type { ParsedEvent } from "./event-parser";
 import { newPermissionRequestId, translateHookEvent } from "./hook-event-translator";
 import type { HookRouter, PermissionDecision, SessionHookHandler } from "./hook-router";
 import { PtySession } from "./pty-session";
+import { loadLastAssistantMessage } from "./transcript";
 
 export interface PtyRuntimeOptions {
   sessionId: string;
   cwd: string;
+  cliSessionId: string;
   hookRouter: HookRouter;
   /** Receives translated ParsedEvents for the existing stream-processor pipeline. */
   onEvents: (events: ParsedEvent[]) => void;
@@ -41,6 +44,7 @@ export class PtyRuntime {
   private settingsPath: string | null = null;
   private readonly pendingPermissions = new Map<string, (decision: PermissionDecision) => void>();
   private exited = false;
+  private emittedTextLength = 0;
 
   constructor(opts: PtyRuntimeOptions) {
     this.opts = opts;
@@ -142,14 +146,42 @@ export class PtyRuntime {
 
   private buildHandler(): SessionHookHandler {
     return {
-      onPreToolUse: (payload) => {
-        this.emit(translateHookEvent("PreToolUse", payload));
+      onPreToolUse: async (payload) => {
+        const toolId = typeof payload.tool_use_id === "string" ? payload.tool_use_id : "";
+        const hookEvents = translateHookEvent("PreToolUse", payload);
+
+        if (toolId) {
+          try {
+            const loaded = await loadLastAssistantMessage(this.opts.cliSessionId, this.opts.cwd);
+            if (loaded) {
+              const textEvents = this.extractNewTextBeforeTool(loaded, toolId);
+              if (textEvents.length > 0) this.emit(textEvents);
+            }
+          } catch {
+            // fall through
+          }
+        }
+
+        this.emit(hookEvents);
       },
       onPostToolUse: (payload) => {
         this.emit(translateHookEvent("PostToolUse", payload));
       },
-      onStop: (payload) => {
-        this.emit(translateHookEvent("Stop", payload));
+      onStop: async (payload) => {
+        const events = translateHookEvent("Stop", payload);
+        const msgDoneIdx = events.findIndex((e) => e.type === "message_done");
+        if (msgDoneIdx !== -1) {
+          try {
+            const loaded = await loadLastAssistantMessage(this.opts.cliSessionId, this.opts.cwd);
+            if (loaded) {
+              events[msgDoneIdx] = { type: "message_done", message: loaded, clearPending: true };
+            }
+          } catch {
+            // fall back to hook-assembled message
+          }
+        }
+        this.emittedTextLength = 0;
+        this.emit(events);
       },
       onUserPromptSubmit: (payload) => {
         this.emit(translateHookEvent("UserPromptSubmit", payload));
@@ -159,6 +191,18 @@ export class PtyRuntime {
       },
       onPermissionRequest: (payload) => this.handlePermissionRequest(payload),
     };
+  }
+
+  private extractNewTextBeforeTool(message: ChatMessage, toolId: string): ParsedEvent[] {
+    let text = "";
+    for (const block of message.blocks) {
+      if (block.type === "tool_use" && block.toolUse.id === toolId) break;
+      if (block.type === "text") text += block.text;
+    }
+    if (text.length <= this.emittedTextLength) return [];
+    const newText = text.slice(this.emittedTextLength);
+    this.emittedTextLength = text.length;
+    return [{ type: "text_delta", text: newText }];
   }
 
   private handlePermissionRequest(payload: Record<string, unknown>): Promise<PermissionDecision> {

@@ -582,6 +582,14 @@ export async function loadTranscript(sessionId: string, cwd: string, options?: {
   return { messages, byteOffset, totalSize, lastUsage };
 }
 
+export async function loadLastAssistantMessage(cliSessionId: string, cwd: string): Promise<ChatMessage | null> {
+  const { messages } = await loadTranscript(cliSessionId, cwd, { tailLines: 100 });
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role === "assistant") return messages[i];
+  }
+  return null;
+}
+
 export async function loadMoreMessages(
   sessionId: string,
   cwd: string,

@@ -31,6 +31,7 @@ export interface ParsedEvent {
   rawToolInput?: Record<string, unknown>;
   permissionSuggestions?: Record<string, unknown>[];
   interrupted?: boolean;
+  clearPending?: boolean;
   rateLimitInfo?: { status: string; retryAfterMs?: number };
   suggestions?: string[];
   taskInfo?: {
