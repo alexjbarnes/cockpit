@@ -2774,7 +2774,7 @@ describe("WebSocket handler", () => {
 
     it("sends delta on connect with replay=0", async () => {
       injectFakeTerminal("term-2", "previous output");
-      let url = `ws://localhost:${port}/ws/terminal?token=${validToken}&terminalId=term-2&replay=0`;
+      const url = `ws://localhost:${port}/ws/terminal?token=${validToken}&terminalId=term-2&replay=0`;
       const ws = new WebSocket(url);
       const dataPromise = new Promise<string>((resolve) => {
         ws.on("message", (d) => resolve(d.toString()));
