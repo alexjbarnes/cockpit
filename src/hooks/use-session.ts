@@ -312,8 +312,9 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
             }
           }
           setMessages((prev) => {
-            const transcriptUserContent = new Set(transcriptMsgs.filter((m) => m.role === "user").map((m) => m.content));
-            const optimistic = prev.filter((m) => m.id.startsWith("user-") && !transcriptUserContent.has(m.content));
+            const stripAttachments = (s: string) => s.replace(/^\[Attached [^\]]+\]\n*/gm, "").trim();
+            const transcriptUserContent = new Set(transcriptMsgs.filter((m) => m.role === "user").map((m) => stripAttachments(m.content)));
+            const optimistic = prev.filter((m) => m.id.startsWith("user-") && !transcriptUserContent.has(stripAttachments(m.content)));
             const localSystem = prev.filter((m) => m.role === "system");
             return [...transcriptMsgs, ...localSystem, ...optimistic];
           });
