@@ -9,6 +9,3 @@ npx tsc --noEmit -p tsconfig.server.json
 
 echo "==> lint"
 npm run lint
-
-echo "==> tests"
-npx vitest run

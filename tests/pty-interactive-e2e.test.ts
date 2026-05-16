@@ -16,6 +16,15 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 
 const CLAUDE_BIN = process.env.CLAUDE_BIN ?? "claude";
 const TEST_TIMEOUT = 120_000;
+const CLAUDE_AVAILABLE = (() => {
+  try {
+    execSync(`${CLAUDE_BIN} --version`, { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+})();
+const RUN_INTEGRATION = process.env.COCKPIT_INTEGRATION_TESTS === "1";
 
 let hookOutputDir: string;
 let hookScriptDir: string;
@@ -228,7 +237,7 @@ afterAll(() => {
 
 // ── Tests ───────────────────────────────────────────────────────────────
 
-describe("PTY Interactive E2E (no bypass permissions)", () => {
+describe.skipIf(!RUN_INTEGRATION || !CLAUDE_AVAILABLE)("PTY Interactive E2E (no bypass permissions)", () => {
   let pty: IPty | null = null;
   let output: ReturnType<typeof collectPtyOutput>;
   let stopCount: number;
@@ -510,7 +519,7 @@ describe("PTY Interactive E2E (no bypass permissions)", () => {
   );
 });
 
-describe("PTY Interactive Permissions (hook-driven, no allow-list)", () => {
+describe.skipIf(!RUN_INTEGRATION || !CLAUDE_AVAILABLE)("PTY Interactive Permissions (hook-driven, no allow-list)", () => {
   let pty: IPty | null = null;
   let output: ReturnType<typeof collectPtyOutput>;
   let stopCount: number;
@@ -664,7 +673,7 @@ echo '{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"be
   );
 });
 
-describe("PTY Interactive Controls (slash commands and interrupt)", () => {
+describe.skipIf(!RUN_INTEGRATION || !CLAUDE_AVAILABLE)("PTY Interactive Controls (slash commands and interrupt)", () => {
   let pty: IPty | null = null;
   let output: ReturnType<typeof collectPtyOutput>;
   let stopCount: number;
@@ -854,7 +863,7 @@ describe("PTY Interactive Controls (slash commands and interrupt)", () => {
   );
 });
 
-describe("PTY Interactive Subagent Visibility", () => {
+describe.skipIf(!RUN_INTEGRATION || !CLAUDE_AVAILABLE)("PTY Interactive Subagent Visibility", () => {
   let pty: IPty | null = null;
   let output: ReturnType<typeof collectPtyOutput>;
   let stopCount: number;

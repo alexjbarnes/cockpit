@@ -712,6 +712,11 @@ export function createWebSocketHandler(
           break;
         }
 
+        case "session:set_runtime": {
+          sessionManager.setRuntime(msg.sessionId, msg.runtime);
+          break;
+        }
+
         case "session:restart": {
           sessionManager.restartSession(msg.sessionId);
           break;

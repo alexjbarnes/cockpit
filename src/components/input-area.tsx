@@ -20,8 +20,10 @@ import {
   ShieldCheck,
   ShieldOff,
   Square,
+  Terminal,
   Trash2,
   X,
+  Zap,
 } from "lucide-react";
 import { type ClipboardEvent, type DragEvent, type KeyboardEvent, useCallback, useEffect, useRef, useState } from "react";
 import { CodeBlock, languageFromPath } from "@/components/code-block";
@@ -237,6 +239,8 @@ interface InputAreaProps {
   onClearRestoredText?: () => void;
   btw?: { question: string; answer: string | null; loading: boolean; error: string | null } | null;
   onDismissBtw?: () => void;
+  currentRuntime?: "pty" | "stream";
+  onSetRuntime?: (runtime: "pty" | "stream") => void;
   onRestart?: () => void;
   providers?: Provider[];
 }
@@ -286,6 +290,8 @@ export function InputArea({
   onClearRestoredText,
   btw,
   onDismissBtw,
+  currentRuntime,
+  onSetRuntime,
   onRestart,
   providers,
 }: InputAreaProps) {
@@ -925,6 +931,38 @@ export function InputArea({
                       </div>
                     );
                   })()}
+                  {onSetRuntime && (
+                    <div className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs">
+                      {currentRuntime === "pty" ? (
+                        <Terminal className="h-3.5 w-3.5 text-muted-foreground" />
+                      ) : (
+                        <Zap className="h-3.5 w-3.5 text-muted-foreground" />
+                      )}
+                      <span className="text-muted-foreground">Backend</span>
+                      <div className="ml-auto flex gap-1">
+                        <button
+                          onClick={() => onSetRuntime("pty")}
+                          className={`rounded px-2 py-0.5 text-xs transition-colors ${
+                            currentRuntime === "pty"
+                              ? "bg-primary text-primary-foreground"
+                              : "bg-muted text-muted-foreground hover:text-foreground"
+                          }`}
+                        >
+                          PTY
+                        </button>
+                        <button
+                          onClick={() => onSetRuntime("stream")}
+                          className={`rounded px-2 py-0.5 text-xs transition-colors ${
+                            currentRuntime === "stream"
+                              ? "bg-primary text-primary-foreground"
+                              : "bg-muted text-muted-foreground hover:text-foreground"
+                          }`}
+                        >
+                          Stream
+                        </button>
+                      </div>
+                    </div>
+                  )}
                   <button
                     onClick={() => onSetBypass(!bypassActive)}
                     className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs hover:bg-muted transition-colors"

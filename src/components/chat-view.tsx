@@ -83,6 +83,8 @@ export function ChatView({
     clearRestoredText,
     dismissBtw,
     retry,
+    currentRuntime,
+    setRuntime,
     restartSession,
   } = useSession(sessionId, cwd, historyView);
   const { settings } = useSettings();
@@ -522,6 +524,8 @@ export function ChatView({
           onClearRestoredText={clearRestoredText}
           btw={btw}
           onDismissBtw={dismissBtw}
+          currentRuntime={currentRuntime}
+          onSetRuntime={setRuntime}
           onRestart={restartSession}
           providers={providers}
         />

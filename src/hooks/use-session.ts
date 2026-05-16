@@ -86,6 +86,8 @@ interface UseSessionReturn {
   clearRestoredText: () => void;
   dismissBtw: () => void;
   retry: () => void;
+  currentRuntime: "pty" | "stream";
+  setRuntime: (runtime: "pty" | "stream") => void;
   restartSession: () => void;
 }
 
@@ -97,6 +99,7 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
   const [pendingQuestions, setPendingQuestions] = useState<PendingQuestion[]>([]);
   const [modelPicker, setModelPicker] = useState<string | null>(null);
   const [currentModel, setCurrentModel] = useState("sonnet");
+  const [currentRuntime, setCurrentRuntime] = useState<"pty" | "stream">("stream");
   const [bypassActive, setBypassActive] = useState(false);
   const [planMode, setPlanModeState] = useState(false);
   const [thinkingLevel, setThinkingLevelState] = useState<ThinkingLevel>("high");
@@ -856,6 +859,9 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
           if (msg.info.model) {
             setCurrentModel(msg.info.model);
           }
+          if (msg.info.runtime) {
+            setCurrentRuntime(msg.info.runtime);
+          }
           break;
         }
 
@@ -1210,6 +1216,14 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
     send({ type: "message:send", sessionId, text: "Continue from where you left off." });
   }, [send, sessionId]);
 
+  const setRuntime = useCallback(
+    (runtime: "pty" | "stream") => {
+      setCurrentRuntime(runtime);
+      send({ type: "session:set_runtime", sessionId, runtime });
+    },
+    [send, sessionId],
+  );
+
   const restartSession = useCallback(() => {
     send({ type: "session:restart", sessionId });
   }, [send, sessionId]);
@@ -1260,6 +1274,8 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
     clearRestoredText,
     dismissBtw,
     retry,
+    currentRuntime,
+    setRuntime,
     restartSession,
   };
 }

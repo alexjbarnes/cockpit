@@ -6,6 +6,7 @@ export interface SessionInfo {
   lastActiveAt: number;
   status: "idle" | "running";
   model?: string;
+  runtime?: "pty" | "stream";
   pendingRequestCount?: number;
 }
 
@@ -306,6 +307,7 @@ export type ClientMessage =
   | { type: "session:set_model"; sessionId: string; model: string }
   | { type: "session:set_model_slot"; sessionId: string; slot: "main" | "subagent" | "fast"; modelId: string }
   | { type: "session:restart"; sessionId: string }
+  | { type: "session:set_runtime"; sessionId: string; runtime: "pty" | "stream" }
   | { type: "session:subscribe"; sessionIds: string[] }
   | { type: "question:response"; sessionId: string; requestId: string; answers: Record<string, string> }
   | { type: "message:cancel_queued"; sessionId: string }

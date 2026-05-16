@@ -19,6 +19,15 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 
 const CLAUDE_BIN = process.env.CLAUDE_BIN ?? "claude";
 const TEST_TIMEOUT = 90_000;
+const CLAUDE_AVAILABLE = (() => {
+  try {
+    execSync(`${CLAUDE_BIN} --version`, { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+})();
+const RUN_INTEGRATION = process.env.COCKPIT_INTEGRATION_TESTS === "1";
 
 let hookOutputDir: string;
 let hookScriptDir: string;
@@ -161,7 +170,7 @@ afterAll(() => {
   }
 });
 
-describe("PTY Interactive Claude Spike", () => {
+describe.skipIf(!RUN_INTEGRATION || !CLAUDE_AVAILABLE)("PTY Interactive Claude Spike", () => {
   let ptyProcess: ReturnType<typeof spawn> | null = null;
 
   beforeEach(() => {

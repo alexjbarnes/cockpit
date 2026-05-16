@@ -136,6 +136,7 @@ export class SessionManager {
     const now = Date.now();
     const defaults = getDefaults();
     const modelSlots: ModelSlots = { main: defaults.modelSlots.main ?? "sonnet" };
+    const rt = options?.runtime ?? defaultRuntime();
     const info: SessionInfo = {
       id,
       name: name || path.basename(cwd) || cwd,
@@ -144,6 +145,7 @@ export class SessionManager {
       lastActiveAt: now,
       status: "idle",
       model: modelSlots.main,
+      runtime: rt,
       pendingRequestCount: 0,
     };
 
@@ -175,11 +177,11 @@ export class SessionManager {
       transcriptTotalSize: 0,
       bufferCliSessionId: id,
       paginationPrevIds: [],
-      runtime: options?.runtime ?? defaultRuntime(),
+      runtime: rt,
       ptyRuntime: null,
     });
 
-    setSessionPrefs(id, { runtime: options?.runtime ?? defaultRuntime() });
+    setSessionPrefs(id, { runtime: rt });
 
     return info;
   }
@@ -198,6 +200,7 @@ export class SessionManager {
       const now = Date.now();
       const modelSlots: ModelSlots =
         prefs?.modelSlots ?? (prefs?.model ? { main: prefs.model } : { main: defaults.modelSlots.main ?? "sonnet" });
+      const restoredRuntime = prefs?.runtime ?? defaultRuntime();
       session = {
         info: {
           id,
@@ -207,6 +210,7 @@ export class SessionManager {
           lastActiveAt: now,
           status: "idle",
           model: modelSlots.main,
+          runtime: restoredRuntime,
           pendingRequestCount: 0,
         },
         process: null,
@@ -240,7 +244,7 @@ export class SessionManager {
         transcriptTotalSize: 0,
         bufferCliSessionId: cliId,
         paginationPrevIds: [],
-        runtime: prefs?.runtime ?? defaultRuntime(),
+        runtime: restoredRuntime,
         ptyRuntime: null,
       };
       this.sessions.set(id, session);
@@ -813,6 +817,17 @@ export class SessionManager {
     }
   }
 
+  setRuntime(sessionId: string, runtime: "pty" | "stream"): boolean {
+    const session = this.sessions.get(sessionId);
+    if (!session || session.runtime === runtime) return false;
+    session.runtime = runtime;
+    session.info.runtime = runtime;
+    setSessionPrefs(sessionId, { runtime });
+    this.killProcess(session);
+    this.emitInfoUpdated(session, sessionId);
+    return true;
+  }
+
   isBypassActive(sessionId: string): boolean {
     const session = this.sessions.get(sessionId);
     return session?.bypassAllPermissions ?? false;
@@ -1329,7 +1344,7 @@ export class SessionManager {
         this.respondToPermission(sessionId, pa.requestId, true, pa.rawToolInput);
       } else if (pa.type === "auto_deny") {
         this.respondToPermission(sessionId, pa.requestId, false, undefined, undefined, pa.denyReason);
-      } else if (session.bypassAllPermissions && !session.planMode) {
+      } else if (session.bypassAllPermissions && !session.planMode && pa.toolName !== "AskUserQuestion") {
         this.respondToPermission(sessionId, pa.requestId, true, pa.rawToolInput);
         bypassedRequestIds.add(pa.requestId);
       } else {
