@@ -33,7 +33,7 @@ import { findSessionCwd, loadMoreMessages, loadTranscript, transcriptExists } fr
 export type { SessionRuntime };
 
 function defaultRuntime(): SessionRuntime {
-  return process.env.COCKPIT_PTY_RUNTIME === "1" ? "pty" : "stream";
+  return "stream";
 }
 
 const smLog = (sessionId: string, msg: string) => {
@@ -1678,7 +1678,7 @@ Additional Cockpit rules beyond the CLI's defaults:
 
   ensureProcess(sessionId: string): void {
     const session = this.sessions.get(sessionId);
-    if (!session || session.process) return;
+    if (!session || session.process || session.ptyRuntime?.isAlive) return;
     this.spawnProcess(session, sessionId);
   }
 
@@ -1909,6 +1909,12 @@ Additional Cockpit rules beyond the CLI's defaults:
   }
 
   private spawnPtyProcess(session: Session, sessionId: string, text?: string): void {
+    if (session.ptyRuntime?.isAlive) {
+      const existing = session.ptyRuntime;
+      session.ptyRuntime = null;
+      existing.kill().catch(() => {});
+    }
+
     const hookRouter = getHookRouter();
     if (!hookRouter) {
       const msg = "PTY runtime requires the hook router; server boot did not register one";
@@ -1955,6 +1961,7 @@ Additional Cockpit rules beyond the CLI's defaults:
     const runtime = new PtyRuntime({
       sessionId,
       cwd: session.info.cwd,
+      cliSessionId: session.cliSessionId,
       hookRouter,
       extraArgs,
       extraEnv,
