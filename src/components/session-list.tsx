@@ -191,11 +191,11 @@ export function SessionList() {
     });
   };
 
-  const createSession = async (cwd: string, name: string) => {
+  const createSession = async (cwd: string, name: string, runtime: "pty" | "stream") => {
     const res = await fetch("/api/sessions", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ cwd, name: name || undefined }),
+      body: JSON.stringify({ cwd, name: name || undefined, runtime }),
     });
     if (res.ok) {
       const data = await res.json();
@@ -273,7 +273,7 @@ export function SessionList() {
           isFavorite
           onToggleFavorite={() => toggleFavorite(group.cwd)}
           onSelectSession={navigateToSession}
-          onCreateSession={(cwd) => createSession(cwd, "")}
+          onCreateSession={(cwd) => createSession(cwd, "", "pty")}
           onDeleteSession={(s) => setDeleteTarget({ type: "single", session: s })}
           onDeleteAll={(g) => setDeleteTarget({ type: "bulk", group: g })}
         />
@@ -288,7 +288,7 @@ export function SessionList() {
           isFavorite={false}
           onToggleFavorite={() => toggleFavorite(group.cwd)}
           onSelectSession={navigateToSession}
-          onCreateSession={(cwd) => createSession(cwd, "")}
+          onCreateSession={(cwd) => createSession(cwd, "", "pty")}
           onDeleteSession={(s) => setDeleteTarget({ type: "single", session: s })}
           onDeleteAll={(g) => setDeleteTarget({ type: "bulk", group: g })}
         />

@@ -25,12 +25,12 @@ import { getDefaults } from "./defaults";
 import { EventParser, type ParsedEvent } from "./event-parser";
 import { findLatestPlanFile, readPlanFile } from "./plans";
 import { PtyRuntime } from "./pty-runtime";
-import { findChainForCliSession, getSessionPrefs, setSessionPrefs } from "./session-prefs";
+import { findChainForCliSession, getSessionPrefs, type SessionRuntime, setSessionPrefs } from "./session-prefs";
 import { getHookRouter } from "./singleton";
 import { createStreamState, processEvents, type StreamState } from "./stream-processor";
 import { findSessionCwd, loadMoreMessages, loadTranscript, transcriptExists } from "./transcript";
 
-export type SessionRuntime = "stream" | "pty";
+export type { SessionRuntime };
 
 function defaultRuntime(): SessionRuntime {
   return process.env.COCKPIT_PTY_RUNTIME === "1" ? "pty" : "stream";
@@ -179,6 +179,8 @@ export class SessionManager {
       ptyRuntime: null,
     });
 
+    setSessionPrefs(id, { runtime: options?.runtime ?? defaultRuntime() });
+
     return info;
   }
 
@@ -238,7 +240,7 @@ export class SessionManager {
         transcriptTotalSize: 0,
         bufferCliSessionId: cliId,
         paginationPrevIds: [],
-        runtime: defaultRuntime(),
+        runtime: prefs?.runtime ?? defaultRuntime(),
         ptyRuntime: null,
       };
       this.sessions.set(id, session);
@@ -652,6 +654,14 @@ export class SessionManager {
       }
       logDiag(id, "interrupt:pty-esc");
       session.ptyRuntime.interrupt();
+      // Esc cancels the claude TUI turn but may not produce a Stop hook if it
+      // arrived before any response. Force-idle so the UI unsticks; the PTY
+      // process stays alive at its REPL prompt and accepts the next message.
+      if (session.info.status === "running") {
+        session.info.status = "idle";
+        session.streamingSnapshot = null;
+        session.emitter.emit("status", id, "idle");
+      }
       return true;
     }
 

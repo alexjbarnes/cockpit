@@ -100,11 +100,13 @@ export async function POST(req: NextRequest) {
   const body = await req.json();
   const cwd = body.cwd as string;
   const name = body.name as string | undefined;
+  const runtimeRaw = body.runtime as string | undefined;
+  const runtime = runtimeRaw === "pty" || runtimeRaw === "stream" ? runtimeRaw : undefined;
 
   if (!cwd) {
     return NextResponse.json({ error: "cwd is required" }, { status: 400 });
   }
 
-  const session = getSessionManager().createSession(cwd, name);
+  const session = getSessionManager().createSession(cwd, name, runtime ? { runtime } : undefined);
   return NextResponse.json({ sessionId: session.id });
 }

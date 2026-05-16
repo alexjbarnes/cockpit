@@ -482,11 +482,11 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
     [sessions],
   );
 
-  const createSession = async (cwd: string, name: string) => {
+  const createSession = async (cwd: string, name: string, runtime: "pty" | "stream") => {
     const res = await fetch("/api/sessions", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ cwd, name: name || undefined }),
+      body: JSON.stringify({ cwd, name: name || undefined, runtime }),
     });
     if (res.ok) {
       const data = await res.json();

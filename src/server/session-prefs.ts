@@ -3,6 +3,8 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { InitData, ModelSlots, ThinkingLevel } from "@/types";
 
+export type SessionRuntime = "stream" | "pty";
+
 export interface PersistedTab {
   type: "file" | "diff" | "changes";
   filePath?: string;
@@ -20,6 +22,7 @@ export interface SessionPrefs {
   previousCliSessionIds?: string[];
   openTabs?: PersistedTab[];
   activeTabId?: string;
+  runtime?: SessionRuntime;
 }
 
 const PREFS_DIR = join(homedir(), ".cockpit");

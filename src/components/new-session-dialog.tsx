@@ -8,17 +8,19 @@ import { Input } from "@/components/ui/input";
 import { DirectoryPicker } from "./directory-picker";
 
 type Tab = "session" | "clone";
+export type SessionRuntime = "pty" | "stream";
 
 interface NewSessionDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onSubmit: (cwd: string, name: string) => void;
+  onSubmit: (cwd: string, name: string, runtime: SessionRuntime) => void;
 }
 
 export function NewSessionDialog({ open, onOpenChange, onSubmit }: NewSessionDialogProps) {
   const [tab, setTab] = useState<Tab>("session");
   const [cwd, setCwd] = useState("");
   const [name, setName] = useState("");
+  const [runtime, setRuntime] = useState<SessionRuntime>("pty");
   const [browsing, setBrowsing] = useState(false);
 
   // Clone state
@@ -32,6 +34,7 @@ export function NewSessionDialog({ open, onOpenChange, onSubmit }: NewSessionDia
   const reset = () => {
     setCwd("");
     setName("");
+    setRuntime("pty");
     setBrowsing(false);
     setCloneUrl("");
     setCloneDest("");
@@ -44,7 +47,7 @@ export function NewSessionDialog({ open, onOpenChange, onSubmit }: NewSessionDia
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!cwd.trim()) return;
-    onSubmit(cwd.trim(), name.trim());
+    onSubmit(cwd.trim(), name.trim(), runtime);
     reset();
     onOpenChange(false);
   };
@@ -73,7 +76,7 @@ export function NewSessionDialog({ open, onOpenChange, onSubmit }: NewSessionDia
         return;
       }
 
-      onSubmit(data.path, name.trim());
+      onSubmit(data.path, name.trim(), runtime);
       reset();
       onOpenChange(false);
     } catch {
@@ -147,6 +150,7 @@ export function NewSessionDialog({ open, onOpenChange, onSubmit }: NewSessionDia
               <label className="text-sm font-medium">Name (optional)</label>
               <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="My Project" />
             </div>
+            <RuntimeField value={runtime} onChange={setRuntime} />
             <Button type="submit" className="w-full" disabled={!cwd.trim()}>
               Create Session
             </Button>
@@ -200,6 +204,7 @@ export function NewSessionDialog({ open, onOpenChange, onSubmit }: NewSessionDia
               <label className="text-sm font-medium">Session Name (optional)</label>
               <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="My Project" />
             </div>
+            <RuntimeField value={runtime} onChange={setRuntime} />
             {cloneError && <p className="text-sm text-destructive">{cloneError}</p>}
             <Button type="submit" className="w-full" disabled={!cloneUrl.trim() || !cloneDest.trim() || cloning}>
               {cloning ? (
@@ -215,5 +220,47 @@ export function NewSessionDialog({ open, onOpenChange, onSubmit }: NewSessionDia
         )}
       </DialogContent>
     </Dialog>
+  );
+}
+
+function RuntimeField({ value, onChange }: { value: SessionRuntime; onChange: (v: SessionRuntime) => void }) {
+  return (
+    <div>
+      <label className="text-sm font-medium">Backend</label>
+      <div className="grid grid-cols-2 gap-2 mt-1">
+        <RuntimeOption
+          selected={value === "pty"}
+          onClick={() => onChange("pty")}
+          title="PTY (interactive)"
+          subtitle="Subscription billing"
+        />
+        <RuntimeOption selected={value === "stream"} onClick={() => onChange("stream")} title="Stream (-p)" subtitle="Credit billing" />
+      </div>
+    </div>
+  );
+}
+
+function RuntimeOption({
+  selected,
+  onClick,
+  title,
+  subtitle,
+}: {
+  selected: boolean;
+  onClick: () => void;
+  title: string;
+  subtitle: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`text-left rounded-md border px-3 py-2 transition-colors ${
+        selected ? "border-foreground bg-accent" : "border-input hover:bg-accent/50"
+      }`}
+    >
+      <div className="text-sm font-medium">{title}</div>
+      <div className="text-xs text-muted-foreground">{subtitle}</div>
+    </button>
   );
 }
