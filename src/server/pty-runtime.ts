@@ -195,10 +195,16 @@ export class PtyRuntime {
 
   private extractNewTextBeforeTool(message: ChatMessage, toolId: string): ParsedEvent[] {
     let text = "";
+    let found = false;
     for (const block of message.blocks) {
-      if (block.type === "tool_use" && block.toolUse.id === toolId) break;
+      if (block.type === "tool_use" && block.toolUse.id === toolId) {
+        found = true;
+        break;
+      }
       if (block.type === "text") text += block.text;
     }
+    // If the tool isn't in this message the JSONL hasn't caught up yet; emit nothing.
+    if (!found) return [];
     if (text.length <= this.emittedTextLength) return [];
     const newText = text.slice(this.emittedTextLength);
     this.emittedTextLength = text.length;
