@@ -218,7 +218,7 @@ describe("SessionManager PTY runtime (unit)", () => {
         const statuses: string[] = [];
         manager.onStatus(session.id, (s) => statuses.push(s));
 
-        manager.sendMessage(session.id, "/cost");
+        manager.sendMessage(session.id, "/unknown-slash-cmd");
         expect(statuses).toContain("running");
 
         vi.advanceTimersByTime(8001);
@@ -237,7 +237,7 @@ describe("SessionManager PTY runtime (unit)", () => {
         manager.sendMessage(session.id, "hello");
         emitMessageDone();
 
-        manager.sendMessage(session.id, "/cost");
+        manager.sendMessage(session.id, "/unknown-slash-cmd");
         emitMessageDone();
 
         vi.advanceTimersByTime(8001);
@@ -435,12 +435,38 @@ describe("SessionManager PTY runtime (unit)", () => {
     });
   });
 
-  describe("destroySession", () => {
-    it("kills PTY runtime on destroy", () => {
+  describe("PTY-handled slash commands", () => {
+    it("/cost emits token usage without throwing", () => {
+      const session = manager.createSession("/tmp", undefined, { runtime: "pty" });
+      const msgs: string[] = [];
+      manager.onSystem(session.id, (m) => msgs.push(m));
+      expect(manager.sendMessage(session.id, "/cost")).toBe(true);
+      expect(msgs.some((m) => m.includes("Input tokens"))).toBe(true);
+    });
+
+    it("/context emits context usage without throwing", () => {
+      const session = manager.createSession("/tmp", undefined, { runtime: "pty" });
+      const msgs: string[] = [];
+      manager.onSystem(session.id, (m) => msgs.push(m));
+      expect(manager.sendMessage(session.id, "/context")).toBe(true);
+      expect(msgs.some((m) => m.includes("Context"))).toBe(true);
+    });
+
+    it("/status emits session info without throwing", () => {
+      const session = manager.createSession("/tmp", undefined, { runtime: "pty" });
+      const msgs: string[] = [];
+      manager.onSystem(session.id, (m) => msgs.push(m));
+      expect(manager.sendMessage(session.id, "/status")).toBe(true);
+      expect(msgs.some((m) => m.includes("Model"))).toBe(true);
+    });
+
+    it("intercepts dialog commands with warning in PTY mode", () => {
       const session = manager.createSession("/tmp", undefined, { runtime: "pty" });
       manager.sendMessage(session.id, "hello");
-      manager.destroySession(session.id);
-      expect(ptyMocks.kill).toHaveBeenCalled();
+      const msgs: string[] = [];
+      manager.onSystem(session.id, (m) => msgs.push(m));
+      expect(manager.sendMessage(session.id, "/config")).toBe(true);
+      expect(msgs.some((m) => m.includes("interactive CLI dialog"))).toBe(true);
     });
   });
 });

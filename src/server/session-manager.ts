@@ -119,6 +119,8 @@ interface Session {
   attachmentPaths: string[];
   /** Non-null when a slash command was forwarded to the PTY and we're waiting for a response. */
   pendingSlashTimeout: ReturnType<typeof setTimeout> | null;
+  /** Cumulative token counts for the current session (used by /cost). */
+  totalTokens: { input: number; output: number; cacheCreate: number; cacheRead: number };
 }
 
 export class SessionManager {
@@ -190,6 +192,7 @@ export class SessionManager {
       todoWatcher: null,
       attachmentPaths: [],
       pendingSlashTimeout: null,
+      totalTokens: { input: 0, output: 0, cacheCreate: 0, cacheRead: 0 },
     });
 
     setSessionPrefs(id, { runtime: rt });
@@ -261,6 +264,7 @@ export class SessionManager {
         todoWatcher: null,
         attachmentPaths: [],
         pendingSlashTimeout: null,
+        totalTokens: { input: 0, output: 0, cacheCreate: 0, cacheRead: 0 },
       };
       this.sessions.set(id, session);
     }
@@ -1256,6 +1260,10 @@ export class SessionManager {
       const usage: ContextUsage = { used, total: session.contextWindowSize };
       session.contextUsage = usage;
       session.emitter.emit("usage", sessionId, usage);
+      session.totalTokens.input += u.input_tokens || 0;
+      session.totalTokens.output += u.output_tokens || 0;
+      session.totalTokens.cacheCreate += u.cache_creation_input_tokens || 0;
+      session.totalTokens.cacheRead += u.cache_read_input_tokens || 0;
     } catch {
       // not valid JSON, ignore
     }
@@ -1533,12 +1541,57 @@ export class SessionManager {
           "  /clear, /reset, /new  - Clear conversation and start fresh",
           "  /model [name]         - Show or switch model",
           "  /rename <name>        - Rename this session",
+          "  /cost                 - Show session token usage",
+          "  /context              - Show context window usage",
+          "  /status               - Show session status",
           "  /help                 - Show this help message",
           "",
-          "All other slash commands (/compact, /cost, /context, /commit,",
-          "/review, /analyze, etc.) are passed directly to Claude.",
+          "Other commands (/compact, /commit, /review, etc.) are passed to Claude when possible.",
         ].join("\n");
         this.emitSystem(session, sessionId, helpText);
+        return true;
+      }
+
+      case "/cost": {
+        const t = session.totalTokens;
+        const lines = [
+          `Input tokens:       ${t.input.toLocaleString()}`,
+          `Output tokens:      ${t.output.toLocaleString()}`,
+          `Cache write tokens: ${t.cacheCreate.toLocaleString()}`,
+          `Cache read tokens:  ${t.cacheRead.toLocaleString()}`,
+        ];
+        this.emitSystem(session, sessionId, lines.join("\n"));
+        return true;
+      }
+
+      case "/context": {
+        if (!session.contextUsage) {
+          this.emitSystem(session, sessionId, "Context usage data not available yet.");
+          return true;
+        }
+        const pct = session.contextWindowSize > 0 ? Math.round((session.contextUsage.used / session.contextWindowSize) * 100) : 0;
+        this.emitSystem(
+          session,
+          sessionId,
+          `Context window: ${session.contextUsage.used.toLocaleString()} / ${session.contextWindowSize.toLocaleString()} (${pct}%)`,
+        );
+        return true;
+      }
+
+      case "/status": {
+        const model = session.info.model || "sonnet";
+        const runtime = session.runtime;
+        const plan = session.planMode ? " [plan]" : "";
+        this.emitSystem(session, sessionId, `Model: ${model}  Runtime: ${runtime}${plan}`);
+        return true;
+      }
+    }
+
+    // In PTY mode, intercept commands that render CLI dialogs to prevent hangs
+    if (session.ptyRuntime?.isAlive) {
+      const dialogCmd = cmd.replace("/", "");
+      if (SessionManager.DIALOG_COMMANDS.has(dialogCmd)) {
+        this.emitSystem(session, sessionId, `"${cmd}" opens an interactive CLI dialog that isn't available in remote mode.`);
         return true;
       }
     }
@@ -1546,6 +1599,56 @@ export class SessionManager {
     // All other slash commands pass through to Claude
     return false;
   }
+
+  private static readonly DIALOG_COMMANDS = new Set([
+    "config",
+    "usage",
+    "session",
+    "stats",
+    "doctor",
+    "diff",
+    "mcp",
+    "permissions",
+    "hooks",
+    "tasks",
+    "agents",
+    "skills",
+    "memory",
+    "theme",
+    "fast",
+    "feedback",
+    "copy",
+    "branch",
+    "plan",
+    "chrome",
+    "desktop",
+    "ide",
+    "mobile",
+    "bridge",
+    "sandbox",
+    "export",
+    "login",
+    "logout",
+    "upgrade",
+    "rate-limit-options",
+    "privacy-settings",
+    "terminal-setup",
+    "install-github-app",
+    "remote-env",
+    "remote-setup",
+    "resume",
+    "add-dir",
+    "btw",
+    "extra-usage",
+    "passes",
+    "think-back",
+    "ultrareview",
+    "tag",
+    "exit",
+    "effort",
+    "color",
+    "files",
+  ]);
 
   private static readonly MEDIA_EXT: Record<string, string> = {
     "image/png": ".png",
