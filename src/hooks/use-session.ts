@@ -302,10 +302,20 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
 
         case "session:transcript": {
           const transcriptMsgs = msg.messages as ChatMessage[];
+          if (transcriptMsgs.length > 0) {
+            lastServerMsgIdRef.current = transcriptMsgs[transcriptMsgs.length - 1].id;
+          }
+          for (let i = transcriptMsgs.length - 1; i >= 0; i--) {
+            if (transcriptMsgs[i].role === "assistant" && transcriptMsgs[i].model) {
+              setActiveModelId(transcriptMsgs[i].model!);
+              break;
+            }
+          }
           setMessages((prev) => {
             const transcriptUserContent = new Set(transcriptMsgs.filter((m) => m.role === "user").map((m) => m.content));
             const optimistic = prev.filter((m) => m.id.startsWith("user-") && !transcriptUserContent.has(m.content));
-            return [...transcriptMsgs, ...optimistic];
+            const localSystem = prev.filter((m) => m.role === "system");
+            return [...transcriptMsgs, ...localSystem, ...optimistic];
           });
           break;
         }

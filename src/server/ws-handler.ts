@@ -398,20 +398,19 @@ export function createWebSocketHandler(
             }
 
             // Send in-progress streaming message if the CLI is mid-response.
-            // This restores tool calls and partial text that aren't yet in the transcript.
-            // Only send when the session is actually running; an idle session has
-            // no in-progress streaming, and a stale snapshot would briefly show
-            // completed agents as still running until the status:idle clears it.
-            const snapshot = correctedStatus === "running" ? sessionManager.getStreamingSnapshot(msg.sessionId) : null;
-            if (snapshot) {
-              send(ws, {
-                type: "session:streaming_snapshot",
-                sessionId: msg.sessionId,
-                messageId: snapshot.messageId,
-                content: snapshot.content,
-                toolUses: snapshot.toolUses,
-                blocks: snapshot.blocks,
-              });
+            // Skip for PTY sessions - the transcript watcher provides message content.
+            if (session.info.runtime !== "pty") {
+              const snapshot = correctedStatus === "running" ? sessionManager.getStreamingSnapshot(msg.sessionId) : null;
+              if (snapshot) {
+                send(ws, {
+                  type: "session:streaming_snapshot",
+                  sessionId: msg.sessionId,
+                  messageId: snapshot.messageId,
+                  content: snapshot.content,
+                  toolUses: snapshot.toolUses,
+                  blocks: snapshot.blocks,
+                });
+              }
             }
 
             // Restore compacting indicator if compaction is in progress
@@ -777,8 +776,13 @@ export function createWebSocketHandler(
 }
 
 function handleParsedEvent(ws: WebSocket, sessionId: string, event: ParsedEvent, sessionManager: SessionManager): void {
+  // In PTY mode the transcript watcher is the sole source of message content.
+  // Only forward non-content events (permissions, rate limits, suggestions, etc.).
+  const isPty = sessionManager.getRuntime(sessionId) === "pty";
+
   switch (event.type) {
     case "thinking":
+      if (isPty) break;
       send(ws, {
         type: "assistant:thinking",
         sessionId,
@@ -790,6 +794,7 @@ function handleParsedEvent(ws: WebSocket, sessionId: string, event: ParsedEvent,
       break;
 
     case "text_delta":
+      if (isPty) break;
       send(ws, {
         type: "assistant:text",
         sessionId,
@@ -798,6 +803,7 @@ function handleParsedEvent(ws: WebSocket, sessionId: string, event: ParsedEvent,
       break;
 
     case "tool_use_start":
+      if (isPty) break;
       send(ws, {
         type: "assistant:tool_use",
         sessionId,
@@ -809,6 +815,7 @@ function handleParsedEvent(ws: WebSocket, sessionId: string, event: ParsedEvent,
       break;
 
     case "tool_done":
+      if (isPty) break;
       send(ws, {
         type: "assistant:tool_use",
         sessionId,
@@ -820,6 +827,7 @@ function handleParsedEvent(ws: WebSocket, sessionId: string, event: ParsedEvent,
       break;
 
     case "tool_result":
+      if (isPty) break;
       send(ws, {
         type: "assistant:tool_result",
         sessionId,
@@ -830,6 +838,7 @@ function handleParsedEvent(ws: WebSocket, sessionId: string, event: ParsedEvent,
       break;
 
     case "message_done":
+      if (isPty) break;
       if (event.message) {
         send(ws, {
           type: "assistant:message_done",
@@ -840,6 +849,7 @@ function handleParsedEvent(ws: WebSocket, sessionId: string, event: ParsedEvent,
       break;
 
     case "streaming_snapshot":
+      if (isPty) break;
       if (event.message) {
         send(ws, {
           type: "session:streaming_snapshot",
@@ -853,6 +863,7 @@ function handleParsedEvent(ws: WebSocket, sessionId: string, event: ParsedEvent,
       break;
 
     case "tool_children":
+      if (isPty) break;
       send(ws, {
         type: "assistant:tool_children",
         sessionId,
@@ -863,6 +874,7 @@ function handleParsedEvent(ws: WebSocket, sessionId: string, event: ParsedEvent,
       break;
 
     case "tool_progress":
+      if (isPty) break;
       send(ws, {
         type: "assistant:tool_progress",
         sessionId,

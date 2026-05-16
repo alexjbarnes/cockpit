@@ -517,6 +517,10 @@ export class SessionManager {
     return this.sessions.get(id)?.compacting ?? false;
   }
 
+  getRuntime(id: string): "pty" | "stream" {
+    return this.sessions.get(id)?.runtime ?? "stream";
+  }
+
   listActiveSessions(): SessionInfo[] {
     return Array.from(this.sessions.values())
       .filter((s) => s.process !== null)
