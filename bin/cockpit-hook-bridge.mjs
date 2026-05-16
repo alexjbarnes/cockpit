@@ -37,6 +37,17 @@ async function readStdin() {
   return body;
 }
 
+const TIMEOUT_MS = eventName === "PermissionRequest" ? 10 * 60 * 1000 : 60 * 1000;
+
+function permissionDenyJson() {
+  return JSON.stringify({
+    hookSpecificOutput: {
+      hookEventName: "PermissionRequest",
+      decision: { behavior: "deny", message: "hook bridge timed out waiting for cockpit" },
+    },
+  });
+}
+
 async function main() {
   const body = await readStdin();
   const target = `${url}/hook/${eventName}`;
@@ -51,14 +62,23 @@ async function main() {
         "X-Cockpit-Token": token,
       },
       body: body || "{}",
+      signal: AbortSignal.timeout(TIMEOUT_MS),
     });
   } catch (err) {
-    process.stderr.write(`cockpit-hook-bridge: request failed: ${err && err.message ? err.message : String(err)}\n`);
+    const msg = err && err.message ? err.message : String(err);
+    const isTimeout = err && err.name === "TimeoutError";
+    process.stderr.write(`cockpit-hook-bridge: request ${isTimeout ? "timed out" : "failed"}: ${msg}\n`);
+    if (isTimeout && eventName === "PermissionRequest") {
+      process.stdout.write(permissionDenyJson());
+    }
     process.exit(0);
   }
 
   if (!res.ok) {
     process.stderr.write(`cockpit-hook-bridge: router returned ${res.status}\n`);
+    if (eventName === "PermissionRequest") {
+      process.stdout.write(permissionDenyJson());
+    }
     process.exit(0);
   }
 

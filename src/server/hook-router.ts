@@ -28,6 +28,7 @@ export interface SessionHookHandler {
 interface RegisteredSession {
   token: string;
   handler: SessionHookHandler;
+  pendingResponses: Set<ServerResponse>;
 }
 
 export class HookRouter {
@@ -58,14 +59,24 @@ export class HookRouter {
     return `http://${host}:${this.port}`;
   }
 
-  /** Register a session and return its hook token. Caller passes this token to the spawned claude process. */
   register(sessionId: string, handler: SessionHookHandler): string {
     const token = randomBytes(24).toString("hex");
-    this.sessions.set(sessionId, { token, handler });
+    this.sessions.set(sessionId, { token, handler, pendingResponses: new Set() });
     return token;
   }
 
   unregister(sessionId: string): void {
+    const registered = this.sessions.get(sessionId);
+    if (registered) {
+      for (const res of registered.pendingResponses) {
+        if (!res.writableEnded) {
+          res.statusCode = 503;
+          res.setHeader("Content-Type", "application/json");
+          res.end(JSON.stringify({ exitCode: 0, stderr: "session restarted" }));
+        }
+      }
+      registered.pendingResponses.clear();
+    }
     this.sessions.delete(sessionId);
   }
 
@@ -113,16 +124,23 @@ export class HookRouter {
       return;
     }
 
+    registered.pendingResponses.add(res);
     try {
       const response = await this.dispatch(registered.handler, eventName, payload);
-      res.statusCode = 200;
-      res.setHeader("Content-Type", "application/json");
-      res.end(JSON.stringify(response));
+      if (!res.writableEnded) {
+        res.statusCode = 200;
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify(response));
+      }
     } catch (err) {
-      console.error(`[hook-router] dispatch failed for ${eventName}:`, err);
-      res.statusCode = 500;
-      res.setHeader("Content-Type", "application/json");
-      res.end(JSON.stringify({ exitCode: 1, stderr: String(err) }));
+      if (!res.writableEnded) {
+        console.error(`[hook-router] dispatch failed for ${eventName}:`, err);
+        res.statusCode = 500;
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ exitCode: 1, stderr: String(err) }));
+      }
+    } finally {
+      registered.pendingResponses.delete(res);
     }
   }
 
