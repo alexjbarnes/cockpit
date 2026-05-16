@@ -12,6 +12,7 @@ export interface HookResponse {
 export interface PermissionDecision {
   behavior: "allow" | "deny";
   message?: string;
+  updatedInput?: Record<string, unknown>;
 }
 
 export interface SessionHookHandler {

@@ -739,7 +739,9 @@ export class SessionManager {
       this.notifyPendingChanged(session, sessionId);
       return session.ptyRuntime.notifyPermissionDecision(
         requestId,
-        allowed ? { behavior: "allow" } : { behavior: "deny", message: denyReason ?? "User denied" },
+        allowed
+          ? { behavior: "allow", ...(toolInput ? { updatedInput: toolInput } : {}) }
+          : { behavior: "deny", message: denyReason ?? "User denied" },
       );
     }
 
@@ -808,7 +810,7 @@ export class SessionManager {
   // session state, guaranteeing the next message runs in the right mode.
   // If a message is in flight, defer until message_done so we don't orphan it.
   private scheduleRespawnForPermissions(session: Session): void {
-    if (!session.process) return;
+    if (!session.process && !session.ptyRuntime?.isAlive) return;
     if (session.info.status === "idle") {
       this.killProcess(session);
       session.hasSpawnedBefore = transcriptExists(session.cliSessionId, session.info.cwd);
@@ -841,7 +843,7 @@ export class SessionManager {
     setSessionPrefs(sessionId, { planMode: true });
     // Kill process so it restarts without --allow-dangerously-skip-permissions,
     // which lets the CLI natively enforce plan mode tool restrictions.
-    if (session.process) {
+    if (session.process || session.ptyRuntime?.isAlive) {
       this.killProcess(session);
       session.info.status = "idle";
       session.emitter.emit("status", sessionId, "idle");
@@ -859,7 +861,7 @@ export class SessionManager {
     setSessionPrefs(sessionId, { planMode: false });
     // Kill process so it restarts with --allow-dangerously-skip-permissions,
     // restoring bypass capability for build mode.
-    if (session.process) {
+    if (session.process || session.ptyRuntime?.isAlive) {
       this.killProcess(session);
       session.info.status = "idle";
       session.emitter.emit("status", sessionId, "idle");
@@ -1611,7 +1613,9 @@ Additional Cockpit rules beyond the CLI's defaults:
       this.emitSystem(session, sessionId, "__compact::start");
       session.info.status = "running";
       session.emitter.emit("status", sessionId, "running");
-      if (session.process && session.stdin) {
+      if (session.ptyRuntime?.isAlive) {
+        session.ptyRuntime.sendText("/compact").catch(() => {});
+      } else if (session.process && session.stdin) {
         const compactInput = { type: "user", message: { role: "user", content: "/compact" } };
         session.stdin.write(JSON.stringify(compactInput) + "\n");
       } else {
