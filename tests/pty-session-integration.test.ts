@@ -25,8 +25,11 @@ const CLAUDE_AVAILABLE = (() => {
     return false;
   }
 })();
+// Integration tests spawn a real claude process and burn API credits + ~90s
+// per test. Opt-in only: set COCKPIT_INTEGRATION_TESTS=1 to run.
+const RUN_INTEGRATION = process.env.COCKPIT_INTEGRATION_TESTS === "1";
 
-describe.skipIf(!CLAUDE_AVAILABLE)("PtySession + HookRouter integration", () => {
+describe.skipIf(!RUN_INTEGRATION || !CLAUDE_AVAILABLE)("PtySession + HookRouter integration", () => {
   let router: HookRouter;
   let workDir: string;
   const sessionId = "integration-session";

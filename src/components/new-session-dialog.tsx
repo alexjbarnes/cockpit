@@ -1,6 +1,6 @@
 "use client";
 
-import { FolderOpen, GitBranch, Loader2 } from "lucide-react";
+import { ArrowLeft, FolderOpen, GitBranch, Loader2, Terminal, Zap } from "lucide-react";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { DirectoryPicker } from "./directory-picker";
 
 type Tab = "session" | "clone";
+type Step = "backend" | "details";
 export type SessionRuntime = "pty" | "stream";
 
 interface NewSessionDialogProps {
@@ -17,10 +18,11 @@ interface NewSessionDialogProps {
 }
 
 export function NewSessionDialog({ open, onOpenChange, onSubmit }: NewSessionDialogProps) {
+  const [step, setStep] = useState<Step>("backend");
   const [tab, setTab] = useState<Tab>("session");
   const [cwd, setCwd] = useState("");
   const [name, setName] = useState("");
-  const [runtime, setRuntime] = useState<SessionRuntime>("pty");
+  const [runtime, setRuntime] = useState<SessionRuntime | null>(null);
   const [browsing, setBrowsing] = useState(false);
 
   // Clone state
@@ -32,9 +34,10 @@ export function NewSessionDialog({ open, onOpenChange, onSubmit }: NewSessionDia
   const [cloneError, setCloneError] = useState("");
 
   const reset = () => {
+    setStep("backend");
     setCwd("");
     setName("");
-    setRuntime("pty");
+    setRuntime(null);
     setBrowsing(false);
     setCloneUrl("");
     setCloneDest("");
@@ -44,9 +47,14 @@ export function NewSessionDialog({ open, onOpenChange, onSubmit }: NewSessionDia
     setCloneError("");
   };
 
+  const pickBackend = (r: SessionRuntime) => {
+    setRuntime(r);
+    setStep("details");
+  };
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!cwd.trim()) return;
+    if (!cwd.trim() || !runtime) return;
     onSubmit(cwd.trim(), name.trim(), runtime);
     reset();
     onOpenChange(false);
@@ -54,7 +62,7 @@ export function NewSessionDialog({ open, onOpenChange, onSubmit }: NewSessionDia
 
   const handleClone = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!cloneUrl.trim() || !cloneDest.trim()) return;
+    if (!cloneUrl.trim() || !cloneDest.trim() || !runtime) return;
 
     setCloning(true);
     setCloneError("");
@@ -101,166 +109,191 @@ export function NewSessionDialog({ open, onOpenChange, onSubmit }: NewSessionDia
         }}
       >
         <DialogHeader>
-          <DialogTitle>New Session</DialogTitle>
+          <DialogTitle className="flex items-center gap-2">
+            {step === "details" && (
+              <button
+                type="button"
+                onClick={() => setStep("backend")}
+                className="rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+                title="Back to backend selection"
+              >
+                <ArrowLeft className="h-4 w-4" />
+              </button>
+            )}
+            {step === "backend" ? "Choose Backend" : "New Session"}
+          </DialogTitle>
         </DialogHeader>
 
-        <div className="flex gap-1 border-b mt-2">
-          <button
-            type="button"
-            onClick={() => setTab("session")}
-            className={`px-3 py-1.5 text-sm font-medium border-b-2 transition-colors ${
-              tab === "session" ? "border-foreground text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"
-            }`}
-          >
-            Open Directory
-          </button>
-          <button
-            type="button"
-            onClick={() => setTab("clone")}
-            className={`px-3 py-1.5 text-sm font-medium border-b-2 transition-colors flex items-center gap-1.5 ${
-              tab === "clone" ? "border-foreground text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"
-            }`}
-          >
-            <GitBranch className="h-3.5 w-3.5" />
-            Clone Repo
-          </button>
-        </div>
-
-        {tab === "session" && (
-          <form onSubmit={handleSubmit} className="space-y-4 mt-2">
-            <div>
-              <label className="text-sm font-medium">Working Directory</label>
-              <div className="flex gap-2">
-                <Input value={cwd} onChange={(e) => setCwd(e.target.value)} placeholder="/home/user/project" required />
-                <Button type="button" variant="outline" size="icon" onClick={() => setBrowsing(!browsing)} title="Browse directories">
-                  <FolderOpen className="h-4 w-4" />
-                </Button>
-              </div>
-            </div>
-            {browsing && (
-              <DirectoryPicker
-                onSelect={(path) => {
-                  setCwd(path);
-                  setBrowsing(false);
-                }}
-                onCancel={() => setBrowsing(false)}
-              />
-            )}
-            <div>
-              <label className="text-sm font-medium">Name (optional)</label>
-              <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="My Project" />
-            </div>
-            <RuntimeField value={runtime} onChange={setRuntime} />
-            <Button type="submit" className="w-full" disabled={!cwd.trim()}>
-              Create Session
-            </Button>
-          </form>
+        {step === "backend" && (
+          <div className="space-y-3 mt-2">
+            <p className="text-sm text-muted-foreground">
+              Pick how claude runs for this session. Subscription users should prefer PTY; programmatic billing uses Stream.
+            </p>
+            <BackendCard
+              icon={<Terminal className="h-5 w-5" />}
+              title="PTY (interactive)"
+              subtitle="Subscription billing"
+              description="Spawns a real claude TUI in a pseudo-terminal. Counts toward your Max plan subscription."
+              onClick={() => pickBackend("pty")}
+            />
+            <BackendCard
+              icon={<Zap className="h-5 w-5" />}
+              title="Stream (-p)"
+              subtitle="Credit billing"
+              description="Runs claude -p with structured JSON. After June 15 2026 this counts toward $100/mo programmatic credit."
+              onClick={() => pickBackend("stream")}
+            />
+          </div>
         )}
 
-        {tab === "clone" && (
-          <form onSubmit={handleClone} className="space-y-4 mt-2">
-            <div>
-              <label className="text-sm font-medium">Repository URL</label>
-              <Input
-                value={cloneUrl}
-                onChange={(e) => setCloneUrl(e.target.value)}
-                placeholder="https://github.com/user/repo.git"
-                required
-              />
+        {step === "details" && (
+          <>
+            <div className="flex gap-1 border-b mt-2">
+              <button
+                type="button"
+                onClick={() => setTab("session")}
+                className={`px-3 py-1.5 text-sm font-medium border-b-2 transition-colors ${
+                  tab === "session" ? "border-foreground text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                Open Directory
+              </button>
+              <button
+                type="button"
+                onClick={() => setTab("clone")}
+                className={`px-3 py-1.5 text-sm font-medium border-b-2 transition-colors flex items-center gap-1.5 ${
+                  tab === "clone" ? "border-foreground text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                <GitBranch className="h-3.5 w-3.5" />
+                Clone Repo
+              </button>
             </div>
-            <div>
-              <label className="text-sm font-medium">Clone Into</label>
-              <div className="flex gap-2">
-                <Input value={cloneDest} onChange={(e) => setCloneDest(e.target.value)} placeholder="/home/user/projects" required />
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="icon"
-                  onClick={() => setCloneBrowsing(!cloneBrowsing)}
-                  title="Browse directories"
-                >
-                  <FolderOpen className="h-4 w-4" />
+
+            {tab === "session" && (
+              <form onSubmit={handleSubmit} className="space-y-4 mt-2">
+                <div>
+                  <label className="text-sm font-medium">Working Directory</label>
+                  <div className="flex gap-2">
+                    <Input value={cwd} onChange={(e) => setCwd(e.target.value)} placeholder="/home/user/project" required />
+                    <Button type="button" variant="outline" size="icon" onClick={() => setBrowsing(!browsing)} title="Browse directories">
+                      <FolderOpen className="h-4 w-4" />
+                    </Button>
+                  </div>
+                </div>
+                {browsing && (
+                  <DirectoryPicker
+                    onSelect={(path) => {
+                      setCwd(path);
+                      setBrowsing(false);
+                    }}
+                    onCancel={() => setBrowsing(false)}
+                  />
+                )}
+                <div>
+                  <label className="text-sm font-medium">Name (optional)</label>
+                  <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="My Project" />
+                </div>
+                <Button type="submit" className="w-full" disabled={!cwd.trim()}>
+                  Create Session
                 </Button>
-              </div>
-            </div>
-            {cloneBrowsing && (
-              <DirectoryPicker
-                onSelect={(path) => {
-                  setCloneDest(path);
-                  setCloneBrowsing(false);
-                }}
-                onCancel={() => setCloneBrowsing(false)}
-              />
+              </form>
             )}
-            <div>
-              <label className="text-sm font-medium">Folder Name (optional)</label>
-              <Input
-                value={cloneFolderName}
-                onChange={(e) => setCloneFolderName(e.target.value)}
-                placeholder="Defaults to repository name"
-              />
-            </div>
-            <div>
-              <label className="text-sm font-medium">Session Name (optional)</label>
-              <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="My Project" />
-            </div>
-            <RuntimeField value={runtime} onChange={setRuntime} />
-            {cloneError && <p className="text-sm text-destructive">{cloneError}</p>}
-            <Button type="submit" className="w-full" disabled={!cloneUrl.trim() || !cloneDest.trim() || cloning}>
-              {cloning ? (
-                <>
-                  <Loader2 className="h-4 w-4 animate-spin mr-2" />
-                  Cloning...
-                </>
-              ) : (
-                "Clone & Create Session"
-              )}
-            </Button>
-          </form>
+
+            {tab === "clone" && (
+              <form onSubmit={handleClone} className="space-y-4 mt-2">
+                <div>
+                  <label className="text-sm font-medium">Repository URL</label>
+                  <Input
+                    value={cloneUrl}
+                    onChange={(e) => setCloneUrl(e.target.value)}
+                    placeholder="https://github.com/user/repo.git"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="text-sm font-medium">Clone Into</label>
+                  <div className="flex gap-2">
+                    <Input value={cloneDest} onChange={(e) => setCloneDest(e.target.value)} placeholder="/home/user/projects" required />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="icon"
+                      onClick={() => setCloneBrowsing(!cloneBrowsing)}
+                      title="Browse directories"
+                    >
+                      <FolderOpen className="h-4 w-4" />
+                    </Button>
+                  </div>
+                </div>
+                {cloneBrowsing && (
+                  <DirectoryPicker
+                    onSelect={(path) => {
+                      setCloneDest(path);
+                      setCloneBrowsing(false);
+                    }}
+                    onCancel={() => setCloneBrowsing(false)}
+                  />
+                )}
+                <div>
+                  <label className="text-sm font-medium">Folder Name (optional)</label>
+                  <Input
+                    value={cloneFolderName}
+                    onChange={(e) => setCloneFolderName(e.target.value)}
+                    placeholder="Defaults to repository name"
+                  />
+                </div>
+                <div>
+                  <label className="text-sm font-medium">Session Name (optional)</label>
+                  <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="My Project" />
+                </div>
+                {cloneError && <p className="text-sm text-destructive">{cloneError}</p>}
+                <Button type="submit" className="w-full" disabled={!cloneUrl.trim() || !cloneDest.trim() || cloning}>
+                  {cloning ? (
+                    <>
+                      <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                      Cloning...
+                    </>
+                  ) : (
+                    "Clone & Create Session"
+                  )}
+                </Button>
+              </form>
+            )}
+          </>
         )}
       </DialogContent>
     </Dialog>
   );
 }
 
-function RuntimeField({ value, onChange }: { value: SessionRuntime; onChange: (v: SessionRuntime) => void }) {
-  return (
-    <div>
-      <label className="text-sm font-medium">Backend</label>
-      <div className="grid grid-cols-2 gap-2 mt-1">
-        <RuntimeOption
-          selected={value === "pty"}
-          onClick={() => onChange("pty")}
-          title="PTY (interactive)"
-          subtitle="Subscription billing"
-        />
-        <RuntimeOption selected={value === "stream"} onClick={() => onChange("stream")} title="Stream (-p)" subtitle="Credit billing" />
-      </div>
-    </div>
-  );
-}
-
-function RuntimeOption({
-  selected,
-  onClick,
+function BackendCard({
+  icon,
   title,
   subtitle,
+  description,
+  onClick,
 }: {
-  selected: boolean;
-  onClick: () => void;
+  icon: React.ReactNode;
   title: string;
   subtitle: string;
+  description: string;
+  onClick: () => void;
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
-      className={`text-left rounded-md border px-3 py-2 transition-colors ${
-        selected ? "border-foreground bg-accent" : "border-input hover:bg-accent/50"
-      }`}
+      className="w-full text-left rounded-lg border border-input bg-card px-4 py-3 transition-colors hover:border-foreground hover:bg-accent"
     >
-      <div className="text-sm font-medium">{title}</div>
-      <div className="text-xs text-muted-foreground">{subtitle}</div>
+      <div className="flex items-center gap-3 mb-1">
+        <span className="text-foreground">{icon}</span>
+        <div className="flex-1">
+          <div className="text-sm font-medium">{title}</div>
+          <div className="text-xs text-muted-foreground">{subtitle}</div>
+        </div>
+      </div>
+      <p className="text-xs text-muted-foreground mt-2">{description}</p>
     </button>
   );
 }
