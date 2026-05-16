@@ -137,13 +137,6 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
   // Track nested agent tool calls
   const agentStackRef = useRef<ToolUse[]>([]);
 
-  // Backup of streaming data so message_done can fall back when
-  // status:idle (from PTY exit) arrives before the async onStop handler finishes.
-  const lastStreamedRef = useRef<{
-    toolUses: ToolUse[];
-    blocks: ContentBlock[];
-  } | null>(null);
-
   // Track the last server-assigned message ID for delta history on reconnect.
   // Using IDs instead of counts avoids drift when locally-generated messages
   // (optimistic user messages, queued injections) have different IDs than
@@ -304,6 +297,16 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
               return [...deduped, ...prev];
             });
           }
+          break;
+        }
+
+        case "session:transcript": {
+          const transcriptMsgs = msg.messages as ChatMessage[];
+          setMessages((prev) => {
+            const transcriptIds = new Set(transcriptMsgs.map((m) => m.id));
+            const optimistic = prev.filter((m) => m.id.startsWith("user-") && !transcriptIds.has(m.id));
+            return [...transcriptMsgs, ...optimistic];
+          });
           break;
         }
 
@@ -530,11 +533,9 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
         }
 
         case "assistant:message_done": {
-          const backup = lastStreamedRef.current;
-          const streamedToolUses = streamingRef.current?.toolUses || backup?.toolUses || [];
-          const streamedBlocks = streamingRef.current?.blocks || backup?.blocks || [];
+          const streamedToolUses = streamingRef.current?.toolUses || [];
+          const streamedBlocks = streamingRef.current?.blocks || [];
           streamingRef.current = null;
-          lastStreamedRef.current = null;
           agentStackRef.current = [];
           if (msg.message.model) {
             setActiveModelId(msg.message.model);
@@ -674,18 +675,11 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
           setIsResponding(nowRunning);
           isRespondingRef.current = nowRunning;
           if (nowRunning) {
-            lastStreamedRef.current = null;
             setApiError(null);
             setErrorActive(false);
             clearTimeout(errorTimerRef.current);
           }
           if (msg.status === "idle") {
-            if (streamingRef.current) {
-              lastStreamedRef.current = {
-                toolUses: streamingRef.current.toolUses,
-                blocks: streamingRef.current.blocks,
-              };
-            }
             streamingRef.current = null;
             agentStackRef.current = [];
             // Remove stale streaming message that may have survived a WS drop

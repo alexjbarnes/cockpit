@@ -29,6 +29,7 @@ import { findChainForCliSession, getSessionPrefs, type SessionRuntime, setSessio
 import { getHookRouter } from "./singleton";
 import { createStreamState, processEvents, type StreamState } from "./stream-processor";
 import { findSessionCwd, loadMoreMessages, loadTranscript, transcriptExists } from "./transcript";
+import { TranscriptWatcher } from "./transcript-watcher";
 
 export type { SessionRuntime };
 
@@ -112,6 +113,7 @@ interface Session {
    *  creation time; future revisions may expose this on SessionInfo. */
   runtime: SessionRuntime;
   ptyRuntime: PtyRuntime | null;
+  transcriptWatcher: TranscriptWatcher | null;
   attachmentPaths: string[];
 }
 
@@ -180,6 +182,7 @@ export class SessionManager {
       paginationPrevIds: [],
       runtime: rt,
       ptyRuntime: null,
+      transcriptWatcher: null,
       attachmentPaths: [],
     });
 
@@ -248,11 +251,12 @@ export class SessionManager {
         paginationPrevIds: [],
         runtime: restoredRuntime,
         ptyRuntime: null,
+        transcriptWatcher: null,
         attachmentPaths: [],
       };
       this.sessions.set(id, session);
     }
-    return session;
+    return session!;
   }
 
   async getSession(
@@ -588,6 +592,10 @@ export class SessionManager {
       session.ptyRuntime = null;
       runtime.kill().catch(() => {});
     }
+    if (session.transcriptWatcher) {
+      session.transcriptWatcher.stop();
+      session.transcriptWatcher = null;
+    }
     this.cleanupAttachments(session);
     session.emitter.removeAllListeners();
     this.sessions.delete(id);
@@ -640,6 +648,14 @@ export class SessionManager {
 
     session.emitter.on("error", handler);
     return () => session.emitter.off("error", handler);
+  }
+
+  onTranscript(id: string, listener: (messages: ChatMessage[]) => void): (() => void) | null {
+    const session = this.sessions.get(id);
+    if (!session) return null;
+    const handler = (_sessionId: string, messages: ChatMessage[]) => listener(messages);
+    session.emitter.on("transcript", handler);
+    return () => session.emitter.off("transcript", handler);
   }
 
   interrupt(id: string): boolean {
@@ -2038,6 +2054,10 @@ Additional Cockpit rules beyond the CLI's defaults:
         session.ptyRuntime = null;
         session.streamingSnapshot = null;
         logDiag(sessionId, "idle:pty-exit", { exitCode, flushedOnMessageDone: streamState.flushedOnMessageDone });
+        if (session.transcriptWatcher) {
+          session.transcriptWatcher.stop();
+          session.transcriptWatcher = null;
+        }
         session.info.status = "idle";
         session.emitter.emit("status", sessionId, "idle");
         if (!streamState.flushedOnMessageDone) {
@@ -2054,10 +2074,16 @@ Additional Cockpit rules beyond the CLI's defaults:
     session.attachmentPaths.push(...attachments);
     const ptyText = text ? this.buildPtyText(text, attachments) : text;
 
+    const watcher = new TranscriptWatcher(session.cliSessionId, session.info.cwd, (messages) => {
+      session.emitter.emit("transcript", sessionId, messages);
+    });
+    session.transcriptWatcher = watcher;
+
     runtime
       .start(ptyText)
       .then(() => {
         this.log(sessionId, `PTY claude ready (pid=${runtime.pid})`);
+        watcher.start();
       })
       .catch((err: unknown) => {
         const msg = err instanceof Error ? err.message : String(err);

@@ -1,10 +1,8 @@
-import type { ChatMessage } from "@/types";
 import { cleanupHookSettings, prepareHookSettings } from "./claude-settings";
 import type { ParsedEvent } from "./event-parser";
 import { newPermissionRequestId, translateHookEvent } from "./hook-event-translator";
 import type { HookRouter, PermissionDecision, SessionHookHandler } from "./hook-router";
 import { PtySession } from "./pty-session";
-import { loadLastAssistantMessage } from "./transcript";
 
 export interface PtyRuntimeOptions {
   sessionId: string;
@@ -145,50 +143,14 @@ export class PtyRuntime {
 
   private buildHandler(): SessionHookHandler {
     return {
-      onPreToolUse: async (payload) => {
-        const toolId = typeof payload.tool_use_id === "string" ? payload.tool_use_id : "";
-        const hookEvents = translateHookEvent("PreToolUse", payload);
-
-        if (toolId) {
-          try {
-            const loaded = await loadLastAssistantMessage(this.opts.cliSessionId, this.opts.cwd);
-            if (loaded) {
-              const snapshot = this.buildLiveSnapshot(loaded, toolId);
-              if (snapshot) this.emit([{ type: "streaming_snapshot", message: snapshot }]);
-            }
-          } catch {
-            // fall through
-          }
-        }
-
-        this.emit(hookEvents);
+      onPreToolUse: (payload) => {
+        this.emit(translateHookEvent("PreToolUse", payload));
       },
       onPostToolUse: (payload) => {
         this.emit(translateHookEvent("PostToolUse", payload));
       },
-      onStop: async (payload) => {
-        const events = translateHookEvent("Stop", payload);
-        const msgDoneIdx = events.findIndex((e) => e.type === "message_done");
-        if (msgDoneIdx !== -1) {
-          const hookMsg = events[msgDoneIdx].message!;
-          try {
-            const matched = await this.loadMatchingTranscript(hookMsg.content);
-            if (matched) {
-              events[msgDoneIdx] = {
-                type: "message_done",
-                message: {
-                  ...hookMsg,
-                  blocks: matched.blocks,
-                  toolUses: matched.toolUses.length > 0 ? matched.toolUses : hookMsg.toolUses,
-                },
-                clearPending: true,
-              };
-            }
-          } catch {
-            // fall back to hook-assembled message
-          }
-        }
-        this.emit(events);
+      onStop: (payload) => {
+        this.emit(translateHookEvent("Stop", payload));
       },
       onUserPromptSubmit: (payload) => {
         this.emit(translateHookEvent("UserPromptSubmit", payload));
@@ -198,32 +160,6 @@ export class PtyRuntime {
       },
       onPermissionRequest: (payload) => this.handlePermissionRequest(payload),
     };
-  }
-
-  private async loadMatchingTranscript(expectedContent: string): Promise<ChatMessage | null> {
-    const delays = [0, 50, 150];
-    for (const delay of delays) {
-      if (delay > 0) await new Promise((r) => setTimeout(r, delay));
-      const loaded = await loadLastAssistantMessage(this.opts.cliSessionId, this.opts.cwd);
-      if (loaded && loaded.blocks.length > 0 && loaded.content === expectedContent) return loaded;
-    }
-    return null;
-  }
-
-  private buildLiveSnapshot(message: ChatMessage, currentToolId: string): ChatMessage | null {
-    // Guard: if JSONL hasn't caught up yet, the current tool won't be in the message.
-    const hasCurrentTool = message.blocks.some((b) => b.type === "tool_use" && b.toolUse.id === currentToolId);
-    if (!hasCurrentTool) return null;
-
-    // Mark the current tool as running — transcript records it as "done" before the result arrives.
-    const blocks = message.blocks.map((b) => {
-      if (b.type === "tool_use" && b.toolUse.id === currentToolId) {
-        return { ...b, toolUse: { ...b.toolUse, status: "running" as const, output: "" } };
-      }
-      return b;
-    });
-    const toolUses = message.toolUses.map((t) => (t.id === currentToolId ? { ...t, status: "running" as const, output: "" } : t));
-    return { ...message, blocks, toolUses };
   }
 
   private handlePermissionRequest(payload: Record<string, unknown>): Promise<PermissionDecision> {

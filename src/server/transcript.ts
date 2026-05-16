@@ -57,7 +57,7 @@ interface TranscriptEntry {
   };
 }
 
-function getTranscriptPath(sessionId: string, cwd: string): string {
+export function getTranscriptPath(sessionId: string, cwd: string): string {
   const projectKey = cwd.replace(/[/.]/g, "-");
   return path.join(homedir(), ".claude", "projects", projectKey, `${sessionId}.jsonl`);
 }

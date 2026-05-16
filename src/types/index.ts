@@ -353,6 +353,7 @@ export type ServerMessage =
   | { type: "session:init"; sessionId: string; data: InitData }
   | { type: "history"; sessionId: string; messages: ChatMessage[]; delta?: boolean; status?: "idle" | "running"; hasMore?: boolean }
   | { type: "history:more"; sessionId: string; messages: ChatMessage[]; hasMore: boolean }
+  | { type: "session:transcript"; sessionId: string; messages: ChatMessage[] }
   | {
       type: "session:streaming_snapshot";
       sessionId: string;

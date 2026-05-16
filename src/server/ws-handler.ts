@@ -199,6 +199,11 @@ export function createWebSocketHandler(
       });
       if (unsubError) cleanups.push(unsubError);
 
+      const unsubTranscript = sessionManager.onTranscript(sessionId, (messages) => {
+        send(ws, { type: "session:transcript", sessionId, messages });
+      });
+      if (unsubTranscript) cleanups.push(unsubTranscript);
+
       const unsubSystem = sessionManager.onSystem(sessionId, (text) => {
         send(ws, { type: "session:system", sessionId, text });
       });
