@@ -315,7 +315,8 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
             const stripAttachments = (s: string) => s.replace(/^\[Attached [^\]]+\]\n*/gm, "").trim();
             const transcriptUserContent = new Set(transcriptMsgs.filter((m) => m.role === "user").map((m) => stripAttachments(m.content)));
             const optimistic = prev.filter((m) => m.id.startsWith("user-") && !transcriptUserContent.has(stripAttachments(m.content)));
-            const localSystem = prev.filter((m) => m.role === "system");
+            const transcriptSystemContent = new Set(transcriptMsgs.filter((m) => m.role === "system").map((m) => m.content));
+            const localSystem = prev.filter((m) => m.role === "system" && !transcriptSystemContent.has(m.content));
             const enriched = transcriptMsgs.map((m) => {
               if (m.role !== "user" || m.images?.length) return m;
               const stripped = stripAttachments(m.content);
