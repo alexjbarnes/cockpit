@@ -170,20 +170,16 @@ export class PtyRuntime {
         const events = translateHookEvent("Stop", payload);
         const msgDoneIdx = events.findIndex((e) => e.type === "message_done");
         if (msgDoneIdx !== -1) {
+          const hookMsg = events[msgDoneIdx].message!;
           try {
-            const loaded = await loadLastAssistantMessage(this.opts.cliSessionId, this.opts.cwd);
-            const hookMsg = events[msgDoneIdx].message!;
-            // Only use transcript blocks when loaded content matches the Stop
-            // payload — proves the JSONL caught up to the current turn.
-            // Without this guard a stale transcript (previous turn) overwrites
-            // the correct response with old content.
-            if (loaded && loaded.blocks.length > 0 && loaded.content === hookMsg.content) {
+            const matched = await this.loadMatchingTranscript(hookMsg.content);
+            if (matched) {
               events[msgDoneIdx] = {
                 type: "message_done",
                 message: {
                   ...hookMsg,
-                  blocks: loaded.blocks,
-                  toolUses: loaded.toolUses.length > 0 ? loaded.toolUses : hookMsg.toolUses,
+                  blocks: matched.blocks,
+                  toolUses: matched.toolUses.length > 0 ? matched.toolUses : hookMsg.toolUses,
                 },
                 clearPending: true,
               };
@@ -202,6 +198,16 @@ export class PtyRuntime {
       },
       onPermissionRequest: (payload) => this.handlePermissionRequest(payload),
     };
+  }
+
+  private async loadMatchingTranscript(expectedContent: string): Promise<ChatMessage | null> {
+    const delays = [0, 50, 150];
+    for (const delay of delays) {
+      if (delay > 0) await new Promise((r) => setTimeout(r, delay));
+      const loaded = await loadLastAssistantMessage(this.opts.cliSessionId, this.opts.cwd);
+      if (loaded && loaded.blocks.length > 0 && loaded.content === expectedContent) return loaded;
+    }
+    return null;
   }
 
   private buildLiveSnapshot(message: ChatMessage, currentToolId: string): ChatMessage | null {
