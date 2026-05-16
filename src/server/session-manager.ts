@@ -117,6 +117,8 @@ interface Session {
   transcriptWatcher: TranscriptWatcher | null;
   todoWatcher: TodoWatcher | null;
   attachmentPaths: string[];
+  /** Non-null when a slash command was forwarded to the PTY and we're waiting for a response. */
+  pendingSlashTimeout: ReturnType<typeof setTimeout> | null;
 }
 
 export class SessionManager {
@@ -187,6 +189,7 @@ export class SessionManager {
       transcriptWatcher: null,
       todoWatcher: null,
       attachmentPaths: [],
+      pendingSlashTimeout: null,
     });
 
     setSessionPrefs(id, { runtime: rt });
@@ -257,6 +260,7 @@ export class SessionManager {
         transcriptWatcher: null,
         todoWatcher: null,
         attachmentPaths: [],
+        pendingSlashTimeout: null,
       };
       this.sessions.set(id, session);
     }
@@ -1588,6 +1592,23 @@ export class SessionManager {
     return `${refs}\n${text}`;
   }
 
+  private readonly SLASH_TIMEOUT_MS = 8000;
+
+  private startPtySlashTimeout(session: Session, sessionId: string): void {
+    if (session.pendingSlashTimeout) clearTimeout(session.pendingSlashTimeout);
+    session.pendingSlashTimeout = setTimeout(() => {
+      session.pendingSlashTimeout = null;
+      if (!session.ptyRuntime?.isAlive) return;
+      this.log(sessionId, "slash command timed out — sending Escape to dismiss possible dialog");
+      session.ptyRuntime.interrupt();
+      if (session.info.status === "running") {
+        session.info.status = "idle";
+        session.emitter.emit("status", sessionId, "idle");
+      }
+      this.emitSystem(session, sessionId, "Command may have opened a CLI dialog. Dismissed.");
+    }, this.SLASH_TIMEOUT_MS);
+  }
+
   private buildContent(
     session: Session,
     text: string,
@@ -1730,6 +1751,9 @@ Additional Cockpit rules beyond the CLI's defaults:
       session.ptyRuntime.sendText(ptyText).catch((err) => {
         this.log(sessionId, `pty sendText failed: ${err instanceof Error ? err.message : String(err)}`);
       });
+      if (text.startsWith("/")) {
+        this.startPtySlashTimeout(session, sessionId);
+      }
       return true;
     }
 
@@ -2059,6 +2083,10 @@ Additional Cockpit rules beyond the CLI's defaults:
       extraArgs,
       extraEnv,
       onEvents: (events) => {
+        if (session.pendingSlashTimeout) {
+          clearTimeout(session.pendingSlashTimeout);
+          session.pendingSlashTimeout = null;
+        }
         const result = processEvents(events, streamState, { planMode: session.planMode, compacting: session.compacting });
         this.applyProcessedResult(session, sessionId, result);
       },

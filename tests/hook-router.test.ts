@@ -234,6 +234,42 @@ describe("HookRouter + bridge round-trip", () => {
     router.unregister(sessionId);
   });
 
+  it("dispatches UserPromptSubmit to the registered handler", async () => {
+    const sessionId = "session-ups";
+    let received: unknown;
+    const token = router.register(sessionId, {
+      onUserPromptSubmit(payload) {
+        received = payload;
+      },
+    });
+    const res = await fetch(`${url}/hook/UserPromptSubmit`, {
+      method: "POST",
+      headers: { "x-cockpit-session": sessionId, "x-cockpit-token": token, "content-type": "application/json" },
+      body: JSON.stringify({ prompt: "hello" }),
+    });
+    expect(res.status).toBe(200);
+    expect(received).toEqual({ prompt: "hello" });
+    router.unregister(sessionId);
+  });
+
+  it("dispatches Notification to the registered handler", async () => {
+    const sessionId = "session-notif";
+    let received: unknown;
+    const token = router.register(sessionId, {
+      onNotification(payload) {
+        received = payload;
+      },
+    });
+    const res = await fetch(`${url}/hook/Notification`, {
+      method: "POST",
+      headers: { "x-cockpit-session": sessionId, "x-cockpit-token": token, "content-type": "application/json" },
+      body: JSON.stringify({ message: "hello" }),
+    });
+    expect(res.status).toBe(200);
+    expect(received).toEqual({ message: "hello" });
+    router.unregister(sessionId);
+  });
+
   it("unregister closes pending responses so bridge doesn't hang", async () => {
     const sessionId = "session-pending";
     const token = router.register(sessionId, {
