@@ -83,6 +83,7 @@ vi.mock("@/server/transcript", () => ({
   transcriptExists: vi.fn().mockReturnValue(false),
   findSessionCwd: vi.fn().mockResolvedValue(null),
   loadLastAssistantMessage: vi.fn().mockResolvedValue(null),
+  getTranscriptPath: vi.fn().mockReturnValue("/tmp/fake-transcript.jsonl"),
 }));
 
 vi.mock("@/server/session-prefs", () => ({

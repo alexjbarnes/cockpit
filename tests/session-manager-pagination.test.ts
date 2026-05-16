@@ -34,6 +34,7 @@ vi.mock("@/server/transcript", () => ({
   loadMoreMessages: (...args: unknown[]) => mockLoadMoreMessages(...args),
   transcriptExists: (...args: unknown[]) => mockTranscriptExists(...args),
   findSessionCwd: () => Promise.resolve(null),
+  getTranscriptPath: () => "/tmp/fake-transcript.jsonl",
 }));
 
 vi.mock("@/server/session-prefs", () => ({
