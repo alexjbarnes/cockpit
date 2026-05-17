@@ -3991,4 +3991,50 @@ describe("SessionManager", () => {
       expect(todosEmitted.some((t) => t.length === 0)).toBe(true);
     });
   });
+
+  describe("setModel on PTY session before first message", () => {
+    it("resets hasSpawnedBefore when PTY is killed and no transcript exists", async () => {
+      const session = manager.createSession("/tmp/pty-model", "PTY", { runtime: "pty" });
+      const s = (manager as any).sessions.get(session.id)!;
+
+      // Simulate ensureProcess having eagerly spawned the PTY
+      capturedPtyOpts = null;
+      manager.ensureProcess(session.id);
+      await vi.waitFor(() => expect(capturedPtyOpts).not.toBeNull());
+      expect(s.hasSpawnedBefore).toBe(true);
+
+      // User changes model before sending any message. setModel kills PTY.
+      manager.setModel(session.id, "opus");
+
+      // hasSpawnedBefore should be reset since there's no transcript
+      expect(s.hasSpawnedBefore).toBe(false);
+    });
+
+    it("uses --session-id (not --resume) on respawn after model change", async () => {
+      const session = manager.createSession("/tmp/pty-model2", "PTY", { runtime: "pty" });
+      const s = (manager as any).sessions.get(session.id)!;
+
+      // ensureProcess spawns PTY eagerly
+      capturedPtyOpts = null;
+      manager.ensureProcess(session.id);
+      await vi.waitFor(() => expect(capturedPtyOpts).not.toBeNull());
+
+      // Kill the ptyRuntime to simulate setModel completing the kill
+      s.ptyRuntime = null;
+
+      // Change model
+      manager.setModel(session.id, "opus");
+
+      // Now send first message, triggering a new PTY spawn
+      capturedPtyOpts = null;
+      manager.sendMessage(session.id, "hello");
+      await vi.waitFor(() => expect(capturedPtyOpts).not.toBeNull());
+
+      const args = capturedPtyOpts!.extraArgs as string[];
+      expect(args).toContain("--session-id");
+      expect(args).not.toContain("--resume");
+      expect(args).toContain("--model");
+      expect(args[args.indexOf("--model") + 1]).toBe("opus");
+    });
+  });
 });

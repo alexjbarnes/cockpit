@@ -145,6 +145,9 @@ export class PtySession {
       }
       if (this.cleanOutput().length >= REPL_READY_MIN_BYTES) {
         await sleep(REPL_SETTLE_MS);
+        if (this.exited) {
+          throw new Error(`claude exited during startup (code=${this.exitCode}, output=${this.cleanOutput().slice(0, 200)})`);
+        }
         return;
       }
       await sleep(200);

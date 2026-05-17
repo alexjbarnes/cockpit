@@ -972,6 +972,9 @@ export class SessionManager {
       }
     } else {
       this.killProcess(session);
+      if (!transcriptExists(session.cliSessionId, session.info.cwd)) {
+        session.hasSpawnedBefore = false;
+      }
       session.queuedMessages.length = 0;
       session.queuePaused = false;
       session.info.status = "idle";
