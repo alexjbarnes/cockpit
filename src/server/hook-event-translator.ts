@@ -26,7 +26,7 @@ export function translateHookEvent(eventName: HookEventName, payload: Record<str
     case "Notification":
       return translateNotification(payload);
     case "UserPromptSubmit":
-      return [];
+      return [{ type: "system_message", text: "__user_prompt_submit" }];
   }
 }
 

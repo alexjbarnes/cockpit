@@ -975,6 +975,17 @@ export class SessionManager {
       session.emitter.emit("status", sessionId, "idle");
     }
     this.emitInfoUpdated(session, sessionId);
+    // Sync the contextWindowSize when the model changes. Without this, the
+    // context indicator shows the old total (e.g. 1000K) after switching to
+    // a model with a different context window (e.g. 200K Flash) until the
+    // CLI respawns and reports the actual value.
+    if (contextChanged && !has1m(model)) {
+      session.contextWindowSize = nextEntry?.contextWindow ?? 200_000;
+    }
+    const cur = session.contextUsage;
+    if (cur) {
+      session.emitter.emit("usage", sessionId, { used: cur.used, total: session.contextWindowSize });
+    }
   }
 
   setModelSlot(sessionId: string, slot: "main" | "subagent" | "fast", modelId: string): void {
@@ -1349,6 +1360,11 @@ export class SessionManager {
     }
 
     for (const sysMsg of result.systemMessages) {
+      if (sysMsg === "__user_prompt_submit") {
+        session.info.status = "running";
+        session.emitter.emit("status", sessionId, "running");
+        continue;
+      }
       const permModePrefix = "__permission_mode::";
       if (sysMsg.startsWith(permModePrefix)) {
         const mode = sysMsg.slice(permModePrefix.length);
