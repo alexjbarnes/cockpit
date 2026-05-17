@@ -21,8 +21,8 @@ test("status indicators work after server restart for PTY session", async () => 
   // Send a message to spawn the CLI and create the transcript
   await page1.locator('[data-testid="message-input"]').fill("hello");
   await page1.locator('[data-testid="btn-send"]').click();
-  await expect(page1.locator('[data-testid="status-running"]')).toBeVisible({ timeout: 30_000 });
-  await expect(page1.locator('[data-testid="status-idle"]')).toBeVisible({ timeout: 30_000 });
+  await expect(page1.locator('[data-testid="status-running"]').first()).toBeVisible({ timeout: 30_000 });
+  await expect(page1.locator('[data-testid="status-idle"]').first()).toBeVisible({ timeout: 30_000 });
 
   // Restart the server
   ctx.mockApi.setScript(simpleTextScript);
@@ -36,6 +36,6 @@ test("status indicators work after server restart for PTY session", async () => 
   await page2.locator('[data-testid="message-input"]').fill("hello again");
   await page2.locator('[data-testid="btn-send"]').click();
 
-  await expect(page2.locator('[data-testid="status-running"]')).toBeVisible({ timeout: 30_000 });
-  await expect(page2.locator('[data-testid="status-idle"]')).toBeVisible({ timeout: 30_000 });
+  await expect(page2.locator('[data-testid="status-running"]').first()).toBeVisible({ timeout: 30_000 });
+  await expect(page2.locator('[data-testid="status-idle"]').first()).toBeVisible({ timeout: 30_000 });
 });

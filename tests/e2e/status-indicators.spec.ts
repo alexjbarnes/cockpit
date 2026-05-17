@@ -17,16 +17,16 @@ test("status indicator transitions through yellow (running) to gray (idle)", asy
 
   const { page } = await ctx.openSession("new", "/tmp");
 
-  // Initial state: idle (gray dot)
-  const idleDot = page.locator('[data-testid="status-idle"]');
+  // Initial state: idle (gray dot) — may be multiple sessions showing idle
+  const idleDot = page.locator('[data-testid="status-idle"]').first();
   await expect(idleDot).toBeVisible({ timeout: 10_000 });
 
   // Type a message and send
   await page.locator('[data-testid="message-input"]').fill("Hello");
   await page.locator('[data-testid="btn-send"]').click();
 
-  // Wait for the running status (yellow dot)
-  const runningDot = page.locator('[data-testid="status-running"]');
+  // Wait for the running status (yellow dot) — use first() in case other sessions also exist
+  const runningDot = page.locator('[data-testid="status-running"]').first();
   await expect(runningDot).toBeVisible({ timeout: 30_000 });
 
   // Wait for the response to complete — idle (gray) dot returns
