@@ -469,6 +469,15 @@ export function createWebSocketHandler(
               });
             }
 
+            const runtime = session.info.runtime;
+            if (runtime && runtime !== "stream") {
+              send(ws, {
+                type: "session:system",
+                sessionId: msg.sessionId,
+                text: `__runtime::${runtime}`,
+              });
+            }
+
             const currentUsage = sessionManager.getContextUsage(msg.sessionId);
             const usage = currentUsage || session.lastUsage;
             if (usage) {

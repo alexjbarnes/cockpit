@@ -860,6 +860,11 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
             setThinkingLevelState(level);
             break;
           }
+          const runtimePrefix = "__runtime::";
+          if (msg.text.startsWith(runtimePrefix)) {
+            setCurrentRuntime(msg.text.slice(runtimePrefix.length) as "pty" | "stream");
+            break;
+          }
           if (msg.text === "__compact_boundary__") {
             setMessages((prev) => {
               const doneId = "compact-done-" + Date.now();

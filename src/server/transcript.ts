@@ -16,6 +16,7 @@ import type {
   ToolUse,
 } from "@/types";
 import { debugLog } from "./debug-logger";
+import { getSessionPrefs } from "./session-prefs";
 
 interface TranscriptBlock {
   type: string;
@@ -795,13 +796,17 @@ export async function scanAllSessions(): Promise<SessionGroup[]> {
 }
 
 function metaToSessionInfo(meta: SessionMeta): SessionInfo {
+  const prefs = getSessionPrefs(meta.id);
   return {
     id: meta.id,
-    name: meta.title,
+    name: prefs?.name || meta.title,
     cwd: meta.cwd,
     createdAt: meta.createdAt,
     lastActiveAt: meta.lastActiveAt,
     status: "idle",
+    model: prefs?.model,
+    runtime: prefs?.runtime,
+    pendingRequestCount: 0,
   };
 }
 
