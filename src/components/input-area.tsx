@@ -319,6 +319,7 @@ export function InputArea({
   const [historyOpen, setHistoryOpen] = useState(false);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [optionsOpen, setOptionsOpen] = useState(false);
+  const [settingsTab, setSettingsTab] = useState<"model" | "runtime">("model");
   const [viewProvider, setViewProvider] = useState<string>("anthropic");
   const [mentionSelectedIndex, setMentionSelectedIndex] = useState(0);
   const [cursorPos, setCursorPos] = useState(0);
@@ -757,6 +758,24 @@ export function InputArea({
         {optionsOpen &&
           (() => {
             const parsed = parseCurrentModel(currentModel);
+            const allProviders = [
+              { id: "anthropic", name: "Anthropic" },
+              ...(providers || []).filter((p) => !p.isBuiltin).map((p) => ({ id: p.id, name: p.name })),
+            ];
+            const vEntries = parsed.alias ? versionsForAlias(parsed.alias) : [];
+            const showVRow = vEntries.length > 1;
+            const supportsExt = parsed.entry?.supportsExtendedContext ?? false;
+            const providerEffort = (() => {
+              if (!providers || !currentModel) return [];
+              for (const p of providers) {
+                const m = p.models.find((pm) => pm.modelId === currentModel);
+                if (m) return m.effortLevels;
+              }
+              return [];
+            })();
+            const allowed = new Set(providerEffort.length > 0 ? providerEffort : allowedEffortLevels(parsed.entry));
+            const visibleLevels = thinkingLevels.filter((opt) => allowed.has(opt.value));
+
             return (
               <div
                 className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
@@ -764,8 +783,9 @@ export function InputArea({
                   if (e.target === e.currentTarget) setOptionsOpen(false);
                 }}
               >
-                <div className="w-full max-w-md mx-4 rounded-lg border bg-background p-4 shadow-lg space-y-1 max-h-[80vh] overflow-y-auto">
-                  <div className="flex items-center justify-between pb-2">
+                <div className="w-full max-w-xl mx-4 rounded-lg border bg-background shadow-lg overflow-hidden flex flex-col max-h-[85vh]">
+                  {/* Header */}
+                  <div className="flex items-center justify-between px-5 py-3 border-b shrink-0">
                     <div className="flex items-center gap-2">
                       <Settings2 className="h-4 w-4" />
                       <h2 className="text-sm font-semibold">Session settings</h2>
@@ -777,237 +797,302 @@ export function InputArea({
                       <X className="h-4 w-4" />
                     </button>
                   </div>
-                  {(() => {
-                    const allProviders = [
-                      { id: "anthropic", name: "Anthropic" },
-                      ...(providers || []).filter((p) => !p.isBuiltin).map((p) => ({ id: p.id, name: p.name })),
-                    ];
-                    const vEntries = parsed.alias ? versionsForAlias(parsed.alias) : [];
-                    const showVRow = vEntries.length > 1;
-                    const supportsExt = parsed.entry?.supportsExtendedContext ?? false;
 
-                    return (
-                      <>
-                        {/* Provider selector */}
-                        <div className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs">
-                          <Cpu className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                          <span className="text-muted-foreground">Provider</span>
-                          <select
-                            value={viewProvider}
-                            onChange={(e) => setViewProvider(e.target.value)}
-                            className="ml-auto rounded border border-input bg-background px-2 py-1 text-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                          >
-                            {allProviders.map((p) => (
-                              <option key={p.id} value={p.id}>
-                                {p.name}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
+                  {/* Body */}
+                  <div className="flex flex-1 min-h-0">
+                    {/* Sidebar tabs */}
+                    <aside className="w-28 border-r shrink-0 p-2 flex flex-col gap-1">
+                      <button
+                        onClick={() => setSettingsTab("model")}
+                        className={`flex items-center gap-2 px-3 py-2 rounded text-xs font-medium transition-colors ${
+                          settingsTab === "model"
+                            ? "bg-primary/10 text-primary border-l-2 border-primary"
+                            : "text-muted-foreground hover:text-foreground hover:bg-muted border-l-2 border-transparent"
+                        }`}
+                      >
+                        <Brain className="h-3.5 w-3.5" />
+                        Model
+                      </button>
+                      <button
+                        onClick={() => setSettingsTab("runtime")}
+                        className={`flex items-center gap-2 px-3 py-2 rounded text-xs font-medium transition-colors ${
+                          settingsTab === "runtime"
+                            ? "bg-primary/10 text-primary border-l-2 border-primary"
+                            : "text-muted-foreground hover:text-foreground hover:bg-muted border-l-2 border-transparent"
+                        }`}
+                      >
+                        <Terminal className="h-3.5 w-3.5" />
+                        Harness
+                      </button>
+                    </aside>
 
-                        {/* Models for selected provider */}
-                        {viewProvider === "anthropic" ? (
-                          <>
-                            {aliases.map((opt) => {
-                              const entry = defaultForAlias(opt.value);
-                              const selected = parsed.alias === opt.value;
+                    {/* Tab content */}
+                    <div className="flex-1 overflow-y-auto p-4 space-y-4 min-h-[320px]">
+                      {/* Model tab */}
+                      {settingsTab === "model" && (
+                        <div className="space-y-3">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                              <Cpu className="h-3.5 w-3.5 text-muted-foreground" />
+                              <span className="text-xs font-medium text-foreground">Provider</span>
+                            </div>
+                            <select
+                              value={viewProvider}
+                              onChange={(e) => setViewProvider(e.target.value)}
+                              className="rounded border border-input bg-background px-2 py-1 text-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                            >
+                              {allProviders.map((p) => (
+                                <option key={p.id} value={p.id}>
+                                  {p.name}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+
+                          {viewProvider === "anthropic" ? (
+                            <div className="space-y-0.5">
+                              {aliases.map((opt) => {
+                                const entry = defaultForAlias(opt.value);
+                                const selected = parsed.alias === opt.value;
+                                return (
+                                  <button
+                                    key={opt.value}
+                                    onClick={() => onSetModel(valueForAlias(opt.value, parsed.extended && opt.value !== "haiku"))}
+                                    className={`flex w-full items-center gap-3 rounded px-3 py-2 text-xs transition-colors ${
+                                      selected ? "bg-primary/10 text-primary" : "hover:bg-muted text-foreground"
+                                    }`}
+                                  >
+                                    <div className="w-3 shrink-0">
+                                      {selected ? (
+                                        <Check className="h-3 w-3" />
+                                      ) : (
+                                        <div className="h-3 w-3 rounded-full border border-muted-foreground/40" />
+                                      )}
+                                    </div>
+                                    <span className="font-mono font-medium">{opt.label}</span>
+                                    {entry && <span className="text-muted-foreground ml-auto">{entry.modelId}</span>}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          ) : (
+                            (() => {
+                              const provider = providers?.find((p) => p.id === viewProvider);
+                              if (!provider) return null;
                               return (
+                                <div className="space-y-0.5">
+                                  {provider.models.map((model) => {
+                                    const selected = currentModel === model.modelId;
+                                    return (
+                                      <button
+                                        key={model.modelId}
+                                        onClick={() => onSetModel(model.modelId)}
+                                        className={`flex w-full items-center gap-3 rounded px-3 py-2 text-xs transition-colors ${
+                                          selected ? "bg-primary/10 text-primary" : "hover:bg-muted text-foreground"
+                                        }`}
+                                      >
+                                        <div className="w-3 shrink-0">
+                                          {selected ? (
+                                            <Check className="h-3 w-3" />
+                                          ) : (
+                                            <div className="h-3 w-3 rounded-full border border-muted-foreground/40" />
+                                          )}
+                                        </div>
+                                        <span className="font-mono font-medium">{model.modelId}</span>
+                                        <span className="text-muted-foreground ml-auto">{model.displayName}</span>
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+                              );
+                            })()
+                          )}
+
+                          {showVRow && (
+                            <div className="flex items-center gap-2 pt-1">
+                              <Layers className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                              <span className="text-xs text-muted-foreground">Version</span>
+                              <div className="ml-auto flex gap-1">
+                                {vEntries.map((entry) => (
+                                  <button
+                                    key={entry.modelId}
+                                    onClick={() => onSetModel(valueForEntry(entry, parsed.extended && entry.supportsExtendedContext))}
+                                    className={`rounded px-2 py-0.5 text-xs transition-colors ${
+                                      parsed.entry?.modelId === entry.modelId
+                                        ? "bg-primary text-primary-foreground"
+                                        : "bg-muted text-muted-foreground hover:text-foreground"
+                                    }`}
+                                  >
+                                    {entry.version}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                          {supportsExt && parsed.entry && (
+                            <div className="flex items-center gap-2">
+                              <Maximize2 className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                              <span className="text-xs text-muted-foreground">Context</span>
+                              <div className="ml-auto flex gap-1">
+                                {contextSizes.map((opt) => (
+                                  <button
+                                    key={opt.value}
+                                    onClick={() => onSetModel(valueForEntry(parsed.entry!, opt.value === "1m"))}
+                                    className={`rounded px-2 py-0.5 text-xs transition-colors ${
+                                      (opt.value === "1m") === parsed.extended
+                                        ? "bg-primary text-primary-foreground"
+                                        : "bg-muted text-muted-foreground hover:text-foreground"
+                                    }`}
+                                  >
+                                    {opt.label}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                          {allowed.size > 0 && (
+                            <div className="space-y-2 pt-1">
+                              <div className="flex items-center gap-2">
+                                <Brain className="h-3.5 w-3.5 text-muted-foreground" />
+                                <span className="text-xs font-medium text-foreground">Thinking</span>
+                              </div>
+                              <div className="flex flex-wrap p-0.5 bg-muted rounded-lg">
+                                {visibleLevels.map((opt) => (
+                                  <button
+                                    key={opt.value}
+                                    onClick={() => onSetThinking(opt.value)}
+                                    className={`px-3 py-1 text-xs rounded-md transition-colors ${
+                                      thinkingLevel === opt.value
+                                        ? "bg-primary text-primary-foreground shadow-sm"
+                                        : "text-muted-foreground hover:text-foreground"
+                                    }`}
+                                  >
+                                    {opt.label}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Runtime tab */}
+                      {settingsTab === "runtime" && (
+                        <div className="space-y-5">
+                          <div className="flex items-center gap-2">
+                            <Terminal className="h-3.5 w-3.5 text-muted-foreground" />
+                            <span className="text-xs text-muted-foreground">Agent harness:</span>
+                            <span className="text-xs font-medium text-foreground">Claude Code</span>
+                          </div>
+
+                          {onSetRuntime && (
+                            <div className="space-y-2">
+                              <div className="flex items-center gap-2">
+                                <Zap className="h-3.5 w-3.5 text-muted-foreground" />
+                                <span className="text-xs font-medium text-foreground">Backend</span>
+                              </div>
+                              <div className="flex flex-wrap p-0.5 bg-muted rounded-lg">
                                 <button
-                                  key={opt.value}
-                                  onClick={() => onSetModel(valueForAlias(opt.value, parsed.extended && opt.value !== "haiku"))}
-                                  className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs transition-colors ${
-                                    selected ? "bg-primary/10 text-primary" : "hover:bg-muted text-foreground"
+                                  onClick={() => onSetRuntime("pty")}
+                                  className={`px-3 py-1 text-xs rounded-md transition-colors ${
+                                    currentRuntime === "pty"
+                                      ? "bg-primary text-primary-foreground shadow-sm"
+                                      : "text-muted-foreground hover:text-foreground"
                                   }`}
                                 >
-                                  <div className="w-3 shrink-0">{selected && <Check className="h-3 w-3" />}</div>
-                                  <span className="font-mono font-medium">{opt.label}</span>
-                                  {entry && <span className="text-muted-foreground ml-auto">{entry.modelId}</span>}
+                                  PTY
                                 </button>
-                              );
-                            })}
-                            {showVRow && (
-                              <div className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs">
-                                <Layers className="h-3.5 w-3.5 text-muted-foreground" />
-                                <span className="text-muted-foreground">Version</span>
-                                <div className="ml-auto flex gap-1">
-                                  {vEntries.map((entry) => (
-                                    <button
-                                      key={entry.modelId}
-                                      onClick={() => onSetModel(valueForEntry(entry, parsed.extended && entry.supportsExtendedContext))}
-                                      className={`rounded px-2 py-0.5 text-xs transition-colors ${
-                                        parsed.entry?.modelId === entry.modelId
-                                          ? "bg-primary text-primary-foreground"
-                                          : "bg-muted text-muted-foreground hover:text-foreground"
-                                      }`}
-                                    >
-                                      {entry.version}
-                                    </button>
-                                  ))}
-                                </div>
+                                <button
+                                  onClick={() => onSetRuntime("stream")}
+                                  className={`px-3 py-1 text-xs rounded-md transition-colors ${
+                                    currentRuntime === "stream"
+                                      ? "bg-primary text-primary-foreground shadow-sm"
+                                      : "text-muted-foreground hover:text-foreground"
+                                  }`}
+                                >
+                                  Stream
+                                </button>
                               </div>
-                            )}
-                            {supportsExt && parsed.entry && (
-                              <div className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs">
-                                <Maximize2 className="h-3.5 w-3.5 text-muted-foreground" />
-                                <span className="text-muted-foreground">Context</span>
-                                <div className="ml-auto flex gap-1">
-                                  {contextSizes.map((opt) => (
-                                    <button
-                                      key={opt.value}
-                                      onClick={() => onSetModel(valueForEntry(parsed.entry!, opt.value === "1m"))}
-                                      className={`rounded px-2 py-0.5 text-xs transition-colors ${
-                                        (opt.value === "1m") === parsed.extended
-                                          ? "bg-primary text-primary-foreground"
-                                          : "bg-muted text-muted-foreground hover:text-foreground"
-                                      }`}
-                                    >
-                                      {opt.label}
-                                    </button>
-                                  ))}
-                                </div>
-                              </div>
-                            )}
-                          </>
-                        ) : (
-                          (() => {
-                            const provider = providers?.find((p) => p.id === viewProvider);
-                            if (!provider) return null;
-                            return (
-                              <div className="space-y-1">
-                                {provider.models.map((model) => {
-                                  const selected = currentModel === model.modelId;
-                                  return (
-                                    <button
-                                      key={model.modelId}
-                                      onClick={() => onSetModel(model.modelId)}
-                                      className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs transition-colors ${
-                                        selected ? "bg-primary/10 text-primary" : "hover:bg-muted text-foreground"
-                                      }`}
-                                    >
-                                      <div className="w-3 shrink-0">{selected && <Check className="h-3 w-3" />}</div>
-                                      <span className="font-mono font-medium">{model.modelId}</span>
-                                      <span className="text-muted-foreground ml-auto">{model.displayName}</span>
-                                    </button>
-                                  );
-                                })}
-                              </div>
-                            );
-                          })()
-                        )}
-                      </>
-                    );
-                  })()}
-                  {(() => {
-                    const providerEffort = (() => {
-                      if (!providers || !currentModel) return [];
-                      for (const p of providers) {
-                        const m = p.models.find((pm) => pm.modelId === currentModel);
-                        if (m) return m.effortLevels;
-                      }
-                      return [];
-                    })();
-                    const allowed = new Set(providerEffort.length > 0 ? providerEffort : allowedEffortLevels(parsed.entry));
-                    if (allowed.size === 0) return null;
-                    const visible = thinkingLevels.filter((opt) => allowed.has(opt.value));
-                    return (
-                      <div className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs">
-                        <Brain className="h-3.5 w-3.5 text-muted-foreground" />
-                        <span className="text-muted-foreground">Thinking</span>
-                        <div className="ml-auto flex gap-1">
-                          {visible.map((opt) => (
-                            <button
-                              key={opt.value}
-                              onClick={() => onSetThinking(opt.value)}
-                              className={`rounded px-2 py-0.5 text-xs transition-colors ${
-                                thinkingLevel === opt.value
-                                  ? "bg-primary text-primary-foreground"
-                                  : "bg-muted text-muted-foreground hover:text-foreground"
+                            </div>
+                          )}
+
+                          <button
+                            onClick={() => {
+                              onRestart?.();
+                              setOptionsOpen(false);
+                            }}
+                            className="flex w-full items-center justify-center gap-2 rounded-lg border border-border px-4 py-2.5 text-xs text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
+                          >
+                            <RefreshCw className="h-3.5 w-3.5" />
+                            Restart agent harness
+                          </button>
+
+                          <button
+                            onClick={() => onSetBypass(!bypassActive)}
+                            className="flex w-full items-center justify-between rounded-lg border border-border px-4 py-3 text-xs hover:bg-muted/50 transition-colors"
+                          >
+                            <div className="flex items-center gap-3">
+                              {bypassActive ? (
+                                <ShieldOff className="h-4 w-4 text-orange-500" />
+                              ) : (
+                                <ShieldCheck className="h-4 w-4 text-muted-foreground" />
+                              )}
+                              <span className={bypassActive ? "text-orange-500 font-medium" : "text-muted-foreground"}>
+                                Bypass all permissions
+                              </span>
+                            </div>
+                            <span
+                              className={`inline-flex h-5 w-9 items-center rounded-full transition-colors shrink-0 ${
+                                bypassActive ? "bg-orange-500" : "bg-muted-foreground/30"
                               }`}
                             >
-                              {opt.label}
+                              <span
+                                className={`inline-block h-4 w-4 rounded-full bg-white transition-transform shadow-sm ${
+                                  bypassActive ? "translate-x-4.5" : "translate-x-0.5"
+                                }`}
+                              />
+                            </span>
+                          </button>
+
+                          {initData?.mcpServers && initData.mcpServers.length > 0 && (
+                            <button
+                              onClick={() => setMcpOpen(true)}
+                              className="flex w-full items-center justify-between rounded-lg border border-border px-4 py-3 text-xs hover:bg-muted/50 transition-colors"
+                            >
+                              <div className="flex items-center gap-3">
+                                <Plug className="h-4 w-4 text-muted-foreground" />
+                                <span className="text-muted-foreground">MCP Servers</span>
+                              </div>
+                              <span className="flex items-center gap-1 text-muted-foreground">
+                                {initData.mcpServers.filter((s) => s.status === "connected").length}/{initData.mcpServers.length}
+                                <ChevronRight className="h-3 w-3" />
+                              </span>
                             </button>
-                          ))}
+                          )}
                         </div>
-                      </div>
-                    );
-                  })()}
-                  {onSetRuntime && (
-                    <div className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs">
-                      {currentRuntime === "pty" ? (
-                        <Terminal className="h-3.5 w-3.5 text-muted-foreground" />
-                      ) : (
-                        <Zap className="h-3.5 w-3.5 text-muted-foreground" />
                       )}
-                      <span className="text-muted-foreground">Backend</span>
-                      <div className="ml-auto flex gap-1">
-                        <button
-                          onClick={() => onSetRuntime("pty")}
-                          className={`rounded px-2 py-0.5 text-xs transition-colors ${
-                            currentRuntime === "pty"
-                              ? "bg-primary text-primary-foreground"
-                              : "bg-muted text-muted-foreground hover:text-foreground"
-                          }`}
-                        >
-                          PTY
-                        </button>
-                        <button
-                          onClick={() => onSetRuntime("stream")}
-                          className={`rounded px-2 py-0.5 text-xs transition-colors ${
-                            currentRuntime === "stream"
-                              ? "bg-primary text-primary-foreground"
-                              : "bg-muted text-muted-foreground hover:text-foreground"
-                          }`}
-                        >
-                          Stream
-                        </button>
-                      </div>
                     </div>
-                  )}
-                  <button
-                    onClick={() => onSetBypass(!bypassActive)}
-                    className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs hover:bg-muted transition-colors"
-                  >
-                    {bypassActive ? (
-                      <ShieldOff className="h-3.5 w-3.5 text-orange-500" />
-                    ) : (
-                      <ShieldCheck className="h-3.5 w-3.5 text-muted-foreground" />
-                    )}
-                    <span className={bypassActive ? "text-orange-500 font-medium" : "text-muted-foreground"}>Bypass all permissions</span>
-                    <span
-                      className={`ml-auto inline-flex h-4 w-7 items-center rounded-full transition-colors ${
-                        bypassActive ? "bg-orange-500" : "bg-muted-foreground/30"
-                      }`}
-                    >
-                      <span
-                        className={`inline-block h-3 w-3 rounded-full bg-white transition-transform ${
-                          bypassActive ? "translate-x-3.5" : "translate-x-0.5"
-                        }`}
-                      />
-                    </span>
-                  </button>
-                  {initData?.mcpServers && initData.mcpServers.length > 0 && (
-                    <button
-                      onClick={() => setMcpOpen(true)}
-                      className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs hover:bg-muted transition-colors"
-                    >
-                      <Plug className="h-3.5 w-3.5 text-muted-foreground" />
-                      <span className="text-muted-foreground">MCP Servers</span>
-                      <span className="ml-auto flex items-center gap-1 text-muted-foreground">
-                        {initData.mcpServers.filter((s) => s.status === "connected").length}/{initData.mcpServers.length}
-                        <ChevronRight className="h-3 w-3" />
-                      </span>
-                    </button>
-                  )}
-                  <button
-                    onClick={() => {
-                      onRestart?.();
-                      setOptionsOpen(false);
-                    }}
-                    className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs hover:bg-muted transition-colors"
-                  >
-                    <RefreshCw className="h-3.5 w-3.5 text-muted-foreground" />
-                    <span className="text-muted-foreground">Restart process</span>
-                  </button>
+                  </div>
+
+                  {/* Footer */}
+                  <div className="flex items-center justify-end px-5 py-3 border-t shrink-0">
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => setOptionsOpen(false)}
+                        className="px-3 py-1.5 text-xs rounded-md border border-input text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        onClick={() => setOptionsOpen(false)}
+                        className="px-4 py-1.5 text-xs rounded-md bg-primary text-primary-foreground hover:brightness-110 transition-all"
+                      >
+                        Done
+                      </button>
+                    </div>
+                  </div>
                 </div>
               </div>
             );
