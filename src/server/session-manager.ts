@@ -535,7 +535,7 @@ export class SessionManager {
 
   listActiveSessions(): SessionInfo[] {
     return Array.from(this.sessions.values())
-      .filter((s) => s.process !== null)
+      .filter((s) => s.process !== null || !!s.ptyRuntime?.isAlive)
       .map((s) => s.info);
   }
 

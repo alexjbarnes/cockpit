@@ -123,6 +123,27 @@ describe("SessionManager", () => {
       manager.createSession("/tmp/b");
       expect(manager.listActiveSessions()).toHaveLength(0);
     });
+
+    it("includes PTY sessions with alive ptyRuntime", () => {
+      const session = manager.createSession("/tmp/pty-test", "PTY Test", { runtime: "pty" });
+      // Simulate a PTY session that's running by setting ptyRuntime.isAlive
+      const internal = (manager as any).sessions.get(session.id);
+      internal.ptyRuntime = { isAlive: true };
+      internal.info.status = "running";
+
+      const active = manager.listActiveSessions();
+      expect(active.some((s) => s.id === session.id)).toBe(true);
+      expect(active.find((s) => s.id === session.id)?.status).toBe("running");
+    });
+
+    it("does not include PTY sessions with dead ptyRuntime", () => {
+      const session = manager.createSession("/tmp/pty-test", "PTY Test", { runtime: "pty" });
+      const internal = (manager as any).sessions.get(session.id);
+      internal.ptyRuntime = { isAlive: false };
+
+      const active = manager.listActiveSessions();
+      expect(active.some((s) => s.id === session.id)).toBe(false);
+    });
   });
 
   describe("destroySession", () => {

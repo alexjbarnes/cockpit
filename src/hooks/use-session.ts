@@ -16,6 +16,7 @@ import type {
   TodoItem,
   ToolUse,
 } from "@/types";
+import { applyMessageDone, applyTranscript } from "./message-ordering";
 import { useWebSocket } from "./use-websocket";
 
 export interface PendingPermission {
@@ -311,57 +312,7 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
               break;
             }
           }
-          setMessages((prev) => {
-            const stripAttachments = (s: string) => s.replace(/^\[Attached [^\]]+\]\n*/gm, "").trim();
-            const transcriptUserContent = new Set(transcriptMsgs.filter((m) => m.role === "user").map((m) => stripAttachments(m.content)));
-            const transcriptSystemContent = new Set(transcriptMsgs.filter((m) => m.role === "system").map((m) => m.content));
-            const enrichedById = new Map<string, ChatMessage>();
-            for (const m of transcriptMsgs) {
-              if (m.role !== "user" || m.images?.length) {
-                enrichedById.set(m.id, m);
-                continue;
-              }
-              const stripped = stripAttachments(m.content);
-              const match = prev.find(
-                (p) => p.role === "user" && (p.images?.length || p.documents?.length) && stripAttachments(p.content) === stripped,
-              );
-              enrichedById.set(
-                m.id,
-                match ? { ...m, content: match.content, images: match.images, documents: match.documents, textFiles: match.textFiles } : m,
-              );
-            }
-
-            // Walk prev, replacing transcript messages with enriched versions
-            // while keeping local-only messages (system, optimistic) at their
-            // original positions. Without this, local system messages like
-            // __compacted__ and "Session restarted" get bulk-appended to the
-            // end on every transcript update, making them appear stuck at
-            // the bottom.
-            const result: ChatMessage[] = [];
-            const seen = new Set<string>();
-            for (const msg of prev) {
-              if (enrichedById.has(msg.id)) {
-                if (seen.has(msg.id)) continue;
-                result.push(enrichedById.get(msg.id)!);
-                seen.add(msg.id);
-              } else if (
-                (msg.role === "system" && !transcriptSystemContent.has(msg.content)) ||
-                (msg.id.startsWith("user-") && !transcriptUserContent.has(stripAttachments(msg.content)))
-              ) {
-                result.push(msg);
-                seen.add(msg.id);
-              }
-            }
-
-            // Append any transcript messages not found in prev
-            for (const m of transcriptMsgs) {
-              if (!seen.has(m.id)) {
-                result.push(enrichedById.get(m.id)!);
-              }
-            }
-
-            return result;
-          });
+          setMessages((prev) => applyTranscript(prev, transcriptMsgs));
           break;
         }
 
@@ -596,8 +547,6 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
             setActiveModelId(msg.message.model);
           }
           setMessages((prev) => {
-            const filtered = prev.filter((m) => m.id !== "streaming");
-            if (filtered.some((m) => m.id === msg.message.id)) return filtered;
             const finalMessage = { ...msg.message };
             if (streamedToolUses.length > finalMessage.toolUses.length) {
               finalMessage.toolUses = streamedToolUses;
@@ -606,7 +555,7 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
               finalMessage.blocks = streamedBlocks;
             }
             lastServerMsgIdRef.current = finalMessage.id;
-            return [...filtered, finalMessage];
+            return applyMessageDone(prev, finalMessage);
           });
           break;
         }
