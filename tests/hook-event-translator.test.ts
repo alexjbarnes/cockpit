@@ -10,8 +10,9 @@ describe("translateHookEvent", () => {
         tool_input: { file_path: "/etc/hosts" },
       });
 
-      expect(events).toHaveLength(1);
-      expect(events[0]).toEqual({
+      expect(events).toHaveLength(2);
+      expect(events[0]).toEqual({ type: "system_message", text: "__tool_use_start" });
+      expect(events[1]).toEqual({
         type: "tool_use_start",
         toolName: "Read",
         toolId: "toolu_01ABC",
@@ -22,8 +23,9 @@ describe("translateHookEvent", () => {
     it("falls back to 'unknown' toolName and undefined toolId/empty toolInput when fields are missing", () => {
       const events = translateHookEvent("PreToolUse", {});
 
-      expect(events).toHaveLength(1);
-      expect(events[0]).toEqual({
+      expect(events).toHaveLength(2);
+      expect(events[0]).toEqual({ type: "system_message", text: "__tool_use_start" });
+      expect(events[1]).toEqual({
         type: "tool_use_start",
         toolName: "unknown",
         toolId: undefined,
@@ -38,10 +40,10 @@ describe("translateHookEvent", () => {
         tool_input: {},
       });
 
-      expect(events).toHaveLength(2);
-      expect(events[0].type).toBe("tool_use_start");
-      expect(events[0]).toMatchObject({ toolName: "EnterPlanMode", toolId: "toolu_plan" });
-      expect(events[1]).toEqual({
+      expect(events).toHaveLength(3);
+      expect(events[0]).toEqual({ type: "system_message", text: "__tool_use_start" });
+      expect(events[1]).toMatchObject({ type: "tool_use_start", toolName: "EnterPlanMode", toolId: "toolu_plan" });
+      expect(events[2]).toEqual({
         type: "system_message",
         text: "__permission_mode::plan",
       });

@@ -15,12 +15,15 @@ export interface PermissionDecision {
   updatedInput?: Record<string, unknown>;
 }
 
+type HookCallbackReturn = Promise<HookResponse | undefined> | HookResponse | undefined;
+type HookCallback = (payload: Record<string, unknown>) => HookCallbackReturn;
+
 export interface SessionHookHandler {
-  onPreToolUse?: (payload: Record<string, unknown>) => Promise<HookResponse | void> | HookResponse | void;
-  onPostToolUse?: (payload: Record<string, unknown>) => Promise<HookResponse | void> | HookResponse | void;
-  onStop?: (payload: Record<string, unknown>) => Promise<HookResponse | void> | HookResponse | void;
-  onUserPromptSubmit?: (payload: Record<string, unknown>) => Promise<HookResponse | void> | HookResponse | void;
-  onNotification?: (payload: Record<string, unknown>) => Promise<HookResponse | void> | HookResponse | void;
+  onPreToolUse?: HookCallback;
+  onPostToolUse?: HookCallback;
+  onStop?: HookCallback;
+  onUserPromptSubmit?: HookCallback;
+  onNotification?: HookCallback;
   /** Must resolve with the permission decision. The promise can take as long as needed. */
   onPermissionRequest?: (payload: Record<string, unknown>) => Promise<PermissionDecision>;
 }
