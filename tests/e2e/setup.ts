@@ -1,6 +1,6 @@
 // Shared test harness: start mock API server + Cockpit + Playwright browser
 
-import { type ChildProcess, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { type Browser, chromium, type Page } from "@playwright/test";
 import { createMockApiServer, type MockApiServer } from "../mock-api/server";
 import { E2E_COCKPIT_TOKEN, restoreProviders, setupTestProvider } from "./fixtures";
@@ -11,7 +11,7 @@ export interface E2EContext {
   mockApi: MockApiServer;
   page: Page;
   browser: Browser;
-  cockpitProcess: ChildProcess;
+  cockpitProcess: { kill(signal: string): void };
 }
 
 export async function setupE2E(): Promise<E2EContext> {
@@ -19,18 +19,25 @@ export async function setupE2E(): Promise<E2EContext> {
 
   setupTestProvider(mockApi.port);
 
-  const cockpitProcess = spawn("npx", ["next", "dev", "-p", String(COCKPIT_PORT)], {
-    env: {
-      ...process.env,
-      COCKPIT_TOKEN: E2E_COCKPIT_TOKEN,
-      PORT: String(COCKPIT_PORT),
-    },
+  const env: Record<string, string> = {};
+  for (const [k, v] of Object.entries(process.env)) {
+    if (k !== "NODE_ENV" && v != null) env[k] = v;
+  }
+  env.COCKPIT_TOKEN = E2E_COCKPIT_TOKEN;
+  env.PORT = String(COCKPIT_PORT);
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const cockpitProcess: any = spawn("npx", ["next", "dev", "-p", String(COCKPIT_PORT)], {
+    env: env as typeof process.env,
     stdio: "pipe",
     shell: true,
   });
 
+  cockpitProcess.stdout.on("data", (d: Buffer) => process.stdout.write(`[cockpit] ${d}`));
+  cockpitProcess.stderr.on("data", (d: Buffer) => process.stderr.write(`[cockpit:err] ${d}`));
+
   // Wait for Cockpit to be ready
-  await waitForServer(`http://localhost:${COCKPIT_PORT}/api/health`, 60_000);
+  await waitForServer(`http://localhost:${COCKPIT_PORT}/api/health`, 120_000);
 
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext();
