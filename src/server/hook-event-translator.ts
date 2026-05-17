@@ -26,7 +26,7 @@ export function translateHookEvent(eventName: HookEventName, payload: Record<str
     case "Notification":
       return translateNotification(payload);
     case "UserPromptSubmit":
-      return [{ type: "system_message", text: "__user_prompt_submit" }];
+      return [];
   }
 }
 
@@ -40,6 +40,10 @@ function translatePreToolUse(payload: Record<string, unknown>): ParsedEvent[] {
   const toolInput = payload.tool_input as Record<string, unknown> | undefined;
   const toolId = stringOr(payload.tool_use_id, "");
   const events: ParsedEvent[] = [
+    {
+      type: "system_message",
+      text: "__tool_use_start",
+    },
     {
       type: "tool_use_start",
       toolName,

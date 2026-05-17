@@ -1363,9 +1363,9 @@ export class SessionManager {
     }
 
     for (const sysMsg of result.systemMessages) {
-      if (sysMsg === "__user_prompt_submit") {
+      if (sysMsg === "__tool_use_start") {
         session.info.status = "running";
-        console.log(`[sm] emit status running (via __user_prompt_submit) for ${sessionId.slice(0, 8)} (runtime=${session.runtime})`);
+        console.log(`[sm] emit status running (via tool_use_start) for ${sessionId.slice(0, 8)} (runtime=${session.runtime})`);
         session.emitter.emit("status", sessionId, "running");
         continue;
       }
