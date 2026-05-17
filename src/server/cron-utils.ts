@@ -6,6 +6,8 @@ interface CronFields {
   dayOfMonth: number[];
   month: number[];
   dayOfWeek: number[];
+  domWild: boolean;
+  dowWild: boolean;
 }
 
 function parseField(field: string, min: number, max: number): number[] {
@@ -40,6 +42,8 @@ function parseCron(expression: string): CronFields {
     dayOfMonth: parseField(parts[2], 1, 31),
     month: parseField(parts[3], 1, 12),
     dayOfWeek: parseField(parts[4], 0, 6),
+    domWild: parts[2] === "*",
+    dowWild: parts[4] === "*",
   };
 }
 
@@ -51,13 +55,18 @@ export function matchesCron(expression: string, date: Date): boolean {
   const month = date.getMonth() + 1;
   const dow = date.getDay();
 
-  return (
-    fields.minute.includes(minute) &&
-    fields.hour.includes(hour) &&
-    fields.dayOfMonth.includes(dom) &&
-    fields.month.includes(month) &&
-    fields.dayOfWeek.includes(dow)
-  );
+  let dayMatch: boolean;
+  if (fields.domWild && fields.dowWild) {
+    dayMatch = true;
+  } else if (fields.domWild) {
+    dayMatch = fields.dayOfWeek.includes(dow);
+  } else if (fields.dowWild) {
+    dayMatch = fields.dayOfMonth.includes(dom);
+  } else {
+    dayMatch = fields.dayOfMonth.includes(dom) || fields.dayOfWeek.includes(dow);
+  }
+
+  return fields.minute.includes(minute) && fields.hour.includes(hour) && dayMatch && fields.month.includes(month);
 }
 
 export function simpleScheduleToCron(schedule: SimpleSchedule): string {

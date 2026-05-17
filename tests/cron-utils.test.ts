@@ -73,6 +73,41 @@ describe("matchesCron", () => {
   it("throws on invalid cron expression", () => {
     expect(() => matchesCron("* * *", new Date())).toThrow("expected 5 fields");
   });
+
+  it("uses OR when both day-of-month and day-of-week are non-wildcard", () => {
+    // Standard cron: when both DOM and DOW are specified, match if EITHER is true
+    // "0 9 15 * 2" = "at 9:00 on the 15th OR on Tuesdays"
+
+    // May 19, 2026 is Tuesday - should match via DOW even though not the 15th
+    const tuesday = new Date(2026, 4, 19, 9, 0, 0);
+    expect(matchesCron("0 9 15 * 2", tuesday)).toBe(true);
+
+    // May 15, 2026 is Friday - should match via DOM even though not Tuesday
+    const fifteenth = new Date(2026, 4, 15, 9, 0, 0);
+    expect(matchesCron("0 9 15 * 2", fifteenth)).toBe(true);
+
+    // May 14, 2026 is Thursday, not the 15th - should NOT match
+    const neither = new Date(2026, 4, 14, 9, 0, 0);
+    expect(matchesCron("0 9 15 * 2", neither)).toBe(false);
+  });
+
+  it("still requires day-of-month when day-of-week is wildcard", () => {
+    const fifteenth = new Date(2026, 4, 15, 9, 0, 0);
+    expect(matchesCron("0 9 15 * *", fifteenth)).toBe(true);
+
+    const sixteenth = new Date(2026, 4, 16, 9, 0, 0);
+    expect(matchesCron("0 9 15 * *", sixteenth)).toBe(false);
+  });
+
+  it("still requires day-of-week when day-of-month is wildcard", () => {
+    // May 19, 2026 is Tuesday
+    const tuesday = new Date(2026, 4, 19, 9, 0, 0);
+    expect(matchesCron("0 9 * * 2", tuesday)).toBe(true);
+
+    // May 20, 2026 is Wednesday
+    const wednesday = new Date(2026, 4, 20, 9, 0, 0);
+    expect(matchesCron("0 9 * * 2", wednesday)).toBe(false);
+  });
 });
 
 describe("simpleScheduleToCron", () => {

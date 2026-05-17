@@ -292,6 +292,7 @@ export class JobScheduler {
 
     const toolTracker = new Map<string, JobRunToolUse>();
     let lastAssistantText = "";
+    const enabledServers = new Set(job.mcpServers || []);
 
     const unsubEvent = this.sessionManager.subscribe(sessionId, (event) => {
       if (event.type === "tool_use_start" && event.toolId) {
@@ -344,7 +345,6 @@ export class JobScheduler {
       }
     });
 
-    const enabledServers = new Set(job.mcpServers || []);
     const initCleanup = this.sessionManager.onInit(sessionId, (initData) => {
       for (const server of initData.mcpServers) {
         if (!enabledServers.has(server.name)) {
@@ -409,7 +409,7 @@ export class JobScheduler {
 
         saveRun(run);
 
-        if (job.inboxOutput && lastAssistantText) {
+        if (job.inboxOutput && lastAssistantText && finalStatus === "success") {
           const inbox = parseInboxBlock(lastAssistantText);
           if (inbox) {
             addInboxMessage({ ...inbox, jobId: job.id, jobName: job.name, runId: run.id, notifyProviders: job.notifyProviders });

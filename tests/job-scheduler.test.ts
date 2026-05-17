@@ -32,7 +32,7 @@ vi.mock("node:fs", async () => {
   return { ...actual, mkdirSync: vi.fn() };
 });
 
-import { addInboxMessage, parseErrorBlock } from "@/server/inbox";
+import { addInboxMessage, parseErrorBlock, parseInboxBlock } from "@/server/inbox";
 import { acquireJobLock, releaseJobLock } from "@/server/job-lock";
 import { JobScheduler } from "@/server/job-scheduler";
 import { loadJobs, loadRuns, saveRun } from "@/server/job-storage";
@@ -956,6 +956,38 @@ describe("inbox output on success", () => {
 
     await promise;
     expect(vi.mocked(addInboxMessage)).not.toHaveBeenCalled();
+  });
+});
+
+describe("inbox suppression on cockpit-error reclassification", () => {
+  let sm: ReturnType<typeof makeMockSessionManager>;
+  let scheduler: JobScheduler;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    sm = makeMockSessionManager();
+    scheduler = new JobScheduler(sm as any);
+  });
+
+  it("does not send inbox output when job is reclassified as failure via cockpit-error", async () => {
+    vi.mocked(parseErrorBlock).mockReturnValue({ error: "Task failed", details: "No access" });
+    vi.mocked(parseInboxBlock).mockReturnValue({ title: "Report", body: "Stale data", priority: "info" });
+
+    const job = makeJob({ inboxOutput: true });
+    const promise = scheduler.executeJob(job);
+    await vi.waitFor(() => expect(sm.sendMessage).toHaveBeenCalled());
+
+    sm.emitEvent({
+      type: "message_done",
+      message: { content: "```cockpit-error\n{}\n```\n```cockpit-inbox\n{}\n```" },
+    });
+    sm.emitStatus("idle");
+
+    const run = await promise;
+    expect(run.status).toBe("failure");
+    const inboxCalls = vi.mocked(addInboxMessage).mock.calls;
+    expect(inboxCalls).toHaveLength(1);
+    expect(inboxCalls[0][0]).toEqual(expect.objectContaining({ title: "Job failed: Test Job" }));
   });
 });
 
