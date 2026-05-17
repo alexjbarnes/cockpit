@@ -81,7 +81,6 @@ vi.mock("@/server/transcript-watcher", () => {
   class MockTranscriptWatcher {
     start = vi.fn();
     stop = vi.fn();
-    constructor(_cliSessionId: string, _cwd: string, _onTranscript: unknown) {}
   }
   return { TranscriptWatcher: MockTranscriptWatcher };
 });
