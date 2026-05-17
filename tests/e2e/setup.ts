@@ -46,11 +46,20 @@ export async function setupE2E(): Promise<E2EContext> {
   return { mockApi, browser, page, cockpitProcess };
 }
 
-export async function teardownE2E(ctx: E2EContext): Promise<void> {
-  await ctx.page.context().close();
-  await ctx.browser.close();
-  ctx.cockpitProcess.kill("SIGTERM");
-  await ctx.mockApi.stop();
+export async function teardownE2E(ctx?: E2EContext): Promise<void> {
+  if (!ctx) return;
+  try {
+    await ctx.page.context().close();
+  } catch {}
+  try {
+    await ctx.browser.close();
+  } catch {}
+  try {
+    ctx.cockpitProcess.kill("SIGTERM");
+  } catch {}
+  try {
+    await ctx.mockApi.stop();
+  } catch {}
   restoreProviders();
 }
 
