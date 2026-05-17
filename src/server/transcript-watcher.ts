@@ -16,7 +16,7 @@ export class TranscriptWatcher {
   constructor(
     private readonly sessionId: string,
     private readonly cwd: string,
-    private readonly onUpdate: (messages: ChatMessage[]) => void,
+    private readonly onUpdate: (messages: ChatMessage[], lastUsage: { used: number; total: number } | null) => void,
   ) {
     this.filePath = getTranscriptPath(sessionId, cwd);
   }
@@ -78,7 +78,7 @@ export class TranscriptWatcher {
       const result = await loadTranscript(this.sessionId, this.cwd, { tailLines: 150 });
       if (result.totalSize !== this.lastSize) {
         this.lastSize = result.totalSize;
-        this.onUpdate(result.messages);
+        this.onUpdate(result.messages, result.lastUsage);
       }
     } catch {
       if (!this.stopped) {

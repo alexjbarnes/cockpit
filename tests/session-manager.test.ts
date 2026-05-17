@@ -52,6 +52,40 @@ vi.mock("@/server/defaults", () => ({
   }),
 }));
 
+let capturedPtyOpts: Record<string, unknown> | null = null;
+vi.mock("@/server/pty-runtime", () => {
+  class MockPtyRuntime {
+    isAlive = true;
+    pid = 12345;
+    start = vi.fn().mockResolvedValue(undefined);
+    kill = vi.fn().mockResolvedValue(undefined);
+    sendText = vi.fn().mockResolvedValue(undefined);
+    interrupt = vi.fn();
+    notifyPermissionDecision = vi.fn();
+    constructor(opts: Record<string, unknown>) {
+      capturedPtyOpts = opts;
+    }
+  }
+  return { PtyRuntime: MockPtyRuntime };
+});
+
+vi.mock("@/server/singleton", () => ({
+  getHookRouter: vi.fn(() => ({
+    register: vi.fn(),
+    unregister: vi.fn(),
+  })),
+  getSessionManager: vi.fn(),
+}));
+
+vi.mock("@/server/transcript-watcher", () => {
+  class MockTranscriptWatcher {
+    start = vi.fn();
+    stop = vi.fn();
+    constructor(_cliSessionId: string, _cwd: string, _onTranscript: unknown) {}
+  }
+  return { TranscriptWatcher: MockTranscriptWatcher };
+});
+
 import { SessionManager } from "@/server/session-manager";
 
 describe("SessionManager", () => {
@@ -3665,6 +3699,53 @@ describe("SessionManager", () => {
 
       firstProc.emit("close", 0, null);
       expect(s.process).toBe(fakeNewProcess);
+    });
+  });
+
+  describe("PTY onExit cleanup", () => {
+    it("clears compacting flag when PTY exits mid-compact", async () => {
+      const session = manager.createSession("/tmp/pty-test", "PTY", { runtime: "pty" });
+      const s = (manager as any).sessions.get(session.id)!;
+      const emitted: string[] = [];
+      s.emitter.on("system", (_id: string, text: string) => emitted.push(text));
+
+      // Trigger spawnPtyProcess via sendMessage
+      capturedPtyOpts = null;
+      manager.sendMessage(session.id, "hello");
+      await vi.waitFor(() => expect(capturedPtyOpts).not.toBeNull());
+
+      // Set compacting flag as if /compact was in flight
+      s.compacting = true;
+
+      // Trigger the real onExit callback
+      const onExit = capturedPtyOpts!.onExit as (info: { exitCode: number; signal?: number }) => void;
+      onExit({ exitCode: 0 });
+
+      expect(s.compacting).toBe(false);
+      expect(emitted).toContain("__compact::done");
+    });
+
+    it("clears completed todos when PTY exits", async () => {
+      const session = manager.createSession("/tmp/pty-test", "PTY", { runtime: "pty" });
+      const s = (manager as any).sessions.get(session.id)!;
+      const todosEmitted: Array<unknown[]> = [];
+      s.emitter.on("todos", (_id: string, todos: unknown[]) => todosEmitted.push(todos));
+
+      capturedPtyOpts = null;
+      manager.sendMessage(session.id, "hello");
+      await vi.waitFor(() => expect(capturedPtyOpts).not.toBeNull());
+
+      // Add completed todos
+      s.todoItems = [
+        { id: "1", content: "task 1", status: "completed" },
+        { id: "2", content: "task 2", status: "completed" },
+      ];
+
+      const onExit = capturedPtyOpts!.onExit as (info: { exitCode: number; signal?: number }) => void;
+      onExit({ exitCode: 0 });
+
+      expect(s.todoItems).toEqual([]);
+      expect(todosEmitted.some((t) => t.length === 0)).toBe(true);
     });
   });
 });

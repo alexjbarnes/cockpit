@@ -2231,6 +2231,24 @@ Additional Cockpit rules beyond the CLI's defaults:
         }
         session.info.status = "idle";
         session.emitter.emit("status", sessionId, "idle");
+
+        if (session.compacting) {
+          logDiag(sessionId, "compact:done-on-pty-exit");
+          session.compacting = false;
+          this.emitSystem(session, sessionId, "__compact::done");
+          const postCompactEstimate: ContextUsage = {
+            used: Math.round(session.contextWindowSize * 0.1),
+            total: session.contextWindowSize,
+          };
+          session.contextUsage = postCompactEstimate;
+          session.emitter.emit("usage", sessionId, postCompactEstimate);
+        }
+
+        if (session.todoItems.length > 0 && session.todoItems.every((t) => t.status === "completed")) {
+          session.todoItems = [];
+          session.emitter.emit("todos", sessionId, []);
+        }
+
         if (!streamState.flushedOnMessageDone) {
           this.flushQueuedMessage(session, sessionId);
         }
@@ -2245,8 +2263,12 @@ Additional Cockpit rules beyond the CLI's defaults:
     session.attachmentPaths.push(...attachments);
     const ptyText = text ? this.buildPtyText(text, attachments) : text;
 
-    const watcher = new TranscriptWatcher(session.cliSessionId, session.info.cwd, (messages) => {
+    const watcher = new TranscriptWatcher(session.cliSessionId, session.info.cwd, (messages, lastUsage) => {
       session.emitter.emit("transcript", sessionId, messages);
+      if (lastUsage) {
+        session.contextUsage = lastUsage;
+        session.emitter.emit("usage", sessionId, lastUsage);
+      }
     });
     session.transcriptWatcher = watcher;
 

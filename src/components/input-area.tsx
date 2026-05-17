@@ -953,20 +953,18 @@ export function InputArea({
                           )}
 
                           {allowed.size > 0 && (
-                            <div className="space-y-2 pt-1">
-                              <div className="flex items-center gap-2">
-                                <Brain className="h-3.5 w-3.5 text-muted-foreground" />
-                                <span className="text-xs font-medium text-foreground">Thinking</span>
-                              </div>
-                              <div className="flex flex-wrap p-0.5 bg-muted rounded-lg">
+                            <div className="flex items-center gap-2">
+                              <Brain className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                              <span className="text-xs text-muted-foreground">Thinking</span>
+                              <div className="ml-auto flex gap-1">
                                 {visibleLevels.map((opt) => (
                                   <button
                                     key={opt.value}
                                     onClick={() => onSetThinking(opt.value)}
-                                    className={`px-3 py-1 text-xs rounded-md transition-colors ${
+                                    className={`rounded px-2 py-0.5 text-xs transition-colors ${
                                       thinkingLevel === opt.value
-                                        ? "bg-primary text-primary-foreground shadow-sm"
-                                        : "text-muted-foreground hover:text-foreground"
+                                        ? "bg-primary text-primary-foreground"
+                                        : "bg-muted text-muted-foreground hover:text-foreground"
                                     }`}
                                   >
                                     {opt.label}
@@ -988,19 +986,17 @@ export function InputArea({
                           </div>
 
                           {onSetRuntime && (
-                            <div className="space-y-2">
-                              <div className="flex items-center gap-2">
-                                <Zap className="h-3.5 w-3.5 text-muted-foreground" />
-                                <span className="text-xs font-medium text-foreground">Backend</span>
-                              </div>
-                              <div className="flex flex-wrap p-0.5 bg-muted rounded-lg">
+                            <div className="flex items-center gap-2">
+                              <Zap className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                              <span className="text-xs text-muted-foreground">Backend</span>
+                              <div className="ml-auto flex gap-1">
                                 <button
                                   onClick={() => onSetRuntime("pty")}
                                   data-testid="runtime-pty"
-                                  className={`px-3 py-1 text-xs rounded-md transition-colors ${
+                                  className={`rounded px-2 py-0.5 text-xs transition-colors ${
                                     currentRuntime === "pty"
-                                      ? "bg-primary text-primary-foreground shadow-sm"
-                                      : "text-muted-foreground hover:text-foreground"
+                                      ? "bg-primary text-primary-foreground"
+                                      : "bg-muted text-muted-foreground hover:text-foreground"
                                   }`}
                                 >
                                   PTY
@@ -1008,10 +1004,10 @@ export function InputArea({
                                 <button
                                   onClick={() => onSetRuntime("stream")}
                                   data-testid="runtime-stream"
-                                  className={`px-3 py-1 text-xs rounded-md transition-colors ${
+                                  className={`rounded px-2 py-0.5 text-xs transition-colors ${
                                     currentRuntime === "stream"
-                                      ? "bg-primary text-primary-foreground shadow-sm"
-                                      : "text-muted-foreground hover:text-foreground"
+                                      ? "bg-primary text-primary-foreground"
+                                      : "bg-muted text-muted-foreground hover:text-foreground"
                                   }`}
                                 >
                                   Stream
