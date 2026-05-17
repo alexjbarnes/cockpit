@@ -357,7 +357,16 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
         const { sessionId, status } = msg;
         // Accept status updates for any session we're showing (pinned or running)
         const known = new Set(sessions.map((s) => s.id));
-        if (!known.has(sessionId)) return;
+        if (!known.has(sessionId)) {
+          console.log(
+            "[sidebar] status update for unknown session",
+            sessionId.slice(0, 8),
+            "known:",
+            [...known].map((s) => s.slice(0, 8)),
+          );
+          return;
+        }
+        console.log("[sidebar] status updated", sessionId.slice(0, 8), "->", status);
 
         const prev = prevStatusRef.current.get(sessionId);
         prevStatusRef.current.set(sessionId, status);
@@ -371,7 +380,11 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
       } else if (msg.type === "session:pending") {
         const { sessionId, count } = msg;
         const known = new Set(sessions.map((s) => s.id));
-        if (!known.has(sessionId)) return;
+        if (!known.has(sessionId)) {
+          console.log("[sidebar] pending update for unknown session", sessionId.slice(0, 8));
+          return;
+        }
+        console.log("[sidebar] pending updated", sessionId.slice(0, 8), "->", count);
         setSessions((list) => list.map((s) => (s.id === sessionId ? { ...s, pendingRequestCount: count } : s)));
       } else if (msg.type === "session:info_updated") {
         const { sessionId, info } = msg;

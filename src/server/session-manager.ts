@@ -636,7 +636,10 @@ export class SessionManager {
 
   onStatus(id: string, listener: (status: "idle" | "running") => void): (() => void) | null {
     const session = this.sessions.get(id);
-    if (!session) return null;
+    if (!session) {
+      smLog(id, "onStatus: session not in memory, returning null");
+      return null;
+    }
 
     const handler = (_sessionId: string, status: "idle" | "running") => {
       listener(status);
@@ -1362,6 +1365,7 @@ export class SessionManager {
     for (const sysMsg of result.systemMessages) {
       if (sysMsg === "__user_prompt_submit") {
         session.info.status = "running";
+        console.log(`[sm] emit status running (via __user_prompt_submit) for ${sessionId.slice(0, 8)} (runtime=${session.runtime})`);
         session.emitter.emit("status", sessionId, "running");
         continue;
       }
@@ -1459,6 +1463,7 @@ export class SessionManager {
 
     if (result.statusChange === "idle") {
       session.info.status = "idle";
+      console.log(`[sm] emit status idle for ${sessionId.slice(0, 8)} (runtime=${session.runtime})`);
       session.emitter.emit("status", sessionId, "idle");
       this.flushQueuedMessage(session, sessionId);
     }
@@ -1859,6 +1864,7 @@ Additional Cockpit rules beyond the CLI's defaults:
       ptyAlive: !!session.ptyRuntime?.isAlive,
     });
     session.info.status = "running";
+    console.log(`[sm] emit status running for ${sessionId.slice(0, 8)} (runtime=${session.runtime})`);
     session.emitter.emit("status", sessionId, "running");
 
     if (session.runtime === "pty" && session.ptyRuntime?.isAlive) {

@@ -184,6 +184,7 @@ export function createWebSocketHandler(
       if (unsubEvent) cleanups.push(unsubEvent);
 
       const unsubStatus = sessionManager.onStatus(sessionId, (status) => {
+        console.log(`[ws] onStatus fired: ${sessionId.slice(0, 8)} -> ${status}`);
         logStatus(sessionId, status);
         send(ws, { type: "session:status", sessionId, status });
       });
@@ -741,9 +742,14 @@ export function createWebSocketHandler(
 
           for (const id of msg.sessionIds) {
             const unsubStatus = sessionManager.onStatus(id, (status) => {
+              console.log(`[ws] onStatus (watch) fired: ${id.slice(0, 8)} -> ${status}`);
               send(ws, { type: "session:status", sessionId: id, status });
             });
-            if (unsubStatus) watchCleanups.push(unsubStatus);
+            if (unsubStatus) {
+              watchCleanups.push(unsubStatus);
+            } else {
+              console.log(`[ws] session:subscribe onStatus returned null for ${id.slice(0, 8)}`);
+            }
 
             const unsubPending = sessionManager.onPending(id, (count) => {
               send(ws, { type: "session:pending", sessionId: id, count });
