@@ -126,6 +126,7 @@ export function createWebSocketHandler(
 
   server.on("upgrade", (req: IncomingMessage, socket: Duplex, head: Buffer) => {
     const url = req.url || "";
+    console.log(`[ws] upgrade: ${url}`);
 
     if (url.startsWith("/ws/terminal")) {
       const token = extractTokenFromQuery(url);
@@ -141,16 +142,19 @@ export function createWebSocketHandler(
     }
 
     if (!url.startsWith("/ws")) {
+      console.log(`[ws] upgrade: ignoring non-ws url: ${url}`);
       return;
     }
 
     const token = extractTokenFromQuery(url);
     if (!token || !validateSession(token)) {
+      console.log(`[ws] upgrade: auth failed for ${url} (token=${token?.slice(0, 10)}...)`);
       socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
       socket.destroy();
       return;
     }
 
+    console.log(`[ws] upgrade: accepted for ${url}`);
     wss.handleUpgrade(req, socket, head, (ws) => {
       wss.emit("connection", ws, req);
     });
