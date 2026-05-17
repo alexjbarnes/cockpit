@@ -102,11 +102,16 @@ export async function POST(req: NextRequest) {
   const name = body.name as string | undefined;
   const runtimeRaw = body.runtime as string | undefined;
   const runtime = runtimeRaw === "pty" || runtimeRaw === "stream" ? runtimeRaw : undefined;
+  const model = typeof body.model === "string" ? body.model : undefined;
+  const bypassPermissions = body.bypassPermissions === true;
 
   if (!cwd) {
     return NextResponse.json({ error: "cwd is required" }, { status: 400 });
   }
 
-  const session = getSessionManager().createSession(cwd, name, runtime ? { runtime } : undefined);
+  const session = getSessionManager().createSession(cwd, name, { runtime, bypassPermissions: bypassPermissions || undefined });
+  if (model) {
+    getSessionManager().setModel(session.id, model);
+  }
   return NextResponse.json({ sessionId: session.id });
 }
