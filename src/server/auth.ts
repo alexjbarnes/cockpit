@@ -64,6 +64,7 @@ function getStoredPassword(): StoredPassword | null {
 }
 
 export function needsSetup(): boolean {
+  if (process.env.COCKPIT_TOKEN) return false;
   return getStoredPassword() === null;
 }
 
