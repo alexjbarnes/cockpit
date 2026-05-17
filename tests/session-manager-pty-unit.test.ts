@@ -460,6 +460,15 @@ describe("SessionManager PTY runtime (unit)", () => {
       expect(msgs.some((m) => m.includes("Model"))).toBe(true);
     });
 
+    it("/status shows plan mode suffix when plan mode is active", () => {
+      const session = manager.createSession("/tmp", undefined, { runtime: "pty" });
+      const msgs: string[] = [];
+      manager.onSystem(session.id, (m) => msgs.push(m));
+      manager.setPlanMode(session.id);
+      expect(manager.sendMessage(session.id, "/status")).toBe(true);
+      expect(msgs.some((m) => m.includes("[plan]"))).toBe(true);
+    });
+
     it("intercepts dialog commands with warning in PTY mode", () => {
       const session = manager.createSession("/tmp", undefined, { runtime: "pty" });
       manager.sendMessage(session.id, "hello");
@@ -467,6 +476,14 @@ describe("SessionManager PTY runtime (unit)", () => {
       manager.onSystem(session.id, (m) => msgs.push(m));
       expect(manager.sendMessage(session.id, "/config")).toBe(true);
       expect(msgs.some((m) => m.includes("interactive CLI dialog"))).toBe(true);
+    });
+
+    it("passes dialog commands through in stream mode without warning", () => {
+      const session = manager.createSession("/tmp");
+      const msgs: string[] = [];
+      manager.onSystem(session.id, (m) => msgs.push(m));
+      manager.sendMessage(session.id, "/config");
+      expect(msgs.every((m) => !m.includes("interactive CLI dialog"))).toBe(true);
     });
   });
 });

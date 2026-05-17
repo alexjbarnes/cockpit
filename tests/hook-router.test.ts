@@ -155,6 +155,10 @@ describe("HookRouter + bridge round-trip", () => {
     expect(resolveHookBridgePath()).toBe(BRIDGE_PATH);
   });
 
+  it("getUrl returns the server URL", () => {
+    expect(router.getUrl()).toBe(url);
+  });
+
   it("returns 405 for non-POST requests", async () => {
     const res = await fetch(url, { method: "GET" });
     expect(res.status).toBe(405);
