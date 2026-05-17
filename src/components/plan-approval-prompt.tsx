@@ -154,7 +154,7 @@ export function PlanApprovalPrompt({
 
   return (
     <>
-      <div className="mx-auto max-w-3xl">
+      <div className="mx-auto max-w-3xl" data-testid="plan-approval-prompt">
         <div
           ref={containerRef}
           tabIndex={-1}

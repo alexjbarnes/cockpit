@@ -270,17 +270,17 @@ function SortableSessionRow({
         {(session.pendingRequestCount ?? 0) > 0 ? (
           <>
             <div className="absolute h-4 w-4 rounded-full bg-blue-500/20 animate-ping" />
-            <div className="h-2.5 w-2.5 rounded-full bg-blue-500" title="Awaiting your input" />
+            <div className="h-2.5 w-2.5 rounded-full bg-blue-500" title="Awaiting your input" data-testid="status-pending" />
           </>
         ) : session.status === "running" ? (
           <>
             <div className="absolute h-4 w-4 rounded-full bg-yellow-500/20 animate-ping" />
-            <div className="h-2.5 w-2.5 rounded-full bg-yellow-500" title="Working" />
+            <div className="h-2.5 w-2.5 rounded-full bg-yellow-500" title="Working" data-testid="status-running" />
           </>
         ) : isUnread ? (
-          <div className="h-2.5 w-2.5 rounded-full bg-green-500" title="New response" />
+          <div className="h-2.5 w-2.5 rounded-full bg-green-500" title="New response" data-testid="status-unread" />
         ) : (
-          <div className="h-2.5 w-2.5 rounded-full bg-muted-foreground/30" />
+          <div className="h-2.5 w-2.5 rounded-full bg-muted-foreground/30" data-testid="status-idle" />
         )}
       </div>
       <div className="flex-1 min-w-0">

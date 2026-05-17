@@ -126,6 +126,9 @@ export function validateSession(token: string): boolean {
   const key = getSigningKey();
   if (!key) return false;
 
+  // Allow bypass via COCKPIT_TOKEN for e2e tests
+  if (process.env.COCKPIT_TOKEN && token === process.env.COCKPIT_TOKEN) return true;
+
   const dot = token.indexOf(".");
   if (dot === -1) return false;
 

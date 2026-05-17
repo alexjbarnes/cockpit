@@ -996,6 +996,7 @@ export function InputArea({
                               <div className="flex flex-wrap p-0.5 bg-muted rounded-lg">
                                 <button
                                   onClick={() => onSetRuntime("pty")}
+                                  data-testid="runtime-pty"
                                   className={`px-3 py-1 text-xs rounded-md transition-colors ${
                                     currentRuntime === "pty"
                                       ? "bg-primary text-primary-foreground shadow-sm"
@@ -1006,6 +1007,7 @@ export function InputArea({
                                 </button>
                                 <button
                                   onClick={() => onSetRuntime("stream")}
+                                  data-testid="runtime-stream"
                                   className={`px-3 py-1 text-xs rounded-md transition-colors ${
                                     currentRuntime === "stream"
                                       ? "bg-primary text-primary-foreground shadow-sm"
@@ -1214,6 +1216,7 @@ export function InputArea({
           <div className="relative flex-1 mr-1">
             <textarea
               ref={textareaRef}
+              data-testid="message-input"
               value={text}
               onChange={handleChange}
               onKeyDown={handleKeyDown}
@@ -1253,7 +1256,13 @@ export function InputArea({
                 <Square className="h-4 w-4" />
               </Button>
             ) : (
-              <Button size="icon" className="h-8 w-8" onClick={handleSend} disabled={!text.trim() && !hasAttachments}>
+              <Button
+                size="icon"
+                className="h-8 w-8"
+                onClick={handleSend}
+                disabled={!text.trim() && !hasAttachments}
+                data-testid="btn-send"
+              >
                 <Send className="h-4 w-4" />
               </Button>
             )}
