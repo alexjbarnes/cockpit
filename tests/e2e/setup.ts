@@ -27,7 +27,7 @@ export async function setupE2E(): Promise<E2EContext> {
   env.PORT = String(COCKPIT_PORT);
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const cockpitProcess: any = spawn("npx", ["next", "dev", "-p", String(COCKPIT_PORT)], {
+  const cockpitProcess: any = spawn("npx", ["tsx", "server.ts"], {
     env: env as typeof process.env,
     stdio: "pipe",
     shell: true,
