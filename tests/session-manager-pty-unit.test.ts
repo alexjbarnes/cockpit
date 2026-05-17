@@ -478,8 +478,10 @@ describe("SessionManager PTY runtime (unit)", () => {
       expect(msgs.some((m) => m.includes("interactive CLI dialog"))).toBe(true);
     });
 
-    it("passes dialog commands through in stream mode without warning", () => {
-      const session = manager.createSession("/tmp");
+    it("does not intercept dialog commands when PTY is not alive", () => {
+      const session = manager.createSession("/tmp", undefined, { runtime: "pty" });
+      manager.sendMessage(session.id, "hello"); // spawns, PTY is alive
+      ptyMocks.isAlive = false; // simulate PTY death (e.g. crash)
       const msgs: string[] = [];
       manager.onSystem(session.id, (m) => msgs.push(m));
       manager.sendMessage(session.id, "/config");
