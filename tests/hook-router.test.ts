@@ -274,6 +274,30 @@ describe("HookRouter + bridge round-trip", () => {
     router.unregister(sessionId);
   });
 
+  it("stop() is a no-op when server was never started", async () => {
+    const fresh = new HookRouter();
+    await expect(fresh.stop()).resolves.toBeUndefined();
+  });
+
+  it("dispatches Stop to the registered handler", async () => {
+    const sessionId = "session-stop";
+    let received: Record<string, unknown> | null = null;
+    const token = router.register(sessionId, {
+      onStop(payload) {
+        received = payload;
+      },
+    });
+
+    const res = await runBridge(
+      ["Stop"],
+      { COCKPIT_HOOK_URL: url, COCKPIT_HOOK_TOKEN: token, COCKPIT_SESSION_ID: sessionId },
+      JSON.stringify({ stop_hook_active: false }),
+    );
+    expect(res.exitCode).toBe(0);
+    expect(received).toEqual({ stop_hook_active: false });
+    router.unregister(sessionId);
+  });
+
   it("unregister closes pending responses so bridge doesn't hang", async () => {
     const sessionId = "session-pending";
     const token = router.register(sessionId, {
