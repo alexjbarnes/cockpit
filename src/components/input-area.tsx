@@ -953,10 +953,10 @@ export function InputArea({
                           )}
 
                           {allowed.size > 0 && (
-                            <div className="flex items-center gap-2">
-                              <Brain className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                              <span className="text-xs text-muted-foreground">Thinking</span>
-                              <div className="ml-auto flex gap-1">
+                            <div className="flex items-start gap-2">
+                              <Brain className="h-3.5 w-3.5 text-muted-foreground shrink-0 mt-0.5" />
+                              <span className="text-xs text-muted-foreground py-0.5 shrink-0">Thinking</span>
+                              <div className="ml-auto flex flex-wrap gap-1 justify-end">
                                 {visibleLevels.map((opt) => (
                                   <button
                                     key={opt.value}

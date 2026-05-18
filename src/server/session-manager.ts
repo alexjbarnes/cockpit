@@ -587,6 +587,9 @@ export class SessionManager {
     }
 
     this.killProcess(session);
+    if (!transcriptExists(session.cliSessionId, session.info.cwd)) {
+      session.hasSpawnedBefore = false;
+    }
     session.pendingRequests.clear();
     this.notifyPendingChanged(session, sessionId);
     session.streamingSnapshot = null;

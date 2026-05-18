@@ -4037,4 +4037,52 @@ describe("SessionManager", () => {
       expect(args[args.indexOf("--model") + 1]).toBe("opus");
     });
   });
+
+  describe("restartSession before first message", () => {
+    it("uses --session-id (not --resume) on stream restart when no message was sent", () => {
+      const mockSpawn = vi.mocked(spawn);
+      const session = manager.createSession("/tmp/restart-stream", "Stream");
+      const s = (manager as any).sessions.get(session.id)!;
+
+      // First spawn (e.g. via ensureProcess or sendMessage)
+      (manager as any).spawnProcess(s, session.id);
+      expect(s.hasSpawnedBefore).toBe(true);
+
+      // Kill the process to simulate idle state
+      s.process = null;
+      s.stdin = null;
+      s.info.status = "idle";
+
+      // Restart without ever having sent a message
+      manager.restartSession(session.id);
+
+      const args = mockSpawn.mock.calls[mockSpawn.mock.calls.length - 1][1] as string[];
+      expect(args).toContain("--session-id");
+      expect(args).not.toContain("--resume");
+    });
+
+    it("uses --session-id (not --resume) on PTY restart when no message was sent", async () => {
+      const session = manager.createSession("/tmp/restart-pty", "PTY", { runtime: "pty" });
+      const s = (manager as any).sessions.get(session.id)!;
+
+      // ensureProcess spawns PTY eagerly
+      capturedPtyOpts = null;
+      manager.ensureProcess(session.id);
+      await vi.waitFor(() => expect(capturedPtyOpts).not.toBeNull());
+      expect(s.hasSpawnedBefore).toBe(true);
+
+      // Kill the ptyRuntime to simulate idle
+      s.ptyRuntime = null;
+      s.info.status = "idle";
+
+      // Restart without ever having sent a message
+      capturedPtyOpts = null;
+      manager.restartSession(session.id);
+      await vi.waitFor(() => expect(capturedPtyOpts).not.toBeNull());
+
+      const args = capturedPtyOpts!.extraArgs as string[];
+      expect(args).toContain("--session-id");
+      expect(args).not.toContain("--resume");
+    });
+  });
 });
