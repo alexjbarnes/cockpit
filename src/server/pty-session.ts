@@ -1,3 +1,4 @@
+import { existsSync, realpathSync, statSync } from "node:fs";
 import { type IPty, spawn } from "node-pty";
 
 const TEXT_TO_ENTER_DELAY_MS = 300;
@@ -49,24 +50,38 @@ export class PtySession {
     delete env.CLAUDECODE;
     delete env.CLAUDE_CODE_ENTRYPOINT;
 
-    if (process.platform === "darwin") {
-      const shell = env.SHELL || "/bin/zsh";
-      const cmd = [bin, ...args].map(shellQuote).join(" ");
-      this.pty = spawn(shell, ["-l", "-c", `exec ${cmd}`], {
+    const spawnFile = process.platform === "darwin" ? env.SHELL || "/bin/zsh" : bin;
+    const spawnArgs = process.platform === "darwin" ? ["-l", "-c", `exec ${[bin, ...args].map(shellQuote).join(" ")}`] : args;
+
+    let diagInfo = `platform=${process.platform}, file=${spawnFile}, cwd=${this.opts.cwd}`;
+    try {
+      const exists = existsSync(spawnFile);
+      diagInfo += `, exists=${exists}`;
+      if (exists) {
+        const real = realpathSync(spawnFile);
+        const stat = statSync(real);
+        const mode = `0${(stat.mode & 0o7777).toString(8)}`;
+        diagInfo += `, realpath=${real}, mode=${mode}, size=${stat.size}`;
+      }
+    } catch (e) {
+      diagInfo += `, diagError=${e instanceof Error ? e.message : String(e)}`;
+    }
+    console.log(`[pty-session] spawn diagnostic: ${diagInfo}`);
+    console.log(`[pty-session] spawn args: ${JSON.stringify(spawnArgs).slice(0, 500)}`);
+    console.log(`[pty-session] PATH: ${env.PATH?.split(":").slice(0, 10).join(":")}`);
+
+    try {
+      this.pty = spawn(spawnFile, spawnArgs, {
         name: "xterm-256color",
         cols: this.cols,
         rows: this.rows,
         cwd: this.opts.cwd,
         env,
       });
-    } else {
-      this.pty = spawn(bin, args, {
-        name: "xterm-256color",
-        cols: this.cols,
-        rows: this.rows,
-        cwd: this.opts.cwd,
-        env,
-      });
+    } catch (err) {
+      console.error(`[pty-session] spawn failed: ${err instanceof Error ? err.message : String(err)}`);
+      console.error(`[pty-session] full diagnostic: ${diagInfo}`);
+      throw err;
     }
 
     this.pty.onData((data) => {
