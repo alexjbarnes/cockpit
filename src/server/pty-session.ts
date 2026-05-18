@@ -49,13 +49,25 @@ export class PtySession {
     delete env.CLAUDECODE;
     delete env.CLAUDE_CODE_ENTRYPOINT;
 
-    this.pty = spawn(bin, args, {
-      name: "xterm-256color",
-      cols: this.cols,
-      rows: this.rows,
-      cwd: this.opts.cwd,
-      env,
-    });
+    if (process.platform === "darwin") {
+      const shell = env.SHELL || "/bin/zsh";
+      const cmd = [bin, ...args].map(shellQuote).join(" ");
+      this.pty = spawn(shell, ["-l", "-c", `exec ${cmd}`], {
+        name: "xterm-256color",
+        cols: this.cols,
+        rows: this.rows,
+        cwd: this.opts.cwd,
+        env,
+      });
+    } else {
+      this.pty = spawn(bin, args, {
+        name: "xterm-256color",
+        cols: this.cols,
+        rows: this.rows,
+        cwd: this.opts.cwd,
+        env,
+      });
+    }
 
     this.pty.onData((data) => {
       this.buffer += data;
@@ -161,4 +173,9 @@ export class PtySession {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function shellQuote(s: string): string {
+  if (!/[\s"'\\$`!#&|;()<>]/.test(s)) return s;
+  return `'${s.replace(/'/g, "'\\''")}'`;
 }
