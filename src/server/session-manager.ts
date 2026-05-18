@@ -1,4 +1,4 @@
-import { type ChildProcess, spawn } from "node:child_process";
+import { type ChildProcess, execFileSync, spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -36,6 +36,18 @@ export type { SessionRuntime };
 
 function defaultRuntime(): SessionRuntime {
   return "stream";
+}
+
+let resolvedClaudeBin: string | null = null;
+function getClaudeBin(): string {
+  if (resolvedClaudeBin) return resolvedClaudeBin;
+  const cmd = process.platform === "win32" ? "where" : "which";
+  try {
+    resolvedClaudeBin = execFileSync(cmd, ["claude"], { encoding: "utf-8" }).trim().split("\n")[0];
+  } catch {
+    resolvedClaudeBin = "claude";
+  }
+  return resolvedClaudeBin;
 }
 
 const smLog = (sessionId: string, msg: string) => {
@@ -1990,7 +2002,7 @@ Additional Cockpit rules beyond the CLI's defaults:
     mkdirSync(session.info.cwd, { recursive: true });
 
     const isWin = process.platform === "win32";
-    const proc = spawn("claude", args, {
+    const proc = spawn(getClaudeBin(), args, {
       cwd: session.info.cwd,
       env,
       stdio: ["pipe", "pipe", "pipe"],
@@ -2211,6 +2223,7 @@ Additional Cockpit rules beyond the CLI's defaults:
       cwd: session.info.cwd,
       cliSessionId: session.cliSessionId,
       hookRouter,
+      claudeBin: getClaudeBin(),
       extraArgs,
       extraEnv,
       onEvents: (events) => {
