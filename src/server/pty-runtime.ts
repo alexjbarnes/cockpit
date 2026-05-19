@@ -36,12 +36,16 @@ export interface PtyRuntimeOptions {
  * resolver in `pendingPermissions` and the caller calls
  * `notifyPermissionDecision` from its UI-facing respondToPermission path.
  */
+// biome-ignore lint/suspicious/noControlCharactersInRegex: strip ANSI escape sequences
+const ANSI_RE = /\x1b\[[0-9;]*[a-zA-Z]/g;
+
 export class PtyRuntime {
   private readonly opts: PtyRuntimeOptions;
   private pty: PtySession | null = null;
   private settingsPath: string | null = null;
   private readonly pendingPermissions = new Map<string, (decision: PermissionDecision) => void>();
   private exited = false;
+  private ptyOutputBuffer = "";
 
   constructor(opts: PtyRuntimeOptions) {
     this.opts = opts;
@@ -74,7 +78,10 @@ export class PtyRuntime {
       env: { ...env, ...(this.opts.extraEnv ?? {}) },
       extraArgs: this.opts.extraArgs,
       bin: this.opts.claudeBin,
-      onData: this.opts.onPtyData,
+      onData: (chunk) => {
+        this.scanForErrors(chunk);
+        this.opts.onPtyData?.(chunk);
+      },
       onExit: (info) => {
         this.exited = true;
         this.opts.onExit(info);
@@ -144,15 +151,24 @@ export class PtyRuntime {
   private buildHandler(): SessionHookHandler {
     return {
       onPreToolUse: (payload) => {
+        this.ptyOutputBuffer = "";
+        const toolName = typeof payload.tool_name === "string" ? payload.tool_name : "unknown";
+        console.log(`[pty-runtime] PreToolUse hook: tool=${toolName}, session=${this.opts.sessionId.slice(0, 8)}`);
         this.emit(translateHookEvent("PreToolUse", payload));
       },
       onPostToolUse: (payload) => {
+        this.ptyOutputBuffer = "";
         this.emit(translateHookEvent("PostToolUse", payload));
       },
       onStop: (payload) => {
-        this.emit(translateHookEvent("Stop", payload));
+        this.ptyOutputBuffer = "";
+        console.log(`[pty-runtime] Stop hook received for session ${this.opts.sessionId.slice(0, 8)}`);
+        const events = translateHookEvent("Stop", payload);
+        console.log(`[pty-runtime] Stop translated to ${events.length} events: [${events.map((e) => e.type).join(", ")}]`);
+        this.emit(events);
       },
       onUserPromptSubmit: (payload) => {
+        this.ptyOutputBuffer = "";
         this.emit(translateHookEvent("UserPromptSubmit", payload));
       },
       onNotification: (payload) => {
@@ -191,7 +207,21 @@ export class PtyRuntime {
     try {
       this.opts.onEvents(events);
     } catch (err) {
+      console.error(`[pty-runtime] onEvents threw for session ${this.opts.sessionId.slice(0, 8)}:`, err);
       this.opts.onError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  private scanForErrors(chunk: string): void {
+    this.ptyOutputBuffer += chunk;
+    if (this.ptyOutputBuffer.length > 8 * 1024) {
+      this.ptyOutputBuffer = this.ptyOutputBuffer.slice(-4 * 1024);
+    }
+    const clean = this.ptyOutputBuffer.replace(ANSI_RE, "");
+    if (/error/i.test(clean)) {
+      console.log(
+        `[pty-runtime] PTY buffer (session ${this.opts.sessionId.slice(0, 8)}, ${clean.length} chars):\n---\n${clean.slice(-1000)}\n---`,
+      );
     }
   }
 

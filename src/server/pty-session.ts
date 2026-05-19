@@ -50,7 +50,7 @@ export class PtySession {
     delete env.CLAUDECODE;
     delete env.CLAUDE_CODE_ENTRYPOINT;
 
-    const spawnFile = process.platform === "darwin" ? env.SHELL || "/bin/zsh" : bin;
+    const spawnFile = process.platform === "darwin" ? "/bin/zsh" : bin;
     const spawnArgs = process.platform === "darwin" ? ["-l", "-c", `exec ${[bin, ...args].map(shellQuote).join(" ")}`] : args;
 
     let diagInfo = `platform=${process.platform}, file=${spawnFile}, cwd=${this.opts.cwd}`;

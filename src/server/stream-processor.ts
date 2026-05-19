@@ -304,6 +304,9 @@ export function processEvents(
       result.systemMessages.push(event.text);
     } else if (event.type === "message_done" && event.message) {
       state.thinkingStartedAt = null;
+      console.log(
+        `[stream-processor] message_done: interrupted=${!!event.interrupted}, pendingBlocks=${state.pendingBlocks.length}, pendingToolUses=${state.pendingToolUses.length}, currentMsgId=${state.currentAssistantMsgId?.slice(0, 8) ?? "null"}, clearPending=${!!event.clearPending}`,
+      );
       if (event.interrupted) {
         if (state.currentAssistantMsgId) {
           event.message.id = state.currentAssistantMsgId;
@@ -452,6 +455,12 @@ export function processEvents(
 
     result.emit.push(event);
     result.snapshot = buildSnapshot(state);
+  }
+
+  if (result.statusChange) {
+    console.log(
+      `[stream-processor] statusChange=${result.statusChange}, emitting ${result.emit.length} events: [${result.emit.map((e) => e.type).join(", ")}]`,
+    );
   }
 
   return result;

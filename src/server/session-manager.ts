@@ -1373,6 +1373,12 @@ export class SessionManager {
   }
 
   private applyProcessedResult(session: Session, sessionId: string, result: import("./stream-processor").ProcessedResult): void {
+    const eventTypes = result.emit.map((e) => e.type).join(", ");
+    if (eventTypes) {
+      console.log(
+        `[sm] applyProcessedResult for ${sessionId.slice(0, 8)}: events=[${eventTypes}], statusChange=${result.statusChange ?? "none"}, currentStatus=${session.info.status}`,
+      );
+    }
     for (const msg of result.intermediateMessages) {
       session.emitter.emit("event", sessionId, { type: "message_done", message: msg } as ParsedEvent);
       if (msg.toolUses.some((t: ToolUse) => t.name === "Agent")) {
@@ -2227,6 +2233,8 @@ Additional Cockpit rules beyond the CLI's defaults:
       extraArgs,
       extraEnv,
       onEvents: (events) => {
+        const types = events.map((e) => e.type).join(", ");
+        console.log(`[sm] pty onEvents for ${sessionId.slice(0, 8)}: [${types}]`);
         if (session.pendingSlashTimeout) {
           clearTimeout(session.pendingSlashTimeout);
           session.pendingSlashTimeout = null;
