@@ -27,7 +27,12 @@ export function translateHookEvent(eventName: HookEventName, payload: Record<str
       return translatePermissionRequest(payload);
     case "Notification":
       return translateNotification(payload);
+    case "SubagentStart":
+      return translateSubagentStart(payload);
+    case "SubagentStop":
+      return translateSubagentStop(payload);
     case "UserPromptSubmit":
+    case "UserPromptExpansion":
       return [];
   }
 }
@@ -121,6 +126,44 @@ function translatePermissionRequest(payload: Record<string, unknown>): ParsedEve
       toolName,
       toolInput: toolInput ? JSON.stringify(toolInput) : "",
       rawToolInput: toolInput,
+    },
+  ];
+}
+
+function translateSubagentStart(payload: Record<string, unknown>): ParsedEvent[] {
+  const sessionId = stringOr(payload.session_id, uuidv4());
+  const agentId = stringOr(payload.agent_id, "");
+  const agentType = stringOr(payload.agent_type, "");
+  const description = stringOr(payload.description, agentType || "Subagent running");
+  return [
+    {
+      type: "task_update",
+      taskInfo: {
+        taskId: sessionId,
+        toolUseId: agentId,
+        status: "running",
+        description,
+      },
+    },
+  ];
+}
+
+function translateSubagentStop(payload: Record<string, unknown>): ParsedEvent[] {
+  const sessionId = stringOr(payload.session_id, "");
+  const agentId = stringOr(payload.agent_id, "");
+  const agentType = stringOr(payload.agent_type, "");
+  const lastMessage = stringOr(payload.last_assistant_message, "");
+  const description = stringOr(payload.description, agentType || "Subagent completed");
+  return [
+    {
+      type: "task_update",
+      taskInfo: {
+        taskId: sessionId,
+        toolUseId: agentId,
+        status: "completed",
+        description,
+        summary: lastMessage.slice(0, 500) || undefined,
+      },
     },
   ];
 }

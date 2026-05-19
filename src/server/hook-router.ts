@@ -7,6 +7,9 @@ export type HookEventName =
   | "Stop"
   | "StopFailure"
   | "UserPromptSubmit"
+  | "UserPromptExpansion"
+  | "SubagentStart"
+  | "SubagentStop"
   | "Notification"
   | "PermissionRequest";
 
@@ -31,6 +34,9 @@ export interface SessionHookHandler {
   onStop?: HookCallback;
   onStopFailure?: HookCallback;
   onUserPromptSubmit?: HookCallback;
+  onUserPromptExpansion?: HookCallback;
+  onSubagentStart?: HookCallback;
+  onSubagentStop?: HookCallback;
   onNotification?: HookCallback;
   /** Must resolve with the permission decision. The promise can take as long as needed. */
   onPermissionRequest?: (payload: Record<string, unknown>) => Promise<PermissionDecision>;
@@ -166,20 +172,18 @@ export class HookRouter {
       return { stdout: permissionDecisionJson(decision), exitCode: 0 };
     }
 
-    const fn =
-      eventName === "PreToolUse"
-        ? handler.onPreToolUse
-        : eventName === "PostToolUse"
-          ? handler.onPostToolUse
-          : eventName === "Stop"
-            ? handler.onStop
-            : eventName === "StopFailure"
-              ? handler.onStopFailure
-              : eventName === "UserPromptSubmit"
-                ? handler.onUserPromptSubmit
-                : eventName === "Notification"
-                  ? handler.onNotification
-                  : undefined;
+    const handlerMap: Partial<Record<HookEventName, HookCallback | undefined>> = {
+      PreToolUse: handler.onPreToolUse,
+      PostToolUse: handler.onPostToolUse,
+      Stop: handler.onStop,
+      StopFailure: handler.onStopFailure,
+      UserPromptSubmit: handler.onUserPromptSubmit,
+      UserPromptExpansion: handler.onUserPromptExpansion,
+      SubagentStart: handler.onSubagentStart,
+      SubagentStop: handler.onSubagentStop,
+      Notification: handler.onNotification,
+    };
+    const fn = handlerMap[eventName];
 
     if (!fn) {
       console.log(`[hook-router] no handler for ${eventName}, returning empty response`);

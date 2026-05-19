@@ -129,8 +129,6 @@ interface Session {
   transcriptWatcher: TranscriptWatcher | null;
   todoWatcher: TodoWatcher | null;
   attachmentPaths: string[];
-  /** Non-null when a slash command was forwarded to the PTY and we're waiting for a response. */
-  pendingSlashTimeout: ReturnType<typeof setTimeout> | null;
   /** Cumulative token counts for the current session (used by /cost). */
   totalTokens: { input: number; output: number; cacheCreate: number; cacheRead: number };
 }
@@ -203,7 +201,6 @@ export class SessionManager {
       transcriptWatcher: null,
       todoWatcher: null,
       attachmentPaths: [],
-      pendingSlashTimeout: null,
       totalTokens: { input: 0, output: 0, cacheCreate: 0, cacheRead: 0 },
     });
 
@@ -275,7 +272,6 @@ export class SessionManager {
         transcriptWatcher: null,
         todoWatcher: null,
         attachmentPaths: [],
-        pendingSlashTimeout: null,
         totalTokens: { input: 0, output: 0, cacheCreate: 0, cacheRead: 0 },
       };
       this.sessions.set(id, session);
@@ -1740,23 +1736,6 @@ export class SessionManager {
     return `${refs}\n${text}`;
   }
 
-  private readonly SLASH_TIMEOUT_MS = 8000;
-
-  private startPtySlashTimeout(session: Session, sessionId: string): void {
-    if (session.pendingSlashTimeout) clearTimeout(session.pendingSlashTimeout);
-    session.pendingSlashTimeout = setTimeout(() => {
-      session.pendingSlashTimeout = null;
-      if (!session.ptyRuntime?.isAlive) return;
-      this.log(sessionId, "slash command timed out — sending Escape to dismiss possible dialog");
-      session.ptyRuntime.interrupt();
-      if (session.info.status === "running") {
-        session.info.status = "idle";
-        session.emitter.emit("status", sessionId, "idle");
-      }
-      this.emitSystem(session, sessionId, "Command may have opened a CLI dialog. Dismissed.");
-    }, this.SLASH_TIMEOUT_MS);
-  }
-
   private buildContent(
     session: Session,
     text: string,
@@ -2232,10 +2211,6 @@ Additional Cockpit rules beyond the CLI's defaults:
       onEvents: (events) => {
         const types = events.map((e) => e.type).join(", ");
         console.log(`[sm] pty onEvents for ${sessionId.slice(0, 8)}: [${types}]`);
-        if (session.pendingSlashTimeout) {
-          clearTimeout(session.pendingSlashTimeout);
-          session.pendingSlashTimeout = null;
-        }
         const result = processEvents(events, streamState, { planMode: session.planMode, compacting: session.compacting });
         this.applyProcessedResult(session, sessionId, result);
       },

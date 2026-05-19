@@ -3,7 +3,18 @@ import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { resolveHookBridgePath } from "./hook-bridge-path";
 
-const HOOK_EVENTS = ["PreToolUse", "PostToolUse", "Stop", "StopFailure", "UserPromptSubmit", "Notification", "PermissionRequest"] as const;
+const HOOK_EVENTS = [
+  "PreToolUse",
+  "PostToolUse",
+  "Stop",
+  "StopFailure",
+  "UserPromptSubmit",
+  "UserPromptExpansion",
+  "SubagentStart",
+  "SubagentStop",
+  "Notification",
+  "PermissionRequest",
+] as const;
 type HookEvent = (typeof HOOK_EVENTS)[number];
 
 const PERMISSION_HOOK_TIMEOUT_SEC = 86400;

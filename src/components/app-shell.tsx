@@ -296,7 +296,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                     {cwd && <NewTerminalButton cwd={cwd} />}
                     <SearchButton />
                     {cwd && <TodoIndicator todos={todos} />}
-                    {cwd && runtime !== "pty" && <BackgroundTasksButton tasks={backgroundTasks} />}
+                    {cwd && <BackgroundTasksButton tasks={backgroundTasks} />}
                     <UsageButton />
                   </div>
                 )}
