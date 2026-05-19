@@ -270,6 +270,83 @@ describe("SessionManager PTY runtime (unit)", () => {
       manager.interrupt(session.id);
       expect(ptyMocks.interrupt).not.toHaveBeenCalled();
     });
+
+    it("clears stream state so interrupted turn does not contaminate next turn", () => {
+      const session = manager.createSession("/tmp", undefined, { runtime: "pty" });
+      manager.sendMessage(session.id, "first message");
+
+      const events: ParsedEvent[] = [];
+      manager.subscribe(session.id, (e) => events.push(e));
+
+      ptyMocks.capturedOpts!.onEvents([{ type: "tool_use_start", toolName: "Read", toolId: "tu-1", toolInput: '{"file_path":"/tmp/x"}' }]);
+
+      manager.interrupt(session.id);
+
+      manager.sendMessage(session.id, "second message");
+
+      ptyMocks.capturedOpts!.onEvents([
+        {
+          type: "message_done",
+          message: {
+            id: "msg-2",
+            role: "assistant",
+            content: "response to second",
+            toolUses: [],
+            blocks: [],
+            timestamp: Date.now(),
+          },
+        } as ParsedEvent,
+      ]);
+
+      const messageDone = events.find((e) => e.type === "message_done" && e.message?.content === "response to second");
+      expect(messageDone).toBeDefined();
+      expect(messageDone!.message!.toolUses).toHaveLength(0);
+    });
+
+    it("does not merge late Stop hook from interrupted turn into next turn", () => {
+      const session = manager.createSession("/tmp", undefined, { runtime: "pty" });
+      manager.sendMessage(session.id, "first message");
+
+      ptyMocks.capturedOpts!.onEvents([{ type: "tool_use_start", toolName: "Bash", toolId: "tu-old", toolInput: '{"command":"ls"}' }]);
+
+      manager.interrupt(session.id);
+      manager.sendMessage(session.id, "second message");
+
+      const events: ParsedEvent[] = [];
+      manager.subscribe(session.id, (e) => events.push(e));
+
+      ptyMocks.capturedOpts!.onEvents([
+        {
+          type: "message_done",
+          message: {
+            id: "late-stop",
+            role: "assistant",
+            content: "interrupted partial",
+            toolUses: [],
+            blocks: [],
+            timestamp: Date.now(),
+          },
+        } as ParsedEvent,
+      ]);
+
+      ptyMocks.capturedOpts!.onEvents([
+        {
+          type: "message_done",
+          message: {
+            id: "msg-2",
+            role: "assistant",
+            content: "clean response",
+            toolUses: [],
+            blocks: [],
+            timestamp: Date.now(),
+          },
+        } as ParsedEvent,
+      ]);
+
+      const doneEvents = events.filter((e) => e.type === "message_done" && e.message);
+      const lastDone = doneEvents[doneEvents.length - 1];
+      expect(lastDone.message!.content).not.toContain("interrupted partial");
+    });
   });
 
   describe("respondToPermission", () => {

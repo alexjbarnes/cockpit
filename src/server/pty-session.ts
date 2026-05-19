@@ -102,9 +102,11 @@ export class PtySession {
   }
 
   async sendText(text: string): Promise<void> {
-    this.requirePty().write(text);
+    const pty = this.requirePty();
+    pty.write("\x15");
+    pty.write(text);
     await sleep(TEXT_TO_ENTER_DELAY_MS);
-    this.requirePty().write("\r");
+    pty.write("\r");
   }
 
   sendSlash(command: string): void {

@@ -718,6 +718,13 @@ export class SessionManager {
       if (session.info.status === "running") {
         session.info.status = "idle";
         session.streamingSnapshot = null;
+        if (session.streamState) {
+          session.streamState.pendingBlocks.length = 0;
+          session.streamState.pendingToolUses.length = 0;
+          session.streamState.agentStack.length = 0;
+          session.streamState.currentAssistantMsgId = null;
+          session.streamState.flushedOnMessageDone = false;
+        }
         session.emitter.emit("status", id, "idle");
       }
       return true;
