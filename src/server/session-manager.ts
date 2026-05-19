@@ -1900,9 +1900,6 @@ Additional Cockpit rules beyond the CLI's defaults:
       session.ptyRuntime.sendText(ptyText).catch((err) => {
         this.log(sessionId, `pty sendText failed: ${err instanceof Error ? err.message : String(err)}`);
       });
-      if (text.startsWith("/") && !text.trim().toLowerCase().startsWith("/compact")) {
-        this.startPtySlashTimeout(session, sessionId);
-      }
       return true;
     }
 
