@@ -46,6 +46,7 @@ export class PtyRuntime {
   private settingsPath: string | null = null;
   private readonly pendingPermissions = new Map<string, (decision: PermissionDecision) => void>();
   private exited = false;
+  private cleaned = false;
   private ptyOutputBuffer = "";
   private errorDebounce: ReturnType<typeof setTimeout> | null = null;
 
@@ -157,12 +158,18 @@ export class PtyRuntime {
         this.cancelErrorDebounce();
         this.ptyOutputBuffer = "";
         const toolName = typeof payload.tool_name === "string" ? payload.tool_name : "unknown";
-        console.log(`[pty-runtime] PreToolUse hook: tool=${toolName}, session=${this.opts.sessionId.slice(0, 8)}`);
+        const cliSession = typeof payload.session_id === "string" ? payload.session_id.slice(0, 8) : "none";
+        const toolUseId = typeof payload.tool_use_id === "string" ? payload.tool_use_id.slice(0, 12) : "none";
+        console.log(`[pty-runtime] PreToolUse: tool=${toolName} cli_session=${cliSession} tool_use_id=${toolUseId}`);
         this.emit(translateHookEvent("PreToolUse", payload));
       },
       onPostToolUse: (payload) => {
         this.cancelErrorDebounce();
         this.ptyOutputBuffer = "";
+        const toolName = typeof payload.tool_name === "string" ? payload.tool_name : "unknown";
+        const cliSession = typeof payload.session_id === "string" ? payload.session_id.slice(0, 8) : "none";
+        const toolUseId = typeof payload.tool_use_id === "string" ? payload.tool_use_id.slice(0, 12) : "none";
+        console.log(`[pty-runtime] PostToolUse: tool=${toolName} cli_session=${cliSession} tool_use_id=${toolUseId}`);
         this.emit(translateHookEvent("PostToolUse", payload));
       },
       onStop: (payload) => {
@@ -186,6 +193,35 @@ export class PtyRuntime {
         this.cancelErrorDebounce();
         this.ptyOutputBuffer = "";
         this.emit(translateHookEvent("UserPromptSubmit", payload));
+      },
+      onUserPromptExpansion: (payload) => {
+        this.cancelErrorDebounce();
+        this.ptyOutputBuffer = "";
+        const cmd = typeof payload.command_name === "string" ? payload.command_name : "unknown";
+        const sid = this.opts.sessionId.slice(0, 8);
+        console.log(`[pty-runtime] UserPromptExpansion: command=${cmd}, session=${sid}`);
+        this.emit(translateHookEvent("UserPromptExpansion", payload));
+      },
+      onSubagentStart: (payload) => {
+        this.cancelErrorDebounce();
+        this.ptyOutputBuffer = "";
+        const cliSession = typeof payload.session_id === "string" ? payload.session_id.slice(0, 8) : "none";
+        const toolUseId = typeof payload.tool_use_id === "string" ? payload.tool_use_id.slice(0, 12) : "none";
+        const agentType = typeof payload.agent_type === "string" ? payload.agent_type : "unknown";
+        const desc = typeof payload.description === "string" ? payload.description.slice(0, 80) : "";
+        console.log(`[pty-runtime] SubagentStart: cli_session=${cliSession} tool_use_id=${toolUseId} type=${agentType} desc="${desc}"`);
+        console.log(`[pty-runtime] SubagentStart full payload keys: ${Object.keys(payload).join(", ")}`);
+        this.emit(translateHookEvent("SubagentStart", payload));
+      },
+      onSubagentStop: (payload) => {
+        this.cancelErrorDebounce();
+        this.ptyOutputBuffer = "";
+        const cliSession = typeof payload.session_id === "string" ? payload.session_id.slice(0, 8) : "none";
+        const toolUseId = typeof payload.tool_use_id === "string" ? payload.tool_use_id.slice(0, 12) : "none";
+        const agentType = typeof payload.agent_type === "string" ? payload.agent_type : "unknown";
+        console.log(`[pty-runtime] SubagentStop: cli_session=${cliSession} tool_use_id=${toolUseId} type=${agentType}`);
+        console.log(`[pty-runtime] SubagentStop full payload keys: ${Object.keys(payload).join(", ")}`);
+        this.emit(translateHookEvent("SubagentStop", payload));
       },
       onNotification: (payload) => {
         this.cancelErrorDebounce();
@@ -280,6 +316,8 @@ export class PtyRuntime {
   }
 
   private async cleanup(): Promise<void> {
+    if (this.cleaned) return;
+    this.cleaned = true;
     this.opts.hookRouter.unregister(this.opts.sessionId);
     if (this.settingsPath) {
       await cleanupHookSettings(this.opts.sessionId).catch(() => {});
