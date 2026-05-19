@@ -267,7 +267,7 @@ export class PtyRuntime {
         // best-effort
       }
       this.opts.onError(errMsg);
-    }, 3000);
+    }, 10_000);
   }
 
   private async cleanup(): Promise<void> {
