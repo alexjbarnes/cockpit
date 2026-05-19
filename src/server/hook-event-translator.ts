@@ -21,6 +21,8 @@ export function translateHookEvent(eventName: HookEventName, payload: Record<str
       return translatePostToolUse(payload);
     case "Stop":
       return translateStop(payload);
+    case "StopFailure":
+      return translateStopFailure(payload);
     case "PermissionRequest":
       return translatePermissionRequest(payload);
     case "Notification":
@@ -89,6 +91,23 @@ function translateStop(payload: Record<string, unknown>): ParsedEvent[] {
     timestamp: Date.now(),
   };
   return [{ type: "message_done", message }];
+}
+
+function translateStopFailure(payload: Record<string, unknown>): ParsedEvent[] {
+  const errorType = stringOr(payload.error_type, "unknown");
+  const errorMessage = stringOr(payload.error_message, "Unknown error");
+  const message: ChatMessage = {
+    id: uuidv4(),
+    role: "assistant",
+    content: "",
+    toolUses: [],
+    blocks: [],
+    timestamp: Date.now(),
+  };
+  return [
+    { type: "message_done", message },
+    { type: "system_message", text: `__stop_failure::${errorType}::${errorMessage}` },
+  ];
 }
 
 function translatePermissionRequest(payload: Record<string, unknown>): ParsedEvent[] {

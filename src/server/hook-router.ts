@@ -1,7 +1,14 @@
 import { randomBytes } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 
-export type HookEventName = "PreToolUse" | "PostToolUse" | "Stop" | "UserPromptSubmit" | "Notification" | "PermissionRequest";
+export type HookEventName =
+  | "PreToolUse"
+  | "PostToolUse"
+  | "Stop"
+  | "StopFailure"
+  | "UserPromptSubmit"
+  | "Notification"
+  | "PermissionRequest";
 
 export interface HookResponse {
   stdout?: string;
@@ -22,6 +29,7 @@ export interface SessionHookHandler {
   onPreToolUse?: HookCallback;
   onPostToolUse?: HookCallback;
   onStop?: HookCallback;
+  onStopFailure?: HookCallback;
   onUserPromptSubmit?: HookCallback;
   onNotification?: HookCallback;
   /** Must resolve with the permission decision. The promise can take as long as needed. */
@@ -165,11 +173,13 @@ export class HookRouter {
           ? handler.onPostToolUse
           : eventName === "Stop"
             ? handler.onStop
-            : eventName === "UserPromptSubmit"
-              ? handler.onUserPromptSubmit
-              : eventName === "Notification"
-                ? handler.onNotification
-                : undefined;
+            : eventName === "StopFailure"
+              ? handler.onStopFailure
+              : eventName === "UserPromptSubmit"
+                ? handler.onUserPromptSubmit
+                : eventName === "Notification"
+                  ? handler.onNotification
+                  : undefined;
 
     if (!fn) {
       console.log(`[hook-router] no handler for ${eventName}, returning empty response`);

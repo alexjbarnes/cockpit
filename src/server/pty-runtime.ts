@@ -173,6 +173,15 @@ export class PtyRuntime {
         console.log(`[pty-runtime] Stop translated to ${events.length} events: [${events.map((e) => e.type).join(", ")}]`);
         this.emit(events);
       },
+      onStopFailure: (payload) => {
+        this.cancelErrorDebounce();
+        this.ptyOutputBuffer = "";
+        const errorType = typeof payload.error_type === "string" ? payload.error_type : "unknown";
+        const errorMessage = typeof payload.error_message === "string" ? payload.error_message : "Unknown error";
+        console.log(`[pty-runtime] StopFailure hook for session ${this.opts.sessionId.slice(0, 8)}: ${errorType} - ${errorMessage}`);
+        this.emit(translateHookEvent("StopFailure", payload));
+        this.opts.onError(`${errorMessage} (${errorType})`);
+      },
       onUserPromptSubmit: (payload) => {
         this.cancelErrorDebounce();
         this.ptyOutputBuffer = "";
