@@ -45,6 +45,7 @@
     "lint:fix": "biome check --fix src/ tests/ server.ts",
     "format": "biome format --write src/ tests/ server.ts",
 
+    "postinstall": "node -e \"const p=require('path'),f=require('fs'),d=p.join(__dirname,'node_modules','node-pty','prebuilds',process.platform+'-'+process.arch,'spawn-helper');f.existsSync(d)&&f.chmodSync(d,0o755)\"",
     "prepublishOnly": "npm run build"
   },
   "dependencies": {

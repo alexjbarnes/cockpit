@@ -217,7 +217,8 @@ export class PtyRuntime {
     if (this.ptyOutputBuffer.length > 8 * 1024) {
       this.ptyOutputBuffer = this.ptyOutputBuffer.slice(-4 * 1024);
     }
-    const clean = this.ptyOutputBuffer.replace(ANSI_RE, "");
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: strip terminal control chars
+    const clean = this.ptyOutputBuffer.replace(ANSI_RE, "").replace(/[\x00-\x1f]/g, "");
     if (/error/i.test(clean)) {
       console.log(
         `[pty-runtime] PTY buffer (session ${this.opts.sessionId.slice(0, 8)}, ${clean.length} chars):\n---\n${clean.slice(-1000)}\n---`,
