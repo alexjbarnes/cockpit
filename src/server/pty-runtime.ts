@@ -1,5 +1,6 @@
 import { v4 as uuidv4 } from "uuid";
 import { cleanupHookSettings, prepareHookSettings } from "./claude-settings";
+import { fetchCliInitData } from "./cli-init-fetch";
 import type { ParsedEvent } from "./event-parser";
 import { newPermissionRequestId, translateHookEvent } from "./hook-event-translator";
 import type { HookRouter, PermissionDecision, SessionHookHandler } from "./hook-router";
@@ -102,6 +103,25 @@ export class PtyRuntime {
     if (initialText) {
       await this.pty.sendText(initialText);
     }
+
+    this.fetchInitData();
+  }
+
+  private fetchInitData(): void {
+    const sid = this.opts.sessionId.slice(0, 8);
+    console.log(`[pty-runtime] fetching CLI init data for session ${sid}`);
+    fetchCliInitData({ cwd: this.opts.cwd, bin: this.opts.claudeBin })
+      .then((initData) => {
+        if (initData && !this.exited) {
+          console.log(`[pty-runtime] emitting init event for session ${sid}: ${initData.slashCommands.length} commands`);
+          this.emit([{ type: "init", initData }]);
+        } else {
+          console.log(`[pty-runtime] init fetch returned ${initData ? "data but session exited" : "null"} for session ${sid}`);
+        }
+      })
+      .catch((err) => {
+        console.log(`[pty-runtime] init fetch failed for session ${sid}: ${err}`);
+      });
   }
 
   async sendText(text: string): Promise<void> {
