@@ -1,3 +1,4 @@
+import { v4 as uuidv4 } from "uuid";
 import { cleanupHookSettings, prepareHookSettings } from "./claude-settings";
 import type { ParsedEvent } from "./event-parser";
 import { newPermissionRequestId, translateHookEvent } from "./hook-event-translator";
@@ -46,6 +47,7 @@ export class PtyRuntime {
   private readonly pendingPermissions = new Map<string, (decision: PermissionDecision) => void>();
   private exited = false;
   private ptyOutputBuffer = "";
+  private errorDebounce: ReturnType<typeof setTimeout> | null = null;
 
   constructor(opts: PtyRuntimeOptions) {
     this.opts = opts;
@@ -127,6 +129,7 @@ export class PtyRuntime {
   }
 
   async kill(signal?: string): Promise<void> {
+    this.cancelErrorDebounce();
     if (this.pty) {
       this.pty.kill(signal);
       this.pty = null;
@@ -151,16 +154,19 @@ export class PtyRuntime {
   private buildHandler(): SessionHookHandler {
     return {
       onPreToolUse: (payload) => {
+        this.cancelErrorDebounce();
         this.ptyOutputBuffer = "";
         const toolName = typeof payload.tool_name === "string" ? payload.tool_name : "unknown";
         console.log(`[pty-runtime] PreToolUse hook: tool=${toolName}, session=${this.opts.sessionId.slice(0, 8)}`);
         this.emit(translateHookEvent("PreToolUse", payload));
       },
       onPostToolUse: (payload) => {
+        this.cancelErrorDebounce();
         this.ptyOutputBuffer = "";
         this.emit(translateHookEvent("PostToolUse", payload));
       },
       onStop: (payload) => {
+        this.cancelErrorDebounce();
         this.ptyOutputBuffer = "";
         console.log(`[pty-runtime] Stop hook received for session ${this.opts.sessionId.slice(0, 8)}`);
         const events = translateHookEvent("Stop", payload);
@@ -168,10 +174,12 @@ export class PtyRuntime {
         this.emit(events);
       },
       onUserPromptSubmit: (payload) => {
+        this.cancelErrorDebounce();
         this.ptyOutputBuffer = "";
         this.emit(translateHookEvent("UserPromptSubmit", payload));
       },
       onNotification: (payload) => {
+        this.cancelErrorDebounce();
         this.emit(translateHookEvent("Notification", payload));
       },
       onPermissionRequest: (payload) => this.handlePermissionRequest(payload),
@@ -212,18 +220,54 @@ export class PtyRuntime {
     }
   }
 
+  private cancelErrorDebounce(): void {
+    if (this.errorDebounce) {
+      clearTimeout(this.errorDebounce);
+      this.errorDebounce = null;
+    }
+  }
+
   private scanForErrors(chunk: string): void {
     this.ptyOutputBuffer += chunk;
     if (this.ptyOutputBuffer.length > 8 * 1024) {
       this.ptyOutputBuffer = this.ptyOutputBuffer.slice(-4 * 1024);
     }
+    if (this.errorDebounce) return;
+
     // biome-ignore lint/suspicious/noControlCharactersInRegex: strip terminal control chars
     const clean = this.ptyOutputBuffer.replace(ANSI_RE, "").replace(/[\x00-\x1f]/g, "");
-    if (/error/i.test(clean)) {
-      console.log(
-        `[pty-runtime] PTY buffer (session ${this.opts.sessionId.slice(0, 8)}, ${clean.length} chars):\n---\n${clean.slice(-1000)}\n---`,
-      );
-    }
+    const match = clean.match(/API\s*Error:\s*(\d+)\s*([^✓✗❯]*)/) || clean.match(/APIError:\s*(\d+)\s*(.*)/);
+    if (!match) return;
+
+    const httpCode = match[1];
+    const detail = match[2].trim().slice(0, 200);
+    const errMsg = detail ? `${detail} (HTTP ${httpCode})` : `API Error (HTTP ${httpCode})`;
+
+    this.errorDebounce = setTimeout(() => {
+      this.errorDebounce = null;
+      this.ptyOutputBuffer = "";
+
+      console.log(`[pty-runtime] API error detected for session ${this.opts.sessionId.slice(0, 8)}: ${errMsg}`);
+
+      const doneEvent: ParsedEvent = {
+        type: "message_done",
+        message: {
+          id: uuidv4(),
+          role: "assistant",
+          content: "",
+          toolUses: [],
+          blocks: [],
+          timestamp: Date.now(),
+        },
+      };
+
+      try {
+        this.opts.onEvents([doneEvent]);
+      } catch {
+        // best-effort
+      }
+      this.opts.onError(errMsg);
+    }, 3000);
   }
 
   private async cleanup(): Promise<void> {
