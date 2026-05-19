@@ -2275,6 +2275,20 @@ Additional Cockpit rules beyond the CLI's defaults:
         session.contextUsage = lastUsage;
         session.emitter.emit("usage", sessionId, lastUsage);
       }
+      if (session.compacting && messages.some((m) => m.content === "__compacted__")) {
+        logDiag(sessionId, "compact:done-on-transcript");
+        session.compacting = false;
+        this.emitSystem(session, sessionId, "__compact::done");
+        const postCompactEstimate: ContextUsage = {
+          used: Math.round(session.contextWindowSize * 0.1),
+          total: session.contextWindowSize,
+        };
+        session.contextUsage = postCompactEstimate;
+        session.emitter.emit("usage", sessionId, postCompactEstimate);
+        session.info.status = "idle";
+        session.emitter.emit("status", sessionId, "idle");
+        this.flushQueuedMessage(session, sessionId);
+      }
     });
     session.transcriptWatcher = watcher;
 
