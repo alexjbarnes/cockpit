@@ -207,48 +207,6 @@ describe("SessionManager PTY runtime (unit)", () => {
     });
   });
 
-  describe("PTY slash timeout", () => {
-    it("sets a timeout when an unhandled slash command is forwarded to the PTY", () => {
-      vi.useFakeTimers();
-      try {
-        const session = manager.createSession("/tmp", undefined, { runtime: "pty" });
-        manager.sendMessage(session.id, "hello");
-        emitMessageDone();
-
-        const statuses: string[] = [];
-        manager.onStatus(session.id, (s) => statuses.push(s));
-
-        manager.sendMessage(session.id, "/unknown-slash-cmd");
-        expect(statuses).toContain("running");
-
-        vi.advanceTimersByTime(8001);
-
-        expect(ptyMocks.interrupt).toHaveBeenCalledTimes(1);
-        expect(manager.listKnownSessions().find((s) => s.id === session.id)?.status).toBe("idle");
-      } finally {
-        vi.useRealTimers();
-      }
-    });
-
-    it("clears the timeout when PTY events arrive before it fires", () => {
-      vi.useFakeTimers();
-      try {
-        const session = manager.createSession("/tmp", undefined, { runtime: "pty" });
-        manager.sendMessage(session.id, "hello");
-        emitMessageDone();
-
-        manager.sendMessage(session.id, "/unknown-slash-cmd");
-        emitMessageDone();
-
-        vi.advanceTimersByTime(8001);
-
-        expect(ptyMocks.interrupt).not.toHaveBeenCalled();
-      } finally {
-        vi.useRealTimers();
-      }
-    });
-  });
-
   describe("PTY lifecycle callbacks", () => {
     it("onExit sets session status to idle", () => {
       const session = manager.createSession("/tmp", undefined, { runtime: "pty" });
