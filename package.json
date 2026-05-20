@@ -44,8 +44,6 @@
     "lint": "biome check src/ tests/ server.ts",
     "lint:fix": "biome check --fix src/ tests/ server.ts",
     "format": "biome format --write src/ tests/ server.ts",
-
-    "postinstall": "node -e \"const p=require('path'),f=require('fs'),d=p.join(__dirname,'node_modules','node-pty','prebuilds',process.platform+'-'+process.arch,'spawn-helper');f.existsSync(d)&&f.chmodSync(d,0o755)\"",
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
@@ -66,7 +64,7 @@
     "lucide-react": "^1.8.0",
     "magika": "^1.0.0",
     "next": "^16.2.4",
-    "node-pty": "^1.1.0",
+    "node-pty": "^1.2.0-beta.13",
     "react": "^19",
     "react-dom": "^19",
     "react-markdown": "^10.1.0",
@@ -84,7 +82,6 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.12",
-
     "@types/node": "^25.6.0",
     "@types/react": "^19",
     "@types/react-dom": "^19",
