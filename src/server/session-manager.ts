@@ -1396,6 +1396,31 @@ export class SessionManager {
         session.emitter.emit("status", sessionId, "running");
         continue;
       }
+      if (sysMsg === "__compact::hook_start") {
+        if (!session.compacting) {
+          logDiag(sessionId, "compact:hook-start");
+          session.compacting = true;
+          this.emitSystem(session, sessionId, "__compact::start");
+        }
+        continue;
+      }
+      if (sysMsg === "__compact::hook_done") {
+        if (session.compacting) {
+          logDiag(sessionId, "compact:hook-done");
+          session.compacting = false;
+          this.emitSystem(session, sessionId, "__compact::done");
+          const postCompactEstimate: ContextUsage = {
+            used: Math.round(session.contextWindowSize * 0.1),
+            total: session.contextWindowSize,
+          };
+          session.contextUsage = postCompactEstimate;
+          session.emitter.emit("usage", sessionId, postCompactEstimate);
+          session.info.status = "idle";
+          session.emitter.emit("status", sessionId, "idle");
+          this.flushQueuedMessage(session, sessionId);
+        }
+        continue;
+      }
       const permModePrefix = "__permission_mode::";
       if (sysMsg.startsWith(permModePrefix)) {
         const mode = sysMsg.slice(permModePrefix.length);

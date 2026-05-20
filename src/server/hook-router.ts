@@ -11,7 +11,9 @@ export type HookEventName =
   | "SubagentStart"
   | "SubagentStop"
   | "Notification"
-  | "PermissionRequest";
+  | "PermissionRequest"
+  | "PreCompact"
+  | "PostCompact";
 
 export interface HookResponse {
   stdout?: string;
@@ -38,6 +40,8 @@ export interface SessionHookHandler {
   onSubagentStart?: HookCallback;
   onSubagentStop?: HookCallback;
   onNotification?: HookCallback;
+  onPreCompact?: HookCallback;
+  onPostCompact?: HookCallback;
   /** Must resolve with the permission decision. The promise can take as long as needed. */
   onPermissionRequest?: (payload: Record<string, unknown>) => Promise<PermissionDecision>;
 }
@@ -182,6 +186,8 @@ export class HookRouter {
       SubagentStart: handler.onSubagentStart,
       SubagentStop: handler.onSubagentStop,
       Notification: handler.onNotification,
+      PreCompact: handler.onPreCompact,
+      PostCompact: handler.onPostCompact,
     };
     const fn = handlerMap[eventName];
 

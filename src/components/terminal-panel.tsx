@@ -271,7 +271,7 @@ export function TerminalPanel({ terminalId, cwd: _cwd, active = true }: Terminal
   return (
     <div className="flex flex-col flex-1 min-h-0">
       <div className="flex-1 min-h-0 relative overflow-hidden bg-[#1e1e1e]">
-        <div ref={containerRef} className="absolute inset-0" />
+        <div ref={containerRef} className="absolute inset-0 px-3 py-2" />
       </div>
       {!isDesktop && kbOpen && (
         <div className="shrink-0 relative z-10 flex items-center gap-1.5 px-2 py-1.5 border-t border-border/50 bg-[#1e1e1e]">

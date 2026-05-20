@@ -14,6 +14,8 @@ const HOOK_EVENTS = [
   "SubagentStop",
   "Notification",
   "PermissionRequest",
+  "PreCompact",
+  "PostCompact",
 ] as const;
 type HookEvent = (typeof HOOK_EVENTS)[number];
 

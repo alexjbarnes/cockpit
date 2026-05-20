@@ -31,6 +31,10 @@ export function translateHookEvent(eventName: HookEventName, payload: Record<str
       return translateSubagentStart(payload);
     case "SubagentStop":
       return translateSubagentStop(payload);
+    case "PreCompact":
+      return translatePreCompact(payload);
+    case "PostCompact":
+      return translatePostCompact(payload);
     case "UserPromptSubmit":
     case "UserPromptExpansion":
       return [];
@@ -168,6 +172,14 @@ function translateSubagentStop(payload: Record<string, unknown>): ParsedEvent[] 
       },
     },
   ];
+}
+
+function translatePreCompact(_payload: Record<string, unknown>): ParsedEvent[] {
+  return [{ type: "system_message", text: "__compact::hook_start" }];
+}
+
+function translatePostCompact(_payload: Record<string, unknown>): ParsedEvent[] {
+  return [{ type: "system_message", text: "__compact::hook_done" }];
 }
 
 function translateNotification(payload: Record<string, unknown>): ParsedEvent[] {
