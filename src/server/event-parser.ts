@@ -39,6 +39,7 @@ export interface ParsedEvent {
     taskId: string;
     toolUseId: string;
     status: "running" | "progress" | "completed";
+    title?: string;
     description: string;
     summary?: string;
   };

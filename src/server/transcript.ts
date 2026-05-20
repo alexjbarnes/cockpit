@@ -336,7 +336,7 @@ function parseLines(lines: string[]): { messages: ChatMessage[]; lastUsage: { us
               name: block.name || "unknown",
               input: block.input ? JSON.stringify(block.input) : "",
               output: "",
-              status: "done",
+              status: "running",
             };
             parentTool.children.push(child);
             toolUseMap.set(child.id, child);
@@ -496,7 +496,7 @@ function parseLines(lines: string[]): { messages: ChatMessage[]; lastUsage: { us
             name: block.name || "unknown",
             input: block.input ? JSON.stringify(block.input) : "",
             output: "",
-            status: "done",
+            status: "running",
           };
           toolUses.push(tool);
           blocks.push({ type: "tool_use", toolUse: tool });

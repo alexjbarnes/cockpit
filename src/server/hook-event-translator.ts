@@ -134,7 +134,7 @@ function translateSubagentStart(payload: Record<string, unknown>): ParsedEvent[]
   const sessionId = stringOr(payload.session_id, uuidv4());
   const agentId = stringOr(payload.agent_id, "");
   const agentType = stringOr(payload.agent_type, "");
-  const description = stringOr(payload.description, agentType || "Subagent running");
+  const description = stringOr(payload.description, "");
   return [
     {
       type: "task_update",
@@ -142,7 +142,8 @@ function translateSubagentStart(payload: Record<string, unknown>): ParsedEvent[]
         taskId: sessionId,
         toolUseId: agentId,
         status: "running",
-        description,
+        title: agentType || "Agent",
+        description: description || agentType || "Subagent running",
       },
     },
   ];
@@ -153,7 +154,7 @@ function translateSubagentStop(payload: Record<string, unknown>): ParsedEvent[] 
   const agentId = stringOr(payload.agent_id, "");
   const agentType = stringOr(payload.agent_type, "");
   const lastMessage = stringOr(payload.last_assistant_message, "");
-  const description = stringOr(payload.description, agentType || "Subagent completed");
+  const description = stringOr(payload.description, "");
   return [
     {
       type: "task_update",
@@ -161,7 +162,8 @@ function translateSubagentStop(payload: Record<string, unknown>): ParsedEvent[] 
         taskId: sessionId,
         toolUseId: agentId,
         status: "completed",
-        description,
+        title: agentType || "Agent",
+        description: description || agentType || "Subagent completed",
         summary: lastMessage.slice(0, 500) || undefined,
       },
     },
