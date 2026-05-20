@@ -313,6 +313,32 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
             }
           }
           setMessages((prev) => applyTranscript(prev, transcriptMsgs));
+          if (currentRuntime !== "pty") break;
+          const agentDescs = new Map<string, string>();
+          for (const tm of transcriptMsgs) {
+            for (const tool of tm.toolUses) {
+              if (tool.name !== "Agent") continue;
+              try {
+                const inp = JSON.parse(tool.input || "{}");
+                const agentType = inp.subagent_type || "";
+                const desc = inp.description || "";
+                if (agentType && desc) agentDescs.set(agentType, desc);
+              } catch {}
+            }
+          }
+          if (agentDescs.size > 0) {
+            setBackgroundTasks((prev) => {
+              let changed = false;
+              const next = prev.map((t) => {
+                if (t.title && agentDescs.has(t.title) && (!t.description || t.description === t.title)) {
+                  changed = true;
+                  return { ...t, description: agentDescs.get(t.title)! };
+                }
+                return t;
+              });
+              return changed ? next : prev;
+            });
+          }
           break;
         }
 
@@ -913,7 +939,7 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
     });
 
     return unsub;
-  }, [sessionId, subscribe]);
+  }, [sessionId, subscribe, currentRuntime]);
 
   const requestMoreHistory = useCallback(() => {
     if (loadingMore || !hasMoreHistory) return;
