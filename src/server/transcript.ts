@@ -583,6 +583,55 @@ export async function loadTranscript(sessionId: string, cwd: string, options?: {
   return { messages, byteOffset, totalSize, lastUsage };
 }
 
+const COMPACTION_PREFIX = "This session is being continued from a previous conversation";
+const STRIP_ATTACHMENTS_RE = /^\[Attached [^\]]+\]\n*/gm;
+
+export async function loadPromptHistory(sessionId: string, cwd: string): Promise<string[]> {
+  const fp = getTranscriptPath(sessionId, cwd);
+  if (!existsSync(fp)) return [];
+
+  const seen = new Set<string>();
+  const prompts: string[] = [];
+
+  const rl = createInterface({ input: createReadStream(fp, "utf-8"), crlfDelay: Infinity });
+  for await (const line of rl) {
+    let entry: { type?: string; message?: { content?: unknown } };
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (entry.type !== "user" || !entry.message) continue;
+    const content = entry.message.content;
+
+    let text = "";
+    if (typeof content === "string") {
+      text = stripCommandXml(content);
+    } else if (Array.isArray(content)) {
+      const hasToolResults = content.some((b) => b.type === "tool_result");
+      if (hasToolResults) continue;
+      text = content
+        .filter((b) => b.type === "text" && b.text)
+        .map((b) => b.text)
+        .join("\n");
+      if (text) text = stripCommandXml(text);
+    }
+
+    text = text.replace(STRIP_ATTACHMENTS_RE, "").trim();
+    if (!text || text.startsWith("/")) continue;
+    if (text.startsWith(COMPACTION_PREFIX)) continue;
+    if (text.startsWith("<") && text.includes("system-reminder")) continue;
+    if (seen.has(text)) {
+      prompts.splice(prompts.indexOf(text), 1);
+    }
+    seen.add(text);
+    prompts.push(text);
+  }
+
+  prompts.reverse();
+  return prompts;
+}
+
 export async function loadLastAssistantMessage(cliSessionId: string, cwd: string): Promise<ChatMessage | null> {
   const { messages } = await loadTranscript(cliSessionId, cwd, { tailLines: 100 });
   for (let i = messages.length - 1; i >= 0; i--) {

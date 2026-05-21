@@ -63,6 +63,7 @@ export function ChatView({
     backgroundTasks,
     todos,
     btw,
+    promptHistory,
     hasMoreHistory,
     loadingMore,
     requestMoreHistory,
@@ -119,20 +120,6 @@ export function ChatView({
       seen.add(msg.id);
       return true;
     });
-  }, [messages]);
-
-  const promptHistory = useMemo(() => {
-    const seen = new Set<string>();
-    const prompts: string[] = [];
-    for (let i = messages.length - 1; i >= 0; i--) {
-      const m = messages[i];
-      if (m.role !== "user" || !m.content.trim()) continue;
-      if (m.content.startsWith("/") || m.content.startsWith("[")) continue;
-      if (seen.has(m.content)) continue;
-      seen.add(m.content);
-      prompts.push(m.content);
-    }
-    return prompts;
   }, [messages]);
 
   const totalMessages = uniqueMessages.length;
@@ -368,6 +355,9 @@ export function ChatView({
               if (questionBlock) {
                 const pending = pendingQuestions.find(() => true);
                 const hasOutput = !!questionBlock.toolUse.output;
+                console.log(
+                  `[question-debug] Place1 render: msgId=${msg.id.slice(0, 8)}, hasOutput=${hasOutput}, pending=${!!pending}, pendingCount=${pendingQuestions.length}`,
+                );
 
                 return (
                   <div key={msg.id} data-message-id={msg.id} className="space-y-4">
@@ -466,9 +456,17 @@ export function ChatView({
             ),
           )}
           {pendingQuestions.length > 0 &&
-            !visibleMessages.some(
-              (m) => m.role === "assistant" && (m.blocks || []).some((b) => b.type === "tool_use" && b.toolUse.name === "AskUserQuestion"),
-            ) &&
+            (() => {
+              const hasInline = visibleMessages.some(
+                (m) =>
+                  m.role === "assistant" && (m.blocks || []).some((b) => b.type === "tool_use" && b.toolUse.name === "AskUserQuestion"),
+              );
+              console.log(
+                `[question-debug] Place2 check: pendingCount=${pendingQuestions.length}, hasInlineQuestion=${hasInline}, visibleMsgCount=${visibleMessages.length}, totalMsgCount=${uniqueMessages.length}`,
+                pendingQuestions.map((q) => ({ id: q.requestId, answered: q.answered })),
+              );
+              return !hasInline;
+            })() &&
             pendingQuestions.map((q) => (
               <div key={q.requestId} className="flex w-full justify-start">
                 <div className="max-w-[85%]">

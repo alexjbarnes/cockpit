@@ -287,6 +287,7 @@ export function createWebSocketHandler(
                 messages: result.messages,
                 status: "idle",
                 hasMore: result.hasMore,
+                promptHistory: result.promptHistory,
               });
               send(ws, { type: "session:connected", sessionId: msg.sessionId });
               send(ws, { type: "session:info_updated", sessionId: msg.sessionId, info: result.info });
@@ -386,6 +387,7 @@ export function createWebSocketHandler(
                   messages: session.messages,
                   status: correctedStatus,
                   hasMore: session.hasMore,
+                  promptHistory: session.promptHistory,
                 });
               }
             } else {
@@ -395,6 +397,7 @@ export function createWebSocketHandler(
                 messages: session.messages,
                 status: correctedStatus,
                 hasMore: session.hasMore,
+                promptHistory: session.promptHistory,
               });
             }
 
@@ -525,6 +528,12 @@ export function createWebSocketHandler(
             // Re-emit any pending permission/question requests that were
             // sent to a previous (now dead) WebSocket connection
             const pendingReqs = sessionManager.getPendingRequests(msg.sessionId);
+            if (pendingReqs.length > 0) {
+              console.log(
+                `[question-debug] reconnect re-sending ${pendingReqs.length} pending requests:`,
+                pendingReqs.map((r) => ({ id: r.requestId, type: r.type, tool: r.toolName })),
+              );
+            }
             for (const req of pendingReqs) {
               if (req.type === "question") {
                 send(ws, {
@@ -687,8 +696,15 @@ export function createWebSocketHandler(
         }
 
         case "question:response": {
+          console.log(
+            `[question-debug] question:response for session ${msg.sessionId.slice(0, 8)}, requestId=${msg.requestId}, hadPending=${!!sessionManager.getPendingRequest(msg.sessionId, msg.requestId)}`,
+          );
           const pending = sessionManager.getPendingRequest(msg.sessionId, msg.requestId);
           sessionManager.removePendingRequest(msg.sessionId, msg.requestId);
+          console.log(
+            `[question-debug] after remove, remaining pending:`,
+            sessionManager.getPendingRequests(msg.sessionId).map((r) => r.requestId),
+          );
           const originalQuestions = pending?.rawToolInput?.questions;
           sessionManager.respondToPermission(msg.sessionId, msg.requestId, true, {
             questions: originalQuestions || [],
@@ -951,6 +967,7 @@ function handleParsedEvent(ws: WebSocket, sessionId: string, event: ParsedEvent,
       const requestId = event.requestId || "";
 
       if (toolName === "AskUserQuestion") {
+        console.log(`[question-debug] live question:request for session ${sessionId.slice(0, 8)}, requestId=${requestId}`);
         send(ws, {
           type: "question:request",
           sessionId,

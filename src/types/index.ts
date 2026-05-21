@@ -351,7 +351,15 @@ export type ServerMessage =
   | { type: "session:task_update"; sessionId: string; task: BackgroundTask }
   | { type: "session:todos"; sessionId: string; todos: TodoItem[] }
   | { type: "session:init"; sessionId: string; data: InitData }
-  | { type: "history"; sessionId: string; messages: ChatMessage[]; delta?: boolean; status?: "idle" | "running"; hasMore?: boolean }
+  | {
+      type: "history";
+      sessionId: string;
+      messages: ChatMessage[];
+      delta?: boolean;
+      status?: "idle" | "running";
+      hasMore?: boolean;
+      promptHistory?: string[];
+    }
   | { type: "history:more"; sessionId: string; messages: ChatMessage[]; hasMore: boolean }
   | { type: "session:transcript"; sessionId: string; messages: ChatMessage[] }
   | {

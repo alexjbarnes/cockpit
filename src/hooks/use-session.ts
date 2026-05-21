@@ -66,6 +66,7 @@ interface UseSessionReturn {
   backgroundTasks: BackgroundTask[];
   todos: TodoItem[];
   btw: BtwState | null;
+  promptHistory: string[];
   hasMoreHistory: boolean;
   loadingMore: boolean;
   requestMoreHistory: () => void;
@@ -115,6 +116,7 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
   const [backgroundTasks, setBackgroundTasks] = useState<BackgroundTask[]>([]);
   const [todos, setTodos] = useState<TodoItem[]>([]);
   const [btw, setBtw] = useState<BtwState | null>(null);
+  const [promptHistory, setPromptHistory] = useState<string[]>([]);
   const [hasMoreHistory, setHasMoreHistory] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
 
@@ -158,6 +160,7 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
     lastServerMsgIdRef.current = null;
     queuedTextsRef.current = [];
     loadedSessionRef.current = null;
+    setPromptHistory([]);
     setHasMoreHistory(false);
     setLoadingMore(false);
   }
@@ -175,7 +178,14 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
     if (connected) {
       // Clear stale client-side state before server re-sends current state
       setPendingPermissions([]);
-      setPendingQuestions([]);
+      setPendingQuestions((prev) => {
+        if (prev.length > 0)
+          console.log(
+            `[question-debug] connect: clearing ${prev.length} pendingQuestions`,
+            prev.map((q) => q.requestId),
+          );
+        return [];
+      });
       const isReconnect = loadedSessionRef.current === sessionId;
       console.log(`[session] sending session:connect for ${sessionId.slice(0, 8)}`);
       (window as unknown as Record<string, unknown>).__sessionConnectTime = performance.now();
@@ -260,7 +270,14 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
               streamingRef.current = null;
               agentStackRef.current = [];
               setMessages((prev) => prev.filter((m) => m.id !== "streaming"));
-              setPendingQuestions([]);
+              setPendingQuestions((prev) => {
+                if (prev.length > 0)
+                  console.log(
+                    `[question-debug] history:idle clearing ${prev.length} pendingQuestions`,
+                    prev.map((q) => q.requestId),
+                  );
+                return [];
+              });
               setRateLimitStatus(null);
               setBackgroundTasks((prev) => {
                 if (prev.some((t) => t.status === "running")) {
@@ -273,6 +290,10 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
 
           if (msg.hasMore !== undefined) {
             setHasMoreHistory(msg.hasMore);
+          }
+
+          if (msg.promptHistory) {
+            setPromptHistory(msg.promptHistory);
           }
 
           const connectTime = (window as unknown as Record<string, unknown>).__sessionConnectTime as number | undefined;
@@ -714,7 +735,14 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
             agentStackRef.current = [];
             // Remove stale streaming message that may have survived a WS drop
             setMessages((prev) => prev.filter((m) => m.id !== "streaming"));
-            setPendingQuestions([]);
+            setPendingQuestions((prev) => {
+              if (prev.length > 0)
+                console.log(
+                  `[question-debug] status:idle clearing ${prev.length} pendingQuestions`,
+                  prev.map((q) => q.requestId),
+                );
+              return [];
+            });
             setRateLimitStatus(null);
             // Clear any background tasks still running - the process has exited
             setBackgroundTasks((prev) => {
@@ -932,7 +960,15 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
         }
 
         case "question:request": {
-          setPendingQuestions((prev) => [...prev, { requestId: msg.requestId, questions: msg.questions }]);
+          console.log(`[question-debug] question:request received`, msg.requestId);
+          console.trace("[question-debug] question:request stack");
+          setPendingQuestions((prev) => {
+            console.log(`[question-debug] question:request adding to ${prev.length} existing`, [
+              ...prev.map((q) => q.requestId),
+              msg.requestId,
+            ]);
+            return [...prev, { requestId: msg.requestId, questions: msg.questions }];
+          });
           break;
         }
       }
@@ -1120,6 +1156,15 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
       };
       setMessages((prev) => [...prev, userMsg]);
       setSuggestions([]);
+
+      const cleaned = text.replace(/^\[Attached [^\]]+\]\n*/gm, "").trim();
+      if (cleaned && !cleaned.startsWith("/")) {
+        setPromptHistory((prev) => {
+          if (prev[0] === cleaned) return prev;
+          return [cleaned, ...prev.filter((p) => p !== cleaned)];
+        });
+      }
+
       send({
         type: "message:send",
         sessionId,
@@ -1145,8 +1190,15 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
 
   const respondToQuestion = useCallback(
     (requestId: string, answers: Record<string, string>) => {
+      console.log(`[question-debug] respondToQuestion`, requestId);
       send({ type: "question:response", sessionId, requestId, answers });
-      setPendingQuestions((prev) => prev.map((q) => (q.requestId === requestId ? { ...q, answered: true } : q)));
+      setPendingQuestions((prev) => {
+        console.log(
+          `[question-debug] marking answered, current pending:`,
+          prev.map((q) => ({ id: q.requestId, answered: q.answered })),
+        );
+        return prev.map((q) => (q.requestId === requestId ? { ...q, answered: true } : q));
+      });
     },
     [send, sessionId],
   );
@@ -1299,6 +1351,7 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
     backgroundTasks,
     todos,
     btw,
+    promptHistory,
     hasMoreHistory,
     loadingMore,
     requestMoreHistory,

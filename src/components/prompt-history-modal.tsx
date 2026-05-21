@@ -52,12 +52,12 @@ export function PromptHistoryModal({ open, prompts, onSelect, onClose }: PromptH
       }
       if (e.key === "ArrowUp") {
         e.preventDefault();
-        setSelected((s) => (s > 0 ? s - 1 : filtered.length - 1));
+        setSelected((s) => (s < filtered.length - 1 ? s + 1 : 0));
         return;
       }
       if (e.key === "ArrowDown") {
         e.preventDefault();
-        setSelected((s) => (s < filtered.length - 1 ? s + 1 : 0));
+        setSelected((s) => (s > 0 ? s - 1 : filtered.length - 1));
         return;
       }
       if (e.key === "Enter") {
@@ -76,7 +76,7 @@ export function PromptHistoryModal({ open, prompts, onSelect, onClose }: PromptH
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div className="w-full max-w-3xl mb-24 mx-4 rounded-lg border bg-background shadow-lg overflow-hidden" onKeyDown={handleKeyDown}>
-        <div ref={listRef} className="max-h-80 overflow-y-auto p-1">
+        <div ref={listRef} className="max-h-80 overflow-y-auto p-1 flex flex-col-reverse">
           {filtered.length === 0 && (
             <div className="px-3 py-6 text-center text-sm text-muted-foreground">{query ? "No matching prompts" : "No prompt history"}</div>
           )}
@@ -89,7 +89,7 @@ export function PromptHistoryModal({ open, prompts, onSelect, onClose }: PromptH
                 selected === i ? "bg-accent text-foreground" : "text-muted-foreground hover:text-foreground"
               }`}
             >
-              <span className="shrink-0 font-mono text-xs text-muted-foreground/50 w-5 text-right pt-0.5">{filtered.length - i}</span>
+              <span className="shrink-0 font-mono text-xs text-muted-foreground/50 w-5 text-right pt-0.5">{i + 1}</span>
               <span className="line-clamp-2 break-all">{prompt}</span>
             </button>
           ))}

@@ -29,7 +29,7 @@ import { findChainForCliSession, getSessionPrefs, type SessionRuntime, setSessio
 import { getHookRouter } from "./singleton";
 import { createStreamState, processEvents, type StreamState } from "./stream-processor";
 import { TodoWatcher } from "./todo-watcher";
-import { findSessionCwd, loadMoreMessages, loadTranscript, transcriptExists } from "./transcript";
+import { findSessionCwd, loadMoreMessages, loadPromptHistory, loadTranscript, transcriptExists } from "./transcript";
 import { TranscriptWatcher } from "./transcript-watcher";
 
 export type { SessionRuntime };
@@ -279,9 +279,13 @@ export class SessionManager {
     return session!;
   }
 
-  async getSession(
-    id: string,
-  ): Promise<{ info: SessionInfo; messages: ChatMessage[]; hasMore: boolean; lastUsage: { used: number; total: number } | null } | null> {
+  async getSession(id: string): Promise<{
+    info: SessionInfo;
+    messages: ChatMessage[];
+    hasMore: boolean;
+    lastUsage: { used: number; total: number } | null;
+    promptHistory: string[];
+  } | null> {
     let session = this.sessions.get(id);
     if (!session) {
       // After server restart, session isn't in memory but transcript exists on disk.
@@ -343,13 +347,31 @@ export class SessionManager {
         session.info.name = firstUser.content.slice(0, 120);
       }
     }
-    return { info: session.info, messages: clientMessages, hasMore, lastUsage };
+    const allCliIds = [...session.previousCliSessionIds, session.cliSessionId];
+    const historyArrays = await Promise.all(allCliIds.map((id) => loadPromptHistory(id, session.info.cwd)));
+    const seen = new Set<string>();
+    const allPrompts: string[] = [];
+    for (const arr of historyArrays) {
+      for (const p of arr) {
+        if (seen.has(p)) continue;
+        seen.add(p);
+        allPrompts.push(p);
+      }
+    }
+
+    return { info: session.info, messages: clientMessages, hasMore, lastUsage, promptHistory: allPrompts };
   }
 
   async getSessionByCwd(
     id: string,
     cwd: string,
-  ): Promise<{ info: SessionInfo; messages: ChatMessage[]; hasMore: boolean; lastUsage: { used: number; total: number } | null } | null> {
+  ): Promise<{
+    info: SessionInfo;
+    messages: ChatMessage[];
+    hasMore: boolean;
+    lastUsage: { used: number; total: number } | null;
+    promptHistory: string[];
+  } | null> {
     this.ensureSession(id, cwd);
     const session = this.sessions.get(id)!;
     const stitching = getDefaults().messageStitching;
@@ -400,13 +422,31 @@ export class SessionManager {
         session.info.name = firstUser.content.slice(0, 120);
       }
     }
-    return { info: session.info, messages: clientMessages, hasMore, lastUsage };
+    const allCliIds = [...session.previousCliSessionIds, session.cliSessionId];
+    const historyArrays = await Promise.all(allCliIds.map((id) => loadPromptHistory(id, cwd)));
+    const seen = new Set<string>();
+    const allPrompts: string[] = [];
+    for (const arr of historyArrays) {
+      for (const p of arr) {
+        if (seen.has(p)) continue;
+        seen.add(p);
+        allPrompts.push(p);
+      }
+    }
+
+    return { info: session.info, messages: clientMessages, hasMore, lastUsage, promptHistory: allPrompts };
   }
 
   async getCliSessionView(
     cliId: string,
     cwd: string,
-  ): Promise<{ info: SessionInfo; messages: ChatMessage[]; hasMore: boolean; lastUsage: { used: number; total: number } | null } | null> {
+  ): Promise<{
+    info: SessionInfo;
+    messages: ChatMessage[];
+    hasMore: boolean;
+    lastUsage: { used: number; total: number } | null;
+    promptHistory: string[];
+  } | null> {
     if (!transcriptExists(cliId, cwd)) return null;
 
     const chain = findChainForCliSession(cliId);
@@ -445,11 +485,24 @@ export class SessionManager {
       }
     }
 
+    const allCliIds = [...prevIds, cliId];
+    const historyArrays = await Promise.all(allCliIds.map((id) => loadPromptHistory(id, cwd)));
+    const seen = new Set<string>();
+    const allPrompts: string[] = [];
+    for (const arr of historyArrays) {
+      for (const p of arr) {
+        if (seen.has(p)) continue;
+        seen.add(p);
+        allPrompts.push(p);
+      }
+    }
+
     return {
       info: { id: cliId, name, cwd, createdAt: Date.now(), lastActiveAt: Date.now(), status: "idle" },
       messages: clientMessages,
       hasMore: messages.length > PAGE,
       lastUsage,
+      promptHistory: allPrompts,
     };
   }
 
@@ -768,7 +821,14 @@ export class SessionManager {
   removePendingRequest(sessionId: string, requestId: string): void {
     const session = this.sessions.get(sessionId);
     if (session) {
+      const had = session.pendingRequests.has(requestId);
+      const wasQuestion = session.pendingRequests.get(requestId)?.type === "question";
       session.pendingRequests.delete(requestId);
+      if (wasQuestion) {
+        console.log(
+          `[question-debug] removePendingRequest: session=${sessionId.slice(0, 8)}, requestId=${requestId}, existed=${had}, remaining=${session.pendingRequests.size}`,
+        );
+      }
       this.notifyPendingChanged(session, sessionId);
     }
   }
@@ -1461,8 +1521,14 @@ export class SessionManager {
         bypassedRequestIds.add(pa.requestId);
       } else {
         const planPath = pa.toolName === "ExitPlanMode" ? findLatestPlanFile() : undefined;
+        const reqType = pa.toolName === "AskUserQuestion" ? "question" : "permission";
+        if (reqType === "question") {
+          console.log(
+            `[question-debug] adding pending question: session=${sessionId.slice(0, 8)}, requestId=${pa.requestId}, total=${session.pendingRequests.size + 1}`,
+          );
+        }
         session.pendingRequests.set(pa.requestId, {
-          type: pa.toolName === "AskUserQuestion" ? "question" : "permission",
+          type: reqType,
           requestId: pa.requestId,
           toolName: pa.toolName,
           toolInput: pa.toolInput || "",
