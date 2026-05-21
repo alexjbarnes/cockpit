@@ -5,6 +5,17 @@ import type { ModelSlots } from "@/types";
 
 export type DiffStyle = "split" | "unified";
 export type ThinkingLevel = "low" | "medium" | "high" | "xhigh" | "max";
+export type TerminalTheme =
+  | "cockpit"
+  | "dark"
+  | "dracula"
+  | "catppuccin"
+  | "tokyoNight"
+  | "nord"
+  | "gruvbox"
+  | "solarized"
+  | "monokai"
+  | "oneDark";
 
 export interface Settings {
   diffStyle: DiffStyle;
@@ -18,6 +29,9 @@ export interface Settings {
   modelSlots: ModelSlots;
   messageStitching: boolean;
   reviewsEnabled: boolean;
+  terminalFontSize: number;
+  terminalTheme: TerminalTheme;
+  terminalScrollback: number;
 }
 
 const defaultSettings: Settings = {
@@ -32,6 +46,9 @@ const defaultSettings: Settings = {
   modelSlots: { main: "sonnet" },
   messageStitching: true,
   reviewsEnabled: true,
+  terminalFontSize: 14,
+  terminalTheme: "dark" as TerminalTheme,
+  terminalScrollback: 1000,
 };
 
 export function useSettings() {

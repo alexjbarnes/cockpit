@@ -1,6 +1,7 @@
 "use client";
 
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
+import { disposeTerminalInstance } from "@/components/terminal-panel";
 import { pathBasename } from "@/lib/path";
 
 interface ChatTab {
@@ -234,6 +235,7 @@ export function TabProvider({ sessionId, children }: { sessionId: string; childr
     setState((prev) => {
       const closingTab = prev.tabs.find((t) => t.id === tabId);
       if (closingTab?.type === "terminal") {
+        disposeTerminalInstance(closingTab.terminalId);
         fetch(`/api/terminal/${closingTab.terminalId}`, { method: "DELETE" }).catch(() => {});
       }
       const idx = prev.tabs.findIndex((t) => t.id === tabId);
