@@ -243,6 +243,18 @@ export class PtyRuntime {
         console.log(`[pty-runtime] SubagentStop full payload keys: ${Object.keys(payload).join(", ")}`);
         this.emit(translateHookEvent("SubagentStop", payload));
       },
+      onPreCompact: (payload) => {
+        this.cancelErrorDebounce();
+        this.ptyOutputBuffer = "";
+        console.log(`[pty-runtime] PreCompact for session ${this.opts.sessionId.slice(0, 8)}`);
+        this.emit(translateHookEvent("PreCompact", payload));
+      },
+      onPostCompact: (payload) => {
+        this.cancelErrorDebounce();
+        this.ptyOutputBuffer = "";
+        console.log(`[pty-runtime] PostCompact for session ${this.opts.sessionId.slice(0, 8)}`);
+        this.emit(translateHookEvent("PostCompact", payload));
+      },
       onNotification: (payload) => {
         this.cancelErrorDebounce();
         this.emit(translateHookEvent("Notification", payload));
