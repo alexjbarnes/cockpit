@@ -27,7 +27,7 @@ export default function AgentEditorPage({ params }: { params: Promise<{ name: st
   const scope = (searchParams.get("scope") || "user") as "user" | "project";
   const cwd = searchParams.get("cwd") || undefined;
 
-  usePageHeader(isNew ? "New Agent" : "Edit Agent");
+  usePageHeader(isNew ? "New Agent" : "Edit Agent", { hideActions: true });
 
   const [agentName, setAgentName] = useState(isNew ? "" : decodeURIComponent(rawName));
   const [content, setContent] = useState(isNew ? TEMPLATE : "");

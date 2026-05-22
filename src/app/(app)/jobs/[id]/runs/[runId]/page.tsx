@@ -167,7 +167,7 @@ export default function RunDetailPage() {
   const runId = params.runId as string;
   const router = useRouter();
 
-  usePageHeader("Run Detail");
+  usePageHeader("Run Detail", { hideActions: true });
 
   const [run, setRun] = useState<JobRun | null>(null);
   const [loading, setLoading] = useState(true);

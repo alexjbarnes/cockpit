@@ -241,7 +241,7 @@ function JobDirGroup({
 }
 
 export default function JobsPage() {
-  usePageHeader("Scheduled Jobs");
+  usePageHeader("Scheduled Jobs", { hideActions: true });
 
   const { jobs, loading, deleteJob, triggerJob, refresh } = useJobs();
   const router = useRouter();

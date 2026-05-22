@@ -152,7 +152,7 @@ export default function JobEditPage() {
   const initialCwd = isNew ? searchParams.get("cwd") : null;
   const router = useRouter();
 
-  usePageHeader(duplicateFrom ? "Duplicate Job" : isNew ? "New Job" : "Edit Job");
+  usePageHeader(duplicateFrom ? "Duplicate Job" : isNew ? "New Job" : "Edit Job", { hideActions: true });
 
   const [name, setName] = useState("");
   const [cwd, setCwd] = useState(initialCwd || "");

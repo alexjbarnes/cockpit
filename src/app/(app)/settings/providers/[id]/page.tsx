@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import type { Provider } from "@/types";
 
 export default function EditProviderPage() {
-  usePageHeader("Edit Provider");
+  usePageHeader("Edit Provider", { hideActions: true });
   const router = useRouter();
   const { id } = useParams<{ id: string }>();
   const [provider, setProvider] = useState<Provider | null>(null);
@@ -64,28 +64,30 @@ export default function EditProviderPage() {
   }
 
   return (
-    <>
-      <Button variant="ghost" size="sm" onClick={() => router.push("/settings")}>
+    <div className="flex-1 min-h-0 flex flex-col p-4 gap-4">
+      <Button variant="ghost" size="sm" className="self-start shrink-0" onClick={() => router.push("/settings")}>
         <ArrowLeft className="h-4 w-4 mr-1" />
         Settings
       </Button>
-      <ProviderForm
-        provider={provider}
-        isNew={false}
-        lockedEnvKeys={[
-          "ANTHROPIC_BASE_URL",
-          "ANTHROPIC_AUTH_TOKEN",
-          "ANTHROPIC_MODEL",
-          "ANTHROPIC_DEFAULT_OPUS_MODEL",
-          "ANTHROPIC_DEFAULT_SONNET_MODEL",
-          "ANTHROPIC_DEFAULT_HAIKU_MODEL",
-          "CLAUDE_CODE_SUBAGENT_MODEL",
-          "CLAUDE_CODE_EFFORT_LEVEL",
-        ]}
-        onSave={handleSave}
-        onCancel={() => router.push("/settings")}
-        onDelete={handleDelete}
-      />
-    </>
+      <div className="max-w-xl flex-1 min-h-0">
+        <ProviderForm
+          provider={provider}
+          isNew={false}
+          lockedEnvKeys={[
+            "ANTHROPIC_BASE_URL",
+            "ANTHROPIC_AUTH_TOKEN",
+            "ANTHROPIC_MODEL",
+            "ANTHROPIC_DEFAULT_OPUS_MODEL",
+            "ANTHROPIC_DEFAULT_SONNET_MODEL",
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+            "CLAUDE_CODE_SUBAGENT_MODEL",
+            "CLAUDE_CODE_EFFORT_LEVEL",
+          ]}
+          onSave={handleSave}
+          onCancel={() => router.push("/settings")}
+          onDelete={handleDelete}
+        />
+      </div>
+    </div>
   );
 }

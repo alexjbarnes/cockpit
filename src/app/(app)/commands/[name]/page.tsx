@@ -25,7 +25,7 @@ export default function CommandEditorPage({ params }: { params: Promise<{ name: 
   const scope = (searchParams.get("scope") || "user") as "user" | "project";
   const cwd = searchParams.get("cwd") || undefined;
 
-  usePageHeader(isNew ? "New Command" : "Edit Command");
+  usePageHeader(isNew ? "New Command" : "Edit Command", { hideActions: true });
 
   const [commandName, setCommandName] = useState(isNew ? "" : decodeURIComponent(rawName));
   const [content, setContent] = useState(isNew ? TEMPLATE : "");

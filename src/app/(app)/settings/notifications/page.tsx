@@ -235,7 +235,7 @@ function ProviderForm({
 }
 
 export default function NotificationsSettingsPage() {
-  usePageHeader("Notifications");
+  usePageHeader("Notifications", { hideActions: true });
   const router = useRouter();
   const [settings, setSettings] = useState<NotificationSettings>({ providers: [] });
   const [loading, setLoading] = useState(true);

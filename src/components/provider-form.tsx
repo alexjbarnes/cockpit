@@ -1,9 +1,7 @@
 "use client";
 
-import { Check, Pencil, Plus, Trash2, X } from "lucide-react";
+import { Cpu, Key, Layers, Plus, Trash2, X } from "lucide-react";
 import { useState } from "react";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import type { Provider, ProviderModel, ThinkingLevel } from "@/types";
 
@@ -15,6 +13,8 @@ interface ProviderFormProps {
   onDelete?: () => void;
   lockedEnvKeys?: string[];
 }
+
+type Tab = "general" | "models";
 
 const ALL_EFFORT_LEVELS: ThinkingLevel[] = ["low", "medium", "high", "xhigh", "max"];
 
@@ -30,7 +30,41 @@ interface EditingModel {
   supportsExtendedContext: boolean;
 }
 
+function EffortPills({ selected, onChange }: { selected: ThinkingLevel[]; onChange: (levels: ThinkingLevel[]) => void }) {
+  return (
+    <div className="ml-auto flex flex-wrap gap-1 justify-end">
+      {ALL_EFFORT_LEVELS.map((level) => (
+        <button
+          type="button"
+          key={level}
+          onClick={() => onChange(selected.includes(level) ? selected.filter((l) => l !== level) : [...selected, level])}
+          className={`rounded px-2 py-0.5 text-xs transition-colors ${
+            selected.includes(level) ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground hover:text-foreground"
+          }`}
+        >
+          {level}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function TabButton({ active, onClick, icon, label }: { active: boolean; onClick: () => void; icon: React.ReactNode; label: string }) {
+  return (
+    <button
+      onClick={onClick}
+      className={`flex items-center gap-2 px-3 py-1.5 rounded text-xs font-medium transition-colors ${
+        active ? "bg-primary/10 text-primary" : "text-muted-foreground hover:text-foreground hover:bg-muted"
+      }`}
+    >
+      {icon}
+      {label}
+    </button>
+  );
+}
+
 export function ProviderForm({ provider, isNew, onSave, onCancel, onDelete, lockedEnvKeys }: ProviderFormProps) {
+  const [tab, setTab] = useState<Tab>("general");
   const [name, setName] = useState(provider.name);
   const [envVars, setEnvVars] = useState<[string, string][]>(Object.entries(provider.envVars));
   const [models, setModels] = useState<ProviderModel[]>(provider.models);
@@ -41,8 +75,8 @@ export function ProviderForm({ provider, isNew, onSave, onCancel, onDelete, lock
   const [newModelEffort, setNewModelEffort] = useState<ThinkingLevel[]>([]);
   const [newModelExtCtx, setNewModelExtCtx] = useState(false);
   const [editingModel, setEditingModel] = useState<EditingModel | null>(null);
-  const locked = new Set(lockedEnvKeys ?? []);
   const [saving, setSaving] = useState(false);
+  const locked = new Set(lockedEnvKeys ?? []);
 
   const handleSave = async () => {
     if (!name.trim()) return;
@@ -103,33 +137,43 @@ export function ProviderForm({ provider, isNew, onSave, onCancel, onDelete, lock
   };
 
   return (
-    <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-6">
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">{isNew ? "Add Provider" : `Edit ${provider.name}`}</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-6">
-          {/* Name */}
-          <div className="space-y-1.5">
-            <label className="text-xs font-medium text-muted-foreground">Name</label>
-            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. OpenRouter" />
-          </div>
+    <div className="flex flex-col h-full">
+      <div className="flex gap-1 px-1 pb-3 border-b shrink-0">
+        <TabButton active={tab === "general"} onClick={() => setTab("general")} icon={<Key className="h-3.5 w-3.5" />} label="General" />
+        <TabButton active={tab === "models"} onClick={() => setTab("models")} icon={<Layers className="h-3.5 w-3.5" />} label="Models" />
+      </div>
 
-          {/* Environment Variables */}
-          <div className="space-y-2">
-            <label className="text-xs font-medium text-muted-foreground">Environment Variables</label>
-            {envVars.length > 0 && (
+      <div className="flex-1 overflow-y-auto py-4 space-y-4">
+        {tab === "general" && (
+          <div className="space-y-4 sm:space-y-5">
+            <div className="flex flex-col sm:flex-row sm:items-center gap-1.5 sm:gap-2">
+              <div className="flex items-center gap-2">
+                <Cpu className="h-3.5 w-3.5 text-muted-foreground" />
+                <span className="text-xs font-medium text-foreground">Name</span>
+              </div>
+              <Input
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="e.g. OpenRouter"
+                className="sm:ml-auto sm:w-56 text-xs h-7"
+              />
+            </div>
+
+            <div className="space-y-2 sm:space-y-3">
+              <div className="flex items-center gap-2">
+                <Key className="h-3.5 w-3.5 text-muted-foreground" />
+                <span className="text-xs font-medium text-foreground">Environment Variables</span>
+              </div>
+
               <div className="space-y-1.5">
                 {envVars.map(([key, value], i) => {
                   const isLocked = locked.has(key);
                   const masked = shouldMaskKey(key);
                   return (
-                    <div key={i} className="space-y-1">
-                      <div className="flex items-center gap-1.5">
+                    <div key={i} className="rounded-lg border border-border px-3 py-2 text-xs space-y-1.5">
+                      <div className="flex items-center gap-2">
                         {isLocked ? (
-                          <span className="flex-1 min-w-0 font-mono text-xs h-8 flex items-center px-3 rounded border border-input bg-muted/50 text-muted-foreground">
-                            {key}
-                          </span>
+                          <span className="font-mono text-muted-foreground truncate">{key}</span>
                         ) : (
                           <>
                             <Input
@@ -140,12 +184,12 @@ export function ProviderForm({ provider, isNew, onSave, onCancel, onDelete, lock
                                 setEnvVars(next);
                               }}
                               placeholder="KEY"
-                              className="flex-1 min-w-0 font-mono text-xs h-8"
+                              className="flex-1 min-w-0 font-mono text-xs h-7"
                             />
                             <button
                               type="button"
                               onClick={() => setEnvVars(envVars.filter((_, j) => j !== i))}
-                              className="shrink-0 text-muted-foreground hover:text-foreground p-1"
+                              className="shrink-0 text-muted-foreground hover:text-foreground p-0.5"
                             >
                               <X className="h-3.5 w-3.5" />
                             </button>
@@ -161,180 +205,162 @@ export function ProviderForm({ provider, isNew, onSave, onCancel, onDelete, lock
                           setEnvVars(next);
                         }}
                         placeholder={masked ? "••••••••" : "value"}
-                        className="flex-1 min-w-0 font-mono text-xs h-8 w-full"
+                        className="w-full font-mono text-xs h-7"
                       />
                     </div>
                   );
                 })}
               </div>
-            )}
-            <div className="space-y-1">
-              <div className="flex items-center gap-1.5">
+
+              <div className="rounded-lg border border-dashed border-input px-3 py-2 space-y-1.5">
+                <div className="flex items-center gap-2">
+                  <Input
+                    value={newEnvKey}
+                    onChange={(e) => setNewEnvKey(e.target.value)}
+                    placeholder="NEW_KEY"
+                    className="flex-1 min-w-0 font-mono text-xs h-7"
+                    onKeyDown={(e) => e.key === "Enter" && addEnvVar()}
+                  />
+                  <button type="button" onClick={addEnvVar} className="shrink-0 text-muted-foreground hover:text-foreground p-0.5">
+                    <Plus className="h-3.5 w-3.5" />
+                  </button>
+                </div>
                 <Input
-                  value={newEnvKey}
-                  onChange={(e) => setNewEnvKey(e.target.value)}
-                  placeholder="KEY"
-                  className="flex-1 min-w-0 font-mono text-xs h-8"
+                  type={shouldMaskKey(newEnvKey) ? "password" : "text"}
+                  value={newEnvVal}
+                  onChange={(e) => setNewEnvVal(e.target.value)}
+                  placeholder={shouldMaskKey(newEnvKey) ? "••••••••" : "value"}
+                  className="w-full font-mono text-xs h-7"
                   onKeyDown={(e) => e.key === "Enter" && addEnvVar()}
                 />
-                <button type="button" onClick={addEnvVar} className="shrink-0 text-muted-foreground hover:text-foreground p-1">
-                  <Plus className="h-3.5 w-3.5" />
-                </button>
               </div>
-              <Input
-                type={shouldMaskKey(newEnvKey) ? "password" : "text"}
-                value={newEnvVal}
-                onChange={(e) => setNewEnvVal(e.target.value)}
-                placeholder={shouldMaskKey(newEnvKey) ? "••••••••" : "value"}
-                className="w-full font-mono text-xs h-8"
-                onKeyDown={(e) => e.key === "Enter" && addEnvVar()}
-              />
             </div>
           </div>
+        )}
 
-          {/* Models */}
-          <div className="space-y-3">
-            <label className="text-xs font-medium text-muted-foreground">Models</label>
-            {models.length > 0 && (
-              <div className="space-y-1">
-                {models.map((model, i) =>
-                  editingModel?.index === i ? (
-                    <div key={i} className="rounded-md border border-border px-3 py-2 space-y-2">
-                      <div className="flex gap-1.5">
-                        <Input
-                          value={editingModel.modelId}
-                          onChange={(e) => setEditingModel({ ...editingModel, modelId: e.target.value })}
-                          placeholder="Model ID"
-                          className="flex-1 font-mono text-xs h-8"
+        {tab === "models" && (
+          <div className="space-y-4">
+            {models.length === 0 && !editingModel && (
+              <p className="text-xs text-muted-foreground py-4 text-center">No models configured yet.</p>
+            )}
+
+            <div className="space-y-1">
+              {models.map((model, i) =>
+                editingModel?.index === i ? (
+                  <div key={i} className="rounded-lg border border-primary/30 bg-primary/5 px-3 sm:px-4 py-3 space-y-3">
+                    <div className="flex flex-col sm:flex-row gap-2">
+                      <Input
+                        value={editingModel.modelId}
+                        onChange={(e) => setEditingModel({ ...editingModel, modelId: e.target.value })}
+                        placeholder="Model ID"
+                        className="flex-1 font-mono text-xs h-7"
+                      />
+                      <Input
+                        value={editingModel.displayName}
+                        onChange={(e) => setEditingModel({ ...editingModel, displayName: e.target.value })}
+                        placeholder="Display name"
+                        className="flex-1 text-xs h-7"
+                      />
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-muted-foreground">Thinking</span>
+                      <EffortPills
+                        selected={editingModel.effortLevels}
+                        onChange={(levels) => setEditingModel({ ...editingModel, effortLevels: levels })}
+                      />
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={editingModel.supportsExtendedContext}
+                          onChange={(e) => setEditingModel({ ...editingModel, supportsExtendedContext: e.target.checked })}
+                          className="rounded"
                         />
-                        <Input
-                          value={editingModel.displayName}
-                          onChange={(e) => setEditingModel({ ...editingModel, displayName: e.target.value })}
-                          placeholder="Display name"
-                          className="flex-1 text-xs h-8"
-                        />
-                      </div>
-                      <div className="flex items-center gap-1.5 flex-wrap">
-                        <span className="text-xs text-muted-foreground">Thinking:</span>
-                        {ALL_EFFORT_LEVELS.map((level) => (
-                          <button
-                            type="button"
-                            key={level}
-                            onClick={() =>
-                              setEditingModel({
-                                ...editingModel,
-                                effortLevels: editingModel.effortLevels.includes(level)
-                                  ? editingModel.effortLevels.filter((l) => l !== level)
-                                  : [...editingModel.effortLevels, level],
-                              })
-                            }
-                            className={`rounded px-1.5 py-0.5 text-xs transition-colors ${
-                              editingModel.effortLevels.includes(level)
-                                ? "bg-primary text-primary-foreground"
-                                : "bg-muted text-muted-foreground hover:bg-muted/80"
-                            }`}
-                          >
-                            {level}
-                          </button>
-                        ))}
-                        <label className="flex items-center gap-1.5 ml-2 text-xs text-muted-foreground cursor-pointer">
-                          <input
-                            type="checkbox"
-                            checked={editingModel.supportsExtendedContext}
-                            onChange={(e) => setEditingModel({ ...editingModel, supportsExtendedContext: e.target.checked })}
-                            className="rounded"
-                          />
-                          1M context
-                        </label>
-                      </div>
+                        1M context
+                      </label>
                       <div className="flex gap-1.5">
-                        <Button
+                        <button
                           type="button"
-                          size="sm"
-                          variant="outline"
+                          onClick={() => setEditingModel(null)}
+                          className="px-2.5 py-1 text-xs rounded-md border border-input text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="button"
                           onClick={saveEditingModel}
                           disabled={!editingModel.modelId.trim()}
+                          className="px-2.5 py-1 text-xs rounded-md bg-primary text-primary-foreground hover:brightness-110 transition-all disabled:opacity-50"
                         >
-                          <Check className="h-3 w-3 mr-1" /> Save
-                        </Button>
-                        <Button type="button" size="sm" variant="ghost" onClick={() => setEditingModel(null)}>
-                          Cancel
-                        </Button>
-                      </div>
-                    </div>
-                  ) : (
-                    <div key={i} className="flex items-center gap-2 rounded-md border border-border px-3 py-2 text-xs">
-                      <span className="font-mono font-medium">{model.modelId}</span>
-                      {model.displayName !== model.modelId && <span className="text-muted-foreground">{model.displayName}</span>}
-                      <div className="ml-auto flex items-center gap-1.5">
-                        {model.effortLevels.length > 0 && (
-                          <span className="text-muted-foreground">thinking: {model.effortLevels.join(", ")}</span>
-                        )}
-                        {model.supportsExtendedContext && <span className="text-muted-foreground">1M</span>}
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setEditingModel({
-                              index: i,
-                              modelId: model.modelId,
-                              displayName: model.displayName,
-                              effortLevels: model.effortLevels,
-                              supportsExtendedContext: model.supportsExtendedContext ?? false,
-                            })
-                          }
-                          className="shrink-0 text-muted-foreground hover:text-foreground p-0.5"
-                        >
-                          <Pencil className="h-3 w-3" />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setModels(models.filter((_, j) => j !== i))}
-                          className="shrink-0 text-muted-foreground hover:text-foreground p-0.5"
-                        >
-                          <X className="h-3 w-3" />
+                          Save
                         </button>
                       </div>
                     </div>
-                  ),
-                )}
-              </div>
-            )}
-            {models.length === 0 && <p className="text-xs text-muted-foreground">No models configured for this provider.</p>}
-
-            {/* Add model form */}
-            <div className="rounded-md border border-dashed border-input p-3 space-y-2">
-              <p className="text-xs font-medium text-muted-foreground">Add a model</p>
-              <Input
-                value={newModelId}
-                onChange={(e) => setNewModelId(e.target.value)}
-                placeholder="Model ID (e.g. openai/gpt-4o)"
-                className="font-mono text-xs h-8"
-                onKeyDown={(e) => e.key === "Enter" && addModel()}
-              />
-              <Input
-                value={newModelName}
-                onChange={(e) => setNewModelName(e.target.value)}
-                placeholder="Display name (e.g. GPT-4o)"
-                className="text-xs h-8"
-                onKeyDown={(e) => e.key === "Enter" && addModel()}
-              />
-              <div className="flex items-center gap-1.5 flex-wrap">
-                <span className="text-xs text-muted-foreground">Thinking:</span>
-                {ALL_EFFORT_LEVELS.map((level) => (
+                  </div>
+                ) : (
                   <button
+                    key={i}
                     type="button"
-                    key={level}
-                    onClick={() => setNewModelEffort((prev) => (prev.includes(level) ? prev.filter((l) => l !== level) : [...prev, level]))}
-                    className={`rounded px-1.5 py-0.5 text-xs transition-colors ${
-                      newModelEffort.includes(level)
-                        ? "bg-primary text-primary-foreground"
-                        : "bg-muted text-muted-foreground hover:bg-muted/80"
-                    }`}
+                    onClick={() =>
+                      setEditingModel({
+                        index: i,
+                        modelId: model.modelId,
+                        displayName: model.displayName,
+                        effortLevels: model.effortLevels,
+                        supportsExtendedContext: model.supportsExtendedContext ?? false,
+                      })
+                    }
+                    className="flex w-full items-center gap-2 sm:gap-3 rounded-lg border border-border px-3 sm:px-4 py-2.5 text-xs hover:bg-muted/50 transition-colors text-left"
                   >
-                    {level}
+                    <div className="flex flex-col sm:flex-row sm:items-center gap-0.5 sm:gap-3 min-w-0 flex-1">
+                      <span className="font-mono font-medium truncate">{model.modelId}</span>
+                      {model.displayName !== model.modelId && <span className="text-muted-foreground truncate">{model.displayName}</span>}
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      {model.effortLevels.length > 0 && (
+                        <span className="text-muted-foreground hidden sm:inline">{model.effortLevels.join(", ")}</span>
+                      )}
+                      {model.supportsExtendedContext && <span className="text-muted-foreground">1M</span>}
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setModels(models.filter((_, j) => j !== i));
+                        }}
+                        className="text-muted-foreground hover:text-destructive p-0.5"
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    </div>
                   </button>
-                ))}
-                <label className="flex items-center gap-1.5 ml-2 text-xs text-muted-foreground cursor-pointer">
+                ),
+              )}
+            </div>
+
+            <div className="rounded-lg border border-dashed border-input px-3 sm:px-4 py-3 space-y-3">
+              <div className="flex flex-col sm:flex-row gap-2">
+                <Input
+                  value={newModelId}
+                  onChange={(e) => setNewModelId(e.target.value)}
+                  placeholder="Model ID (e.g. openai/gpt-4o)"
+                  className="flex-1 font-mono text-xs h-7"
+                  onKeyDown={(e) => e.key === "Enter" && addModel()}
+                />
+                <Input
+                  value={newModelName}
+                  onChange={(e) => setNewModelName(e.target.value)}
+                  placeholder="Display name"
+                  className="flex-1 text-xs h-7"
+                  onKeyDown={(e) => e.key === "Enter" && addModel()}
+                />
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-muted-foreground">Thinking</span>
+                <EffortPills selected={newModelEffort} onChange={setNewModelEffort} />
+              </div>
+              <div className="flex items-center justify-between">
+                <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer">
                   <input
                     type="checkbox"
                     checked={newModelExtCtx}
@@ -343,30 +369,47 @@ export function ProviderForm({ provider, isNew, onSave, onCancel, onDelete, lock
                   />
                   1M context
                 </label>
+                <button
+                  type="button"
+                  onClick={addModel}
+                  disabled={!newModelId.trim()}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-md border border-input text-muted-foreground hover:text-foreground hover:bg-muted transition-colors disabled:opacity-50"
+                >
+                  <Plus className="h-3 w-3" />
+                  Add model
+                </button>
               </div>
-              <Button type="button" variant="outline" size="sm" onClick={addModel} disabled={!newModelId.trim()}>
-                <Plus className="h-3.5 w-3.5 mr-1" /> Add model
-              </Button>
             </div>
           </div>
-        </CardContent>
-      </Card>
+        )}
+      </div>
 
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between pt-3 border-t shrink-0">
         <div>
           {onDelete && (
-            <Button variant="outline" size="sm" className="text-destructive" onClick={onDelete}>
-              <Trash2 className="h-3.5 w-3.5 mr-1" /> Delete provider
-            </Button>
+            <button
+              onClick={onDelete}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-md text-destructive hover:bg-destructive/10 transition-colors"
+            >
+              <Trash2 className="h-3 w-3" />
+              Delete
+            </button>
           )}
         </div>
         <div className="flex gap-2">
-          <Button variant="outline" size="sm" onClick={onCancel}>
+          <button
+            onClick={onCancel}
+            className="px-3 py-1.5 text-xs rounded-md border border-input text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+          >
             Cancel
-          </Button>
-          <Button size="sm" onClick={handleSave} disabled={!name.trim() || saving}>
+          </button>
+          <button
+            onClick={handleSave}
+            disabled={!name.trim() || saving}
+            className="px-4 py-1.5 text-xs rounded-md bg-primary text-primary-foreground hover:brightness-110 transition-all disabled:opacity-50"
+          >
             {saving ? "Saving..." : isNew ? "Create" : "Save"}
-          </Button>
+          </button>
         </div>
       </div>
     </div>

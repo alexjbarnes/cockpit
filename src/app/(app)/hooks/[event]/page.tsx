@@ -46,7 +46,7 @@ export default function HookEditorPage({ params }: { params: Promise<{ event: st
   const filePath = searchParams.get("filePath") || "";
   const cwd = searchParams.get("cwd") || undefined;
 
-  usePageHeader(isNew ? "New Hook" : event);
+  usePageHeader(isNew ? "New Hook" : event, { hideActions: true });
 
   const [selectedEvent, setSelectedEvent] = useState(event);
   const [selectedScope, setSelectedScope] = useState(scope);

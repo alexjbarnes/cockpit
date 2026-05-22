@@ -77,7 +77,7 @@ export default function JobDetailPage() {
   const [triggering, setTriggering] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
 
-  usePageHeader(job?.name || "Job");
+  usePageHeader(job?.name || "Job", { hideActions: true });
 
   const { runs, loading: runsLoading, loadingMore, hasMore, refresh: refreshRuns, loadMore } = useJobRuns(id);
 
