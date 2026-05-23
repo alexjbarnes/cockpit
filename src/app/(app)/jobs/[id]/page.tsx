@@ -59,11 +59,15 @@ function runStatusBadge(status: string) {
 
 function formatModel(job: ScheduledJob): string {
   const raw = job.model || "";
+  const ext = /\[1m\]$/i.test(raw) ? " (1M)" : "";
   const base = raw.replace(/\[.*\]$/, "");
+  const colonIdx = base.indexOf(":");
+  if (colonIdx > 0) {
+    return `${base.slice(colonIdx + 1)}${ext}`;
+  }
   const entry = findModelById(base);
   if (!entry) return raw || "Default";
   const label = entry.alias.charAt(0).toUpperCase() + entry.alias.slice(1);
-  const ext = /\[1m\]$/i.test(raw) ? " (1M)" : "";
   return `${label} ${entry.version}${ext}`;
 }
 
@@ -163,6 +167,8 @@ export default function JobDetailPage() {
                   <span className="text-right capitalize">{job.thinkingLevel}</span>
                 </>
               )}
+              <span className="text-muted-foreground">Runtime</span>
+              <span className="text-right uppercase">{job.runtime || "stream"}</span>
               <span className="text-muted-foreground">Max Duration</span>
               <span className="text-right">{job.maxDurationMinutes ?? 30} min</span>
               {job.cwd && (

@@ -207,6 +207,7 @@ export interface ScheduledJob {
   skipIfMissed?: boolean;
   inboxOutput?: boolean;
   notifyProviders?: string[];
+  runtime?: "stream" | "pty";
 }
 
 export type JobRunStatus = "running" | "success" | "failure" | "timeout";

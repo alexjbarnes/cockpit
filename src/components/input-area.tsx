@@ -764,7 +764,16 @@ export function InputArea({
             ];
             const vEntries = parsed.alias ? versionsForAlias(parsed.alias) : [];
             const showVRow = vEntries.length > 1;
-            const supportsExt = parsed.entry?.supportsExtendedContext ?? false;
+            const supportsExt =
+              parsed.entry?.supportsExtendedContext ??
+              (() => {
+                if (!providers || !currentModel) return false;
+                for (const p of providers) {
+                  const m = p.models.find((pm) => pm.modelId === currentModel);
+                  if (m) return m.supportsExtendedContext ?? false;
+                }
+                return false;
+              })();
             const providerEffort = (() => {
               if (!providers || !currentModel) return [];
               for (const p of providers) {

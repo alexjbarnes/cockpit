@@ -18,7 +18,7 @@ import {
   versionsForAlias,
 } from "@/lib/models";
 import { describeSchedule, getJobSchedules } from "@/server/cron-utils";
-import type { JobSchedule, Provider, ScheduledJob, SimpleSchedule, SimpleScheduleFrequency, ThinkingLevel } from "@/types";
+import type { JobSchedule, Provider, ProviderModel, ScheduledJob, SimpleSchedule, SimpleScheduleFrequency, ThinkingLevel } from "@/types";
 
 const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
@@ -164,6 +164,8 @@ export default function JobEditPage() {
   const [modelId, setModelId] = useState(DEFAULT_MODEL_ID);
   const [extendedContext, setExtendedContext] = useState(false);
   const [thinkingLevel, setThinkingLevel] = useState<ThinkingLevel | "">("medium");
+  const [selectedProviderId, setSelectedProviderId] = useState("anthropic");
+  const [runtime, setRuntime] = useState<"stream" | "pty">("stream");
 
   const [maxDuration, setMaxDuration] = useState(30);
   const [bypassPermissions, setBypassPermissions] = useState(false);
@@ -186,29 +188,51 @@ export default function JobEditPage() {
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(!isNew || !!duplicateFrom);
 
-  const selectedEntry = modelId ? findModelById(modelId) : null;
+  const isBuiltinProvider = selectedProviderId === "anthropic";
+  const selectedProvider = providers.find((p) => p.id === selectedProviderId);
+  const selectedEntry = isBuiltinProvider && modelId ? findModelById(modelId) : null;
   const selectedAlias = selectedEntry?.alias || null;
   const availableVersions = selectedAlias ? versionsForAlias(selectedAlias) : [];
   const showVersions = availableVersions.length > 1;
-  const providerEffort = (() => {
+  const customProviderModel = !isBuiltinProvider && selectedProvider ? selectedProvider.models.find((m) => m.modelId === modelId) : null;
+  const effortLevels = (() => {
+    if (!isBuiltinProvider && customProviderModel) return customProviderModel.effortLevels;
     const base = modelId.replace(/\[.*\]$/, "");
     for (const p of providers) {
       const m = p.models.find((pm) => pm.modelId === base);
-      if (m) return m.effortLevels;
+      if (m && m.effortLevels.length > 0) return m.effortLevels;
     }
-    return [];
+    return selectedEntry ? allowedEffortLevels(selectedEntry) : [];
   })();
-  const effortLevels = providerEffort.length > 0 ? providerEffort : selectedEntry ? allowedEffortLevels(selectedEntry) : [];
   const toolSuggestions = COMMON_TOOLS.filter((t) => !allowedTools.includes(t));
+  const customProviders = providers.filter((p) => !p.isBuiltin);
 
   function selectAlias(alias: ModelAlias) {
     const entry = defaultForAlias(alias);
     if (entry) {
+      setSelectedProviderId("anthropic");
       setModelId(entry.modelId);
       setExtendedContext(false);
       const rec = recommendedEffort(entry);
       setThinkingLevel(rec || "");
     }
+  }
+
+  function selectCustomProvider(providerId: string) {
+    setSelectedProviderId(providerId);
+    const provider = providers.find((p) => p.id === providerId);
+    if (provider && provider.models.length > 0) {
+      const first = provider.models[0];
+      setModelId(first.modelId);
+      setExtendedContext(false);
+      setThinkingLevel(first.defaultEffort || (first.effortLevels.length > 0 ? first.effortLevels[0] : ""));
+    }
+  }
+
+  function selectCustomModel(model: ProviderModel) {
+    setModelId(model.modelId);
+    setExtendedContext(false);
+    setThinkingLevel(model.defaultEffort || (model.effortLevels.length > 0 ? model.effortLevels[0] : ""));
   }
 
   function selectVersion(version: string) {
@@ -250,11 +274,19 @@ export default function JobEditPage() {
     setSchedules(getJobSchedules(job));
     const rawModel = job.model || "";
     const hasExtended = /\[1m\]$/i.test(rawModel);
-    const baseModel = rawModel.replace(/\[.*\]$/, "");
-    const entry = resolveModel(baseModel);
-    setModelId(entry?.modelId || DEFAULT_MODEL_ID);
+    const withoutExt = rawModel.replace(/\[.*\]$/, "");
+    const colonIdx = withoutExt.indexOf(":");
+    if (colonIdx > 0) {
+      setSelectedProviderId(withoutExt.slice(0, colonIdx));
+      setModelId(withoutExt.slice(colonIdx + 1));
+    } else {
+      setSelectedProviderId("anthropic");
+      const entry = resolveModel(withoutExt);
+      setModelId(entry?.modelId || DEFAULT_MODEL_ID);
+    }
     setExtendedContext(hasExtended);
-    setThinkingLevel(job.thinkingLevel || recommendedEffort(entry) || "");
+    const builtinEntry = resolveModel(withoutExt);
+    setThinkingLevel(job.thinkingLevel || recommendedEffort(builtinEntry) || "");
     setMaxDuration(job.maxDurationMinutes ?? 30);
     setBypassPermissions(job.bypassPermissions ?? false);
     setAllowedTools(job.allowedTools || []);
@@ -264,6 +296,7 @@ export default function JobEditPage() {
     setRetentionDays(job.retentionDays ?? 90);
     setInboxOutput(job.inboxOutput ?? false);
     setNotifyProviders(job.notifyProviders || []);
+    setRuntime(job.runtime || "stream");
   }, []);
 
   const loadJob = useCallback(async () => {
@@ -314,8 +347,16 @@ export default function JobEditPage() {
 
   async function handleSave() {
     setSaving(true);
-    const supportsExtended = selectedEntry?.supportsExtendedContext ?? false;
-    const modelStr = supportsExtended && extendedContext ? `${modelId}[1m]` : modelId;
+    const supportsExtended = isBuiltinProvider
+      ? (selectedEntry?.supportsExtendedContext ?? false)
+      : (customProviderModel?.supportsExtendedContext ?? false);
+    let modelStr = modelId;
+    if (!isBuiltinProvider && selectedProviderId) {
+      modelStr = `${selectedProviderId}:${modelId}`;
+    }
+    if (supportsExtended && extendedContext) {
+      modelStr = `${modelStr}[1m]`;
+    }
 
     const body = {
       name,
@@ -335,6 +376,7 @@ export default function JobEditPage() {
       retentionDays,
       inboxOutput,
       notifyProviders,
+      runtime,
     };
 
     try {
@@ -447,23 +489,67 @@ export default function JobEditPage() {
             <CardTitle className="text-sm font-medium">Model</CardTitle>
           </CardHeader>
           <CardContent className="space-y-1">
-            <div className="flex items-center justify-between px-2 py-2 text-sm">
-              <span>Model</span>
-              <div className="flex gap-1 flex-wrap justify-end">
-                {(["haiku", "sonnet", "opus"] as ModelAlias[]).map((alias) => (
-                  <Button
-                    key={alias}
-                    variant={selectedAlias === alias ? "default" : "outline"}
-                    size="sm"
-                    onClick={() => selectAlias(alias)}
-                  >
-                    {alias.charAt(0).toUpperCase() + alias.slice(1)}
-                  </Button>
+            <div className="flex flex-col gap-1.5 px-2 py-2 text-sm">
+              <span>Provider</span>
+              <select
+                value={selectedProviderId}
+                onChange={(e) => {
+                  if (e.target.value === "anthropic") {
+                    const entry = findModelById(modelId);
+                    if (!entry) selectAlias("sonnet");
+                    else setSelectedProviderId("anthropic");
+                  } else {
+                    selectCustomProvider(e.target.value);
+                  }
+                }}
+                className={SELECT_CLASS}
+              >
+                <option value="anthropic">Anthropic</option>
+                {customProviders.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
                 ))}
-              </div>
+              </select>
             </div>
 
-            {showVersions && (
+            {isBuiltinProvider && (
+              <div className="flex items-center justify-between px-2 py-2 text-sm">
+                <span>Model</span>
+                <div className="flex gap-1 flex-wrap justify-end">
+                  {(["haiku", "sonnet", "opus"] as ModelAlias[]).map((alias) => (
+                    <Button
+                      key={alias}
+                      variant={selectedAlias === alias ? "default" : "outline"}
+                      size="sm"
+                      onClick={() => selectAlias(alias)}
+                    >
+                      {alias.charAt(0).toUpperCase() + alias.slice(1)}
+                    </Button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {!isBuiltinProvider && selectedProvider && (
+              <div className="flex items-center justify-between px-2 py-2 text-sm">
+                <span>Model</span>
+                <div className="flex gap-1 flex-wrap justify-end">
+                  {selectedProvider.models.map((m) => (
+                    <Button
+                      key={m.modelId}
+                      variant={modelId === m.modelId ? "default" : "outline"}
+                      size="sm"
+                      onClick={() => selectCustomModel(m)}
+                    >
+                      {m.displayName}
+                    </Button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {isBuiltinProvider && showVersions && (
               <div className="flex items-center justify-between px-2 py-2 text-sm">
                 <span>Version</span>
                 <div className="flex gap-1 flex-wrap justify-end">
@@ -481,7 +567,8 @@ export default function JobEditPage() {
               </div>
             )}
 
-            {selectedEntry?.supportsExtendedContext && (
+            {((isBuiltinProvider && selectedEntry?.supportsExtendedContext) ||
+              (!isBuiltinProvider && customProviderModel?.supportsExtendedContext)) && (
               <div className="flex items-center justify-between px-2 py-2 text-sm">
                 <span>Context</span>
                 <div className="flex gap-1">
@@ -728,6 +815,18 @@ export default function JobEditPage() {
             <CardTitle className="text-sm font-medium">Execution</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
+            <div className="flex items-center justify-between">
+              <label className="text-sm font-medium">Runtime</label>
+              <div className="flex gap-1">
+                <Button variant={runtime === "stream" ? "default" : "outline"} size="sm" onClick={() => setRuntime("stream")}>
+                  Stream
+                </Button>
+                <Button variant={runtime === "pty" ? "default" : "outline"} size="sm" onClick={() => setRuntime("pty")}>
+                  PTY
+                </Button>
+              </div>
+            </div>
+
             <div className="space-y-1.5">
               <label className="text-sm font-medium">Max Duration (minutes)</label>
               <Input type="number" min={1} value={maxDuration} onChange={(e) => setMaxDuration(Number(e.target.value))} />

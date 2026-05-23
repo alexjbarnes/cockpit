@@ -328,7 +328,7 @@ export function SessionList() {
                 <Terminal className="h-5 w-5 text-foreground" />
                 <div className="flex-1">
                   <div className="text-sm font-medium">PTY (interactive)</div>
-                  <div className="text-xs text-muted-foreground">Subscription billing</div>
+                  <div className="text-xs text-muted-foreground">Pseudo-terminal</div>
                 </div>
               </div>
             </button>
@@ -344,8 +344,8 @@ export function SessionList() {
               <div className="flex items-center gap-3 mb-1">
                 <Zap className="h-5 w-5 text-foreground" />
                 <div className="flex-1">
-                  <div className="text-sm font-medium">Stream (-p)</div>
-                  <div className="text-xs text-muted-foreground">Credit billing</div>
+                  <div className="text-sm font-medium">Stream (headless)</div>
+                  <div className="text-xs text-muted-foreground">Structured output</div>
                 </div>
               </div>
             </button>

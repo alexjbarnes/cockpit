@@ -126,21 +126,19 @@ export function NewSessionDialog({ open, onOpenChange, onSubmit }: NewSessionDia
 
         {step === "backend" && (
           <div className="space-y-3 mt-2">
-            <p className="text-sm text-muted-foreground">
-              Pick how claude runs for this session. Subscription users should prefer PTY; programmatic billing uses Stream.
-            </p>
+            <p className="text-sm text-muted-foreground">Pick how Claude runs for this session.</p>
             <BackendCard
               icon={<Terminal className="h-5 w-5" />}
               title="PTY (interactive)"
-              subtitle="Subscription billing"
-              description="Spawns a real claude TUI in a pseudo-terminal. Counts toward your Max plan subscription."
+              subtitle="Pseudo-terminal"
+              description="Spawns a real Claude TUI in a pseudo-terminal. Supports interactive features like slash commands."
               onClick={() => pickBackend("pty")}
             />
             <BackendCard
               icon={<Zap className="h-5 w-5" />}
-              title="Stream (-p)"
-              subtitle="Credit billing"
-              description="Runs claude -p with structured JSON. After June 15 2026 this counts toward $100/mo programmatic credit."
+              title="Stream (headless)"
+              subtitle="Structured output"
+              description="Runs Claude with structured JSON streaming. Lower overhead, better for automated workflows."
               onClick={() => pickBackend("stream")}
             />
           </div>

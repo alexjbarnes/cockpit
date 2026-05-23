@@ -272,6 +272,7 @@ export class JobScheduler {
     mkdirSync(path.join(SCRATCHPAD_DIR, job.id), { recursive: true });
     const sessionInfo = this.sessionManager.createSession(jobCwd, `[job] ${job.name}`, {
       bypassPermissions: !!job.bypassPermissions,
+      runtime: job.runtime,
     });
     const sessionId = sessionInfo.id;
 

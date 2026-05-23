@@ -58,6 +58,8 @@ export async function POST(req: NextRequest) {
     retentionDays: body.retentionDays ?? 90,
     skipIfMissed: body.skipIfMissed ?? false,
     inboxOutput: body.inboxOutput ?? false,
+    notifyProviders: body.notifyProviders,
+    runtime: body.runtime,
   };
 
   saveJob(job);
