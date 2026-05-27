@@ -1019,7 +1019,16 @@ export class SessionManager {
 
   setModel(sessionId: string, model: string): void {
     const session = this.sessions.get(sessionId);
-    if (!session || session.info.model === model) return;
+    this.log(
+      sessionId,
+      `setModel: requested=${model}, current=${session?.info.model}, hasStdin=${!!session?.stdin}, hasPty=${!!session?.ptyRuntime}`,
+    );
+    if (!session || session.info.model === model) {
+      if (session && session.info.model === model) {
+        this.log(sessionId, `setModel: skipping (already ${model})`);
+      }
+      return;
+    }
 
     // Detect 200K↔1M flip. The CLAUDE_CODE_DISABLE_1M_CONTEXT env var is
     // applied at spawn, so toggling the [1m] suffix mid-session needs a CLI
@@ -1048,6 +1057,7 @@ export class SessionManager {
     }
 
     if (session.stdin && !contextChanged) {
+      this.log(sessionId, `setModel: sending control_request set_model=${model}`);
       const request = {
         type: "control_request",
         request_id: `model-${Date.now()}`,
@@ -1063,6 +1073,7 @@ export class SessionManager {
         session.stdin.write(JSON.stringify(effortRequest) + "\n");
       }
     } else {
+      this.log(sessionId, `setModel: killing process (hasStdin=${!!session.stdin}, contextChanged=${contextChanged})`);
       this.killProcess(session);
       if (!transcriptExists(session.cliSessionId, session.info.cwd)) {
         session.hasSpawnedBefore = false;
@@ -1666,6 +1677,7 @@ export class SessionManager {
           this.emitSystem(session, sessionId, `__model_picker::${current}`);
           return true;
         }
+        this.log(sessionId, `/model command: args="${args}", was=${session.info.model}`);
         this.killProcess(session);
         session.info.model = args;
         session.info.status = "idle";
@@ -2066,6 +2078,10 @@ Additional Cockpit rules beyond the CLI's defaults:
 
     const resolved = resolveProviderModel(session.info.model ?? "sonnet");
     const cliModel = resolved ? resolved.model.modelId : session.info.model;
+    this.log(
+      sessionId,
+      `spawn: info.model=${session.info.model}, resolved=${resolved ? `${resolved.provider.id}:${resolved.model.modelId}` : "null"}, cliModel=${cliModel}`,
+    );
 
     if (cliModel) {
       args.push("--model", cliModel);
