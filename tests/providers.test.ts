@@ -159,4 +159,95 @@ describe("providers", () => {
     const { deleteProvider } = await import("@/server/providers");
     expect(() => deleteProvider("anthropic")).toThrow();
   });
+
+  it("updateProvider modifies and persists", async () => {
+    const fs = await import("node:fs");
+    const custom = [{ id: "p-1", name: "Old", envVars: {}, models: [] }];
+    vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(custom));
+    vi.mocked(fs.writeFileSync).mockImplementation(() => {});
+    vi.mocked(fs.mkdirSync).mockImplementation(() => "");
+
+    const { updateProvider } = await import("@/server/providers");
+    const result = updateProvider("p-1", { name: "New" });
+    expect(result.name).toBe("New");
+    expect(result.id).toBe("p-1");
+    expect(fs.writeFileSync).toHaveBeenCalled();
+  });
+
+  it("updateProvider throws for built-in provider", async () => {
+    const fs = await import("node:fs");
+    vi.mocked(fs.readFileSync).mockImplementation(() => {
+      throw new Error("ENOENT");
+    });
+
+    const { updateProvider } = await import("@/server/providers");
+    expect(() => updateProvider("anthropic", { name: "X" })).toThrow("Cannot modify built-in");
+  });
+
+  it("updateProvider throws for unknown provider", async () => {
+    const fs = await import("node:fs");
+    vi.mocked(fs.readFileSync).mockImplementation(() => {
+      throw new Error("ENOENT");
+    });
+
+    const { updateProvider } = await import("@/server/providers");
+    expect(() => updateProvider("nonexistent", { name: "X" })).toThrow("Provider not found");
+  });
+
+  it("deleteProvider removes and persists", async () => {
+    const fs = await import("node:fs");
+    const custom = [{ id: "p-1", name: "Test", envVars: {}, models: [] }];
+    vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(custom));
+    vi.mocked(fs.writeFileSync).mockImplementation(() => {});
+    vi.mocked(fs.mkdirSync).mockImplementation(() => "");
+
+    const { deleteProvider, getProviders } = await import("@/server/providers");
+    deleteProvider("p-1");
+    const remaining = getProviders().filter((p) => p.id === "p-1");
+    expect(remaining.length).toBe(0);
+  });
+
+  it("deleteProvider throws for unknown provider", async () => {
+    const fs = await import("node:fs");
+    vi.mocked(fs.readFileSync).mockImplementation(() => {
+      throw new Error("ENOENT");
+    });
+
+    const { deleteProvider } = await import("@/server/providers");
+    expect(() => deleteProvider("nonexistent")).toThrow("Provider not found");
+  });
+
+  it("setProviders replaces all custom providers", async () => {
+    const fs = await import("node:fs");
+    vi.mocked(fs.readFileSync).mockImplementation(() => {
+      throw new Error("ENOENT");
+    });
+    vi.mocked(fs.writeFileSync).mockImplementation(() => {});
+    vi.mocked(fs.mkdirSync).mockImplementation(() => "");
+
+    const { setProviders, getProviders } = await import("@/server/providers");
+    setProviders([{ id: "new-1", name: "New", isBuiltin: false, envVars: {}, models: [] }]);
+    const all = getProviders();
+    expect(all.find((p) => p.id === "new-1")).toBeDefined();
+  });
+
+  it("resolveProviderModel returns null for empty string", async () => {
+    const fs = await import("node:fs");
+    vi.mocked(fs.readFileSync).mockImplementation(() => {
+      throw new Error("ENOENT");
+    });
+
+    const { resolveProviderModel } = await import("@/server/providers");
+    expect(resolveProviderModel("")).toBeNull();
+  });
+
+  it("resolveProviderModel returns null for unknown qualified provider", async () => {
+    const fs = await import("node:fs");
+    vi.mocked(fs.readFileSync).mockImplementation(() => {
+      throw new Error("ENOENT");
+    });
+
+    const { resolveProviderModel } = await import("@/server/providers");
+    expect(resolveProviderModel("unknown:model")).toBeNull();
+  });
 });
