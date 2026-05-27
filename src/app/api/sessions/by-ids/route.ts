@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { validateSession } from "@/server/auth";
+import { debugLog } from "@/server/debug-logger";
 import { getSessionManager } from "@/server/singleton";
 import { scanSessionsByIds } from "@/server/transcript";
 import type { SessionInfo } from "@/types";
@@ -25,7 +26,7 @@ export async function GET(req: NextRequest) {
   }
 
   const sessions = await scanSessionsByIds(ids);
-  console.log(`[api/sessions/by-ids] scanSessionsByIds(${ids.length} ids) took ${(performance.now() - t0).toFixed(0)}ms`);
+  debugLog(`[api/sessions/by-ids] scanSessionsByIds(${ids.length} ids) took ${(performance.now() - t0).toFixed(0)}ms`);
 
   const manager = getSessionManager();
   const activeMap = new Map(manager.listActiveSessions().map((s) => [s.id, s]));

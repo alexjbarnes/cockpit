@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { NextRequest, NextResponse } from "next/server";
 import { validateSession } from "@/server/auth";
+import { debugLog } from "@/server/debug-logger";
 
 function authenticate(req: NextRequest): boolean {
   const token = req.cookies.get("cockpit_session")?.value || req.headers.get("authorization")?.replace("Bearer ", "");
@@ -32,7 +33,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
   const pinned = await readPinned();
-  console.log(`[api/sessions/pinned] readPinned(${pinned.length} ids) took ${(performance.now() - t0).toFixed(0)}ms`);
+  debugLog(`[api/sessions/pinned] readPinned(${pinned.length} ids) took ${(performance.now() - t0).toFixed(0)}ms`);
   return NextResponse.json({ pinned });
 }
 

@@ -1,6 +1,7 @@
 import path from "node:path";
 import { NextRequest, NextResponse } from "next/server";
 import { validateSession } from "@/server/auth";
+import { debugLog } from "@/server/debug-logger";
 import { getSessionManager } from "@/server/singleton";
 import { scanAllSessions } from "@/server/transcript";
 
@@ -18,7 +19,7 @@ export async function GET(req: NextRequest) {
   }
 
   const groups = await scanAllSessions();
-  console.log(`[api/sessions] scanAllSessions took ${(performance.now() - t0).toFixed(0)}ms`);
+  debugLog(`[api/sessions] scanAllSessions took ${(performance.now() - t0).toFixed(0)}ms`);
 
   // Merge status and name from in-memory sessions
   const manager = getSessionManager();
