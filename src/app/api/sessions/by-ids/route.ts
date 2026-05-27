@@ -10,6 +10,7 @@ function authenticate(req: NextRequest): boolean {
 }
 
 export async function GET(req: NextRequest) {
+  const t0 = performance.now();
   if (!authenticate(req)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
@@ -24,6 +25,7 @@ export async function GET(req: NextRequest) {
   }
 
   const sessions = await scanSessionsByIds(ids);
+  console.log(`[api/sessions/by-ids] scanSessionsByIds(${ids.length} ids) took ${(performance.now() - t0).toFixed(0)}ms`);
 
   const manager = getSessionManager();
   const activeMap = new Map(manager.listActiveSessions().map((s) => [s.id, s]));

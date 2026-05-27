@@ -27,10 +27,12 @@ async function writePinned(ids: string[]): Promise<void> {
 }
 
 export async function GET(req: NextRequest) {
+  const t0 = performance.now();
   if (!authenticate(req)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
   const pinned = await readPinned();
+  console.log(`[api/sessions/pinned] readPinned(${pinned.length} ids) took ${(performance.now() - t0).toFixed(0)}ms`);
   return NextResponse.json({ pinned });
 }
 

@@ -394,9 +394,12 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
   }, [subscribe, currentSessionId, sessions]);
 
   const fetchSessions = useCallback(async () => {
+    const t0 = performance.now();
+    console.log(`[sidebar] fetchSessions started`);
     setUnread(getUnreadSessions());
 
     const pinnedIds = await fetchPinnedIds();
+    console.log(`[sidebar] fetchPinnedIds returned ${pinnedIds.length} ids in ${(performance.now() - t0).toFixed(0)}ms`);
     if (pinnedIds.length === 0) {
       setSessions([]);
       return;
@@ -406,6 +409,7 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
     const res = await fetch(`/api/sessions/by-ids?ids=${encodeURIComponent(idsParam)}`)
       .then((r) => (r.ok ? r.json() : null))
       .catch(() => null);
+    console.log(`[sidebar] by-ids returned in ${(performance.now() - t0).toFixed(0)}ms`);
 
     if (!res) return;
 
@@ -447,8 +451,19 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
     }
   }, [send]);
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: pathname triggers refetch on navigation
+  // Fetch immediately on mount so pinned sessions appear without waiting
+  // for the WebSocket connection to establish.
+  const hasFetchedRef = useRef(false);
   useEffect(() => {
+    if (!hasFetchedRef.current) {
+      hasFetchedRef.current = true;
+      console.log("[sidebar] initial fetch on mount");
+      fetchSessions();
+    }
+  }, [fetchSessions]);
+
+  useEffect(() => {
+    console.log(`[sidebar] fetch gate: open=${open}, connected=${connected}, pathname=${pathname}`);
     if (open || connected) {
       fetchSessions();
     }

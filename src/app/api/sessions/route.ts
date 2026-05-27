@@ -12,11 +12,13 @@ function authenticate(req: NextRequest): boolean {
 }
 
 export async function GET(req: NextRequest) {
+  const t0 = performance.now();
   if (!authenticate(req)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   const groups = await scanAllSessions();
+  console.log(`[api/sessions] scanAllSessions took ${(performance.now() - t0).toFixed(0)}ms`);
 
   // Merge status and name from in-memory sessions
   const manager = getSessionManager();
