@@ -1,7 +1,6 @@
 import { execFile } from "node:child_process";
 import { NextRequest, NextResponse } from "next/server";
 import { validateSession } from "@/server/auth";
-import { debugLog } from "@/server/debug-logger";
 
 function authenticate(req: NextRequest): boolean {
   const token = req.cookies.get("cockpit_session")?.value || req.headers.get("authorization")?.replace("Bearer ", "");
@@ -51,8 +50,6 @@ export async function GET(req: NextRequest) {
   if (!cwd) {
     return NextResponse.json({ error: "cwd is required" }, { status: 400 });
   }
-
-  debugLog(`[git/status] hit cwd=${cwd}`);
 
   try {
     // Optionally fetch from remote first
@@ -118,7 +115,6 @@ export async function GET(req: NextRequest) {
       deletions: statsMap.get(f.path)?.deletions ?? 0,
     }));
 
-    debugLog(`[git/status] result: branch=${branch} files=${files.map((f) => `${f.path}(${f.status})`).join(",")}`);
     return NextResponse.json({ branch, files, ahead } satisfies GitStatusResponse);
   } catch {
     return NextResponse.json({ error: "Not a git repository" }, { status: 400 });
