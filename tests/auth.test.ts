@@ -236,6 +236,49 @@ describe("auth", () => {
     });
   });
 
+  describe("readPasswordFile edge cases", () => {
+    it("handles empty password file", async () => {
+      const fs = await import("node:fs");
+      fs.mkdirSync(path.dirname(PASSWORD_FILE), { recursive: true });
+      fs.writeFileSync(PASSWORD_FILE, "");
+      const { needsSetup } = await import("@/server/auth");
+      expect(needsSetup()).toBe(true);
+    });
+
+    it("handles password file with missing hash field", async () => {
+      const fs = await import("node:fs");
+      fs.mkdirSync(path.dirname(PASSWORD_FILE), { recursive: true });
+      fs.writeFileSync(PASSWORD_FILE, JSON.stringify({ salt: "abc" }));
+      const { needsSetup } = await import("@/server/auth");
+      expect(needsSetup()).toBe(true);
+    });
+
+    it("handles password file with invalid JSON", async () => {
+      const fs = await import("node:fs");
+      fs.mkdirSync(path.dirname(PASSWORD_FILE), { recursive: true });
+      fs.writeFileSync(PASSWORD_FILE, "{broken json");
+      const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      const { needsSetup } = await import("@/server/auth");
+      expect(needsSetup()).toBe(true);
+      consoleSpy.mockRestore();
+    });
+
+    it("needsSetup returns false when COCKPIT_TOKEN is set", async () => {
+      process.env.COCKPIT_TOKEN = "test-bypass";
+      const { needsSetup } = await import("@/server/auth");
+      expect(needsSetup()).toBe(false);
+      delete process.env.COCKPIT_TOKEN;
+    });
+
+    it("validateSession accepts COCKPIT_TOKEN bypass", async () => {
+      process.env.COCKPIT_TOKEN = "bypass-token";
+      const { setupPassword, validateSession } = await import("@/server/auth");
+      await setupPassword("test");
+      expect(validateSession("bypass-token")).toBe(true);
+      delete process.env.COCKPIT_TOKEN;
+    });
+  });
+
   describe("extractTokenFromQuery", () => {
     it("extracts token from query string", async () => {
       const { extractTokenFromQuery } = await import("@/server/auth");
