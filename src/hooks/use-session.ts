@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { resolveModel } from "@/lib/models";
 import type {
   BackgroundTask,
   ChatMessage,
@@ -39,6 +40,13 @@ export interface BtwState {
   answer: string | null;
   loading: boolean;
   error: string | null;
+}
+
+export interface ThinkingCheck {
+  pending: boolean;
+  targetModel: string;
+  models: string[];
+  via: "set" | "select";
 }
 
 interface UseSessionReturn {
@@ -91,6 +99,9 @@ interface UseSessionReturn {
   currentRuntime: "pty" | "stream";
   setRuntime: (runtime: "pty" | "stream") => void;
   restartSession: () => void;
+  thinkingCheck: ThinkingCheck | null;
+  confirmThinkingStrip: () => Promise<void>;
+  cancelThinkingCheck: () => void;
 }
 
 export function useSession(sessionId: string, cwd?: string, historyView?: boolean): UseSessionReturn {
@@ -1203,7 +1214,9 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
     [send, sessionId],
   );
 
-  const selectModel = useCallback(
+  const [thinkingCheck, setThinkingCheck] = useState<ThinkingCheck | null>(null);
+
+  const applyModelSelect = useCallback(
     (model: string) => {
       setModelPicker(null);
       setCurrentModel(model);
@@ -1212,13 +1225,70 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
     [send, sessionId],
   );
 
-  const setModel = useCallback(
+  const applyModelSet = useCallback(
     (model: string) => {
       setCurrentModel(model);
       send({ type: "session:set_model", sessionId, model });
     },
     [send, sessionId],
   );
+
+  const checkAndSwitchModel = useCallback(
+    async (model: string, via: "set" | "select") => {
+      const base = model.replace(/\[.*\]$/, "");
+      const isAnthropic = base.startsWith("claude") || resolveModel(base) !== null;
+      if (!isAnthropic) {
+        if (via === "select") applyModelSelect(model);
+        else applyModelSet(model);
+        return;
+      }
+
+      try {
+        const res = await fetch(`/api/sessions/thinking?sessionId=${encodeURIComponent(sessionId)}`);
+        const data = await res.json();
+        if (data.hasNonAnthropicThinking) {
+          if (via === "select") setModelPicker(null);
+          setThinkingCheck({ pending: true, targetModel: model, models: data.models, via });
+          return;
+        }
+      } catch {}
+
+      if (via === "select") applyModelSelect(model);
+      else applyModelSet(model);
+    },
+    [sessionId, applyModelSelect, applyModelSet],
+  );
+
+  const selectModel = useCallback(
+    (model: string) => {
+      checkAndSwitchModel(model, "select");
+    },
+    [checkAndSwitchModel],
+  );
+
+  const setModel = useCallback(
+    (model: string) => {
+      checkAndSwitchModel(model, "set");
+    },
+    [checkAndSwitchModel],
+  );
+
+  const confirmThinkingStrip = useCallback(async () => {
+    if (!thinkingCheck) return;
+    const { targetModel, via } = thinkingCheck;
+    await fetch("/api/sessions/thinking", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sessionId }),
+    });
+    setThinkingCheck(null);
+    if (via === "select") applyModelSelect(targetModel);
+    else applyModelSet(targetModel);
+  }, [thinkingCheck, sessionId, applyModelSelect, applyModelSet]);
+
+  const cancelThinkingCheck = useCallback(() => {
+    setThinkingCheck(null);
+  }, []);
 
   const setModelSlot = useCallback(
     (slot: "main" | "subagent" | "fast", modelId: string) => {
@@ -1376,5 +1446,8 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
     currentRuntime,
     setRuntime,
     restartSession,
+    thinkingCheck,
+    confirmThinkingStrip,
+    cancelThinkingCheck,
   };
 }

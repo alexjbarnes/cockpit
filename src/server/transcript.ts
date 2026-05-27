@@ -1,5 +1,5 @@
 import { createReadStream, existsSync, readFileSync } from "node:fs";
-import { open, readdir, readFile, stat, unlink } from "node:fs/promises";
+import { open, readdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline";
@@ -976,6 +976,106 @@ export async function listAllTranscriptFiles(): Promise<TranscriptFileInfo[]> {
 
   results.sort((a, b) => b.mtimeMs - a.mtimeMs);
   return results;
+}
+
+export async function findTranscriptFile(sessionId: string): Promise<string | null> {
+  const projectsDir = path.join(homedir(), ".claude", "projects");
+  if (!existsSync(projectsDir)) return null;
+
+  let projectDirs: string[];
+  try {
+    projectDirs = await readdir(projectsDir);
+  } catch {
+    return null;
+  }
+
+  const filename = `${sessionId}.jsonl`;
+  for (const dir of projectDirs) {
+    const filePath = path.join(projectsDir, dir, filename);
+    if (existsSync(filePath)) return filePath;
+  }
+  return null;
+}
+
+export interface ThinkingCheckResult {
+  hasNonAnthropicThinking: boolean;
+  count: number;
+  models: string[];
+}
+
+export async function checkNonAnthropicThinking(filePath: string): Promise<ThinkingCheckResult> {
+  const raw = await readFile(filePath, "utf-8");
+  let count = 0;
+  const models = new Set<string>();
+
+  for (const line of raw.split("\n")) {
+    if (!line.trim()) continue;
+    let entry: TranscriptEntry;
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (entry.type !== "assistant" || !entry.message) continue;
+    const model = entry.message.model || "";
+    if (model.startsWith("claude")) continue;
+
+    const content = entry.message.content;
+    if (!Array.isArray(content)) continue;
+    const hasThinking = content.some((b) => typeof b === "object" && b !== null && (b as TranscriptBlock).type === "thinking");
+    if (hasThinking) {
+      count++;
+      if (model) models.add(model);
+    }
+  }
+
+  return { hasNonAnthropicThinking: count > 0, count, models: [...models] };
+}
+
+export async function stripNonAnthropicThinking(filePath: string): Promise<number> {
+  const raw = await readFile(filePath, "utf-8");
+  const lines = raw.split("\n");
+  const output: string[] = [];
+  let stripped = 0;
+
+  for (const line of lines) {
+    if (!line.trim()) {
+      output.push(line);
+      continue;
+    }
+    let entry: TranscriptEntry;
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      output.push(line);
+      continue;
+    }
+    if (entry.type !== "assistant" || !entry.message) {
+      output.push(line);
+      continue;
+    }
+    const model = entry.message.model || "";
+    if (model.startsWith("claude")) {
+      output.push(line);
+      continue;
+    }
+    const content = entry.message.content;
+    if (!Array.isArray(content)) {
+      output.push(line);
+      continue;
+    }
+    const filtered = content.filter((b) => !(typeof b === "object" && b !== null && (b as TranscriptBlock).type === "thinking"));
+    if (filtered.length !== content.length) {
+      stripped++;
+      entry.message.content = filtered as TranscriptBlock[];
+      output.push(JSON.stringify(entry));
+    } else {
+      output.push(line);
+    }
+  }
+
+  await writeFile(filePath, output.join("\n"));
+  return stripped;
 }
 
 export async function globalSearch(

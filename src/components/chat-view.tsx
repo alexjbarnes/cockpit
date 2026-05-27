@@ -1,6 +1,7 @@
 "use client";
 
 import { AlertTriangle, ArrowDown, Loader2, RotateCcw } from "lucide-react";
+import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useMessageSelection } from "@/hooks/use-message-selection";
 import { useSession } from "@/hooks/use-session";
@@ -18,6 +19,7 @@ import { PermissionPrompt } from "./permission-prompt";
 import { PlanApprovalPrompt } from "./plan-approval-prompt";
 import { parseQuestionsFromInput, QuestionCard, QuestionPrompt } from "./question-card";
 import { SelectionToolbar } from "./selection-toolbar";
+import { ThinkingStripDialog } from "./thinking-strip-dialog";
 
 const INITIAL_WINDOW = 50;
 const WINDOW_INCREMENT = 30;
@@ -87,8 +89,12 @@ export function ChatView({
     currentRuntime,
     setRuntime,
     restartSession,
+    thinkingCheck,
+    confirmThinkingStrip,
+    cancelThinkingCheck,
   } = useSession(sessionId, cwd, historyView);
   const { settings } = useSettings();
+  const router = useRouter();
   const { setHeader, setBackgroundTasks, setTodos, setInitData: setShellInitData, setRuntime: setShellRuntime } = useShell();
   const scrollRef = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);
@@ -323,6 +329,23 @@ export function ChatView({
     copySelected(uniqueMessages);
   }, [copySelected, uniqueMessages]);
 
+  const handleThinkingNewSession = useCallback(async () => {
+    if (!cwd) return;
+    cancelThinkingCheck();
+    const targetModel = thinkingCheck?.targetModel;
+    try {
+      const res = await fetch("/api/sessions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cwd, runtime: currentRuntime, model: targetModel }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        router.push(`/sessions/${data.sessionId}?cwd=${encodeURIComponent(cwd)}`);
+      }
+    } catch {}
+  }, [cwd, currentRuntime, thinkingCheck?.targetModel, cancelThinkingCheck, router]);
+
   return (
     <div className={cn("flex flex-col flex-1 min-h-0", className)}>
       <div
@@ -477,6 +500,13 @@ export function ChatView({
           {modelPicker !== null && (
             <ModelPicker currentModel={modelPicker} activeModelId={activeModelId} onSelect={selectModel} providers={providers} />
           )}
+          <ThinkingStripDialog
+            open={thinkingCheck !== null}
+            models={thinkingCheck?.models ?? []}
+            onStrip={confirmThinkingStrip}
+            onNewSession={handleThinkingNewSession}
+            onCancel={cancelThinkingCheck}
+          />
           <div />
         </div>
       </div>
