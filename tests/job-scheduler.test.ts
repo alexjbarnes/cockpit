@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("@/server/job-lock", () => ({
   acquireJobLock: vi.fn(() => true),
   releaseJobLock: vi.fn(),
+  forceReleaseJobLock: vi.fn(),
   clearStaleLocks: vi.fn(),
 }));
 

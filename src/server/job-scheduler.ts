@@ -5,7 +5,7 @@ import { v4 as uuidv4 } from "uuid";
 import type { JobRun, JobRunToolUse, ScheduledJob } from "@/types";
 import { findMissedRun, getJobSchedules, matchesCron, scheduleToCron } from "./cron-utils";
 import { addInboxMessage, parseErrorBlock, parseInboxBlock } from "./inbox";
-import { acquireJobLock, clearStaleLocks, releaseJobLock } from "./job-lock";
+import { acquireJobLock, clearStaleLocks, forceReleaseJobLock, releaseJobLock } from "./job-lock";
 import { getLatestRun, loadJobs, loadRuns, pruneAllRuns, saveRun } from "./job-storage";
 import type { SessionManager } from "./session-manager";
 import { countTranscriptMessages } from "./transcript";
@@ -198,6 +198,7 @@ export class JobScheduler {
           run.completedAt = now;
           run.durationMs = now - run.startedAt;
           saveRun(run);
+          forceReleaseJobLock(job.id);
         }
       }
     }

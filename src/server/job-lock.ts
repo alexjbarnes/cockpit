@@ -78,6 +78,12 @@ export function releaseJobLock(jobId: string): void {
   } catch {}
 }
 
+export function forceReleaseJobLock(jobId: string): void {
+  try {
+    unlinkSync(lockPath(jobId));
+  } catch {}
+}
+
 export function clearStaleLocks(): void {
   if (!existsSync(LOCKS_DIR)) return;
   const { readdirSync } = require("node:fs") as typeof import("node:fs");
