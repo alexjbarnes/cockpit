@@ -784,6 +784,8 @@ export class SessionManager {
         }
         session.emitter.emit("status", id, "idle");
       }
+      session.pendingRequests.clear();
+      this.notifyPendingChanged(session, id);
       return true;
     }
 
@@ -805,12 +807,16 @@ export class SessionManager {
       };
       logDiag(id, "interrupt:stdin", { requestId: request.request_id });
       session.stdin.write(JSON.stringify(request) + "\n");
+      session.pendingRequests.clear();
+      this.notifyPendingChanged(session, id);
       return true;
     }
 
     // Fallback: if stdin is gone, kill the process group
     logDiag(id, "interrupt:kill-fallback");
     this.killProcessGroup(session.process);
+    session.pendingRequests.clear();
+    this.notifyPendingChanged(session, id);
     return true;
   }
 

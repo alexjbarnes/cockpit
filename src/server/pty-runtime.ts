@@ -143,6 +143,10 @@ export class PtyRuntime {
   interrupt(): void {
     if (!this.pty) return;
     this.pty.sendKey("\x1b");
+    for (const [, resolve] of this.pendingPermissions) {
+      resolve({ behavior: "deny", message: "interrupted" });
+    }
+    this.pendingPermissions.clear();
   }
 
   resize(cols: number, rows: number): void {
