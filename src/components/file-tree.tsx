@@ -2,6 +2,7 @@
 
 import { ChevronDown, ChevronRight, File, Folder, FolderOpen, Loader2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useWebSocket } from "@/hooks/use-websocket";
 import { cn } from "@/lib/utils";
 
 interface TreeNode {
@@ -183,6 +184,7 @@ export function FileTree({ cwd, selectedFile, onSelectFile }: FileTreeProps) {
   const cwdRef = useRef(cwd);
   const expandedRef = useRef(expanded);
   expandedRef.current = expanded;
+  const { subscribe } = useWebSocket();
 
   useEffect(() => {
     cwdRef.current = cwd;
@@ -204,37 +206,33 @@ export function FileTree({ cwd, selectedFile, onSelectFile }: FileTreeProps) {
 
   useEffect(() => {
     let active = true;
-    let timer: ReturnType<typeof setTimeout>;
 
-    const poll = async () => {
-      if (!active) return;
+    const refreshDirs = async () => {
       const dirs = [cwdRef.current, ...expandedRef.current];
       let changed = false;
-
       for (const dir of dirs) {
         if (!active) return;
         const old = childrenCache.get(dir);
         const fresh = await fetchChildren(dir, true);
         if (!active) return;
-        if (!old || nodesChanged(old, fresh)) {
-          changed = true;
-        }
+        if (!old || nodesChanged(old, fresh)) changed = true;
       }
-
       if (changed && active) {
         setRoots(childrenCache.get(cwdRef.current) || []);
         setRefreshTick((t) => t + 1);
       }
-
-      if (active) timer = setTimeout(poll, 3000);
     };
 
-    timer = setTimeout(poll, 3000);
+    const unsub = subscribe((msg) => {
+      if (msg.type !== "session:fs_changed") return;
+      refreshDirs();
+    });
+
     return () => {
       active = false;
-      clearTimeout(timer);
+      unsub();
     };
-  }, []);
+  }, [subscribe]);
 
   const toggleExpand = useCallback(
     (path: string) => {

@@ -594,6 +594,10 @@ export class SessionManager {
     return this.sessions.get(id)?.runtime ?? "stream";
   }
 
+  getSessionCwd(id: string): string | null {
+    return this.sessions.get(id)?.info.cwd ?? null;
+  }
+
   listActiveSessions(): SessionInfo[] {
     return Array.from(this.sessions.values())
       .filter((s) => s.process !== null || !!s.ptyRuntime?.isAlive)

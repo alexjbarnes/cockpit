@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { NextRequest, NextResponse } from "next/server";
 import { validateSession } from "@/server/auth";
+import { debugLog } from "@/server/debug-logger";
 
 function authenticate(req: NextRequest): boolean {
   const token = req.cookies.get("cockpit_session")?.value || req.headers.get("authorization")?.replace("Bearer ", "");
@@ -52,6 +53,8 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "cwd and file are required" }, { status: 400 });
   }
 
+  debugLog(`[git/diff] hit cwd=${cwd} file=${file}`);
+
   try {
     let diff = "";
     // Try tracked file diff first (staged + unstaged vs HEAD)
@@ -65,17 +68,21 @@ export async function GET(req: NextRequest) {
       }
     }
 
+    if (diff) debugLog(`[git/diff] tracked diff for ${file}: ${diff.length} chars`);
+
     // If no diff, the file might be untracked - show full content as addition
     if (!diff) {
       try {
         const content = await run("git", ["show", `:${file}`], cwd);
         const lines = content.split(/\r?\n/);
         diff = [`--- /dev/null`, `+++ b/${file}`, `@@ -0,0 +1,${lines.length} @@`, ...lines.map((l) => `+${l}`)].join("\n");
+        debugLog(`[git/diff] staged untracked ${file}: ${lines.length} lines`);
       } catch {
         try {
           const content = await readFile(join(cwd, file), "utf-8");
           const lines = content.split(/\r?\n/);
           diff = [`--- /dev/null`, `+++ b/${file}`, `@@ -0,0 +1,${lines.length} @@`, ...lines.map((l) => `+${l}`)].join("\n");
+          debugLog(`[git/diff] readFile untracked ${file}: ${lines.length} lines`);
         } catch {
           return NextResponse.json({ error: "File not found" }, { status: 404 });
         }
@@ -85,6 +92,9 @@ export async function GET(req: NextRequest) {
     // Fetch full file contents for expand-context support
     const [oldContent, newContent] = await Promise.all([getOldContent(cwd, file), getNewContent(cwd, file)]);
 
+    debugLog(
+      `[git/diff] returning ${file}: diff=${diff.length}chars old=${oldContent?.length ?? "null"} new=${newContent?.length ?? "null"}`,
+    );
     return NextResponse.json({
       diff,
       oldContent: oldContent ?? undefined,

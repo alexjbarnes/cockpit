@@ -903,41 +903,43 @@ function SidebarChanges({ cwd, sessionId }: { cwd: string; sessionId?: string })
   const router = useRouter();
   const pathname = usePathname();
   const { tabActions } = useShell();
+  const { subscribe } = useWebSocket();
   const { checkedFiles, toggleFile } = useCheckedFiles(cwd);
   const [branch, setBranch] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [files, setFiles] = useState<Array<{ path: string; status: string; additions: number; deletions: number }>>([]);
+  const cwdRef = useRef(cwd);
+  cwdRef.current = cwd;
+
+  const fetchStatus = useCallback(() => {
+    fetch(`/api/git/status?cwd=${encodeURIComponent(cwdRef.current)}`)
+      .then((r) => {
+        if (!r.ok) throw new Error("Not a git repository");
+        return r.json();
+      })
+      .then((data) => {
+        setFiles(data.files || []);
+        setBranch(data.branch || "");
+        setError(null);
+      })
+      .catch((err) => {
+        setFiles([]);
+        setBranch("");
+        setError(err instanceof Error ? err.message : "Failed to load");
+      });
+  }, []);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: pathname triggers refetch on navigation
   useEffect(() => {
-    let cancelled = false;
-    const fetchStatus = () => {
-      fetch(`/api/git/status?cwd=${encodeURIComponent(cwd)}`)
-        .then((r) => {
-          if (!r.ok) throw new Error("Not a git repository");
-          return r.json();
-        })
-        .then((data) => {
-          if (cancelled) return;
-          setFiles(data.files || []);
-          setBranch(data.branch || "");
-          setError(null);
-        })
-        .catch((err) => {
-          if (!cancelled) {
-            setFiles([]);
-            setBranch("");
-            setError(err instanceof Error ? err.message : "Failed to load");
-          }
-        });
-    };
     fetchStatus();
-    const interval = setInterval(fetchStatus, 30_000);
-    return () => {
-      cancelled = true;
-      clearInterval(interval);
-    };
-  }, [cwd, pathname]);
+  }, [cwd, pathname, fetchStatus]);
+
+  useEffect(() => {
+    return subscribe((msg) => {
+      if (msg.type !== "session:fs_changed") return;
+      fetchStatus();
+    });
+  }, [subscribe, fetchStatus]);
 
   const sessionParam = sessionId ? `&sessionId=${encodeURIComponent(sessionId)}` : "";
   const totalAdded = files.reduce((sum, f) => sum + f.additions, 0);

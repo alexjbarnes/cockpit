@@ -5,9 +5,10 @@ import { parsePatchFiles } from "@pierre/diffs";
 import { FileDiff } from "@pierre/diffs/react";
 import { Check, ExternalLink, FileEdit, FileMinus, FilePlus, FileSymlink, Loader2 } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { DIFF_SELECTABLE_CSS, DiffErrorBoundary } from "@/components/diff-viewer";
 import { useSettings } from "@/hooks/use-settings";
+import { useWebSocket } from "@/hooks/use-websocket";
 import { useCheckedFiles } from "@/lib/checked-files";
 import { cn } from "@/lib/utils";
 
@@ -56,12 +57,14 @@ interface DiffViewProps {
 export function DiffView({ cwd, filePath }: DiffViewProps) {
   const { settings } = useSettings();
   const router = useRouter();
+  const { subscribe } = useWebSocket();
   const [loading, setLoading] = useState(true);
   const [diff, setDiff] = useState<string | null>(null);
   const [fileDiff, setFileDiff] = useState<FileDiffMetadata | null>(null);
   const [fileStatus, setFileStatus] = useState<string>("modified");
   const { checkedFiles, toggleFile } = useCheckedFiles(cwd);
   const checked = checkedFiles.has(filePath);
+  const refreshTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
 
   const fetchDiff = useCallback(() => {
     setLoading(true);
@@ -96,6 +99,37 @@ export function DiffView({ cwd, filePath }: DiffViewProps) {
   useEffect(() => {
     fetchDiff();
   }, [fetchDiff]);
+
+  const refreshDiff = useCallback(() => {
+    fetch(`/api/git/diff?cwd=${encodeURIComponent(cwd)}&file=${encodeURIComponent(filePath)}`)
+      .then((res) => {
+        if (!res.ok) throw new Error("Failed");
+        return res.json();
+      })
+      .then((data: { diff: string; oldContent?: string; newContent?: string; status?: string }) => {
+        setDiff(data.diff);
+        if (data.status) setFileStatus(data.status);
+        try {
+          const parsed = parsePatchFiles(data.diff);
+          if (parsed.length > 0 && parsed[0].files.length > 0) {
+            const meta = parsed[0].files[0];
+            if (data.oldContent != null && data.newContent != null) {
+              reindexForFullContent(meta, data.oldContent, data.newContent);
+            }
+            setFileDiff(meta);
+          }
+        } catch {}
+      })
+      .catch(() => {});
+  }, [cwd, filePath]);
+
+  useEffect(() => {
+    return subscribe((msg) => {
+      if (msg.type !== "session:fs_changed") return;
+      clearTimeout(refreshTimer.current);
+      refreshTimer.current = setTimeout(refreshDiff, 300);
+    });
+  }, [subscribe, refreshDiff]);
 
   const handleToggle = useCallback(() => {
     toggleFile(filePath);

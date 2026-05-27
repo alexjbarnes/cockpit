@@ -317,6 +317,7 @@ export type ClientMessage =
   | { type: "message:delete_queued"; sessionId: string; messageId: string }
   | { type: "message:edit_queued"; sessionId: string; messageId: string }
   | { type: "history:request_more"; sessionId: string; beforeMessageId: string }
+  | { type: "watch:cwd"; cwd: string }
   | { type: "ping" };
 
 // Server -> Client messages
@@ -330,6 +331,7 @@ export type ServerMessage =
   | { type: "assistant:tool_children"; sessionId: string; messageId: string; toolId: string; children: ToolUse[] }
   | { type: "session:status"; sessionId: string; status: "idle" | "running" }
   | { type: "session:pending"; sessionId: string; count: number }
+  | { type: "session:fs_changed"; cwd: string }
   | { type: "session:error"; sessionId: string; error: string }
   | {
       type: "permission:request";

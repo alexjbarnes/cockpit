@@ -6,6 +6,7 @@ import { extractTokenFromQuery, validateSession } from "./auth";
 // loadLastUsage no longer needed - usage is returned by loadTranscript
 import { debugLog, logClientMessage, logParsedEvent, logServerMessage, logStatus } from "./debug-logger";
 import type { ParsedEvent } from "./event-parser";
+import { watchCwd } from "./fs-watcher";
 import { findLatestPlanFile, readPlanFile } from "./plans";
 import { SessionManager } from "./session-manager";
 import { getSessionPrefs } from "./session-prefs";
@@ -172,6 +173,8 @@ export function createWebSocketHandler(
     const sessionCleanups = new Map<string, Array<() => void>>();
     // Lightweight status-only subscriptions for sidebar
     let watchCleanups: Array<() => void> = [];
+    // Explicit cwd watches requested by pages (e.g. changes view)
+    let cwdWatchCleanups: Array<() => void> = [];
 
     function subscribeSession(sessionId: string): void {
       const prev = sessionCleanups.get(sessionId);
@@ -180,6 +183,15 @@ export function createWebSocketHandler(
       }
       const cleanups: Array<() => void> = [];
       sessionCleanups.set(sessionId, cleanups);
+
+      const cwd = sessionManager.getSessionCwd(sessionId);
+      if (cwd) {
+        cleanups.push(
+          watchCwd(cwd, () => {
+            send(ws, { type: "session:fs_changed", cwd });
+          }),
+        );
+      }
 
       const unsubEvent = sessionManager.subscribe(sessionId, (event: ParsedEvent) => {
         logParsedEvent(sessionId, event);
@@ -760,6 +772,8 @@ export function createWebSocketHandler(
           for (const fn of watchCleanups) fn();
           watchCleanups = [];
 
+          const watchedCwds = new Set<string>();
+
           for (const id of msg.sessionIds) {
             const unsubStatus = sessionManager.onStatus(id, (status) => {
               console.log(`[ws] onStatus (watch) fired: ${id.slice(0, 8)} -> ${status}`);
@@ -780,7 +794,26 @@ export function createWebSocketHandler(
               send(ws, { type: "session:info_updated", sessionId: id, info });
             });
             if (unsubInfo) watchCleanups.push(unsubInfo);
+
+            const cwd = sessionManager.getSessionCwd(id);
+            if (cwd && !watchedCwds.has(cwd)) {
+              watchedCwds.add(cwd);
+              watchCleanups.push(
+                watchCwd(cwd, () => {
+                  send(ws, { type: "session:fs_changed", cwd });
+                }),
+              );
+            }
           }
+          break;
+        }
+
+        case "watch:cwd": {
+          cwdWatchCleanups.push(
+            watchCwd(msg.cwd, () => {
+              send(ws, { type: "session:fs_changed", cwd: msg.cwd });
+            }),
+          );
           break;
         }
       }
@@ -795,6 +828,8 @@ export function createWebSocketHandler(
       sessionCleanups.clear();
       for (const fn of watchCleanups) fn();
       watchCleanups = [];
+      for (const fn of cwdWatchCleanups) fn();
+      cwdWatchCleanups = [];
     });
   });
 

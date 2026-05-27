@@ -8,6 +8,7 @@ import { FilePicker } from "@/components/file-picker";
 import { FileTree } from "@/components/file-tree";
 import { MarkdownRender } from "@/components/markdown-render";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { useWebSocket } from "@/hooks/use-websocket";
 import { pathBasename } from "@/lib/path";
 
 interface FileContent {
@@ -116,6 +117,7 @@ export function FilesView({
   manageSidebar?: boolean;
 }) {
   const { setSidebarSection, removeSidebarSection, closeSidebar, tabActions } = useShell();
+  const { subscribe } = useWebSocket();
   const [selectedFile, setSelectedFile] = useState<string | null>(() => initialFile || selectedFileCache.get(cwd) || null);
   const [fileData, setFileData] = useState<FileContent | null>(null);
   const [loading, setLoading] = useState(false);
@@ -317,25 +319,18 @@ export function FilesView({
   useEffect(() => {
     if (!selectedFile) return;
 
-    let active = true;
-    let timer: ReturnType<typeof setTimeout>;
-
-    const poll = async () => {
-      if (!active) return;
+    const refresh = async () => {
       const cached = fileContentCache.get(selectedFile);
-      if (!cached?.mtimeMs) {
-        if (active) timer = setTimeout(poll, 2000);
-        return;
-      }
+      if (!cached?.mtimeMs) return;
 
       try {
         const res = await fetch(`/api/filesystem/read?path=${encodeURIComponent(selectedFile)}&stat=true`);
-        if (!res.ok || !active) return;
+        if (!res.ok) return;
         const stat = await res.json();
         if (stat.mtimeMs !== cached.mtimeMs) {
           const savedScroll = scrollRef.current?.scrollTop ?? 0;
           const contentRes = await fetch(`/api/filesystem/read?path=${encodeURIComponent(selectedFile)}`);
-          if (!contentRes.ok || !active) return;
+          if (!contentRes.ok) return;
           const data: FileContent = await contentRes.json();
           fileContentCache.set(selectedFile, data);
           setFileData(data);
@@ -344,15 +339,13 @@ export function FilesView({
           });
         }
       } catch {}
-      if (active) timer = setTimeout(poll, 2000);
     };
 
-    timer = setTimeout(poll, 2000);
-    return () => {
-      active = false;
-      clearTimeout(timer);
-    };
-  }, [selectedFile]);
+    return subscribe((msg) => {
+      if (msg.type !== "session:fs_changed") return;
+      refresh();
+    });
+  }, [selectedFile, subscribe]);
 
   // No file selected
   if (!selectedFile) {
