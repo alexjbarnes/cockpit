@@ -2060,8 +2060,11 @@ Additional Cockpit rules beyond the CLI's defaults:
       args.push("--session-id", session.cliSessionId);
     }
 
-    if (session.info.model) {
-      args.push("--model", session.info.model);
+    const resolved = resolveProviderModel(session.info.model ?? "sonnet");
+    const cliModel = resolved ? resolved.model.modelId : session.info.model;
+
+    if (cliModel) {
+      args.push("--model", cliModel);
     }
 
     if (this.modelEffortLevels(session.info.model).length > 0) {
@@ -2072,7 +2075,6 @@ Additional Cockpit rules beyond the CLI's defaults:
     delete env.CLAUDECODE;
     delete env.CLAUDE_CODE_ENTRYPOINT;
 
-    const resolved = resolveProviderModel(session.info.model ?? "sonnet");
     if (resolved) {
       Object.assign(env, resolved.provider.envVars);
     }
@@ -2086,7 +2088,8 @@ Additional Cockpit rules beyond the CLI's defaults:
     }
 
     if (session.modelSlots.subagent && session.modelSlots.subagent !== session.modelSlots.main) {
-      env.ANTHROPIC_SMALL_FAST_MODEL = session.modelSlots.subagent;
+      const resolvedSub = resolveProviderModel(session.modelSlots.subagent);
+      env.ANTHROPIC_SMALL_FAST_MODEL = resolvedSub ? resolvedSub.model.modelId : session.modelSlots.subagent;
     }
 
     mkdirSync(session.info.cwd, { recursive: true });
@@ -2288,7 +2291,9 @@ Additional Cockpit rules beyond the CLI's defaults:
     } else {
       extraArgs.push("--session-id", session.cliSessionId);
     }
-    if (session.info.model) extraArgs.push("--model", session.info.model);
+    const resolvedPty = resolveProviderModel(session.info.model ?? "sonnet");
+    const cliModelPty = resolvedPty ? resolvedPty.model.modelId : session.info.model;
+    if (cliModelPty) extraArgs.push("--model", cliModelPty);
     if (this.modelEffortLevels(session.info.model).length > 0) {
       extraArgs.push("--effort", session.thinkingLevel);
     }
@@ -2299,13 +2304,13 @@ Additional Cockpit rules beyond the CLI's defaults:
     }
 
     const extraEnv: Record<string, string> = {};
-    const resolved = resolveProviderModel(session.info.model ?? "sonnet");
-    if (resolved) Object.assign(extraEnv, resolved.provider.envVars);
+    if (resolvedPty) Object.assign(extraEnv, resolvedPty.provider.envVars);
     if (session.info.model && !/\[1m\]/i.test(session.info.model)) {
       extraEnv.CLAUDE_CODE_DISABLE_1M_CONTEXT = "1";
     }
     if (session.modelSlots.subagent && session.modelSlots.subagent !== session.modelSlots.main) {
-      extraEnv.ANTHROPIC_SMALL_FAST_MODEL = session.modelSlots.subagent;
+      const resolvedSub = resolveProviderModel(session.modelSlots.subagent);
+      extraEnv.ANTHROPIC_SMALL_FAST_MODEL = resolvedSub ? resolvedSub.model.modelId : session.modelSlots.subagent;
     }
 
     const runtime = new PtyRuntime({

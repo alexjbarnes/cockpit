@@ -165,7 +165,7 @@ export function TabBar({ splitRatio }: TabBarProps) {
               closeTab(tab.id);
             }
           }}
-          className="ml-0.5 rounded p-0.5 hover:bg-muted"
+          className="ml-0.5 rounded p-0.5 hover:bg-muted cursor-default"
         >
           <X className="h-2.5 w-2.5 md:h-3 md:w-3" />
         </span>
