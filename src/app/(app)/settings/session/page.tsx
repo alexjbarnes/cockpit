@@ -5,18 +5,8 @@ import { useRouter } from "next/navigation";
 import { usePageHeader } from "@/components/app-shell";
 import { Button } from "@/components/ui/button";
 import { type ThinkingLevel, useSettings } from "@/hooks/use-settings";
-import { allowedEffortLevels, defaultForAlias, type ModelAlias, recommendedEffort, resolveModel, versionsForAlias } from "@/lib/models";
+import { allowedEffortLevels, CONTEXT_SIZES, type ContextSize, defaultForAlias, type ModelAlias, recommendedEffort, resolveModel, versionsForAlias } from "@/lib/models";
 
-function parseModelString(model: string): { base: string; extended: boolean } {
-  const extended = model.includes("[1m]");
-  const base = model.replace(/\[.*\]$/, "");
-  return { base, extended };
-}
-
-function buildModelString(modelId: string, extended: boolean): string {
-  if (extended) return `${modelId}[1m]`;
-  return modelId;
-}
 
 const thinkingOptions: { value: ThinkingLevel; label: string }[] = [
   { value: "low", label: "Low" },
@@ -74,8 +64,8 @@ export default function SessionSettingsPage() {
   const { settings, updateSetting } = useSettings();
 
   const mainModel = settings.modelSlots?.main ?? "sonnet";
-  const { base, extended } = parseModelString(mainModel);
-  const entry = resolveModel(base);
+  const mainContext: ContextSize = settings.modelSlots?.mainContext ?? "200k";
+  const entry = resolveModel(mainModel);
   const selectedAlias = entry?.alias || "sonnet";
   const versions = versionsForAlias(selectedAlias);
   const showVersions = versions.length > 1;
@@ -93,10 +83,12 @@ export default function SessionSettingsPage() {
   function selectVersion(version: string) {
     const ver = versions.find((m) => m.version === version);
     if (!ver) return;
-    updateSetting("modelSlots", {
+    const nextSlots = {
       ...settings.modelSlots,
-      main: buildModelString(ver.modelId, extended && ver.supportsExtendedContext),
-    });
+      main: ver.modelId,
+      mainContext: ver.contextSizes.includes(mainContext) ? mainContext : (ver.contextSizes[0] ?? "200k"),
+    };
+    updateSetting("modelSlots", nextSlots);
     const levels = allowedEffortLevels(ver);
     if (!levels.includes(settings.thinkingLevel)) {
       const rec = recommendedEffort(ver);
@@ -133,15 +125,18 @@ export default function SessionSettingsPage() {
             />
           </SettingRow>
         )}
-        {entry?.supportsExtendedContext && (
+        {entry && entry.contextSizes.length >= 2 && (
           <SettingRow label="Context">
             <ButtonGroup
-              options={[
-                { value: "default", label: "200K" },
-                { value: "1m", label: "1M" },
-              ]}
-              value={extended ? "1m" : "default"}
-              onChange={(v) => updateSetting("modelSlots", { ...settings.modelSlots, main: buildModelString(entry.modelId, v === "1m") })}
+              options={entry.contextSizes.map((s) => ({ value: s, label: CONTEXT_SIZES[s].label }))}
+              value={mainContext}
+              onChange={(v) =>
+                updateSetting("modelSlots", {
+                  ...settings.modelSlots,
+                  main: entry.modelId,
+                  mainContext: v as ContextSize,
+                })
+              }
             />
           </SettingRow>
         )}
