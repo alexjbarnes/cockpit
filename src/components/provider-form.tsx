@@ -126,7 +126,7 @@ export function ProviderForm({ provider, isNew, onSave, onCancel, onDelete, lock
   };
 
   const addModel = () => {
-    if (newModelId.trim()) {
+    if (newModelId.trim() && newModelContextSizes.length > 0) {
       setModels([
         ...models,
         {
