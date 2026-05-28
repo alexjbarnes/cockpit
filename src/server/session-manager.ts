@@ -1092,8 +1092,8 @@ export class SessionManager {
     // context indicator shows the old total (e.g. 1000K) after switching to
     // a model with a different context window (e.g. 200K Flash) until the
     // CLI respawns and reports the actual value.
-    if (contextChanged && !has1m(model)) {
-      session.contextWindowSize = nextEntry?.contextWindow ?? 200_000;
+    if (contextChanged) {
+      session.contextWindowSize = has1m(model) ? 1_000_000 : (nextEntry?.contextWindow ?? 200_000);
     }
     const cur = session.contextUsage;
     if (cur) {
