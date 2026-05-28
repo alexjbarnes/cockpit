@@ -499,7 +499,13 @@ export function ChatView({
               </div>
             ))}
           {modelPicker !== null && (
-            <ModelPicker currentModel={modelPicker} activeModelId={activeModelId} onSelect={selectModel} providers={providers} />
+            <ModelPicker
+              currentModel={modelPicker}
+              currentContextSize={currentContextSize}
+              activeModelId={activeModelId}
+              onSelect={(model, contextSize) => setModel(model, contextSize)}
+              providers={providers}
+            />
           )}
           <ThinkingStripDialog
             open={thinkingCheck !== null}

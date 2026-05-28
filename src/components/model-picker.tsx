@@ -1,22 +1,16 @@
 "use client";
 
 import { Check } from "lucide-react";
+import { CONTEXT_SIZES, type ContextSize } from "@/lib/models";
 import type { Provider } from "@/types";
 
 interface ModelPickerProps {
   currentModel: string;
+  currentContextSize?: ContextSize;
   activeModelId?: string | null;
-  onSelect: (model: string) => void;
+  onSelect: (model: string, contextSize?: ContextSize) => void;
   providers: Provider[];
   slot?: "main" | "subagent" | "fast";
-}
-
-function baseModel(model: string): string {
-  return model.replace(/\[.*\]$/, "");
-}
-
-function hasExtendedContext(model: string): boolean {
-  return model.includes("[1m]");
 }
 
 interface PickerRow {
@@ -26,7 +20,7 @@ interface PickerRow {
   description: string;
   providerId: string;
   providerName: string;
-  extended: boolean;
+  sizes: ContextSize[];
 }
 
 function buildRows(providers: Provider[]): PickerRow[] {
@@ -41,28 +35,15 @@ function buildRows(providers: Provider[]): PickerRow[] {
         description: desc,
         providerId: provider.id,
         providerName: provider.name,
-        extended: false,
+        sizes: model.contextSizes,
       });
-      if (model.supportsExtendedContext && !/\[.*\]$/.test(model.modelId)) {
-        rows.push({
-          key: `${provider.id}::${model.modelId}[1m]`,
-          value: `${model.modelId}[1m]`,
-          label: `${model.displayName} (1M)`,
-          description: desc,
-          providerId: provider.id,
-          providerName: provider.name,
-          extended: true,
-        });
-      }
     }
   }
   return rows;
 }
 
-export function ModelPicker({ currentModel, onSelect, providers, slot }: ModelPickerProps) {
+export function ModelPicker({ currentModel, currentContextSize, onSelect, providers, slot }: ModelPickerProps) {
   const rows = buildRows(providers);
-  const currentBase = baseModel(currentModel);
-  const currentExtended = hasExtendedContext(currentModel);
 
   let lastProvider = "";
 
@@ -76,7 +57,7 @@ export function ModelPicker({ currentModel, onSelect, providers, slot }: ModelPi
         {rows.map((row) => {
           const showHeader = row.providerName !== lastProvider;
           lastProvider = row.providerName;
-          const active = row.value === currentBase || (row.extended === currentExtended && baseModel(row.value) === currentBase);
+          const active = row.value === currentModel;
           return (
             <div key={row.key}>
               {showHeader && (
@@ -93,6 +74,23 @@ export function ModelPicker({ currentModel, onSelect, providers, slot }: ModelPi
                 <span className="text-muted-foreground">{row.label}</span>
                 <span className="text-muted-foreground ml-auto text-xs">{row.description}</span>
               </button>
+              {row.sizes.length >= 2 && (
+                <div className="flex gap-1 pl-10 pt-1 pb-2">
+                  {row.sizes.map((s) => (
+                    <button
+                      key={s}
+                      onClick={() => onSelect(row.value, s)}
+                      className={`rounded px-2 py-0.5 text-xs transition-colors ${
+                        row.value === currentModel && currentContextSize === s
+                          ? "bg-primary text-primary-foreground"
+                          : "bg-muted text-muted-foreground hover:text-foreground"
+                      }`}
+                    >
+                      {CONTEXT_SIZES[s].label}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
           );
         })}
