@@ -1044,10 +1044,8 @@ export class SessionManager {
       if (!sizes || sizes.length === 0) return requestedSize;
       return sizes.includes(requestedSize) ? requestedSize : sizes[0];
     })();
-    // Detect 200K<->1M flip via the explicit contextSize field. The
-    // CLAUDE_CODE_DISABLE_1M_CONTEXT env var is applied at spawn, so toggling
-    // the context size mid-session needs a CLI restart for the new context
-    // window to actually take effect.
+    // CLAUDE_CODE_DISABLE_1M_CONTEXT is applied at spawn, so a context-size
+    // change mid-session requires a CLI restart to take effect.
     const contextChanged = currentSize !== resolvedSize;
 
     if (session.info.model === model && !contextChanged) {

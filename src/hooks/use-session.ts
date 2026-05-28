@@ -1222,6 +1222,7 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
 
   const applyModelSet = useCallback(
     (model: string, contextSize?: ContextSize) => {
+      setModelPicker(null);
       setCurrentModel(model);
       if (contextSize !== undefined) setCurrentContextSize(contextSize);
       send({ type: "session:set_model", sessionId, model, contextSize });
@@ -1242,6 +1243,7 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
         const res = await fetch(`/api/sessions/thinking?sessionId=${encodeURIComponent(sessionId)}`);
         const data = await res.json();
         if (data.hasNonAnthropicThinking) {
+          setModelPicker(null);
           setThinkingCheck({ pending: true, targetModel: model, models: data.models, contextSize });
           return;
         }
