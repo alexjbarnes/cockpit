@@ -602,6 +602,10 @@ export class SessionManager {
     return this.sessions.get(id)?.cliSessionId ?? null;
   }
 
+  getSessionModel(id: string): string | null {
+    return this.sessions.get(id)?.info.model ?? null;
+  }
+
   listActiveSessions(): SessionInfo[] {
     return Array.from(this.sessions.values())
       .filter((s) => s.process !== null || !!s.ptyRuntime?.isAlive)

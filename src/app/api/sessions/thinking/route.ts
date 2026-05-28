@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { validateSession } from "@/server/auth";
+import { debugLog } from "@/server/debug-logger";
 import { getSessionManager } from "@/server/singleton";
 import { checkNonAnthropicThinking, findTranscriptFile, getTranscriptPath, stripNonAnthropicThinking } from "@/server/transcript";
 
@@ -48,9 +49,13 @@ export async function POST(req: NextRequest) {
 
   const filePath = resolveTranscriptPath(sessionId) || (await findTranscriptFile(sessionId));
   if (!filePath) {
+    debugLog(`[strip] sessionId=${sessionId.slice(0, 8)} transcript not found`);
     return NextResponse.json({ error: "Transcript not found" }, { status: 404 });
   }
 
+  const manager = getSessionManager();
+  debugLog(`[strip] sessionId=${sessionId.slice(0, 8)} stripping ${filePath} (current model=${manager.getSessionModel(sessionId)})`);
   const stripped = await stripNonAnthropicThinking(filePath);
+  debugLog(`[strip] sessionId=${sessionId.slice(0, 8)} stripped=${stripped} model-after-strip=${manager.getSessionModel(sessionId)}`);
   return NextResponse.json({ stripped });
 }

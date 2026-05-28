@@ -731,6 +731,7 @@ export function createWebSocketHandler(
         }
 
         case "session:set_model": {
+          debugLog(`[ws] session:set_model received: sessionId=${msg.sessionId.slice(0, 8)} model=${msg.model}`);
           sessionManager.setModel(msg.sessionId, msg.model);
           break;
         }
