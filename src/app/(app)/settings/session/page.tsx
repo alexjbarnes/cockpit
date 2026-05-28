@@ -75,7 +75,11 @@ export default function SessionSettingsPage() {
   function selectAlias(alias: ModelAlias) {
     const def = defaultForAlias(alias);
     if (!def) return;
-    updateSetting("modelSlots", { ...settings.modelSlots, main: def.modelId });
+    updateSetting("modelSlots", {
+      ...settings.modelSlots,
+      main: def.modelId,
+      mainContext: def.contextSizes.includes(mainContext) ? mainContext : (def.contextSizes[0] ?? "200k"),
+    });
     const rec = recommendedEffort(def);
     if (rec) updateSetting("thinkingLevel", rec);
   }
@@ -134,7 +138,7 @@ export default function SessionSettingsPage() {
                 updateSetting("modelSlots", {
                   ...settings.modelSlots,
                   main: entry.modelId,
-                  mainContext: v as ContextSize,
+                  mainContext: v,
                 })
               }
             />
