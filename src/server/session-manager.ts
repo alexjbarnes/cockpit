@@ -5,7 +5,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { type Writable } from "node:stream";
 import { v4 as uuidv4 } from "uuid";
-import { allowedEffortLevels, coerceEffort, CONTEXT_SIZES, DEFAULT_CONTEXT_SIZE, recommendedEffort, resolveModel } from "@/lib/models";
+import { allowedEffortLevels, coerceEffort, CONTEXT_SIZES, type ContextSize, DEFAULT_CONTEXT_SIZE, recommendedEffort, resolveModel } from "@/lib/models";
 import { resolveProviderModel } from "@/server/providers";
 import type {
   ChatMessage,
@@ -1021,28 +1021,32 @@ export class SessionManager {
     return session?.planMode ?? false;
   }
 
-  setModel(sessionId: string, model: string): void {
+  setModel(sessionId: string, model: string, contextSize?: ContextSize): void {
     const session = this.sessions.get(sessionId);
     this.log(
       sessionId,
-      `setModel: requested=${model}, current=${session?.info.model}, hasStdin=${!!session?.stdin}, hasPty=${!!session?.ptyRuntime}`,
+      `setModel: requested=${model} size=${contextSize ?? "(unspecified)"}, current=${session?.info.model} currentSize=${session?.info.contextSize ?? "(unset)"}, hasStdin=${!!session?.stdin}, hasPty=${!!session?.ptyRuntime}`,
     );
-    if (!session || session.info.model === model) {
-      if (session && session.info.model === model) {
-        this.log(sessionId, `setModel: skipping (already ${model})`);
-      }
+    if (!session) return;
+
+    const currentSize = session.info.contextSize ?? DEFAULT_CONTEXT_SIZE;
+    const requestedSize = contextSize ?? currentSize;
+    const resolvedSize: ContextSize = (() => {
+      const sizes = resolveModel(model)?.contextSizes;
+      if (!sizes || sizes.length === 0) return requestedSize;
+      return sizes.includes(requestedSize) ? requestedSize : sizes[0];
+    })();
+    const contextChanged = currentSize !== resolvedSize;
+
+    if (session.info.model === model && !contextChanged) {
+      this.log(sessionId, `setModel: skipping (already ${model} with size ${resolvedSize})`);
       return;
     }
 
-    // Detect 200K↔1M flip. The CLAUDE_CODE_DISABLE_1M_CONTEXT env var is
-    // applied at spawn, so toggling the [1m] suffix mid-session needs a CLI
-    // restart for the new context window to actually take effect.
-    const has1m = (m: string | undefined) => !!m && /\[1m\]/i.test(m);
-    const contextChanged = has1m(session.info.model) !== has1m(model);
-
     session.info.model = model;
-    session.modelSlots = { ...session.modelSlots, main: model };
-    setSessionPrefs(sessionId, { model, modelSlots: session.modelSlots });
+    session.info.contextSize = resolvedSize;
+    session.modelSlots = { ...session.modelSlots, main: model, mainContext: resolvedSize };
+    setSessionPrefs(sessionId, { model, contextSize: resolvedSize, modelSlots: session.modelSlots });
 
     const nextEntry = resolveModel(model);
     const coerced = nextEntry
@@ -1093,7 +1097,7 @@ export class SessionManager {
     // a model with a different context window (e.g. 200K Flash) until the
     // CLI respawns and reports the actual value.
     if (contextChanged) {
-      session.contextWindowSize = has1m(model) ? 1_000_000 : (nextEntry?.contextWindow ?? 200_000);
+      session.contextWindowSize = resolvedSize === "1m" ? 1_000_000 : (nextEntry?.contextWindow ?? 200_000);
     }
     const cur = session.contextUsage;
     if (cur) {
