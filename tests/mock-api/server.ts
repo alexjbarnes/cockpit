@@ -77,6 +77,16 @@ export function createMockApiServer(): Promise<MockApiServer> {
 
       // ── Anthropic Messages API ──────────────────────────────────────
 
+      // Token counter stub — claude-code may poke this before/after a turn.
+      // Returning a constant keeps things predictable for assertions.
+      if (req.method === "POST" && req.url === "/v1/messages/count_tokens") {
+        readBody(req).then(() => {
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ input_tokens: 0 }));
+        });
+        return;
+      }
+
       if (req.method === "POST" && req.url === "/v1/messages") {
         const auth = req.headers.authorization || "";
         if (!auth.startsWith("Bearer ") || !auth.slice(7).trim()) {

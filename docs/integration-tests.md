@@ -67,7 +67,7 @@ Not runnable yet. See "Building this out".
 Tracked in `next` branch commits:
 
 - [x] **Commit 1 — Path helpers and refactor.** Added `src/server/paths.ts` with `getCockpitDir()`, `getCockpitCacheDir()`, `getClaudeDir()`, `getClaudeUserConfigFile()`. Replaced every `~/.cockpit` / `~/.claude` / `~/.cache/cockpit` literal in `src/` to go through these helpers. Env-var overrides take precedence; defaults preserve current behaviour for non-test callers.
-- [ ] **Commit 2 — Mock API audit and fixes.** Echo the request's model into `message_start`. Stub `POST /v1/messages/count_tokens`. Smoke-test the mock with a representative request.
+- [x] **Commit 2 — Mock API audit and fixes.** `textResponse`/`toolUseResponse` accept a `model` option so tests can vary the echoed model. Added `POST /v1/messages/count_tokens` stub returning `{input_tokens: 0}`. Added `tests/mock-api/server.test.ts` with 8 smoke tests covering auth, SSE shape, request capture, count_tokens, multi-turn scripts. The mock now passes a representative request lifecycle locally without a CLI in the loop.
 - [ ] **Commit 3 — Integration harness.** `tests/integration/harness.ts` boots mock + cockpit, seeds the config dir, returns auth token. `tests/integration/fixtures.ts` is the Playwright fixture wrapping it.
 - [ ] **Commit 4 — First Playwright test.** "Hello" round-trip: type a message in the browser, mock returns "Hello from mock", assert the text rendered.
 - [ ] **Commit 5 — Docs polish.** Fill in the gaps in this file once the harness is real and we know what footguns showed up.

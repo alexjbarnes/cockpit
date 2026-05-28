@@ -11,7 +11,14 @@ function toolId(): string {
   return `mock_toolu_${++seq}`;
 }
 
-export function textResponse(text: string, stopReason: "end_turn" | "tool_use" = "end_turn"): SSEScriptEvent[] {
+const DEFAULT_MODEL = "claude-sonnet-4-6";
+
+export interface ResponseOptions {
+  /** Model echoed back in message_start. Defaults to claude-sonnet-4-6. Tests can override per turn. */
+  model?: string;
+}
+
+export function textResponse(text: string, stopReason: "end_turn" | "tool_use" = "end_turn", opts: ResponseOptions = {}): SSEScriptEvent[] {
   const events: SSEScriptEvent[] = [];
   const mid = msgId();
 
@@ -24,7 +31,7 @@ export function textResponse(text: string, stopReason: "end_turn" | "tool_use" =
         type: "message",
         role: "assistant",
         content: [],
-        model: "claude-sonnet-4-6",
+        model: opts.model ?? DEFAULT_MODEL,
         stop_reason: null,
         stop_sequence: null,
         usage: { input_tokens: 0, output_tokens: 0 },
@@ -66,7 +73,7 @@ export function textResponse(text: string, stopReason: "end_turn" | "tool_use" =
   return events;
 }
 
-export function toolUseResponse(toolName: string, input: Record<string, unknown>): SSEScriptEvent[] {
+export function toolUseResponse(toolName: string, input: Record<string, unknown>, opts: ResponseOptions = {}): SSEScriptEvent[] {
   const events: SSEScriptEvent[] = [];
   const mid = msgId();
   const tid = toolId();
@@ -81,7 +88,7 @@ export function toolUseResponse(toolName: string, input: Record<string, unknown>
         type: "message",
         role: "assistant",
         content: [],
-        model: "claude-sonnet-4-6",
+        model: opts.model ?? DEFAULT_MODEL,
         stop_reason: null,
         stop_sequence: null,
         usage: { input_tokens: 0, output_tokens: 0 },
