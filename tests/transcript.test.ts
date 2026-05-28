@@ -1,8 +1,10 @@
 import { existsSync } from "node:fs";
-import { open, readdir, readFile, stat } from "node:fs/promises";
+import { open, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  checkNonAnthropicThinking,
   findSessionCwd,
+  findTranscriptFile,
   globalSearch,
   listAllTranscriptFiles,
   loadLastUsage,
@@ -12,6 +14,7 @@ import {
   scanAllSessions,
   scanSessionsByIds,
   scanSessionsForCwd,
+  stripNonAnthropicThinking,
   transcriptExists,
 } from "@/server/transcript";
 
@@ -22,6 +25,8 @@ vi.mock("node:fs/promises", () => ({
   readdir: vi.fn(),
   stat: vi.fn(),
   open: vi.fn(),
+  unlink: vi.fn(),
+  writeFile: vi.fn(),
 }));
 vi.mock("node:readline", () => ({
   createInterface: vi.fn(),
@@ -2316,6 +2321,173 @@ describe("transcript module", () => {
       const result = await globalSearch("hello", 50);
       expect(result.results).toHaveLength(1);
       expect(result.results[0].role).toBe("user");
+    });
+  });
+
+  describe("findTranscriptFile", () => {
+    it("returns null when projects dir does not exist", async () => {
+      (existsSync as any).mockReturnValue(false);
+      const result = await findTranscriptFile("session-123");
+      expect(result).toBeNull();
+    });
+
+    it("returns null when readdir fails", async () => {
+      (existsSync as any).mockReturnValue(true);
+      (readdir as any).mockRejectedValue(new Error("EACCES"));
+      const result = await findTranscriptFile("session-123");
+      expect(result).toBeNull();
+    });
+
+    it("returns matching path when transcript exists in a project dir", async () => {
+      (existsSync as any).mockImplementation((p: string) => {
+        if (p === "/home/user/.claude/projects") return true;
+        return p === "/home/user/.claude/projects/-tmp-foo/session-123.jsonl";
+      });
+      (readdir as any).mockResolvedValue(["-tmp-bar", "-tmp-foo"]);
+      const result = await findTranscriptFile("session-123");
+      expect(result).toBe("/home/user/.claude/projects/-tmp-foo/session-123.jsonl");
+    });
+
+    it("returns null when no project dir contains the file", async () => {
+      (existsSync as any).mockImplementation((p: string) => p === "/home/user/.claude/projects");
+      (readdir as any).mockResolvedValue(["-tmp-bar", "-tmp-foo"]);
+      const result = await findTranscriptFile("session-missing");
+      expect(result).toBeNull();
+    });
+  });
+
+  describe("checkNonAnthropicThinking", () => {
+    it("reports no thinking on an empty file", async () => {
+      (readFile as any).mockResolvedValue("");
+      const result = await checkNonAnthropicThinking("/path/x.jsonl");
+      expect(result).toEqual({ hasNonAnthropicThinking: false, count: 0, models: [] });
+    });
+
+    it("ignores malformed JSON lines", async () => {
+      (readFile as any).mockResolvedValue("not json\n{bad\n");
+      const result = await checkNonAnthropicThinking("/path/x.jsonl");
+      expect(result.hasNonAnthropicThinking).toBe(false);
+    });
+
+    it("skips claude-prefixed model entries", async () => {
+      (readFile as any).mockResolvedValue(
+        jsonl({
+          type: "assistant",
+          message: { model: "claude-opus-4-7", content: [{ type: "thinking", thinking: "x" }] },
+        }),
+      );
+      const result = await checkNonAnthropicThinking("/path/x.jsonl");
+      expect(result.hasNonAnthropicThinking).toBe(false);
+    });
+
+    it("skips entries without an assistant message", async () => {
+      (readFile as any).mockResolvedValue(jsonl({ type: "user", message: { content: "hi" } }, { type: "assistant" }));
+      const result = await checkNonAnthropicThinking("/path/x.jsonl");
+      expect(result.hasNonAnthropicThinking).toBe(false);
+    });
+
+    it("skips entries whose content is not an array", async () => {
+      (readFile as any).mockResolvedValue(jsonl({ type: "assistant", message: { model: "deepseek-v3", content: "plain text" } }));
+      const result = await checkNonAnthropicThinking("/path/x.jsonl");
+      expect(result.hasNonAnthropicThinking).toBe(false);
+    });
+
+    it("counts non-anthropic thinking blocks and collects model names", async () => {
+      (readFile as any).mockResolvedValue(
+        jsonl(
+          {
+            type: "assistant",
+            message: { model: "deepseek-v3", content: [{ type: "thinking", thinking: "a" }] },
+          },
+          {
+            type: "assistant",
+            message: { model: "deepseek-v3", content: [{ type: "text", text: "no thinking here" }] },
+          },
+          {
+            type: "assistant",
+            message: {
+              model: "qwen-max",
+              content: [
+                { type: "thinking", thinking: "b" },
+                { type: "text", text: "x" },
+              ],
+            },
+          },
+        ),
+      );
+      const result = await checkNonAnthropicThinking("/path/x.jsonl");
+      expect(result.hasNonAnthropicThinking).toBe(true);
+      expect(result.count).toBe(2);
+      expect(result.models.sort()).toEqual(["deepseek-v3", "qwen-max"]);
+    });
+
+    it("counts thinking blocks even when the model field is missing", async () => {
+      (readFile as any).mockResolvedValue(jsonl({ type: "assistant", message: { content: [{ type: "thinking", thinking: "x" }] } }));
+      const result = await checkNonAnthropicThinking("/path/x.jsonl");
+      expect(result.count).toBe(1);
+      expect(result.models).toEqual([]);
+    });
+  });
+
+  describe("stripNonAnthropicThinking", () => {
+    it("preserves blank lines and malformed JSON untouched", async () => {
+      const input = "\nnot json\n";
+      (readFile as any).mockResolvedValue(input);
+      const stripped = await stripNonAnthropicThinking("/path/x.jsonl");
+      expect(stripped).toBe(0);
+      expect(writeFile).toHaveBeenCalledWith("/path/x.jsonl", input);
+    });
+
+    it("leaves claude-prefixed assistant entries untouched", async () => {
+      const input = jsonl({
+        type: "assistant",
+        message: { model: "claude-opus-4-7", content: [{ type: "thinking", thinking: "x" }] },
+      });
+      (readFile as any).mockResolvedValue(input);
+      const stripped = await stripNonAnthropicThinking("/path/x.jsonl");
+      expect(stripped).toBe(0);
+      expect(writeFile).toHaveBeenCalledWith("/path/x.jsonl", input);
+    });
+
+    it("leaves non-assistant entries and entries without message untouched", async () => {
+      const input = jsonl(
+        { type: "user", message: { content: "hi" } },
+        { type: "assistant" },
+        { type: "assistant", message: { model: "deepseek-v3", content: "string content" } },
+      );
+      (readFile as any).mockResolvedValue(input);
+      const stripped = await stripNonAnthropicThinking("/path/x.jsonl");
+      expect(stripped).toBe(0);
+    });
+
+    it("strips thinking blocks from non-anthropic assistant entries", async () => {
+      const input = jsonl({
+        type: "assistant",
+        message: {
+          model: "deepseek-v3",
+          content: [
+            { type: "thinking", thinking: "secret" },
+            { type: "text", text: "kept" },
+          ],
+        },
+      });
+      (readFile as any).mockResolvedValue(input);
+      const stripped = await stripNonAnthropicThinking("/path/x.jsonl");
+      expect(stripped).toBe(1);
+      const writtenArg = (writeFile as any).mock.calls[0][1] as string;
+      expect(writtenArg).not.toContain('"thinking"');
+      expect(writtenArg).toContain('"kept"');
+    });
+
+    it("does not rewrite the entry when no thinking blocks are present", async () => {
+      const input = jsonl({
+        type: "assistant",
+        message: { model: "deepseek-v3", content: [{ type: "text", text: "kept" }] },
+      });
+      (readFile as any).mockResolvedValue(input);
+      const stripped = await stripNonAnthropicThinking("/path/x.jsonl");
+      expect(stripped).toBe(0);
+      expect(writeFile).toHaveBeenCalledWith("/path/x.jsonl", input);
     });
   });
 });

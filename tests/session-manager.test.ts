@@ -2235,6 +2235,23 @@ describe("SessionManager", () => {
       manager.setModel(session.id, "opus");
       expect(statuses).toContain("idle");
     });
+
+    it("sets contextWindowSize to 1M when switching to a [1m] model", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      s.contextWindowSize = 200_000;
+      manager.setModel(session.id, "opus[1m]");
+      expect(s.contextWindowSize).toBe(1_000_000);
+    });
+
+    it("resets contextWindowSize to 200K when switching away from [1m]", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      s.info.model = "opus[1m]";
+      s.contextWindowSize = 1_000_000;
+      manager.setModel(session.id, "opus");
+      expect(s.contextWindowSize).toBe(200_000);
+    });
   });
 
   describe("setThinkingLevel", () => {
