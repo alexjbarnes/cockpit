@@ -35,7 +35,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { useWebSocket } from "@/hooks/use-websocket";
 import type { SlashCommand } from "@/lib/commands";
-import { allowedEffortLevels, defaultForAlias, findModelById, type ModelAlias, type ModelEntry, versionsForAlias } from "@/lib/models";
+import { allowedEffortLevels, CONTEXT_SIZES, defaultForAlias, findModelById, type ContextSize, type ModelAlias, type ModelEntry, versionsForAlias } from "@/lib/models";
 import { detectLanguage, extensionForLabel, shouldCollapsePaste } from "@/lib/paste-detect";
 import type { ContextUsage, DocumentAttachment, ImageAttachment, InitData, Provider, TextFileAttachment, ThinkingLevel } from "@/types";
 import { ContextIndicator } from "./context-indicator";
@@ -48,40 +48,25 @@ const aliases: { value: ModelAlias; label: string }[] = [
   { value: "opus", label: "Opus" },
 ];
 
-const contextSizes: { value: string; label: string }[] = [
-  { value: "default", label: "200K" },
-  { value: "1m", label: "1M" },
-];
-
-function baseModel(model: string): string {
-  return model.replace(/\[.*\]$/, "");
-}
-
-function hasExtendedContext(model: string): boolean {
-  return model.includes("[1m]");
-}
-
-function parseCurrentModel(currentModel: string): { alias: ModelAlias | null; entry: ModelEntry | null; extended: boolean } {
-  const extended = hasExtendedContext(currentModel);
-  const base = baseModel(currentModel);
+function parseCurrentModel(currentModel: string, currentContextSize: ContextSize): { alias: ModelAlias | null; entry: ModelEntry | null; contextSize: ContextSize } {
+  const base = currentModel.replace(/\[.*\]$/, "");
   if (base === "opus" || base === "sonnet" || base === "haiku") {
-    return { alias: base, entry: defaultForAlias(base) ?? null, extended };
+    return { alias: base, entry: defaultForAlias(base) ?? null, contextSize: currentContextSize };
   }
   const entry = findModelById(base) ?? null;
-  return { alias: entry?.alias ?? null, entry, extended };
+  return { alias: entry?.alias ?? null, entry, contextSize: currentContextSize };
 }
 
-function valueForEntry(entry: ModelEntry, extended: boolean): string {
+function valueForEntry(entry: ModelEntry): string {
   const versions = versionsForAlias(entry.alias);
   const isSoleDefault = versions.length === 1 && entry.isDefault;
-  const base = isSoleDefault ? entry.alias : entry.modelId;
-  return extended && entry.supportsExtendedContext ? `${base}[1m]` : base;
+  return isSoleDefault ? entry.alias : entry.modelId;
 }
 
-function valueForAlias(alias: ModelAlias, extended: boolean): string {
+function valueForAlias(alias: ModelAlias): string {
   const entry = defaultForAlias(alias);
   if (!entry) return alias;
-  return valueForEntry(entry, extended);
+  return valueForEntry(entry);
 }
 
 const thinkingLevels: { value: ThinkingLevel; label: string }[] = [
@@ -222,7 +207,8 @@ interface InputAreaProps {
   thinkingLevel: ThinkingLevel;
   onSetThinking: (level: ThinkingLevel) => void;
   currentModel: string;
-  onSetModel: (model: string) => void;
+  currentContextSize: ContextSize;
+  onSetModel: (model: string, contextSize?: ContextSize) => void;
   contextUsage: ContextUsage | null;
   dismissKeyboard: boolean;
   cwd?: string;
@@ -274,6 +260,7 @@ export function InputArea({
   thinkingLevel,
   onSetThinking,
   currentModel,
+  currentContextSize,
   onSetModel,
   contextUsage,
   dismissKeyboard,
@@ -757,23 +744,22 @@ export function InputArea({
         )}
         {optionsOpen &&
           (() => {
-            const parsed = parseCurrentModel(currentModel);
+            const parsed = parseCurrentModel(currentModel, currentContextSize);
             const allProviders = [
               { id: "anthropic", name: "Anthropic" },
               ...(providers || []).filter((p) => !p.isBuiltin).map((p) => ({ id: p.id, name: p.name })),
             ];
             const vEntries = parsed.alias ? versionsForAlias(parsed.alias) : [];
             const showVRow = vEntries.length > 1;
-            const supportsExt =
-              parsed.entry?.supportsExtendedContext ??
-              (() => {
-                if (!providers || !currentModel) return false;
-                for (const p of providers) {
-                  const m = p.models.find((pm) => pm.modelId === currentModel);
-                  if (m) return m.supportsExtendedContext ?? false;
-                }
-                return false;
-              })();
+            const sizes: ContextSize[] = (() => {
+              if (parsed.entry) return parsed.entry.contextSizes;
+              if (!providers || !currentModel) return [];
+              for (const p of providers) {
+                const m = p.models.find((pm) => pm.modelId === currentModel);
+                if (m) return m.contextSizes;
+              }
+              return [];
+            })();
             const providerEffort = (() => {
               if (!providers || !currentModel) return [];
               for (const p of providers) {
@@ -866,7 +852,7 @@ export function InputArea({
                                 return (
                                   <button
                                     key={opt.value}
-                                    onClick={() => onSetModel(valueForAlias(opt.value, parsed.extended && opt.value !== "haiku"))}
+                                    onClick={() => onSetModel(valueForAlias(opt.value))}
                                     className={`flex w-full items-center gap-3 rounded px-3 py-2 text-xs transition-colors ${
                                       selected ? "bg-primary/10 text-primary" : "hover:bg-muted text-foreground"
                                     }`}
@@ -925,7 +911,7 @@ export function InputArea({
                                 {vEntries.map((entry) => (
                                   <button
                                     key={entry.modelId}
-                                    onClick={() => onSetModel(valueForEntry(entry, parsed.extended && entry.supportsExtendedContext))}
+                                    onClick={() => onSetModel(valueForEntry(entry))}
                                     className={`rounded px-2 py-0.5 text-xs transition-colors ${
                                       parsed.entry?.modelId === entry.modelId
                                         ? "bg-primary text-primary-foreground"
@@ -939,22 +925,20 @@ export function InputArea({
                             </div>
                           )}
 
-                          {supportsExt && parsed.entry && (
+                          {sizes.length >= 2 && (
                             <div className="flex items-center gap-2">
                               <Maximize2 className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
                               <span className="text-xs text-muted-foreground">Context</span>
                               <div className="ml-auto flex gap-1">
-                                {contextSizes.map((opt) => (
+                                {sizes.map((s) => (
                                   <button
-                                    key={opt.value}
-                                    onClick={() => onSetModel(valueForEntry(parsed.entry!, opt.value === "1m"))}
+                                    key={s}
+                                    onClick={() => onSetModel(currentModel, s)}
                                     className={`rounded px-2 py-0.5 text-xs transition-colors ${
-                                      (opt.value === "1m") === parsed.extended
-                                        ? "bg-primary text-primary-foreground"
-                                        : "bg-muted text-muted-foreground hover:text-foreground"
+                                      parsed.contextSize === s ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground hover:text-foreground"
                                     }`}
                                   >
-                                    {opt.label}
+                                    {CONTEXT_SIZES[s].label}
                                   </button>
                                 ))}
                               </div>
@@ -1203,7 +1187,7 @@ export function InputArea({
               onClick={() =>
                 setOptionsOpen((v) => {
                   if (!v) {
-                    const p = parseCurrentModel(currentModel);
+                    const p = parseCurrentModel(currentModel, currentContextSize);
                     if (!p.alias) {
                       const prov = providers?.find((x) => x.models.some((m) => m.modelId === currentModel));
                       setViewProvider(prov?.id ?? "anthropic");

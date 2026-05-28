@@ -59,6 +59,7 @@ interface UseSessionReturn {
   pendingQuestions: PendingQuestion[];
   modelPicker: string | null;
   currentModel: string;
+  currentContextSize: ContextSize;
   bypassActive: boolean;
   planMode: boolean;
   thinkingLevel: ThinkingLevel;
@@ -113,6 +114,7 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
   const [pendingQuestions, setPendingQuestions] = useState<PendingQuestion[]>([]);
   const [modelPicker, setModelPicker] = useState<string | null>(null);
   const [currentModel, setCurrentModel] = useState("sonnet");
+  const [currentContextSize, setCurrentContextSize] = useState<ContextSize>("200k");
   const [currentRuntime, setCurrentRuntime] = useState<"pty" | "stream">("stream");
   const [bypassActive, setBypassActive] = useState(false);
   const [planMode, setPlanModeState] = useState(false);
@@ -945,6 +947,9 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
           if (msg.info.model) {
             setCurrentModel(msg.info.model);
           }
+          if (msg.info.contextSize) {
+            setCurrentContextSize(msg.info.contextSize);
+          }
           if (msg.info.runtime) {
             setCurrentRuntime(msg.info.runtime);
           }
@@ -1229,6 +1234,7 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
   const applyModelSet = useCallback(
     (model: string, contextSize?: ContextSize) => {
       setCurrentModel(model);
+      if (contextSize !== undefined) setCurrentContextSize(contextSize);
       send({ type: "session:set_model", sessionId, model, contextSize });
     },
     [send, sessionId],
@@ -1406,6 +1412,7 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
     pendingQuestions,
     modelPicker,
     currentModel,
+    currentContextSize,
     bypassActive,
     planMode,
     thinkingLevel,

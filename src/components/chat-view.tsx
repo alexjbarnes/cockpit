@@ -50,6 +50,7 @@ export function ChatView({
     pendingQuestions,
     modelPicker,
     currentModel,
+    currentContextSize,
     bypassActive,
     planMode,
     thinkingLevel,
@@ -539,6 +540,7 @@ export function ChatView({
           thinkingLevel={thinkingLevel}
           onSetThinking={setThinkingLevel}
           currentModel={currentModel}
+          currentContextSize={currentContextSize}
           onSetModel={setModel}
           contextUsage={contextUsage}
           dismissKeyboard={settings.dismissKeyboardOnSend}
