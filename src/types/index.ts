@@ -1,3 +1,5 @@
+import type { ContextSize } from "@/lib/models";
+
 export interface SessionInfo {
   id: string;
   name: string;
@@ -396,7 +398,7 @@ export interface ProviderModel {
   modelId: string;
   displayName: string;
   effortLevels: ThinkingLevel[];
-  supportsExtendedContext?: boolean;
+  contextSizes: ContextSize[];
   defaultEffort?: ThinkingLevel;
 }
 

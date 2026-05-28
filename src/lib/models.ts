@@ -17,7 +17,7 @@ export interface ModelEntry {
   modelId: string;
   displayName: string;
   description: string;
-  supportsExtendedContext: boolean;
+  contextSizes: ContextSize[];
   contextWindow?: number;
   isDefault?: boolean;
 }
@@ -29,7 +29,7 @@ export const MODELS: ModelEntry[] = [
     modelId: "claude-haiku-4-5-20251001",
     displayName: "Haiku 4.5",
     description: "Fastest",
-    supportsExtendedContext: false,
+    contextSizes: ["200k"],
     contextWindow: 200_000,
     isDefault: true,
   },
@@ -39,7 +39,7 @@ export const MODELS: ModelEntry[] = [
     modelId: "claude-sonnet-4-6",
     displayName: "Sonnet 4.6",
     description: "Balanced",
-    supportsExtendedContext: true,
+    contextSizes: ["200k", "1m"],
     contextWindow: 200_000,
     isDefault: true,
   },
@@ -49,7 +49,7 @@ export const MODELS: ModelEntry[] = [
     modelId: "claude-opus-4-6",
     displayName: "Opus 4.6",
     description: "Previous generation",
-    supportsExtendedContext: true,
+    contextSizes: ["200k", "1m"],
     contextWindow: 200_000,
   },
   {
@@ -58,7 +58,7 @@ export const MODELS: ModelEntry[] = [
     modelId: "claude-opus-4-7",
     displayName: "Opus 4.7",
     description: "Most capable",
-    supportsExtendedContext: true,
+    contextSizes: ["200k", "1m"],
     contextWindow: 200_000,
     isDefault: true,
   },
@@ -113,7 +113,7 @@ export function toProviderModels(): ProviderModel[] {
     modelId: m.modelId,
     displayName: m.displayName,
     effortLevels: allowedEffortLevels(m),
-    supportsExtendedContext: m.supportsExtendedContext,
+    contextSizes: m.contextSizes,
     defaultEffort: recommendedEffort(m) ?? undefined,
   }));
 }
