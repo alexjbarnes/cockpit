@@ -172,6 +172,7 @@ export class SessionManager {
       lastActiveAt: now,
       status: "idle",
       model: modelSlots.main,
+      contextSize: defaults.modelSlots?.mainContext ?? DEFAULT_CONTEXT_SIZE,
       runtime: rt,
       pendingRequestCount: 0,
     };
@@ -241,6 +242,7 @@ export class SessionManager {
           lastActiveAt: now,
           status: "idle",
           model: modelSlots.main,
+          contextSize: prefs?.contextSize ?? prefs?.modelSlots?.mainContext ?? DEFAULT_CONTEXT_SIZE,
           runtime: restoredRuntime,
           pendingRequestCount: 0,
         },

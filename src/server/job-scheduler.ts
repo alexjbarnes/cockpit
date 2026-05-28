@@ -356,7 +356,7 @@ export class JobScheduler {
     });
 
     if (job.model) {
-      this.sessionManager.setModel(sessionId, job.model);
+      this.sessionManager.setModel(sessionId, job.model, job.contextSize);
     }
     if (job.thinkingLevel) {
       this.sessionManager.setThinkingLevel(sessionId, job.thinkingLevel);

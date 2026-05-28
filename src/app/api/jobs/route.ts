@@ -49,6 +49,7 @@ export async function POST(req: NextRequest) {
     createdAt: now,
     updatedAt: now,
     model: body.model,
+    contextSize: body.contextSize,
     thinkingLevel: body.thinkingLevel,
     allowedTools: body.allowedTools,
     mcpServers: body.mcpServers,

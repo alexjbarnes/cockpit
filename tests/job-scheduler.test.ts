@@ -136,7 +136,7 @@ describe("JobScheduler", () => {
       sm.emitStatus("idle");
       await promise;
 
-      expect(sm.setModel).toHaveBeenCalledWith("session-1", "opus");
+      expect(sm.setModel).toHaveBeenCalledWith("session-1", "opus", undefined);
       expect(sm.setThinkingLevel).toHaveBeenCalledWith("session-1", "high");
     });
 
