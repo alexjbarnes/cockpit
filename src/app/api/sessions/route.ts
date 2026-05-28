@@ -106,6 +106,8 @@ export async function POST(req: NextRequest) {
   const runtimeRaw = body.runtime as string | undefined;
   const runtime = runtimeRaw === "pty" || runtimeRaw === "stream" ? runtimeRaw : undefined;
   const model = typeof body.model === "string" ? body.model : undefined;
+  const contextSizeRaw = typeof body.contextSize === "string" ? body.contextSize : undefined;
+  const contextSize = contextSizeRaw === "200k" || contextSizeRaw === "1m" ? contextSizeRaw : undefined;
   const bypassPermissions = body.bypassPermissions === true;
 
   if (!cwd) {
@@ -114,7 +116,7 @@ export async function POST(req: NextRequest) {
 
   const session = getSessionManager().createSession(cwd, name, { runtime, bypassPermissions: bypassPermissions || undefined });
   if (model) {
-    getSessionManager().setModel(session.id, model);
+    getSessionManager().setModel(session.id, model, contextSize);
   }
   return NextResponse.json({ sessionId: session.id });
 }

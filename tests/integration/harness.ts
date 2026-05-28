@@ -137,7 +137,7 @@ function seedConfig(opts: SeedOpts): void {
         modelId: "claude-sonnet-4-6",
         displayName: "Mock Sonnet",
         effortLevels: [],
-        contextSizes: ["200k"],
+        contextSizes: ["200k", "1m"],
       },
     ],
   };
