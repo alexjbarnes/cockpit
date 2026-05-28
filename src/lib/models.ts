@@ -117,3 +117,16 @@ export function toProviderModels(): ProviderModel[] {
     defaultEffort: recommendedEffort(m) ?? undefined,
   }));
 }
+
+export function splitLegacyModel(stored: string | undefined | null): {
+  model: string | undefined;
+  contextSize: ContextSize;
+} {
+  if (!stored) return { model: undefined, contextSize: DEFAULT_CONTEXT_SIZE };
+  const hasOneM = /\[1m\]$/i.test(stored);
+  const stripped = stored.replace(/\[.*\]$/, "");
+  return {
+    model: stripped || undefined,
+    contextSize: hasOneM ? "1m" : "200k",
+  };
+}
