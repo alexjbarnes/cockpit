@@ -10,8 +10,10 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import {
   allowedEffortLevels,
+  CONTEXT_SIZES,
   defaultForAlias,
   findModelById,
+  type ContextSize,
   type ModelAlias,
   recommendedEffort,
   resolveModel,
@@ -162,7 +164,7 @@ export default function JobEditPage() {
   const [schedules, setSchedules] = useState<JobSchedule[]>([{ type: "simple", frequency: "daily", time: "09:00" }]);
 
   const [modelId, setModelId] = useState(DEFAULT_MODEL_ID);
-  const [extendedContext, setExtendedContext] = useState(false);
+  const [contextSize, setContextSize] = useState<ContextSize>("200k");
   const [thinkingLevel, setThinkingLevel] = useState<ThinkingLevel | "">("medium");
   const [selectedProviderId, setSelectedProviderId] = useState("anthropic");
   const [runtime, setRuntime] = useState<"stream" | "pty">("stream");
@@ -195,6 +197,16 @@ export default function JobEditPage() {
   const availableVersions = selectedAlias ? versionsForAlias(selectedAlias) : [];
   const showVersions = availableVersions.length > 1;
   const customProviderModel = !isBuiltinProvider && selectedProvider ? selectedProvider.models.find((m) => m.modelId === modelId) : null;
+  const contextSizes: ContextSize[] = isBuiltinProvider
+    ? (selectedEntry?.contextSizes ?? ["200k"])
+    : (customProviderModel?.contextSizes ?? ["200k"]);
+
+  useEffect(() => {
+    if (!contextSizes.includes(contextSize)) {
+      setContextSize(contextSizes[0] ?? "200k");
+    }
+  }, [contextSizes, contextSize]);
+
   const effortLevels = (() => {
     if (!isBuiltinProvider && customProviderModel) return customProviderModel.effortLevels;
     const base = modelId.replace(/\[.*\]$/, "");
@@ -212,7 +224,7 @@ export default function JobEditPage() {
     if (entry) {
       setSelectedProviderId("anthropic");
       setModelId(entry.modelId);
-      setExtendedContext(false);
+      setContextSize("200k");
       const rec = recommendedEffort(entry);
       setThinkingLevel(rec || "");
     }
@@ -224,14 +236,14 @@ export default function JobEditPage() {
     if (provider && provider.models.length > 0) {
       const first = provider.models[0];
       setModelId(first.modelId);
-      setExtendedContext(false);
+      setContextSize("200k");
       setThinkingLevel(first.defaultEffort || (first.effortLevels.length > 0 ? first.effortLevels[0] : ""));
     }
   }
 
   function selectCustomModel(model: ProviderModel) {
     setModelId(model.modelId);
-    setExtendedContext(false);
+    setContextSize("200k");
     setThinkingLevel(model.defaultEffort || (model.effortLevels.length > 0 ? model.effortLevels[0] : ""));
   }
 
@@ -273,7 +285,6 @@ export default function JobEditPage() {
     setEnabled(job.enabled);
     setSchedules(getJobSchedules(job));
     const rawModel = job.model || "";
-    const hasExtended = /\[1m\]$/i.test(rawModel);
     const withoutExt = rawModel.replace(/\[.*\]$/, "");
     const colonIdx = withoutExt.indexOf(":");
     if (colonIdx > 0) {
@@ -284,7 +295,8 @@ export default function JobEditPage() {
       const entry = resolveModel(withoutExt);
       setModelId(entry?.modelId || DEFAULT_MODEL_ID);
     }
-    setExtendedContext(hasExtended);
+    const legacy1m = /\[1m\]$/i.test(rawModel);
+    setContextSize(job.contextSize ?? (legacy1m ? "1m" : "200k"));
     const builtinEntry = resolveModel(withoutExt);
     setThinkingLevel(job.thinkingLevel || recommendedEffort(builtinEntry) || "");
     setMaxDuration(job.maxDurationMinutes ?? 30);
@@ -347,15 +359,9 @@ export default function JobEditPage() {
 
   async function handleSave() {
     setSaving(true);
-    const supportsExtended = isBuiltinProvider
-      ? (selectedEntry?.supportsExtendedContext ?? false)
-      : (customProviderModel?.supportsExtendedContext ?? false);
     let modelStr = modelId;
     if (!isBuiltinProvider && selectedProviderId) {
       modelStr = `${selectedProviderId}:${modelId}`;
-    }
-    if (supportsExtended && extendedContext) {
-      modelStr = `${modelStr}[1m]`;
     }
 
     const body = {
@@ -366,6 +372,7 @@ export default function JobEditPage() {
       schedule: schedules[0],
       schedules,
       model: modelStr,
+      contextSize,
       thinkingLevel: thinkingLevel || undefined,
       maxDurationMinutes: maxDuration,
       bypassPermissions,
@@ -567,17 +574,20 @@ export default function JobEditPage() {
               </div>
             )}
 
-            {((isBuiltinProvider && selectedEntry?.supportsExtendedContext) ||
-              (!isBuiltinProvider && customProviderModel?.supportsExtendedContext)) && (
+            {contextSizes.length >= 2 && (
               <div className="flex items-center justify-between px-2 py-2 text-sm">
                 <span>Context</span>
                 <div className="flex gap-1">
-                  <Button variant={!extendedContext ? "default" : "outline"} size="sm" onClick={() => setExtendedContext(false)}>
-                    200K
-                  </Button>
-                  <Button variant={extendedContext ? "default" : "outline"} size="sm" onClick={() => setExtendedContext(true)}>
-                    1M
-                  </Button>
+                  {contextSizes.map((size) => (
+                    <Button
+                      key={size}
+                      variant={contextSize === size ? "default" : "outline"}
+                      size="sm"
+                      onClick={() => setContextSize(size)}
+                    >
+                      {CONTEXT_SIZES[size].label}
+                    </Button>
+                  ))}
                 </div>
               </div>
             )}
