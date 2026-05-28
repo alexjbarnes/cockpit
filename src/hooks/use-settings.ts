@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import type { ModelSlots } from "@/types";
+import { splitLegacyModel } from "@/lib/models";
 
 export type DiffStyle = "split" | "unified";
 export type ThinkingLevel = "low" | "medium" | "high" | "xhigh" | "max";
@@ -62,6 +63,14 @@ export function useSettings() {
         if (data.model && !data.modelSlots) {
           data.modelSlots = { main: data.model };
           delete data.model;
+        }
+        if (data.modelSlots?.main && data.modelSlots.main.includes("[")) {
+          const split = splitLegacyModel(data.modelSlots.main);
+          data.modelSlots = {
+            ...data.modelSlots,
+            main: split.model,
+            mainContext: data.modelSlots.mainContext ?? split.contextSize,
+          };
         }
         setSettings({ ...defaultSettings, ...data });
         setLoaded(true);
