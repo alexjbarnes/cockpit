@@ -2,7 +2,7 @@
 
 import { ArrowLeft, Plus, X } from "lucide-react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { usePageHeader } from "@/components/app-shell";
 import { DirectoryPicker } from "@/components/directory-picker";
 import { Button } from "@/components/ui/button";
@@ -197,9 +197,13 @@ export default function JobEditPage() {
   const availableVersions = selectedAlias ? versionsForAlias(selectedAlias) : [];
   const showVersions = availableVersions.length > 1;
   const customProviderModel = !isBuiltinProvider && selectedProvider ? selectedProvider.models.find((m) => m.modelId === modelId) : null;
-  const contextSizes: ContextSize[] = isBuiltinProvider
-    ? (selectedEntry?.contextSizes ?? ["200k"])
-    : (customProviderModel?.contextSizes ?? ["200k"]);
+  const contextSizes = useMemo<ContextSize[]>(
+    () =>
+      isBuiltinProvider
+        ? (selectedEntry?.contextSizes ?? ["200k"])
+        : (customProviderModel?.contextSizes ?? ["200k"]),
+    [isBuiltinProvider, selectedEntry, customProviderModel],
+  );
 
   useEffect(() => {
     if (!contextSizes.includes(contextSize)) {
