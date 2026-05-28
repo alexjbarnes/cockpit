@@ -57,12 +57,12 @@ function save(): void {
 function normalize(raw: SessionPrefs | undefined): SessionPrefs | undefined {
   if (!raw) return raw;
   const next = { ...raw };
-  if (next.model && next.model.includes("[")) {
+  if (next.model?.includes("[")) {
     const split = splitLegacyModel(next.model);
     next.model = split.model;
     if (next.contextSize === undefined) next.contextSize = split.contextSize;
   }
-  if (next.modelSlots?.main && next.modelSlots.main.includes("[")) {
+  if (next.modelSlots?.main?.includes("[")) {
     const split = splitLegacyModel(next.modelSlots.main);
     next.modelSlots = {
       ...next.modelSlots,

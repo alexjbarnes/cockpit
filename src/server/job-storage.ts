@@ -17,7 +17,7 @@ function runsFile(jobId: string): string {
 }
 
 function normalizeJob(raw: ScheduledJob): ScheduledJob {
-  if (raw.model && raw.model.includes("[")) {
+  if (raw.model?.includes("[")) {
     const split = splitLegacyModel(raw.model);
     return { ...raw, model: split.model, contextSize: raw.contextSize ?? split.contextSize };
   }

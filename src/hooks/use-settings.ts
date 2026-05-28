@@ -64,7 +64,7 @@ export function useSettings() {
           data.modelSlots = { main: data.model };
           delete data.model;
         }
-        if (data.modelSlots?.main && data.modelSlots.main.includes("[")) {
+        if (data.modelSlots?.main?.includes("[")) {
           const split = splitLegacyModel(data.modelSlots.main);
           data.modelSlots = {
             ...data.modelSlots,
