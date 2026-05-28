@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { resolveModel, type ContextSize } from "@/lib/models";
+import { type ContextSize, DEFAULT_CONTEXT_SIZE, resolveModel } from "@/lib/models";
 import type {
   BackgroundTask,
   ChatMessage,
@@ -114,7 +114,7 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
   const [pendingQuestions, setPendingQuestions] = useState<PendingQuestion[]>([]);
   const [modelPicker, setModelPicker] = useState<string | null>(null);
   const [currentModel, setCurrentModel] = useState("sonnet");
-  const [currentContextSize, setCurrentContextSize] = useState<ContextSize>("200k");
+  const [currentContextSize, setCurrentContextSize] = useState<ContextSize>(DEFAULT_CONTEXT_SIZE);
   const [currentRuntime, setCurrentRuntime] = useState<"pty" | "stream">("stream");
   const [bypassActive, setBypassActive] = useState(false);
   const [planMode, setPlanModeState] = useState(false);
