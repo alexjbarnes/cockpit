@@ -44,6 +44,8 @@
     "lint": "biome check src/ tests/ server.ts",
     "lint:fix": "biome check --fix src/ tests/ server.ts",
     "format": "biome format --write src/ tests/ server.ts",
+    "pretest:integration": "npm run build",
+    "test:integration": "playwright test --config=tests/integration/playwright.config.ts",
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
@@ -82,6 +84,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.12",
+    "@playwright/test": "^1.60.0",
     "@types/node": "^25.6.0",
     "@types/react": "^19",
     "@types/react-dom": "^19",
