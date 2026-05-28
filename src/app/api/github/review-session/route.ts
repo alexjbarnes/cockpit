@@ -1,8 +1,8 @@
 import { mkdirSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import { NextRequest, NextResponse } from "next/server";
 import { validateSession } from "@/server/auth";
+import { getCockpitDir } from "@/server/paths";
 import { getSessionManager } from "@/server/singleton";
 
 function authenticate(req: NextRequest): boolean {
@@ -24,7 +24,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "repo and prNumber are required" }, { status: 400 });
   }
 
-  const reviewsDir = join(homedir(), ".cockpit", "reviews");
+  const reviewsDir = join(getCockpitDir(), "reviews");
   mkdirSync(reviewsDir, { recursive: true });
 
   let name = `Review: ${repo}#${prNumber}`;

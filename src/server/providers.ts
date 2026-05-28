@@ -1,12 +1,16 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import { v4 as uuidv4 } from "uuid";
 import { toProviderModels } from "@/lib/models";
+import { getCockpitDir } from "@/server/paths";
 import type { Provider, ProviderModel } from "@/types";
 
-const PREFS_DIR = join(homedir(), ".cockpit");
-const PROVIDERS_FILE = join(PREFS_DIR, "providers.json");
+function prefsDir(): string {
+  return getCockpitDir();
+}
+function providersFile(): string {
+  return join(prefsDir(), "providers.json");
+}
 
 function validateProvider(p: Pick<Provider, "models"> & { id?: string }): void {
   for (const m of p.models) {
@@ -30,7 +34,7 @@ let cache: Provider[] | null = null;
 
 function loadCustom(): Provider[] {
   try {
-    return JSON.parse(readFileSync(PROVIDERS_FILE, "utf-8"));
+    return JSON.parse(readFileSync(providersFile(), "utf-8"));
   } catch {
     return [];
   }
@@ -38,8 +42,8 @@ function loadCustom(): Provider[] {
 
 function saveCustom(providers: Provider[]): void {
   try {
-    mkdirSync(PREFS_DIR, { recursive: true });
-    writeFileSync(PROVIDERS_FILE, JSON.stringify(providers, null, 2) + "\n");
+    mkdirSync(prefsDir(), { recursive: true });
+    writeFileSync(providersFile(), JSON.stringify(providers, null, 2) + "\n");
   } catch {
     // best effort
   }

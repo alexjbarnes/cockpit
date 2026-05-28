@@ -1,6 +1,7 @@
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import path from "node:path";
+import { getClaudeDir, getCockpitCacheDir } from "@/server/paths";
 import { resolveHookBridgePath } from "./hook-bridge-path";
 
 const HOOK_EVENTS = [
@@ -118,11 +119,13 @@ function shellQuote(p: string): string {
   return `'${p.replace(/'/g, "'\\''")}'`;
 }
 
-const USER_SETTINGS_PATHS = [path.join(homedir(), ".claude", "settings.json"), path.join(homedir(), ".claude", "settings.local.json")];
+function userSettingsPaths(): string[] {
+  return [path.join(getClaudeDir(), "settings.json"), path.join(getClaudeDir(), "settings.local.json")];
+}
 
 async function loadUserSettings(): Promise<Record<string, unknown>> {
   let merged: Record<string, unknown> = {};
-  for (const p of USER_SETTINGS_PATHS) {
+  for (const p of userSettingsPaths()) {
     try {
       const raw = await readFile(p, "utf-8");
       const parsed = JSON.parse(raw);
@@ -158,7 +161,7 @@ let settingsDirCache: string | null = null;
 
 async function resolveSettingsDir(): Promise<string> {
   if (settingsDirCache) return settingsDirCache;
-  const primary = path.join(homedir(), ".cache", "cockpit", "hook-settings");
+  const primary = path.join(getCockpitCacheDir(), "hook-settings");
   try {
     await mkdir(primary, { recursive: true });
     settingsDirCache = primary;

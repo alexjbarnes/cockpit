@@ -1,8 +1,8 @@
 import { readdir, readFile, stat } from "node:fs/promises";
-import { homedir } from "node:os";
 import path from "node:path";
 import { NextRequest, NextResponse } from "next/server";
 import { validateSession } from "@/server/auth";
+import { getClaudeDir } from "@/server/paths";
 
 function authenticate(req: NextRequest): boolean {
   const token = req.cookies.get("cockpit_session")?.value || req.headers.get("authorization")?.replace("Bearer ", "");
@@ -71,7 +71,7 @@ export async function GET(req: NextRequest) {
   const url = new URL(req.url);
   const cwd = url.searchParams.get("cwd");
 
-  const userDir = path.join(homedir(), ".claude", "skills");
+  const userDir = path.join(getClaudeDir(), "skills");
   const userSkills = await readSkillsFromDir(userDir, "user");
 
   let projectSkills: SkillInfo[] = [];

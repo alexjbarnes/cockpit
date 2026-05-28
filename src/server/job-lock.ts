@@ -1,8 +1,10 @@
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
+import { getCockpitDir } from "@/server/paths";
 
-const LOCKS_DIR = join(homedir(), ".cockpit", "job-locks");
+function locksDir(): string {
+  return join(getCockpitDir(), "job-locks");
+}
 
 interface LockData {
   pid: number;
@@ -11,7 +13,7 @@ interface LockData {
 }
 
 function lockPath(jobId: string): string {
-  return join(LOCKS_DIR, `${jobId}.lock`);
+  return join(locksDir(), `${jobId}.lock`);
 }
 
 function isPidAlive(pid: number): boolean {
@@ -32,7 +34,7 @@ function readLock(jobId: string): LockData | null {
 }
 
 export function acquireJobLock(jobId: string, runId: string): boolean {
-  mkdirSync(LOCKS_DIR, { recursive: true });
+  mkdirSync(locksDir(), { recursive: true });
   const fp = lockPath(jobId);
   const data: LockData = { pid: process.pid, runId, acquiredAt: Date.now() };
 
@@ -85,9 +87,9 @@ export function forceReleaseJobLock(jobId: string): void {
 }
 
 export function clearStaleLocks(): void {
-  if (!existsSync(LOCKS_DIR)) return;
+  if (!existsSync(locksDir())) return;
   const { readdirSync } = require("node:fs") as typeof import("node:fs");
-  for (const file of readdirSync(LOCKS_DIR)) {
+  for (const file of readdirSync(locksDir())) {
     if (!file.endsWith(".lock")) continue;
     const jobId = file.slice(0, -5);
     const lock = readLock(jobId);

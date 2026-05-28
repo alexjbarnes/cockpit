@@ -1,8 +1,8 @@
 import { existsSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import { NextRequest, NextResponse } from "next/server";
 import { validateSession } from "@/server/auth";
+import { getClaudeUserConfigFile } from "@/server/paths";
 import { getSessionManager } from "@/server/singleton";
 
 function authenticate(req: NextRequest): boolean {
@@ -27,7 +27,7 @@ export async function GET(req: NextRequest) {
 
   const cwd = req.nextUrl.searchParams.get("cwd");
 
-  const globalPath = join(homedir(), ".claude.json");
+  const globalPath = getClaudeUserConfigFile();
   const globalServers = readMcpServers(globalPath);
 
   const projectServers = cwd ? readMcpServers(join(cwd, ".mcp.json")) : [];

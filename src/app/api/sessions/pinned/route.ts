@@ -1,20 +1,22 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
 import path from "node:path";
 import { NextRequest, NextResponse } from "next/server";
 import { validateSession } from "@/server/auth";
 import { debugLog } from "@/server/debug-logger";
+import { getClaudeDir } from "@/server/paths";
 
 function authenticate(req: NextRequest): boolean {
   const token = req.cookies.get("cockpit_session")?.value || req.headers.get("authorization")?.replace("Bearer ", "");
   return !!token && validateSession(token);
 }
 
-const PINNED_FILE = path.join(homedir(), ".claude", "cockpit", "pinned_sessions.json");
+function pinnedFile(): string {
+  return path.join(getClaudeDir(), "cockpit", "pinned_sessions.json");
+}
 
 async function readPinned(): Promise<string[]> {
   try {
-    const raw = await readFile(PINNED_FILE, "utf-8");
+    const raw = await readFile(pinnedFile(), "utf-8");
     const data = JSON.parse(raw);
     return Array.isArray(data) ? data : [];
   } catch {
@@ -23,8 +25,9 @@ async function readPinned(): Promise<string[]> {
 }
 
 async function writePinned(ids: string[]): Promise<void> {
-  await mkdir(path.dirname(PINNED_FILE), { recursive: true });
-  await writeFile(PINNED_FILE, JSON.stringify(ids, null, 2) + "\n");
+  const fp = pinnedFile();
+  await mkdir(path.dirname(fp), { recursive: true });
+  await writeFile(fp, JSON.stringify(ids, null, 2) + "\n");
 }
 
 export async function GET(req: NextRequest) {

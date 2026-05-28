@@ -1,10 +1,14 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
+import { getCockpitDir } from "@/server/paths";
 import type { NotificationSettings } from "@/types";
 
-const CONFIG_DIR = join(homedir(), ".cockpit");
-const CONFIG_FILE = join(CONFIG_DIR, "notifications.json");
+function configDir(): string {
+  return getCockpitDir();
+}
+function configFile(): string {
+  return join(configDir(), "notifications.json");
+}
 
 const fallback: NotificationSettings = {
   providers: [],
@@ -12,7 +16,7 @@ const fallback: NotificationSettings = {
 
 export function getNotificationSettings(): NotificationSettings {
   try {
-    return { ...fallback, ...JSON.parse(readFileSync(CONFIG_FILE, "utf-8")) };
+    return { ...fallback, ...JSON.parse(readFileSync(configFile(), "utf-8")) };
   } catch {
     return { ...fallback };
   }
@@ -20,8 +24,8 @@ export function getNotificationSettings(): NotificationSettings {
 
 export function setNotificationSettings(settings: NotificationSettings): NotificationSettings {
   try {
-    mkdirSync(CONFIG_DIR, { recursive: true });
-    writeFileSync(CONFIG_FILE, JSON.stringify(settings, null, 2) + "\n");
+    mkdirSync(configDir(), { recursive: true });
+    writeFileSync(configFile(), JSON.stringify(settings, null, 2) + "\n");
   } catch {
     // best effort
   }
@@ -31,7 +35,7 @@ export function setNotificationSettings(settings: NotificationSettings): Notific
 export function updateNotificationSettings(partial: Partial<NotificationSettings>): NotificationSettings {
   const current = getNotificationSettings();
   const updated = { ...current, ...partial };
-  if (!existsSync(CONFIG_DIR)) mkdirSync(CONFIG_DIR, { recursive: true });
-  writeFileSync(CONFIG_FILE, JSON.stringify(updated, null, 2) + "\n");
+  if (!existsSync(configDir())) mkdirSync(configDir(), { recursive: true });
+  writeFileSync(configFile(), JSON.stringify(updated, null, 2) + "\n");
   return updated;
 }

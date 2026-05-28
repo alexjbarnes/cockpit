@@ -1,8 +1,8 @@
 import { readFile, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
 import path from "node:path";
 import { NextRequest, NextResponse } from "next/server";
 import { validateSession } from "@/server/auth";
+import { getClaudeDir } from "@/server/paths";
 
 function authenticate(req: NextRequest): boolean {
   const token = req.cookies.get("cockpit_session")?.value || req.headers.get("authorization")?.replace("Bearer ", "");
@@ -62,7 +62,7 @@ async function readSettings(filePath: string): Promise<SettingsFile> {
 
 function getSettingsPaths(cwd?: string | null): Array<{ path: string; scope: "global" | "project" | "project-local" }> {
   const paths: Array<{ path: string; scope: "global" | "project" | "project-local" }> = [
-    { path: path.join(homedir(), ".claude", "settings.json"), scope: "global" },
+    { path: path.join(getClaudeDir(), "settings.json"), scope: "global" },
   ];
   if (cwd) {
     paths.push({ path: path.join(cwd, ".claude", "settings.json"), scope: "project" });
@@ -120,7 +120,7 @@ export async function PUT(req: NextRequest) {
   // Resolve __global__ sentinel to actual path
   const url = new URL(req.url);
   const cwd = url.searchParams.get("cwd");
-  const resolvedPath = filePath === "__global__" ? path.join(homedir(), ".claude", "settings.json") : filePath;
+  const resolvedPath = filePath === "__global__" ? path.join(getClaudeDir(), "settings.json") : filePath;
 
   // Security: validate filePath is a known settings location
   const validPaths = getSettingsPaths(cwd).map((p) => p.path);

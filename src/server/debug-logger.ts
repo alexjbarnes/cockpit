@@ -1,6 +1,6 @@
 import { appendFile, mkdir, rename, stat } from "node:fs/promises";
-import { homedir } from "node:os";
 import path from "node:path";
+import { getCockpitDir } from "@/server/paths";
 import type { ClientMessage, ServerMessage } from "@/types";
 import type { ParsedEvent } from "./event-parser";
 
@@ -16,7 +16,7 @@ let rotating = false;
 
 function init(): Promise<void> {
   if (ready) return ready;
-  const dir = path.join(homedir(), ".cockpit");
+  const dir = getCockpitDir();
   logPath = path.join(dir, "debug.jsonl");
   prevPath = path.join(dir, "debug.prev.jsonl");
   ready = mkdir(dir, { recursive: true }).then(() => {});

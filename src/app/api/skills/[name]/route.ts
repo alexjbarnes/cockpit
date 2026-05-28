@@ -1,8 +1,8 @@
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
 import path from "node:path";
 import { NextRequest, NextResponse } from "next/server";
 import { validateSession } from "@/server/auth";
+import { getClaudeDir } from "@/server/paths";
 
 function authenticate(req: NextRequest): boolean {
   const token = req.cookies.get("cockpit_session")?.value || req.headers.get("authorization")?.replace("Bearer ", "");
@@ -14,7 +14,7 @@ const NAME_RE = /^[a-zA-Z0-9_-]+$/;
 function resolveSkillDir(name: string, scope: string, cwd?: string | null): string | null {
   if (!NAME_RE.test(name)) return null;
   if (scope === "user") {
-    return path.join(homedir(), ".claude", "skills", name);
+    return path.join(getClaudeDir(), "skills", name);
   }
   if (scope === "project" && cwd) {
     return path.join(cwd, ".claude", "skills", name);

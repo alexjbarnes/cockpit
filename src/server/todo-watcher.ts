@@ -1,6 +1,6 @@
 import { existsSync, type FSWatcher, readdirSync, readFileSync, unwatchFile, watch, watchFile } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
+import { getClaudeDir } from "@/server/paths";
 import type { TodoItem } from "@/types";
 
 const DEBOUNCE_MS = 300;
@@ -24,7 +24,7 @@ export class TodoWatcher {
     private readonly cliSessionId: string,
     private readonly onUpdate: (todos: TodoItem[]) => void,
   ) {
-    const base = join(homedir(), ".claude");
+    const base = getClaudeDir();
     this.todosDir = join(base, "todos");
     this.tasksDir = join(base, "tasks", cliSessionId);
   }

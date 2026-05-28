@@ -1,7 +1,7 @@
 import { mkdirSync } from "node:fs";
-import { homedir } from "node:os";
 import path from "node:path";
 import { v4 as uuidv4 } from "uuid";
+import { getCockpitDir } from "@/server/paths";
 import type { JobRun, JobRunToolUse, ScheduledJob } from "@/types";
 import { findMissedRun, getJobSchedules, matchesCron, scheduleToCron } from "./cron-utils";
 import { addInboxMessage, parseErrorBlock, parseInboxBlock } from "./inbox";
@@ -10,7 +10,9 @@ import { getLatestRun, loadJobs, loadRuns, pruneAllRuns, saveRun } from "./job-s
 import type { SessionManager } from "./session-manager";
 import { countTranscriptMessages } from "./transcript";
 
-const SCRATCHPAD_DIR = path.join(homedir(), ".cockpit", "jobs");
+function scratchpadDir(): string {
+  return path.join(getCockpitDir(), "jobs");
+}
 
 const JOB_PROMPT_HEADER = [
   "You are running as an autonomous scheduled job. There is no human operator in this session.",
@@ -41,7 +43,7 @@ function buildJobPrompt(job: ScheduledJob): string {
   }
 
   if (job.cwd) {
-    const storageDir = path.join(SCRATCHPAD_DIR, job.id);
+    const storageDir = path.join(scratchpadDir(), job.id);
     parts.push("");
     parts.push(`Storage: If you need to persist any files between runs (state, cache, data), save them in ${storageDir}`);
     parts.push("Do not store persistent files in the working directory as it is a git repository.");
@@ -269,8 +271,8 @@ export class JobScheduler {
       throw new Error("Could not acquire job lock - another process is running this job");
     }
 
-    const jobCwd = job.cwd || path.join(SCRATCHPAD_DIR, job.id);
-    mkdirSync(path.join(SCRATCHPAD_DIR, job.id), { recursive: true });
+    const jobCwd = job.cwd || path.join(scratchpadDir(), job.id);
+    mkdirSync(path.join(scratchpadDir(), job.id), { recursive: true });
     const sessionInfo = this.sessionManager.createSession(jobCwd, `[job] ${job.name}`, {
       bypassPermissions: !!job.bypassPermissions,
       runtime: job.runtime,

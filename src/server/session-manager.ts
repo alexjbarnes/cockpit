@@ -1,7 +1,6 @@
 import { type ChildProcess, execFileSync, spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import path from "node:path";
 import { type Writable } from "node:stream";
 import { v4 as uuidv4 } from "uuid";
@@ -15,6 +14,7 @@ import {
   recommendedEffort,
   resolveModel,
 } from "@/lib/models";
+import { getCockpitCacheDir, getCockpitDir } from "@/server/paths";
 import { resolveProviderModel } from "@/server/providers";
 import type {
   ChatMessage,
@@ -1835,7 +1835,7 @@ export class SessionManager {
 
   private writeAttachments(images?: ImageAttachment[], documents?: DocumentAttachment[]): string[] {
     if (!images?.length && !documents?.length) return [];
-    const dir = path.join(homedir(), ".cache", "cockpit", "attachments");
+    const dir = path.join(getCockpitCacheDir(), "attachments");
     mkdirSync(dir, { recursive: true });
     const paths: string[] = [];
     for (const img of images ?? []) {
@@ -2468,12 +2468,15 @@ Additional Cockpit rules beyond the CLI's defaults:
   }
 }
 
-const MCP_CACHE_PATH = path.join(homedir(), ".cockpit", "mcp-servers.json");
+function mcpCachePath(): string {
+  return path.join(getCockpitDir(), "mcp-servers.json");
+}
 
 function loadMcpServerCache(): string[] {
   try {
-    if (!existsSync(MCP_CACHE_PATH)) return [];
-    return JSON.parse(readFileSync(MCP_CACHE_PATH, "utf-8")) as string[];
+    const fp = mcpCachePath();
+    if (!existsSync(fp)) return [];
+    return JSON.parse(readFileSync(fp, "utf-8")) as string[];
   } catch {
     return [];
   }
@@ -2481,9 +2484,10 @@ function loadMcpServerCache(): string[] {
 
 function saveMcpServerCache(servers: string[]): void {
   try {
-    const dir = path.dirname(MCP_CACHE_PATH);
+    const fp = mcpCachePath();
+    const dir = path.dirname(fp);
     mkdirSync(dir, { recursive: true });
-    writeFileSync(MCP_CACHE_PATH, JSON.stringify(servers));
+    writeFileSync(fp, JSON.stringify(servers));
   } catch {
     // best-effort
   }

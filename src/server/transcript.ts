@@ -1,9 +1,9 @@
 import { createReadStream, existsSync, readFileSync } from "node:fs";
 import { open, readdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import { v4 as uuidv4 } from "uuid";
+import { getClaudeDir } from "@/server/paths";
 import type {
   ChatMessage,
   ContentBlock,
@@ -60,7 +60,7 @@ interface TranscriptEntry {
 
 export function getTranscriptPath(sessionId: string, cwd: string): string {
   const projectKey = cwd.replace(/[/.]/g, "-");
-  return path.join(homedir(), ".claude", "projects", projectKey, `${sessionId}.jsonl`);
+  return path.join(getClaudeDir(), "projects", projectKey, `${sessionId}.jsonl`);
 }
 
 export function transcriptExists(sessionId: string, cwd: string): boolean {
@@ -757,7 +757,7 @@ async function extractSessionMeta(filePath: string): Promise<SessionMeta | null>
 }
 
 export async function findSessionCwd(sessionId: string): Promise<string | null> {
-  const projectsDir = path.join(homedir(), ".claude", "projects");
+  const projectsDir = path.join(getClaudeDir(), "projects");
   if (!existsSync(projectsDir)) return null;
 
   let projectDirs: string[];
@@ -780,7 +780,7 @@ export async function findSessionCwd(sessionId: string): Promise<string | null> 
 }
 
 export async function scanAllSessions(): Promise<SessionGroup[]> {
-  const projectsDir = path.join(homedir(), ".claude", "projects");
+  const projectsDir = path.join(getClaudeDir(), "projects");
   if (!existsSync(projectsDir)) return [];
 
   let projectDirs: string[];
@@ -860,7 +860,7 @@ function metaToSessionInfo(meta: SessionMeta): SessionInfo {
 }
 
 export async function scanSessionsForCwd(targetCwd: string): Promise<SessionInfo[]> {
-  const projectsDir = path.join(homedir(), ".claude", "projects");
+  const projectsDir = path.join(getClaudeDir(), "projects");
   if (!existsSync(projectsDir)) return [];
 
   let projectDirs: string[];
@@ -897,7 +897,7 @@ export async function scanSessionsForCwd(targetCwd: string): Promise<SessionInfo
 
 export async function scanSessionsByIds(ids: string[]): Promise<SessionInfo[]> {
   if (ids.length === 0) return [];
-  const projectsDir = path.join(homedir(), ".claude", "projects");
+  const projectsDir = path.join(getClaudeDir(), "projects");
   if (!existsSync(projectsDir)) return [];
 
   let projectDirs: string[];
@@ -942,7 +942,7 @@ interface TranscriptFileInfo {
 }
 
 export async function listAllTranscriptFiles(): Promise<TranscriptFileInfo[]> {
-  const projectsDir = path.join(homedir(), ".claude", "projects");
+  const projectsDir = path.join(getClaudeDir(), "projects");
   if (!existsSync(projectsDir)) return [];
 
   let projectDirs: string[];
@@ -979,7 +979,7 @@ export async function listAllTranscriptFiles(): Promise<TranscriptFileInfo[]> {
 }
 
 export async function findTranscriptFile(sessionId: string): Promise<string | null> {
-  const projectsDir = path.join(homedir(), ".claude", "projects");
+  const projectsDir = path.join(getClaudeDir(), "projects");
   if (!existsSync(projectsDir)) return null;
 
   let projectDirs: string[];

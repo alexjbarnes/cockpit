@@ -1,8 +1,8 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ContextSize } from "@/lib/models";
 import { splitLegacyModel } from "@/lib/models";
+import { getCockpitDir } from "@/server/paths";
 import type { InitData, ModelSlots, ThinkingLevel } from "@/types";
 
 export type SessionRuntime = "stream" | "pty";
@@ -28,15 +28,19 @@ export interface SessionPrefs {
   runtime?: SessionRuntime;
 }
 
-const PREFS_DIR = join(homedir(), ".cockpit");
-const PREFS_FILE = join(PREFS_DIR, "session-prefs.json");
+function prefsDir(): string {
+  return getCockpitDir();
+}
+function prefsFile(): string {
+  return join(prefsDir(), "session-prefs.json");
+}
 
 let cache: Record<string, SessionPrefs> | null = null;
 
 function load(): Record<string, SessionPrefs> {
   if (cache) return cache;
   try {
-    cache = JSON.parse(readFileSync(PREFS_FILE, "utf-8"));
+    cache = JSON.parse(readFileSync(prefsFile(), "utf-8"));
     return cache!;
   } catch {
     cache = {};
@@ -47,8 +51,8 @@ function load(): Record<string, SessionPrefs> {
 function save(): void {
   if (!cache) return;
   try {
-    mkdirSync(PREFS_DIR, { recursive: true });
-    writeFileSync(PREFS_FILE, JSON.stringify(cache, null, 2) + "\n");
+    mkdirSync(prefsDir(), { recursive: true });
+    writeFileSync(prefsFile(), JSON.stringify(cache, null, 2) + "\n");
   } catch {
     // best effort
   }
