@@ -13,3 +13,6 @@ fixes.md
 tui-commands.md
 coverage/
 .playwright-mcp/
+.graphene/
+CLAUDE.md
+core
