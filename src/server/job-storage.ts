@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { JobRun, ScheduledJob } from "@/types";
+import { splitLegacyModel } from "@/lib/models";
 
 const PREFS_DIR = join(homedir(), ".cockpit");
 const JOBS_FILE = join(PREFS_DIR, "scheduled-jobs.json");
@@ -15,10 +16,19 @@ function runsFile(jobId: string): string {
   return join(RUNS_DIR, `${jobId}.json`);
 }
 
+function normalizeJob(raw: ScheduledJob): ScheduledJob {
+  if (raw.model && raw.model.includes("[")) {
+    const split = splitLegacyModel(raw.model);
+    return { ...raw, model: split.model, contextSize: raw.contextSize ?? split.contextSize };
+  }
+  return raw;
+}
+
 export function loadJobs(): ScheduledJob[] {
   try {
     const data = JSON.parse(readFileSync(JOBS_FILE, "utf-8"));
-    return data.jobs || [];
+    const jobs: ScheduledJob[] = data.jobs || [];
+    return jobs.map(normalizeJob);
   } catch {
     return [];
   }
