@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("node:fs");
 vi.mock("node:os", () => ({ homedir: () => "/home/user" }));
@@ -16,9 +16,7 @@ describe("job-storage context migration", () => {
   it("splits a legacy [1m] suffix on getJob", async () => {
     const fs = await import("node:fs");
     const stored = JSON.stringify({
-      jobs: [
-        { id: "job-1", name: "x", model: "claude-opus-4-7[1m]" },
-      ],
+      jobs: [{ id: "job-1", name: "x", model: "claude-opus-4-7[1m]" }],
     });
     vi.mocked(fs.readFileSync).mockReturnValue(stored as never);
 

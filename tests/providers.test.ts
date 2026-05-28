@@ -253,7 +253,9 @@ describe("providers", () => {
 
   it("rejects updateProvider with a model that has empty contextSizes", async () => {
     const fs = await import("node:fs");
-    vi.mocked(fs.readFileSync).mockImplementation(() => { throw new Error("ENOENT"); });
+    vi.mocked(fs.readFileSync).mockImplementation(() => {
+      throw new Error("ENOENT");
+    });
     vi.mocked(fs.writeFileSync).mockImplementation(() => {});
     vi.mocked(fs.mkdirSync).mockImplementation(() => "");
 
@@ -269,8 +271,10 @@ describe("providers", () => {
     const created = getProviders().find((p) => p.name === "Custom" && !p.isBuiltin);
     expect(created).toBeDefined();
 
-    expect(() => updateProvider(created!.id, {
-      models: [{ modelId: "m1", displayName: "m1", effortLevels: [], contextSizes: [] }],
-    })).toThrow(/contextSizes/);
+    expect(() =>
+      updateProvider(created!.id, {
+        models: [{ modelId: "m1", displayName: "m1", effortLevels: [], contextSizes: [] }],
+      }),
+    ).toThrow(/contextSizes/);
   });
 });

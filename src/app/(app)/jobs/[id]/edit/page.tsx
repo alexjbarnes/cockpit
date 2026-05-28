@@ -11,9 +11,9 @@ import { Input } from "@/components/ui/input";
 import {
   allowedEffortLevels,
   CONTEXT_SIZES,
+  type ContextSize,
   defaultForAlias,
   findModelById,
-  type ContextSize,
   type ModelAlias,
   recommendedEffort,
   resolveModel,
@@ -198,10 +198,7 @@ export default function JobEditPage() {
   const showVersions = availableVersions.length > 1;
   const customProviderModel = !isBuiltinProvider && selectedProvider ? selectedProvider.models.find((m) => m.modelId === modelId) : null;
   const contextSizes = useMemo<ContextSize[]>(
-    () =>
-      isBuiltinProvider
-        ? (selectedEntry?.contextSizes ?? ["200k"])
-        : (customProviderModel?.contextSizes ?? ["200k"]),
+    () => (isBuiltinProvider ? (selectedEntry?.contextSizes ?? ["200k"]) : (customProviderModel?.contextSizes ?? ["200k"])),
     [isBuiltinProvider, selectedEntry, customProviderModel],
   );
 

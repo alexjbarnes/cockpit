@@ -344,9 +344,13 @@ export function ProviderForm({ provider, isNew, onSave, onCancel, onDelete, lock
                       {model.effortLevels.length > 0 && (
                         <span className="text-muted-foreground hidden sm:inline">{model.effortLevels.join(", ")}</span>
                       )}
-                      {model.contextSizes.filter((s) => s !== "200k").map((s) => (
-                        <span key={s} className="text-muted-foreground">{CONTEXT_SIZES[s].label}</span>
-                      ))}
+                      {model.contextSizes
+                        .filter((s) => s !== "200k")
+                        .map((s) => (
+                          <span key={s} className="text-muted-foreground">
+                            {CONTEXT_SIZES[s].label}
+                          </span>
+                        ))}
                       <button
                         type="button"
                         onClick={(e) => {

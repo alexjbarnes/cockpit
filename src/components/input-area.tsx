@@ -35,7 +35,16 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { useWebSocket } from "@/hooks/use-websocket";
 import type { SlashCommand } from "@/lib/commands";
-import { allowedEffortLevels, CONTEXT_SIZES, defaultForAlias, findModelById, type ContextSize, type ModelAlias, type ModelEntry, versionsForAlias } from "@/lib/models";
+import {
+  allowedEffortLevels,
+  CONTEXT_SIZES,
+  type ContextSize,
+  defaultForAlias,
+  findModelById,
+  type ModelAlias,
+  type ModelEntry,
+  versionsForAlias,
+} from "@/lib/models";
 import { detectLanguage, extensionForLabel, shouldCollapsePaste } from "@/lib/paste-detect";
 import type { ContextUsage, DocumentAttachment, ImageAttachment, InitData, Provider, TextFileAttachment, ThinkingLevel } from "@/types";
 import { ContextIndicator } from "./context-indicator";
@@ -48,7 +57,10 @@ const aliases: { value: ModelAlias; label: string }[] = [
   { value: "opus", label: "Opus" },
 ];
 
-function parseCurrentModel(currentModel: string, currentContextSize: ContextSize): { alias: ModelAlias | null; entry: ModelEntry | null; contextSize: ContextSize } {
+function parseCurrentModel(
+  currentModel: string,
+  currentContextSize: ContextSize,
+): { alias: ModelAlias | null; entry: ModelEntry | null; contextSize: ContextSize } {
   const base = currentModel.replace(/\[.*\]$/, "");
   if (base === "opus" || base === "sonnet" || base === "haiku") {
     return { alias: base, entry: defaultForAlias(base) ?? null, contextSize: currentContextSize };
@@ -935,7 +947,9 @@ export function InputArea({
                                     key={s}
                                     onClick={() => onSetModel(currentModel, s)}
                                     className={`rounded px-2 py-0.5 text-xs transition-colors ${
-                                      parsed.contextSize === s ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground hover:text-foreground"
+                                      parsed.contextSize === s
+                                        ? "bg-primary text-primary-foreground"
+                                        : "bg-muted text-muted-foreground hover:text-foreground"
                                     }`}
                                   >
                                     {CONTEXT_SIZES[s].label}

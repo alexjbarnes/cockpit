@@ -5,7 +5,15 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { type Writable } from "node:stream";
 import { v4 as uuidv4 } from "uuid";
-import { allowedEffortLevels, coerceEffort, CONTEXT_SIZES, type ContextSize, DEFAULT_CONTEXT_SIZE, recommendedEffort, resolveModel } from "@/lib/models";
+import {
+  allowedEffortLevels,
+  CONTEXT_SIZES,
+  type ContextSize,
+  coerceEffort,
+  DEFAULT_CONTEXT_SIZE,
+  recommendedEffort,
+  resolveModel,
+} from "@/lib/models";
 import { resolveProviderModel } from "@/server/providers";
 import type {
   ChatMessage,
@@ -1036,6 +1044,10 @@ export class SessionManager {
       if (!sizes || sizes.length === 0) return requestedSize;
       return sizes.includes(requestedSize) ? requestedSize : sizes[0];
     })();
+    // Detect 200K<->1M flip via the explicit contextSize field. The
+    // CLAUDE_CODE_DISABLE_1M_CONTEXT env var is applied at spawn, so toggling
+    // the context size mid-session needs a CLI restart for the new context
+    // window to actually take effect.
     const contextChanged = currentSize !== resolvedSize;
 
     if (session.info.model === model && !contextChanged) {

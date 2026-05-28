@@ -5,8 +5,16 @@ import { useRouter } from "next/navigation";
 import { usePageHeader } from "@/components/app-shell";
 import { Button } from "@/components/ui/button";
 import { type ThinkingLevel, useSettings } from "@/hooks/use-settings";
-import { allowedEffortLevels, CONTEXT_SIZES, type ContextSize, defaultForAlias, type ModelAlias, recommendedEffort, resolveModel, versionsForAlias } from "@/lib/models";
-
+import {
+  allowedEffortLevels,
+  CONTEXT_SIZES,
+  type ContextSize,
+  defaultForAlias,
+  type ModelAlias,
+  recommendedEffort,
+  resolveModel,
+  versionsForAlias,
+} from "@/lib/models";
 
 const thinkingOptions: { value: ThinkingLevel; label: string }[] = [
   { value: "low", label: "Low" },
