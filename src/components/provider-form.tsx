@@ -3,6 +3,7 @@
 import { Cpu, Key, Layers, Plus, Trash2, X } from "lucide-react";
 import { useState } from "react";
 import { Input } from "@/components/ui/input";
+import { CONTEXT_SIZES, type ContextSize } from "@/lib/models";
 import type { Provider, ProviderModel, ThinkingLevel } from "@/types";
 
 interface ProviderFormProps {
@@ -27,7 +28,7 @@ interface EditingModel {
   modelId: string;
   displayName: string;
   effortLevels: ThinkingLevel[];
-  supportsExtendedContext: boolean;
+  contextSizes: ContextSize[];
 }
 
 function EffortPills({ selected, onChange }: { selected: ThinkingLevel[]; onChange: (levels: ThinkingLevel[]) => void }) {
@@ -45,6 +46,29 @@ function EffortPills({ selected, onChange }: { selected: ThinkingLevel[]; onChan
           {level}
         </button>
       ))}
+    </div>
+  );
+}
+
+function ContextSizePills({ selected, onChange }: { selected: ContextSize[]; onChange: (sizes: ContextSize[]) => void }) {
+  const allSizes = Object.keys(CONTEXT_SIZES) as ContextSize[];
+  return (
+    <div className="ml-auto flex flex-wrap gap-1 justify-end">
+      {allSizes.map((size) => {
+        const isSelected = selected.includes(size);
+        return (
+          <button
+            type="button"
+            key={size}
+            onClick={() => onChange(isSelected ? selected.filter((s) => s !== size) : [...selected, size])}
+            className={`rounded px-2 py-0.5 text-xs transition-colors ${
+              isSelected ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            {CONTEXT_SIZES[size].label}
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -73,7 +97,7 @@ export function ProviderForm({ provider, isNew, onSave, onCancel, onDelete, lock
   const [newModelId, setNewModelId] = useState("");
   const [newModelName, setNewModelName] = useState("");
   const [newModelEffort, setNewModelEffort] = useState<ThinkingLevel[]>([]);
-  const [newModelExtCtx, setNewModelExtCtx] = useState(false);
+  const [newModelContextSizes, setNewModelContextSizes] = useState<ContextSize[]>(["200k"]);
   const [editingModel, setEditingModel] = useState<EditingModel | null>(null);
   const [saving, setSaving] = useState(false);
   const locked = new Set(lockedEnvKeys ?? []);
@@ -109,18 +133,19 @@ export function ProviderForm({ provider, isNew, onSave, onCancel, onDelete, lock
           modelId: newModelId.trim(),
           displayName: newModelName.trim() || newModelId.trim(),
           effortLevels: newModelEffort,
-          supportsExtendedContext: newModelExtCtx,
+          contextSizes: newModelContextSizes,
         },
       ]);
       setNewModelId("");
       setNewModelName("");
       setNewModelEffort([]);
-      setNewModelExtCtx(false);
+      setNewModelContextSizes(["200k"]);
     }
   };
 
   const saveEditingModel = () => {
     if (!editingModel) return;
+    if (editingModel.contextSizes.length === 0) return;
     setModels(
       models.map((m, i) =>
         i === editingModel.index
@@ -128,7 +153,7 @@ export function ProviderForm({ provider, isNew, onSave, onCancel, onDelete, lock
               modelId: editingModel.modelId.trim(),
               displayName: editingModel.displayName.trim() || editingModel.modelId.trim(),
               effortLevels: editingModel.effortLevels,
-              supportsExtendedContext: editingModel.supportsExtendedContext,
+              contextSizes: editingModel.contextSizes,
             }
           : m,
       ),
@@ -270,15 +295,13 @@ export function ProviderForm({ provider, isNew, onSave, onCancel, onDelete, lock
                       />
                     </div>
                     <div className="flex items-center justify-between">
-                      <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={editingModel.supportsExtendedContext}
-                          onChange={(e) => setEditingModel({ ...editingModel, supportsExtendedContext: e.target.checked })}
-                          className="rounded"
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs text-muted-foreground">Context</span>
+                        <ContextSizePills
+                          selected={editingModel.contextSizes}
+                          onChange={(sizes) => setEditingModel({ ...editingModel, contextSizes: sizes })}
                         />
-                        1M context
-                      </label>
+                      </div>
                       <div className="flex gap-1.5">
                         <button
                           type="button"
@@ -290,7 +313,7 @@ export function ProviderForm({ provider, isNew, onSave, onCancel, onDelete, lock
                         <button
                           type="button"
                           onClick={saveEditingModel}
-                          disabled={!editingModel.modelId.trim()}
+                          disabled={!editingModel.modelId.trim() || editingModel.contextSizes.length === 0}
                           className="px-2.5 py-1 text-xs rounded-md bg-primary text-primary-foreground hover:brightness-110 transition-all disabled:opacity-50"
                         >
                           Save
@@ -308,7 +331,7 @@ export function ProviderForm({ provider, isNew, onSave, onCancel, onDelete, lock
                         modelId: model.modelId,
                         displayName: model.displayName,
                         effortLevels: model.effortLevels,
-                        supportsExtendedContext: model.supportsExtendedContext ?? false,
+                        contextSizes: model.contextSizes,
                       })
                     }
                     className="flex w-full items-center gap-2 sm:gap-3 rounded-lg border border-border px-3 sm:px-4 py-2.5 text-xs hover:bg-muted/50 transition-colors text-left"
@@ -321,7 +344,9 @@ export function ProviderForm({ provider, isNew, onSave, onCancel, onDelete, lock
                       {model.effortLevels.length > 0 && (
                         <span className="text-muted-foreground hidden sm:inline">{model.effortLevels.join(", ")}</span>
                       )}
-                      {model.supportsExtendedContext && <span className="text-muted-foreground">1M</span>}
+                      {model.contextSizes.filter((s) => s !== "200k").map((s) => (
+                        <span key={s} className="text-muted-foreground">{CONTEXT_SIZES[s].label}</span>
+                      ))}
                       <button
                         type="button"
                         onClick={(e) => {
@@ -360,19 +385,14 @@ export function ProviderForm({ provider, isNew, onSave, onCancel, onDelete, lock
                 <EffortPills selected={newModelEffort} onChange={setNewModelEffort} />
               </div>
               <div className="flex items-center justify-between">
-                <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={newModelExtCtx}
-                    onChange={(e) => setNewModelExtCtx(e.target.checked)}
-                    className="rounded"
-                  />
-                  1M context
-                </label>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-muted-foreground">Context</span>
+                  <ContextSizePills selected={newModelContextSizes} onChange={setNewModelContextSizes} />
+                </div>
                 <button
                   type="button"
                   onClick={addModel}
-                  disabled={!newModelId.trim()}
+                  disabled={!newModelId.trim() || newModelContextSizes.length === 0}
                   className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-md border border-input text-muted-foreground hover:text-foreground hover:bg-muted transition-colors disabled:opacity-50"
                 >
                   <Plus className="h-3 w-3" />
