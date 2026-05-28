@@ -1,6 +1,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { splitLegacyModel } from "@/lib/models";
 import type { ContextSize } from "@/lib/models";
 import type { InitData, ModelSlots, ThinkingLevel } from "@/types";
 
@@ -53,6 +54,25 @@ function save(): void {
   }
 }
 
+function normalize(raw: SessionPrefs | undefined): SessionPrefs | undefined {
+  if (!raw) return raw;
+  const next = { ...raw };
+  if (next.model && next.model.includes("[")) {
+    const split = splitLegacyModel(next.model);
+    next.model = split.model;
+    if (next.contextSize === undefined) next.contextSize = split.contextSize;
+  }
+  if (next.modelSlots?.main && next.modelSlots.main.includes("[")) {
+    const split = splitLegacyModel(next.modelSlots.main);
+    next.modelSlots = {
+      ...next.modelSlots,
+      main: split.model,
+      mainContext: next.modelSlots.mainContext ?? split.contextSize,
+    };
+  }
+  return next;
+}
+
 export function getSessionPrefs(sessionId: string): SessionPrefs | undefined {
   const all = load();
   // Prefer chain resolution. The sidebar lists entries keyed by CLI id (one
@@ -61,8 +81,8 @@ export function getSessionPrefs(sessionId: string): SessionPrefs | undefined {
   // guards against legacy CLI-id duplicates that may exist in the prefs file
   // from before chain resolution was applied at write time.
   const chain = findChainForCliSession(sessionId);
-  if (chain && all[chain.cockpitId]) return all[chain.cockpitId];
-  return all[sessionId];
+  if (chain && all[chain.cockpitId]) return normalize(all[chain.cockpitId]);
+  return normalize(all[sessionId]);
 }
 
 export function setSessionPrefs(sessionId: string, prefs: Partial<SessionPrefs>): void {
