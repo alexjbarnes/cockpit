@@ -1,13 +1,17 @@
 import type { ProviderModel, ThinkingLevel } from "@/types";
 
 export const CONTEXT_SIZES = {
-  "200k": { label: "200K", disableEnv: true },
-  "1m": { label: "1M", disableEnv: false },
+  "200k": { label: "200K", disableEnv: true, window: 200_000 },
+  "1m": { label: "1M", disableEnv: false, window: 1_000_000 },
 } as const;
 
 export type ContextSize = keyof typeof CONTEXT_SIZES;
 
 export const DEFAULT_CONTEXT_SIZE: ContextSize = "200k";
+
+export function contextSizeToWindow(size: ContextSize): number {
+  return CONTEXT_SIZES[size].window;
+}
 
 export type ModelAlias = "opus" | "sonnet" | "haiku";
 

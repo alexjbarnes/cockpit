@@ -114,6 +114,28 @@ describe("SessionManager", () => {
       const session = manager.createSession("/tmp", "My Session");
       expect(session.name).toBe("My Session");
     });
+
+    it("seeds contextWindowSize from defaults.modelSlots.mainContext", async () => {
+      const defaultsMod = await import("@/server/defaults");
+      const orig = defaultsMod.getDefaults;
+      (defaultsMod as { getDefaults: () => unknown }).getDefaults = () => ({
+        thinkingLevel: "high",
+        bypassAllPermissions: false,
+        diffStyle: "split",
+        dismissKeyboardOnSend: true,
+        thinkingExpanded: false,
+        modelSlots: { main: "opus", mainContext: "1m" },
+      });
+      try {
+        const m = new SessionManager();
+        const session = m.createSession("/tmp");
+        const s = (m as any).sessions.get(session.id)!;
+        expect(s.info.contextSize).toBe("1m");
+        expect(s.contextWindowSize).toBe(1_000_000);
+      } finally {
+        (defaultsMod as { getDefaults: () => unknown }).getDefaults = orig;
+      }
+    });
   });
 
   describe("getSession", () => {
@@ -144,6 +166,23 @@ describe("SessionManager", () => {
       const created = manager.createSession("/tmp");
       const ensured = manager.ensureSession(created.id, "/tmp");
       expect(ensured.info.id).toBe(created.id);
+    });
+
+    it("restores contextWindowSize from prefs.contextSize on rehydrate", async () => {
+      const prefsMod = await import("@/server/session-prefs");
+      const orig = prefsMod.getSessionPrefs;
+      (prefsMod as { getSessionPrefs: (id: string) => unknown }).getSessionPrefs = () => ({
+        contextSize: "1m",
+        modelSlots: { main: "opus" },
+      });
+      try {
+        const ensured = manager.ensureSession("restored-1m", "/tmp/proj");
+        const s = (manager as any).sessions.get(ensured.info.id)!;
+        expect(ensured.info.contextSize).toBe("1m");
+        expect(s.contextWindowSize).toBe(1_000_000);
+      } finally {
+        (prefsMod as { getSessionPrefs: (id: string) => unknown }).getSessionPrefs = orig;
+      }
     });
   });
 
@@ -2752,15 +2791,16 @@ describe("SessionManager", () => {
       expect(usages).toHaveLength(1);
     });
 
-    it("extracts contextWindowSize from result message", () => {
+    it("does not let CLI result.modelUsage override session.contextWindowSize", () => {
       const session = manager.createSession("/tmp");
       const s = (manager as any).sessions.get(session.id)!;
+      s.contextWindowSize = 1_000_000;
       const line = JSON.stringify({
         type: "result",
         modelUsage: { "claude-3-5-sonnet": { contextWindow: 128000 } },
       });
       (manager as any).extractUsage(s, session.id, line);
-      expect(s.contextWindowSize).toBe(128000);
+      expect(s.contextWindowSize).toBe(1_000_000);
     });
 
     it("skips synthetic responses", () => {
@@ -2778,27 +2818,6 @@ describe("SessionManager", () => {
       const session = manager.createSession("/tmp");
       const s = (manager as any).sessions.get(session.id)!;
       expect(() => (manager as any).extractUsage(s, session.id, "not json")).not.toThrow();
-    });
-  });
-
-  describe("extractContextWindowSize", () => {
-    it("sets context window from model usage", () => {
-      const session = manager.createSession("/tmp");
-      const s = (manager as any).sessions.get(session.id)!;
-      (manager as any).extractContextWindowSize(s, {
-        "claude-3-5-sonnet": { contextWindow: 256000 },
-      });
-      expect(s.contextWindowSize).toBe(256000);
-    });
-
-    it("ignores models with zero or missing contextWindow", () => {
-      const session = manager.createSession("/tmp");
-      const s = (manager as any).sessions.get(session.id)!;
-      (manager as any).extractContextWindowSize(s, {
-        "model-a": { contextWindow: 0 },
-        "model-b": {},
-      });
-      expect(s.contextWindowSize).toBe(200000);
     });
   });
 

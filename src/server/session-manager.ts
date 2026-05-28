@@ -10,6 +10,7 @@ import {
   CONTEXT_SIZES,
   type ContextSize,
   coerceEffort,
+  contextSizeToWindow,
   DEFAULT_CONTEXT_SIZE,
   recommendedEffort,
   resolveModel,
@@ -192,7 +193,7 @@ export class SessionManager {
       thinkingLevel: defaults.thinkingLevel,
       streamState: null,
       contextUsage: null,
-      contextWindowSize: 200_000,
+      contextWindowSize: contextSizeToWindow(info.contextSize ?? DEFAULT_CONTEXT_SIZE),
       todoItems: [],
       pendingRequests: new Map(),
       controlCallbacks: new Map(),
@@ -233,6 +234,7 @@ export class SessionManager {
       const modelSlots: ModelSlots =
         prefs?.modelSlots ?? (prefs?.model ? { main: prefs.model } : { main: defaults.modelSlots.main ?? "sonnet" });
       const restoredRuntime = prefs?.runtime ?? defaultRuntime();
+      const restoredContextSize = prefs?.contextSize ?? prefs?.modelSlots?.mainContext ?? DEFAULT_CONTEXT_SIZE;
       session = {
         info: {
           id,
@@ -242,7 +244,7 @@ export class SessionManager {
           lastActiveAt: now,
           status: "idle",
           model: modelSlots.main,
-          contextSize: prefs?.contextSize ?? prefs?.modelSlots?.mainContext ?? DEFAULT_CONTEXT_SIZE,
+          contextSize: restoredContextSize,
           runtime: restoredRuntime,
           pendingRequestCount: 0,
         },
@@ -263,7 +265,7 @@ export class SessionManager {
           defaults.thinkingLevel,
         streamState: null,
         contextUsage: null,
-        contextWindowSize: 200_000,
+        contextWindowSize: contextSizeToWindow(restoredContextSize),
         todoItems: [],
         pendingRequests: new Map(),
         controlCallbacks: new Map(),
@@ -369,7 +371,8 @@ export class SessionManager {
       }
     }
 
-    return { info: session.info, messages: clientMessages, hasMore, lastUsage, promptHistory: allPrompts };
+    const normalized = lastUsage ? { used: lastUsage.used, total: session.contextWindowSize } : null;
+    return { info: session.info, messages: clientMessages, hasMore, lastUsage: normalized, promptHistory: allPrompts };
   }
 
   async getSessionByCwd(
@@ -444,7 +447,8 @@ export class SessionManager {
       }
     }
 
-    return { info: session.info, messages: clientMessages, hasMore, lastUsage, promptHistory: allPrompts };
+    const normalized = lastUsage ? { used: lastUsage.used, total: session.contextWindowSize } : null;
+    return { info: session.info, messages: clientMessages, hasMore, lastUsage: normalized, promptHistory: allPrompts };
   }
 
   async getCliSessionView(
@@ -507,11 +511,14 @@ export class SessionManager {
       }
     }
 
+    const prefs = getSessionPrefs(cliId);
+    const viewSize = prefs?.contextSize ?? prefs?.modelSlots?.mainContext ?? DEFAULT_CONTEXT_SIZE;
+    const normalized = lastUsage ? { used: lastUsage.used, total: contextSizeToWindow(viewSize) } : null;
     return {
       info: { id: cliId, name, cwd, createdAt: Date.now(), lastActiveAt: Date.now(), status: "idle" },
       messages: clientMessages,
       hasMore: messages.length > PAGE,
-      lastUsage,
+      lastUsage: normalized,
       promptHistory: allPrompts,
     };
   }
@@ -1104,12 +1111,8 @@ export class SessionManager {
       session.emitter.emit("status", sessionId, "idle");
     }
     this.emitInfoUpdated(session, sessionId);
-    // Sync the contextWindowSize when the model changes. Without this, the
-    // context indicator shows the old total (e.g. 1000K) after switching to
-    // a model with a different context window (e.g. 200K Flash) until the
-    // CLI respawns and reports the actual value.
     if (contextChanged) {
-      session.contextWindowSize = resolvedSize === "1m" ? 1_000_000 : (nextEntry?.contextWindow ?? 200_000);
+      session.contextWindowSize = contextSizeToWindow(resolvedSize);
     }
     const cur = session.contextUsage;
     if (cur) {
@@ -1388,10 +1391,6 @@ export class SessionManager {
     try {
       const raw = JSON.parse(line.trim());
 
-      if (raw.type === "result" && raw.modelUsage) {
-        this.extractContextWindowSize(session, raw.modelUsage);
-      }
-
       if (raw.type !== "assistant" || !raw.message?.usage) return;
       // Skip synthetic responses (e.g. /context) that have all-zero usage
       if (raw.message.model === "<synthetic>") return;
@@ -1406,15 +1405,6 @@ export class SessionManager {
       session.totalTokens.cacheRead += u.cache_read_input_tokens || 0;
     } catch {
       // not valid JSON, ignore
-    }
-  }
-
-  private extractContextWindowSize(session: Session, modelUsage: Record<string, Record<string, number>>): void {
-    for (const model of Object.values(modelUsage)) {
-      if (model.contextWindow && model.contextWindow > 0) {
-        session.contextWindowSize = model.contextWindow;
-        return;
-      }
     }
   }
 
@@ -2419,8 +2409,9 @@ Additional Cockpit rules beyond the CLI's defaults:
     const watcher = new TranscriptWatcher(session.cliSessionId, session.info.cwd, (messages, lastUsage) => {
       session.emitter.emit("transcript", sessionId, messages);
       if (lastUsage) {
-        session.contextUsage = lastUsage;
-        session.emitter.emit("usage", sessionId, lastUsage);
+        const usage: ContextUsage = { used: lastUsage.used, total: session.contextWindowSize };
+        session.contextUsage = usage;
+        session.emitter.emit("usage", sessionId, usage);
       }
       if (session.compacting && messages.some((m) => m.content === "__compacted__")) {
         logDiag(sessionId, "compact:done-on-transcript");
