@@ -1,8 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import type { ModelSlots } from "@/types";
 import { splitLegacyModel } from "@/lib/models";
+import type { ModelSlots } from "@/types";
 
 export type DiffStyle = "split" | "unified";
 export type ThinkingLevel = "low" | "medium" | "high" | "xhigh" | "max";

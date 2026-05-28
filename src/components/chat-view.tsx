@@ -74,7 +74,6 @@ export function ChatView({
     interrupt,
     respondToPermission,
     respondToQuestion,
-    selectModel,
     setModel,
     setBypassAll,
     setPlanMode,

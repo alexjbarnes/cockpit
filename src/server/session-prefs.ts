@@ -1,8 +1,8 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { splitLegacyModel } from "@/lib/models";
 import type { ContextSize } from "@/lib/models";
+import { splitLegacyModel } from "@/lib/models";
 import type { InitData, ModelSlots, ThinkingLevel } from "@/types";
 
 export type SessionRuntime = "stream" | "pty";

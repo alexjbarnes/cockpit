@@ -1,8 +1,8 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { JobRun, ScheduledJob } from "@/types";
 import { splitLegacyModel } from "@/lib/models";
+import type { JobRun, ScheduledJob } from "@/types";
 
 const PREFS_DIR = join(homedir(), ".cockpit");
 const JOBS_FILE = join(PREFS_DIR, "scheduled-jobs.json");

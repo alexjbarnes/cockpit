@@ -46,7 +46,6 @@ export interface ThinkingCheck {
   pending: boolean;
   targetModel: string;
   models: string[];
-  via: "set" | "select";
   contextSize?: ContextSize;
 }
 
@@ -84,7 +83,6 @@ interface UseSessionReturn {
   interrupt: () => void;
   respondToPermission: (requestId: string, allowed: boolean, permissionMode?: PermissionMode, suggestionIndex?: number) => void;
   respondToQuestion: (requestId: string, answers: Record<string, string>) => void;
-  selectModel: (model: string) => void;
   setModel: (model: string, contextSize?: ContextSize) => void;
   setModelSlot: (slot: "main" | "subagent" | "fast", modelId: string) => void;
   setBypassAll: (enabled: boolean) => void;
@@ -1222,15 +1220,6 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
 
   const [thinkingCheck, setThinkingCheck] = useState<ThinkingCheck | null>(null);
 
-  const applyModelSelect = useCallback(
-    (model: string) => {
-      setModelPicker(null);
-      setCurrentModel(model);
-      send({ type: "message:send", sessionId, text: `/model ${model}` });
-    },
-    [send, sessionId],
-  );
-
   const applyModelSet = useCallback(
     (model: string, contextSize?: ContextSize) => {
       setCurrentModel(model);
@@ -1241,12 +1230,11 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
   );
 
   const checkAndSwitchModel = useCallback(
-    async (model: string, via: "set" | "select", contextSize?: ContextSize) => {
+    async (model: string, contextSize?: ContextSize) => {
       const base = model.replace(/\[.*\]$/, "");
       const isAnthropic = base.startsWith("claude") || resolveModel(base) !== null;
       if (!isAnthropic) {
-        if (via === "select") applyModelSelect(model);
-        else applyModelSet(model, contextSize);
+        applyModelSet(model, contextSize);
         return;
       }
 
@@ -1254,44 +1242,34 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
         const res = await fetch(`/api/sessions/thinking?sessionId=${encodeURIComponent(sessionId)}`);
         const data = await res.json();
         if (data.hasNonAnthropicThinking) {
-          if (via === "select") setModelPicker(null);
-          setThinkingCheck({ pending: true, targetModel: model, models: data.models, via, contextSize });
+          setThinkingCheck({ pending: true, targetModel: model, models: data.models, contextSize });
           return;
         }
       } catch {}
 
-      if (via === "select") applyModelSelect(model);
-      else applyModelSet(model, contextSize);
+      applyModelSet(model, contextSize);
     },
-    [sessionId, applyModelSelect, applyModelSet],
-  );
-
-  const selectModel = useCallback(
-    (model: string) => {
-      checkAndSwitchModel(model, "select");
-    },
-    [checkAndSwitchModel],
+    [sessionId, applyModelSet],
   );
 
   const setModel = useCallback(
     (model: string, contextSize?: ContextSize) => {
-      checkAndSwitchModel(model, "set", contextSize);
+      checkAndSwitchModel(model, contextSize);
     },
     [checkAndSwitchModel],
   );
 
   const confirmThinkingStrip = useCallback(async () => {
     if (!thinkingCheck) return;
-    const { targetModel, via, contextSize } = thinkingCheck;
+    const { targetModel, contextSize } = thinkingCheck;
     await fetch("/api/sessions/thinking", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ sessionId }),
     });
     setThinkingCheck(null);
-    if (via === "select") applyModelSelect(targetModel);
-    else applyModelSet(targetModel, contextSize);
-  }, [thinkingCheck, sessionId, applyModelSelect, applyModelSet]);
+    applyModelSet(targetModel, contextSize);
+  }, [thinkingCheck, sessionId, applyModelSet]);
 
   const cancelThinkingCheck = useCallback(() => {
     setThinkingCheck(null);
@@ -1437,7 +1415,6 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
     interrupt,
     respondToPermission,
     respondToQuestion,
-    selectModel,
     setModel,
     setModelSlot,
     setBypassAll,
