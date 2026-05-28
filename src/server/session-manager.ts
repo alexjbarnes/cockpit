@@ -5,7 +5,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { type Writable } from "node:stream";
 import { v4 as uuidv4 } from "uuid";
-import { allowedEffortLevels, coerceEffort, recommendedEffort, resolveModel } from "@/lib/models";
+import { allowedEffortLevels, coerceEffort, CONTEXT_SIZES, DEFAULT_CONTEXT_SIZE, recommendedEffort, resolveModel } from "@/lib/models";
 import { resolveProviderModel } from "@/server/providers";
 import type {
   ChatMessage,
@@ -2103,11 +2103,11 @@ Additional Cockpit rules beyond the CLI's defaults:
       Object.assign(env, resolved.provider.envVars);
     }
 
-    // Claude Code defaults to a model's full context window (1M for Opus 4.7,
-    // Sonnet 4.6) when no [1m] suffix is present, ignoring the suffix as the
-    // gate. CLAUDE_CODE_DISABLE_1M_CONTEXT is the only switch that forces 200K
-    // back regardless of model capability -- set it when the user picked 200K.
-    if (session.info.model && !/\[1m\]/i.test(session.info.model)) {
+    // CLAUDE_CODE_DISABLE_1M_CONTEXT is the only switch that forces a model
+    // back to 200K regardless of its capability. Set it when the user picked
+    // 200K for this session.
+    const sizeKey = session.info.contextSize ?? DEFAULT_CONTEXT_SIZE;
+    if (CONTEXT_SIZES[sizeKey].disableEnv) {
       env.CLAUDE_CODE_DISABLE_1M_CONTEXT = "1";
     }
 
@@ -2329,7 +2329,8 @@ Additional Cockpit rules beyond the CLI's defaults:
 
     const extraEnv: Record<string, string> = {};
     if (resolvedPty) Object.assign(extraEnv, resolvedPty.provider.envVars);
-    if (session.info.model && !/\[1m\]/i.test(session.info.model)) {
+    const sizeKeyPty = session.info.contextSize ?? DEFAULT_CONTEXT_SIZE;
+    if (CONTEXT_SIZES[sizeKeyPty].disableEnv) {
       extraEnv.CLAUDE_CODE_DISABLE_1M_CONTEXT = "1";
     }
     if (session.modelSlots.subagent && session.modelSlots.subagent !== session.modelSlots.main) {
