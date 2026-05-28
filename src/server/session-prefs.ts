@@ -1,6 +1,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import type { ContextSize } from "@/lib/models";
 import type { InitData, ModelSlots, ThinkingLevel } from "@/types";
 
 export type SessionRuntime = "stream" | "pty";
@@ -16,6 +17,7 @@ export interface SessionPrefs {
   bypassAllPermissions?: boolean;
   planMode?: boolean;
   model?: string;
+  contextSize?: ContextSize;
   modelSlots?: ModelSlots;
   initData?: InitData;
   cliSessionId?: string;

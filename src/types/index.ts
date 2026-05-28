@@ -8,6 +8,7 @@ export interface SessionInfo {
   lastActiveAt: number;
   status: "idle" | "running";
   model?: string;
+  contextSize?: ContextSize;
   runtime?: "pty" | "stream";
   pendingRequestCount?: number;
 }
@@ -199,6 +200,7 @@ export interface ScheduledJob {
   createdAt: number;
   updatedAt: number;
   model?: string;
+  contextSize?: ContextSize;
   thinkingLevel?: ThinkingLevel;
   allowedTools?: string[];
   mcpServers?: string[];
@@ -307,7 +309,7 @@ export type ClientMessage =
   | { type: "permission:set_bypass"; sessionId: string; enabled: boolean }
   | { type: "session:set_plan_mode"; sessionId: string; enabled: boolean }
   | { type: "session:set_thinking"; sessionId: string; level: ThinkingLevel }
-  | { type: "session:set_model"; sessionId: string; model: string }
+  | { type: "session:set_model"; sessionId: string; model: string; contextSize?: ContextSize }
   | { type: "session:set_model_slot"; sessionId: string; slot: "main" | "subagent" | "fast"; modelId: string }
   | { type: "session:restart"; sessionId: string }
   | { type: "session:set_runtime"; sessionId: string; runtime: "pty" | "stream" }
@@ -390,6 +392,7 @@ export type ServerMessage =
 
 export interface ModelSlots {
   main?: string;
+  mainContext?: ContextSize;
   subagent?: string;
   fast?: string;
 }
