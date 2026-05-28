@@ -8,6 +8,14 @@ import type { Provider, ProviderModel } from "@/types";
 const PREFS_DIR = join(homedir(), ".cockpit");
 const PROVIDERS_FILE = join(PREFS_DIR, "providers.json");
 
+function validateProvider(p: Pick<Provider, "models"> & { id?: string }): void {
+  for (const m of p.models) {
+    if (!Array.isArray(m.contextSizes) || m.contextSizes.length === 0) {
+      throw new Error(`provider${p.id ? ` ${p.id}` : ""}: model ${m.modelId} has empty contextSizes`);
+    }
+  }
+}
+
 function buildAnthropicProvider(): Provider {
   return {
     id: "anthropic",
@@ -50,6 +58,7 @@ export function getProvider(id: string): Provider | undefined {
 
 export function addProvider(provider: Omit<Provider, "id">): Provider {
   const newProvider: Provider = { ...provider, id: uuidv4() };
+  validateProvider(newProvider);
   const all = getProviders();
   const custom = all.filter((p) => !p.isBuiltin);
   custom.push(newProvider);
@@ -64,7 +73,9 @@ export function updateProvider(id: string, partial: Partial<Provider>): Provider
   const custom = all.filter((p) => !p.isBuiltin);
   const idx = custom.findIndex((p) => p.id === id);
   if (idx === -1) throw new Error(`Provider not found: ${id}`);
-  custom[idx] = { ...custom[idx], ...partial, id };
+  const merged = { ...custom[idx], ...partial, id };
+  validateProvider(merged);
+  custom[idx] = merged;
   saveCustom(custom);
   cache = [buildAnthropicProvider(), ...custom];
   return custom[idx];
@@ -83,6 +94,7 @@ export function deleteProvider(id: string): void {
 
 export function setProviders(providers: Provider[]): void {
   const custom = providers.filter((p) => !p.isBuiltin);
+  for (const p of custom) validateProvider(p);
   saveCustom(custom);
   cache = [buildAnthropicProvider(), ...custom];
 }
