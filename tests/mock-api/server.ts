@@ -77,9 +77,12 @@ export function createMockApiServer(): Promise<MockApiServer> {
 
       // ── Anthropic Messages API ──────────────────────────────────────
 
+      // Match path-only (ignore query string) so beta flags etc. don't miss.
+      const pathOnly = (req.url || "").split("?")[0];
+
       // Token counter stub — claude-code may poke this before/after a turn.
       // Returning a constant keeps things predictable for assertions.
-      if (req.method === "POST" && req.url === "/v1/messages/count_tokens") {
+      if (req.method === "POST" && pathOnly === "/v1/messages/count_tokens") {
         readBody(req).then(() => {
           res.writeHead(200, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ input_tokens: 0 }));
@@ -87,9 +90,13 @@ export function createMockApiServer(): Promise<MockApiServer> {
         return;
       }
 
-      if (req.method === "POST" && req.url === "/v1/messages") {
-        const auth = req.headers.authorization || "";
-        if (!auth.startsWith("Bearer ") || !auth.slice(7).trim()) {
+      if (req.method === "POST" && pathOnly === "/v1/messages") {
+        // claude-code uses Authorization: Bearer when ANTHROPIC_AUTH_TOKEN is set
+        // and x-api-key when ANTHROPIC_API_KEY is set. Accept either.
+        const bearer = req.headers.authorization?.startsWith("Bearer ") && req.headers.authorization.slice(7).trim();
+        const apiKeyHeader = req.headers["x-api-key"];
+        const apiKey = typeof apiKeyHeader === "string" ? apiKeyHeader.trim() : "";
+        if (!bearer && !apiKey) {
           res.writeHead(401, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ error: { type: "authentication_error", message: "Missing API key" } }));
           return;
@@ -150,9 +157,25 @@ export function createMockApiServer(): Promise<MockApiServer> {
       }
 
       // ── 404 ──────────────────────────────────────────────────────────
+      //
+      // Log unknown requests so debugging an integration test failure shows
+      // exactly which endpoint the CLI hit. Captured in requests[] too so
+      // tests can assert against them.
 
-      res.writeHead(404, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: { type: "not_found", message: `Unknown endpoint: ${req.method} ${req.url}` } }));
+      readBody(req).then((raw) => {
+        requests.push({
+          timestamp: Date.now(),
+          method: req.method!,
+          url: req.url!,
+          body: raw,
+          headers: req.headers as Record<string, string | string[] | undefined>,
+        });
+        if (process.env.COCKPIT_MOCK_DEBUG === "1") {
+          console.log(`[mock-api] 404 ${req.method} ${req.url}`);
+        }
+        res.writeHead(404, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: { type: "not_found", message: `Unknown endpoint: ${req.method} ${req.url}` } }));
+      });
     });
 
     server.listen(0, "127.0.0.1", () => {

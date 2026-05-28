@@ -4,7 +4,9 @@ import path from "path";
 export default defineConfig({
   test: {
     globals: true,
-    exclude: ["node_modules/**"],
+    // Playwright specs in tests/integration/ run via `npm run test:integration`,
+    // not vitest. Excluding them here keeps them from being discovered.
+    exclude: ["node_modules/**", "tests/integration/**"],
     coverage: {
       exclude: [
         // Require real node-pty/OS-level PTY; covered by gated E2E tests

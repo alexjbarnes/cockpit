@@ -45,6 +45,16 @@ export async function startHarness(opts: HarnessOptions = {}): Promise<Harness> 
   mkdirSync(configDir, { recursive: true });
   mkdirSync(claudeDir, { recursive: true });
 
+  // Pre-seed the CLI's .claude.json so the TUI skips its onboarding flow.
+  // Real users complete this once interactively on install and never see it
+  // again; tests get a fresh CLAUDE_CONFIG_DIR every run, so we mimic the
+  // post-onboarding state. theme + hasCompletedOnboarding skips the welcome
+  // and security-notes screens. The trust prompt is handled by cockpit's
+  // pty-session.handleTrustDialog at runtime — no seed needed. The bypass
+  // prompt is suppressed by skipDangerousModePermissionPrompt that cockpit
+  // writes into the per-session settings.json (see claude-settings.ts).
+  writeFileSync(path.join(claudeDir, ".claude.json"), JSON.stringify({ theme: "dark", hasCompletedOnboarding: true }, null, 2));
+
   const mock = await createMockApiServer();
 
   seedConfig({
@@ -104,17 +114,27 @@ function seedConfig(opts: SeedOpts): void {
 
   // providers.json: one custom provider pointing the CLI at the mock.
   // cockpit's session-manager assigns provider.envVars into the spawned CLI's
-  // env, so ANTHROPIC_BASE_URL and ANTHROPIC_AUTH_TOKEN are wired through.
+  // env, so each var is wired through:
+  //   ANTHROPIC_BASE_URL    — redirects /v1/messages to the mock
+  //   ANTHROPIC_AUTH_TOKEN  — CLI sends as Authorization: Bearer (no prompt).
+  //     ANTHROPIC_API_KEY would trigger a TUI "Detected a custom API key in
+  //     your environment, use it? 1. Yes 2. No (recommended)" prompt that the
+  //     PTY can't easily dismiss.
+  //   CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC — skip bootstrap, telemetry
+  // Model IDs are real Anthropic names (claude-sonnet-4-6) so the CLI's
+  // hardcoded model-availability list accepts them.
   const provider = {
     id: "mock",
     name: "Mock API",
     envVars: {
       ANTHROPIC_BASE_URL: opts.mockUrl,
       ANTHROPIC_AUTH_TOKEN: "mock-token",
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+      DISABLE_TELEMETRY: "1",
     },
     models: [
       {
-        modelId: "mock-sonnet",
+        modelId: "claude-sonnet-4-6",
         displayName: "Mock Sonnet",
         effortLevels: [],
         contextSizes: ["200k"],
@@ -125,11 +145,14 @@ function seedConfig(opts: SeedOpts): void {
 
   // defaults.json: pick the mock model so new sessions use it by default.
   // The qualified form provider:modelId is what resolveProviderModel expects.
+  // bypassAllPermissions mirrors how most cockpit users configure their setup;
+  // the resulting CLI bypass-mode dialog is suppressed via cockpit's per-session
+  // settings.json (skipDangerousModePermissionPrompt).
   writeFileSync(
     path.join(opts.configDir, "defaults.json"),
     JSON.stringify(
       {
-        modelSlots: { main: "mock:mock-sonnet", mainContext: "200k" },
+        modelSlots: { main: "mock:claude-sonnet-4-6", mainContext: "200k" },
         thinkingLevel: "high",
         bypassAllPermissions: true,
       },
@@ -170,6 +193,9 @@ function spawnCockpit(opts: SpawnOpts): ChildProcess {
       // Dev mode is rejected because Next.js dev singleton-locks the project
       // directory, so we can't run alongside a developer's dev server.
       NODE_ENV: "production",
+      // Surface cockpit's debugLog() output to stdout (which we capture when
+      // COCKPIT_IT_DEBUG=1). Without this, debugLog goes only to debug.jsonl.
+      COCKPIT_DEBUG: "1",
       // Avoid colour codes in captured stdout.
       FORCE_COLOR: "0",
     },

@@ -71,6 +71,11 @@ export async function prepareHookSettings(opts: HookSettingsOptions): Promise<Ho
       allow: [...baseAllow, ...(opts.allowList ?? [])],
       deny: [...baseDeny, ...(opts.denyList ?? [])],
     },
+    // cockpit drives the CLI programmatically and owns the bypass-mode UX
+    // itself (flipping bypass on is a deliberate cockpit UI action). The CLI's
+    // interactive "WARNING: Bypass Permissions mode" dialog has nowhere to go
+    // when there's no human at the TUI, so suppress it here.
+    skipDangerousModePermissionPrompt: true,
   };
 
   const dir = await resolveSettingsDir();
