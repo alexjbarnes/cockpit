@@ -162,6 +162,18 @@ function seedConfig(opts: SeedOpts): void {
         effortLevels: [],
         contextSizes: ["200k"],
       },
+      // Regression fixture: a model with NO contextSizes field, mirroring a
+      // legacy custom-provider entry written before contextSizes existed (e.g.
+      // a Deepseek config carrying the old supportsExtendedContext flag). The
+      // type says contextSizes is required, but persisted JSON predating the
+      // field has it undefined. Opening the session-settings dialog on such a
+      // model used to crash with "Cannot read properties of undefined (reading
+      // 'length')". Covered by model-selector.spec.ts.
+      {
+        modelId: "claude-sonnet-4-6-legacy",
+        displayName: "Mock Legacy (no contextSizes)",
+        effortLevels: ["high", "max"],
+      },
     ],
   };
   writeFileSync(path.join(opts.configDir, "providers.json"), JSON.stringify([provider], null, 2) + "\n");
