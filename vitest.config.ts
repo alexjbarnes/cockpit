@@ -9,6 +9,12 @@ export default defineConfig({
     exclude: ["node_modules/**", "tests/integration/**"],
     coverage: {
       exclude: [
+        // Test helpers (mock API server/builder) are exercised by their own
+        // smoke tests but are not production source — keep them out of the
+        // coverage gate so they neither count toward nor drag down the src
+        // thresholds. Without this they get pulled in because server.test.ts
+        // imports them.
+        "tests/**",
         // Require real node-pty/OS-level PTY; covered by gated E2E tests
         "src/server/pty-session.ts",
         "src/server/pty-runtime.ts",
