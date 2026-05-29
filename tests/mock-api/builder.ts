@@ -163,6 +163,89 @@ export function messageStop(usage?: { input_tokens: number; output_tokens: numbe
   return events;
 }
 
+export interface MockQuestionOption {
+  label: string;
+  description: string;
+}
+
+export interface MockQuestion {
+  question: string;
+  header?: string;
+  multiSelect?: boolean;
+  options: MockQuestionOption[];
+}
+
+/**
+ * AskUserQuestion tool_use response. The CLI's local tool input validator
+ * rejects calls missing `option.description`, so callers must provide it for
+ * every option.
+ */
+export function askUserQuestionResponse(questions: MockQuestion[], opts: ResponseOptions = {}): SSEScriptEvent[] {
+  const events: SSEScriptEvent[] = [];
+  const mid = msgId();
+  const tid = toolId();
+  const inputJson = JSON.stringify({ questions });
+
+  events.push({
+    event: "message_start",
+    data: {
+      type: "message_start",
+      message: {
+        id: mid,
+        type: "message",
+        role: "assistant",
+        content: [],
+        model: opts.model ?? DEFAULT_MODEL,
+        stop_reason: null,
+        stop_sequence: null,
+        usage: { input_tokens: 0, output_tokens: 0 },
+      },
+    },
+  });
+  events.push({
+    event: "content_block_start",
+    data: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+  });
+  events.push({
+    event: "content_block_delta",
+    data: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "I have a question." } },
+  });
+  events.push({
+    event: "content_block_stop",
+    data: { type: "content_block_stop", index: 0 },
+  });
+  events.push({
+    event: "content_block_start",
+    data: {
+      type: "content_block_start",
+      index: 1,
+      content_block: { type: "tool_use", id: tid, name: "AskUserQuestion", input: {} },
+    },
+  });
+  events.push({
+    event: "content_block_delta",
+    data: { type: "content_block_delta", index: 1, delta: { type: "input_json_delta", partial_json: inputJson } },
+  });
+  events.push({
+    event: "content_block_stop",
+    data: { type: "content_block_stop", index: 1 },
+  });
+  events.push({
+    event: "message_delta",
+    data: {
+      type: "message_delta",
+      delta: { stop_reason: "tool_use", stop_sequence: null },
+      usage: { input_tokens: 50, output_tokens: 20 },
+    },
+  });
+  events.push({
+    event: "message_stop",
+    data: { type: "message_stop" },
+  });
+
+  return events;
+}
+
 export function errorResponse(status: number, message: string): SSEScriptEvent[] {
   // Non-streaming error response (server returns JSON error, not SSE)
   return [

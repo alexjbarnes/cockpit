@@ -177,7 +177,10 @@ interface SpawnOpts {
 
 function spawnCockpit(opts: SpawnOpts): ChildProcess {
   const repoRoot = path.resolve(__dirname, "..", "..");
-  return spawn("npx", ["tsx", "server.ts"], {
+  // Use the compiled dist/ instead of `npx tsx server.ts`. tsx incurs ~10s
+  // TypeScript transpile cost per process that we can't afford in a 60s
+  // per-test timeout. pretest:integration ensures dist/ is fresh.
+  return spawn("node", ["dist/server.js"], {
     cwd: repoRoot,
     env: {
       ...process.env,

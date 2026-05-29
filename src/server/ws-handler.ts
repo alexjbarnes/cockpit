@@ -370,6 +370,36 @@ export function createWebSocketHandler(
               sessionManager.fixStaleStatus(msg.sessionId);
             }
 
+            // Re-emit any pending permission/question requests BEFORE the
+            // history snapshot. Otherwise, on reconnect the client lands the
+            // assistant message with the AskUserQuestion tool_use first, and
+            // chat-view's Place1 renders nothing until question:request
+            // arrives 80+ms later — the chat looks stuck.
+            const pendingReqsEarly = sessionManager.getPendingRequests(msg.sessionId);
+            for (const req of pendingReqsEarly) {
+              if (req.type === "question") {
+                send(ws, {
+                  type: "question:request",
+                  sessionId: msg.sessionId,
+                  requestId: req.requestId,
+                  questions: req.toolInput,
+                });
+              } else {
+                const permMsg: ServerMessage & { type: "permission:request" } = {
+                  type: "permission:request",
+                  sessionId: msg.sessionId,
+                  requestId: req.requestId,
+                  toolName: req.toolName,
+                  input: req.toolInput,
+                };
+                if (req.planFilePath) {
+                  permMsg.planFilePath = req.planFilePath;
+                  permMsg.planContent = req.planContent;
+                }
+                send(ws, permMsg);
+              }
+            }
+
             // If client already has messages, send only the delta to avoid
             // re-sending 1000+ messages on every mobile reconnect.
             // Uses the last known server message ID instead of a count, since
@@ -537,38 +567,6 @@ export function createWebSocketHandler(
               paused: sessionManager.isQueuePaused(msg.sessionId),
             });
 
-            // Re-emit any pending permission/question requests that were
-            // sent to a previous (now dead) WebSocket connection
-            const pendingReqs = sessionManager.getPendingRequests(msg.sessionId);
-            if (pendingReqs.length > 0) {
-              console.log(
-                `[question-debug] reconnect re-sending ${pendingReqs.length} pending requests:`,
-                pendingReqs.map((r) => ({ id: r.requestId, type: r.type, tool: r.toolName })),
-              );
-            }
-            for (const req of pendingReqs) {
-              if (req.type === "question") {
-                send(ws, {
-                  type: "question:request",
-                  sessionId: msg.sessionId,
-                  requestId: req.requestId,
-                  questions: req.toolInput,
-                });
-              } else {
-                const permMsg: ServerMessage & { type: "permission:request" } = {
-                  type: "permission:request",
-                  sessionId: msg.sessionId,
-                  requestId: req.requestId,
-                  toolName: req.toolName,
-                  input: req.toolInput,
-                };
-                if (req.planFilePath) {
-                  permMsg.planFilePath = req.planFilePath;
-                  permMsg.planContent = req.planContent;
-                }
-                send(ws, permMsg);
-              }
-            }
             const tDone = performance.now();
             debugLog(`[ws:${wsId}] session ${sid} connect complete in ${(tDone - t0).toFixed(0)}ms`);
           });

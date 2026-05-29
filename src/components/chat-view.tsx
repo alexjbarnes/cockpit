@@ -484,10 +484,6 @@ export function ChatView({
                 (m) =>
                   m.role === "assistant" && (m.blocks || []).some((b) => b.type === "tool_use" && b.toolUse.name === "AskUserQuestion"),
               );
-              console.log(
-                `[question-debug] Place2 check: pendingCount=${pendingQuestions.length}, hasInlineQuestion=${hasInline}, visibleMsgCount=${visibleMessages.length}, totalMsgCount=${uniqueMessages.length}`,
-                pendingQuestions.map((q) => ({ id: q.requestId, answered: q.answered })),
-              );
               return !hasInline;
             })() &&
             pendingQuestions.map((q) => (
