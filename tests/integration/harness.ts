@@ -18,6 +18,7 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { v4 as uuidv4 } from "uuid";
+import type { ThinkingLevel } from "../../src/types";
 import { createMockApiServer, type MockApiServer } from "../mock-api/server";
 
 export interface Harness {
@@ -36,6 +37,8 @@ export interface HarnessOptions {
   claudeBin?: string;
   /** Override the cockpit runtime mode. Defaults to "pty". */
   runtime?: "pty" | "stream";
+  /** Override the default thinking level. Defaults to "high". */
+  thinkingLevel?: ThinkingLevel;
 }
 
 export async function startHarness(opts: HarnessOptions = {}): Promise<Harness> {
@@ -60,6 +63,7 @@ export async function startHarness(opts: HarnessOptions = {}): Promise<Harness> 
   seedConfig({
     configDir,
     mockUrl: `http://127.0.0.1:${mock.port}`,
+    thinkingLevel: opts.thinkingLevel,
   });
 
   const cockpitPort = await getFreePort();
@@ -103,6 +107,7 @@ export async function startHarness(opts: HarnessOptions = {}): Promise<Harness> 
 interface SeedOpts {
   configDir: string;
   mockUrl: string;
+  thinkingLevel?: ThinkingLevel;
 }
 
 function seedConfig(opts: SeedOpts): void {
@@ -136,8 +141,26 @@ function seedConfig(opts: SeedOpts): void {
       {
         modelId: "claude-sonnet-4-6",
         displayName: "Mock Sonnet",
-        effortLevels: [],
+        effortLevels: ["low", "medium", "high", "xhigh", "max"],
         contextSizes: ["200k", "1m"],
+      },
+      {
+        modelId: "claude-opus-4-7",
+        displayName: "Mock Opus 4.7",
+        effortLevels: ["low", "medium", "high", "xhigh", "max"],
+        contextSizes: ["200k", "1m"],
+      },
+      {
+        modelId: "claude-opus-4-8",
+        displayName: "Mock Opus 4.8",
+        effortLevels: ["low", "medium", "high", "xhigh", "max"],
+        contextSizes: ["200k", "1m"],
+      },
+      {
+        modelId: "claude-haiku-4-5-20251001",
+        displayName: "Mock Haiku",
+        effortLevels: [],
+        contextSizes: ["200k"],
       },
     ],
   };
@@ -153,7 +176,7 @@ function seedConfig(opts: SeedOpts): void {
     JSON.stringify(
       {
         modelSlots: { main: "mock:claude-sonnet-4-6", mainContext: "200k" },
-        thinkingLevel: "high",
+        thinkingLevel: opts.thinkingLevel ?? "high",
         bypassAllPermissions: true,
       },
       null,

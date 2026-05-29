@@ -46,7 +46,16 @@ import {
   versionsForAlias,
 } from "@/lib/models";
 import { detectLanguage, extensionForLabel, shouldCollapsePaste } from "@/lib/paste-detect";
-import type { ContextUsage, DocumentAttachment, ImageAttachment, InitData, Provider, TextFileAttachment, ThinkingLevel } from "@/types";
+import type {
+  ContextUsage,
+  DocumentAttachment,
+  ImageAttachment,
+  InitData,
+  Provider,
+  ProviderModel,
+  TextFileAttachment,
+  ThinkingLevel,
+} from "@/types";
 import { ContextIndicator } from "./context-indicator";
 import { PromptHistoryModal } from "./prompt-history-modal";
 import { QueueModal } from "./queue-modal";
@@ -763,11 +772,13 @@ export function InputArea({
             ];
             const vEntries = parsed.alias ? versionsForAlias(parsed.alias) : [];
             const showVRow = vEntries.length > 1;
+            const matchesProviderModel = (p: Provider, pm: ProviderModel): boolean =>
+              currentModel === pm.modelId || currentModel === `${p.id}:${pm.modelId}`;
             const sizes: ContextSize[] = (() => {
               if (parsed.entry) return parsed.entry.contextSizes;
               if (!providers || !currentModel) return [];
               for (const p of providers) {
-                const m = p.models.find((pm) => pm.modelId === currentModel);
+                const m = p.models.find((pm) => matchesProviderModel(p, pm));
                 if (m) return m.contextSizes;
               }
               return [];
@@ -775,7 +786,7 @@ export function InputArea({
             const providerEffort = (() => {
               if (!providers || !currentModel) return [];
               for (const p of providers) {
-                const m = p.models.find((pm) => pm.modelId === currentModel);
+                const m = p.models.find((pm) => matchesProviderModel(p, pm));
                 if (m) return m.effortLevels;
               }
               return [];
@@ -889,11 +900,12 @@ export function InputArea({
                               return (
                                 <div className="space-y-0.5">
                                   {provider.models.map((model) => {
-                                    const selected = currentModel === model.modelId;
+                                    const qualified = `${provider.id}:${model.modelId}`;
+                                    const selected = currentModel === qualified || currentModel === model.modelId;
                                     return (
                                       <button
                                         key={model.modelId}
-                                        onClick={() => onSetModel(model.modelId)}
+                                        onClick={() => onSetModel(qualified)}
                                         className={`flex w-full items-center gap-3 rounded px-3 py-2 text-xs transition-colors ${
                                           selected ? "bg-primary/10 text-primary" : "hover:bg-muted text-foreground"
                                         }`}
@@ -968,6 +980,7 @@ export function InputArea({
                                   <button
                                     key={opt.value}
                                     onClick={() => onSetThinking(opt.value)}
+                                    data-testid={`thinking-${opt.value}`}
                                     className={`rounded px-2 py-0.5 text-xs transition-colors ${
                                       thinkingLevel === opt.value
                                         ? "bg-primary text-primary-foreground"
@@ -1197,6 +1210,7 @@ export function InputArea({
             <Button
               size="icon"
               variant="ghost"
+              data-testid="btn-session-settings"
               className={`h-8 w-8 ${bypassActive ? "text-orange-500" : ""}`}
               onClick={() =>
                 setOptionsOpen((v) => {

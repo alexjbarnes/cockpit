@@ -24,6 +24,7 @@ export interface ModelEntry {
   contextSizes: ContextSize[];
   contextWindow?: number;
   isDefault?: boolean;
+  supportsXhigh?: boolean;
 }
 
 export const MODELS: ModelEntry[] = [
@@ -61,10 +62,21 @@ export const MODELS: ModelEntry[] = [
     version: "4.7",
     modelId: "claude-opus-4-7",
     displayName: "Opus 4.7",
+    description: "Previous generation",
+    contextSizes: ["200k", "1m"],
+    contextWindow: 200_000,
+    supportsXhigh: true,
+  },
+  {
+    alias: "opus",
+    version: "4.8",
+    modelId: "claude-opus-4-8",
+    displayName: "Opus 4.8",
     description: "Most capable",
     contextSizes: ["200k", "1m"],
     contextWindow: 200_000,
     isDefault: true,
+    supportsXhigh: true,
   },
 ];
 
@@ -93,14 +105,14 @@ export function resolveModel(model: string | undefined | null): ModelEntry | nul
 export function allowedEffortLevels(entry: ModelEntry | null | undefined): ThinkingLevel[] {
   if (!entry || entry.alias === "haiku") return [];
   const levels: ThinkingLevel[] = ["low", "medium", "high"];
-  if (entry.alias === "opus" && entry.version === "4.7") levels.push("xhigh");
+  if (entry.supportsXhigh) levels.push("xhigh");
   levels.push("max");
   return levels;
 }
 
 export function recommendedEffort(entry: ModelEntry | null | undefined): ThinkingLevel | null {
   if (!entry || entry.alias === "haiku") return null;
-  if (entry.alias === "opus" && entry.version === "4.7") return "xhigh";
+  if (entry.supportsXhigh) return "xhigh";
   if (entry.alias === "sonnet") return "medium";
   return "high";
 }
