@@ -5,6 +5,56 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-05-29
+
+### Added
+- **PTY runtime mode.** A second session runtime that drives the real Claude Code CLI through a pseudo-terminal (node-pty), alongside the default streaming-JSON mode. Pick it per session from the new-session dialog or the session-settings runtime switcher; the choice persists across server restarts. Behind it sits a hook bridge that translates CLI hook events (PreToolUse, PostToolUse, Stop, StopFailure, UserPromptSubmit, UserPromptExpansion, SubagentStart, SubagentStop, Notification, PermissionRequest, PreCompact, PostCompact) into live UI updates.
+- **Transcript-driven PTY rendering.** PTY message content is sourced from the CLI's JSONL transcript via a file watcher, so live rendering matches what you see on reload.
+- **Attachments in PTY mode.** Image and document attachments work in PTY sessions.
+- **PTY API-error detection.** A StopFailure hook plus a debounced output scan surface API errors instead of leaving the spinner stuck.
+- **Compaction progress.** The UI shows COMPACTING for both manual `/compact` and automatic compaction (PreCompact/PostCompact hooks).
+- **Background tasks from subagents.** SubagentStart/Stop populate the background-tasks button with agent type and description.
+- **Multi-provider support.** Configure custom Anthropic-compatible providers (base URL, auth token, env vars) each with their own model list. Manage them from the settings provider list and a dedicated provider editor page. Models resolve through a provider-aware picker, and the in-chat session-settings popover shows each provider's models, effort levels, and context sizes.
+- **Per-slot models.** Separate main / subagent / fast model slots (`modelSlots`), switchable over the WebSocket `set_model` path.
+- **Selectable context window size.** Choose 200K or 1M context per session on models that support it, shown as inline pills in the model selector and chat input. Replaces the previous extended-context boolean.
+- **Opus 4.8.** Added as the default Opus model (with `xhigh` effort); Opus 4.7 retained as a selectable previous generation.
+- **Embedded terminal.** xterm.js terminal panels with mobile keyboard support and Nerd Font glyphs. A settings modal offers 10 themes, font size, and scrollback; terminal instances are cached across tab moves so scrollback survives.
+- **Tabbed session view.** File, diff, and changes tabs in a split-pane layout, with cross-pane tab dragging. Tabs persist across refreshes.
+- **Clickable file paths.** Tool cards link file paths to their diff/file tab, with scroll restoration.
+- **Live filesystem refresh.** A filesystem watcher pushes `session:fs_changed` over the WebSocket so git status, diffs, and file views update without a manual refresh.
+- **Prompt history modal.** Atuin-style searchable prompt history on the up arrow.
+- **Isolated config directories.** `COCKPIT_CONFIG_DIR` and `CLAUDE_CONFIG_DIR` relocate cockpit and CLI config, enabling fully isolated instances.
+- **Single-file PR review view** with a shared checked-files store, immediate PR pinning, and a fixed viewed toggle.
+- **In-app updates.** Settings shows update buttons for Cockpit and Claude Code with native-install detection, and surfaces each one's changelog.
+- **Inbox mark-as-unread.**
+- **Job reliability.** Per-job locking with stale-lock recovery on startup, automatic port reclaim before starting the dev/production server, and more durable password storage.
+
+### Changed
+- **Settings redesign.** Settings is now a menu with dedicated sub-pages; the provider form was revamped, and the session-settings modal became a tabbed layout.
+- **Status accuracy.** The "running" beacon now triggers on the first tool use (PreToolUse) rather than prompt submission.
+- **Todos from disk.** Todo/task progress is watched from on-disk files instead of parsed from the event stream.
+- **Prompt history source.** History loads from the full JSONL transcript rather than the tail buffer.
+- **Model switching.** Model selection flows exclusively through the WebSocket `set_model`/`modelSlots` path; the legacy `/model` text-command path was removed.
+
+### Fixed
+- macOS PTY spawn failures (posix_spawnp, non-POSIX login shells, spawn-helper permissions); node-pty upgraded to 1.2.0-beta.13.
+- PTY compaction stuck in the "running" state after `/compact` finished.
+- Duplicate and mis-ordered messages, and stale status dots, in PTY mode.
+- Structured AskUserQuestion prompts not rendering on reconnect, leaving a session that looked stuck until Stop was pressed.
+- Context gauge reverting to 200K after a message or server restart on 1M-configured sessions.
+- Session-settings dialog crash, and missing thinking/context selectors, for custom-provider models whose config omitted `contextSizes`.
+- Restart or model change before the first message passing `--resume` to a nonexistent conversation.
+- Cron day-of-month/day-of-week OR logic and duplicate inbox entries.
+- Stop button not showing during 529 retry loops.
+- Image previews lost when the transcript replaced optimistic messages, and duplicate user messages when sending images.
+- Slash-command XML tags rendering as raw text in history.
+- Phantom permission prompts and accumulating COMPACTED markers on transcript updates.
+
+### Internal
+- **Integration test framework.** A Playwright harness boots the real Claude CLI, a mock Anthropic API, and cockpit in isolated config directories to validate end-to-end behavior without calling the real API.
+- **Orphan-process cleanup.** The test harness kills its whole process group on teardown and reaps stragglers via a `/proc`-based scan on suite setup and teardown, preventing leaked CLI/cockpit processes from accumulating.
+- **Coverage.** Broad unit-test additions (scheduled jobs, job storage and locking, filesystem watcher, providers, notifications, transcript watcher, auth, hook router) with the coverage gate scoped to production source.
+
 ## [0.2.0] - 2026-05-07
 
 ### Added

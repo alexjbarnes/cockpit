@@ -1,6 +1,6 @@
 {
   "name": "@alexjbarnes/cockpit",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Web UI for Claude Code",
   "license": "Apache-2.0",
   "author": "Alex Barnes (https://github.com/alexjbarnes)",
