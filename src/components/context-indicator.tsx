@@ -41,6 +41,7 @@ export function ContextIndicator({ usage, onCompact }: ContextIndicatorProps) {
         onClick={() => setOpen(true)}
         className="flex items-center justify-center w-8 h-6 rounded-md hover:bg-muted transition-colors"
         title={`Context: ${pct}%`}
+        data-testid="context-indicator"
       >
         <svg width={size} height={size} className="-rotate-90">
           <circle
@@ -90,8 +91,8 @@ export function ContextIndicator({ usage, onCompact }: ContextIndicatorProps) {
               />
             </div>
             <div className="flex justify-between text-xs text-muted-foreground">
-              <span>{formatTokens(usage.used)} used</span>
-              <span>{formatTokens(usage.total)} total</span>
+              <span data-testid="context-used">{formatTokens(usage.used)} used</span>
+              <span data-testid="context-total">{formatTokens(usage.total)} total</span>
             </div>
             {onCompact && (
               <Button

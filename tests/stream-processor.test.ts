@@ -351,23 +351,6 @@ describe("processEvents", () => {
       expect(state.pendingToolUses).toHaveLength(1);
       expect(state.agentStack[0].children).toBeUndefined();
     });
-
-    it("collects TodoWrite inputs", () => {
-      const state = makeState({ currentAssistantMsgId: "msg-1" });
-      const input = '{"todos":[{"content":"task","status":"pending"}]}';
-      const events: ParsedEvent[] = [
-        makeEvent({
-          type: "tool_use_start",
-          toolId: "t1",
-          toolName: "TodoWrite",
-          toolInput: input,
-          assistantMessageId: "msg-1",
-        }),
-      ];
-      const result = processEvents(events, state, defaults);
-
-      expect(result.todoInputs).toEqual([input]);
-    });
   });
 
   describe("tool_result", () => {

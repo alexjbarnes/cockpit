@@ -1,20 +1,24 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import path from "node:path";
 import { v4 as uuidv4 } from "uuid";
+import { getCockpitDir } from "@/server/paths";
 import type { InboxMessage, InboxPriority } from "@/types";
 import { dispatchNotification } from "./notifications";
 
-const INBOX_DIR = path.join(homedir(), ".cockpit");
-const INBOX_FILE = path.join(INBOX_DIR, "inbox.jsonl");
+function inboxDir(): string {
+  return getCockpitDir();
+}
+function inboxFile(): string {
+  return path.join(inboxDir(), "inbox.jsonl");
+}
 
 function ensureDir() {
-  if (!existsSync(INBOX_DIR)) mkdirSync(INBOX_DIR, { recursive: true });
+  if (!existsSync(inboxDir())) mkdirSync(inboxDir(), { recursive: true });
 }
 
 function readAll(): InboxMessage[] {
-  if (!existsSync(INBOX_FILE)) return [];
-  const raw = readFileSync(INBOX_FILE, "utf-8");
+  if (!existsSync(inboxFile())) return [];
+  const raw = readFileSync(inboxFile(), "utf-8");
   const messages: InboxMessage[] = [];
   for (const line of raw.split("\n")) {
     if (!line.trim()) continue;
@@ -27,7 +31,7 @@ function readAll(): InboxMessage[] {
 
 function writeAll(messages: InboxMessage[]) {
   ensureDir();
-  writeFileSync(INBOX_FILE, messages.map((m) => JSON.stringify(m)).join("\n") + "\n");
+  writeFileSync(inboxFile(), messages.map((m) => JSON.stringify(m)).join("\n") + "\n");
 }
 
 export function getInboxMessages(): InboxMessage[] {
@@ -72,11 +76,11 @@ export function addInboxMessage(msg: {
   return entry;
 }
 
-export function markRead(id: string): boolean {
+export function markRead(id: string, read = true): boolean {
   const messages = readAll();
   const msg = messages.find((m) => m.id === id);
   if (!msg) return false;
-  msg.read = true;
+  msg.read = read;
   writeAll(messages);
   return true;
 }

@@ -1,6 +1,7 @@
 import path from "node:path";
 import { NextRequest, NextResponse } from "next/server";
 import { validateSession } from "@/server/auth";
+import { debugLog } from "@/server/debug-logger";
 import { getSessionManager } from "@/server/singleton";
 import { scanAllSessions } from "@/server/transcript";
 
@@ -12,11 +13,13 @@ function authenticate(req: NextRequest): boolean {
 }
 
 export async function GET(req: NextRequest) {
+  const t0 = performance.now();
   if (!authenticate(req)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   const groups = await scanAllSessions();
+  debugLog(`[api/sessions] scanAllSessions took ${(performance.now() - t0).toFixed(0)}ms`);
 
   // Merge status and name from in-memory sessions
   const manager = getSessionManager();
@@ -100,11 +103,20 @@ export async function POST(req: NextRequest) {
   const body = await req.json();
   const cwd = body.cwd as string;
   const name = body.name as string | undefined;
+  const runtimeRaw = body.runtime as string | undefined;
+  const runtime = runtimeRaw === "pty" || runtimeRaw === "stream" ? runtimeRaw : undefined;
+  const model = typeof body.model === "string" ? body.model : undefined;
+  const contextSizeRaw = typeof body.contextSize === "string" ? body.contextSize : undefined;
+  const contextSize = contextSizeRaw === "200k" || contextSizeRaw === "1m" ? contextSizeRaw : undefined;
+  const bypassPermissions = body.bypassPermissions === true;
 
   if (!cwd) {
     return NextResponse.json({ error: "cwd is required" }, { status: 400 });
   }
 
-  const session = getSessionManager().createSession(cwd, name);
+  const session = getSessionManager().createSession(cwd, name, { runtime, bypassPermissions: bypassPermissions || undefined });
+  if (model) {
+    getSessionManager().setModel(session.id, model, contextSize);
+  }
   return NextResponse.json({ sessionId: session.id });
 }

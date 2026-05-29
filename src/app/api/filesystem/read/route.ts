@@ -33,6 +33,11 @@ export async function GET(req: NextRequest) {
   }
 
   const size = info.size;
+  const mtimeMs = info.mtimeMs;
+
+  if (url.searchParams.get("stat") === "true") {
+    return NextResponse.json({ mtimeMs, size });
+  }
 
   const fh = await open(resolved, "r");
   try {
@@ -41,7 +46,7 @@ export async function GET(req: NextRequest) {
     const checkBuf = Buffer.alloc(checkSize);
     await fh.read(checkBuf, 0, checkSize, 0);
     if (checkBuf.includes(0)) {
-      return NextResponse.json({ content: "", size, truncated: false, binary: true });
+      return NextResponse.json({ content: "", size, truncated: false, binary: true, mtimeMs });
     }
 
     // Read up to MAX_BYTES
@@ -51,7 +56,7 @@ export async function GET(req: NextRequest) {
     const content = buf.toString("utf-8");
     const truncated = size > MAX_BYTES;
 
-    return NextResponse.json({ content, size, truncated, binary: false });
+    return NextResponse.json({ content, size, truncated, binary: false, mtimeMs });
   } finally {
     await fh.close();
   }

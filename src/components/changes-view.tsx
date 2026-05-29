@@ -27,10 +27,12 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useShell } from "@/components/app-shell";
 import { ChatView } from "@/components/chat-view";
 import { DIFF_SELECTABLE_CSS, DiffErrorBoundary } from "@/components/diff-viewer";
+import { ResizeHandle } from "@/components/resize-handle";
 import { Button } from "@/components/ui/button";
 import { useIsDesktop } from "@/hooks/use-is-desktop";
 import { useSettings } from "@/hooks/use-settings";
 import { useWebSocket } from "@/hooks/use-websocket";
+import { useCheckedFiles } from "@/lib/checked-files";
 import { cn } from "@/lib/utils";
 
 function Checkbox({ checked, onChange, onClick }: { checked: boolean; onChange: () => void; onClick?: (e: React.MouseEvent) => void }) {
@@ -407,49 +409,10 @@ function StackedDiffs({
   );
 }
 
-// --- Resize Handle ---
-
-function ResizeHandle({ onResize }: { onResize: (delta: number) => void }) {
-  const dragging = useRef(false);
-  const lastX = useRef(0);
-
-  const onMouseDown = useCallback(
-    (e: React.MouseEvent) => {
-      e.preventDefault();
-      dragging.current = true;
-      lastX.current = e.clientX;
-
-      const onMouseMove = (ev: MouseEvent) => {
-        if (!dragging.current) return;
-        const delta = lastX.current - ev.clientX;
-        lastX.current = ev.clientX;
-        onResize(delta);
-      };
-
-      const onMouseUp = () => {
-        dragging.current = false;
-        document.removeEventListener("mousemove", onMouseMove);
-        document.removeEventListener("mouseup", onMouseUp);
-        document.body.style.cursor = "";
-        document.body.style.userSelect = "";
-      };
-
-      document.body.style.cursor = "col-resize";
-      document.body.style.userSelect = "none";
-      document.addEventListener("mousemove", onMouseMove);
-      document.addEventListener("mouseup", onMouseUp);
-    },
-    [onResize],
-  );
-
-  return <div onMouseDown={onMouseDown} className="w-1 shrink-0 cursor-col-resize bg-border hover:bg-primary/30 transition-colors" />;
-}
-
 // --- State Cache ---
 
 interface ChangesState {
   selectedFile: string | null;
-  checkedFiles: Set<string>;
   commitMsg: string;
   commitPanelOpen: boolean;
   pushOnCommit: boolean;
@@ -471,7 +434,6 @@ function getCachedState(cwd: string): ChangesState {
   return (
     stateCache.get(cwd) || {
       selectedFile: null,
-      checkedFiles: new Set(),
       commitMsg: "",
       commitPanelOpen: isDesktopStatic(),
       pushOnCommit: false,
@@ -483,10 +445,20 @@ function getCachedState(cwd: string): ChangesState {
 
 // --- Main Component ---
 
-export function ChangesView({ cwd, sessionId }: { cwd: string; sessionId?: string | null }) {
+export function ChangesView({
+  cwd,
+  sessionId,
+  embeddedChat = true,
+  manageSidebar = true,
+}: {
+  cwd: string;
+  sessionId?: string | null;
+  embeddedChat?: boolean;
+  manageSidebar?: boolean;
+}) {
   const { settings } = useSettings();
   const { setSidebarSection, removeSidebarSection, closeSidebar } = useShell();
-  const { subscribe } = useWebSocket();
+  const { send, subscribe } = useWebSocket();
   const router = useRouter();
   const isDesktop = useIsDesktop();
   const [status, setStatus] = useState<GitStatus | null>(null);
@@ -501,7 +473,7 @@ export function ChangesView({ cwd, sessionId }: { cwd: string; sessionId?: strin
   const [commitMsg, setCommitMsg] = useState(cached.commitMsg);
   const [committing, setCommitting] = useState(false);
   const [commitResult, setCommitResult] = useState<{ ok: boolean; message: string } | null>(null);
-  const [checkedFiles, setCheckedFiles] = useState<Set<string>>(cached.checkedFiles);
+  const { checkedFiles, toggleFile, toggleAll: sharedToggleAll, setCheckedFiles } = useCheckedFiles(cwd);
   const [pushOnCommit, setPushOnCommit] = useState(cached.pushOnCommit);
   const [commitPanelOpen, setCommitPanelOpen] = useState(cached.commitPanelOpen);
   const [generating, setGenerating] = useState(false);
@@ -515,12 +487,12 @@ export function ChangesView({ cwd, sessionId }: { cwd: string; sessionId?: strin
 
   // Persist state changes to cache
   useEffect(() => {
-    stateCache.set(cwd, { selectedFile, checkedFiles, commitMsg, commitPanelOpen, pushOnCommit, stackedMode, chatRatio });
-  }, [cwd, selectedFile, checkedFiles, commitMsg, commitPanelOpen, pushOnCommit, stackedMode, chatRatio]);
+    stateCache.set(cwd, { selectedFile, commitMsg, commitPanelOpen, pushOnCommit, stackedMode, chatRatio });
+  }, [cwd, selectedFile, commitMsg, commitPanelOpen, pushOnCommit, stackedMode, chatRatio]);
 
   const fetchStatus = useCallback(
-    (opts?: { gitFetch?: boolean }) => {
-      setLoading(true);
+    (opts?: { gitFetch?: boolean; refresh?: boolean }) => {
+      if (!opts?.refresh) setLoading(true);
       setError(null);
       const params = new URLSearchParams({ cwd });
       if (opts?.gitFetch) params.set("fetch", "1");
@@ -531,6 +503,7 @@ export function ChangesView({ cwd, sessionId }: { cwd: string; sessionId?: strin
         })
         .then((data: GitStatus) => {
           setStatus(data);
+          if (opts?.refresh) setRefreshKey((k) => k + 1);
         })
         .catch(() => setError("Not a git repository"))
         .finally(() => setLoading(false));
@@ -542,6 +515,10 @@ export function ChangesView({ cwd, sessionId }: { cwd: string; sessionId?: strin
     fetchStatus();
   }, [fetchStatus]);
 
+  useEffect(() => {
+    send({ type: "watch:cwd", cwd });
+  }, [send, cwd]);
+
   // Auto-refresh when the chat session finishes a turn
   const prevStatusRef = useRef<string | null>(null);
   useEffect(() => {
@@ -551,12 +528,18 @@ export function ChangesView({ cwd, sessionId }: { cwd: string; sessionId?: strin
       const prev = prevStatusRef.current;
       prevStatusRef.current = msg.status;
       if (prev === "running" && msg.status === "idle") {
-        fetchStatus();
-        setRefreshKey((k) => k + 1);
+        fetchStatus({ refresh: true });
       }
     });
     return unsub;
   }, [sessionId, subscribe, fetchStatus]);
+
+  useEffect(() => {
+    return subscribe((msg) => {
+      if (msg.type !== "session:fs_changed") return;
+      fetchStatus({ refresh: true });
+    });
+  }, [subscribe, fetchStatus]);
 
   const fetchDiff = useCallback(
     (file: string) => {
@@ -589,13 +572,40 @@ export function ChangesView({ cwd, sessionId }: { cwd: string; sessionId?: strin
     [cwd],
   );
 
-  // Re-fetch diff for previously selected file on mount (single-file mode)
+  // Re-fetch diff for selected file (single-file mode) on mount or refresh
+  const lastRefreshRef = useRef(refreshKey);
   useEffect(() => {
-    if (selectedFile && !stackedMode) {
+    if (!selectedFile || stackedMode) return;
+    const isRefresh = lastRefreshRef.current !== refreshKey;
+    lastRefreshRef.current = refreshKey;
+    if (isRefresh) {
+      // Background refresh: keep old diff visible, just re-fetch
+      fetch(`/api/git/diff?cwd=${encodeURIComponent(cwd)}&file=${encodeURIComponent(selectedFile)}`)
+        .then((res) => {
+          if (!res.ok) throw new Error("Failed");
+          return res.json();
+        })
+        .then((data: { diff: string; oldContent?: string; newContent?: string }) => {
+          setDiff(data.diff);
+          try {
+            const parsed = parsePatchFiles(data.diff);
+            if (parsed.length > 0 && parsed[0].files.length > 0) {
+              const meta = parsed[0].files[0];
+              if (data.oldContent != null && data.newContent != null) {
+                reindexForFullContent(meta, data.oldContent, data.newContent);
+              }
+              setSingleFileDiff(meta);
+            }
+          } catch {
+            // Fall back to raw diff
+          }
+        })
+        .catch(() => {});
+    } else {
       fetchDiff(selectedFile);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [stackedMode, selectedFile, fetchDiff]);
+  }, [stackedMode, selectedFile, fetchDiff, refreshKey, cwd]);
 
   // Auto-select first file when status loads and nothing is selected
   useEffect(() => {
@@ -678,7 +688,7 @@ export function ChangesView({ cwd, sessionId }: { cwd: string; sessionId?: strin
     } finally {
       setCommitting(false);
     }
-  }, [cwd, commitMsg, checkedFiles, pushOnCommit, fetchStatus]);
+  }, [cwd, commitMsg, checkedFiles, pushOnCommit, fetchStatus, setCheckedFiles]);
 
   const handleGenerate = useCallback(async () => {
     if (checkedFiles.size === 0) return;
@@ -721,23 +731,10 @@ export function ChangesView({ cwd, sessionId }: { cwd: string; sessionId?: strin
     }
   }, [cwd, fetchStatus]);
 
-  const toggleFile = useCallback((path: string) => {
-    setCheckedFiles((prev) => {
-      const next = new Set(prev);
-      if (next.has(path)) {
-        next.delete(path);
-      } else {
-        next.add(path);
-      }
-      return next;
-    });
-  }, []);
-
   const toggleAll = useCallback(() => {
     if (!status) return;
-    const allPaths = status.files.map((f) => f.path);
-    setCheckedFiles((prev) => (prev.size === allPaths.length ? new Set() : new Set(allPaths)));
-  }, [status]);
+    sharedToggleAll(status.files.map((f) => f.path));
+  }, [status, sharedToggleAll]);
 
   const handleResize = useCallback((delta: number) => {
     const width = window.innerWidth || 1;
@@ -757,6 +754,7 @@ export function ChangesView({ cwd, sessionId }: { cwd: string; sessionId?: strin
   );
 
   useEffect(() => {
+    if (!manageSidebar) return;
     if (!status || status.files.length === 0) {
       removeSidebarSection("git-changes");
       return;
@@ -780,6 +778,7 @@ export function ChangesView({ cwd, sessionId }: { cwd: string; sessionId?: strin
     });
     return () => removeSidebarSection("git-changes");
   }, [
+    manageSidebar,
     status,
     selectedFile,
     checkedFiles,
@@ -822,7 +821,7 @@ export function ChangesView({ cwd, sessionId }: { cwd: string; sessionId?: strin
 
   if (!status) return null;
 
-  const showChat = isDesktop && !!sessionId;
+  const showChat = embeddedChat && isDesktop && !!sessionId;
 
   return (
     <div className="flex flex-col flex-1 min-h-0">

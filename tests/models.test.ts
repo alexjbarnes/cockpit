@@ -61,9 +61,10 @@ describe("versionsForAlias", () => {
 
   it("returns multiple opus versions", () => {
     const versions = versionsForAlias("opus");
-    expect(versions).toHaveLength(2);
+    expect(versions).toHaveLength(3);
     expect(versions[0].version).toBe("4.6");
     expect(versions[1].version).toBe("4.7");
+    expect(versions[2].version).toBe("4.8");
   });
 
   it("returns empty array for non-existent alias", () => {
@@ -91,17 +92,17 @@ describe("defaultForAlias", () => {
     expect(model?.isDefault).toBe(true);
   });
 
-  it("returns default opus model (4.7)", () => {
+  it("returns default opus model (4.8)", () => {
     const model = defaultForAlias("opus");
     expect(model).toBeDefined();
-    expect(model?.version).toBe("4.7");
+    expect(model?.version).toBe("4.8");
     expect(model?.isDefault).toBe(true);
   });
 
   it("returns the default-flagged entry even if not first in array", () => {
     const result = defaultForAlias("opus");
     expect(result?.isDefault).toBe(true);
-    expect(result?.modelId).toBe("claude-opus-4-7");
+    expect(result?.modelId).toBe("claude-opus-4-8");
   });
 });
 
@@ -132,7 +133,7 @@ describe("resolveModel", () => {
   it("resolves 'opus' alias to default opus", () => {
     const model = resolveModel("opus");
     expect(model?.alias).toBe("opus");
-    expect(model?.version).toBe("4.7");
+    expect(model?.version).toBe("4.8");
   });
 
   it("strips [bracket] suffix from alias", () => {
@@ -193,6 +194,11 @@ describe("allowedEffortLevels", () => {
     const opus47 = MODELS.find((m) => m.alias === "opus" && m.version === "4.7")!;
     expect(allowedEffortLevels(opus47)).toEqual(["low", "medium", "high", "xhigh", "max"]);
   });
+
+  it("returns [low, medium, high, xhigh, max] for opus 4.8", () => {
+    const opus48 = MODELS.find((m) => m.alias === "opus" && m.version === "4.8")!;
+    expect(allowedEffortLevels(opus48)).toEqual(["low", "medium", "high", "xhigh", "max"]);
+  });
 });
 
 describe("recommendedEffort", () => {
@@ -212,6 +218,11 @@ describe("recommendedEffort", () => {
   it("returns 'xhigh' for opus 4.7", () => {
     const opus47 = MODELS.find((m) => m.alias === "opus" && m.version === "4.7")!;
     expect(recommendedEffort(opus47)).toBe("xhigh");
+  });
+
+  it("returns 'xhigh' for opus 4.8", () => {
+    const opus48 = MODELS.find((m) => m.alias === "opus" && m.version === "4.8")!;
+    expect(recommendedEffort(opus48)).toBe("xhigh");
   });
 
   it("returns 'medium' for sonnet", () => {

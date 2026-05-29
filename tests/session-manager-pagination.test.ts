@@ -34,6 +34,8 @@ vi.mock("@/server/transcript", () => ({
   loadMoreMessages: (...args: unknown[]) => mockLoadMoreMessages(...args),
   transcriptExists: (...args: unknown[]) => mockTranscriptExists(...args),
   findSessionCwd: () => Promise.resolve(null),
+  getTranscriptPath: () => "/tmp/fake-transcript.jsonl",
+  loadPromptHistory: () => Promise.resolve([]),
 }));
 
 vi.mock("@/server/session-prefs", () => ({
@@ -75,7 +77,7 @@ describe("pagination with message stitching", () => {
       diffStyle: "split",
       dismissKeyboardOnSend: true,
       thinkingExpanded: false,
-      model: "sonnet",
+      modelSlots: { main: "sonnet" },
       messageStitching: true,
     });
     mockTranscriptExists.mockReturnValue(false);
@@ -193,7 +195,7 @@ describe("pagination with message stitching", () => {
         diffStyle: "split",
         dismissKeyboardOnSend: true,
         thinkingExpanded: false,
-        model: "sonnet",
+        modelSlots: { main: "sonnet" },
         messageStitching: false,
       });
 

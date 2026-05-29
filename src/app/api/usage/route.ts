@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { NextRequest, NextResponse } from "next/server";
 import { validateSession } from "@/server/auth";
+import { getClaudeDir } from "@/server/paths";
 
 function authenticate(req: NextRequest): boolean {
   const token = req.cookies.get("cockpit_session")?.value || req.headers.get("authorization")?.replace("Bearer ", "");
@@ -25,7 +26,7 @@ function readFromKeychain(): string | null {
 
 function getOAuthAccessToken(): string | null {
   // Linux: credentials stored in a JSON file
-  const credPath = path.join(os.homedir(), ".claude", ".credentials.json");
+  const credPath = path.join(getClaudeDir(), ".credentials.json");
   try {
     const raw = fs.readFileSync(credPath, "utf-8");
     const creds = JSON.parse(raw);

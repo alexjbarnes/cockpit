@@ -1,15 +1,18 @@
 import { mkdirSync } from "node:fs";
-import { homedir } from "node:os";
 import path from "node:path";
 import { v4 as uuidv4 } from "uuid";
+import { getCockpitDir } from "@/server/paths";
 import type { JobRun, JobRunToolUse, ScheduledJob } from "@/types";
 import { findMissedRun, getJobSchedules, matchesCron, scheduleToCron } from "./cron-utils";
 import { addInboxMessage, parseErrorBlock, parseInboxBlock } from "./inbox";
+import { acquireJobLock, clearStaleLocks, forceReleaseJobLock, releaseJobLock } from "./job-lock";
 import { getLatestRun, loadJobs, loadRuns, pruneAllRuns, saveRun } from "./job-storage";
 import type { SessionManager } from "./session-manager";
 import { countTranscriptMessages } from "./transcript";
 
-const SCRATCHPAD_DIR = path.join(homedir(), ".cockpit", "jobs");
+function scratchpadDir(): string {
+  return path.join(getCockpitDir(), "jobs");
+}
 
 const JOB_PROMPT_HEADER = [
   "You are running as an autonomous scheduled job. There is no human operator in this session.",
@@ -40,7 +43,7 @@ function buildJobPrompt(job: ScheduledJob): string {
   }
 
   if (job.cwd) {
-    const storageDir = path.join(SCRATCHPAD_DIR, job.id);
+    const storageDir = path.join(scratchpadDir(), job.id);
     parts.push("");
     parts.push(`Storage: If you need to persist any files between runs (state, cache, data), save them in ${storageDir}`);
     parts.push("Do not store persistent files in the working directory as it is a git repository.");
@@ -159,6 +162,9 @@ export class JobScheduler {
       clearInterval(this.timer);
       this.timer = null;
     }
+    for (const jobId of this.runningJobs.keys()) {
+      releaseJobLock(jobId);
+    }
     console.log("[scheduler] stopped");
   }
 
@@ -178,6 +184,7 @@ export class JobScheduler {
   }
 
   private recoverState(): void {
+    clearStaleLocks();
     pruneAllRuns();
     const now = Date.now();
     const jobs = loadJobs();
@@ -193,6 +200,7 @@ export class JobScheduler {
           run.completedAt = now;
           run.durationMs = now - run.startedAt;
           saveRun(run);
+          forceReleaseJobLock(job.id);
         }
       }
     }
@@ -218,6 +226,7 @@ export class JobScheduler {
         if (run.cwd) run.messageCount = countTranscriptMessages(run.sessionId, run.cwd);
         saveRun(run);
         this.runningJobs.delete(jobId);
+        releaseJobLock(jobId);
       }
     }
 
@@ -256,10 +265,17 @@ export class JobScheduler {
 
   async executeJob(job: ScheduledJob): Promise<JobRun> {
     const runId = uuidv4();
-    const jobCwd = job.cwd || path.join(SCRATCHPAD_DIR, job.id);
-    mkdirSync(path.join(SCRATCHPAD_DIR, job.id), { recursive: true });
+
+    if (!acquireJobLock(job.id, runId)) {
+      console.log(`[scheduler] skipping job ${job.name}: another process holds the lock`);
+      throw new Error("Could not acquire job lock - another process is running this job");
+    }
+
+    const jobCwd = job.cwd || path.join(scratchpadDir(), job.id);
+    mkdirSync(path.join(scratchpadDir(), job.id), { recursive: true });
     const sessionInfo = this.sessionManager.createSession(jobCwd, `[job] ${job.name}`, {
       bypassPermissions: !!job.bypassPermissions,
+      runtime: job.runtime,
     });
     const sessionId = sessionInfo.id;
 
@@ -280,6 +296,7 @@ export class JobScheduler {
 
     const toolTracker = new Map<string, JobRunToolUse>();
     let lastAssistantText = "";
+    const enabledServers = new Set(job.mcpServers || []);
 
     const unsubEvent = this.sessionManager.subscribe(sessionId, (event) => {
       if (event.type === "tool_use_start" && event.toolId) {
@@ -332,7 +349,6 @@ export class JobScheduler {
       }
     });
 
-    const enabledServers = new Set(job.mcpServers || []);
     const initCleanup = this.sessionManager.onInit(sessionId, (initData) => {
       for (const server of initData.mcpServers) {
         if (!enabledServers.has(server.name)) {
@@ -342,7 +358,7 @@ export class JobScheduler {
     });
 
     if (job.model) {
-      this.sessionManager.setModel(sessionId, job.model);
+      this.sessionManager.setModel(sessionId, job.model, job.contextSize);
     }
     if (job.thinkingLevel) {
       this.sessionManager.setThinkingLevel(sessionId, job.thinkingLevel);
@@ -397,7 +413,7 @@ export class JobScheduler {
 
         saveRun(run);
 
-        if (job.inboxOutput && lastAssistantText) {
+        if (job.inboxOutput && lastAssistantText && finalStatus === "success") {
           const inbox = parseInboxBlock(lastAssistantText);
           if (inbox) {
             addInboxMessage({ ...inbox, jobId: job.id, jobName: job.name, runId: run.id, notifyProviders: job.notifyProviders });
@@ -416,6 +432,7 @@ export class JobScheduler {
         }
 
         this.runningJobs.delete(job.id);
+        releaseJobLock(job.id);
         resolve(run);
       };
 

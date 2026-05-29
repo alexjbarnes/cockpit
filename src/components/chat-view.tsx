@@ -1,6 +1,7 @@
 "use client";
 
 import { AlertTriangle, ArrowDown, Loader2, RotateCcw } from "lucide-react";
+import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useMessageSelection } from "@/hooks/use-message-selection";
 import { useSession } from "@/hooks/use-session";
@@ -8,6 +9,8 @@ import { useSettings } from "@/hooks/use-settings";
 import { useWebSocket } from "@/hooks/use-websocket";
 import { pathBasename } from "@/lib/path";
 import { splitAtQuestion } from "@/lib/split-question-blocks";
+import { cn } from "@/lib/utils";
+import type { Provider } from "@/types";
 import { useShell } from "./app-shell";
 import { InputArea } from "./input-area";
 import { MessageBubble } from "./message-bubble";
@@ -16,6 +19,7 @@ import { PermissionPrompt } from "./permission-prompt";
 import { PlanApprovalPrompt } from "./plan-approval-prompt";
 import { parseQuestionsFromInput, QuestionCard, QuestionPrompt } from "./question-card";
 import { SelectionToolbar } from "./selection-toolbar";
+import { ThinkingStripDialog } from "./thinking-strip-dialog";
 
 const INITIAL_WINDOW = 50;
 const WINDOW_INCREMENT = 30;
@@ -27,6 +31,7 @@ export function ChatView({
   initialContext,
   historyView,
   onSendMessage,
+  className,
 }: {
   sessionId: string;
   cwd?: string;
@@ -34,15 +39,18 @@ export function ChatView({
   initialContext?: string;
   historyView?: boolean;
   onSendMessage?: (fn: (text: string) => void) => void;
+  className?: string;
 }) {
   const {
     messages,
     historyLoaded,
     isResponding,
+    errorActive,
     pendingPermissions,
     pendingQuestions,
     modelPicker,
     currentModel,
+    currentContextSize,
     bypassActive,
     planMode,
     thinkingLevel,
@@ -58,6 +66,7 @@ export function ChatView({
     backgroundTasks,
     todos,
     btw,
+    promptHistory,
     hasMoreHistory,
     loadingMore,
     requestMoreHistory,
@@ -65,7 +74,6 @@ export function ChatView({
     interrupt,
     respondToPermission,
     respondToQuestion,
-    selectModel,
     setModel,
     setBypassAll,
     setPlanMode,
@@ -78,10 +86,16 @@ export function ChatView({
     clearRestoredText,
     dismissBtw,
     retry,
+    currentRuntime,
+    setRuntime,
     restartSession,
+    thinkingCheck,
+    confirmThinkingStrip,
+    cancelThinkingCheck,
   } = useSession(sessionId, cwd, historyView);
   const { settings } = useSettings();
-  const { setHeader, setBackgroundTasks, setTodos, setInitData: setShellInitData } = useShell();
+  const router = useRouter();
+  const { setHeader, setBackgroundTasks, setTodos, setInitData: setShellInitData, setRuntime: setShellRuntime } = useShell();
   const scrollRef = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);
   const [showScrollDown, setShowScrollDown] = useState(false);
@@ -92,8 +106,17 @@ export function ChatView({
   const { selectedIds, selectionMode, enterSelection, toggleSelect, clearSelection, copySelected } = useMessageSelection();
   const expandedToolIdsRef = useRef<Set<string>>(new Set());
   const [isTouch, setIsTouch] = useState(false);
+  const [providers, setProviders] = useState<Provider[]>([]);
   useEffect(() => {
     setIsTouch(matchMedia("(pointer: coarse)").matches);
+  }, []);
+  useEffect(() => {
+    fetch("/api/providers")
+      .then((res) => res.json())
+      .then((data) => {
+        if (Array.isArray(data)) setProviders(data);
+      })
+      .catch(() => {});
   }, []);
 
   const uniqueMessages = useMemo(() => {
@@ -141,6 +164,10 @@ export function ChatView({
   useEffect(() => {
     setShellInitData(initData);
   }, [initData, setShellInitData]);
+
+  useEffect(() => {
+    setShellRuntime(currentRuntime);
+  }, [currentRuntime, setShellRuntime]);
 
   // Preserve scroll position after expanding the window
   useLayoutEffect(() => {
@@ -190,6 +217,23 @@ export function ChatView({
     }
   }, [messages, isResponding, pendingQuestions, pendingPermissions, scrollToBottom]);
 
+  // Restore scroll position when navigating back from the file viewer
+  useEffect(() => {
+    if (!historyLoaded) return;
+    const key = "cockpit:scrollPos:" + window.location.pathname;
+    const saved = sessionStorage.getItem(key);
+    if (!saved) return;
+    sessionStorage.removeItem(key);
+    const pos = Number(saved);
+    const el = scrollRef.current;
+    if (el && pos > 0) {
+      stickToBottom.current = false;
+      requestAnimationFrame(() => {
+        el.scrollTop = pos;
+      });
+    }
+  }, [historyLoaded]);
+
   // Re-scroll when virtual keyboard shows/hides (viewport resize)
   useEffect(() => {
     const vv = window.visualViewport;
@@ -216,10 +260,11 @@ export function ChatView({
   // making the scroll handler think the user scrolled up.
   useEffect(() => {
     if (isTouch) return;
+    const el = scrollRef.current;
     const handler = () => {
       if (document.activeElement?.closest("textarea, input, [contenteditable]")) return;
-      if (document.activeElement === scrollRef.current) return;
-      scrollRef.current?.focus({ preventScroll: true });
+      if (document.activeElement === el) return;
+      el?.focus({ preventScroll: true });
       if (stickToBottom.current) scrollToBottom();
     };
     const visHandler = () => {
@@ -227,11 +272,11 @@ export function ChatView({
         scrollToBottom();
       }
     };
-    document.addEventListener("pointermove", handler);
+    el?.addEventListener("pointermove", handler);
     window.addEventListener("focus", handler);
     document.addEventListener("visibilitychange", visHandler);
     return () => {
-      document.removeEventListener("pointermove", handler);
+      el?.removeEventListener("pointermove", handler);
       window.removeEventListener("focus", handler);
       document.removeEventListener("visibilitychange", visHandler);
     };
@@ -242,7 +287,7 @@ export function ChatView({
   // so this only fires when focus is elsewhere.
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (e.key !== "Escape" || !isResponding) return;
+      if (e.key !== "Escape" || !(isResponding || errorActive)) return;
       if (document.querySelector(".fixed.inset-0.z-50")) return;
       const tag = (e.target as HTMLElement)?.tagName;
       if (tag === "TEXTAREA" || tag === "INPUT") return;
@@ -251,7 +296,7 @@ export function ChatView({
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [isResponding, interrupt]);
+  }, [isResponding, errorActive, interrupt]);
 
   const contextInjected = useRef(false);
   const handleSend = useCallback(
@@ -284,10 +329,28 @@ export function ChatView({
     copySelected(uniqueMessages);
   }, [copySelected, uniqueMessages]);
 
+  const handleThinkingNewSession = useCallback(async () => {
+    if (!cwd) return;
+    cancelThinkingCheck();
+    const targetModel = thinkingCheck?.targetModel;
+    try {
+      const res = await fetch("/api/sessions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cwd, runtime: currentRuntime, model: targetModel }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        router.push(`/sessions/${data.sessionId}?cwd=${encodeURIComponent(cwd)}`);
+      }
+    } catch {}
+  }, [cwd, currentRuntime, thinkingCheck?.targetModel, cancelThinkingCheck, router]);
+
   return (
-    <>
+    <div className={cn("flex flex-col flex-1 min-h-0", className)}>
       <div
         ref={scrollRef}
+        data-chat-scroll
         tabIndex={isTouch ? undefined : -1}
         className="flex-1 min-h-0 overflow-y-auto p-4 outline-none"
         onScroll={handleScroll}
@@ -315,6 +378,9 @@ export function ChatView({
               if (questionBlock) {
                 const pending = pendingQuestions.find(() => true);
                 const hasOutput = !!questionBlock.toolUse.output;
+                console.log(
+                  `[question-debug] Place1 render: msgId=${msg.id.slice(0, 8)}, hasOutput=${hasOutput}, pending=${!!pending}, pendingCount=${pendingQuestions.length}`,
+                );
 
                 return (
                   <div key={msg.id} data-message-id={msg.id} className="space-y-4">
@@ -372,13 +438,14 @@ export function ChatView({
               </div>
             );
           })}
-          {isResponding && pendingPermissions.length === 0 && !pendingQuestions.some((q) => !q.answered) && (
+          {(isResponding || errorActive) && pendingPermissions.length === 0 && !pendingQuestions.some((q) => !q.answered) && (
             <div className="flex items-center gap-2 text-muted-foreground">
               <Loader2 className="h-4 w-4 animate-spin" />
+              {errorActive && !isResponding && <span className="text-xs text-red-500">API error, retrying...</span>}
               {rateLimitStatus && <span className="text-xs">Rate limited, retrying...</span>}
             </div>
           )}
-          {apiError && !isResponding && (
+          {apiError && !isResponding && !errorActive && (
             <div className="flex w-full justify-start">
               <div className="max-w-[85%] rounded-lg border border-red-500/30 bg-red-500/5 px-4 py-3">
                 <div className="flex items-center gap-2 text-red-500 mb-1">
@@ -401,6 +468,7 @@ export function ChatView({
               <PlanApprovalPrompt
                 key={p.requestId}
                 permission={p}
+                bypassActive={bypassActive}
                 onRespond={respondToPermission}
                 onSendMessage={sendMessage}
                 onSetBypass={setBypassAll}
@@ -411,9 +479,13 @@ export function ChatView({
             ),
           )}
           {pendingQuestions.length > 0 &&
-            !visibleMessages.some(
-              (m) => m.role === "assistant" && (m.blocks || []).some((b) => b.type === "tool_use" && b.toolUse.name === "AskUserQuestion"),
-            ) &&
+            (() => {
+              const hasInline = visibleMessages.some(
+                (m) =>
+                  m.role === "assistant" && (m.blocks || []).some((b) => b.type === "tool_use" && b.toolUse.name === "AskUserQuestion"),
+              );
+              return !hasInline;
+            })() &&
             pendingQuestions.map((q) => (
               <div key={q.requestId} className="flex w-full justify-start">
                 <div className="max-w-[85%]">
@@ -421,7 +493,22 @@ export function ChatView({
                 </div>
               </div>
             ))}
-          {modelPicker !== null && <ModelPicker currentModel={modelPicker} activeModelId={activeModelId} onSelect={selectModel} />}
+          {modelPicker !== null && (
+            <ModelPicker
+              currentModel={modelPicker}
+              currentContextSize={currentContextSize}
+              activeModelId={activeModelId}
+              onSelect={(model, contextSize) => setModel(model, contextSize)}
+              providers={providers}
+            />
+          )}
+          <ThinkingStripDialog
+            open={thinkingCheck !== null}
+            models={thinkingCheck?.models ?? []}
+            onStrip={confirmThinkingStrip}
+            onNewSession={handleThinkingNewSession}
+            onCancel={cancelThinkingCheck}
+          />
           <div />
         </div>
       </div>
@@ -443,9 +530,10 @@ export function ChatView({
       <div className="shrink-0">
         <InputArea
           sessionId={sessionId}
+          promptHistory={promptHistory}
           onSend={handleSend}
           onInterrupt={interrupt}
-          isResponding={isResponding}
+          isResponding={isResponding || errorActive}
           bypassActive={bypassActive}
           onSetBypass={setBypassAll}
           planMode={planMode}
@@ -453,13 +541,13 @@ export function ChatView({
           thinkingLevel={thinkingLevel}
           onSetThinking={setThinkingLevel}
           currentModel={currentModel}
+          currentContextSize={currentContextSize}
           onSetModel={setModel}
           contextUsage={contextUsage}
           dismissKeyboard={settings.dismissKeyboardOnSend}
           cwd={cwd}
           onCompact={handleCompact}
           initData={initData}
-          activeModelId={activeModelId}
           hasQueuedMessage={hasQueuedMessage}
           queuedMessages={queuedMessages}
           queuePaused={queuePaused}
@@ -471,9 +559,12 @@ export function ChatView({
           onClearRestoredText={clearRestoredText}
           btw={btw}
           onDismissBtw={dismissBtw}
+          currentRuntime={currentRuntime}
+          onSetRuntime={setRuntime}
           onRestart={restartSession}
+          providers={providers}
         />
       </div>
-    </>
+    </div>
   );
 }

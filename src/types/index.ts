@@ -1,3 +1,5 @@
+import type { ContextSize } from "@/lib/models";
+
 export interface SessionInfo {
   id: string;
   name: string;
@@ -6,6 +8,8 @@ export interface SessionInfo {
   lastActiveAt: number;
   status: "idle" | "running";
   model?: string;
+  contextSize?: ContextSize;
+  runtime?: "pty" | "stream";
   pendingRequestCount?: number;
 }
 
@@ -196,6 +200,7 @@ export interface ScheduledJob {
   createdAt: number;
   updatedAt: number;
   model?: string;
+  contextSize?: ContextSize;
   thinkingLevel?: ThinkingLevel;
   allowedTools?: string[];
   mcpServers?: string[];
@@ -206,6 +211,7 @@ export interface ScheduledJob {
   skipIfMissed?: boolean;
   inboxOutput?: boolean;
   notifyProviders?: string[];
+  runtime?: "stream" | "pty";
 }
 
 export type JobRunStatus = "running" | "success" | "failure" | "timeout";
@@ -303,8 +309,10 @@ export type ClientMessage =
   | { type: "permission:set_bypass"; sessionId: string; enabled: boolean }
   | { type: "session:set_plan_mode"; sessionId: string; enabled: boolean }
   | { type: "session:set_thinking"; sessionId: string; level: ThinkingLevel }
-  | { type: "session:set_model"; sessionId: string; model: string }
+  | { type: "session:set_model"; sessionId: string; model: string; contextSize?: ContextSize }
+  | { type: "session:set_model_slot"; sessionId: string; slot: "main" | "subagent" | "fast"; modelId: string }
   | { type: "session:restart"; sessionId: string }
+  | { type: "session:set_runtime"; sessionId: string; runtime: "pty" | "stream" }
   | { type: "session:subscribe"; sessionIds: string[] }
   | { type: "question:response"; sessionId: string; requestId: string; answers: Record<string, string> }
   | { type: "message:cancel_queued"; sessionId: string }
@@ -313,6 +321,7 @@ export type ClientMessage =
   | { type: "message:delete_queued"; sessionId: string; messageId: string }
   | { type: "message:edit_queued"; sessionId: string; messageId: string }
   | { type: "history:request_more"; sessionId: string; beforeMessageId: string }
+  | { type: "watch:cwd"; cwd: string }
   | { type: "ping" };
 
 // Server -> Client messages
@@ -326,6 +335,7 @@ export type ServerMessage =
   | { type: "assistant:tool_children"; sessionId: string; messageId: string; toolId: string; children: ToolUse[] }
   | { type: "session:status"; sessionId: string; status: "idle" | "running" }
   | { type: "session:pending"; sessionId: string; count: number }
+  | { type: "session:fs_changed"; cwd: string }
   | { type: "session:error"; sessionId: string; error: string }
   | {
       type: "permission:request";
@@ -348,8 +358,17 @@ export type ServerMessage =
   | { type: "session:task_update"; sessionId: string; task: BackgroundTask }
   | { type: "session:todos"; sessionId: string; todos: TodoItem[] }
   | { type: "session:init"; sessionId: string; data: InitData }
-  | { type: "history"; sessionId: string; messages: ChatMessage[]; delta?: boolean; status?: "idle" | "running"; hasMore?: boolean }
+  | {
+      type: "history";
+      sessionId: string;
+      messages: ChatMessage[];
+      delta?: boolean;
+      status?: "idle" | "running";
+      hasMore?: boolean;
+      promptHistory?: string[];
+    }
   | { type: "history:more"; sessionId: string; messages: ChatMessage[]; hasMore: boolean }
+  | { type: "session:transcript"; sessionId: string; messages: ChatMessage[] }
   | {
       type: "session:streaming_snapshot";
       sessionId: string;
@@ -370,3 +389,26 @@ export type ServerMessage =
     }
   | { type: "message:ack"; sessionId: string }
   | { type: "pong" };
+
+export interface ModelSlots {
+  main?: string;
+  mainContext?: ContextSize;
+  subagent?: string;
+  fast?: string;
+}
+
+export interface ProviderModel {
+  modelId: string;
+  displayName: string;
+  effortLevels: ThinkingLevel[];
+  contextSizes: ContextSize[];
+  defaultEffort?: ThinkingLevel;
+}
+
+export interface Provider {
+  id: string;
+  name: string;
+  envVars: Record<string, string>;
+  models: ProviderModel[];
+  isBuiltin?: boolean;
+}

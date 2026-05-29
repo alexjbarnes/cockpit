@@ -1,6 +1,6 @@
 "use client";
 
-import { ChevronRight, Folder, Plus, Star, Trash2 } from "lucide-react";
+import { ChevronRight, Folder, Plus, Star, Terminal, Trash2, Zap } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Badge } from "@/components/ui/badge";
@@ -149,6 +149,7 @@ export function SessionList() {
     null,
   );
   const [deleting, setDeleting] = useState(false);
+  const [quickCreateCwd, setQuickCreateCwd] = useState<string | null>(null);
 
   useEffect(() => {
     setFavorites(loadFavorites());
@@ -191,11 +192,11 @@ export function SessionList() {
     });
   };
 
-  const createSession = async (cwd: string, name: string) => {
+  const createSession = async (cwd: string, name: string, runtime: "pty" | "stream") => {
     const res = await fetch("/api/sessions", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ cwd, name: name || undefined }),
+      body: JSON.stringify({ cwd, name: name || undefined, runtime }),
     });
     if (res.ok) {
       const data = await res.json();
@@ -273,7 +274,7 @@ export function SessionList() {
           isFavorite
           onToggleFavorite={() => toggleFavorite(group.cwd)}
           onSelectSession={navigateToSession}
-          onCreateSession={(cwd) => createSession(cwd, "")}
+          onCreateSession={(cwd) => setQuickCreateCwd(cwd)}
           onDeleteSession={(s) => setDeleteTarget({ type: "single", session: s })}
           onDeleteAll={(g) => setDeleteTarget({ type: "bulk", group: g })}
         />
@@ -288,7 +289,7 @@ export function SessionList() {
           isFavorite={false}
           onToggleFavorite={() => toggleFavorite(group.cwd)}
           onSelectSession={navigateToSession}
-          onCreateSession={(cwd) => createSession(cwd, "")}
+          onCreateSession={(cwd) => setQuickCreateCwd(cwd)}
           onDeleteSession={(s) => setDeleteTarget({ type: "single", session: s })}
           onDeleteAll={(g) => setDeleteTarget({ type: "bulk", group: g })}
         />
@@ -301,6 +302,56 @@ export function SessionList() {
         </Button>
       </div>
       <NewSessionDialog open={dialogOpen} onOpenChange={setDialogOpen} onSubmit={createSession} />
+
+      <Dialog
+        open={!!quickCreateCwd}
+        onOpenChange={(v) => {
+          if (!v) setQuickCreateCwd(null);
+        }}
+      >
+        <DialogContent onClose={() => setQuickCreateCwd(null)}>
+          <DialogHeader>
+            <DialogTitle>Choose Backend</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 mt-2">
+            <p className="text-sm text-muted-foreground">Pick how claude runs for this session.</p>
+            <button
+              type="button"
+              onClick={() => {
+                const cwd = quickCreateCwd!;
+                setQuickCreateCwd(null);
+                createSession(cwd, "", "pty");
+              }}
+              className="w-full text-left rounded-lg border border-input bg-card px-4 py-3 transition-colors hover:border-foreground hover:bg-accent"
+            >
+              <div className="flex items-center gap-3 mb-1">
+                <Terminal className="h-5 w-5 text-foreground" />
+                <div className="flex-1">
+                  <div className="text-sm font-medium">PTY (interactive)</div>
+                  <div className="text-xs text-muted-foreground">Pseudo-terminal</div>
+                </div>
+              </div>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                const cwd = quickCreateCwd!;
+                setQuickCreateCwd(null);
+                createSession(cwd, "", "stream");
+              }}
+              className="w-full text-left rounded-lg border border-input bg-card px-4 py-3 transition-colors hover:border-foreground hover:bg-accent"
+            >
+              <div className="flex items-center gap-3 mb-1">
+                <Zap className="h-5 w-5 text-foreground" />
+                <div className="flex-1">
+                  <div className="text-sm font-medium">Stream (headless)</div>
+                  <div className="text-xs text-muted-foreground">Structured output</div>
+                </div>
+              </div>
+            </button>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={!!deleteTarget} onOpenChange={() => setDeleteTarget(null)}>
         <DialogContent>

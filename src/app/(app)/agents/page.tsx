@@ -11,7 +11,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { useAgents } from "@/hooks/use-agents";
 
 export default function AgentsPage() {
-  usePageHeader("Agents");
+  usePageHeader("Agents", { hideActions: true });
 
   const cwd = typeof localStorage !== "undefined" ? localStorage.getItem("cockpit-agents-cwd") || undefined : undefined;
 

@@ -11,7 +11,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { useSkills } from "@/hooks/use-skills";
 
 export default function SkillsPage() {
-  usePageHeader("Skills");
+  usePageHeader("Skills", { hideActions: true });
 
   const cwd = typeof localStorage !== "undefined" ? localStorage.getItem("cockpit-agents-cwd") || undefined : undefined;
 

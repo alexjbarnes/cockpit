@@ -1,6 +1,6 @@
 "use client";
 
-import { AlertCircle, AlertTriangle, Check, CheckCheck, Info, Loader2, Trash2 } from "lucide-react";
+import { AlertCircle, AlertTriangle, Check, CheckCheck, Info, Loader2, Mail, Trash2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { usePageHeader } from "@/components/app-shell";
@@ -31,7 +31,7 @@ function timeAgo(ts: number): string {
 }
 
 export default function InboxPage() {
-  usePageHeader("Inbox");
+  usePageHeader("Inbox", { hideActions: true });
 
   const router = useRouter();
   const [messages, setMessages] = useState<InboxMessage[]>([]);
@@ -51,6 +51,17 @@ export default function InboxPage() {
   useEffect(() => {
     fetchMessages();
   }, [fetchMessages]);
+
+  const handleToggleRead = async (e: React.MouseEvent, msg: InboxMessage) => {
+    e.stopPropagation();
+    const newRead = !msg.read;
+    await fetch(`/api/inbox/${msg.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ read: newRead }),
+    });
+    setMessages((prev) => prev.map((m) => (m.id === msg.id ? { ...m, read: newRead } : m)));
+  };
 
   const handleDeleteClick = (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
@@ -145,14 +156,25 @@ export default function InboxPage() {
                   <span>{timeAgo(msg.createdAt)}</span>
                 </div>
               </div>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-8 w-8 shrink-0 text-muted-foreground hover:text-destructive"
-                onClick={(e) => handleDeleteClick(e, msg.id)}
-              >
-                <Trash2 className="h-3.5 w-3.5" />
-              </Button>
+              <div className="flex items-center shrink-0">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8 text-muted-foreground hover:text-foreground"
+                  title={msg.read ? "Mark as unread" : "Mark as read"}
+                  onClick={(e) => handleToggleRead(e, msg)}
+                >
+                  {msg.read ? <Mail className="h-3.5 w-3.5" /> : <Check className="h-3.5 w-3.5" />}
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                  onClick={(e) => handleDeleteClick(e, msg.id)}
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </Button>
+              </div>
             </div>
           </div>
         ))}

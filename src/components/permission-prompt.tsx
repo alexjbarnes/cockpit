@@ -90,7 +90,7 @@ export function PermissionPrompt({ permission, onRespond }: PermissionPromptProp
   const hasSuggestions = suggestions && suggestions.length > 0;
 
   return (
-    <div className="mx-auto max-w-3xl">
+    <div className="mx-auto max-w-3xl" data-testid="permission-prompt">
       <div className="rounded-lg border border-yellow-500/50 bg-yellow-500/10 p-4">
         <div className="flex items-start gap-3">
           <ShieldAlert className="h-5 w-5 shrink-0 text-yellow-500 mt-0.5" />
@@ -109,6 +109,7 @@ export function PermissionPrompt({ permission, onRespond }: PermissionPromptProp
                 ref={allowRef}
                 onClick={() => onRespond(permission.requestId, true, "allow")}
                 className="rounded bg-primary px-3 py-1 text-xs font-medium text-primary-foreground hover:bg-primary/90"
+                data-testid="btn-allow"
               >
                 Allow
               </button>

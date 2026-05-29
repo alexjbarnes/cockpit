@@ -15,7 +15,7 @@ const SCOPE_LABELS: Record<string, string> = {
 const BLOCKING_EVENTS = new Set(["UserPromptSubmit", "PreToolUse", "PermissionRequest", "Stop", "SubagentStop"]);
 
 export default function HooksPage() {
-  usePageHeader("Hooks");
+  usePageHeader("Hooks", { hideActions: true });
 
   const cwd = typeof localStorage !== "undefined" ? localStorage.getItem("cockpit-agents-cwd") || undefined : undefined;
 

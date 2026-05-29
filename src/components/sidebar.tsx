@@ -5,6 +5,8 @@ import { arrayMove, SortableContext, useSortable, verticalListSortingStrategy } 
 import { CSS } from "@dnd-kit/utilities";
 import {
   CalendarClock,
+  Check,
+  ExternalLink,
   FileEdit,
   FileMinus,
   FilePlus,
@@ -20,12 +22,15 @@ import {
 import { usePathname, useRouter } from "next/navigation";
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { type SidebarSectionConfig, useShell } from "@/components/app-shell";
+import { FilePicker } from "@/components/file-picker";
 import { FileTree } from "@/components/file-tree";
 import { SidebarSection } from "@/components/sidebar-section";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useJobFailureCount } from "@/hooks/use-jobs";
 import { useSettings } from "@/hooks/use-settings";
 import { useWebSocket } from "@/hooks/use-websocket";
+import { useCheckedFiles } from "@/lib/checked-files";
 import { cn } from "@/lib/utils";
 import type { SessionInfo } from "@/types";
 import { NewSessionDialog } from "./new-session-dialog";
@@ -118,12 +123,22 @@ async function fetchPinnedIds(): Promise<string[]> {
 }
 
 // Server-side pinned reviews API helpers
+const pinListeners = new Set<() => void>();
+
+export function onPinChange(cb: () => void): () => void {
+  pinListeners.add(cb);
+  return () => {
+    pinListeners.delete(cb);
+  };
+}
+
 export async function pinReview(id: string): Promise<void> {
   await fetch("/api/reviews/pinned", {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ add: id }),
   }).catch(() => {});
+  for (const cb of pinListeners) cb();
 }
 
 async function unpinReview(id: string): Promise<void> {
@@ -255,17 +270,17 @@ function SortableSessionRow({
         {(session.pendingRequestCount ?? 0) > 0 ? (
           <>
             <div className="absolute h-4 w-4 rounded-full bg-blue-500/20 animate-ping" />
-            <div className="h-2.5 w-2.5 rounded-full bg-blue-500" title="Awaiting your input" />
+            <div className="h-2.5 w-2.5 rounded-full bg-blue-500" title="Awaiting your input" data-testid="status-pending" />
           </>
         ) : session.status === "running" ? (
           <>
             <div className="absolute h-4 w-4 rounded-full bg-yellow-500/20 animate-ping" />
-            <div className="h-2.5 w-2.5 rounded-full bg-yellow-500" title="Working" />
+            <div className="h-2.5 w-2.5 rounded-full bg-yellow-500" title="Working" data-testid="status-running" />
           </>
         ) : isUnread ? (
-          <div className="h-2.5 w-2.5 rounded-full bg-green-500" title="New response" />
+          <div className="h-2.5 w-2.5 rounded-full bg-green-500" title="New response" data-testid="status-unread" />
         ) : (
-          <div className="h-2.5 w-2.5 rounded-full bg-muted-foreground/30" />
+          <div className="h-2.5 w-2.5 rounded-full bg-muted-foreground/30" data-testid="status-idle" />
         )}
       </div>
       <div className="flex-1 min-w-0">
@@ -303,6 +318,10 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
     setWidth(getSavedWidth());
   }, []);
 
+  useEffect(() => {
+    router.prefetch("/sessions/_");
+  }, [router]);
+
   const handleResize = useCallback((delta: number) => {
     setWidth((prev) => {
       const next = Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, prev + delta));
@@ -338,7 +357,16 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
         const { sessionId, status } = msg;
         // Accept status updates for any session we're showing (pinned or running)
         const known = new Set(sessions.map((s) => s.id));
-        if (!known.has(sessionId)) return;
+        if (!known.has(sessionId)) {
+          console.log(
+            "[sidebar] status update for unknown session",
+            sessionId.slice(0, 8),
+            "known:",
+            [...known].map((s) => s.slice(0, 8)),
+          );
+          return;
+        }
+        console.log("[sidebar] status updated", sessionId.slice(0, 8), "->", status);
 
         const prev = prevStatusRef.current.get(sessionId);
         prevStatusRef.current.set(sessionId, status);
@@ -352,7 +380,11 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
       } else if (msg.type === "session:pending") {
         const { sessionId, count } = msg;
         const known = new Set(sessions.map((s) => s.id));
-        if (!known.has(sessionId)) return;
+        if (!known.has(sessionId)) {
+          console.log("[sidebar] pending update for unknown session", sessionId.slice(0, 8));
+          return;
+        }
+        console.log("[sidebar] pending updated", sessionId.slice(0, 8), "->", count);
         setSessions((list) => list.map((s) => (s.id === sessionId ? { ...s, pendingRequestCount: count } : s)));
       } else if (msg.type === "session:info_updated") {
         const { sessionId, info } = msg;
@@ -415,6 +447,16 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
     }
   }, [send]);
 
+  // Fetch immediately on mount so pinned sessions appear without waiting
+  // for the WebSocket connection to establish.
+  const hasFetchedRef = useRef(false);
+  useEffect(() => {
+    if (!hasFetchedRef.current) {
+      hasFetchedRef.current = true;
+      fetchSessions();
+    }
+  }, [fetchSessions]);
+
   // biome-ignore lint/correctness/useExhaustiveDependencies: pathname triggers refetch on navigation
   useEffect(() => {
     if (open || connected) {
@@ -463,11 +505,11 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
     [sessions],
   );
 
-  const createSession = async (cwd: string, name: string) => {
+  const createSession = async (cwd: string, name: string, runtime: "pty" | "stream") => {
     const res = await fetch("/api/sessions", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ cwd, name: name || undefined }),
+      body: JSON.stringify({ cwd, name: name || undefined, runtime }),
     });
     if (res.ok) {
       const data = await res.json();
@@ -561,17 +603,22 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
 
           {cwd && !sidebarSections.has("git-changes") && <SidebarChanges cwd={cwd} sessionId={shellSessionId} />}
 
-          {cwd && !sidebarSections.has("file-tree") && (
-            <SidebarSection id="files" title="Session Files" defaultOpen={false}>
-              <SidebarFileTree cwd={cwd} />
-            </SidebarSection>
-          )}
+          {cwd && !sidebarSections.has("file-tree") && <SidebarFileTree cwd={cwd} />}
 
           {settings.reviewsEnabled && <RecentReviewsSection onNavigate={close} />}
 
-          {settings.reviewsEnabled && sidebarSections.has("pr-files") && (
-            <SidebarSection id="pr-files" title={sidebarSections.get("pr-files")!.title} badge={sidebarSections.get("pr-files")!.badge}>
-              {sidebarSections.get("pr-files")!.content}
+          {settings.reviewsEnabled && (
+            <SidebarSection
+              id="pr-files"
+              title={sidebarSections.get("pr-files")?.title || "PR Files"}
+              badge={sidebarSections.get("pr-files")?.badge}
+              defaultOpen={false}
+            >
+              {sidebarSections.has("pr-files") ? (
+                sidebarSections.get("pr-files")!.content
+              ) : (
+                <div className="px-3 py-3 text-xs text-muted-foreground">No PR open</div>
+              )}
             </SidebarSection>
           )}
         </div>
@@ -663,6 +710,10 @@ function RecentReviewsSection({ onNavigate }: { onNavigate: () => void }) {
   useEffect(() => {
     fetchReviews();
   }, [pathname, fetchReviews]);
+
+  useEffect(() => {
+    return onPinChange(() => fetchReviews());
+  }, [fetchReviews]);
 
   useEffect(() => {
     return subscribe((msg) => {
@@ -779,7 +830,7 @@ function DynamicSections({ sections, exclude }: { sections: Map<string, SidebarS
   return (
     <>
       {sorted.map((section) => (
-        <SidebarSection key={section.id} id={section.id} title={section.title} badge={section.badge}>
+        <SidebarSection key={section.id} id={section.id} title={section.title} badge={section.badge} actions={section.actions}>
           {section.content}
         </SidebarSection>
       ))}
@@ -787,17 +838,61 @@ function DynamicSections({ sections, exclude }: { sections: Map<string, SidebarS
   );
 }
 
+function isMobile() {
+  return typeof window !== "undefined" && window.innerWidth < 768;
+}
+
 function SidebarFileTree({ cwd }: { cwd: string }) {
   const router = useRouter();
+  const { tabActions, closeSidebar } = useShell();
+  const [pickerOpen, setPickerOpen] = useState(false);
 
   const handleSelect = useCallback(
     (filePath: string) => {
-      router.push(`/files?cwd=${encodeURIComponent(cwd)}&file=${encodeURIComponent(filePath)}`);
+      if (tabActions) {
+        tabActions.openFile(filePath);
+      } else {
+        router.push(`/files?cwd=${encodeURIComponent(cwd)}&file=${encodeURIComponent(filePath)}`);
+      }
+      if (isMobile()) closeSidebar();
     },
-    [router, cwd],
+    [router, cwd, tabActions, closeSidebar],
   );
 
-  return <FileTree cwd={cwd} selectedFile={null} onSelectFile={handleSelect} />;
+  const handlePickFile = useCallback(
+    (filePath: string) => {
+      handleSelect(filePath);
+      setPickerOpen(false);
+    },
+    [handleSelect],
+  );
+
+  return (
+    <SidebarSection
+      id="files"
+      title="Session Files"
+      defaultOpen={false}
+      actions={
+        <button
+          onClick={() => setPickerOpen(true)}
+          title="Open file"
+          className="flex items-center justify-center rounded p-0.5 hover:bg-accent text-muted-foreground"
+        >
+          <Plus className="h-3.5 w-3.5" />
+        </button>
+      }
+    >
+      <FileTree cwd={cwd} selectedFile={null} onSelectFile={handleSelect} />
+      <Dialog open={pickerOpen} onOpenChange={setPickerOpen}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Open File</DialogTitle>
+          </DialogHeader>
+          <FilePicker startPath={cwd} onSelect={handlePickFile} onCancel={() => setPickerOpen(false)} />
+        </DialogContent>
+      </Dialog>
+    </SidebarSection>
+  );
 }
 
 function changeStatusIcon(status: string) {
@@ -817,40 +912,44 @@ function changeStatusIcon(status: string) {
 function SidebarChanges({ cwd, sessionId }: { cwd: string; sessionId?: string }) {
   const router = useRouter();
   const pathname = usePathname();
+  const { tabActions } = useShell();
+  const { subscribe } = useWebSocket();
+  const { checkedFiles, toggleFile } = useCheckedFiles(cwd);
   const [branch, setBranch] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [files, setFiles] = useState<Array<{ path: string; status: string; additions: number; deletions: number }>>([]);
+  const cwdRef = useRef(cwd);
+  cwdRef.current = cwd;
+
+  const fetchStatus = useCallback(() => {
+    fetch(`/api/git/status?cwd=${encodeURIComponent(cwdRef.current)}`)
+      .then((r) => {
+        if (!r.ok) throw new Error("Not a git repository");
+        return r.json();
+      })
+      .then((data) => {
+        setFiles(data.files || []);
+        setBranch(data.branch || "");
+        setError(null);
+      })
+      .catch((err) => {
+        setFiles([]);
+        setBranch("");
+        setError(err instanceof Error ? err.message : "Failed to load");
+      });
+  }, []);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: pathname triggers refetch on navigation
   useEffect(() => {
-    let cancelled = false;
-    const fetchStatus = () => {
-      fetch(`/api/git/status?cwd=${encodeURIComponent(cwd)}`)
-        .then((r) => {
-          if (!r.ok) throw new Error("Not a git repository");
-          return r.json();
-        })
-        .then((data) => {
-          if (cancelled) return;
-          setFiles(data.files || []);
-          setBranch(data.branch || "");
-          setError(null);
-        })
-        .catch((err) => {
-          if (!cancelled) {
-            setFiles([]);
-            setBranch("");
-            setError(err instanceof Error ? err.message : "Failed to load");
-          }
-        });
-    };
     fetchStatus();
-    const interval = setInterval(fetchStatus, 30_000);
-    return () => {
-      cancelled = true;
-      clearInterval(interval);
-    };
-  }, [cwd, pathname]);
+  }, [cwd, pathname, fetchStatus]);
+
+  useEffect(() => {
+    return subscribe((msg) => {
+      if (msg.type !== "session:fs_changed") return;
+      fetchStatus();
+    });
+  }, [subscribe, fetchStatus]);
 
   const sessionParam = sessionId ? `&sessionId=${encodeURIComponent(sessionId)}` : "";
   const totalAdded = files.reduce((sum, f) => sum + f.additions, 0);
@@ -880,21 +979,60 @@ function SidebarChanges({ cwd, sessionId }: { cwd: string; sessionId?: string })
             <span>{files.length} changed</span>
             {totalAdded > 0 && <span className="text-green-500">+{totalAdded}</span>}
             {totalDeleted > 0 && <span className="text-red-500">-{totalDeleted}</span>}
+            <div className="flex-1" />
+            <button
+              type="button"
+              title="Open commit view"
+              onClick={() => {
+                if (tabActions) {
+                  tabActions.openChanges();
+                } else {
+                  router.push(`/changes?cwd=${encodeURIComponent(cwd)}${sessionParam}`);
+                }
+              }}
+              className="hover:text-foreground transition-colors"
+            >
+              <ExternalLink className="h-3 w-3" />
+            </button>
           </div>
           {files.map((file) => (
-            <button
-              key={file.path}
-              type="button"
-              onClick={() => router.push(`/changes?cwd=${encodeURIComponent(cwd)}${sessionParam}`)}
-              className="w-full flex items-center gap-2 px-3 py-1 text-left text-xs hover:bg-accent/50 transition-colors"
-            >
-              {changeStatusIcon(file.status)}
-              <span className="font-mono truncate flex-1 min-w-0">{file.path}</span>
-              <span className="shrink-0 flex gap-1 text-[10px] font-mono">
-                {file.additions > 0 && <span className="text-green-500">+{file.additions}</span>}
-                {file.deletions > 0 && <span className="text-red-500">-{file.deletions}</span>}
-              </span>
-            </button>
+            <div key={file.path} className="flex items-center gap-1 px-3 py-1 text-xs hover:bg-accent/50 transition-colors">
+              <button
+                type="button"
+                role="checkbox"
+                aria-checked={checkedFiles.has(file.path)}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  toggleFile(file.path);
+                }}
+                className={cn(
+                  "h-3.5 w-3.5 shrink-0 rounded-full border flex items-center justify-center transition-colors",
+                  checkedFiles.has(file.path)
+                    ? "border-primary bg-primary text-primary-foreground"
+                    : "border-muted-foreground/30 bg-transparent hover:border-muted-foreground/50",
+                )}
+              >
+                {checkedFiles.has(file.path) && <Check className="h-2 w-2" strokeWidth={3} />}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (tabActions) {
+                    tabActions.openDiff(file.path);
+                  } else {
+                    router.push(`/changes?cwd=${encodeURIComponent(cwd)}${sessionParam}`);
+                  }
+                }}
+                className="flex items-center gap-2 flex-1 min-w-0 text-left"
+              >
+                {changeStatusIcon(file.status)}
+                <span className="font-mono truncate flex-1 min-w-0">{file.path}</span>
+                <span className="shrink-0 flex gap-1 text-[10px] font-mono">
+                  {file.additions > 0 && <span className="text-green-500">+{file.additions}</span>}
+                  {file.deletions > 0 && <span className="text-red-500">-{file.deletions}</span>}
+                </span>
+              </button>
+            </div>
           ))}
         </>
       )}

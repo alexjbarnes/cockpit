@@ -2,6 +2,7 @@
 
 import { Trash2, X } from "lucide-react";
 import * as React from "react";
+import { createPortal } from "react-dom";
 import { cn } from "@/lib/utils";
 
 interface DialogProps {
@@ -27,7 +28,7 @@ function Dialog({ open, onOpenChange, children, className }: DialogProps) {
 
   if (!open) return null;
 
-  return (
+  return createPortal(
     <div
       className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center px-4 py-12"
       onMouseDown={(e) => {
@@ -35,7 +36,8 @@ function Dialog({ open, onOpenChange, children, className }: DialogProps) {
       }}
     >
       <div className={cn("w-full max-h-full flex flex-col", className || "max-w-lg")}>{children}</div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 

@@ -17,6 +17,7 @@ vi.mock("node:child_process", () => ({
 }));
 
 vi.mock("@/server/debug-logger", () => ({
+  debugLog: vi.fn(),
   logRawLine: vi.fn(),
   logDiag: vi.fn(),
   logParsedEvent: vi.fn(),
@@ -31,6 +32,8 @@ vi.mock("@/server/transcript", () => ({
   loadMoreMessages: () => Promise.resolve({ messages: [], newByteOffset: 0 }),
   transcriptExists: () => false,
   findSessionCwd: () => Promise.resolve(null),
+  getTranscriptPath: () => "/tmp/fake-transcript.jsonl",
+  loadPromptHistory: () => Promise.resolve([]),
 }));
 
 vi.mock("@/server/session-prefs", () => ({
@@ -46,9 +49,42 @@ vi.mock("@/server/defaults", () => ({
     diffStyle: "split",
     dismissKeyboardOnSend: true,
     thinkingExpanded: false,
-    model: "sonnet",
+    modelSlots: { main: "sonnet" },
   }),
 }));
+
+let capturedPtyOpts: Record<string, unknown> | null = null;
+vi.mock("@/server/pty-runtime", () => {
+  class MockPtyRuntime {
+    isAlive = true;
+    pid = 12345;
+    start = vi.fn().mockResolvedValue(undefined);
+    kill = vi.fn().mockResolvedValue(undefined);
+    sendText = vi.fn().mockResolvedValue(undefined);
+    interrupt = vi.fn();
+    notifyPermissionDecision = vi.fn();
+    constructor(opts: Record<string, unknown>) {
+      capturedPtyOpts = opts;
+    }
+  }
+  return { PtyRuntime: MockPtyRuntime };
+});
+
+vi.mock("@/server/singleton", () => ({
+  getHookRouter: vi.fn(() => ({
+    register: vi.fn(),
+    unregister: vi.fn(),
+  })),
+  getSessionManager: vi.fn(),
+}));
+
+vi.mock("@/server/transcript-watcher", () => {
+  class MockTranscriptWatcher {
+    start = vi.fn();
+    stop = vi.fn();
+  }
+  return { TranscriptWatcher: MockTranscriptWatcher };
+});
 
 import { SessionManager } from "@/server/session-manager";
 
@@ -77,6 +113,28 @@ describe("SessionManager", () => {
     it("uses custom name when provided", () => {
       const session = manager.createSession("/tmp", "My Session");
       expect(session.name).toBe("My Session");
+    });
+
+    it("seeds contextWindowSize from defaults.modelSlots.mainContext", async () => {
+      const defaultsMod = await import("@/server/defaults");
+      const orig = defaultsMod.getDefaults;
+      (defaultsMod as { getDefaults: () => unknown }).getDefaults = () => ({
+        thinkingLevel: "high",
+        bypassAllPermissions: false,
+        diffStyle: "split",
+        dismissKeyboardOnSend: true,
+        thinkingExpanded: false,
+        modelSlots: { main: "opus", mainContext: "1m" },
+      });
+      try {
+        const m = new SessionManager();
+        const session = m.createSession("/tmp");
+        const s = (m as any).sessions.get(session.id)!;
+        expect(s.info.contextSize).toBe("1m");
+        expect(s.contextWindowSize).toBe(1_000_000);
+      } finally {
+        (defaultsMod as { getDefaults: () => unknown }).getDefaults = orig;
+      }
     });
   });
 
@@ -109,6 +167,23 @@ describe("SessionManager", () => {
       const ensured = manager.ensureSession(created.id, "/tmp");
       expect(ensured.info.id).toBe(created.id);
     });
+
+    it("restores contextWindowSize from prefs.contextSize on rehydrate", async () => {
+      const prefsMod = await import("@/server/session-prefs");
+      const orig = prefsMod.getSessionPrefs;
+      (prefsMod as { getSessionPrefs: (id: string) => unknown }).getSessionPrefs = () => ({
+        contextSize: "1m",
+        modelSlots: { main: "opus" },
+      });
+      try {
+        const ensured = manager.ensureSession("restored-1m", "/tmp/proj");
+        const s = (manager as any).sessions.get(ensured.info.id)!;
+        expect(ensured.info.contextSize).toBe("1m");
+        expect(s.contextWindowSize).toBe(1_000_000);
+      } finally {
+        (prefsMod as { getSessionPrefs: (id: string) => unknown }).getSessionPrefs = orig;
+      }
+    });
   });
 
   describe("listActiveSessions", () => {
@@ -120,6 +195,27 @@ describe("SessionManager", () => {
       manager.createSession("/tmp/a");
       manager.createSession("/tmp/b");
       expect(manager.listActiveSessions()).toHaveLength(0);
+    });
+
+    it("includes PTY sessions with alive ptyRuntime", () => {
+      const session = manager.createSession("/tmp/pty-test", "PTY Test", { runtime: "pty" });
+      // Simulate a PTY session that's running by setting ptyRuntime.isAlive
+      const internal = (manager as any).sessions.get(session.id);
+      internal.ptyRuntime = { isAlive: true };
+      internal.info.status = "running";
+
+      const active = manager.listActiveSessions();
+      expect(active.some((s) => s.id === session.id)).toBe(true);
+      expect(active.find((s) => s.id === session.id)?.status).toBe("running");
+    });
+
+    it("does not include PTY sessions with dead ptyRuntime", () => {
+      const session = manager.createSession("/tmp/pty-test", "PTY Test", { runtime: "pty" });
+      const internal = (manager as any).sessions.get(session.id);
+      internal.ptyRuntime = { isAlive: false };
+
+      const active = manager.listActiveSessions();
+      expect(active.some((s) => s.id === session.id)).toBe(false);
     });
   });
 
@@ -2088,34 +2184,9 @@ describe("SessionManager", () => {
     });
   });
 
-  describe("rebuildTodosFromHistory", () => {
+  describe("loadTodosFromFiles", () => {
     it("does nothing for unknown session", () => {
-      expect(() => manager.rebuildTodosFromHistory("nonexistent", [])).not.toThrow();
-    });
-
-    it("extracts todos from TodoWrite tool uses", () => {
-      const session = manager.createSession("/tmp");
-      const messages = [
-        {
-          id: "m1",
-          role: "assistant" as const,
-          content: "",
-          toolUses: [
-            {
-              id: "t1",
-              name: "TodoWrite",
-              input: JSON.stringify({ todos: [{ id: "1", content: "Test task", status: "pending" }] }),
-              output: "",
-              status: "done" as const,
-            },
-          ],
-          blocks: [],
-          timestamp: Date.now(),
-        },
-      ];
-      manager.rebuildTodosFromHistory(session.id, messages);
-      expect(manager.getTodos(session.id)).toHaveLength(1);
-      expect(manager.getTodos(session.id)[0].content).toBe("Test task");
+      expect(() => manager.loadTodosFromFiles("nonexistent")).not.toThrow();
     });
   });
 
@@ -2202,6 +2273,23 @@ describe("SessionManager", () => {
       manager.onStatus(session.id, (status) => statuses.push(status));
       manager.setModel(session.id, "opus");
       expect(statuses).toContain("idle");
+    });
+
+    it("sets contextWindowSize to 1M when switching to 1m context", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      s.contextWindowSize = 200_000;
+      manager.setModel(session.id, "opus", "1m");
+      expect(s.contextWindowSize).toBe(1_000_000);
+    });
+
+    it("resets contextWindowSize to 200K when switching back to 200k context", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      s.info.contextSize = "1m";
+      s.contextWindowSize = 1_000_000;
+      manager.setModel(session.id, "opus", "200k");
+      expect(s.contextWindowSize).toBe(200_000);
     });
   });
 
@@ -2454,151 +2542,6 @@ describe("SessionManager", () => {
     });
   });
 
-  describe("rebuildTodosFromHistory edge cases", () => {
-    it("does not overwrite existing todos", () => {
-      const session = manager.createSession("/tmp");
-      const s = (manager as any).sessions.get(session.id)!;
-      s.todoItems = [{ content: "existing", status: "pending" }];
-      const messages = [
-        {
-          id: "m1",
-          role: "assistant" as const,
-          content: "",
-          toolUses: [
-            {
-              id: "t1",
-              name: "TodoWrite",
-              input: JSON.stringify({ todos: [{ content: "new", status: "pending" }] }),
-              output: "",
-              status: "done" as const,
-            },
-          ],
-          blocks: [],
-          timestamp: Date.now(),
-        },
-      ];
-      manager.rebuildTodosFromHistory(session.id, messages);
-      expect(manager.getTodos(session.id)[0].content).toBe("existing");
-    });
-
-    it("stops at compact boundary", () => {
-      const session = manager.createSession("/tmp");
-      const messages = [
-        {
-          id: "m1",
-          role: "assistant" as const,
-          content: "",
-          toolUses: [
-            {
-              id: "t1",
-              name: "TodoWrite",
-              input: JSON.stringify({ todos: [{ content: "old", status: "pending" }] }),
-              output: "",
-              status: "done" as const,
-            },
-          ],
-          blocks: [],
-          timestamp: Date.now(),
-        },
-        { id: "sys1", role: "system" as const, content: "__compacted__", toolUses: [], blocks: [], timestamp: Date.now() },
-        {
-          id: "m2",
-          role: "user" as const,
-          content: "hello",
-          toolUses: [],
-          blocks: [],
-          timestamp: Date.now(),
-        },
-      ];
-      manager.rebuildTodosFromHistory(session.id, messages);
-      expect(manager.getTodos(session.id)).toHaveLength(0);
-    });
-
-    it("handles invalid TodoWrite input gracefully", () => {
-      const session = manager.createSession("/tmp");
-      const messages = [
-        {
-          id: "m1",
-          role: "assistant" as const,
-          content: "",
-          toolUses: [{ id: "t1", name: "TodoWrite", input: "not-json", output: "", status: "done" as const }],
-          blocks: [],
-          timestamp: Date.now(),
-        },
-      ];
-      manager.rebuildTodosFromHistory(session.id, messages);
-      expect(manager.getTodos(session.id)).toHaveLength(0);
-    });
-
-    it("handles TodoWrite with non-array todos", () => {
-      const session = manager.createSession("/tmp");
-      const messages = [
-        {
-          id: "m1",
-          role: "assistant" as const,
-          content: "",
-          toolUses: [{ id: "t1", name: "TodoWrite", input: JSON.stringify({ todos: "not-array" }), output: "", status: "done" as const }],
-          blocks: [],
-          timestamp: Date.now(),
-        },
-      ];
-      manager.rebuildTodosFromHistory(session.id, messages);
-      expect(manager.getTodos(session.id)).toHaveLength(0);
-    });
-
-    it("filters out todos without content or status", () => {
-      const session = manager.createSession("/tmp");
-      const messages = [
-        {
-          id: "m1",
-          role: "assistant" as const,
-          content: "",
-          toolUses: [
-            {
-              id: "t1",
-              name: "TodoWrite",
-              input: JSON.stringify({
-                todos: [{ content: "valid", status: "pending" }, { content: "", status: "pending" }, { content: "no-status" }],
-              }),
-              output: "",
-              status: "done" as const,
-            },
-          ],
-          blocks: [],
-          timestamp: Date.now(),
-        },
-      ];
-      manager.rebuildTodosFromHistory(session.id, messages);
-      expect(manager.getTodos(session.id)).toHaveLength(1);
-    });
-
-    it("emits todos event after rebuild", () => {
-      const session = manager.createSession("/tmp");
-      const todoEvents: unknown[] = [];
-      manager.onTodos(session.id, (todos) => todoEvents.push(todos));
-      const messages = [
-        {
-          id: "m1",
-          role: "assistant" as const,
-          content: "",
-          toolUses: [
-            {
-              id: "t1",
-              name: "TodoWrite",
-              input: JSON.stringify({ todos: [{ content: "task", status: "in_progress" }] }),
-              output: "",
-              status: "done" as const,
-            },
-          ],
-          blocks: [],
-          timestamp: Date.now(),
-        },
-      ];
-      manager.rebuildTodosFromHistory(session.id, messages);
-      expect(todoEvents).toHaveLength(1);
-    });
-  });
-
   describe("sendMessage with queue pause reset", () => {
     it("clears paused queue and resets flag on new message", () => {
       const session = manager.createSession("/tmp");
@@ -2848,15 +2791,16 @@ describe("SessionManager", () => {
       expect(usages).toHaveLength(1);
     });
 
-    it("extracts contextWindowSize from result message", () => {
+    it("does not let CLI result.modelUsage override session.contextWindowSize", () => {
       const session = manager.createSession("/tmp");
       const s = (manager as any).sessions.get(session.id)!;
+      s.contextWindowSize = 1_000_000;
       const line = JSON.stringify({
         type: "result",
         modelUsage: { "claude-3-5-sonnet": { contextWindow: 128000 } },
       });
       (manager as any).extractUsage(s, session.id, line);
-      expect(s.contextWindowSize).toBe(128000);
+      expect(s.contextWindowSize).toBe(1_000_000);
     });
 
     it("skips synthetic responses", () => {
@@ -2874,27 +2818,6 @@ describe("SessionManager", () => {
       const session = manager.createSession("/tmp");
       const s = (manager as any).sessions.get(session.id)!;
       expect(() => (manager as any).extractUsage(s, session.id, "not json")).not.toThrow();
-    });
-  });
-
-  describe("extractContextWindowSize", () => {
-    it("sets context window from model usage", () => {
-      const session = manager.createSession("/tmp");
-      const s = (manager as any).sessions.get(session.id)!;
-      (manager as any).extractContextWindowSize(s, {
-        "claude-3-5-sonnet": { contextWindow: 256000 },
-      });
-      expect(s.contextWindowSize).toBe(256000);
-    });
-
-    it("ignores models with zero or missing contextWindow", () => {
-      const session = manager.createSession("/tmp");
-      const s = (manager as any).sessions.get(session.id)!;
-      (manager as any).extractContextWindowSize(s, {
-        "model-a": { contextWindow: 0 },
-        "model-b": {},
-      });
-      expect(s.contextWindowSize).toBe(200000);
     });
   });
 
@@ -3154,56 +3077,6 @@ describe("SessionManager", () => {
     });
   });
 
-  describe("handleTodoWrite", () => {
-    it("parses valid todo input and emits", () => {
-      const session = manager.createSession("/tmp");
-      const s = (manager as any).sessions.get(session.id)!;
-      const emitted: unknown[] = [];
-      s.emitter.on("todos", (_id: string, todos: unknown) => emitted.push(todos));
-
-      const input = JSON.stringify({ todos: [{ content: "task1", status: "pending" }] });
-      (manager as any).handleTodoWrite(s, session.id, input);
-
-      expect(s.todoItems).toHaveLength(1);
-      expect(s.todoItems[0].content).toBe("task1");
-      expect(emitted).toHaveLength(1);
-    });
-
-    it("ignores invalid JSON", () => {
-      const session = manager.createSession("/tmp");
-      const s = (manager as any).sessions.get(session.id)!;
-      (manager as any).handleTodoWrite(s, session.id, "not json");
-      expect(s.todoItems).toHaveLength(0);
-    });
-
-    it("ignores non-array todos field", () => {
-      const session = manager.createSession("/tmp");
-      const s = (manager as any).sessions.get(session.id)!;
-      (manager as any).handleTodoWrite(s, session.id, JSON.stringify({ todos: "bad" }));
-      expect(s.todoItems).toHaveLength(0);
-    });
-
-    it("filters out items without content or status", () => {
-      const session = manager.createSession("/tmp");
-      const s = (manager as any).sessions.get(session.id)!;
-      const input = JSON.stringify({
-        todos: [{ content: "valid", status: "pending" }, { content: "", status: "pending" }, { content: "no status" }],
-      });
-      (manager as any).handleTodoWrite(s, session.id, input);
-      expect(s.todoItems).toHaveLength(1);
-    });
-
-    it("preserves activeForm field", () => {
-      const session = manager.createSession("/tmp");
-      const s = (manager as any).sessions.get(session.id)!;
-      const input = JSON.stringify({
-        todos: [{ content: "task", status: "in_progress", activeForm: "doing stuff" }],
-      });
-      (manager as any).handleTodoWrite(s, session.id, input);
-      expect(s.todoItems[0].activeForm).toBe("doing stuff");
-    });
-  });
-
   describe("getKnownMcpServers", () => {
     it("returns servers from session initData", () => {
       const session = manager.createSession("/tmp");
@@ -3353,7 +3226,7 @@ describe("SessionManager", () => {
         emit: [],
         systemMessages: ["__permission_mode::plan"],
         errors: [],
-        todoInputs: [],
+
         permissionActions: [],
         statusChange: null,
         compactDone: false,
@@ -3376,7 +3249,7 @@ describe("SessionManager", () => {
         emit: [],
         systemMessages: ["__permission_mode::default"],
         errors: [],
-        todoInputs: [],
+
         permissionActions: [],
         statusChange: null,
         compactDone: false,
@@ -3399,7 +3272,7 @@ describe("SessionManager", () => {
         emit: [],
         systemMessages: ["some other system message"],
         errors: [],
-        todoInputs: [],
+
         permissionActions: [],
         statusChange: null,
         compactDone: false,
@@ -3420,7 +3293,7 @@ describe("SessionManager", () => {
         emit: [],
         systemMessages: [],
         errors: ["something broke"],
-        todoInputs: [],
+
         permissionActions: [],
         statusChange: null,
         compactDone: false,
@@ -3428,25 +3301,6 @@ describe("SessionManager", () => {
       };
       (manager as any).applyProcessedResult(s, session.id, result);
       expect(emitted).toContain("something broke");
-    });
-
-    it("handles todoInputs", () => {
-      const session = manager.createSession("/tmp");
-      const s = (manager as any).sessions.get(session.id)!;
-
-      const result = {
-        intermediateMessages: [],
-        emit: [],
-        systemMessages: [],
-        errors: [],
-        todoInputs: [JSON.stringify({ todos: [{ content: "do this", status: "pending" }] })],
-        permissionActions: [],
-        statusChange: null,
-        compactDone: false,
-        snapshot: null,
-      };
-      (manager as any).applyProcessedResult(s, session.id, result);
-      expect(s.todoItems).toHaveLength(1);
     });
 
     it("handles auto_approve permission action", () => {
@@ -3460,7 +3314,7 @@ describe("SessionManager", () => {
         emit: [],
         systemMessages: [],
         errors: [],
-        todoInputs: [],
+
         permissionActions: [{ type: "auto_approve", requestId: "req-1", toolName: "Read", rawToolInput: {} }],
         statusChange: null,
         compactDone: false,
@@ -3481,7 +3335,7 @@ describe("SessionManager", () => {
         emit: [],
         systemMessages: [],
         errors: [],
-        todoInputs: [],
+
         permissionActions: [{ type: "auto_deny", requestId: "req-1", toolName: "Write", denyReason: "blocked" }],
         statusChange: null,
         compactDone: false,
@@ -3500,7 +3354,7 @@ describe("SessionManager", () => {
         emit: [],
         systemMessages: [],
         errors: [],
-        todoInputs: [],
+
         permissionActions: [
           {
             type: "request",
@@ -3531,7 +3385,7 @@ describe("SessionManager", () => {
         emit: [],
         systemMessages: [],
         errors: [],
-        todoInputs: [],
+
         permissionActions: [{ type: "request", requestId: "req-1", toolName: "Bash", rawToolInput: { command: "ls" } }],
         statusChange: null,
         compactDone: false,
@@ -3554,7 +3408,7 @@ describe("SessionManager", () => {
         emit: [],
         systemMessages: [],
         errors: [],
-        todoInputs: [],
+
         permissionActions: [],
         statusChange: null,
         compactDone: true,
@@ -3575,7 +3429,7 @@ describe("SessionManager", () => {
         emit: [],
         systemMessages: [],
         errors: [],
-        todoInputs: [],
+
         permissionActions: [],
         statusChange: "idle",
         compactDone: false,
@@ -3594,7 +3448,7 @@ describe("SessionManager", () => {
         emit: [],
         systemMessages: [],
         errors: [],
-        todoInputs: [],
+
         permissionActions: [
           {
             type: "request",
@@ -3627,7 +3481,7 @@ describe("SessionManager", () => {
         emit: [{ type: "message_done", message: { id: "m1", toolUses: [] } }],
         systemMessages: [],
         errors: [],
-        todoInputs: [],
+
         permissionActions: [],
         statusChange: null,
         compactDone: false,
@@ -3650,7 +3504,7 @@ describe("SessionManager", () => {
         emit: [],
         systemMessages: ["__permission_mode::plan"],
         errors: [],
-        todoInputs: [],
+
         permissionActions: [],
         statusChange: null,
         compactDone: false,
@@ -3672,7 +3526,7 @@ describe("SessionManager", () => {
         emit: [],
         systemMessages: ["__permission_mode::default"],
         errors: [],
-        todoInputs: [],
+
         permissionActions: [],
         statusChange: null,
         compactDone: false,
@@ -3881,6 +3735,391 @@ describe("SessionManager", () => {
 
       firstProc.emit("close", 0, null);
       expect(s.process).toBe(fakeNewProcess);
+    });
+  });
+
+  describe("respondToPermission with stdin", () => {
+    it("writes allow control_response to stdin and clears pending request", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      s.process = { pid: 123 };
+      s.stdin = { write: vi.fn() };
+      s.pendingRequests.set("req-1", { type: "permission", requestId: "req-1", toolName: "Bash", toolInput: "" });
+
+      const result = manager.respondToPermission(session.id, "req-1", true, { command: "ls" });
+      expect(result).toBe(true);
+      expect(s.pendingRequests.has("req-1")).toBe(false);
+      const written = JSON.parse(s.stdin.write.mock.calls[0][0]);
+      expect(written.type).toBe("control_response");
+      expect(written.response.response.behavior).toBe("allow");
+      expect(written.response.response.updatedInput).toEqual({ command: "ls" });
+    });
+
+    it("writes deny control_response with reason", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      s.process = { pid: 123 };
+      s.stdin = { write: vi.fn() };
+      s.pendingRequests.set("req-2", { type: "permission", requestId: "req-2", toolName: "Write", toolInput: "" });
+
+      const result = manager.respondToPermission(session.id, "req-2", false, undefined, undefined, "Nope");
+      expect(result).toBe(true);
+      const written = JSON.parse(s.stdin.write.mock.calls[0][0]);
+      expect(written.response.response.behavior).toBe("deny");
+      expect(written.response.response.message).toBe("Nope");
+    });
+
+    it("emits pending count change via notifyPendingChanged", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      s.process = { pid: 123 };
+      s.stdin = { write: vi.fn() };
+      s.pendingRequests.set("req-3", { type: "permission", requestId: "req-3", toolName: "Bash", toolInput: "" });
+      s.info.pendingRequestCount = 1;
+      const pendingCounts: number[] = [];
+      s.emitter.on("pending", (_id: string, count: number) => pendingCounts.push(count));
+
+      manager.respondToPermission(session.id, "req-3", true);
+      expect(pendingCounts).toContain(0);
+    });
+
+    it("includes updatedPermissions when permissionSuggestions provided", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      s.process = { pid: 123 };
+      s.stdin = { write: vi.fn() };
+
+      const suggestions = [{ tool: "Bash", behavior: "allow" }];
+      manager.respondToPermission(session.id, "req-4", true, {}, suggestions);
+      const written = JSON.parse(s.stdin.write.mock.calls[0][0]);
+      expect(written.response.response.updatedPermissions).toEqual(suggestions);
+    });
+  });
+
+  describe("extractUsage skips synthetic model", () => {
+    it("ignores lines with model '<synthetic>'", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      s.contextUsage = null;
+      const line = JSON.stringify({
+        type: "assistant",
+        message: { usage: { input_tokens: 9999 }, model: "<synthetic>" },
+      });
+      (manager as any).extractUsage(s, session.id, line);
+      expect(s.contextUsage).toBeNull();
+    });
+  });
+
+  describe("extractUsage totalTokens accumulation", () => {
+    it("accumulates input, output, cacheCreate, and cacheRead across calls", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+
+      const line1 = JSON.stringify({
+        type: "assistant",
+        message: {
+          usage: { input_tokens: 100, output_tokens: 50, cache_creation_input_tokens: 20, cache_read_input_tokens: 10 },
+          model: "claude-4",
+        },
+      });
+      const line2 = JSON.stringify({
+        type: "assistant",
+        message: {
+          usage: { input_tokens: 200, output_tokens: 30, cache_creation_input_tokens: 0, cache_read_input_tokens: 40 },
+          model: "claude-4",
+        },
+      });
+
+      (manager as any).extractUsage(s, session.id, line1);
+      (manager as any).extractUsage(s, session.id, line2);
+
+      expect(s.totalTokens.input).toBe(300);
+      expect(s.totalTokens.output).toBe(80);
+      expect(s.totalTokens.cacheCreate).toBe(20);
+      expect(s.totalTokens.cacheRead).toBe(50);
+    });
+  });
+
+  describe("process close: context usage estimate on compacting", () => {
+    it("sets contextUsage to 10% estimate and emits usage event", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      s.compacting = true;
+      s.contextWindowSize = 200000;
+      const usageEvents: Array<{ used: number; total: number }> = [];
+      s.emitter.on("usage", (_id: string, usage: { used: number; total: number }) => usageEvents.push(usage));
+
+      const mockSpawn = vi.mocked(spawn);
+      (manager as any).spawnProcess(s, session.id);
+      const proc = mockSpawn.mock.results[mockSpawn.mock.results.length - 1].value;
+      proc.emit("close", 0, null);
+
+      expect(s.contextUsage).toEqual({ used: 20000, total: 200000 });
+      expect(usageEvents).toHaveLength(1);
+      expect(usageEvents[0]).toEqual({ used: 20000, total: 200000 });
+    });
+  });
+
+  describe("process close: flushQueuedMessage called on close", () => {
+    it("flushes queued message when streamState.flushedOnMessageDone is false", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+
+      const mockSpawn = vi.mocked(spawn);
+      (manager as any).spawnProcess(s, session.id);
+      const proc = mockSpawn.mock.results[mockSpawn.mock.results.length - 1].value;
+
+      s.queuedMessages = [{ id: "q-1", text: "waiting" }];
+
+      proc.emit("close", 0, null);
+
+      expect(s.queuedMessages).toHaveLength(0);
+    });
+
+    it("does not flush when streamState.flushedOnMessageDone is true", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+
+      const mockSpawn = vi.mocked(spawn);
+      (manager as any).spawnProcess(s, session.id);
+      const proc = mockSpawn.mock.results[mockSpawn.mock.results.length - 1].value;
+
+      s.streamState.flushedOnMessageDone = true;
+      s.queuedMessages = [{ id: "q-1", text: "waiting" }];
+
+      proc.emit("close", 0, null);
+
+      expect(s.queuedMessages).toHaveLength(1);
+    });
+  });
+
+  describe("process close: stderr suppressed on zero exit code", () => {
+    it("does not emit error when exit code is 0 even with stderr output", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      const errors: string[] = [];
+      s.emitter.on("error", (_id: string, err: string) => errors.push(err));
+
+      const mockSpawn = vi.mocked(spawn);
+      (manager as any).spawnProcess(s, session.id);
+      const proc = mockSpawn.mock.results[mockSpawn.mock.results.length - 1].value;
+      proc.stderr.emit("data", Buffer.from("some warning"));
+      proc.emit("close", 0, null);
+
+      expect(errors).toHaveLength(0);
+    });
+  });
+
+  describe("interrupt with stream process", () => {
+    it("sends interrupt control_request via stdin and returns true", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      s.process = { pid: 123 };
+      s.stdin = { write: vi.fn() };
+
+      const result = manager.interrupt(session.id);
+      expect(result).toBe(true);
+      const written = JSON.parse(s.stdin.write.mock.calls[0][0]);
+      expect(written.type).toBe("control_request");
+      expect(written.request.subtype).toBe("interrupt");
+    });
+
+    it("falls back to killProcessGroup when stdin is null", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      const fakeProc = { pid: 555, kill: vi.fn() };
+      s.process = fakeProc;
+      s.stdin = null;
+
+      const result = manager.interrupt(session.id);
+      expect(result).toBe(true);
+    });
+
+    it("pauses queue when interrupted with queued messages", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      s.process = { pid: 123 };
+      s.stdin = { write: vi.fn() };
+      s.queuedMessages = [{ id: "q-1", text: "pending" }];
+
+      manager.interrupt(session.id);
+      expect(s.queuePaused).toBe(true);
+    });
+  });
+
+  describe("endProcess writes end_session and sets fallback timer", () => {
+    it("writes end_session control_request to stdin", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      s.process = { pid: 123, once: vi.fn(), kill: vi.fn() };
+      s.stdin = { write: vi.fn() };
+
+      (manager as any).endProcess(s, "test_reason");
+      const written = JSON.parse(s.stdin.write.mock.calls[0][0]);
+      expect(written.type).toBe("control_request");
+      expect(written.request.subtype).toBe("end_session");
+      expect(written.request.reason).toBe("test_reason");
+    });
+
+    it("registers close listener to clear fallback timer", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      s.process = { pid: 123, once: vi.fn(), kill: vi.fn() };
+      s.stdin = { write: vi.fn() };
+
+      (manager as any).endProcess(s);
+      expect(s.process.once).toHaveBeenCalledWith("close", expect.any(Function));
+    });
+
+    it("falls back to killProcessGroup when no stdin", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      const fakeProc = { pid: 456, kill: vi.fn() };
+      s.process = fakeProc;
+      s.stdin = null;
+
+      expect(() => (manager as any).endProcess(s)).not.toThrow();
+    });
+  });
+
+  describe("PTY onExit cleanup", () => {
+    it("clears compacting flag when PTY exits mid-compact", async () => {
+      const session = manager.createSession("/tmp/pty-test", "PTY", { runtime: "pty" });
+      const s = (manager as any).sessions.get(session.id)!;
+      const emitted: string[] = [];
+      s.emitter.on("system", (_id: string, text: string) => emitted.push(text));
+
+      // Trigger spawnPtyProcess via sendMessage
+      capturedPtyOpts = null;
+      manager.sendMessage(session.id, "hello");
+      await vi.waitFor(() => expect(capturedPtyOpts).not.toBeNull());
+
+      // Set compacting flag as if /compact was in flight
+      s.compacting = true;
+
+      // Trigger the real onExit callback
+      const onExit = capturedPtyOpts!.onExit as (info: { exitCode: number; signal?: number }) => void;
+      onExit({ exitCode: 0 });
+
+      expect(s.compacting).toBe(false);
+      expect(emitted).toContain("__compact::done");
+    });
+
+    it("clears completed todos when PTY exits", async () => {
+      const session = manager.createSession("/tmp/pty-test", "PTY", { runtime: "pty" });
+      const s = (manager as any).sessions.get(session.id)!;
+      const todosEmitted: Array<unknown[]> = [];
+      s.emitter.on("todos", (_id: string, todos: unknown[]) => todosEmitted.push(todos));
+
+      capturedPtyOpts = null;
+      manager.sendMessage(session.id, "hello");
+      await vi.waitFor(() => expect(capturedPtyOpts).not.toBeNull());
+
+      // Add completed todos
+      s.todoItems = [
+        { id: "1", content: "task 1", status: "completed" },
+        { id: "2", content: "task 2", status: "completed" },
+      ];
+
+      const onExit = capturedPtyOpts!.onExit as (info: { exitCode: number; signal?: number }) => void;
+      onExit({ exitCode: 0 });
+
+      expect(s.todoItems).toEqual([]);
+      expect(todosEmitted.some((t) => t.length === 0)).toBe(true);
+    });
+  });
+
+  describe("setModel on PTY session before first message", () => {
+    it("resets hasSpawnedBefore when PTY is killed and no transcript exists", async () => {
+      const session = manager.createSession("/tmp/pty-model", "PTY", { runtime: "pty" });
+      const s = (manager as any).sessions.get(session.id)!;
+
+      // Simulate ensureProcess having eagerly spawned the PTY
+      capturedPtyOpts = null;
+      manager.ensureProcess(session.id);
+      await vi.waitFor(() => expect(capturedPtyOpts).not.toBeNull());
+      expect(s.hasSpawnedBefore).toBe(true);
+
+      // User changes model before sending any message. setModel kills PTY.
+      manager.setModel(session.id, "opus");
+
+      // hasSpawnedBefore should be reset since there's no transcript
+      expect(s.hasSpawnedBefore).toBe(false);
+    });
+
+    it("uses --session-id (not --resume) on respawn after model change", async () => {
+      const session = manager.createSession("/tmp/pty-model2", "PTY", { runtime: "pty" });
+      const s = (manager as any).sessions.get(session.id)!;
+
+      // ensureProcess spawns PTY eagerly
+      capturedPtyOpts = null;
+      manager.ensureProcess(session.id);
+      await vi.waitFor(() => expect(capturedPtyOpts).not.toBeNull());
+
+      // Kill the ptyRuntime to simulate setModel completing the kill
+      s.ptyRuntime = null;
+
+      // Change model
+      manager.setModel(session.id, "opus");
+
+      // Now send first message, triggering a new PTY spawn
+      capturedPtyOpts = null;
+      manager.sendMessage(session.id, "hello");
+      await vi.waitFor(() => expect(capturedPtyOpts).not.toBeNull());
+
+      const args = capturedPtyOpts!.extraArgs as string[];
+      expect(args).toContain("--session-id");
+      expect(args).not.toContain("--resume");
+      expect(args).toContain("--model");
+      expect(args[args.indexOf("--model") + 1]).toBe("opus");
+    });
+  });
+
+  describe("restartSession before first message", () => {
+    it("uses --session-id (not --resume) on stream restart when no message was sent", () => {
+      const mockSpawn = vi.mocked(spawn);
+      const session = manager.createSession("/tmp/restart-stream", "Stream");
+      const s = (manager as any).sessions.get(session.id)!;
+
+      // First spawn (e.g. via ensureProcess or sendMessage)
+      (manager as any).spawnProcess(s, session.id);
+      expect(s.hasSpawnedBefore).toBe(true);
+
+      // Kill the process to simulate idle state
+      s.process = null;
+      s.stdin = null;
+      s.info.status = "idle";
+
+      // Restart without ever having sent a message
+      manager.restartSession(session.id);
+
+      const args = mockSpawn.mock.calls[mockSpawn.mock.calls.length - 1][1] as string[];
+      expect(args).toContain("--session-id");
+      expect(args).not.toContain("--resume");
+    });
+
+    it("uses --session-id (not --resume) on PTY restart when no message was sent", async () => {
+      const session = manager.createSession("/tmp/restart-pty", "PTY", { runtime: "pty" });
+      const s = (manager as any).sessions.get(session.id)!;
+
+      // ensureProcess spawns PTY eagerly
+      capturedPtyOpts = null;
+      manager.ensureProcess(session.id);
+      await vi.waitFor(() => expect(capturedPtyOpts).not.toBeNull());
+      expect(s.hasSpawnedBefore).toBe(true);
+
+      // Kill the ptyRuntime to simulate idle
+      s.ptyRuntime = null;
+      s.info.status = "idle";
+
+      // Restart without ever having sent a message
+      capturedPtyOpts = null;
+      manager.restartSession(session.id);
+      await vi.waitFor(() => expect(capturedPtyOpts).not.toBeNull());
+
+      const args = capturedPtyOpts!.extraArgs as string[];
+      expect(args).toContain("--session-id");
+      expect(args).not.toContain("--resume");
     });
   });
 });

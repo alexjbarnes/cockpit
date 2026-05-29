@@ -1,6 +1,7 @@
 "use client";
 
-import { ChevronRight, ClipboardList, Loader2 } from "lucide-react";
+import { ChevronRight, ClipboardList, ExternalLink, Loader2 } from "lucide-react";
+import { useRouter } from "next/navigation";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSettings } from "@/hooks/use-settings";
 import { shortPath } from "@/lib/path";
@@ -154,12 +155,14 @@ export function ToolCard({ tool, expandedToolIds }: ToolCardProps) {
           ) : (
             <ChevronRight className={cn("h-3 w-3 shrink-0 text-muted-foreground transition-transform", expanded && "rotate-90")} />
           )}
-          <span className="font-mono font-medium">{tool.name}</span>
-          {tool.name === "Agent" &&
-            (tool.status === "running" || backgroundTasks.some((t) => t.toolUseId === tool.id && t.status === "running")) && (
-              <Loader2 className="h-3 w-3 shrink-0 animate-spin text-muted-foreground" />
-            )}
-          <ToolSummary tool={tool} input={input} />
+          {tool.name === "Agent" ? (
+            <AgentHeader tool={tool} input={input} backgroundTasks={backgroundTasks} />
+          ) : (
+            <>
+              <span className="font-mono font-medium">{tool.name}</span>
+              <ToolSummary tool={tool} input={input} />
+            </>
+          )}
         </button>
 
         {expanded && hasContent && (
@@ -173,6 +176,97 @@ export function ToolCard({ tool, expandedToolIds }: ToolCardProps) {
   );
 }
 
+function useFileViewerHref(filePath: string) {
+  const { cwd } = useShell();
+  return `/files?cwd=${encodeURIComponent(cwd || "")}&file=${encodeURIComponent(filePath)}`;
+}
+
+function saveScrollPosition() {
+  const el = document.querySelector("[data-chat-scroll]");
+  if (el) {
+    sessionStorage.setItem("cockpit:scrollPos:" + window.location.pathname, String(el.scrollTop));
+  }
+}
+
+function FilePathIcon({ filePath }: { filePath: string }) {
+  const { tabActions } = useShell();
+  const href = useFileViewerHref(filePath);
+  const router = useRouter();
+  return (
+    <button
+      onClick={(e) => {
+        e.stopPropagation();
+        if (tabActions) {
+          tabActions.openFile(filePath);
+        } else {
+          saveScrollPosition();
+          router.push(href);
+        }
+      }}
+      title={filePath}
+      className="shrink-0 text-muted-foreground hover:text-foreground"
+    >
+      <ExternalLink className="h-3 w-3" />
+    </button>
+  );
+}
+
+function FilePathLink({ filePath, children }: { filePath: string; children: React.ReactNode }) {
+  const { tabActions } = useShell();
+  const href = useFileViewerHref(filePath);
+  const router = useRouter();
+  return (
+    <a
+      href={href}
+      onClick={(e) => {
+        e.preventDefault();
+        if (tabActions) {
+          tabActions.openFile(filePath);
+        } else {
+          saveScrollPosition();
+          router.push(href);
+        }
+      }}
+      title={filePath}
+      className="font-mono text-muted-foreground break-all hover:underline"
+    >
+      {children}
+    </a>
+  );
+}
+
+function AgentHeader({
+  tool,
+  input,
+  backgroundTasks,
+}: {
+  tool: ToolUse;
+  input: Record<string, unknown>;
+  backgroundTasks: Array<{ toolUseId: string; status: string }>;
+}) {
+  const desc = (input.description as string) || (input.prompt as string) || "";
+  const short = desc.length > 80 ? desc.slice(0, 80) + "..." : desc;
+  const model = input.model as string | undefined;
+  const agentType = input.subagent_type as string | undefined;
+  const tags = [agentType, model].filter(Boolean);
+  const spinning = tool.status === "running" || backgroundTasks.some((t) => t.toolUseId === tool.id && t.status === "running");
+
+  return (
+    <div className="flex flex-col gap-0.5 min-w-0 flex-1">
+      <div className="flex items-center gap-2">
+        <span className="font-mono font-medium">Agent</span>
+        {spinning && <Loader2 className="h-3 w-3 shrink-0 animate-spin text-muted-foreground" />}
+        {tags.map((tag) => (
+          <span key={tag} className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+            {tag}
+          </span>
+        ))}
+      </div>
+      {short && <span className="text-muted-foreground truncate">{short}</span>}
+    </div>
+  );
+}
+
 function ToolSummary({ tool, input }: { tool: ToolUse; input: Record<string, unknown> }) {
   const name = tool.name;
 
@@ -181,9 +275,12 @@ function ToolSummary({ tool, input }: { tool: ToolUse; input: Record<string, unk
     if (!fp) return null;
     const plan = isPlanFile(name, fp);
     return (
-      <span className="text-muted-foreground truncate">
-        {shortPath(fp)}
-        {plan ? " (plan edit)" : ""}
+      <span className="flex items-center gap-1.5 min-w-0">
+        <span className="text-muted-foreground truncate">
+          {shortPath(fp)}
+          {plan ? " (plan edit)" : ""}
+        </span>
+        <FilePathIcon filePath={fp} />
       </span>
     );
   }
@@ -195,12 +292,22 @@ function ToolSummary({ tool, input }: { tool: ToolUse; input: Record<string, unk
     if (isPlanFile(name, fp) && content) {
       return <span className="text-blue-500 truncate">View plan</span>;
     }
-    return <span className="text-muted-foreground truncate">{shortPath(fp)}</span>;
+    return (
+      <span className="flex items-center gap-1.5 min-w-0">
+        <span className="text-muted-foreground truncate">{shortPath(fp)}</span>
+        <FilePathIcon filePath={fp} />
+      </span>
+    );
   }
 
   if (name === "Read" || name === "read") {
     const fp = (input.file_path as string) || tool.filePath || "";
-    return fp ? <span className="text-muted-foreground truncate">{shortPath(fp)}</span> : null;
+    return fp ? (
+      <span className="flex items-center gap-1.5 min-w-0">
+        <span className="text-muted-foreground truncate">{shortPath(fp)}</span>
+        <FilePathIcon filePath={fp} />
+      </span>
+    ) : null;
   }
 
   if (name === "Bash" || name === "bash") {
@@ -217,28 +324,6 @@ function ToolSummary({ tool, input }: { tool: ToolUse; input: Record<string, unk
   if (name === "Glob" || name === "glob") {
     const pattern = (input.pattern as string) || "";
     return pattern ? <span className="font-mono text-muted-foreground truncate">{pattern}</span> : null;
-  }
-
-  if (name === "Agent") {
-    const desc = (input.description as string) || (input.prompt as string) || "";
-    const short = desc.length > 60 ? desc.slice(0, 60) + "..." : desc;
-    const model = input.model as string | undefined;
-    const agentType = input.subagent_type as string | undefined;
-    const tags = [agentType, model].filter(Boolean);
-    return (
-      <span className="flex flex-col gap-0.5 min-w-0">
-        {short && <span className="text-muted-foreground truncate">{short}</span>}
-        {tags.length > 0 && (
-          <span className="flex items-center gap-1.5">
-            {tags.map((tag) => (
-              <span key={tag} className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
-                {tag}
-              </span>
-            ))}
-          </span>
-        )}
-      </span>
-    );
   }
 
   if (name === "EnterPlanMode") {
@@ -335,7 +420,7 @@ function WriteContent({ input, tool, dark }: { input: Record<string, unknown>; t
 
   return (
     <div className="space-y-1">
-      {filePath && <div className="font-mono text-muted-foreground">{filePath}</div>}
+      {filePath && <FilePathLink filePath={filePath}>{filePath}</FilePathLink>}
       {content && <CodeBlock code={content} language={lang} dark={dark} />}
       {tool.output && (
         <pre className="overflow-x-auto rounded bg-muted/50 p-2 text-[11px] leading-relaxed max-h-32 overflow-y-auto text-muted-foreground">
@@ -352,7 +437,7 @@ function ReadContent({ input, tool, dark }: { input: Record<string, unknown>; to
 
   return (
     <div className="space-y-1">
-      {filePath && <div className="font-mono text-muted-foreground break-all">{filePath}</div>}
+      {filePath && <FilePathLink filePath={filePath}>{filePath}</FilePathLink>}
       {tool.output && <CodeBlock code={tool.output} language={lang} dark={dark} />}
     </div>
   );

@@ -3,9 +3,11 @@ import { networkInterfaces } from "node:os";
 import { parse } from "node:url";
 import next from "next";
 import { deletePasswordFile, needsSetup } from "./src/server/auth";
+import { HookRouter } from "./src/server/hook-router";
 import { JobScheduler } from "./src/server/job-scheduler";
 import { SessionManager } from "./src/server/session-manager";
-import { setJobScheduler, setSessionManager } from "./src/server/singleton";
+import { setHookRouter, setJobScheduler, setSessionManager, setTerminalManager } from "./src/server/singleton";
+import { TerminalManager } from "./src/server/terminal-manager";
 import { createWebSocketHandler } from "./src/server/ws-handler";
 
 const dev = process.env.NODE_ENV !== "production";
@@ -66,6 +68,16 @@ async function main() {
   const sessionManager = new SessionManager();
   setSessionManager(sessionManager);
 
+  const terminalManager = new TerminalManager();
+  setTerminalManager(terminalManager);
+
+  const hookRouter = new HookRouter();
+  const hookHost = process.env.COCKPIT_HOOK_HOST || "127.0.0.1";
+  const hookPortPref = parseInt(process.env.COCKPIT_HOOK_PORT || "0", 10);
+  await hookRouter.start(hookHost, Number.isFinite(hookPortPref) ? hookPortPref : 0);
+  setHookRouter(hookRouter);
+  console.log(`Hook router listening on ${hookRouter.getUrl(hookHost)}`);
+
   const jobScheduler = new JobScheduler(sessionManager);
   setJobScheduler(jobScheduler);
   jobScheduler.start();
@@ -75,7 +87,7 @@ async function main() {
     handle(req, res, parsedUrl);
   });
 
-  createWebSocketHandler(server, sessionManager);
+  createWebSocketHandler(server, sessionManager, terminalManager);
 
   server.listen(port, host, () => {
     logStartupBanner();

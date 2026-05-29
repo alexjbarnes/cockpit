@@ -1,16 +1,20 @@
 import crypto from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, unlink, writeFile } from "node:fs/promises";
+import { open as fsOpen, mkdir, rename, unlink } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { homedir } from "node:os";
 import path from "node:path";
+import { getCockpitDir } from "@/server/paths";
 
 // ---------------------------------------------------------------------------
 // Config
 // ---------------------------------------------------------------------------
 
-const COCKPIT_DIR = path.join(homedir(), ".cockpit");
-const PASSWORD_FILE = path.join(COCKPIT_DIR, "password.json");
+function cockpitDir(): string {
+  return getCockpitDir();
+}
+function passwordFile(): string {
+  return path.join(cockpitDir(), "password.json");
+}
 const SCRYPT_KEYLEN = 64;
 const SALT_BYTES = 32;
 
@@ -37,13 +41,19 @@ interface StoredPassword {
 }
 
 function readPasswordFile(): StoredPassword | null {
-  if (!existsSync(PASSWORD_FILE)) return null;
+  if (!existsSync(passwordFile())) return null;
   try {
-    const raw = require("node:fs").readFileSync(PASSWORD_FILE, "utf-8");
+    const raw = require("node:fs").readFileSync(passwordFile(), "utf-8");
+    if (!raw.trim()) {
+      console.warn("[auth] password.json exists but is empty (likely corrupted by interrupted write)");
+      return null;
+    }
     const data = JSON.parse(raw) as StoredPassword;
     if (data.hash && data.salt) return data;
+    console.warn("[auth] password.json missing hash/salt fields");
     return null;
-  } catch {
+  } catch (err) {
+    console.error("[auth] failed to read password.json:", err);
     return null;
   }
 }
@@ -58,18 +68,25 @@ function getStoredPassword(): StoredPassword | null {
 }
 
 export function needsSetup(): boolean {
+  if (process.env.COCKPIT_TOKEN) return false;
   return getStoredPassword() === null;
 }
 
 export async function setupPassword(password: string): Promise<void> {
-  await mkdir(COCKPIT_DIR, { recursive: true });
+  await mkdir(cockpitDir(), { recursive: true });
   const salt = crypto.randomBytes(SALT_BYTES);
   const hash = await scryptHash(password, salt);
   const data: StoredPassword = {
     hash: hash.toString("hex"),
     salt: salt.toString("hex"),
   };
-  await writeFile(PASSWORD_FILE, JSON.stringify(data), "utf-8");
+  const pwFile = passwordFile();
+  const tmpFile = `${pwFile}.tmp.${process.pid}.${Date.now()}`;
+  const fh = await fsOpen(tmpFile, "w");
+  await fh.writeFile(JSON.stringify(data), "utf-8");
+  await fh.sync();
+  await fh.close();
+  await rename(tmpFile, pwFile);
   cachedPassword = data;
 }
 
@@ -84,8 +101,9 @@ export async function verifyPassword(password: string): Promise<boolean> {
 }
 
 export async function deletePasswordFile(): Promise<void> {
-  if (existsSync(PASSWORD_FILE)) {
-    await unlink(PASSWORD_FILE);
+  const pwFile = passwordFile();
+  if (existsSync(pwFile)) {
+    await unlink(pwFile);
   }
   cachedPassword = undefined;
 }
@@ -114,6 +132,9 @@ export function createSession(): string {
 export function validateSession(token: string): boolean {
   const key = getSigningKey();
   if (!key) return false;
+
+  // Allow bypass via COCKPIT_TOKEN for e2e tests
+  if (process.env.COCKPIT_TOKEN && token === process.env.COCKPIT_TOKEN) return true;
 
   const dot = token.indexOf(".");
   if (dot === -1) return false;

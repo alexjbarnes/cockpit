@@ -1,24 +1,40 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
+import { splitLegacyModel } from "@/lib/models";
+import { getCockpitDir } from "@/server/paths";
 import type { JobRun, ScheduledJob } from "@/types";
 
-const PREFS_DIR = join(homedir(), ".cockpit");
-const JOBS_FILE = join(PREFS_DIR, "scheduled-jobs.json");
-const RUNS_DIR = join(PREFS_DIR, "job-runs");
+function prefsDir(): string {
+  return getCockpitDir();
+}
+function jobsFile(): string {
+  return join(prefsDir(), "scheduled-jobs.json");
+}
+function runsDir(): string {
+  return join(prefsDir(), "job-runs");
+}
 
 function ensureDir(dir: string): void {
   mkdirSync(dir, { recursive: true });
 }
 
 function runsFile(jobId: string): string {
-  return join(RUNS_DIR, `${jobId}.json`);
+  return join(runsDir(), `${jobId}.json`);
+}
+
+function normalizeJob(raw: ScheduledJob): ScheduledJob {
+  if (raw.model?.includes("[")) {
+    const split = splitLegacyModel(raw.model);
+    return { ...raw, model: split.model, contextSize: raw.contextSize ?? split.contextSize };
+  }
+  return raw;
 }
 
 export function loadJobs(): ScheduledJob[] {
   try {
-    const data = JSON.parse(readFileSync(JOBS_FILE, "utf-8"));
-    return data.jobs || [];
+    const data = JSON.parse(readFileSync(jobsFile(), "utf-8"));
+    const jobs: ScheduledJob[] = data.jobs || [];
+    return jobs.map(normalizeJob);
   } catch {
     return [];
   }
@@ -36,16 +52,16 @@ export function saveJob(job: ScheduledJob): void {
   } else {
     jobs.push(job);
   }
-  ensureDir(PREFS_DIR);
-  writeFileSync(JOBS_FILE, JSON.stringify({ jobs }, null, 2) + "\n");
+  ensureDir(prefsDir());
+  writeFileSync(jobsFile(), JSON.stringify({ jobs }, null, 2) + "\n");
 }
 
 export function deleteJob(id: string): boolean {
   const jobs = loadJobs();
   const filtered = jobs.filter((j) => j.id !== id);
   if (filtered.length === jobs.length) return false;
-  ensureDir(PREFS_DIR);
-  writeFileSync(JOBS_FILE, JSON.stringify({ jobs: filtered }, null, 2) + "\n");
+  ensureDir(prefsDir());
+  writeFileSync(jobsFile(), JSON.stringify({ jobs: filtered }, null, 2) + "\n");
 
   const rf = runsFile(id);
   try {
@@ -84,7 +100,7 @@ export function saveRun(run: JobRun): void {
   const maxAgeDays = job?.retentionDays ?? 90;
   pruneRuns(runs, 500, maxAgeDays);
 
-  ensureDir(RUNS_DIR);
+  ensureDir(runsDir());
   writeFileSync(runsFile(run.jobId), JSON.stringify({ runs }, null, 2) + "\n");
 }
 
@@ -110,7 +126,7 @@ export function pruneAllRuns(): void {
     const before = runs.length;
     pruneRuns(runs, 500, job.retentionDays ?? 90);
     if (runs.length < before) {
-      ensureDir(RUNS_DIR);
+      ensureDir(runsDir());
       writeFileSync(runsFile(job.id), JSON.stringify({ runs }, null, 2) + "\n");
     }
   }

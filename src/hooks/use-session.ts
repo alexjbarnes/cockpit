@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { type ContextSize, DEFAULT_CONTEXT_SIZE, resolveModel } from "@/lib/models";
 import type {
   BackgroundTask,
   ChatMessage,
@@ -16,6 +17,7 @@ import type {
   TodoItem,
   ToolUse,
 } from "@/types";
+import { applyMessageDone, applyTranscript } from "./message-ordering";
 import { useWebSocket } from "./use-websocket";
 
 export interface PendingPermission {
@@ -40,14 +42,23 @@ export interface BtwState {
   error: string | null;
 }
 
+export interface ThinkingCheck {
+  pending: boolean;
+  targetModel: string;
+  models: string[];
+  contextSize?: ContextSize;
+}
+
 interface UseSessionReturn {
   messages: ChatMessage[];
   historyLoaded: boolean;
   isResponding: boolean;
+  errorActive: boolean;
   pendingPermissions: PendingPermission[];
   pendingQuestions: PendingQuestion[];
   modelPicker: string | null;
   currentModel: string;
+  currentContextSize: ContextSize;
   bypassActive: boolean;
   planMode: boolean;
   thinkingLevel: ThinkingLevel;
@@ -64,6 +75,7 @@ interface UseSessionReturn {
   backgroundTasks: BackgroundTask[];
   todos: TodoItem[];
   btw: BtwState | null;
+  promptHistory: string[];
   hasMoreHistory: boolean;
   loadingMore: boolean;
   requestMoreHistory: () => void;
@@ -71,8 +83,8 @@ interface UseSessionReturn {
   interrupt: () => void;
   respondToPermission: (requestId: string, allowed: boolean, permissionMode?: PermissionMode, suggestionIndex?: number) => void;
   respondToQuestion: (requestId: string, answers: Record<string, string>) => void;
-  selectModel: (model: string) => void;
-  setModel: (model: string) => void;
+  setModel: (model: string, contextSize?: ContextSize) => void;
+  setModelSlot: (slot: "main" | "subagent" | "fast", modelId: string) => void;
   setBypassAll: (enabled: boolean) => void;
   setPlanMode: (enabled: boolean) => void;
   setThinkingLevel: (level: ThinkingLevel) => void;
@@ -84,7 +96,12 @@ interface UseSessionReturn {
   clearRestoredText: () => void;
   dismissBtw: () => void;
   retry: () => void;
+  currentRuntime: "pty" | "stream";
+  setRuntime: (runtime: "pty" | "stream") => void;
   restartSession: () => void;
+  thinkingCheck: ThinkingCheck | null;
+  confirmThinkingStrip: () => Promise<void>;
+  cancelThinkingCheck: () => void;
 }
 
 export function useSession(sessionId: string, cwd?: string, historyView?: boolean): UseSessionReturn {
@@ -95,6 +112,8 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
   const [pendingQuestions, setPendingQuestions] = useState<PendingQuestion[]>([]);
   const [modelPicker, setModelPicker] = useState<string | null>(null);
   const [currentModel, setCurrentModel] = useState("sonnet");
+  const [currentContextSize, setCurrentContextSize] = useState<ContextSize>(DEFAULT_CONTEXT_SIZE);
+  const [currentRuntime, setCurrentRuntime] = useState<"pty" | "stream">("stream");
   const [bypassActive, setBypassActive] = useState(false);
   const [planMode, setPlanModeState] = useState(false);
   const [thinkingLevel, setThinkingLevelState] = useState<ThinkingLevel>("high");
@@ -109,6 +128,7 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
   const [backgroundTasks, setBackgroundTasks] = useState<BackgroundTask[]>([]);
   const [todos, setTodos] = useState<TodoItem[]>([]);
   const [btw, setBtw] = useState<BtwState | null>(null);
+  const [promptHistory, setPromptHistory] = useState<string[]>([]);
   const [hasMoreHistory, setHasMoreHistory] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
 
@@ -116,6 +136,8 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
   const [queuedMessages, setQueuedMessages] = useState<Array<{ id: string; text: string }>>([]);
   const [queuePaused, setQueuePaused] = useState(false);
   const [restoredText, setRestoredText] = useState<string | null>(null);
+  const [errorActive, setErrorActive] = useState(false);
+  const errorTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const isRespondingRef = useRef(false);
   const messagesRef = useRef<ChatMessage[]>([]);
   const currentModelRef = useRef(currentModel);
@@ -150,6 +172,7 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
     lastServerMsgIdRef.current = null;
     queuedTextsRef.current = [];
     loadedSessionRef.current = null;
+    setPromptHistory([]);
     setHasMoreHistory(false);
     setLoadingMore(false);
   }
@@ -167,7 +190,14 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
     if (connected) {
       // Clear stale client-side state before server re-sends current state
       setPendingPermissions([]);
-      setPendingQuestions([]);
+      setPendingQuestions((prev) => {
+        if (prev.length > 0)
+          console.log(
+            `[question-debug] connect: clearing ${prev.length} pendingQuestions`,
+            prev.map((q) => q.requestId),
+          );
+        return [];
+      });
       const isReconnect = loadedSessionRef.current === sessionId;
       console.log(`[session] sending session:connect for ${sessionId.slice(0, 8)}`);
       (window as unknown as Record<string, unknown>).__sessionConnectTime = performance.now();
@@ -252,7 +282,14 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
               streamingRef.current = null;
               agentStackRef.current = [];
               setMessages((prev) => prev.filter((m) => m.id !== "streaming"));
-              setPendingQuestions([]);
+              setPendingQuestions((prev) => {
+                if (prev.length > 0)
+                  console.log(
+                    `[question-debug] history:idle clearing ${prev.length} pendingQuestions`,
+                    prev.map((q) => q.requestId),
+                  );
+                return [];
+              });
               setRateLimitStatus(null);
               setBackgroundTasks((prev) => {
                 if (prev.some((t) => t.status === "running")) {
@@ -265,6 +302,10 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
 
           if (msg.hasMore !== undefined) {
             setHasMoreHistory(msg.hasMore);
+          }
+
+          if (msg.promptHistory) {
+            setPromptHistory(msg.promptHistory);
           }
 
           const connectTime = (window as unknown as Record<string, unknown>).__sessionConnectTime as number | undefined;
@@ -293,6 +334,47 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
           break;
         }
 
+        case "session:transcript": {
+          const transcriptMsgs = msg.messages as ChatMessage[];
+          if (transcriptMsgs.length > 0) {
+            lastServerMsgIdRef.current = transcriptMsgs[transcriptMsgs.length - 1].id;
+          }
+          for (let i = transcriptMsgs.length - 1; i >= 0; i--) {
+            if (transcriptMsgs[i].role === "assistant" && transcriptMsgs[i].model) {
+              setActiveModelId(transcriptMsgs[i].model!);
+              break;
+            }
+          }
+          setMessages((prev) => applyTranscript(prev, transcriptMsgs));
+          if (currentRuntime !== "pty") break;
+          const agentDescs = new Map<string, string>();
+          for (const tm of transcriptMsgs) {
+            for (const tool of tm.toolUses) {
+              if (tool.name !== "Agent") continue;
+              try {
+                const inp = JSON.parse(tool.input || "{}");
+                const agentType = inp.subagent_type || "";
+                const desc = inp.description || "";
+                if (agentType && desc) agentDescs.set(agentType, desc);
+              } catch {}
+            }
+          }
+          if (agentDescs.size > 0) {
+            setBackgroundTasks((prev) => {
+              let changed = false;
+              const next = prev.map((t) => {
+                if (t.title && agentDescs.has(t.title) && (!t.description || t.description === t.title)) {
+                  changed = true;
+                  return { ...t, description: agentDescs.get(t.title)! };
+                }
+                return t;
+              });
+              return changed ? next : prev;
+            });
+          }
+          break;
+        }
+
         case "session:streaming_snapshot": {
           // Restore in-progress message that wasn't in the transcript yet
 
@@ -316,12 +398,13 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
             timestamp: Date.now(),
           };
           setMessages((prev) => {
-            // Remove both the old streaming placeholder and any history
-            // message with the same ID as the snapshot. The transcript
-            // may contain a stale version of this message (from an
-            // intermediate emission) while the snapshot has the latest
-            // in-progress state including new tool calls.
-            const filtered = prev.filter((m) => m.id !== "streaming" && m.id !== msg.messageId);
+            const withoutStreaming = prev.filter((m) => m.id !== "streaming");
+            // Only remove a stale transcript message if it belongs to the
+            // CURRENT turn (appears after the last user message). Previous
+            // turns' messages must survive even if their transcript ID
+            // matches the snapshot's messageId during a brief JSONL race.
+            const lastUserIdx = withoutStreaming.findLastIndex((m) => m.role === "user");
+            const filtered = withoutStreaming.filter((m, i) => m.id !== msg.messageId || i <= lastUserIdx);
             return [...filtered, streamMsg];
           });
           break;
@@ -523,17 +606,15 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
             setActiveModelId(msg.message.model);
           }
           setMessages((prev) => {
-            const filtered = prev.filter((m) => m.id !== "streaming");
-            if (filtered.some((m) => m.id === msg.message.id)) return filtered;
             const finalMessage = { ...msg.message };
-            if (finalMessage.toolUses.length === 0 && streamedToolUses.length > 0) {
+            if (streamedToolUses.length > finalMessage.toolUses.length) {
               finalMessage.toolUses = streamedToolUses;
             }
-            if ((!finalMessage.blocks || finalMessage.blocks.length === 0) && streamedBlocks.length > 0) {
+            if (streamedBlocks.length > (finalMessage.blocks?.length ?? 0)) {
               finalMessage.blocks = streamedBlocks;
             }
             lastServerMsgIdRef.current = finalMessage.id;
-            return [...filtered, finalMessage];
+            return applyMessageDone(prev, finalMessage);
           });
           break;
         }
@@ -656,13 +737,24 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
           const nowRunning = msg.status === "running";
           setIsResponding(nowRunning);
           isRespondingRef.current = nowRunning;
-          if (nowRunning) setApiError(null);
+          if (nowRunning) {
+            setApiError(null);
+            setErrorActive(false);
+            clearTimeout(errorTimerRef.current);
+          }
           if (msg.status === "idle") {
             streamingRef.current = null;
             agentStackRef.current = [];
             // Remove stale streaming message that may have survived a WS drop
             setMessages((prev) => prev.filter((m) => m.id !== "streaming"));
-            setPendingQuestions([]);
+            setPendingQuestions((prev) => {
+              if (prev.length > 0)
+                console.log(
+                  `[question-debug] status:idle clearing ${prev.length} pendingQuestions`,
+                  prev.map((q) => q.requestId),
+                );
+              return [];
+            });
             setRateLimitStatus(null);
             // Clear any background tasks still running - the process has exited
             setBackgroundTasks((prev) => {
@@ -681,9 +773,13 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
           streamingRef.current = null;
           agentStackRef.current = [];
           const err = (msg.error as string) || "Unknown error";
-          // Extract the human-readable message from JSON if present
           const match = err.match(/"message"\s*:\s*"([^"]+)"/);
           setApiError(match ? match[1] : err.slice(0, 200));
+          if (/\(HTTP 529\)/.test(err) || /API Error: 529\b/.test(err)) {
+            setErrorActive(true);
+            clearTimeout(errorTimerRef.current);
+            errorTimerRef.current = setTimeout(() => setErrorActive(false), 15_000);
+          }
           break;
         }
 
@@ -779,6 +875,11 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
             setThinkingLevelState(level);
             break;
           }
+          const runtimePrefix = "__runtime::";
+          if (msg.text.startsWith(runtimePrefix)) {
+            setCurrentRuntime(msg.text.slice(runtimePrefix.length) as "pty" | "stream");
+            break;
+          }
           if (msg.text === "__compact_boundary__") {
             setMessages((prev) => {
               const doneId = "compact-done-" + Date.now();
@@ -844,6 +945,12 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
           if (msg.info.model) {
             setCurrentModel(msg.info.model);
           }
+          if (msg.info.contextSize) {
+            setCurrentContextSize(msg.info.contextSize);
+          }
+          if (msg.info.runtime) {
+            setCurrentRuntime(msg.info.runtime);
+          }
           break;
         }
 
@@ -868,14 +975,22 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
         }
 
         case "question:request": {
-          setPendingQuestions((prev) => [...prev, { requestId: msg.requestId, questions: msg.questions }]);
+          console.log(`[question-debug] question:request received`, msg.requestId);
+          console.trace("[question-debug] question:request stack");
+          setPendingQuestions((prev) => {
+            console.log(`[question-debug] question:request adding to ${prev.length} existing`, [
+              ...prev.map((q) => q.requestId),
+              msg.requestId,
+            ]);
+            return [...prev, { requestId: msg.requestId, questions: msg.questions }];
+          });
           break;
         }
       }
     });
 
     return unsub;
-  }, [sessionId, subscribe]);
+  }, [sessionId, subscribe, currentRuntime]);
 
   const requestMoreHistory = useCallback(() => {
     if (loadingMore || !hasMoreHistory) return;
@@ -1056,6 +1171,15 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
       };
       setMessages((prev) => [...prev, userMsg]);
       setSuggestions([]);
+
+      const cleaned = text.replace(/^\[Attached [^\]]+\]\n*/gm, "").trim();
+      if (cleaned && !cleaned.startsWith("/")) {
+        setPromptHistory((prev) => {
+          if (prev[0] === cleaned) return prev;
+          return [cleaned, ...prev.filter((p) => p !== cleaned)];
+        });
+      }
+
       send({
         type: "message:send",
         sessionId,
@@ -1081,25 +1205,82 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
 
   const respondToQuestion = useCallback(
     (requestId: string, answers: Record<string, string>) => {
+      console.log(`[question-debug] respondToQuestion`, requestId);
       send({ type: "question:response", sessionId, requestId, answers });
-      setPendingQuestions((prev) => prev.map((q) => (q.requestId === requestId ? { ...q, answered: true } : q)));
+      setPendingQuestions((prev) => {
+        console.log(
+          `[question-debug] marking answered, current pending:`,
+          prev.map((q) => ({ id: q.requestId, answered: q.answered })),
+        );
+        return prev.map((q) => (q.requestId === requestId ? { ...q, answered: true } : q));
+      });
     },
     [send, sessionId],
   );
 
-  const selectModel = useCallback(
-    (model: string) => {
+  const [thinkingCheck, setThinkingCheck] = useState<ThinkingCheck | null>(null);
+
+  const applyModelSet = useCallback(
+    (model: string, contextSize?: ContextSize) => {
       setModelPicker(null);
       setCurrentModel(model);
-      send({ type: "message:send", sessionId, text: `/model ${model}` });
+      if (contextSize !== undefined) setCurrentContextSize(contextSize);
+      send({ type: "session:set_model", sessionId, model, contextSize });
     },
     [send, sessionId],
+  );
+
+  const checkAndSwitchModel = useCallback(
+    async (model: string, contextSize?: ContextSize) => {
+      const base = model.replace(/\[.*\]$/, "");
+      const isAnthropic = base.startsWith("claude") || resolveModel(base) !== null;
+      if (!isAnthropic) {
+        applyModelSet(model, contextSize);
+        return;
+      }
+
+      try {
+        const res = await fetch(`/api/sessions/thinking?sessionId=${encodeURIComponent(sessionId)}`);
+        const data = await res.json();
+        if (data.hasNonAnthropicThinking) {
+          setModelPicker(null);
+          setThinkingCheck({ pending: true, targetModel: model, models: data.models, contextSize });
+          return;
+        }
+      } catch {}
+
+      applyModelSet(model, contextSize);
+    },
+    [sessionId, applyModelSet],
   );
 
   const setModel = useCallback(
-    (model: string) => {
-      setCurrentModel(model);
-      send({ type: "session:set_model", sessionId, model });
+    (model: string, contextSize?: ContextSize) => {
+      checkAndSwitchModel(model, contextSize);
+    },
+    [checkAndSwitchModel],
+  );
+
+  const confirmThinkingStrip = useCallback(async () => {
+    if (!thinkingCheck) return;
+    const { targetModel, contextSize } = thinkingCheck;
+    await fetch("/api/sessions/thinking", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sessionId }),
+    });
+    setThinkingCheck(null);
+    applyModelSet(targetModel, contextSize);
+  }, [thinkingCheck, sessionId, applyModelSet]);
+
+  const cancelThinkingCheck = useCallback(() => {
+    setThinkingCheck(null);
+  }, []);
+
+  const setModelSlot = useCallback(
+    (slot: "main" | "subagent" | "fast", modelId: string) => {
+      if (slot === "main") setCurrentModel(modelId);
+      send({ type: "session:set_model_slot", sessionId, slot, modelId });
     },
     [send, sessionId],
   );
@@ -1190,6 +1371,14 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
     send({ type: "message:send", sessionId, text: "Continue from where you left off." });
   }, [send, sessionId]);
 
+  const setRuntime = useCallback(
+    (runtime: "pty" | "stream") => {
+      setCurrentRuntime(runtime);
+      send({ type: "session:set_runtime", sessionId, runtime });
+    },
+    [send, sessionId],
+  );
+
   const restartSession = useCallback(() => {
     send({ type: "session:restart", sessionId });
   }, [send, sessionId]);
@@ -1198,10 +1387,12 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
     messages,
     historyLoaded,
     isResponding,
+    errorActive,
     pendingPermissions,
     pendingQuestions,
     modelPicker,
     currentModel,
+    currentContextSize,
     bypassActive,
     planMode,
     thinkingLevel,
@@ -1218,6 +1409,7 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
     backgroundTasks,
     todos,
     btw,
+    promptHistory,
     hasMoreHistory,
     loadingMore,
     requestMoreHistory,
@@ -1225,8 +1417,8 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
     interrupt,
     respondToPermission,
     respondToQuestion,
-    selectModel,
     setModel,
+    setModelSlot,
     setBypassAll,
     setPlanMode,
     setThinkingLevel,
@@ -1238,6 +1430,11 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
     clearRestoredText,
     dismissBtw,
     retry,
+    currentRuntime,
+    setRuntime,
     restartSession,
+    thinkingCheck,
+    confirmThinkingStrip,
+    cancelThinkingCheck,
   };
 }

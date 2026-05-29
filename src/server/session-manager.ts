@@ -1,11 +1,21 @@
-import { type ChildProcess, spawn } from "node:child_process";
+import { type ChildProcess, execFileSync, spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { type Writable } from "node:stream";
 import { v4 as uuidv4 } from "uuid";
-import { allowedEffortLevels, coerceEffort, recommendedEffort, resolveModel } from "@/lib/models";
+import {
+  allowedEffortLevels,
+  CONTEXT_SIZES,
+  type ContextSize,
+  coerceEffort,
+  contextSizeToWindow,
+  DEFAULT_CONTEXT_SIZE,
+  recommendedEffort,
+  resolveModel,
+} from "@/lib/models";
+import { getCockpitCacheDir, getCockpitDir } from "@/server/paths";
+import { resolveProviderModel } from "@/server/providers";
 import type {
   ChatMessage,
   ContentBlock,
@@ -13,6 +23,7 @@ import type {
   DocumentAttachment,
   ImageAttachment,
   InitData,
+  ModelSlots,
   SessionInfo,
   ThinkingLevel,
   TodoItem,
@@ -22,9 +33,31 @@ import { debugLog, isDebugEnabled, logDiag, logRawLine } from "./debug-logger";
 import { getDefaults } from "./defaults";
 import { EventParser, type ParsedEvent } from "./event-parser";
 import { findLatestPlanFile, readPlanFile } from "./plans";
-import { findChainForCliSession, getSessionPrefs, setSessionPrefs } from "./session-prefs";
+import { PtyRuntime } from "./pty-runtime";
+import { findChainForCliSession, getSessionPrefs, type SessionRuntime, setSessionPrefs } from "./session-prefs";
+import { getHookRouter } from "./singleton";
 import { createStreamState, processEvents, type StreamState } from "./stream-processor";
-import { findSessionCwd, loadMoreMessages, loadTranscript, transcriptExists } from "./transcript";
+import { TodoWatcher } from "./todo-watcher";
+import { findSessionCwd, loadMoreMessages, loadPromptHistory, loadTranscript, transcriptExists } from "./transcript";
+import { TranscriptWatcher } from "./transcript-watcher";
+
+export type { SessionRuntime };
+
+function defaultRuntime(): SessionRuntime {
+  return "stream";
+}
+
+let resolvedClaudeBin: string | null = null;
+function getClaudeBin(): string {
+  if (resolvedClaudeBin) return resolvedClaudeBin;
+  const cmd = process.platform === "win32" ? "where" : "which";
+  try {
+    resolvedClaudeBin = execFileSync(cmd, ["claude"], { encoding: "utf-8" }).trim().split("\n")[0];
+  } catch {
+    resolvedClaudeBin = "claude";
+  }
+  return resolvedClaudeBin;
+}
 
 const smLog = (sessionId: string, msg: string) => {
   if (!isDebugEnabled()) return;
@@ -89,6 +122,7 @@ interface Session {
   streamingSnapshot: StreamingSnapshot | null;
   queuedMessages: QueuedMessage[];
   queuePaused: boolean;
+  modelSlots: ModelSlots;
   transcriptBuffer: ChatMessage[];
   transcriptByteOffset: number;
   transcriptTotalSize: number;
@@ -96,6 +130,16 @@ interface Session {
   /** Pagination-only copy of previousCliSessionIds, consumed by getMoreHistory
    *  without affecting the canonical list used for stitching on reconnect. */
   paginationPrevIds: string[];
+  /** "stream" spawns `claude -p` (current default). "pty" spawns interactive
+   *  claude through node-pty + hooks. Selectable per session via env at
+   *  creation time; future revisions may expose this on SessionInfo. */
+  runtime: SessionRuntime;
+  ptyRuntime: PtyRuntime | null;
+  transcriptWatcher: TranscriptWatcher | null;
+  todoWatcher: TodoWatcher | null;
+  attachmentPaths: string[];
+  /** Cumulative token counts for the current session (used by /cost). */
+  totalTokens: { input: number; output: number; cacheCreate: number; cacheRead: number };
 }
 
 export class SessionManager {
@@ -104,9 +148,9 @@ export class SessionManager {
     // Periodically check for sessions stuck in "running" with a dead process
     setInterval(() => {
       for (const [id, session] of this.sessions) {
-        if (session.info.status === "running" && !session.process) {
+        if (session.info.status === "running" && !session.process && !session.ptyRuntime?.isAlive) {
           const short = id.slice(0, 8);
-          debugLog(`[session:${short}] stale check: status=running but process=null, correcting to idle`);
+          debugLog(`[session:${short}] stale check: status=running but no live process, correcting to idle`);
           logDiag(id, "idle:stale-check");
           session.info.status = "idle";
           session.emitter.emit("status", id, "idle");
@@ -115,10 +159,12 @@ export class SessionManager {
     }, 15000);
   }
 
-  createSession(cwd: string, name?: string, options?: { bypassPermissions?: boolean }): SessionInfo {
+  createSession(cwd: string, name?: string, options?: { bypassPermissions?: boolean; runtime?: SessionRuntime }): SessionInfo {
     const id = uuidv4();
     const now = Date.now();
     const defaults = getDefaults();
+    const modelSlots: ModelSlots = { main: defaults.modelSlots.main ?? "sonnet" };
+    const rt = options?.runtime ?? defaultRuntime();
     const info: SessionInfo = {
       id,
       name: name || path.basename(cwd) || cwd,
@@ -126,7 +172,9 @@ export class SessionManager {
       createdAt: now,
       lastActiveAt: now,
       status: "idle",
-      model: defaults.model || undefined,
+      model: modelSlots.main,
+      contextSize: defaults.modelSlots?.mainContext ?? DEFAULT_CONTEXT_SIZE,
+      runtime: rt,
       pendingRequestCount: 0,
     };
 
@@ -145,19 +193,28 @@ export class SessionManager {
       thinkingLevel: defaults.thinkingLevel,
       streamState: null,
       contextUsage: null,
-      contextWindowSize: 200_000,
+      contextWindowSize: contextSizeToWindow(info.contextSize ?? DEFAULT_CONTEXT_SIZE),
       todoItems: [],
       pendingRequests: new Map(),
       controlCallbacks: new Map(),
       streamingSnapshot: null,
       queuedMessages: [],
       queuePaused: false,
+      modelSlots,
       transcriptBuffer: [],
       transcriptByteOffset: 0,
       transcriptTotalSize: 0,
       bufferCliSessionId: id,
       paginationPrevIds: [],
+      runtime: rt,
+      ptyRuntime: null,
+      transcriptWatcher: null,
+      todoWatcher: null,
+      attachmentPaths: [],
+      totalTokens: { input: 0, output: 0, cacheCreate: 0, cacheRead: 0 },
     });
+
+    setSessionPrefs(id, { runtime: rt });
 
     return info;
   }
@@ -166,8 +223,18 @@ export class SessionManager {
     let session = this.sessions.get(id);
     if (!session) {
       const prefs = getSessionPrefs(id);
+      const cliId = prefs?.cliSessionId || id;
+      const prevIds = prefs?.previousCliSessionIds || [];
+      const short = id.slice(0, 8);
+      debugLog(
+        `[session:${short}] ensureSession: cliSessionId=${cliId.slice(0, 8)}, prevIds=[${prevIds.map((p) => p.slice(0, 8)).join(",")}], hasPrefs=${!!prefs}`,
+      );
       const defaults = getDefaults();
       const now = Date.now();
+      const modelSlots: ModelSlots =
+        prefs?.modelSlots ?? (prefs?.model ? { main: prefs.model } : { main: defaults.modelSlots.main ?? "sonnet" });
+      const restoredRuntime = prefs?.runtime ?? defaultRuntime();
+      const restoredContextSize = prefs?.contextSize ?? prefs?.modelSlots?.mainContext ?? DEFAULT_CONTEXT_SIZE;
       session = {
         info: {
           id,
@@ -176,24 +243,29 @@ export class SessionManager {
           createdAt: now,
           lastActiveAt: now,
           status: "idle",
-          model: prefs?.model || defaults.model || undefined,
+          model: modelSlots.main,
+          contextSize: restoredContextSize,
+          runtime: restoredRuntime,
           pendingRequestCount: 0,
         },
         process: null,
         stdin: null,
         emitter: new EventEmitter(),
         hasSpawnedBefore: true,
-        cliSessionId: prefs?.cliSessionId || id,
-        previousCliSessionIds: prefs?.previousCliSessionIds || [],
+        cliSessionId: cliId,
+        previousCliSessionIds: prevIds,
         bypassAllPermissions: prefs?.bypassAllPermissions ?? defaults.bypassAllPermissions,
         planMode: prefs?.planMode ?? false,
         pendingPlanReminder: prefs?.planMode ?? false,
         needsRespawnForPermissions: false,
         compacting: false,
-        thinkingLevel: prefs?.thinkingLevel ?? recommendedEffort(resolveModel(prefs?.model || defaults.model)) ?? defaults.thinkingLevel,
+        thinkingLevel:
+          prefs?.thinkingLevel ??
+          recommendedEffort(resolveModel((prefs?.model || defaults.modelSlots.main) ?? "sonnet")) ??
+          defaults.thinkingLevel,
         streamState: null,
         contextUsage: null,
-        contextWindowSize: 200_000,
+        contextWindowSize: contextSizeToWindow(restoredContextSize),
         todoItems: [],
         pendingRequests: new Map(),
         controlCallbacks: new Map(),
@@ -201,20 +273,31 @@ export class SessionManager {
         streamingSnapshot: null,
         queuedMessages: [],
         queuePaused: false,
+        modelSlots,
         transcriptBuffer: [],
         transcriptByteOffset: 0,
         transcriptTotalSize: 0,
-        bufferCliSessionId: prefs?.cliSessionId || id,
+        bufferCliSessionId: cliId,
         paginationPrevIds: [],
+        runtime: restoredRuntime,
+        ptyRuntime: null,
+        transcriptWatcher: null,
+        todoWatcher: null,
+        attachmentPaths: [],
+        totalTokens: { input: 0, output: 0, cacheCreate: 0, cacheRead: 0 },
       };
       this.sessions.set(id, session);
     }
-    return session;
+    return session!;
   }
 
-  async getSession(
-    id: string,
-  ): Promise<{ info: SessionInfo; messages: ChatMessage[]; hasMore: boolean; lastUsage: { used: number; total: number } | null } | null> {
+  async getSession(id: string): Promise<{
+    info: SessionInfo;
+    messages: ChatMessage[];
+    hasMore: boolean;
+    lastUsage: { used: number; total: number } | null;
+    promptHistory: string[];
+  } | null> {
     let session = this.sessions.get(id);
     if (!session) {
       // After server restart, session isn't in memory but transcript exists on disk.
@@ -237,24 +320,22 @@ export class SessionManager {
     session.bufferCliSessionId = session.cliSessionId;
 
     if (willStitch) {
-      const currentMessages = messages;
       for (let i = session.previousCliSessionIds.length - 1; i >= 0; i--) {
         const prevId = session.previousCliSessionIds[i];
         const prevResult = await loadTranscript(prevId, session.info.cwd, { tailLines: 150 });
         if (prevResult.messages.length > 0) {
           const marker: ChatMessage = {
-            id: "clear-boundary-" + Date.now(),
+            id: `clear-boundary-${i}`,
             role: "system" as const,
             content: "__context_reset__",
             toolUses: [],
             blocks: [],
             timestamp: Date.now(),
           };
-          messages = [...prevResult.messages, marker, ...currentMessages];
+          messages = [...prevResult.messages, marker, ...messages];
           byteOffset = prevResult.byteOffset;
           lastUsage = lastUsage || prevResult.lastUsage;
           session.bufferCliSessionId = prevId;
-          break;
         }
       }
     }
@@ -278,13 +359,32 @@ export class SessionManager {
         session.info.name = firstUser.content.slice(0, 120);
       }
     }
-    return { info: session.info, messages: clientMessages, hasMore, lastUsage };
+    const allCliIds = [...session.previousCliSessionIds, session.cliSessionId];
+    const historyArrays = await Promise.all(allCliIds.map((id) => loadPromptHistory(id, session.info.cwd)));
+    const seen = new Set<string>();
+    const allPrompts: string[] = [];
+    for (const arr of historyArrays) {
+      for (const p of arr) {
+        if (seen.has(p)) continue;
+        seen.add(p);
+        allPrompts.push(p);
+      }
+    }
+
+    const normalized = lastUsage ? { used: lastUsage.used, total: session.contextWindowSize } : null;
+    return { info: session.info, messages: clientMessages, hasMore, lastUsage: normalized, promptHistory: allPrompts };
   }
 
   async getSessionByCwd(
     id: string,
     cwd: string,
-  ): Promise<{ info: SessionInfo; messages: ChatMessage[]; hasMore: boolean; lastUsage: { used: number; total: number } | null } | null> {
+  ): Promise<{
+    info: SessionInfo;
+    messages: ChatMessage[];
+    hasMore: boolean;
+    lastUsage: { used: number; total: number } | null;
+    promptHistory: string[];
+  } | null> {
     this.ensureSession(id, cwd);
     const session = this.sessions.get(id)!;
     const stitching = getDefaults().messageStitching;
@@ -295,24 +395,22 @@ export class SessionManager {
     session.bufferCliSessionId = session.cliSessionId;
 
     if (willStitch) {
-      const currentMessages = messages;
       for (let i = session.previousCliSessionIds.length - 1; i >= 0; i--) {
         const prevId = session.previousCliSessionIds[i];
         const prevResult = await loadTranscript(prevId, cwd, { tailLines: 150 });
         if (prevResult.messages.length > 0) {
           const marker: ChatMessage = {
-            id: "clear-boundary-" + Date.now(),
+            id: `clear-boundary-${i}`,
             role: "system" as const,
             content: "__context_reset__",
             toolUses: [],
             blocks: [],
             timestamp: Date.now(),
           };
-          messages = [...prevResult.messages, marker, ...currentMessages];
+          messages = [...prevResult.messages, marker, ...messages];
           byteOffset = prevResult.byteOffset;
           lastUsage = lastUsage || prevResult.lastUsage;
           session.bufferCliSessionId = prevId;
-          break;
         }
       }
     }
@@ -337,13 +435,32 @@ export class SessionManager {
         session.info.name = firstUser.content.slice(0, 120);
       }
     }
-    return { info: session.info, messages: clientMessages, hasMore, lastUsage };
+    const allCliIds = [...session.previousCliSessionIds, session.cliSessionId];
+    const historyArrays = await Promise.all(allCliIds.map((id) => loadPromptHistory(id, cwd)));
+    const seen = new Set<string>();
+    const allPrompts: string[] = [];
+    for (const arr of historyArrays) {
+      for (const p of arr) {
+        if (seen.has(p)) continue;
+        seen.add(p);
+        allPrompts.push(p);
+      }
+    }
+
+    const normalized = lastUsage ? { used: lastUsage.used, total: session.contextWindowSize } : null;
+    return { info: session.info, messages: clientMessages, hasMore, lastUsage: normalized, promptHistory: allPrompts };
   }
 
   async getCliSessionView(
     cliId: string,
     cwd: string,
-  ): Promise<{ info: SessionInfo; messages: ChatMessage[]; hasMore: boolean; lastUsage: { used: number; total: number } | null } | null> {
+  ): Promise<{
+    info: SessionInfo;
+    messages: ChatMessage[];
+    hasMore: boolean;
+    lastUsage: { used: number; total: number } | null;
+    promptHistory: string[];
+  } | null> {
     if (!transcriptExists(cliId, cwd)) return null;
 
     const chain = findChainForCliSession(cliId);
@@ -354,21 +471,19 @@ export class SessionManager {
     let { messages, lastUsage } = result;
 
     if (willStitch) {
-      const currentMessages = messages;
       for (let i = prevIds.length - 1; i >= 0; i--) {
         const prevResult = await loadTranscript(prevIds[i], cwd, { tailLines: 150 });
         if (prevResult.messages.length > 0) {
           const marker: ChatMessage = {
-            id: "clear-boundary-" + Date.now(),
+            id: `clear-boundary-${i}`,
             role: "system" as const,
             content: "__context_reset__",
             toolUses: [],
             blocks: [],
             timestamp: Date.now(),
           };
-          messages = [...prevResult.messages, marker, ...currentMessages];
+          messages = [...prevResult.messages, marker, ...messages];
           lastUsage = lastUsage || prevResult.lastUsage;
-          break;
         }
       }
     }
@@ -384,11 +499,27 @@ export class SessionManager {
       }
     }
 
+    const allCliIds = [...prevIds, cliId];
+    const historyArrays = await Promise.all(allCliIds.map((id) => loadPromptHistory(id, cwd)));
+    const seen = new Set<string>();
+    const allPrompts: string[] = [];
+    for (const arr of historyArrays) {
+      for (const p of arr) {
+        if (seen.has(p)) continue;
+        seen.add(p);
+        allPrompts.push(p);
+      }
+    }
+
+    const prefs = getSessionPrefs(cliId);
+    const viewSize = prefs?.contextSize ?? prefs?.modelSlots?.mainContext ?? DEFAULT_CONTEXT_SIZE;
+    const normalized = lastUsage ? { used: lastUsage.used, total: contextSizeToWindow(viewSize) } : null;
     return {
       info: { id: cliId, name, cwd, createdAt: Date.now(), lastActiveAt: Date.now(), status: "idle" },
       messages: clientMessages,
       hasMore: messages.length > PAGE,
-      lastUsage,
+      lastUsage: normalized,
+      promptHistory: allPrompts,
     };
   }
 
@@ -476,9 +607,25 @@ export class SessionManager {
     return this.sessions.get(id)?.compacting ?? false;
   }
 
+  getRuntime(id: string): "pty" | "stream" {
+    return this.sessions.get(id)?.runtime ?? "stream";
+  }
+
+  getSessionCwd(id: string): string | null {
+    return this.sessions.get(id)?.info.cwd ?? null;
+  }
+
+  getCliSessionId(id: string): string | null {
+    return this.sessions.get(id)?.cliSessionId ?? null;
+  }
+
+  getSessionModel(id: string): string | null {
+    return this.sessions.get(id)?.info.model ?? null;
+  }
+
   listActiveSessions(): SessionInfo[] {
     return Array.from(this.sessions.values())
-      .filter((s) => s.process !== null)
+      .filter((s) => s.process !== null || !!s.ptyRuntime?.isAlive)
       .map((s) => s.info);
   }
 
@@ -503,17 +650,17 @@ export class SessionManager {
 
   isProcessAlive(id: string): boolean {
     const session = this.sessions.get(id);
-    return !!session?.process;
+    return !!session?.process || !!session?.ptyRuntime?.isAlive;
   }
 
   hasRunningProcess(id: string): boolean {
     const session = this.sessions.get(id);
-    return !!session?.process;
+    return !!session?.process || !!session?.ptyRuntime?.isAlive;
   }
 
   fixStaleStatus(id: string): void {
     const session = this.sessions.get(id);
-    if (session && session.info.status === "running" && !session.process) {
+    if (session && session.info.status === "running" && !session.process && !session.ptyRuntime?.isAlive) {
       session.info.status = "idle";
       session.pendingRequests.clear();
       this.notifyPendingChanged(session, id);
@@ -530,6 +677,9 @@ export class SessionManager {
     }
 
     this.killProcess(session);
+    if (!transcriptExists(session.cliSessionId, session.info.cwd)) {
+      session.hasSpawnedBefore = false;
+    }
     session.pendingRequests.clear();
     this.notifyPendingChanged(session, sessionId);
     session.streamingSnapshot = null;
@@ -546,6 +696,20 @@ export class SessionManager {
     if (session.process) {
       this.endProcess(session, "session_destroyed");
     }
+    if (session.ptyRuntime) {
+      const runtime = session.ptyRuntime;
+      session.ptyRuntime = null;
+      runtime.kill().catch(() => {});
+    }
+    if (session.transcriptWatcher) {
+      session.transcriptWatcher.stop();
+      session.transcriptWatcher = null;
+    }
+    if (session.todoWatcher) {
+      session.todoWatcher.stop();
+      session.todoWatcher = null;
+    }
+    this.cleanupAttachments(session);
     session.emitter.removeAllListeners();
     this.sessions.delete(id);
     return true;
@@ -565,7 +729,10 @@ export class SessionManager {
 
   onStatus(id: string, listener: (status: "idle" | "running") => void): (() => void) | null {
     const session = this.sessions.get(id);
-    if (!session) return null;
+    if (!session) {
+      smLog(id, "onStatus: session not in memory, returning null");
+      return null;
+    }
 
     const handler = (_sessionId: string, status: "idle" | "running") => {
       listener(status);
@@ -599,19 +766,57 @@ export class SessionManager {
     return () => session.emitter.off("error", handler);
   }
 
+  onTranscript(id: string, listener: (messages: ChatMessage[]) => void): (() => void) | null {
+    const session = this.sessions.get(id);
+    if (!session) return null;
+    const handler = (_sessionId: string, messages: ChatMessage[]) => listener(messages);
+    session.emitter.on("transcript", handler);
+    return () => session.emitter.off("transcript", handler);
+  }
+
   interrupt(id: string): boolean {
     const session = this.sessions.get(id);
-    if (!session?.process) {
-      logDiag(id, "interrupt:no-process", { hasSession: !!session });
+    if (!session) {
+      logDiag(id, "interrupt:no-process", { hasSession: false });
       return false;
     }
 
     // Pause the queue atomically with the interrupt so
     // flushQueuedMessage (called on message_done) becomes a no-op.
-    // This prevents a race where message_done fires before a
-    // separate pause_queue WS message can arrive.
     if (session.queuedMessages.length > 0) {
       session.queuePaused = true;
+    }
+
+    if (session.runtime === "pty") {
+      if (!session.ptyRuntime?.isAlive) {
+        logDiag(id, "interrupt:no-pty");
+        return false;
+      }
+      logDiag(id, "interrupt:pty-esc");
+      session.ptyRuntime.interrupt();
+      // Esc cancels the claude TUI turn but may not produce a Stop hook if it
+      // arrived before any response. Force-idle so the UI unsticks; the PTY
+      // process stays alive at its REPL prompt and accepts the next message.
+      if (session.info.status === "running") {
+        session.info.status = "idle";
+        session.streamingSnapshot = null;
+        if (session.streamState) {
+          session.streamState.pendingBlocks.length = 0;
+          session.streamState.pendingToolUses.length = 0;
+          session.streamState.agentStack.length = 0;
+          session.streamState.currentAssistantMsgId = null;
+          session.streamState.flushedOnMessageDone = false;
+        }
+        session.emitter.emit("status", id, "idle");
+      }
+      session.pendingRequests.clear();
+      this.notifyPendingChanged(session, id);
+      return true;
+    }
+
+    if (!session.process) {
+      logDiag(id, "interrupt:no-process", { hasSession: true });
+      return false;
     }
 
     // Send a control_request interrupt via stdin instead of SIGINT.
@@ -627,12 +832,16 @@ export class SessionManager {
       };
       logDiag(id, "interrupt:stdin", { requestId: request.request_id });
       session.stdin.write(JSON.stringify(request) + "\n");
+      session.pendingRequests.clear();
+      this.notifyPendingChanged(session, id);
       return true;
     }
 
     // Fallback: if stdin is gone, kill the process group
     logDiag(id, "interrupt:kill-fallback");
     this.killProcessGroup(session.process);
+    session.pendingRequests.clear();
+    this.notifyPendingChanged(session, id);
     return true;
   }
 
@@ -647,7 +856,14 @@ export class SessionManager {
   removePendingRequest(sessionId: string, requestId: string): void {
     const session = this.sessions.get(sessionId);
     if (session) {
+      const had = session.pendingRequests.has(requestId);
+      const wasQuestion = session.pendingRequests.get(requestId)?.type === "question";
       session.pendingRequests.delete(requestId);
+      if (wasQuestion) {
+        console.log(
+          `[question-debug] removePendingRequest: session=${sessionId.slice(0, 8)}, requestId=${requestId}, existed=${had}, remaining=${session.pendingRequests.size}`,
+        );
+      }
       this.notifyPendingChanged(session, sessionId);
     }
   }
@@ -671,7 +887,21 @@ export class SessionManager {
     denyReason?: string,
   ): boolean {
     const session = this.sessions.get(sessionId);
-    if (!session?.stdin) return false;
+    if (!session) return false;
+
+    if (session.runtime === "pty") {
+      if (!session.ptyRuntime?.isAlive) return false;
+      session.pendingRequests.delete(requestId);
+      this.notifyPendingChanged(session, sessionId);
+      return session.ptyRuntime.notifyPermissionDecision(
+        requestId,
+        allowed
+          ? { behavior: "allow", ...(toolInput ? { updatedInput: toolInput } : {}) }
+          : { behavior: "deny", message: denyReason ?? "User denied" },
+      );
+    }
+
+    if (!session.stdin) return false;
 
     session.pendingRequests.delete(requestId);
     this.notifyPendingChanged(session, sessionId);
@@ -736,13 +966,24 @@ export class SessionManager {
   // session state, guaranteeing the next message runs in the right mode.
   // If a message is in flight, defer until message_done so we don't orphan it.
   private scheduleRespawnForPermissions(session: Session): void {
-    if (!session.process) return;
+    if (!session.process && !session.ptyRuntime?.isAlive) return;
     if (session.info.status === "idle") {
       this.killProcess(session);
       session.hasSpawnedBefore = transcriptExists(session.cliSessionId, session.info.cwd);
     } else {
       session.needsRespawnForPermissions = true;
     }
+  }
+
+  setRuntime(sessionId: string, runtime: "pty" | "stream"): boolean {
+    const session = this.sessions.get(sessionId);
+    if (!session || session.runtime === runtime) return false;
+    session.runtime = runtime;
+    session.info.runtime = runtime;
+    setSessionPrefs(sessionId, { runtime });
+    this.killProcess(session);
+    this.emitInfoUpdated(session, sessionId);
+    return true;
   }
 
   isBypassActive(sessionId: string): boolean {
@@ -758,7 +999,7 @@ export class SessionManager {
     setSessionPrefs(sessionId, { planMode: true });
     // Kill process so it restarts without --allow-dangerously-skip-permissions,
     // which lets the CLI natively enforce plan mode tool restrictions.
-    if (session.process) {
+    if (session.process || session.ptyRuntime?.isAlive) {
       this.killProcess(session);
       session.info.status = "idle";
       session.emitter.emit("status", sessionId, "idle");
@@ -776,7 +1017,7 @@ export class SessionManager {
     setSessionPrefs(sessionId, { planMode: false });
     // Kill process so it restarts with --allow-dangerously-skip-permissions,
     // restoring bypass capability for build mode.
-    if (session.process) {
+    if (session.process || session.ptyRuntime?.isAlive) {
       this.killProcess(session);
       session.info.status = "idle";
       session.emitter.emit("status", sessionId, "idle");
@@ -797,21 +1038,44 @@ export class SessionManager {
     return session?.planMode ?? false;
   }
 
-  setModel(sessionId: string, model: string): void {
+  setModel(sessionId: string, model: string, contextSize?: ContextSize): void {
     const session = this.sessions.get(sessionId);
-    if (!session || session.info.model === model) return;
+    this.log(
+      sessionId,
+      `setModel: requested=${model} size=${contextSize ?? "(unspecified)"}, current=${session?.info.model} currentSize=${session?.info.contextSize ?? "(unset)"}, hasStdin=${!!session?.stdin}, hasPty=${!!session?.ptyRuntime}`,
+    );
+    if (!session) return;
 
-    // Detect 200K↔1M flip. The CLAUDE_CODE_DISABLE_1M_CONTEXT env var is
-    // applied at spawn, so toggling the [1m] suffix mid-session needs a CLI
-    // restart for the new context window to actually take effect.
-    const has1m = (m: string | undefined) => !!m && /\[1m\]/i.test(m);
-    const contextChanged = has1m(session.info.model) !== has1m(model);
+    const currentSize = session.info.contextSize ?? DEFAULT_CONTEXT_SIZE;
+    const requestedSize = contextSize ?? currentSize;
+    const resolvedSize: ContextSize = (() => {
+      const sizes = resolveModel(model)?.contextSizes;
+      if (!sizes || sizes.length === 0) return requestedSize;
+      return sizes.includes(requestedSize) ? requestedSize : sizes[0];
+    })();
+    // CLAUDE_CODE_DISABLE_1M_CONTEXT is applied at spawn, so a context-size
+    // change mid-session requires a CLI restart to take effect.
+    const contextChanged = currentSize !== resolvedSize;
+
+    if (session.info.model === model && !contextChanged) {
+      this.log(sessionId, `setModel: skipping (already ${model} with size ${resolvedSize})`);
+      return;
+    }
 
     session.info.model = model;
-    setSessionPrefs(sessionId, { model });
+    session.info.contextSize = resolvedSize;
+    session.modelSlots = { ...session.modelSlots, main: model, mainContext: resolvedSize };
+    setSessionPrefs(sessionId, { model, contextSize: resolvedSize, modelSlots: session.modelSlots });
 
     const nextEntry = resolveModel(model);
-    const coerced = coerceEffort(session.thinkingLevel, nextEntry);
+    const coerced = nextEntry
+      ? coerceEffort(session.thinkingLevel, nextEntry)
+      : (() => {
+          const levels = this.modelEffortLevels(model);
+          if (levels.length === 0) return null;
+          if (levels.includes(session.thinkingLevel)) return session.thinkingLevel;
+          return levels[levels.length - 1];
+        })();
     const levelChanged = coerced !== null && coerced !== session.thinkingLevel;
     if (levelChanged) {
       session.thinkingLevel = coerced;
@@ -820,13 +1084,14 @@ export class SessionManager {
     }
 
     if (session.stdin && !contextChanged) {
+      this.log(sessionId, `setModel: sending control_request set_model=${model}`);
       const request = {
         type: "control_request",
         request_id: `model-${Date.now()}`,
         request: { subtype: "set_model", model },
       };
       session.stdin.write(JSON.stringify(request) + "\n");
-      if (allowedEffortLevels(nextEntry).length > 0) {
+      if (this.modelEffortLevels(model).length > 0) {
         const effortRequest = {
           type: "control_request",
           request_id: `effort-${Date.now()}`,
@@ -835,13 +1100,45 @@ export class SessionManager {
         session.stdin.write(JSON.stringify(effortRequest) + "\n");
       }
     } else {
+      this.log(sessionId, `setModel: killing process (hasStdin=${!!session.stdin}, contextChanged=${contextChanged})`);
       this.killProcess(session);
+      if (!transcriptExists(session.cliSessionId, session.info.cwd)) {
+        session.hasSpawnedBefore = false;
+      }
       session.queuedMessages.length = 0;
       session.queuePaused = false;
       session.info.status = "idle";
       session.emitter.emit("status", sessionId, "idle");
     }
     this.emitInfoUpdated(session, sessionId);
+    if (contextChanged) {
+      session.contextWindowSize = contextSizeToWindow(resolvedSize);
+    }
+    const cur = session.contextUsage;
+    if (cur) {
+      session.emitter.emit("usage", sessionId, { used: cur.used, total: session.contextWindowSize });
+    }
+  }
+
+  setModelSlot(sessionId: string, slot: "main" | "subagent" | "fast", modelId: string): void {
+    const session = this.sessions.get(sessionId);
+    if (!session) return;
+
+    const slots = { ...session.modelSlots };
+    slots[slot] = modelId;
+    session.modelSlots = slots;
+    setSessionPrefs(sessionId, { modelSlots: slots });
+
+    if (slot === "main") {
+      this.setModel(sessionId, modelId);
+    } else {
+      this.killProcess(session);
+      session.queuedMessages.length = 0;
+      session.queuePaused = false;
+      session.info.status = "idle";
+      session.emitter.emit("status", sessionId, "idle");
+      this.emitInfoUpdated(session, sessionId);
+    }
   }
 
   getModel(sessionId: string): string {
@@ -854,7 +1151,7 @@ export class SessionManager {
     session.thinkingLevel = level;
     setSessionPrefs(sessionId, { thinkingLevel: level });
 
-    const supportsEffort = allowedEffortLevels(resolveModel(session.info.model)).length > 0;
+    const supportsEffort = this.modelEffortLevels(session.info.model).length > 0;
     if (session.stdin && supportsEffort) {
       const request = {
         type: "control_request",
@@ -1067,45 +1364,32 @@ export class SessionManager {
     return () => session.emitter.off("init", handler);
   }
 
-  private handleTodoWrite(session: Session, sessionId: string, toolInput: string): void {
-    try {
-      const input = JSON.parse(toolInput);
-      const todos = input.todos;
-      if (!Array.isArray(todos)) return;
-      session.todoItems = todos
-        .filter((t: Record<string, unknown>) => t.content && t.status)
-        .map((t: Record<string, unknown>) => ({
-          content: t.content as string,
-          status: t.status as TodoItem["status"],
-          activeForm: (t.activeForm as string) || undefined,
-        }));
-      session.emitter.emit("todos", sessionId, [...session.todoItems]);
-    } catch {
-      // invalid input, ignore
-    }
-  }
-
-  rebuildTodosFromHistory(sessionId: string, messages: ChatMessage[]): void {
+  loadTodosFromFiles(sessionId: string): void {
     const session = this.sessions.get(sessionId);
     if (!session) return;
-
-    // If there's already a live todo state (set during the current process),
-    // don't overwrite it from history.
     if (session.todoItems.length > 0) return;
-
-    const todos = extractTodosFromHistory(messages);
+    const watcher = new TodoWatcher(session.cliSessionId, () => {});
+    const todos = watcher.readOnce();
     if (todos.length === 0) return;
     session.todoItems = todos;
     session.emitter.emit("todos", sessionId, [...session.todoItems]);
   }
 
+  private startTodoWatcher(session: Session, sessionId: string): void {
+    if (session.todoWatcher) {
+      session.todoWatcher.stop();
+    }
+    const watcher = new TodoWatcher(session.cliSessionId, (todos) => {
+      session.todoItems = todos;
+      session.emitter.emit("todos", sessionId, [...todos]);
+    });
+    session.todoWatcher = watcher;
+    watcher.start();
+  }
+
   private extractUsage(session: Session, sessionId: string, line: string): void {
     try {
       const raw = JSON.parse(line.trim());
-
-      if (raw.type === "result" && raw.modelUsage) {
-        this.extractContextWindowSize(session, raw.modelUsage);
-      }
 
       if (raw.type !== "assistant" || !raw.message?.usage) return;
       // Skip synthetic responses (e.g. /context) that have all-zero usage
@@ -1115,17 +1399,12 @@ export class SessionManager {
       const usage: ContextUsage = { used, total: session.contextWindowSize };
       session.contextUsage = usage;
       session.emitter.emit("usage", sessionId, usage);
+      session.totalTokens.input += u.input_tokens || 0;
+      session.totalTokens.output += u.output_tokens || 0;
+      session.totalTokens.cacheCreate += u.cache_creation_input_tokens || 0;
+      session.totalTokens.cacheRead += u.cache_read_input_tokens || 0;
     } catch {
       // not valid JSON, ignore
-    }
-  }
-
-  private extractContextWindowSize(session: Session, modelUsage: Record<string, Record<string, number>>): void {
-    for (const model of Object.values(modelUsage)) {
-      if (model.contextWindow && model.contextWindow > 0) {
-        session.contextWindowSize = model.contextWindow;
-        return;
-      }
     }
   }
 
@@ -1172,6 +1451,11 @@ export class SessionManager {
       session.process = null;
       session.stdin = null;
     }
+    if (session.ptyRuntime) {
+      const runtime = session.ptyRuntime;
+      session.ptyRuntime = null;
+      runtime.kill().catch(() => {});
+    }
     session.compacting = false;
   }
 
@@ -1187,6 +1471,12 @@ export class SessionManager {
   }
 
   private applyProcessedResult(session: Session, sessionId: string, result: import("./stream-processor").ProcessedResult): void {
+    const eventTypes = result.emit.map((e) => e.type).join(", ");
+    if (eventTypes) {
+      console.log(
+        `[sm] applyProcessedResult for ${sessionId.slice(0, 8)}: events=[${eventTypes}], statusChange=${result.statusChange ?? "none"}, currentStatus=${session.info.status}`,
+      );
+    }
     for (const msg of result.intermediateMessages) {
       session.emitter.emit("event", sessionId, { type: "message_done", message: msg } as ParsedEvent);
       if (msg.toolUses.some((t: ToolUse) => t.name === "Agent")) {
@@ -1195,6 +1485,37 @@ export class SessionManager {
     }
 
     for (const sysMsg of result.systemMessages) {
+      if (sysMsg === "__tool_use_start") {
+        session.info.status = "running";
+        console.log(`[sm] emit status running (via tool_use_start) for ${sessionId.slice(0, 8)} (runtime=${session.runtime})`);
+        session.emitter.emit("status", sessionId, "running");
+        continue;
+      }
+      if (sysMsg === "__compact::hook_start") {
+        if (!session.compacting) {
+          logDiag(sessionId, "compact:hook-start");
+          session.compacting = true;
+          this.emitSystem(session, sessionId, "__compact::start");
+        }
+        continue;
+      }
+      if (sysMsg === "__compact::hook_done") {
+        if (session.compacting) {
+          logDiag(sessionId, "compact:hook-done");
+          session.compacting = false;
+          this.emitSystem(session, sessionId, "__compact::done");
+          const postCompactEstimate: ContextUsage = {
+            used: Math.round(session.contextWindowSize * 0.1),
+            total: session.contextWindowSize,
+          };
+          session.contextUsage = postCompactEstimate;
+          session.emitter.emit("usage", sessionId, postCompactEstimate);
+          session.info.status = "idle";
+          session.emitter.emit("status", sessionId, "idle");
+          this.flushQueuedMessage(session, sessionId);
+        }
+        continue;
+      }
       const permModePrefix = "__permission_mode::";
       if (sysMsg.startsWith(permModePrefix)) {
         const mode = sysMsg.slice(permModePrefix.length);
@@ -1217,24 +1538,32 @@ export class SessionManager {
       session.emitter.emit("error", sessionId, errMsg);
     }
 
-    for (const todoInput of result.todoInputs) {
-      this.handleTodoWrite(session, sessionId, todoInput);
-    }
-
+    // After exiting plan mode the CLI process is killed and respawned with the
+    // correct --permission-mode flag (see needsRespawnForPermissions). Between
+    // the plan exit and the message_done that triggers the respawn, the old
+    // process may still send permission_request events. The server auto-approves
+    // these so the CLI isn't blocked, but we must also suppress the events from
+    // reaching the UI -- otherwise the user sees phantom permission prompts that
+    // don't actually gate anything.
+    const bypassedRequestIds = new Set<string>();
     for (const pa of result.permissionActions) {
       if (pa.type === "auto_approve") {
         this.respondToPermission(sessionId, pa.requestId, true, pa.rawToolInput);
       } else if (pa.type === "auto_deny") {
         this.respondToPermission(sessionId, pa.requestId, false, undefined, undefined, pa.denyReason);
-      } else if (session.bypassAllPermissions && !session.planMode) {
-        // CLI was spawned without bypass capability (e.g. after exiting plan
-        // mode) but the session has bypass enabled. Auto-approve server-side
-        // until the process respawns with the right flags.
+      } else if (session.bypassAllPermissions && !session.planMode && pa.toolName !== "AskUserQuestion") {
         this.respondToPermission(sessionId, pa.requestId, true, pa.rawToolInput);
+        bypassedRequestIds.add(pa.requestId);
       } else {
         const planPath = pa.toolName === "ExitPlanMode" ? findLatestPlanFile() : undefined;
+        const reqType = pa.toolName === "AskUserQuestion" ? "question" : "permission";
+        if (reqType === "question") {
+          console.log(
+            `[question-debug] adding pending question: session=${sessionId.slice(0, 8)}, requestId=${pa.requestId}, total=${session.pendingRequests.size + 1}`,
+          );
+        }
         session.pendingRequests.set(pa.requestId, {
-          type: pa.toolName === "AskUserQuestion" ? "question" : "permission",
+          type: reqType,
           requestId: pa.requestId,
           toolName: pa.toolName,
           toolInput: pa.toolInput || "",
@@ -1250,6 +1579,12 @@ export class SessionManager {
     if (result.compactDone) {
       session.compacting = false;
       this.emitSystem(session, sessionId, "__compact::done");
+      const postCompactEstimate: ContextUsage = {
+        used: Math.round(session.contextWindowSize * 0.1),
+        total: session.contextWindowSize,
+      };
+      session.contextUsage = postCompactEstimate;
+      session.emitter.emit("usage", sessionId, postCompactEstimate);
     }
 
     if (result.emit.length > 0) {
@@ -1259,6 +1594,8 @@ export class SessionManager {
       }
     }
     for (const event of result.emit) {
+      // Skip phantom permission events that were already bypass-approved above
+      if (event.type === "permission_request" && event.requestId && bypassedRequestIds.has(event.requestId)) continue;
       session.emitter.emit("event", sessionId, event);
     }
 
@@ -1279,6 +1616,7 @@ export class SessionManager {
 
     if (result.statusChange === "idle") {
       session.info.status = "idle";
+      console.log(`[sm] emit status idle for ${sessionId.slice(0, 8)} (runtime=${session.runtime})`);
       session.emitter.emit("status", sessionId, "idle");
       this.flushQueuedMessage(session, sessionId);
     }
@@ -1349,6 +1687,7 @@ export class SessionManager {
           this.emitSystem(session, sessionId, `__model_picker::${current}`);
           return true;
         }
+        this.log(sessionId, `/model command: args="${args}", was=${session.info.model}`);
         this.killProcess(session);
         session.info.model = args;
         session.info.status = "idle";
@@ -1377,18 +1716,158 @@ export class SessionManager {
           "  /clear, /reset, /new  - Clear conversation and start fresh",
           "  /model [name]         - Show or switch model",
           "  /rename <name>        - Rename this session",
+          "  /cost                 - Show session token usage",
+          "  /context              - Show context window usage",
+          "  /status               - Show session status",
           "  /help                 - Show this help message",
           "",
-          "All other slash commands (/compact, /cost, /context, /commit,",
-          "/review, /analyze, etc.) are passed directly to Claude.",
+          "Other commands (/compact, /commit, /review, etc.) are passed to Claude when possible.",
         ].join("\n");
         this.emitSystem(session, sessionId, helpText);
+        return true;
+      }
+
+      case "/cost": {
+        const t = session.totalTokens;
+        const lines = [
+          `Input tokens:       ${t.input.toLocaleString()}`,
+          `Output tokens:      ${t.output.toLocaleString()}`,
+          `Cache write tokens: ${t.cacheCreate.toLocaleString()}`,
+          `Cache read tokens:  ${t.cacheRead.toLocaleString()}`,
+        ];
+        this.emitSystem(session, sessionId, lines.join("\n"));
+        return true;
+      }
+
+      case "/context": {
+        if (!session.contextUsage) {
+          this.emitSystem(session, sessionId, "Context usage data not available yet.");
+          return true;
+        }
+        const pct = session.contextWindowSize > 0 ? Math.round((session.contextUsage.used / session.contextWindowSize) * 100) : 0;
+        this.emitSystem(
+          session,
+          sessionId,
+          `Context window: ${session.contextUsage.used.toLocaleString()} / ${session.contextWindowSize.toLocaleString()} (${pct}%)`,
+        );
+        return true;
+      }
+
+      case "/status": {
+        const model = session.info.model || "sonnet";
+        const runtime = session.runtime;
+        const plan = session.planMode ? " [plan]" : "";
+        this.emitSystem(session, sessionId, `Model: ${model}  Runtime: ${runtime}${plan}`);
+        return true;
+      }
+    }
+
+    // In PTY mode, intercept commands that render CLI dialogs to prevent hangs
+    if (session.ptyRuntime?.isAlive) {
+      const dialogCmd = cmd.replace("/", "");
+      if (SessionManager.DIALOG_COMMANDS.has(dialogCmd)) {
+        this.emitSystem(session, sessionId, `"${cmd}" opens an interactive CLI dialog that isn't available in remote mode.`);
         return true;
       }
     }
 
     // All other slash commands pass through to Claude
     return false;
+  }
+
+  private static readonly DIALOG_COMMANDS = new Set([
+    "config",
+    "usage",
+    "session",
+    "stats",
+    "doctor",
+    "diff",
+    "mcp",
+    "permissions",
+    "hooks",
+    "tasks",
+    "agents",
+    "skills",
+    "memory",
+    "theme",
+    "fast",
+    "feedback",
+    "copy",
+    "branch",
+    "plan",
+    "chrome",
+    "desktop",
+    "ide",
+    "mobile",
+    "bridge",
+    "sandbox",
+    "export",
+    "login",
+    "logout",
+    "upgrade",
+    "rate-limit-options",
+    "privacy-settings",
+    "terminal-setup",
+    "install-github-app",
+    "remote-env",
+    "remote-setup",
+    "resume",
+    "add-dir",
+    "btw",
+    "extra-usage",
+    "passes",
+    "think-back",
+    "ultrareview",
+    "tag",
+    "exit",
+    "effort",
+    "color",
+    "files",
+  ]);
+
+  private static readonly MEDIA_EXT: Record<string, string> = {
+    "image/png": ".png",
+    "image/jpeg": ".jpg",
+    "image/gif": ".gif",
+    "image/webp": ".webp",
+    "application/pdf": ".pdf",
+  };
+
+  private writeAttachments(images?: ImageAttachment[], documents?: DocumentAttachment[]): string[] {
+    if (!images?.length && !documents?.length) return [];
+    const dir = path.join(getCockpitCacheDir(), "attachments");
+    mkdirSync(dir, { recursive: true });
+    const paths: string[] = [];
+    for (const img of images ?? []) {
+      const ext = SessionManager.MEDIA_EXT[img.mediaType] || ".png";
+      const p = path.join(dir, `${uuidv4()}${ext}`);
+      writeFileSync(p, Buffer.from(img.data, "base64"));
+      paths.push(p);
+    }
+    for (const doc of documents ?? []) {
+      const ext = SessionManager.MEDIA_EXT[doc.mediaType] || ".pdf";
+      const p = path.join(dir, `${uuidv4()}${ext}`);
+      writeFileSync(p, Buffer.from(doc.data, "base64"));
+      paths.push(p);
+    }
+    return paths;
+  }
+
+  private cleanupAttachments(session: Session): void {
+    for (const p of session.attachmentPaths) {
+      try {
+        unlinkSync(p);
+      } catch {
+        // file already cleaned up
+      }
+    }
+    session.attachmentPaths = [];
+  }
+
+  private buildPtyText(text: string, attachmentPaths: string[]): string {
+    if (attachmentPaths.length === 0) return text;
+    const refs = attachmentPaths.map((p) => `[Attached image: ${p}]`).join("\n");
+    return `${refs}\n${text}`;
   }
 
   private buildContent(
@@ -1487,7 +1966,9 @@ Additional Cockpit rules beyond the CLI's defaults:
       this.emitSystem(session, sessionId, "__compact::start");
       session.info.status = "running";
       session.emitter.emit("status", sessionId, "running");
-      if (session.process && session.stdin) {
+      if (session.ptyRuntime?.isAlive) {
+        session.ptyRuntime.sendText("/compact").catch(() => {});
+      } else if (session.process && session.stdin) {
         const compactInput = { type: "user", message: { role: "user", content: "/compact" } };
         session.stdin.write(JSON.stringify(compactInput) + "\n");
       } else {
@@ -1513,9 +1994,27 @@ Additional Cockpit rules beyond the CLI's defaults:
       return true;
     }
 
-    logDiag(sessionId, "running:send", { hasProcess: !!session.process, hasStdin: !!session.stdin });
+    logDiag(sessionId, "running:send", {
+      hasProcess: !!session.process,
+      hasStdin: !!session.stdin,
+      runtime: session.runtime,
+      ptyAlive: !!session.ptyRuntime?.isAlive,
+    });
     session.info.status = "running";
+    console.log(`[sm] emit status running for ${sessionId.slice(0, 8)} (runtime=${session.runtime})`);
     session.emitter.emit("status", sessionId, "running");
+
+    if (session.runtime === "pty" && session.ptyRuntime?.isAlive) {
+      if (session.streamState) session.streamState.thinkingStartedAt = Date.now();
+      this.cleanupAttachments(session);
+      const attachments = this.writeAttachments(images, documents);
+      session.attachmentPaths.push(...attachments);
+      const ptyText = this.buildPtyText(text, attachments);
+      session.ptyRuntime.sendText(ptyText).catch((err) => {
+        this.log(sessionId, `pty sendText failed: ${err instanceof Error ? err.message : String(err)}`);
+      });
+      return true;
+    }
 
     if (session.process && session.stdin) {
       if (session.streamState) session.streamState.thinkingStartedAt = Date.now();
@@ -1537,8 +2036,18 @@ Additional Cockpit rules beyond the CLI's defaults:
 
   ensureProcess(sessionId: string): void {
     const session = this.sessions.get(sessionId);
-    if (!session || session.process) return;
+    if (!session || session.process || session.ptyRuntime?.isAlive) return;
     this.spawnProcess(session, sessionId);
+  }
+
+  /** Check effort levels for built-in models or custom provider models. */
+  private modelEffortLevels(modelId: string | null | undefined): ThinkingLevel[] {
+    if (!modelId) return [];
+    const builtin = resolveModel(modelId);
+    if (builtin) return allowedEffortLevels(builtin);
+    const resolved = resolveProviderModel(modelId);
+    if (resolved) return resolved.model.effortLevels;
+    return [];
   }
 
   private spawnProcess(
@@ -1548,6 +2057,11 @@ Additional Cockpit rules beyond the CLI's defaults:
     images?: ImageAttachment[],
     documents?: DocumentAttachment[],
   ): void {
+    if (session.runtime === "pty") {
+      this.spawnPtyProcess(session, sessionId, text, images, documents);
+      return;
+    }
+
     this.log(sessionId, `spawning CLI process (resume=${session.hasSpawnedBefore}, model=${session.info.model || "sonnet"})`);
     const args = ["-p", "--verbose", "--output-format", "stream-json", "--input-format", "stream-json"];
 
@@ -1572,11 +2086,18 @@ Additional Cockpit rules beyond the CLI's defaults:
       args.push("--session-id", session.cliSessionId);
     }
 
-    if (session.info.model) {
-      args.push("--model", session.info.model);
+    const resolved = resolveProviderModel(session.info.model ?? "sonnet");
+    const cliModel = resolved ? resolved.model.modelId : session.info.model;
+    this.log(
+      sessionId,
+      `spawn: info.model=${session.info.model}, resolved=${resolved ? `${resolved.provider.id}:${resolved.model.modelId}` : "null"}, cliModel=${cliModel}`,
+    );
+
+    if (cliModel) {
+      args.push("--model", cliModel);
     }
 
-    if (allowedEffortLevels(resolveModel(session.info.model)).length > 0) {
+    if (this.modelEffortLevels(session.info.model).length > 0) {
       args.push("--effort", session.thinkingLevel);
     }
 
@@ -1584,18 +2105,27 @@ Additional Cockpit rules beyond the CLI's defaults:
     delete env.CLAUDECODE;
     delete env.CLAUDE_CODE_ENTRYPOINT;
 
-    // Claude Code defaults to a model's full context window (1M for Opus 4.7,
-    // Sonnet 4.6) when no [1m] suffix is present, ignoring the suffix as the
-    // gate. CLAUDE_CODE_DISABLE_1M_CONTEXT is the only switch that forces 200K
-    // back regardless of model capability — set it when the user picked 200K.
-    if (session.info.model && !/\[1m\]/i.test(session.info.model)) {
+    if (resolved) {
+      Object.assign(env, resolved.provider.envVars);
+    }
+
+    // CLAUDE_CODE_DISABLE_1M_CONTEXT is the only switch that forces a model
+    // back to 200K regardless of its capability. Set it when the user picked
+    // 200K for this session.
+    const sizeKey = session.info.contextSize ?? DEFAULT_CONTEXT_SIZE;
+    if (CONTEXT_SIZES[sizeKey].disableEnv) {
       env.CLAUDE_CODE_DISABLE_1M_CONTEXT = "1";
+    }
+
+    if (session.modelSlots.subagent && session.modelSlots.subagent !== session.modelSlots.main) {
+      const resolvedSub = resolveProviderModel(session.modelSlots.subagent);
+      env.ANTHROPIC_SMALL_FAST_MODEL = resolvedSub ? resolvedSub.model.modelId : session.modelSlots.subagent;
     }
 
     mkdirSync(session.info.cwd, { recursive: true });
 
     const isWin = process.platform === "win32";
-    const proc = spawn("claude", args, {
+    const proc = spawn(getClaudeBin(), args, {
       cwd: session.info.cwd,
       env,
       stdio: ["pipe", "pipe", "pipe"],
@@ -1606,6 +2136,8 @@ Additional Cockpit rules beyond the CLI's defaults:
     session.stdin = proc.stdin!;
     session.hasSpawnedBefore = true;
     this.log(sessionId, `CLI process spawned (pid=${proc.pid})`);
+
+    this.startTodoWatcher(session, sessionId);
 
     // Send initialize control request before the first user message to get
     // model capabilities, account info, and command metadata from the CLI.
@@ -1719,6 +2251,12 @@ Additional Cockpit rules beyond the CLI's defaults:
         logDiag(sessionId, "compact:done-on-close");
         session.compacting = false;
         this.emitSystem(session, sessionId, "__compact::done");
+        const postCompactEstimate: ContextUsage = {
+          used: Math.round(session.contextWindowSize * 0.1),
+          total: session.contextWindowSize,
+        };
+        session.contextUsage = postCompactEstimate;
+        session.emitter.emit("usage", sessionId, postCompactEstimate);
       }
 
       if (session.todoItems.length > 0 && session.todoItems.every((t) => t.status === "completed")) {
@@ -1747,6 +2285,169 @@ Additional Cockpit rules beyond the CLI's defaults:
     });
   }
 
+  private spawnPtyProcess(
+    session: Session,
+    sessionId: string,
+    text?: string,
+    images?: ImageAttachment[],
+    documents?: DocumentAttachment[],
+  ): void {
+    if (session.ptyRuntime?.isAlive) {
+      const existing = session.ptyRuntime;
+      session.ptyRuntime = null;
+      existing.kill().catch(() => {});
+    }
+
+    const hookRouter = getHookRouter();
+    if (!hookRouter) {
+      const msg = "PTY runtime requires the hook router; server boot did not register one";
+      this.log(sessionId, msg);
+      session.info.status = "idle";
+      session.emitter.emit("status", sessionId, "idle");
+      session.emitter.emit("error", sessionId, msg);
+      return;
+    }
+
+    this.log(sessionId, `spawning PTY claude (resume=${session.hasSpawnedBefore}, model=${session.info.model || "sonnet"})`);
+    mkdirSync(session.info.cwd, { recursive: true });
+
+    const streamState = createStreamState();
+    session.streamState = streamState;
+    streamState.thinkingStartedAt = Date.now();
+
+    const extraArgs: string[] = [];
+    if (session.hasSpawnedBefore || transcriptExists(session.cliSessionId, session.info.cwd)) {
+      extraArgs.push("--resume", session.cliSessionId);
+    } else {
+      extraArgs.push("--session-id", session.cliSessionId);
+    }
+    const resolvedPty = resolveProviderModel(session.info.model ?? "sonnet");
+    const cliModelPty = resolvedPty ? resolvedPty.model.modelId : session.info.model;
+    if (cliModelPty) extraArgs.push("--model", cliModelPty);
+    if (this.modelEffortLevels(session.info.model).length > 0) {
+      extraArgs.push("--effort", session.thinkingLevel);
+    }
+    if (session.planMode) {
+      extraArgs.push("--permission-mode", "plan");
+    } else if (session.bypassAllPermissions) {
+      extraArgs.push("--permission-mode", "bypassPermissions");
+    }
+
+    const extraEnv: Record<string, string> = {};
+    if (resolvedPty) Object.assign(extraEnv, resolvedPty.provider.envVars);
+    const sizeKeyPty = session.info.contextSize ?? DEFAULT_CONTEXT_SIZE;
+    if (CONTEXT_SIZES[sizeKeyPty].disableEnv) {
+      extraEnv.CLAUDE_CODE_DISABLE_1M_CONTEXT = "1";
+    }
+    if (session.modelSlots.subagent && session.modelSlots.subagent !== session.modelSlots.main) {
+      const resolvedSub = resolveProviderModel(session.modelSlots.subagent);
+      extraEnv.ANTHROPIC_SMALL_FAST_MODEL = resolvedSub ? resolvedSub.model.modelId : session.modelSlots.subagent;
+    }
+
+    const runtime = new PtyRuntime({
+      sessionId,
+      cwd: session.info.cwd,
+      cliSessionId: session.cliSessionId,
+      hookRouter,
+      claudeBin: getClaudeBin(),
+      extraArgs,
+      extraEnv,
+      onEvents: (events) => {
+        const types = events.map((e) => e.type).join(", ");
+        console.log(`[sm] pty onEvents for ${sessionId.slice(0, 8)}: [${types}]`);
+        const result = processEvents(events, streamState, { planMode: session.planMode, compacting: session.compacting });
+        this.applyProcessedResult(session, sessionId, result);
+      },
+      onError: (err) => {
+        this.log(sessionId, `pty runtime error: ${err}`);
+        session.emitter.emit("error", sessionId, err);
+      },
+      onExit: ({ exitCode, signal }) => {
+        this.log(sessionId, `PTY claude exited (code=${exitCode}, signal=${signal ?? "none"})`);
+        if (session.ptyRuntime !== runtime) return;
+        session.ptyRuntime = null;
+        session.streamingSnapshot = null;
+        logDiag(sessionId, "idle:pty-exit", { exitCode, flushedOnMessageDone: streamState.flushedOnMessageDone });
+        if (session.transcriptWatcher) {
+          session.transcriptWatcher.stop();
+          session.transcriptWatcher = null;
+        }
+        session.info.status = "idle";
+        session.emitter.emit("status", sessionId, "idle");
+
+        if (session.compacting) {
+          logDiag(sessionId, "compact:done-on-pty-exit");
+          session.compacting = false;
+          this.emitSystem(session, sessionId, "__compact::done");
+          const postCompactEstimate: ContextUsage = {
+            used: Math.round(session.contextWindowSize * 0.1),
+            total: session.contextWindowSize,
+          };
+          session.contextUsage = postCompactEstimate;
+          session.emitter.emit("usage", sessionId, postCompactEstimate);
+        }
+
+        if (session.todoItems.length > 0 && session.todoItems.every((t) => t.status === "completed")) {
+          session.todoItems = [];
+          session.emitter.emit("todos", sessionId, []);
+        }
+
+        if (!streamState.flushedOnMessageDone) {
+          this.flushQueuedMessage(session, sessionId);
+        }
+      },
+    });
+
+    session.ptyRuntime = runtime;
+    session.hasSpawnedBefore = true;
+
+    this.cleanupAttachments(session);
+    const attachments = this.writeAttachments(images, documents);
+    session.attachmentPaths.push(...attachments);
+    const ptyText = text ? this.buildPtyText(text, attachments) : text;
+
+    const watcher = new TranscriptWatcher(session.cliSessionId, session.info.cwd, (messages, lastUsage) => {
+      session.emitter.emit("transcript", sessionId, messages);
+      if (lastUsage) {
+        const usage: ContextUsage = { used: lastUsage.used, total: session.contextWindowSize };
+        session.contextUsage = usage;
+        session.emitter.emit("usage", sessionId, usage);
+      }
+      if (session.compacting && messages.some((m) => m.content === "__compacted__")) {
+        logDiag(sessionId, "compact:done-on-transcript");
+        session.compacting = false;
+        this.emitSystem(session, sessionId, "__compact::done");
+        const postCompactEstimate: ContextUsage = {
+          used: Math.round(session.contextWindowSize * 0.1),
+          total: session.contextWindowSize,
+        };
+        session.contextUsage = postCompactEstimate;
+        session.emitter.emit("usage", sessionId, postCompactEstimate);
+        session.info.status = "idle";
+        session.emitter.emit("status", sessionId, "idle");
+        this.flushQueuedMessage(session, sessionId);
+      }
+    });
+    session.transcriptWatcher = watcher;
+
+    this.startTodoWatcher(session, sessionId);
+
+    runtime
+      .start(ptyText)
+      .then(() => {
+        this.log(sessionId, `PTY claude ready (pid=${runtime.pid})`);
+        watcher.start();
+      })
+      .catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        this.log(sessionId, `pty runtime start failed: ${msg}`);
+        session.ptyRuntime = null;
+        session.info.status = "idle";
+        session.emitter.emit("status", sessionId, "idle");
+        session.emitter.emit("error", sessionId, msg);
+      });
+  }
+
   private async loadAgentChildren(session: Session, sessionId: string, messageId: string, cwd: string): Promise<void> {
     try {
       const result = await loadTranscript(session.cliSessionId, cwd);
@@ -1767,12 +2468,15 @@ Additional Cockpit rules beyond the CLI's defaults:
   }
 }
 
-const MCP_CACHE_PATH = path.join(homedir(), ".cockpit", "mcp-servers.json");
+function mcpCachePath(): string {
+  return path.join(getCockpitDir(), "mcp-servers.json");
+}
 
 function loadMcpServerCache(): string[] {
   try {
-    if (!existsSync(MCP_CACHE_PATH)) return [];
-    return JSON.parse(readFileSync(MCP_CACHE_PATH, "utf-8")) as string[];
+    const fp = mcpCachePath();
+    if (!existsSync(fp)) return [];
+    return JSON.parse(readFileSync(fp, "utf-8")) as string[];
   } catch {
     return [];
   }
@@ -1780,38 +2484,11 @@ function loadMcpServerCache(): string[] {
 
 function saveMcpServerCache(servers: string[]): void {
   try {
-    const dir = path.dirname(MCP_CACHE_PATH);
+    const fp = mcpCachePath();
+    const dir = path.dirname(fp);
     mkdirSync(dir, { recursive: true });
-    writeFileSync(MCP_CACHE_PATH, JSON.stringify(servers));
+    writeFileSync(fp, JSON.stringify(servers));
   } catch {
     // best-effort
   }
-}
-
-// Walk messages newest-first, stop at the most recent /clear boundary, and
-// pull todos from the last TodoWrite call. Pure function so the history-view
-// branch can use it without an in-memory session.
-export function extractTodosFromHistory(messages: ChatMessage[]): TodoItem[] {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const msg = messages[i];
-    if (msg.role === "system" && msg.content === "__compacted__") return [];
-    if (msg.role !== "assistant") continue;
-    for (let j = msg.toolUses.length - 1; j >= 0; j--) {
-      if (msg.toolUses[j].name !== "TodoWrite") continue;
-      try {
-        const input = JSON.parse(msg.toolUses[j].input);
-        if (!Array.isArray(input.todos)) return [];
-        return input.todos
-          .filter((t: Record<string, unknown>) => t.content && t.status)
-          .map((t: Record<string, unknown>) => ({
-            content: t.content as string,
-            status: t.status as TodoItem["status"],
-            activeForm: (t.activeForm as string) || undefined,
-          }));
-      } catch {
-        return [];
-      }
-    }
-  }
-  return [];
 }

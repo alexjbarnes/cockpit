@@ -11,7 +11,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { useCommands } from "@/hooks/use-commands";
 
 export default function CommandsPage() {
-  usePageHeader("Commands");
+  usePageHeader("Commands", { hideActions: true });
 
   const cwd = typeof localStorage !== "undefined" ? localStorage.getItem("cockpit-agents-cwd") || undefined : undefined;
 

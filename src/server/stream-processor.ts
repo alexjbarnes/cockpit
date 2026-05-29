@@ -23,7 +23,6 @@ export interface ProcessedResult {
     blocks: ContentBlock[];
   } | null;
   permissionActions: PermissionAction[];
-  todoInputs: string[];
   compactDone: boolean;
 }
 
@@ -168,7 +167,6 @@ export function processEvents(
     intermediateMessages: [],
     snapshot: null,
     permissionActions: [],
-    todoInputs: [],
     compactDone: false,
   };
 
@@ -233,10 +231,6 @@ export function processEvents(
       };
 
       const isAgent = tool.name === "Agent";
-
-      if (tool.name === "TodoWrite") {
-        result.todoInputs.push(tool.input);
-      }
 
       const isFromMainThread = event.assistantMessageId === state.currentAssistantMsgId;
       event.isMainThread = isFromMainThread;
@@ -310,6 +304,9 @@ export function processEvents(
       result.systemMessages.push(event.text);
     } else if (event.type === "message_done" && event.message) {
       state.thinkingStartedAt = null;
+      console.log(
+        `[stream-processor] message_done: interrupted=${!!event.interrupted}, pendingBlocks=${state.pendingBlocks.length}, pendingToolUses=${state.pendingToolUses.length}, currentMsgId=${state.currentAssistantMsgId?.slice(0, 8) ?? "null"}, clearPending=${!!event.clearPending}`,
+      );
       if (event.interrupted) {
         if (state.currentAssistantMsgId) {
           event.message.id = state.currentAssistantMsgId;
@@ -344,57 +341,68 @@ export function processEvents(
         continue;
       }
 
-      if (state.currentAssistantMsgId) {
-        event.message.id = state.currentAssistantMsgId;
-      }
-      const hasStreamedText = state.pendingBlocks.some((b) => b.type === "text");
-      if (event.message.content && !hasStreamedText) {
-        state.pendingBlocks.push({ type: "text", text: event.message.content });
-      }
-
-      if (state.pendingToolUses.length === 0) {
-        const fullText = state.pendingBlocks
-          .filter((b) => b.type === "text")
-          .map((b) => b.text)
-          .join("")
-          .trim();
-
-        if (fullText === "No response requested.") {
-          state.pendingBlocks.length = 0;
-          state.currentAssistantMsgId = null;
-          result.statusChange = "idle";
-          state.flushedOnMessageDone = true;
-          result.snapshot = null;
-          continue;
+      if (event.clearPending) {
+        // Transcript-loaded message: blocks are already correct; just clear pending state.
+        state.pendingToolUses.length = 0;
+        state.pendingBlocks.length = 0;
+        state.agentStack.length = 0;
+        state.currentAssistantMsgId = null;
+        result.statusChange = "idle";
+        if (options.compacting) result.compactDone = true;
+        state.flushedOnMessageDone = true;
+      } else {
+        if (state.currentAssistantMsgId) {
+          event.message.id = state.currentAssistantMsgId;
+        }
+        const hasStreamedText = state.pendingBlocks.some((b) => b.type === "text");
+        if (event.message.content && !hasStreamedText) {
+          state.pendingBlocks.push({ type: "text", text: event.message.content });
         }
 
-        const apiErrMatch = fullText.match(/^API Error: (\d+)\s/);
-        if (apiErrMatch) {
-          const msgMatch = fullText.match(/"message"\s*:\s*"([^"]+)"/);
-          const errMsg = msgMatch ? `${msgMatch[1]} (HTTP ${apiErrMatch[1]})` : fullText.slice(0, 200);
-          state.pendingBlocks.length = 0;
-          state.pendingToolUses.length = 0;
-          state.agentStack.length = 0;
-          state.currentAssistantMsgId = null;
-          result.statusChange = "idle";
-          result.errors.push(errMsg);
-          state.flushedOnMessageDone = true;
-          result.snapshot = null;
-          continue;
-        }
-      }
+        if (state.pendingToolUses.length === 0) {
+          const fullText = state.pendingBlocks
+            .filter((b) => b.type === "text")
+            .map((b) => b.text)
+            .join("")
+            .trim();
 
-      event.message.blocks = [...state.pendingBlocks];
-      if (event.message.toolUses.length === 0 && state.pendingToolUses.length > 0) {
-        event.message.toolUses = [...state.pendingToolUses];
+          if (fullText === "No response requested.") {
+            state.pendingBlocks.length = 0;
+            state.currentAssistantMsgId = null;
+            result.statusChange = "idle";
+            state.flushedOnMessageDone = true;
+            result.snapshot = null;
+            continue;
+          }
+
+          const apiErrMatch = fullText.match(/^API Error: (\d+)\s/);
+          if (apiErrMatch) {
+            const msgMatch = fullText.match(/"message"\s*:\s*"([^"]+)"/);
+            const errMsg = msgMatch ? `${msgMatch[1]} (HTTP ${apiErrMatch[1]})` : fullText.slice(0, 200);
+            state.pendingBlocks.length = 0;
+            state.pendingToolUses.length = 0;
+            state.agentStack.length = 0;
+            state.currentAssistantMsgId = null;
+            result.statusChange = "idle";
+            result.errors.push(errMsg);
+            state.flushedOnMessageDone = true;
+            result.snapshot = null;
+            continue;
+          }
+        }
+
+        event.message.blocks = [...state.pendingBlocks];
+        if (event.message.toolUses.length === 0 && state.pendingToolUses.length > 0) {
+          event.message.toolUses = [...state.pendingToolUses];
+        }
+        state.pendingToolUses.length = 0;
+        state.pendingBlocks.length = 0;
+        state.agentStack.length = 0;
+        state.currentAssistantMsgId = null;
+        result.statusChange = "idle";
+        if (options.compacting) result.compactDone = true;
+        state.flushedOnMessageDone = true;
       }
-      state.pendingToolUses.length = 0;
-      state.pendingBlocks.length = 0;
-      state.agentStack.length = 0;
-      state.currentAssistantMsgId = null;
-      result.statusChange = "idle";
-      if (options.compacting) result.compactDone = true;
-      state.flushedOnMessageDone = true;
     }
 
     if (event.type === "permission_request" && event.requestId) {
@@ -447,6 +455,12 @@ export function processEvents(
 
     result.emit.push(event);
     result.snapshot = buildSnapshot(state);
+  }
+
+  if (result.statusChange) {
+    console.log(
+      `[stream-processor] statusChange=${result.statusChange}, emitting ${result.emit.length} events: [${result.emit.map((e) => e.type).join(", ")}]`,
+    );
   }
 
   return result;

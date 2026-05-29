@@ -1,10 +1,10 @@
 import { createReadStream, existsSync } from "node:fs";
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import { NextRequest, NextResponse } from "next/server";
 import { validateSession } from "@/server/auth";
+import { getClaudeDir } from "@/server/paths";
 
 function authenticate(req: NextRequest): boolean {
   const token = req.cookies.get("cockpit_session")?.value || req.headers.get("authorization")?.replace("Bearer ", "");
@@ -24,7 +24,7 @@ interface ClaudeMdFile {
 function resolvePath(scope: Scope, cwd?: string | null): string | null {
   switch (scope) {
     case "user":
-      return path.join(homedir(), ".claude", "CLAUDE.md");
+      return path.join(getClaudeDir(), "CLAUDE.md");
     case "project":
       return cwd ? path.join(cwd, "CLAUDE.md") : null;
     case "project-hidden":
@@ -73,7 +73,7 @@ async function extractCwdFromJsonl(filePath: string): Promise<string | null> {
 }
 
 async function getKnownCwds(): Promise<string[]> {
-  const projectsDir = path.join(homedir(), ".claude", "projects");
+  const projectsDir = path.join(getClaudeDir(), "projects");
   if (!existsSync(projectsDir)) return [];
 
   let projectDirs: string[];

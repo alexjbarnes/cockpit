@@ -12,7 +12,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { useMcpServers } from "@/hooks/use-mcp-servers";
 
 export default function McpServersPage() {
-  usePageHeader("MCP Servers");
+  usePageHeader("MCP Servers", { hideActions: true });
 
   const cwd = typeof localStorage !== "undefined" ? localStorage.getItem("cockpit-agents-cwd") || undefined : undefined;
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { Menu } from "lucide-react";
+import { Menu, Terminal } from "lucide-react";
 import Image from "next/image";
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { AuthGuard } from "@/components/auth-guard";
@@ -19,11 +19,20 @@ export interface SidebarSectionConfig {
   content: ReactNode;
   order?: number;
   badge?: string;
+  actions?: ReactNode;
 }
 
 interface HeaderConfig {
   title: string;
   onRename?: (name: string) => void;
+  hideActions?: boolean;
+}
+
+export interface TabActions {
+  openFile: (filePath: string) => void;
+  openDiff: (filePath: string) => void;
+  openChanges: () => void;
+  openTerminal?: (terminalId: string, label?: string) => void;
 }
 
 interface ShellContextValue {
@@ -32,6 +41,8 @@ interface ShellContextValue {
   setCwd: (cwd: string | undefined) => void;
   sessionId: string | undefined;
   setSessionId: (id: string | undefined) => void;
+  runtime: "pty" | "stream";
+  setRuntime: (runtime: "pty" | "stream") => void;
   backgroundTasks: BackgroundTask[];
   setBackgroundTasks: (tasks: BackgroundTask[]) => void;
   todos: TodoItem[];
@@ -42,6 +53,8 @@ interface ShellContextValue {
   setSidebarSection: (section: SidebarSectionConfig) => void;
   removeSidebarSection: (id: string) => void;
   closeSidebar: () => void;
+  tabActions: TabActions | null;
+  setTabActions: (actions: TabActions | null) => void;
 }
 
 const ShellContext = createContext<ShellContextValue>({
@@ -50,6 +63,8 @@ const ShellContext = createContext<ShellContextValue>({
   setCwd: () => {},
   sessionId: undefined,
   setSessionId: () => {},
+  runtime: "stream",
+  setRuntime: () => {},
   backgroundTasks: [],
   setBackgroundTasks: () => {},
   todos: [],
@@ -60,17 +75,20 @@ const ShellContext = createContext<ShellContextValue>({
   setSidebarSection: () => {},
   removeSidebarSection: () => {},
   closeSidebar: () => {},
+  tabActions: null,
+  setTabActions: () => {},
 });
 
 export function useShell() {
   return useContext(ShellContext);
 }
 
-export function usePageHeader(title: string) {
+export function usePageHeader(title: string, options?: { hideActions?: boolean }) {
   const { setHeader } = useShell();
+  const hideActions = options?.hideActions;
   useEffect(() => {
-    setHeader({ title });
-  }, [title, setHeader]);
+    setHeader({ title, hideActions });
+  }, [title, hideActions, setHeader]);
 }
 
 export function useShellCwd(cwd: string | undefined) {
@@ -140,6 +158,34 @@ function EditableTitle({ title, onRename }: { title: string; onRename?: (name: s
   );
 }
 
+function NewTerminalButton({ cwd }: { cwd: string }) {
+  const { tabActions } = useShell();
+  const [creating, setCreating] = useState(false);
+
+  const handleClick = useCallback(async () => {
+    if (!tabActions?.openTerminal) return;
+    setCreating(true);
+    try {
+      const res = await fetch("/api/terminal", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cwd }),
+      });
+      if (!res.ok) return;
+      const { terminalId } = await res.json();
+      tabActions.openTerminal(terminalId);
+    } finally {
+      setCreating(false);
+    }
+  }, [cwd, tabActions]);
+
+  return (
+    <Button variant="ghost" size="icon" onClick={handleClick} disabled={creating} title="New terminal (Ctrl+`)">
+      <Terminal className="h-4 w-4" />
+    </Button>
+  );
+}
+
 export function AppShell({ children }: { children: ReactNode }) {
   const sidebarRef = useRef<SidebarHandle>(null);
   const [header, setHeaderState] = useState<HeaderConfig>({ title: "Cockpit" });
@@ -149,6 +195,8 @@ export function AppShell({ children }: { children: ReactNode }) {
   const [todos, setTodos] = useState<TodoItem[]>([]);
   const [initData, setInitData] = useState<InitData | null>(null);
   const [sidebarSectionsMap, setSidebarSectionsMap] = useState<Map<string, SidebarSectionConfig>>(new Map());
+  const [runtime, setRuntimeState] = useState<"pty" | "stream">("stream");
+  const [tabActions, setTabActionsState] = useState<TabActions | null>(null);
 
   const setSidebarSection = useCallback((section: SidebarSectionConfig) => {
     setSidebarSectionsMap((prev) => {
@@ -187,6 +235,14 @@ export function AppShell({ children }: { children: ReactNode }) {
     sidebarRef.current?.close();
   }, []);
 
+  const setRuntime = useCallback((val: "pty" | "stream") => {
+    setRuntimeState(val);
+  }, []);
+
+  const setTabActions = useCallback((actions: TabActions | null) => {
+    setTabActionsState(actions);
+  }, []);
+
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === "b") {
@@ -208,6 +264,8 @@ export function AppShell({ children }: { children: ReactNode }) {
             setCwd,
             sessionId,
             setSessionId,
+            runtime,
+            setRuntime,
             backgroundTasks,
             setBackgroundTasks,
             todos,
@@ -218,6 +276,8 @@ export function AppShell({ children }: { children: ReactNode }) {
             setSidebarSection,
             removeSidebarSection,
             closeSidebar,
+            tabActions,
+            setTabActions,
           }}
         >
           <div className="fixed inset-0 flex">
@@ -231,12 +291,15 @@ export function AppShell({ children }: { children: ReactNode }) {
                   <Image src="/icon-192.png" alt="" width={22} height={22} className="shrink-0 dark:invert" />
                   <EditableTitle title={header.title} onRename={header.onRename} />
                 </div>
-                <div className="flex items-center gap-2 shrink-0 ml-auto">
-                  <SearchButton />
-                  {cwd && <TodoIndicator todos={todos} />}
-                  {cwd && <BackgroundTasksButton tasks={backgroundTasks} />}
-                  <UsageButton />
-                </div>
+                {!header.hideActions && (
+                  <div className="flex items-center gap-2 shrink-0 ml-auto">
+                    {cwd && <NewTerminalButton cwd={cwd} />}
+                    <SearchButton />
+                    {cwd && <TodoIndicator todos={todos} />}
+                    {cwd && <BackgroundTasksButton tasks={backgroundTasks} />}
+                    <UsageButton />
+                  </div>
+                )}
               </header>
               <main className="flex-1 min-h-0 min-w-0 flex flex-col">{children}</main>
             </div>

@@ -1,7 +1,16 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
-import type { InitData, ThinkingLevel } from "@/types";
+import type { ContextSize } from "@/lib/models";
+import { splitLegacyModel } from "@/lib/models";
+import { getCockpitDir } from "@/server/paths";
+import type { InitData, ModelSlots, ThinkingLevel } from "@/types";
+
+export type SessionRuntime = "stream" | "pty";
+
+export interface PersistedTab {
+  type: "file" | "diff" | "changes";
+  filePath?: string;
+}
 
 export interface SessionPrefs {
   name?: string;
@@ -9,20 +18,29 @@ export interface SessionPrefs {
   bypassAllPermissions?: boolean;
   planMode?: boolean;
   model?: string;
+  contextSize?: ContextSize;
+  modelSlots?: ModelSlots;
   initData?: InitData;
   cliSessionId?: string;
   previousCliSessionIds?: string[];
+  openTabs?: PersistedTab[];
+  activeTabId?: string;
+  runtime?: SessionRuntime;
 }
 
-const PREFS_DIR = join(homedir(), ".cockpit");
-const PREFS_FILE = join(PREFS_DIR, "session-prefs.json");
+function prefsDir(): string {
+  return getCockpitDir();
+}
+function prefsFile(): string {
+  return join(prefsDir(), "session-prefs.json");
+}
 
 let cache: Record<string, SessionPrefs> | null = null;
 
 function load(): Record<string, SessionPrefs> {
   if (cache) return cache;
   try {
-    cache = JSON.parse(readFileSync(PREFS_FILE, "utf-8"));
+    cache = JSON.parse(readFileSync(prefsFile(), "utf-8"));
     return cache!;
   } catch {
     cache = {};
@@ -33,11 +51,30 @@ function load(): Record<string, SessionPrefs> {
 function save(): void {
   if (!cache) return;
   try {
-    mkdirSync(PREFS_DIR, { recursive: true });
-    writeFileSync(PREFS_FILE, JSON.stringify(cache, null, 2) + "\n");
+    mkdirSync(prefsDir(), { recursive: true });
+    writeFileSync(prefsFile(), JSON.stringify(cache, null, 2) + "\n");
   } catch {
     // best effort
   }
+}
+
+function normalize(raw: SessionPrefs | undefined): SessionPrefs | undefined {
+  if (!raw) return raw;
+  const next = { ...raw };
+  if (next.model?.includes("[")) {
+    const split = splitLegacyModel(next.model);
+    next.model = split.model;
+    if (next.contextSize === undefined) next.contextSize = split.contextSize;
+  }
+  if (next.modelSlots?.main?.includes("[")) {
+    const split = splitLegacyModel(next.modelSlots.main);
+    next.modelSlots = {
+      ...next.modelSlots,
+      main: split.model,
+      mainContext: next.modelSlots.mainContext ?? split.contextSize,
+    };
+  }
+  return next;
 }
 
 export function getSessionPrefs(sessionId: string): SessionPrefs | undefined {
@@ -48,8 +85,8 @@ export function getSessionPrefs(sessionId: string): SessionPrefs | undefined {
   // guards against legacy CLI-id duplicates that may exist in the prefs file
   // from before chain resolution was applied at write time.
   const chain = findChainForCliSession(sessionId);
-  if (chain && all[chain.cockpitId]) return all[chain.cockpitId];
-  return all[sessionId];
+  if (chain && all[chain.cockpitId]) return normalize(all[chain.cockpitId]);
+  return normalize(all[sessionId]);
 }
 
 export function setSessionPrefs(sessionId: string, prefs: Partial<SessionPrefs>): void {

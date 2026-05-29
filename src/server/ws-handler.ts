@@ -6,17 +6,109 @@ import { extractTokenFromQuery, validateSession } from "./auth";
 // loadLastUsage no longer needed - usage is returned by loadTranscript
 import { debugLog, logClientMessage, logParsedEvent, logServerMessage, logStatus } from "./debug-logger";
 import type { ParsedEvent } from "./event-parser";
+import { watchCwd } from "./fs-watcher";
 import { findLatestPlanFile, readPlanFile } from "./plans";
-import { extractTodosFromHistory, SessionManager } from "./session-manager";
+import { SessionManager } from "./session-manager";
 import { getSessionPrefs } from "./session-prefs";
+import type { TerminalManager } from "./terminal-manager";
 
-export function createWebSocketHandler(server: HTTPServer, sessionManager: SessionManager): WebSocketServer {
+const RESIZE_PREFIX = "\x01R";
+
+function setupTerminalWebSocket(terminalWss: WebSocketServer, terminalManager: TerminalManager): void {
+  const heartbeat = setInterval(() => {
+    for (const ws of terminalWss.clients) {
+      const ext = ws as WebSocket & { isAlive?: boolean };
+      if (ext.isAlive === false) {
+        ws.terminate();
+        continue;
+      }
+      ext.isAlive = false;
+      ws.ping();
+    }
+  }, 30000);
+
+  terminalWss.on("close", () => {
+    clearInterval(heartbeat);
+  });
+
+  terminalWss.on("connection", (ws: WebSocket, req: IncomingMessage) => {
+    const ext = ws as WebSocket & { isAlive?: boolean };
+    ext.isAlive = true;
+    ws.on("pong", () => {
+      ext.isAlive = true;
+    });
+
+    const url = new URL(req.url || "", "http://localhost");
+    const terminalId = url.searchParams.get("terminalId");
+    if (!terminalId) {
+      ws.close(1008, "Missing terminalId");
+      return;
+    }
+
+    const terminal = terminalManager.getTerminal(terminalId);
+    if (!terminal) {
+      console.log(`[terminal-ws] terminal not found: ${terminalId.slice(0, 8)}`);
+      ws.close(1008, "Terminal not found");
+      return;
+    }
+
+    const wantsReplay = url.searchParams.get("replay") !== "0";
+    console.log(`[terminal-ws] connected: ${terminalId.slice(0, 8)} replay=${wantsReplay}`);
+
+    terminalManager.attachClient(terminalId, (data) => {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(data);
+      }
+    });
+
+    if (!wantsReplay) {
+      const delta = terminalManager.getDelta(terminalId);
+      if (delta) {
+        console.log(`[terminal-ws] sending delta: ${delta.length}b`);
+        ws.send(delta);
+      }
+    }
+
+    let bufferSent = !wantsReplay;
+
+    ws.on("message", (data: Buffer) => {
+      const str = data.toString();
+      if (str.startsWith(RESIZE_PREFIX)) {
+        const parts = str.slice(RESIZE_PREFIX.length).split(";");
+        const cols = parseInt(parts[0], 10);
+        const rows = parseInt(parts[1], 10);
+        const replayBuffer = !bufferSent ? terminalManager.getBuffer(terminalId) : null;
+        if (cols > 0 && rows > 0) {
+          terminalManager.resizeTerminal(terminalId, cols, rows);
+        }
+        if (!bufferSent) {
+          bufferSent = true;
+          if (replayBuffer) {
+            ws.send("\x1b[2J\x1b[3J\x1b[H" + replayBuffer);
+          }
+        }
+        return;
+      }
+      terminalManager.writeToTerminal(terminalId, str);
+    });
+
+    ws.on("close", () => {
+      console.log(`[terminal-ws] disconnected: ${terminalId.slice(0, 8)}`);
+      terminalManager.detachClient(terminalId);
+    });
+  });
+}
+
+export function createWebSocketHandler(
+  server: HTTPServer,
+  sessionManager: SessionManager,
+  terminalManager: TerminalManager,
+): WebSocketServer {
   const wss = new WebSocketServer({ noServer: true });
+  const terminalWss = new WebSocketServer({ noServer: true });
 
-  // Server-side heartbeat: detect dead connections every 30s.
-  // Without this, zombie connections persist for hours (TCP keepalive default)
-  // and can cause CLI process stdout backpressure when send() buffers data
-  // into a dead socket's TCP buffer.
+  setupTerminalWebSocket(terminalWss, terminalManager);
+
   const heartbeat = setInterval(() => {
     for (const ws of wss.clients) {
       const ext = ws as WebSocket & { isAlive?: boolean };
@@ -35,17 +127,35 @@ export function createWebSocketHandler(server: HTTPServer, sessionManager: Sessi
 
   server.on("upgrade", (req: IncomingMessage, socket: Duplex, head: Buffer) => {
     const url = req.url || "";
+    console.log(`[ws] upgrade: ${url}`);
+
+    if (url.startsWith("/ws/terminal")) {
+      const token = extractTokenFromQuery(url);
+      if (!token || !validateSession(token)) {
+        socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
+        socket.destroy();
+        return;
+      }
+      terminalWss.handleUpgrade(req, socket, head, (ws) => {
+        terminalWss.emit("connection", ws, req);
+      });
+      return;
+    }
+
     if (!url.startsWith("/ws")) {
-      return; // Let Next.js handle other upgrades (e.g. HMR)
+      console.log(`[ws] upgrade: ignoring non-ws url: ${url}`);
+      return;
     }
 
     const token = extractTokenFromQuery(url);
     if (!token || !validateSession(token)) {
+      console.log(`[ws] upgrade: auth failed for ${url} (token=${token?.slice(0, 10)}...)`);
       socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
       socket.destroy();
       return;
     }
 
+    console.log(`[ws] upgrade: accepted for ${url}`);
     wss.handleUpgrade(req, socket, head, (ws) => {
       wss.emit("connection", ws, req);
     });
@@ -63,6 +173,8 @@ export function createWebSocketHandler(server: HTTPServer, sessionManager: Sessi
     const sessionCleanups = new Map<string, Array<() => void>>();
     // Lightweight status-only subscriptions for sidebar
     let watchCleanups: Array<() => void> = [];
+    // Explicit cwd watches requested by pages (e.g. changes view)
+    let cwdWatchCleanups: Array<() => void> = [];
 
     function subscribeSession(sessionId: string): void {
       const prev = sessionCleanups.get(sessionId);
@@ -72,6 +184,15 @@ export function createWebSocketHandler(server: HTTPServer, sessionManager: Sessi
       const cleanups: Array<() => void> = [];
       sessionCleanups.set(sessionId, cleanups);
 
+      const cwd = sessionManager.getSessionCwd(sessionId);
+      if (cwd) {
+        cleanups.push(
+          watchCwd(cwd, () => {
+            send(ws, { type: "session:fs_changed", cwd });
+          }),
+        );
+      }
+
       const unsubEvent = sessionManager.subscribe(sessionId, (event: ParsedEvent) => {
         logParsedEvent(sessionId, event);
         handleParsedEvent(ws, sessionId, event, sessionManager);
@@ -79,6 +200,7 @@ export function createWebSocketHandler(server: HTTPServer, sessionManager: Sessi
       if (unsubEvent) cleanups.push(unsubEvent);
 
       const unsubStatus = sessionManager.onStatus(sessionId, (status) => {
+        console.log(`[ws] onStatus fired: ${sessionId.slice(0, 8)} -> ${status}`);
         logStatus(sessionId, status);
         send(ws, { type: "session:status", sessionId, status });
       });
@@ -93,6 +215,11 @@ export function createWebSocketHandler(server: HTTPServer, sessionManager: Sessi
         send(ws, { type: "session:error", sessionId, error });
       });
       if (unsubError) cleanups.push(unsubError);
+
+      const unsubTranscript = sessionManager.onTranscript(sessionId, (messages) => {
+        send(ws, { type: "session:transcript", sessionId, messages });
+      });
+      if (unsubTranscript) cleanups.push(unsubTranscript);
 
       const unsubSystem = sessionManager.onSystem(sessionId, (text) => {
         send(ws, { type: "session:system", sessionId, text });
@@ -172,6 +299,7 @@ export function createWebSocketHandler(server: HTTPServer, sessionManager: Sessi
                 messages: result.messages,
                 status: "idle",
                 hasMore: result.hasMore,
+                promptHistory: result.promptHistory,
               });
               send(ws, { type: "session:connected", sessionId: msg.sessionId });
               send(ws, { type: "session:info_updated", sessionId: msg.sessionId, info: result.info });
@@ -197,10 +325,6 @@ export function createWebSocketHandler(server: HTTPServer, sessionManager: Sessi
               }
               if (prefs?.initData) {
                 send(ws, { type: "session:init", sessionId: msg.sessionId, data: prefs.initData });
-              }
-              const historyTodos = extractTodosFromHistory(result.messages);
-              if (historyTodos.length > 0) {
-                send(ws, { type: "session:todos", sessionId: msg.sessionId, todos: historyTodos });
               }
             });
             break;
@@ -246,6 +370,36 @@ export function createWebSocketHandler(server: HTTPServer, sessionManager: Sessi
               sessionManager.fixStaleStatus(msg.sessionId);
             }
 
+            // Re-emit any pending permission/question requests BEFORE the
+            // history snapshot. Otherwise, on reconnect the client lands the
+            // assistant message with the AskUserQuestion tool_use first, and
+            // chat-view's Place1 renders nothing until question:request
+            // arrives 80+ms later — the chat looks stuck.
+            const pendingReqsEarly = sessionManager.getPendingRequests(msg.sessionId);
+            for (const req of pendingReqsEarly) {
+              if (req.type === "question") {
+                send(ws, {
+                  type: "question:request",
+                  sessionId: msg.sessionId,
+                  requestId: req.requestId,
+                  questions: req.toolInput,
+                });
+              } else {
+                const permMsg: ServerMessage & { type: "permission:request" } = {
+                  type: "permission:request",
+                  sessionId: msg.sessionId,
+                  requestId: req.requestId,
+                  toolName: req.toolName,
+                  input: req.toolInput,
+                };
+                if (req.planFilePath) {
+                  permMsg.planFilePath = req.planFilePath;
+                  permMsg.planContent = req.planContent;
+                }
+                send(ws, permMsg);
+              }
+            }
+
             // If client already has messages, send only the delta to avoid
             // re-sending 1000+ messages on every mobile reconnect.
             // Uses the last known server message ID instead of a count, since
@@ -275,6 +429,7 @@ export function createWebSocketHandler(server: HTTPServer, sessionManager: Sessi
                   messages: session.messages,
                   status: correctedStatus,
                   hasMore: session.hasMore,
+                  promptHistory: session.promptHistory,
                 });
               }
             } else {
@@ -284,24 +439,24 @@ export function createWebSocketHandler(server: HTTPServer, sessionManager: Sessi
                 messages: session.messages,
                 status: correctedStatus,
                 hasMore: session.hasMore,
+                promptHistory: session.promptHistory,
               });
             }
 
             // Send in-progress streaming message if the CLI is mid-response.
-            // This restores tool calls and partial text that aren't yet in the transcript.
-            // Only send when the session is actually running; an idle session has
-            // no in-progress streaming, and a stale snapshot would briefly show
-            // completed agents as still running until the status:idle clears it.
-            const snapshot = correctedStatus === "running" ? sessionManager.getStreamingSnapshot(msg.sessionId) : null;
-            if (snapshot) {
-              send(ws, {
-                type: "session:streaming_snapshot",
-                sessionId: msg.sessionId,
-                messageId: snapshot.messageId,
-                content: snapshot.content,
-                toolUses: snapshot.toolUses,
-                blocks: snapshot.blocks,
-              });
+            // Skip for PTY sessions - the transcript watcher provides message content.
+            if (session.info.runtime !== "pty") {
+              const snapshot = correctedStatus === "running" ? sessionManager.getStreamingSnapshot(msg.sessionId) : null;
+              if (snapshot) {
+                send(ws, {
+                  type: "session:streaming_snapshot",
+                  sessionId: msg.sessionId,
+                  messageId: snapshot.messageId,
+                  content: snapshot.content,
+                  toolUses: snapshot.toolUses,
+                  blocks: snapshot.blocks,
+                });
+              }
             }
 
             // Restore compacting indicator if compaction is in progress
@@ -364,6 +519,15 @@ export function createWebSocketHandler(server: HTTPServer, sessionManager: Sessi
               });
             }
 
+            const runtime = session.info.runtime;
+            if (runtime && runtime !== "stream") {
+              send(ws, {
+                type: "session:system",
+                sessionId: msg.sessionId,
+                text: `__runtime::${runtime}`,
+              });
+            }
+
             const currentUsage = sessionManager.getContextUsage(msg.sessionId);
             const usage = currentUsage || session.lastUsage;
             if (usage) {
@@ -376,12 +540,7 @@ export function createWebSocketHandler(server: HTTPServer, sessionManager: Sessi
 
             subscribeSession(msg.sessionId);
 
-            // Rebuild todos from last TodoWrite in history
-            const tTodos0 = performance.now();
-            const fullBuffer = sessionManager.getTranscriptBuffer(msg.sessionId);
-            sessionManager.rebuildTodosFromHistory(msg.sessionId, fullBuffer.length > 0 ? fullBuffer : session.messages);
-            const tTodos1 = performance.now();
-            debugLog(`[ws:${wsId}] session ${sid} rebuildTodos in ${(tTodos1 - tTodos0).toFixed(0)}ms`);
+            sessionManager.loadTodosFromFiles(msg.sessionId);
             const currentTodos = sessionManager.getTodos(msg.sessionId);
             if (currentTodos.length > 0) {
               send(ws, {
@@ -408,32 +567,6 @@ export function createWebSocketHandler(server: HTTPServer, sessionManager: Sessi
               paused: sessionManager.isQueuePaused(msg.sessionId),
             });
 
-            // Re-emit any pending permission/question requests that were
-            // sent to a previous (now dead) WebSocket connection
-            const pendingReqs = sessionManager.getPendingRequests(msg.sessionId);
-            for (const req of pendingReqs) {
-              if (req.type === "question") {
-                send(ws, {
-                  type: "question:request",
-                  sessionId: msg.sessionId,
-                  requestId: req.requestId,
-                  questions: req.toolInput,
-                });
-              } else {
-                const permMsg: ServerMessage & { type: "permission:request" } = {
-                  type: "permission:request",
-                  sessionId: msg.sessionId,
-                  requestId: req.requestId,
-                  toolName: req.toolName,
-                  input: req.toolInput,
-                };
-                if (req.planFilePath) {
-                  permMsg.planFilePath = req.planFilePath;
-                  permMsg.planContent = req.planContent;
-                }
-                send(ws, permMsg);
-              }
-            }
             const tDone = performance.now();
             debugLog(`[ws:${wsId}] session ${sid} connect complete in ${(tDone - t0).toFixed(0)}ms`);
           });
@@ -573,8 +706,15 @@ export function createWebSocketHandler(server: HTTPServer, sessionManager: Sessi
         }
 
         case "question:response": {
+          console.log(
+            `[question-debug] question:response for session ${msg.sessionId.slice(0, 8)}, requestId=${msg.requestId}, hadPending=${!!sessionManager.getPendingRequest(msg.sessionId, msg.requestId)}`,
+          );
           const pending = sessionManager.getPendingRequest(msg.sessionId, msg.requestId);
           sessionManager.removePendingRequest(msg.sessionId, msg.requestId);
+          console.log(
+            `[question-debug] after remove, remaining pending:`,
+            sessionManager.getPendingRequests(msg.sessionId).map((r) => r.requestId),
+          );
           const originalQuestions = pending?.rawToolInput?.questions;
           sessionManager.respondToPermission(msg.sessionId, msg.requestId, true, {
             questions: originalQuestions || [],
@@ -589,7 +729,15 @@ export function createWebSocketHandler(server: HTTPServer, sessionManager: Sessi
         }
 
         case "session:set_model": {
-          sessionManager.setModel(msg.sessionId, msg.model);
+          debugLog(
+            `[ws] session:set_model received: sessionId=${msg.sessionId.slice(0, 8)} model=${msg.model} contextSize=${msg.contextSize ?? "(unspecified)"}`,
+          );
+          sessionManager.setModel(msg.sessionId, msg.model, msg.contextSize);
+          break;
+        }
+
+        case "session:set_model_slot": {
+          sessionManager.setModelSlot(msg.sessionId, msg.slot, msg.modelId);
           break;
         }
 
@@ -599,6 +747,11 @@ export function createWebSocketHandler(server: HTTPServer, sessionManager: Sessi
           } else {
             sessionManager.clearBypassAllPermissions(msg.sessionId);
           }
+          break;
+        }
+
+        case "session:set_runtime": {
+          sessionManager.setRuntime(msg.sessionId, msg.runtime);
           break;
         }
 
@@ -620,11 +773,18 @@ export function createWebSocketHandler(server: HTTPServer, sessionManager: Sessi
           for (const fn of watchCleanups) fn();
           watchCleanups = [];
 
+          const watchedCwds = new Set<string>();
+
           for (const id of msg.sessionIds) {
             const unsubStatus = sessionManager.onStatus(id, (status) => {
+              console.log(`[ws] onStatus (watch) fired: ${id.slice(0, 8)} -> ${status}`);
               send(ws, { type: "session:status", sessionId: id, status });
             });
-            if (unsubStatus) watchCleanups.push(unsubStatus);
+            if (unsubStatus) {
+              watchCleanups.push(unsubStatus);
+            } else {
+              console.log(`[ws] session:subscribe onStatus returned null for ${id.slice(0, 8)}`);
+            }
 
             const unsubPending = sessionManager.onPending(id, (count) => {
               send(ws, { type: "session:pending", sessionId: id, count });
@@ -635,7 +795,26 @@ export function createWebSocketHandler(server: HTTPServer, sessionManager: Sessi
               send(ws, { type: "session:info_updated", sessionId: id, info });
             });
             if (unsubInfo) watchCleanups.push(unsubInfo);
+
+            const cwd = sessionManager.getSessionCwd(id);
+            if (cwd && !watchedCwds.has(cwd)) {
+              watchedCwds.add(cwd);
+              watchCleanups.push(
+                watchCwd(cwd, () => {
+                  send(ws, { type: "session:fs_changed", cwd });
+                }),
+              );
+            }
           }
+          break;
+        }
+
+        case "watch:cwd": {
+          cwdWatchCleanups.push(
+            watchCwd(msg.cwd, () => {
+              send(ws, { type: "session:fs_changed", cwd: msg.cwd });
+            }),
+          );
           break;
         }
       }
@@ -650,6 +829,8 @@ export function createWebSocketHandler(server: HTTPServer, sessionManager: Sessi
       sessionCleanups.clear();
       for (const fn of watchCleanups) fn();
       watchCleanups = [];
+      for (const fn of cwdWatchCleanups) fn();
+      cwdWatchCleanups = [];
     });
   });
 
@@ -657,8 +838,13 @@ export function createWebSocketHandler(server: HTTPServer, sessionManager: Sessi
 }
 
 function handleParsedEvent(ws: WebSocket, sessionId: string, event: ParsedEvent, sessionManager: SessionManager): void {
+  // In PTY mode the transcript watcher is the sole source of message content.
+  // Only forward non-content events (permissions, rate limits, suggestions, etc.).
+  const isPty = sessionManager.getRuntime(sessionId) === "pty";
+
   switch (event.type) {
     case "thinking":
+      if (isPty) break;
       send(ws, {
         type: "assistant:thinking",
         sessionId,
@@ -670,6 +856,7 @@ function handleParsedEvent(ws: WebSocket, sessionId: string, event: ParsedEvent,
       break;
 
     case "text_delta":
+      if (isPty) break;
       send(ws, {
         type: "assistant:text",
         sessionId,
@@ -678,6 +865,7 @@ function handleParsedEvent(ws: WebSocket, sessionId: string, event: ParsedEvent,
       break;
 
     case "tool_use_start":
+      if (isPty) break;
       send(ws, {
         type: "assistant:tool_use",
         sessionId,
@@ -689,6 +877,7 @@ function handleParsedEvent(ws: WebSocket, sessionId: string, event: ParsedEvent,
       break;
 
     case "tool_done":
+      if (isPty) break;
       send(ws, {
         type: "assistant:tool_use",
         sessionId,
@@ -700,6 +889,7 @@ function handleParsedEvent(ws: WebSocket, sessionId: string, event: ParsedEvent,
       break;
 
     case "tool_result":
+      if (isPty) break;
       send(ws, {
         type: "assistant:tool_result",
         sessionId,
@@ -710,6 +900,7 @@ function handleParsedEvent(ws: WebSocket, sessionId: string, event: ParsedEvent,
       break;
 
     case "message_done":
+      if (isPty) break;
       if (event.message) {
         send(ws, {
           type: "assistant:message_done",
@@ -719,7 +910,22 @@ function handleParsedEvent(ws: WebSocket, sessionId: string, event: ParsedEvent,
       }
       break;
 
+    case "streaming_snapshot":
+      if (isPty) break;
+      if (event.message) {
+        send(ws, {
+          type: "session:streaming_snapshot",
+          sessionId,
+          messageId: event.message.id,
+          content: event.message.content,
+          toolUses: event.message.toolUses,
+          blocks: event.message.blocks,
+        });
+      }
+      break;
+
     case "tool_children":
+      if (isPty) break;
       send(ws, {
         type: "assistant:tool_children",
         sessionId,
@@ -730,6 +936,7 @@ function handleParsedEvent(ws: WebSocket, sessionId: string, event: ParsedEvent,
       break;
 
     case "tool_progress":
+      if (isPty) break;
       send(ws, {
         type: "assistant:tool_progress",
         sessionId,
@@ -780,7 +987,7 @@ function handleParsedEvent(ws: WebSocket, sessionId: string, event: ParsedEvent,
             taskId: event.taskInfo.taskId,
             toolUseId: event.taskInfo.toolUseId,
             status: isProgress ? "running" : (event.taskInfo.status as "running" | "completed"),
-            title: isProgress ? undefined : event.taskInfo.description,
+            title: isProgress ? undefined : event.taskInfo.title || event.taskInfo.description,
             description: event.taskInfo.description,
             activity: isProgress ? event.taskInfo.description : undefined,
             summary: event.taskInfo.summary,
@@ -796,6 +1003,7 @@ function handleParsedEvent(ws: WebSocket, sessionId: string, event: ParsedEvent,
       const requestId = event.requestId || "";
 
       if (toolName === "AskUserQuestion") {
+        console.log(`[question-debug] live question:request for session ${sessionId.slice(0, 8)}, requestId=${requestId}`);
         send(ws, {
           type: "question:request",
           sessionId,

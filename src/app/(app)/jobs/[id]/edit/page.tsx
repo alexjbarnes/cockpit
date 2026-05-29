@@ -2,7 +2,7 @@
 
 import { ArrowLeft, Plus, X } from "lucide-react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { usePageHeader } from "@/components/app-shell";
 import { DirectoryPicker } from "@/components/directory-picker";
 import { Button } from "@/components/ui/button";
@@ -10,6 +10,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import {
   allowedEffortLevels,
+  CONTEXT_SIZES,
+  type ContextSize,
   defaultForAlias,
   findModelById,
   type ModelAlias,
@@ -18,7 +20,7 @@ import {
   versionsForAlias,
 } from "@/lib/models";
 import { describeSchedule, getJobSchedules } from "@/server/cron-utils";
-import type { JobSchedule, ScheduledJob, SimpleSchedule, SimpleScheduleFrequency, ThinkingLevel } from "@/types";
+import type { JobSchedule, Provider, ProviderModel, ScheduledJob, SimpleSchedule, SimpleScheduleFrequency, ThinkingLevel } from "@/types";
 
 const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
@@ -152,7 +154,7 @@ export default function JobEditPage() {
   const initialCwd = isNew ? searchParams.get("cwd") : null;
   const router = useRouter();
 
-  usePageHeader(duplicateFrom ? "Duplicate Job" : isNew ? "New Job" : "Edit Job");
+  usePageHeader(duplicateFrom ? "Duplicate Job" : isNew ? "New Job" : "Edit Job", { hideActions: true });
 
   const [name, setName] = useState("");
   const [cwd, setCwd] = useState(initialCwd || "");
@@ -162,8 +164,10 @@ export default function JobEditPage() {
   const [schedules, setSchedules] = useState<JobSchedule[]>([{ type: "simple", frequency: "daily", time: "09:00" }]);
 
   const [modelId, setModelId] = useState(DEFAULT_MODEL_ID);
-  const [extendedContext, setExtendedContext] = useState(false);
+  const [contextSize, setContextSize] = useState<ContextSize>("200k");
   const [thinkingLevel, setThinkingLevel] = useState<ThinkingLevel | "">("medium");
+  const [selectedProviderId, setSelectedProviderId] = useState("anthropic");
+  const [runtime, setRuntime] = useState<"stream" | "pty">("stream");
 
   const [maxDuration, setMaxDuration] = useState(30);
   const [bypassPermissions, setBypassPermissions] = useState(false);
@@ -180,26 +184,68 @@ export default function JobEditPage() {
   const [inboxOutput, setInboxOutput] = useState(false);
   const [notifyProviders, setNotifyProviders] = useState<string[]>([]);
   const [availableProviders, setAvailableProviders] = useState<{ id: string; name: string; type: string }[]>([]);
+  const [providers, setProviders] = useState<Provider[]>([]);
 
   const [showDirPicker, setShowDirPicker] = useState(false);
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(!isNew || !!duplicateFrom);
 
-  const selectedEntry = modelId ? findModelById(modelId) : null;
+  const isBuiltinProvider = selectedProviderId === "anthropic";
+  const selectedProvider = providers.find((p) => p.id === selectedProviderId);
+  const selectedEntry = isBuiltinProvider && modelId ? findModelById(modelId) : null;
   const selectedAlias = selectedEntry?.alias || null;
   const availableVersions = selectedAlias ? versionsForAlias(selectedAlias) : [];
   const showVersions = availableVersions.length > 1;
-  const effortLevels = selectedEntry ? allowedEffortLevels(selectedEntry) : [];
+  const customProviderModel = !isBuiltinProvider && selectedProvider ? selectedProvider.models.find((m) => m.modelId === modelId) : null;
+  const contextSizes = useMemo<ContextSize[]>(
+    () => (isBuiltinProvider ? (selectedEntry?.contextSizes ?? ["200k"]) : (customProviderModel?.contextSizes ?? ["200k"])),
+    [isBuiltinProvider, selectedEntry, customProviderModel],
+  );
+
+  useEffect(() => {
+    if (!contextSizes.includes(contextSize)) {
+      setContextSize(contextSizes[0] ?? "200k");
+    }
+  }, [contextSizes, contextSize]);
+
+  const effortLevels = (() => {
+    if (!isBuiltinProvider && customProviderModel) return customProviderModel.effortLevels;
+    const base = modelId.replace(/\[.*\]$/, "");
+    for (const p of providers) {
+      const m = p.models.find((pm) => pm.modelId === base);
+      if (m && m.effortLevels.length > 0) return m.effortLevels;
+    }
+    return selectedEntry ? allowedEffortLevels(selectedEntry) : [];
+  })();
   const toolSuggestions = COMMON_TOOLS.filter((t) => !allowedTools.includes(t));
+  const customProviders = providers.filter((p) => !p.isBuiltin);
 
   function selectAlias(alias: ModelAlias) {
     const entry = defaultForAlias(alias);
     if (entry) {
+      setSelectedProviderId("anthropic");
       setModelId(entry.modelId);
-      setExtendedContext(false);
+      setContextSize("200k");
       const rec = recommendedEffort(entry);
       setThinkingLevel(rec || "");
     }
+  }
+
+  function selectCustomProvider(providerId: string) {
+    setSelectedProviderId(providerId);
+    const provider = providers.find((p) => p.id === providerId);
+    if (provider && provider.models.length > 0) {
+      const first = provider.models[0];
+      setModelId(first.modelId);
+      setContextSize("200k");
+      setThinkingLevel(first.defaultEffort || (first.effortLevels.length > 0 ? first.effortLevels[0] : ""));
+    }
+  }
+
+  function selectCustomModel(model: ProviderModel) {
+    setModelId(model.modelId);
+    setContextSize("200k");
+    setThinkingLevel(model.defaultEffort || (model.effortLevels.length > 0 ? model.effortLevels[0] : ""));
   }
 
   function selectVersion(version: string) {
@@ -207,7 +253,14 @@ export default function JobEditPage() {
     const entry = versionsForAlias(selectedAlias).find((m) => m.version === version);
     if (entry) {
       setModelId(entry.modelId);
-      const levels = allowedEffortLevels(entry);
+      const provLevels = (() => {
+        for (const p of providers) {
+          const m = p.models.find((pm) => pm.modelId === entry.modelId);
+          if (m) return m.effortLevels;
+        }
+        return [];
+      })();
+      const levels = provLevels.length > 0 ? provLevels : allowedEffortLevels(entry);
       if (thinkingLevel && !levels.includes(thinkingLevel as ThinkingLevel)) {
         setThinkingLevel(recommendedEffort(entry) || "");
       }
@@ -233,12 +286,20 @@ export default function JobEditPage() {
     setEnabled(job.enabled);
     setSchedules(getJobSchedules(job));
     const rawModel = job.model || "";
-    const hasExtended = /\[1m\]$/i.test(rawModel);
-    const baseModel = rawModel.replace(/\[.*\]$/, "");
-    const entry = resolveModel(baseModel);
-    setModelId(entry?.modelId || DEFAULT_MODEL_ID);
-    setExtendedContext(hasExtended);
-    setThinkingLevel(job.thinkingLevel || recommendedEffort(entry) || "");
+    const withoutExt = rawModel.replace(/\[.*\]$/, "");
+    const colonIdx = withoutExt.indexOf(":");
+    if (colonIdx > 0) {
+      setSelectedProviderId(withoutExt.slice(0, colonIdx));
+      setModelId(withoutExt.slice(colonIdx + 1));
+    } else {
+      setSelectedProviderId("anthropic");
+      const entry = resolveModel(withoutExt);
+      setModelId(entry?.modelId || DEFAULT_MODEL_ID);
+    }
+    const legacy1m = /\[1m\]$/i.test(rawModel);
+    setContextSize(job.contextSize ?? (legacy1m ? "1m" : "200k"));
+    const builtinEntry = resolveModel(withoutExt);
+    setThinkingLevel(job.thinkingLevel || recommendedEffort(builtinEntry) || "");
     setMaxDuration(job.maxDurationMinutes ?? 30);
     setBypassPermissions(job.bypassPermissions ?? false);
     setAllowedTools(job.allowedTools || []);
@@ -248,6 +309,7 @@ export default function JobEditPage() {
     setRetentionDays(job.retentionDays ?? 90);
     setInboxOutput(job.inboxOutput ?? false);
     setNotifyProviders(job.notifyProviders || []);
+    setRuntime(job.runtime || "stream");
   }, []);
 
   const loadJob = useCallback(async () => {
@@ -287,10 +349,21 @@ export default function JobEditPage() {
       .catch(() => setAvailableProviders([]));
   }, []);
 
+  useEffect(() => {
+    fetch("/api/providers")
+      .then((res) => res.json())
+      .then((data) => {
+        if (Array.isArray(data)) setProviders(data);
+      })
+      .catch(() => {});
+  }, []);
+
   async function handleSave() {
     setSaving(true);
-    const supportsExtended = selectedEntry?.supportsExtendedContext ?? false;
-    const modelStr = supportsExtended && extendedContext ? `${modelId}[1m]` : modelId;
+    let modelStr = modelId;
+    if (!isBuiltinProvider && selectedProviderId) {
+      modelStr = `${selectedProviderId}:${modelId}`;
+    }
 
     const body = {
       name,
@@ -300,6 +373,7 @@ export default function JobEditPage() {
       schedule: schedules[0],
       schedules,
       model: modelStr,
+      contextSize,
       thinkingLevel: thinkingLevel || undefined,
       maxDurationMinutes: maxDuration,
       bypassPermissions,
@@ -310,6 +384,7 @@ export default function JobEditPage() {
       retentionDays,
       inboxOutput,
       notifyProviders,
+      runtime,
     };
 
     try {
@@ -422,23 +497,67 @@ export default function JobEditPage() {
             <CardTitle className="text-sm font-medium">Model</CardTitle>
           </CardHeader>
           <CardContent className="space-y-1">
-            <div className="flex items-center justify-between px-2 py-2 text-sm">
-              <span>Model</span>
-              <div className="flex gap-1 flex-wrap justify-end">
-                {(["haiku", "sonnet", "opus"] as ModelAlias[]).map((alias) => (
-                  <Button
-                    key={alias}
-                    variant={selectedAlias === alias ? "default" : "outline"}
-                    size="sm"
-                    onClick={() => selectAlias(alias)}
-                  >
-                    {alias.charAt(0).toUpperCase() + alias.slice(1)}
-                  </Button>
+            <div className="flex flex-col gap-1.5 px-2 py-2 text-sm">
+              <span>Provider</span>
+              <select
+                value={selectedProviderId}
+                onChange={(e) => {
+                  if (e.target.value === "anthropic") {
+                    const entry = findModelById(modelId);
+                    if (!entry) selectAlias("sonnet");
+                    else setSelectedProviderId("anthropic");
+                  } else {
+                    selectCustomProvider(e.target.value);
+                  }
+                }}
+                className={SELECT_CLASS}
+              >
+                <option value="anthropic">Anthropic</option>
+                {customProviders.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
                 ))}
-              </div>
+              </select>
             </div>
 
-            {showVersions && (
+            {isBuiltinProvider && (
+              <div className="flex items-center justify-between px-2 py-2 text-sm">
+                <span>Model</span>
+                <div className="flex gap-1 flex-wrap justify-end">
+                  {(["haiku", "sonnet", "opus"] as ModelAlias[]).map((alias) => (
+                    <Button
+                      key={alias}
+                      variant={selectedAlias === alias ? "default" : "outline"}
+                      size="sm"
+                      onClick={() => selectAlias(alias)}
+                    >
+                      {alias.charAt(0).toUpperCase() + alias.slice(1)}
+                    </Button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {!isBuiltinProvider && selectedProvider && (
+              <div className="flex items-center justify-between px-2 py-2 text-sm">
+                <span>Model</span>
+                <div className="flex gap-1 flex-wrap justify-end">
+                  {selectedProvider.models.map((m) => (
+                    <Button
+                      key={m.modelId}
+                      variant={modelId === m.modelId ? "default" : "outline"}
+                      size="sm"
+                      onClick={() => selectCustomModel(m)}
+                    >
+                      {m.displayName}
+                    </Button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {isBuiltinProvider && showVersions && (
               <div className="flex items-center justify-between px-2 py-2 text-sm">
                 <span>Version</span>
                 <div className="flex gap-1 flex-wrap justify-end">
@@ -456,16 +575,20 @@ export default function JobEditPage() {
               </div>
             )}
 
-            {selectedEntry?.supportsExtendedContext && (
+            {contextSizes.length >= 2 && (
               <div className="flex items-center justify-between px-2 py-2 text-sm">
                 <span>Context</span>
                 <div className="flex gap-1">
-                  <Button variant={!extendedContext ? "default" : "outline"} size="sm" onClick={() => setExtendedContext(false)}>
-                    200K
-                  </Button>
-                  <Button variant={extendedContext ? "default" : "outline"} size="sm" onClick={() => setExtendedContext(true)}>
-                    1M
-                  </Button>
+                  {contextSizes.map((size) => (
+                    <Button
+                      key={size}
+                      variant={contextSize === size ? "default" : "outline"}
+                      size="sm"
+                      onClick={() => setContextSize(size)}
+                    >
+                      {CONTEXT_SIZES[size].label}
+                    </Button>
+                  ))}
                 </div>
               </div>
             )}
@@ -703,6 +826,18 @@ export default function JobEditPage() {
             <CardTitle className="text-sm font-medium">Execution</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
+            <div className="flex items-center justify-between">
+              <label className="text-sm font-medium">Runtime</label>
+              <div className="flex gap-1">
+                <Button variant={runtime === "stream" ? "default" : "outline"} size="sm" onClick={() => setRuntime("stream")}>
+                  Stream
+                </Button>
+                <Button variant={runtime === "pty" ? "default" : "outline"} size="sm" onClick={() => setRuntime("pty")}>
+                  PTY
+                </Button>
+              </div>
+            </div>
+
             <div className="space-y-1.5">
               <label className="text-sm font-medium">Max Duration (minutes)</label>
               <Input type="number" min={1} value={maxDuration} onChange={(e) => setMaxDuration(Number(e.target.value))} />

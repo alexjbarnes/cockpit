@@ -9,6 +9,7 @@ export interface ParsedEvent {
     | "tool_done"
     | "tool_result"
     | "message_done"
+    | "streaming_snapshot"
     | "permission_request"
     | "system_message"
     | "tool_children"
@@ -31,12 +32,14 @@ export interface ParsedEvent {
   rawToolInput?: Record<string, unknown>;
   permissionSuggestions?: Record<string, unknown>[];
   interrupted?: boolean;
+  clearPending?: boolean;
   rateLimitInfo?: { status: string; retryAfterMs?: number };
   suggestions?: string[];
   taskInfo?: {
     taskId: string;
     toolUseId: string;
     status: "running" | "progress" | "completed";
+    title?: string;
     description: string;
     summary?: string;
   };

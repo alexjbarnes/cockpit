@@ -7,16 +7,20 @@ function authenticate(req: NextRequest): boolean {
   return !!token && validateSession(token);
 }
 
-export function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   if (!authenticate(req)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  return params.then(({ id }) => {
-    const found = markRead(id);
-    if (!found) return NextResponse.json({ error: "Not found" }, { status: 404 });
-    return NextResponse.json({ ok: true });
-  });
+  const { id } = await params;
+  let read = true;
+  try {
+    const body = await req.json();
+    if (typeof body.read === "boolean") read = body.read;
+  } catch {}
+  const found = markRead(id, read);
+  if (!found) return NextResponse.json({ error: "Not found" }, { status: 404 });
+  return NextResponse.json({ ok: true });
 }
 
 export function DELETE(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {

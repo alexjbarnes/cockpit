@@ -57,4 +57,62 @@ describe("session-prefs", () => {
     expect(data.s1).toBeUndefined();
     expect(data.s2).toBeDefined();
   });
+
+  it("findChainForCliSession returns match when cliSessionId matches directly", async () => {
+    mockReadFileSync.mockReturnValue(
+      JSON.stringify({
+        cockpit1: { cliSessionId: "cli-a", previousCliSessionIds: ["cli-b"] },
+      }),
+    );
+    const { findChainForCliSession } = await import("@/server/session-prefs");
+    const result = findChainForCliSession("cli-a");
+    expect(result).toEqual({ cockpitId: "cockpit1", truncatedPrevIds: ["cli-b"] });
+  });
+
+  it("findChainForCliSession returns match when target is in previousCliSessionIds", async () => {
+    mockReadFileSync.mockReturnValue(
+      JSON.stringify({
+        cockpit1: { cliSessionId: "cli-a", previousCliSessionIds: ["cli-b", "cli-c"] },
+      }),
+    );
+    const { findChainForCliSession } = await import("@/server/session-prefs");
+    const result = findChainForCliSession("cli-b");
+    expect(result).toEqual({ cockpitId: "cockpit1", truncatedPrevIds: [] });
+  });
+
+  it("findChainForCliSession returns null when no match", async () => {
+    mockReadFileSync.mockReturnValue(
+      JSON.stringify({
+        cockpit1: { cliSessionId: "cli-a", previousCliSessionIds: ["cli-b"] },
+      }),
+    );
+    const { findChainForCliSession } = await import("@/server/session-prefs");
+    expect(findChainForCliSession("cli-z")).toBeNull();
+  });
+
+  it("getSessionPrefs resolves via chain when direct key not found", async () => {
+    mockReadFileSync.mockReturnValue(
+      JSON.stringify({
+        cockpit1: { cliSessionId: "cli-a", previousCliSessionIds: [], model: "opus" },
+      }),
+    );
+    const { getSessionPrefs } = await import("@/server/session-prefs");
+    const prefs = getSessionPrefs("cli-a");
+    expect(prefs?.model).toBe("opus");
+  });
+
+  it("setSessionPrefs writes under cockpit key when cli id resolves to chain", async () => {
+    mockReadFileSync.mockReturnValue(
+      JSON.stringify({
+        cockpit1: { cliSessionId: "cli-a", previousCliSessionIds: [], name: "Old" },
+      }),
+    );
+    const { setSessionPrefs } = await import("@/server/session-prefs");
+    setSessionPrefs("cli-a", { model: "opus" });
+
+    const data = JSON.parse(mockWriteFileSync.mock.calls[0][1] as string);
+    expect(data.cockpit1.model).toBe("opus");
+    expect(data.cockpit1.name).toBe("Old");
+    expect(data["cli-a"]).toBeUndefined();
+  });
 });

@@ -25,7 +25,7 @@ export default function SkillEditorPage({ params }: { params: Promise<{ name: st
   const scope = (searchParams.get("scope") || "user") as "user" | "project";
   const cwd = searchParams.get("cwd") || undefined;
 
-  usePageHeader(isNew ? "New Skill" : "Edit Skill");
+  usePageHeader(isNew ? "New Skill" : "Edit Skill", { hideActions: true });
 
   const [skillName, setSkillName] = useState(isNew ? "" : decodeURIComponent(rawName));
   const [content, setContent] = useState(isNew ? TEMPLATE : "");

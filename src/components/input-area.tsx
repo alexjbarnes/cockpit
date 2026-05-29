@@ -2,6 +2,7 @@
 
 import {
   Brain,
+  Check,
   ChevronRight,
   Cpu,
   Eye,
@@ -19,8 +20,10 @@ import {
   ShieldCheck,
   ShieldOff,
   Square,
+  Terminal,
   Trash2,
   X,
+  Zap,
 } from "lucide-react";
 import { type ClipboardEvent, type DragEvent, type KeyboardEvent, useCallback, useEffect, useRef, useState } from "react";
 import { CodeBlock, languageFromPath } from "@/components/code-block";
@@ -32,10 +35,29 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { useWebSocket } from "@/hooks/use-websocket";
 import type { SlashCommand } from "@/lib/commands";
-import { allowedEffortLevels, defaultForAlias, findModelById, type ModelAlias, type ModelEntry, versionsForAlias } from "@/lib/models";
+import {
+  allowedEffortLevels,
+  CONTEXT_SIZES,
+  type ContextSize,
+  defaultForAlias,
+  findModelById,
+  type ModelAlias,
+  type ModelEntry,
+  versionsForAlias,
+} from "@/lib/models";
 import { detectLanguage, extensionForLabel, shouldCollapsePaste } from "@/lib/paste-detect";
-import type { ContextUsage, DocumentAttachment, ImageAttachment, InitData, TextFileAttachment, ThinkingLevel } from "@/types";
+import type {
+  ContextUsage,
+  DocumentAttachment,
+  ImageAttachment,
+  InitData,
+  Provider,
+  ProviderModel,
+  TextFileAttachment,
+  ThinkingLevel,
+} from "@/types";
 import { ContextIndicator } from "./context-indicator";
+import { PromptHistoryModal } from "./prompt-history-modal";
 import { QueueModal } from "./queue-modal";
 
 const aliases: { value: ModelAlias; label: string }[] = [
@@ -44,40 +66,28 @@ const aliases: { value: ModelAlias; label: string }[] = [
   { value: "opus", label: "Opus" },
 ];
 
-const contextSizes: { value: string; label: string }[] = [
-  { value: "default", label: "200K" },
-  { value: "1m", label: "1M" },
-];
-
-function baseModel(model: string): string {
-  return model.replace(/\[.*\]$/, "");
-}
-
-function hasExtendedContext(model: string): boolean {
-  return model.includes("[1m]");
-}
-
-function parseCurrentModel(currentModel: string): { alias: ModelAlias | null; entry: ModelEntry | null; extended: boolean } {
-  const extended = hasExtendedContext(currentModel);
-  const base = baseModel(currentModel);
+function parseCurrentModel(
+  currentModel: string,
+  currentContextSize: ContextSize,
+): { alias: ModelAlias | null; entry: ModelEntry | null; contextSize: ContextSize } {
+  const base = currentModel.replace(/\[.*\]$/, "");
   if (base === "opus" || base === "sonnet" || base === "haiku") {
-    return { alias: base, entry: defaultForAlias(base) ?? null, extended };
+    return { alias: base, entry: defaultForAlias(base) ?? null, contextSize: currentContextSize };
   }
   const entry = findModelById(base) ?? null;
-  return { alias: entry?.alias ?? null, entry, extended };
+  return { alias: entry?.alias ?? null, entry, contextSize: currentContextSize };
 }
 
-function valueForEntry(entry: ModelEntry, extended: boolean): string {
+function valueForEntry(entry: ModelEntry): string {
   const versions = versionsForAlias(entry.alias);
   const isSoleDefault = versions.length === 1 && entry.isDefault;
-  const base = isSoleDefault ? entry.alias : entry.modelId;
-  return extended && entry.supportsExtendedContext ? `${base}[1m]` : base;
+  return isSoleDefault ? entry.alias : entry.modelId;
 }
 
-function valueForAlias(alias: ModelAlias, extended: boolean): string {
+function valueForAlias(alias: ModelAlias): string {
   const entry = defaultForAlias(alias);
   if (!entry) return alias;
-  return valueForEntry(entry, extended);
+  return valueForEntry(entry);
 }
 
 const thinkingLevels: { value: ThinkingLevel; label: string }[] = [
@@ -207,6 +217,7 @@ const FILE_ACCEPT = ["image/*", ".pdf", ...Array.from(TEXT_EXTENSIONS)].join(","
 
 interface InputAreaProps {
   sessionId: string;
+  promptHistory?: string[];
   onSend: (text: string, images?: ImageAttachment[], documents?: DocumentAttachment[], textFiles?: TextFileAttachment[]) => void;
   onInterrupt: () => void;
   isResponding: boolean;
@@ -217,13 +228,13 @@ interface InputAreaProps {
   thinkingLevel: ThinkingLevel;
   onSetThinking: (level: ThinkingLevel) => void;
   currentModel: string;
-  onSetModel: (model: string) => void;
+  currentContextSize: ContextSize;
+  onSetModel: (model: string, contextSize?: ContextSize) => void;
   contextUsage: ContextUsage | null;
   dismissKeyboard: boolean;
   cwd?: string;
   onCompact?: () => void;
   initData?: InitData | null;
-  activeModelId?: string | null;
   hasQueuedMessage?: boolean;
   queuedMessages?: Array<{ id: string; text: string }>;
   queuePaused?: boolean;
@@ -235,11 +246,13 @@ interface InputAreaProps {
   onClearRestoredText?: () => void;
   btw?: { question: string; answer: string | null; loading: boolean; error: string | null } | null;
   onDismissBtw?: () => void;
+  currentRuntime?: "pty" | "stream";
+  onSetRuntime?: (runtime: "pty" | "stream") => void;
   onRestart?: () => void;
+  providers?: Provider[];
 }
 
 const sessionDrafts = new Map<string, string>();
-const sessionHistories = new Map<string, string[]>();
 
 function getMentionContext(text: string, cursorPos: number): { active: boolean; query: string; start: number } {
   const before = text.slice(0, cursorPos);
@@ -257,6 +270,7 @@ function getSlashContext(text: string, cursorPos: number): { active: boolean; qu
 
 export function InputArea({
   sessionId,
+  promptHistory = [],
   onSend,
   onInterrupt,
   isResponding,
@@ -267,13 +281,13 @@ export function InputArea({
   thinkingLevel,
   onSetThinking,
   currentModel,
+  currentContextSize,
   onSetModel,
   contextUsage,
   dismissKeyboard,
   cwd,
   onCompact,
   initData,
-  activeModelId,
   hasQueuedMessage,
   queuedMessages,
   queuePaused,
@@ -284,7 +298,10 @@ export function InputArea({
   onClearRestoredText,
   btw,
   onDismissBtw,
+  currentRuntime,
+  onSetRuntime,
   onRestart,
+  providers,
 }: InputAreaProps) {
   const { connected } = useWebSocket();
   const [text, setText] = useState(() => sessionDrafts.get(sessionId) || "");
@@ -307,9 +324,11 @@ export function InputArea({
     }
   }, [restoredText, onClearRestoredText]);
 
-  const historyIndexRef = useRef(-1);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [optionsOpen, setOptionsOpen] = useState(false);
+  const [settingsTab, setSettingsTab] = useState<"model" | "runtime">("model");
+  const [viewProvider, setViewProvider] = useState<string>("anthropic");
   const [mentionSelectedIndex, setMentionSelectedIndex] = useState(0);
   const [cursorPos, setCursorPos] = useState(0);
   const [pendingImages, setPendingImages] = useState<ImageAttachment[]>([]);
@@ -392,12 +411,6 @@ export function InputArea({
       pendingDocs.length > 0 ? pendingDocs : undefined,
       pendingTextFiles.length > 0 ? pendingTextFiles : undefined,
     );
-    const history = sessionHistories.get(sessionId) || [];
-    if (history[history.length - 1] !== trimmed) {
-      history.push(trimmed);
-      sessionHistories.set(sessionId, history);
-    }
-    historyIndexRef.current = -1;
     setText("");
     setPendingImages([]);
     setPendingDocs([]);
@@ -499,24 +512,9 @@ export function InputArea({
         return;
       }
 
-      const history = sessionHistories.get(sessionId) || [];
-      if (e.key === "ArrowUp" && !text.trim() && history.length > 0) {
+      if (e.key === "ArrowUp" && !text.trim() && promptHistory.length > 0) {
         e.preventDefault();
-        const idx = historyIndexRef.current === -1 ? history.length - 1 : Math.max(0, historyIndexRef.current - 1);
-        historyIndexRef.current = idx;
-        setText(history[idx]);
-        return;
-      }
-      if (e.key === "ArrowDown" && historyIndexRef.current >= 0) {
-        e.preventDefault();
-        const idx = historyIndexRef.current + 1;
-        if (idx >= history.length) {
-          historyIndexRef.current = -1;
-          setText("");
-        } else {
-          historyIndexRef.current = idx;
-          setText(history[idx]);
-        }
+        setHistoryOpen(true);
         return;
       }
 
@@ -541,7 +539,7 @@ export function InputArea({
       onInterrupt,
       planMode,
       onSetPlanMode,
-      sessionId,
+      promptHistory,
     ],
   );
 
@@ -767,10 +765,35 @@ export function InputArea({
         )}
         {optionsOpen &&
           (() => {
-            const parsed = parseCurrentModel(currentModel);
-            const versionEntries = parsed.alias ? versionsForAlias(parsed.alias) : [];
-            const showVersionRow = versionEntries.length > 1;
-            const supportsExtended = parsed.entry?.supportsExtendedContext ?? false;
+            const parsed = parseCurrentModel(currentModel, currentContextSize);
+            const allProviders = [
+              { id: "anthropic", name: "Anthropic" },
+              ...(providers || []).filter((p) => !p.isBuiltin).map((p) => ({ id: p.id, name: p.name })),
+            ];
+            const vEntries = parsed.alias ? versionsForAlias(parsed.alias) : [];
+            const showVRow = vEntries.length > 1;
+            const matchesProviderModel = (p: Provider, pm: ProviderModel): boolean =>
+              currentModel === pm.modelId || currentModel === `${p.id}:${pm.modelId}`;
+            const sizes: ContextSize[] = (() => {
+              if (parsed.entry) return parsed.entry.contextSizes;
+              if (!providers || !currentModel) return [];
+              for (const p of providers) {
+                const m = p.models.find((pm) => matchesProviderModel(p, pm));
+                if (m) return m.contextSizes ?? [];
+              }
+              return [];
+            })();
+            const providerEffort = (() => {
+              if (!providers || !currentModel) return [];
+              for (const p of providers) {
+                const m = p.models.find((pm) => matchesProviderModel(p, pm));
+                if (m) return m.effortLevels ?? [];
+              }
+              return [];
+            })();
+            const allowed = new Set(providerEffort.length > 0 ? providerEffort : allowedEffortLevels(parsed.entry));
+            const visibleLevels = thinkingLevels.filter((opt) => allowed.has(opt.value));
+
             return (
               <div
                 className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
@@ -778,8 +801,9 @@ export function InputArea({
                   if (e.target === e.currentTarget) setOptionsOpen(false);
                 }}
               >
-                <div className="w-full max-w-md mx-4 rounded-lg border bg-background p-4 shadow-lg space-y-1">
-                  <div className="flex items-center justify-between pb-2">
+                <div className="w-full max-w-xl mx-4 rounded-lg border bg-background shadow-lg overflow-hidden flex flex-col max-h-[85vh]">
+                  {/* Header */}
+                  <div className="flex items-center justify-between px-5 py-3 border-b shrink-0">
                     <div className="flex items-center gap-2">
                       <Settings2 className="h-4 w-4" />
                       <h2 className="text-sm font-semibold">Session settings</h2>
@@ -791,139 +815,302 @@ export function InputArea({
                       <X className="h-4 w-4" />
                     </button>
                   </div>
-                  <div className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs">
-                    <Cpu className="h-3.5 w-3.5 text-muted-foreground" />
-                    <span className="text-muted-foreground">Model</span>
-                    {activeModelId && <span className="text-[10px] font-mono text-muted-foreground/70 truncate">{activeModelId}</span>}
-                    <div className="ml-auto flex gap-1">
-                      {aliases.map((opt) => (
-                        <button
-                          key={opt.value}
-                          onClick={() => onSetModel(valueForAlias(opt.value, parsed.extended && opt.value !== "haiku"))}
-                          className={`rounded px-2 py-0.5 text-xs transition-colors ${
-                            parsed.alias === opt.value
-                              ? "bg-primary text-primary-foreground"
-                              : "bg-muted text-muted-foreground hover:text-foreground"
-                          }`}
-                        >
-                          {opt.label}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                  {showVersionRow && (
-                    <div className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs">
-                      <Layers className="h-3.5 w-3.5 text-muted-foreground" />
-                      <span className="text-muted-foreground">Version</span>
-                      <div className="ml-auto flex gap-1">
-                        {versionEntries.map((entry) => (
+
+                  {/* Body */}
+                  <div className="flex flex-1 min-h-0">
+                    {/* Sidebar tabs */}
+                    <aside className="w-28 border-r shrink-0 p-2 flex flex-col gap-1">
+                      <button
+                        onClick={() => setSettingsTab("model")}
+                        className={`flex items-center gap-2 px-3 py-2 rounded text-xs font-medium transition-colors ${
+                          settingsTab === "model"
+                            ? "bg-primary/10 text-primary border-l-2 border-primary"
+                            : "text-muted-foreground hover:text-foreground hover:bg-muted border-l-2 border-transparent"
+                        }`}
+                      >
+                        <Brain className="h-3.5 w-3.5" />
+                        Model
+                      </button>
+                      <button
+                        onClick={() => setSettingsTab("runtime")}
+                        className={`flex items-center gap-2 px-3 py-2 rounded text-xs font-medium transition-colors ${
+                          settingsTab === "runtime"
+                            ? "bg-primary/10 text-primary border-l-2 border-primary"
+                            : "text-muted-foreground hover:text-foreground hover:bg-muted border-l-2 border-transparent"
+                        }`}
+                      >
+                        <Terminal className="h-3.5 w-3.5" />
+                        Harness
+                      </button>
+                    </aside>
+
+                    {/* Tab content */}
+                    <div className="flex-1 overflow-y-auto p-4 space-y-4 min-h-[320px]">
+                      {/* Model tab */}
+                      {settingsTab === "model" && (
+                        <div className="space-y-3">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                              <Cpu className="h-3.5 w-3.5 text-muted-foreground" />
+                              <span className="text-xs font-medium text-foreground">Provider</span>
+                            </div>
+                            <select
+                              value={viewProvider}
+                              onChange={(e) => setViewProvider(e.target.value)}
+                              className="rounded border border-input bg-background px-2 py-1 text-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                            >
+                              {allProviders.map((p) => (
+                                <option key={p.id} value={p.id}>
+                                  {p.name}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+
+                          {viewProvider === "anthropic" ? (
+                            <div className="space-y-0.5">
+                              {aliases.map((opt) => {
+                                const entry = defaultForAlias(opt.value);
+                                const selected = parsed.alias === opt.value;
+                                return (
+                                  <button
+                                    key={opt.value}
+                                    onClick={() => onSetModel(valueForAlias(opt.value))}
+                                    className={`flex w-full items-center gap-3 rounded px-3 py-2 text-xs transition-colors ${
+                                      selected ? "bg-primary/10 text-primary" : "hover:bg-muted text-foreground"
+                                    }`}
+                                  >
+                                    <div className="w-3 shrink-0">
+                                      {selected ? (
+                                        <Check className="h-3 w-3" />
+                                      ) : (
+                                        <div className="h-3 w-3 rounded-full border border-muted-foreground/40" />
+                                      )}
+                                    </div>
+                                    <span className="font-mono font-medium">{opt.label}</span>
+                                    {entry && <span className="text-muted-foreground ml-auto">{entry.modelId}</span>}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          ) : (
+                            (() => {
+                              const provider = providers?.find((p) => p.id === viewProvider);
+                              if (!provider) return null;
+                              return (
+                                <div className="space-y-0.5">
+                                  {provider.models.map((model) => {
+                                    const qualified = `${provider.id}:${model.modelId}`;
+                                    const selected = currentModel === qualified || currentModel === model.modelId;
+                                    return (
+                                      <button
+                                        key={model.modelId}
+                                        onClick={() => onSetModel(qualified)}
+                                        className={`flex w-full items-center gap-3 rounded px-3 py-2 text-xs transition-colors ${
+                                          selected ? "bg-primary/10 text-primary" : "hover:bg-muted text-foreground"
+                                        }`}
+                                      >
+                                        <div className="w-3 shrink-0">
+                                          {selected ? (
+                                            <Check className="h-3 w-3" />
+                                          ) : (
+                                            <div className="h-3 w-3 rounded-full border border-muted-foreground/40" />
+                                          )}
+                                        </div>
+                                        <span className="font-mono font-medium">{model.modelId}</span>
+                                        <span className="text-muted-foreground ml-auto">{model.displayName}</span>
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+                              );
+                            })()
+                          )}
+
+                          {showVRow && (
+                            <div className="flex items-center gap-2 pt-1">
+                              <Layers className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                              <span className="text-xs text-muted-foreground">Version</span>
+                              <div className="ml-auto flex gap-1">
+                                {vEntries.map((entry) => (
+                                  <button
+                                    key={entry.modelId}
+                                    onClick={() => onSetModel(valueForEntry(entry))}
+                                    className={`rounded px-2 py-0.5 text-xs transition-colors ${
+                                      parsed.entry?.modelId === entry.modelId
+                                        ? "bg-primary text-primary-foreground"
+                                        : "bg-muted text-muted-foreground hover:text-foreground"
+                                    }`}
+                                  >
+                                    {entry.version}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                          {sizes.length >= 2 && (
+                            <div className="flex items-center gap-2">
+                              <Maximize2 className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                              <span className="text-xs text-muted-foreground">Context</span>
+                              <div className="ml-auto flex gap-1">
+                                {sizes.map((s) => (
+                                  <button
+                                    key={s}
+                                    onClick={() => onSetModel(currentModel, s)}
+                                    className={`rounded px-2 py-0.5 text-xs transition-colors ${
+                                      parsed.contextSize === s
+                                        ? "bg-primary text-primary-foreground"
+                                        : "bg-muted text-muted-foreground hover:text-foreground"
+                                    }`}
+                                  >
+                                    {CONTEXT_SIZES[s].label}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                          {allowed.size > 0 && (
+                            <div className="flex items-start gap-2">
+                              <Brain className="h-3.5 w-3.5 text-muted-foreground shrink-0 mt-0.5" />
+                              <span className="text-xs text-muted-foreground py-0.5 shrink-0">Thinking</span>
+                              <div className="ml-auto flex flex-wrap gap-1 justify-end">
+                                {visibleLevels.map((opt) => (
+                                  <button
+                                    key={opt.value}
+                                    onClick={() => onSetThinking(opt.value)}
+                                    data-testid={`thinking-${opt.value}`}
+                                    className={`rounded px-2 py-0.5 text-xs transition-colors ${
+                                      thinkingLevel === opt.value
+                                        ? "bg-primary text-primary-foreground"
+                                        : "bg-muted text-muted-foreground hover:text-foreground"
+                                    }`}
+                                  >
+                                    {opt.label}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Runtime tab */}
+                      {settingsTab === "runtime" && (
+                        <div className="space-y-5">
+                          <div className="flex items-center gap-2">
+                            <Terminal className="h-3.5 w-3.5 text-muted-foreground" />
+                            <span className="text-xs text-muted-foreground">Agent harness:</span>
+                            <span className="text-xs font-medium text-foreground">Claude Code</span>
+                          </div>
+
+                          {onSetRuntime && (
+                            <div className="flex items-center gap-2">
+                              <Zap className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                              <span className="text-xs text-muted-foreground">Backend</span>
+                              <div className="ml-auto flex gap-1">
+                                <button
+                                  onClick={() => onSetRuntime("pty")}
+                                  data-testid="runtime-pty"
+                                  className={`rounded px-2 py-0.5 text-xs transition-colors ${
+                                    currentRuntime === "pty"
+                                      ? "bg-primary text-primary-foreground"
+                                      : "bg-muted text-muted-foreground hover:text-foreground"
+                                  }`}
+                                >
+                                  PTY
+                                </button>
+                                <button
+                                  onClick={() => onSetRuntime("stream")}
+                                  data-testid="runtime-stream"
+                                  className={`rounded px-2 py-0.5 text-xs transition-colors ${
+                                    currentRuntime === "stream"
+                                      ? "bg-primary text-primary-foreground"
+                                      : "bg-muted text-muted-foreground hover:text-foreground"
+                                  }`}
+                                >
+                                  Stream
+                                </button>
+                              </div>
+                            </div>
+                          )}
+
                           <button
-                            key={entry.modelId}
-                            onClick={() => onSetModel(valueForEntry(entry, parsed.extended && entry.supportsExtendedContext))}
-                            className={`rounded px-2 py-0.5 text-xs transition-colors ${
-                              parsed.entry?.modelId === entry.modelId
-                                ? "bg-primary text-primary-foreground"
-                                : "bg-muted text-muted-foreground hover:text-foreground"
-                            }`}
+                            onClick={() => {
+                              onRestart?.();
+                              setOptionsOpen(false);
+                            }}
+                            className="flex w-full items-center justify-center gap-2 rounded-lg border border-border px-4 py-2.5 text-xs text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
                           >
-                            {entry.version}
+                            <RefreshCw className="h-3.5 w-3.5" />
+                            Restart agent harness
                           </button>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                  {supportsExtended && parsed.entry && (
-                    <div className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs">
-                      <Maximize2 className="h-3.5 w-3.5 text-muted-foreground" />
-                      <span className="text-muted-foreground">Context</span>
-                      <div className="ml-auto flex gap-1">
-                        {contextSizes.map((opt) => (
+
                           <button
-                            key={opt.value}
-                            onClick={() => onSetModel(valueForEntry(parsed.entry!, opt.value === "1m"))}
-                            className={`rounded px-2 py-0.5 text-xs transition-colors ${
-                              (opt.value === "1m") === parsed.extended
-                                ? "bg-primary text-primary-foreground"
-                                : "bg-muted text-muted-foreground hover:text-foreground"
-                            }`}
+                            onClick={() => onSetBypass(!bypassActive)}
+                            className="flex w-full items-center justify-between rounded-lg border border-border px-4 py-3 text-xs hover:bg-muted/50 transition-colors"
                           >
-                            {opt.label}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                  {(() => {
-                    const allowed = new Set(allowedEffortLevels(parsed.entry));
-                    if (allowed.size === 0) return null;
-                    const visible = thinkingLevels.filter((opt) => allowed.has(opt.value));
-                    return (
-                      <div className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs">
-                        <Brain className="h-3.5 w-3.5 text-muted-foreground" />
-                        <span className="text-muted-foreground">Thinking</span>
-                        <div className="ml-auto flex gap-1">
-                          {visible.map((opt) => (
-                            <button
-                              key={opt.value}
-                              onClick={() => onSetThinking(opt.value)}
-                              className={`rounded px-2 py-0.5 text-xs transition-colors ${
-                                thinkingLevel === opt.value
-                                  ? "bg-primary text-primary-foreground"
-                                  : "bg-muted text-muted-foreground hover:text-foreground"
+                            <div className="flex items-center gap-3">
+                              {bypassActive ? (
+                                <ShieldOff className="h-4 w-4 text-orange-500" />
+                              ) : (
+                                <ShieldCheck className="h-4 w-4 text-muted-foreground" />
+                              )}
+                              <span className={bypassActive ? "text-orange-500 font-medium" : "text-muted-foreground"}>
+                                Bypass all permissions
+                              </span>
+                            </div>
+                            <span
+                              className={`inline-flex h-5 w-9 items-center rounded-full transition-colors shrink-0 ${
+                                bypassActive ? "bg-orange-500" : "bg-muted-foreground/30"
                               }`}
                             >
-                              {opt.label}
+                              <span
+                                className={`inline-block h-4 w-4 rounded-full bg-white transition-transform shadow-sm ${
+                                  bypassActive ? "translate-x-4.5" : "translate-x-0.5"
+                                }`}
+                              />
+                            </span>
+                          </button>
+
+                          {initData?.mcpServers && initData.mcpServers.length > 0 && (
+                            <button
+                              onClick={() => setMcpOpen(true)}
+                              className="flex w-full items-center justify-between rounded-lg border border-border px-4 py-3 text-xs hover:bg-muted/50 transition-colors"
+                            >
+                              <div className="flex items-center gap-3">
+                                <Plug className="h-4 w-4 text-muted-foreground" />
+                                <span className="text-muted-foreground">MCP Servers</span>
+                              </div>
+                              <span className="flex items-center gap-1 text-muted-foreground">
+                                {initData.mcpServers.filter((s) => s.status === "connected").length}/{initData.mcpServers.length}
+                                <ChevronRight className="h-3 w-3" />
+                              </span>
                             </button>
-                          ))}
+                          )}
                         </div>
-                      </div>
-                    );
-                  })()}
-                  <button
-                    onClick={() => onSetBypass(!bypassActive)}
-                    className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs hover:bg-muted transition-colors"
-                  >
-                    {bypassActive ? (
-                      <ShieldOff className="h-3.5 w-3.5 text-orange-500" />
-                    ) : (
-                      <ShieldCheck className="h-3.5 w-3.5 text-muted-foreground" />
-                    )}
-                    <span className={bypassActive ? "text-orange-500 font-medium" : "text-muted-foreground"}>Bypass all permissions</span>
-                    <span
-                      className={`ml-auto inline-flex h-4 w-7 items-center rounded-full transition-colors ${
-                        bypassActive ? "bg-orange-500" : "bg-muted-foreground/30"
-                      }`}
-                    >
-                      <span
-                        className={`inline-block h-3 w-3 rounded-full bg-white transition-transform ${
-                          bypassActive ? "translate-x-3.5" : "translate-x-0.5"
-                        }`}
-                      />
-                    </span>
-                  </button>
-                  {initData?.mcpServers && initData.mcpServers.length > 0 && (
-                    <button
-                      onClick={() => setMcpOpen(true)}
-                      className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs hover:bg-muted transition-colors"
-                    >
-                      <Plug className="h-3.5 w-3.5 text-muted-foreground" />
-                      <span className="text-muted-foreground">MCP Servers</span>
-                      <span className="ml-auto flex items-center gap-1 text-muted-foreground">
-                        {initData.mcpServers.filter((s) => s.status === "connected").length}/{initData.mcpServers.length}
-                        <ChevronRight className="h-3 w-3" />
-                      </span>
-                    </button>
-                  )}
-                  <button
-                    onClick={() => {
-                      onRestart?.();
-                      setOptionsOpen(false);
-                    }}
-                    className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs hover:bg-muted transition-colors"
-                  >
-                    <RefreshCw className="h-3.5 w-3.5 text-muted-foreground" />
-                    <span className="text-muted-foreground">Restart process</span>
-                  </button>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Footer */}
+                  <div className="flex items-center justify-end px-5 py-3 border-t shrink-0">
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => setOptionsOpen(false)}
+                        className="px-3 py-1.5 text-xs rounded-md border border-input text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        onClick={() => setOptionsOpen(false)}
+                        className="px-4 py-1.5 text-xs rounded-md bg-primary text-primary-foreground hover:brightness-110 transition-all"
+                      >
+                        Done
+                      </button>
+                    </div>
+                  </div>
                 </div>
               </div>
             );
@@ -1023,8 +1210,22 @@ export function InputArea({
             <Button
               size="icon"
               variant="ghost"
+              data-testid="btn-session-settings"
               className={`h-8 w-8 ${bypassActive ? "text-orange-500" : ""}`}
-              onClick={() => setOptionsOpen((v) => !v)}
+              onClick={() =>
+                setOptionsOpen((v) => {
+                  if (!v) {
+                    const p = parseCurrentModel(currentModel, currentContextSize);
+                    if (!p.alias) {
+                      const prov = providers?.find((x) => x.models.some((m) => m.modelId === currentModel));
+                      setViewProvider(prov?.id ?? "anthropic");
+                    } else {
+                      setViewProvider("anthropic");
+                    }
+                  }
+                  return !v;
+                })
+              }
             >
               <Settings2 className="h-4 w-4" />
             </Button>
@@ -1032,6 +1233,7 @@ export function InputArea({
           <div className="relative flex-1 mr-1">
             <textarea
               ref={textareaRef}
+              data-testid="message-input"
               value={text}
               onChange={handleChange}
               onKeyDown={handleKeyDown}
@@ -1071,7 +1273,13 @@ export function InputArea({
                 <Square className="h-4 w-4" />
               </Button>
             ) : (
-              <Button size="icon" className="h-8 w-8" onClick={handleSend} disabled={!text.trim() && !hasAttachments}>
+              <Button
+                size="icon"
+                className="h-8 w-8"
+                onClick={handleSend}
+                disabled={!text.trim() && !hasAttachments}
+                data-testid="btn-send"
+              >
                 <Send className="h-4 w-4" />
               </Button>
             )}
@@ -1123,6 +1331,19 @@ export function InputArea({
         onResume={onResumeQueue ?? (() => {})}
       />
       <McpStatusModal open={mcpOpen} onOpenChange={setMcpOpen} sessionId={sessionId} initData={initData} />
+      <PromptHistoryModal
+        open={historyOpen}
+        prompts={promptHistory}
+        onSelect={(prompt) => {
+          setHistoryOpen(false);
+          setText(prompt);
+          requestAnimationFrame(() => textareaRef.current?.focus());
+        }}
+        onClose={() => {
+          setHistoryOpen(false);
+          requestAnimationFrame(() => textareaRef.current?.focus());
+        }}
+      />
     </div>
   );
 }

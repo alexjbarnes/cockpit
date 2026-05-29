@@ -25,6 +25,7 @@ vi.mock("@/server/plans", () => ({
 import { createSession as createAuthSession, setupPassword } from "@/server/auth";
 import type { ParsedEvent } from "@/server/event-parser";
 import { SessionManager } from "@/server/session-manager";
+import { TerminalManager } from "@/server/terminal-manager";
 import { createWebSocketHandler } from "@/server/ws-handler";
 
 beforeAll(async () => {
@@ -34,6 +35,7 @@ beforeAll(async () => {
 describe("WebSocket handler", () => {
   let server: Server;
   let manager: SessionManager;
+  let terminalMgr: TerminalManager;
   let port: number;
   let validToken: string;
 
@@ -41,8 +43,9 @@ describe("WebSocket handler", () => {
     () =>
       new Promise<void>((resolve) => {
         manager = new SessionManager();
+        terminalMgr = new TerminalManager();
         server = createServer();
-        createWebSocketHandler(server, manager);
+        createWebSocketHandler(server, manager, terminalMgr);
         validToken = createAuthSession();
         server.listen(0, () => {
           const addr = server.address();
@@ -709,6 +712,42 @@ describe("WebSocket handler", () => {
       await new Promise((resolve) => setTimeout(resolve, 50));
 
       expect(manager.getModel(session.id)).toBe("opus");
+      ws.close();
+    });
+
+    it("handles session:set_model_slot", async () => {
+      const session = manager.createSession("/tmp");
+      const ws = await connectWs();
+
+      ws.send(JSON.stringify({ type: "session:connect", sessionId: session.id }));
+      await readMessages(ws, 5);
+
+      ws.send(JSON.stringify({ type: "session:set_model_slot", sessionId: session.id, slot: "primary", modelId: "opus" }));
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      ws.close();
+    });
+
+    it("handles session:set_runtime", async () => {
+      const session = manager.createSession("/tmp");
+      const ws = await connectWs();
+
+      ws.send(JSON.stringify({ type: "session:connect", sessionId: session.id }));
+      await readMessages(ws, 5);
+
+      ws.send(JSON.stringify({ type: "session:set_runtime", sessionId: session.id, runtime: "stream" }));
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      ws.close();
+    });
+
+    it("handles session:restart", async () => {
+      const session = manager.createSession("/tmp");
+      const ws = await connectWs();
+
+      ws.send(JSON.stringify({ type: "session:connect", sessionId: session.id }));
+      await readMessages(ws, 5);
+
+      ws.send(JSON.stringify({ type: "session:restart", sessionId: session.id }));
+      await new Promise((resolve) => setTimeout(resolve, 50));
       ws.close();
     });
 
@@ -1888,6 +1927,106 @@ describe("WebSocket handler", () => {
     });
   });
 
+  describe("PTY mode suppresses content events", () => {
+    function waitForConnect(ws: WebSocket, sessionId: string): Promise<void> {
+      return new Promise((resolve) => {
+        const handler = (data: Buffer) => {
+          const msg = JSON.parse(data.toString());
+          if (msg.type === "session:queued" && msg.sessionId === sessionId) {
+            ws.removeListener("message", handler);
+            resolve();
+          }
+        };
+        ws.on("message", handler);
+        ws.send(JSON.stringify({ type: "session:connect", sessionId }));
+      });
+    }
+
+    function collectUntilQueued(ws: WebSocket, sessionId: string): Promise<Record<string, unknown>[]> {
+      return new Promise((resolve) => {
+        const messages: Record<string, unknown>[] = [];
+        const handler = (data: Buffer) => {
+          const msg = JSON.parse(data.toString());
+          messages.push(msg);
+          if (msg.type === "session:queued" && msg.sessionId === sessionId) {
+            ws.removeListener("message", handler);
+            resolve(messages);
+          }
+        };
+        ws.on("message", handler);
+      });
+    }
+
+    it("suppresses all content events for PTY sessions", async () => {
+      const session = manager.createSession("/tmp");
+      const ws = await connectWs();
+      await waitForConnect(ws, session.id);
+
+      const s = (manager as any).sessions.get(session.id)!;
+      s.runtime = "pty";
+      s.emitter.emit("event", session.id, { type: "thinking", text: "hmm" });
+      s.emitter.emit("event", session.id, { type: "text_delta", text: "hello" });
+      s.emitter.emit("event", session.id, { type: "tool_use_start", toolName: "Bash", toolInput: "ls", toolId: "t1" });
+      s.emitter.emit("event", session.id, { type: "tool_done", toolName: "Bash", toolInput: "ls", toolId: "t1" });
+      s.emitter.emit("event", session.id, { type: "tool_result", toolId: "t1", toolOutput: "file.txt" });
+      s.emitter.emit("event", session.id, {
+        type: "message_done",
+        message: { id: "m1", role: "assistant", content: "done", toolUses: [], blocks: [] },
+      });
+      s.emitter.emit("event", session.id, {
+        type: "streaming_snapshot",
+        message: { id: "m2", role: "assistant", content: "partial", toolUses: [], blocks: [] },
+      });
+      s.emitter.emit("event", session.id, { type: "tool_children", messageId: "m1", toolId: "t1", children: [] });
+      s.emitter.emit("event", session.id, { type: "tool_progress", toolId: "t1", text: "progress" });
+
+      // Emit a non-content event as probe to verify the connection is alive
+      s.emitter.emit("event", session.id, {
+        type: "rate_limit",
+        rateLimitInfo: { status: "rate_limited", retryAfterMs: 1000 },
+      });
+      const msg = await readMessage(ws);
+      expect(msg.type).toBe("session:rate_limit");
+      ws.close();
+    });
+
+    it("still forwards non-content events for PTY sessions", async () => {
+      const session = manager.createSession("/tmp");
+      const ws = await connectWs();
+      await waitForConnect(ws, session.id);
+
+      const s = (manager as any).sessions.get(session.id)!;
+      s.runtime = "pty";
+      s.emitter.emit("event", session.id, {
+        type: "permission_request",
+        toolName: "Bash",
+        requestId: "req-pty",
+        toolInput: "ls",
+        rawToolInput: { command: "ls" },
+      });
+      const msg = await readMessage(ws);
+      expect(msg.type).toBe("permission:request");
+      expect(msg.toolName).toBe("Bash");
+      ws.close();
+    });
+
+    it("skips streaming snapshot on connect for PTY sessions", async () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      s.info.runtime = "pty";
+      s.info.status = "running";
+      s.streamingSnapshot = { messageId: "m1", content: "partial", toolUses: [], blocks: [] };
+
+      const ws = await connectWs();
+      const msgsPromise = collectUntilQueued(ws, session.id);
+      ws.send(JSON.stringify({ type: "session:connect", sessionId: session.id }));
+      const msgs = await msgsPromise;
+
+      expect(msgs.some((m) => m.type === "session:streaming_snapshot")).toBe(false);
+      ws.close();
+    });
+  });
+
   describe("session:connect with bypass, plan mode, model, thinking level", () => {
     function collectUntilQueued(ws: WebSocket, sessionId: string): Promise<Record<string, unknown>[]> {
       return new Promise((resolve) => {
@@ -2246,6 +2385,35 @@ describe("WebSocket handler", () => {
       ws.close();
     });
 
+    it("forwards streaming_snapshot event with message", async () => {
+      const session = manager.createSession("/tmp");
+      const ws = await connectWs();
+      await waitForConnect(ws, session.id);
+
+      const s = (manager as any).sessions.get(session.id)!;
+      s.emitter.emit("event", session.id, {
+        type: "streaming_snapshot",
+        message: { id: "snap-1", role: "assistant", content: "partial", toolUses: [], blocks: [] },
+      });
+      const msg = await readMessage(ws);
+      expect(msg.type).toBe("session:streaming_snapshot");
+      expect(msg.messageId).toBe("snap-1");
+      ws.close();
+    });
+
+    it("skips streaming_snapshot event without message", async () => {
+      const session = manager.createSession("/tmp");
+      const ws = await connectWs();
+      await waitForConnect(ws, session.id);
+
+      const s = (manager as any).sessions.get(session.id)!;
+      s.emitter.emit("event", session.id, { type: "streaming_snapshot" });
+      s.emitter.emit("event", session.id, { type: "text_delta", text: "check" });
+      const msg = await readMessage(ws);
+      expect(msg.type).toBe("assistant:text");
+      ws.close();
+    });
+
     it("task_update with non-progress status does not set activity", async () => {
       const session = manager.createSession("/tmp");
       const ws = await connectWs();
@@ -2331,6 +2499,31 @@ describe("WebSocket handler", () => {
       const msgs = await msgsPromise;
 
       expect(msgs.some((m) => m.type === "session:connected")).toBe(true);
+      ws.close();
+    });
+
+    it("cleans up previous subscriptions on reconnect to same session", async () => {
+      const session = manager.createSession("/tmp");
+      const ws = await connectWs();
+
+      const msgs1 = collectUntilQueued(ws, session.id);
+      ws.send(JSON.stringify({ type: "session:connect", sessionId: session.id }));
+      await msgs1;
+
+      const msgs2 = collectUntilQueued(ws, session.id);
+      ws.send(JSON.stringify({ type: "session:connect", sessionId: session.id }));
+      const msgs = await msgs2;
+
+      expect(msgs.some((m) => m.type === "session:connected")).toBe(true);
+      ws.close();
+    });
+
+    it("ignores invalid JSON messages", async () => {
+      const ws = await connectWs();
+      ws.send("not json at all");
+      ws.send(JSON.stringify({ type: "ping" }));
+      const msg = await readMessage(ws);
+      expect(msg.type).toBe("pong");
       ws.close();
     });
 
@@ -2515,6 +2708,127 @@ describe("WebSocket handler", () => {
       await new Promise((r) => setTimeout(r, 50));
       // No crash, question handled
       ws.close();
+    });
+  });
+
+  describe("terminal WebSocket", () => {
+    function injectFakeTerminal(id: string, buffer = ""): void {
+      const fakePty = { write: vi.fn(), resize: vi.fn(), kill: vi.fn(), pid: 12345, onData: vi.fn(), onExit: vi.fn() };
+      (terminalMgr as any).terminals.set(id, {
+        id,
+        pty: fakePty,
+        cwd: "/tmp",
+        cols: 80,
+        rows: 24,
+        buffer,
+        detachOffset: 0,
+        client: null,
+      });
+    }
+
+    function connectTerminalWs(terminalId: string, opts?: { replay?: string }): Promise<WebSocket> {
+      return new Promise((resolve, reject) => {
+        let url = `ws://localhost:${port}/ws/terminal?token=${validToken}&terminalId=${terminalId}`;
+        if (opts?.replay !== undefined) url += `&replay=${opts.replay}`;
+        const ws = new WebSocket(url);
+        ws.on("open", () => resolve(ws));
+        ws.on("error", reject);
+      });
+    }
+
+    it("rejects terminal connection without token", async () => {
+      const ws = new WebSocket(`ws://localhost:${port}/ws/terminal`);
+      await new Promise<void>((resolve) => {
+        ws.on("close", () => resolve());
+        ws.on("error", () => resolve());
+      });
+      expect(ws.readyState).not.toBe(WebSocket.OPEN);
+    });
+
+    it("closes connection when terminalId is missing", async () => {
+      const ws = new WebSocket(`ws://localhost:${port}/ws/terminal?token=${validToken}`);
+      const code = await new Promise<number>((resolve) => {
+        ws.on("close", (c) => resolve(c));
+        ws.on("error", () => {});
+      });
+      expect(code).toBe(1008);
+    });
+
+    it("closes connection when terminal is not found", async () => {
+      const ws = await connectTerminalWs("nonexistent-terminal");
+      const code = await new Promise<number>((resolve) => {
+        ws.on("close", (c) => resolve(c));
+      });
+      expect(code).toBe(1008);
+    });
+
+    it("connects to existing terminal and attaches client", async () => {
+      injectFakeTerminal("term-1");
+      const ws = await connectTerminalWs("term-1");
+      await new Promise((r) => setTimeout(r, 50));
+      expect(ws.readyState).toBe(WebSocket.OPEN);
+      const term = (terminalMgr as any).terminals.get("term-1")!;
+      expect(term.client).not.toBeNull();
+      ws.close();
+    });
+
+    it("sends delta on connect with replay=0", async () => {
+      injectFakeTerminal("term-2", "previous output");
+      const url = `ws://localhost:${port}/ws/terminal?token=${validToken}&terminalId=term-2&replay=0`;
+      const ws = new WebSocket(url);
+      const dataPromise = new Promise<string>((resolve) => {
+        ws.on("message", (d) => resolve(d.toString()));
+      });
+      await new Promise<void>((resolve) => ws.on("open", () => resolve()));
+      const data = await dataPromise;
+      expect(data).toBe("previous output");
+      ws.close();
+    });
+
+    it("sends buffer on first resize when replay is enabled", async () => {
+      injectFakeTerminal("term-3", "buffered content");
+      const ws = await connectTerminalWs("term-3");
+      await new Promise((r) => setTimeout(r, 50));
+      ws.send("\x01R100;40");
+      const data = await new Promise<string>((resolve) => {
+        ws.on("message", (d) => resolve(d.toString()));
+      });
+      expect(data).toContain("buffered content");
+      ws.close();
+    });
+
+    it("forwards input to terminal pty", async () => {
+      injectFakeTerminal("term-4");
+      const ws = await connectTerminalWs("term-4");
+      await new Promise((r) => setTimeout(r, 50));
+      ws.send("\x01R80;24");
+      await new Promise((r) => setTimeout(r, 50));
+      ws.send("ls -la\r");
+      await new Promise((r) => setTimeout(r, 50));
+      const term = (terminalMgr as any).terminals.get("term-4")!;
+      expect(term.pty.write).toHaveBeenCalledWith("ls -la\r");
+      ws.close();
+    });
+
+    it("handles resize command", async () => {
+      injectFakeTerminal("term-5");
+      const ws = await connectTerminalWs("term-5", { replay: "0" });
+      await new Promise((r) => setTimeout(r, 50));
+      ws.send("\x01R120;50");
+      await new Promise((r) => setTimeout(r, 50));
+      const term = (terminalMgr as any).terminals.get("term-5")!;
+      expect(term.pty.resize).toHaveBeenCalledWith(120, 50);
+      ws.close();
+    });
+
+    it("detaches client on close", async () => {
+      injectFakeTerminal("term-6");
+      const ws = await connectTerminalWs("term-6");
+      await new Promise((r) => setTimeout(r, 50));
+      ws.close();
+      await new Promise((r) => setTimeout(r, 50));
+      const term = (terminalMgr as any).terminals.get("term-6");
+      expect(!term || term.client === null).toBe(true);
     });
   });
 });

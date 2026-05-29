@@ -1,9 +1,9 @@
 import { spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
-import { homedir } from "node:os";
 import path from "node:path";
 import { NextRequest, NextResponse } from "next/server";
 import { validateSession } from "@/server/auth";
+import { getClaudeUserConfigFile } from "@/server/paths";
 
 function authenticate(req: NextRequest): boolean {
   const token = req.cookies.get("cockpit_session")?.value || req.headers.get("authorization")?.replace("Bearer ", "");
@@ -29,7 +29,7 @@ async function readJsonFile(filePath: string): Promise<Record<string, unknown>> 
 }
 
 function resolveConfigPath(scope: string, cwd?: string | null): string | null {
-  if (scope === "user") return path.join(homedir(), ".claude.json");
+  if (scope === "user") return getClaudeUserConfigFile();
   if (scope === "project" && cwd) return path.join(cwd, ".mcp.json");
   return null;
 }

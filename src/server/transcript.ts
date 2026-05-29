@@ -1,9 +1,9 @@
 import { createReadStream, existsSync, readFileSync } from "node:fs";
-import { open, readdir, readFile, stat, unlink } from "node:fs/promises";
-import { homedir } from "node:os";
+import { open, readdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import { v4 as uuidv4 } from "uuid";
+import { getClaudeDir } from "@/server/paths";
 import type {
   ChatMessage,
   ContentBlock,
@@ -16,6 +16,7 @@ import type {
   ToolUse,
 } from "@/types";
 import { debugLog } from "./debug-logger";
+import { getSessionPrefs } from "./session-prefs";
 
 interface TranscriptBlock {
   type: string;
@@ -57,9 +58,9 @@ interface TranscriptEntry {
   };
 }
 
-function getTranscriptPath(sessionId: string, cwd: string): string {
+export function getTranscriptPath(sessionId: string, cwd: string): string {
   const projectKey = cwd.replace(/[/.]/g, "-");
-  return path.join(homedir(), ".claude", "projects", projectKey, `${sessionId}.jsonl`);
+  return path.join(getClaudeDir(), "projects", projectKey, `${sessionId}.jsonl`);
 }
 
 export function transcriptExists(sessionId: string, cwd: string): boolean {
@@ -112,12 +113,13 @@ function stripCommandXml(text: string): string {
   if (trimmed.startsWith("<task-notification>")) return "";
   if (trimmed.startsWith("<local-command-caveat>")) return "";
   if (trimmed.startsWith("<local-command-stdout>")) return "";
-  if (trimmed.startsWith("<command-name>")) {
+  if (trimmed.startsWith("<command-name>") || trimmed.startsWith("<command-message>") || trimmed.startsWith("<command-args>")) {
     const match = trimmed.match(/<command-name>(\/[^<]+)<\/command-name>/);
     if (match) {
       if (match[1] === "/compact") return "";
       return match[1];
     }
+    return "";
   }
   return text;
 }
@@ -334,7 +336,7 @@ function parseLines(lines: string[]): { messages: ChatMessage[]; lastUsage: { us
               name: block.name || "unknown",
               input: block.input ? JSON.stringify(block.input) : "",
               output: "",
-              status: "done",
+              status: "running",
             };
             parentTool.children.push(child);
             toolUseMap.set(child.id, child);
@@ -494,7 +496,7 @@ function parseLines(lines: string[]): { messages: ChatMessage[]; lastUsage: { us
             name: block.name || "unknown",
             input: block.input ? JSON.stringify(block.input) : "",
             output: "",
-            status: "done",
+            status: "running",
           };
           toolUses.push(tool);
           blocks.push({ type: "tool_use", toolUse: tool });
@@ -579,6 +581,63 @@ export async function loadTranscript(sessionId: string, cwd: string, options?: {
   );
 
   return { messages, byteOffset, totalSize, lastUsage };
+}
+
+const COMPACTION_PREFIX = "This session is being continued from a previous conversation";
+const STRIP_ATTACHMENTS_RE = /^\[Attached [^\]]+\]\n*/gm;
+
+export async function loadPromptHistory(sessionId: string, cwd: string): Promise<string[]> {
+  const fp = getTranscriptPath(sessionId, cwd);
+  if (!existsSync(fp)) return [];
+
+  const seen = new Set<string>();
+  const prompts: string[] = [];
+
+  const rl = createInterface({ input: createReadStream(fp, "utf-8"), crlfDelay: Infinity });
+  for await (const line of rl) {
+    let entry: { type?: string; message?: { content?: unknown } };
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (entry.type !== "user" || !entry.message) continue;
+    const content = entry.message.content;
+
+    let text = "";
+    if (typeof content === "string") {
+      text = stripCommandXml(content);
+    } else if (Array.isArray(content)) {
+      const hasToolResults = content.some((b) => b.type === "tool_result");
+      if (hasToolResults) continue;
+      text = content
+        .filter((b) => b.type === "text" && b.text)
+        .map((b) => b.text)
+        .join("\n");
+      if (text) text = stripCommandXml(text);
+    }
+
+    text = text.replace(STRIP_ATTACHMENTS_RE, "").trim();
+    if (!text || text.startsWith("/")) continue;
+    if (text.startsWith(COMPACTION_PREFIX)) continue;
+    if (text.startsWith("<") && text.includes("system-reminder")) continue;
+    if (seen.has(text)) {
+      prompts.splice(prompts.indexOf(text), 1);
+    }
+    seen.add(text);
+    prompts.push(text);
+  }
+
+  prompts.reverse();
+  return prompts;
+}
+
+export async function loadLastAssistantMessage(cliSessionId: string, cwd: string): Promise<ChatMessage | null> {
+  const { messages } = await loadTranscript(cliSessionId, cwd, { tailLines: 100 });
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role === "assistant") return messages[i];
+  }
+  return null;
 }
 
 export async function loadMoreMessages(
@@ -698,7 +757,7 @@ async function extractSessionMeta(filePath: string): Promise<SessionMeta | null>
 }
 
 export async function findSessionCwd(sessionId: string): Promise<string | null> {
-  const projectsDir = path.join(homedir(), ".claude", "projects");
+  const projectsDir = path.join(getClaudeDir(), "projects");
   if (!existsSync(projectsDir)) return null;
 
   let projectDirs: string[];
@@ -721,7 +780,7 @@ export async function findSessionCwd(sessionId: string): Promise<string | null> 
 }
 
 export async function scanAllSessions(): Promise<SessionGroup[]> {
-  const projectsDir = path.join(homedir(), ".claude", "projects");
+  const projectsDir = path.join(getClaudeDir(), "projects");
   if (!existsSync(projectsDir)) return [];
 
   let projectDirs: string[];
@@ -786,18 +845,22 @@ export async function scanAllSessions(): Promise<SessionGroup[]> {
 }
 
 function metaToSessionInfo(meta: SessionMeta): SessionInfo {
+  const prefs = getSessionPrefs(meta.id);
   return {
     id: meta.id,
-    name: meta.title,
+    name: prefs?.name || meta.title,
     cwd: meta.cwd,
     createdAt: meta.createdAt,
     lastActiveAt: meta.lastActiveAt,
     status: "idle",
+    model: prefs?.model,
+    runtime: prefs?.runtime,
+    pendingRequestCount: 0,
   };
 }
 
 export async function scanSessionsForCwd(targetCwd: string): Promise<SessionInfo[]> {
-  const projectsDir = path.join(homedir(), ".claude", "projects");
+  const projectsDir = path.join(getClaudeDir(), "projects");
   if (!existsSync(projectsDir)) return [];
 
   let projectDirs: string[];
@@ -834,7 +897,7 @@ export async function scanSessionsForCwd(targetCwd: string): Promise<SessionInfo
 
 export async function scanSessionsByIds(ids: string[]): Promise<SessionInfo[]> {
   if (ids.length === 0) return [];
-  const projectsDir = path.join(homedir(), ".claude", "projects");
+  const projectsDir = path.join(getClaudeDir(), "projects");
   if (!existsSync(projectsDir)) return [];
 
   let projectDirs: string[];
@@ -879,7 +942,7 @@ interface TranscriptFileInfo {
 }
 
 export async function listAllTranscriptFiles(): Promise<TranscriptFileInfo[]> {
-  const projectsDir = path.join(homedir(), ".claude", "projects");
+  const projectsDir = path.join(getClaudeDir(), "projects");
   if (!existsSync(projectsDir)) return [];
 
   let projectDirs: string[];
@@ -913,6 +976,106 @@ export async function listAllTranscriptFiles(): Promise<TranscriptFileInfo[]> {
 
   results.sort((a, b) => b.mtimeMs - a.mtimeMs);
   return results;
+}
+
+export async function findTranscriptFile(sessionId: string): Promise<string | null> {
+  const projectsDir = path.join(getClaudeDir(), "projects");
+  if (!existsSync(projectsDir)) return null;
+
+  let projectDirs: string[];
+  try {
+    projectDirs = await readdir(projectsDir);
+  } catch {
+    return null;
+  }
+
+  const filename = `${sessionId}.jsonl`;
+  for (const dir of projectDirs) {
+    const filePath = path.join(projectsDir, dir, filename);
+    if (existsSync(filePath)) return filePath;
+  }
+  return null;
+}
+
+export interface ThinkingCheckResult {
+  hasNonAnthropicThinking: boolean;
+  count: number;
+  models: string[];
+}
+
+export async function checkNonAnthropicThinking(filePath: string): Promise<ThinkingCheckResult> {
+  const raw = await readFile(filePath, "utf-8");
+  let count = 0;
+  const models = new Set<string>();
+
+  for (const line of raw.split("\n")) {
+    if (!line.trim()) continue;
+    let entry: TranscriptEntry;
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (entry.type !== "assistant" || !entry.message) continue;
+    const model = entry.message.model || "";
+    if (model.startsWith("claude")) continue;
+
+    const content = entry.message.content;
+    if (!Array.isArray(content)) continue;
+    const hasThinking = content.some((b) => typeof b === "object" && b !== null && (b as TranscriptBlock).type === "thinking");
+    if (hasThinking) {
+      count++;
+      if (model) models.add(model);
+    }
+  }
+
+  return { hasNonAnthropicThinking: count > 0, count, models: [...models] };
+}
+
+export async function stripNonAnthropicThinking(filePath: string): Promise<number> {
+  const raw = await readFile(filePath, "utf-8");
+  const lines = raw.split("\n");
+  const output: string[] = [];
+  let stripped = 0;
+
+  for (const line of lines) {
+    if (!line.trim()) {
+      output.push(line);
+      continue;
+    }
+    let entry: TranscriptEntry;
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      output.push(line);
+      continue;
+    }
+    if (entry.type !== "assistant" || !entry.message) {
+      output.push(line);
+      continue;
+    }
+    const model = entry.message.model || "";
+    if (model.startsWith("claude")) {
+      output.push(line);
+      continue;
+    }
+    const content = entry.message.content;
+    if (!Array.isArray(content)) {
+      output.push(line);
+      continue;
+    }
+    const filtered = content.filter((b) => !(typeof b === "object" && b !== null && (b as TranscriptBlock).type === "thinking"));
+    if (filtered.length !== content.length) {
+      stripped++;
+      entry.message.content = filtered as TranscriptBlock[];
+      output.push(JSON.stringify(entry));
+    } else {
+      output.push(line);
+    }
+  }
+
+  await writeFile(filePath, output.join("\n"));
+  return stripped;
 }
 
 export async function globalSearch(

@@ -66,6 +66,9 @@ export function BackgroundTasksButton({ tasks }: BackgroundTasksButtonProps) {
                     )}
                     <div className="min-w-0 flex-1">
                       <div className="text-sm truncate">{task.title || task.description}</div>
+                      {task.title && task.description && task.description !== task.title && (
+                        <div className="text-xs text-muted-foreground truncate mt-0.5">{task.description}</div>
+                      )}
                       {task.activity && task.activity !== (task.title || task.description) && (
                         <div className="text-xs text-muted-foreground truncate mt-0.5">{task.activity}</div>
                       )}

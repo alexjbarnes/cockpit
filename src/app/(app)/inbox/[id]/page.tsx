@@ -1,6 +1,6 @@
 "use client";
 
-import { AlertCircle, AlertTriangle, ArrowLeft, Info, Loader2, Trash2 } from "lucide-react";
+import { AlertCircle, AlertTriangle, ArrowLeft, Info, Loader2, Mail, Trash2 } from "lucide-react";
 import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { usePageHeader } from "@/components/app-shell";
@@ -25,7 +25,7 @@ function formatDate(ts: number): string {
 }
 
 export default function InboxMessagePage() {
-  usePageHeader("Inbox");
+  usePageHeader("Inbox", { hideActions: true });
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
   const [message, setMessage] = useState<InboxMessage | null>(null);
@@ -48,6 +48,15 @@ export default function InboxMessagePage() {
   useEffect(() => {
     fetchMessage();
   }, [fetchMessage]);
+
+  const handleMarkUnread = async () => {
+    await fetch(`/api/inbox/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ read: false }),
+    });
+    router.push("/inbox");
+  };
 
   const handleDelete = async () => {
     await fetch(`/api/inbox/${id}`, { method: "DELETE" });
@@ -81,10 +90,16 @@ export default function InboxMessagePage() {
           <ArrowLeft className="h-4 w-4 mr-1" />
           Back
         </Button>
-        <Button variant="ghost" size="sm" className="text-destructive hover:text-destructive" onClick={() => setConfirmDelete(true)}>
-          <Trash2 className="h-4 w-4 mr-1" />
-          Delete
-        </Button>
+        <div className="flex items-center gap-1">
+          <Button variant="ghost" size="sm" onClick={handleMarkUnread}>
+            <Mail className="h-4 w-4 mr-1" />
+            Mark unread
+          </Button>
+          <Button variant="ghost" size="sm" className="text-destructive hover:text-destructive" onClick={() => setConfirmDelete(true)}>
+            <Trash2 className="h-4 w-4 mr-1" />
+            Delete
+          </Button>
+        </div>
       </div>
 
       <div className="flex items-start gap-3">

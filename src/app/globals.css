@@ -1,4 +1,13 @@
 @import "tailwindcss";
+@import "@xterm/xterm/css/xterm.css";
+
+@font-face {
+  font-family: "Symbols Nerd Font Mono";
+  src: url("/fonts/symbols-nerd-font-mono.woff2") format("woff2");
+  font-weight: normal;
+  font-style: normal;
+  font-display: swap;
+}
 
 @custom-variant dark (&:where(.dark, .dark *));
 
@@ -32,6 +41,12 @@
   body {
     @apply bg-background text-foreground;
   }
+}
+
+/* xterm.js terminal fills its container */
+.xterm {
+  width: 100%;
+  height: 100%;
 }
 
 /* Thin scrollbars inside message bubbles, tool cards, and code blocks */
