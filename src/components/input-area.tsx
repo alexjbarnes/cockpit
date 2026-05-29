@@ -779,7 +779,7 @@ export function InputArea({
               if (!providers || !currentModel) return [];
               for (const p of providers) {
                 const m = p.models.find((pm) => matchesProviderModel(p, pm));
-                if (m) return m.contextSizes;
+                if (m) return m.contextSizes ?? [];
               }
               return [];
             })();
@@ -787,7 +787,7 @@ export function InputArea({
               if (!providers || !currentModel) return [];
               for (const p of providers) {
                 const m = p.models.find((pm) => matchesProviderModel(p, pm));
-                if (m) return m.effortLevels;
+                if (m) return m.effortLevels ?? [];
               }
               return [];
             })();
