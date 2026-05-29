@@ -203,6 +203,12 @@ function spawnCockpit(opts: SpawnOpts): ChildProcess {
       FORCE_COLOR: "0",
     },
     stdio: ["ignore", "pipe", "pipe"],
+    // Put cockpit in its own process group so we can SIGTERM the WHOLE tree
+    // (cockpit + every CLI it spawned via node-pty + cli-init-fetch). Without
+    // this, killing cockpit leaves orphan claude processes that keep running
+    // and pile up across test runs — the box can end up with 10+ leaked
+    // tsx/claude processes after a flaky suite.
+    detached: true,
   });
 }
 
@@ -229,20 +235,32 @@ async function waitForCockpitReady(port: number, timeoutMs = 60_000): Promise<vo
 
 async function stopProcess(proc: ChildProcess): Promise<void> {
   if (!proc.pid || proc.exitCode != null) return;
+  const pgid = proc.pid;
   return new Promise<void>((resolve) => {
     proc.once("exit", () => resolve());
     try {
-      proc.kill("SIGTERM");
+      // Negative pid = signal the whole process group (cockpit + every CLI it
+      // spawned). Requires detached:true on spawn. Without group kill, orphan
+      // CLI processes survive and pile up across runs.
+      process.kill(-pgid, "SIGTERM");
     } catch {
-      resolve();
-      return;
+      try {
+        proc.kill("SIGTERM");
+      } catch {
+        resolve();
+        return;
+      }
     }
     setTimeout(() => {
       if (proc.exitCode == null) {
         try {
-          proc.kill("SIGKILL");
+          process.kill(-pgid, "SIGKILL");
         } catch {
-          // already dead
+          try {
+            proc.kill("SIGKILL");
+          } catch {
+            // already dead
+          }
         }
       }
     }, 3_000);

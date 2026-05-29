@@ -3,6 +3,9 @@ import { defineConfig } from "@playwright/test";
 export default defineConfig({
   testDir: ".",
   testMatch: "**/*.spec.ts",
+  // Reap any orphan cockpit/CLI processes from a previous failed run so they
+  // don't compound across runs.
+  globalSetup: "./global-setup.ts",
   // One test at a time. The harness spawns a fresh cockpit per test; parallelism
   // would balloon resource use without buying much (CLI startup dominates).
   workers: 1,
