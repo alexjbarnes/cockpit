@@ -3,9 +3,11 @@ import { defineConfig } from "@playwright/test";
 export default defineConfig({
   testDir: ".",
   testMatch: "**/*.spec.ts",
-  // Reap any orphan cockpit/CLI processes from a previous failed run so they
-  // don't compound across runs.
+  // Reap any orphan cockpit/CLI processes before the suite (leftovers from a
+  // previous run that died without teardown) and after it (this run's own
+  // crashed/timed-out workers). See reap.ts.
   globalSetup: "./global-setup.ts",
+  globalTeardown: "./global-teardown.ts",
   // One test at a time. The harness spawns a fresh cockpit per test; parallelism
   // would balloon resource use without buying much (CLI startup dominates).
   workers: 1,

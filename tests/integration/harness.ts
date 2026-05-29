@@ -41,6 +41,31 @@ export interface HarnessOptions {
   thinkingLevel?: ThinkingLevel;
 }
 
+// Process groups (pgids) of cockpit servers still running in this worker.
+// stop() removes its own entry on clean teardown. The exit hook below kills
+// whatever remains if the worker exits without every stop() running (a test
+// throwing past its finally, an unhandled rejection ending the process). This
+// is the in-worker complement to the /proc reaper in reap.ts, which catches the
+// harder case of the worker being SIGKILLed.
+const activeGroups = new Set<number>();
+let exitHookInstalled = false;
+
+function ensureExitHook(): void {
+  if (exitHookInstalled) return;
+  exitHookInstalled = true;
+  // "exit" handlers must be synchronous; process.kill is. We signal the whole
+  // group (-pgid) so cockpit and every CLI child die together.
+  process.once("exit", () => {
+    for (const pgid of activeGroups) {
+      try {
+        process.kill(-pgid, "SIGKILL");
+      } catch {
+        // already gone
+      }
+    }
+  });
+}
+
 export async function startHarness(opts: HarnessOptions = {}): Promise<Harness> {
   const rootDir = mkdtempSync(path.join(tmpdir(), "cockpit-it-"));
   const configDir = path.join(rootDir, "cockpit");
@@ -79,6 +104,11 @@ export async function startHarness(opts: HarnessOptions = {}): Promise<Harness> 
   });
   if (process.env.COCKPIT_IT_DEBUG === "1") captureCockpitLogs(proc);
 
+  // Track this cockpit's process group so the exit hook can reap it if stop()
+  // never runs. detached:true makes proc.pid the group leader, so pid === pgid.
+  if (proc.pid) activeGroups.add(proc.pid);
+  ensureExitHook();
+
   await waitForCockpitReady(cockpitPort);
 
   return {
@@ -89,6 +119,7 @@ export async function startHarness(opts: HarnessOptions = {}): Promise<Harness> 
     configDir,
     claudeDir,
     async stop() {
+      if (proc.pid) activeGroups.delete(proc.pid);
       await stopProcess(proc);
       await mock.stop();
       try {
