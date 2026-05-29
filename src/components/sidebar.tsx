@@ -457,6 +457,7 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
     }
   }, [fetchSessions]);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: pathname triggers refetch on navigation
   useEffect(() => {
     if (open || connected) {
       fetchSessions();
