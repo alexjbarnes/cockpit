@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.3.0] - 2026-05-29
+## [0.3.0] - 2026-05-30
 
 ### Added
 - **PTY runtime mode.** A second session runtime that drives the real Claude Code CLI through a pseudo-terminal (node-pty), alongside the default streaming-JSON mode. Pick it per session from the new-session dialog or the session-settings runtime switcher; the choice persists across server restarts. Behind it sits a hook bridge that translates CLI hook events (PreToolUse, PostToolUse, Stop, StopFailure, UserPromptSubmit, UserPromptExpansion, SubagentStart, SubagentStop, Notification, PermissionRequest, PreCompact, PostCompact) into live UI updates.
