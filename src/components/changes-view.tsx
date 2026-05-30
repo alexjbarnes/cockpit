@@ -457,7 +457,7 @@ export function ChangesView({
   manageSidebar?: boolean;
 }) {
   const { settings } = useSettings();
-  const { setSidebarSection, removeSidebarSection, closeSidebar } = useShell();
+  const { setSidebarSection, removeSidebarSection, closeSidebar, tabActions } = useShell();
   const { send, subscribe } = useWebSocket();
   const router = useRouter();
   const isDesktop = useIsDesktop();
@@ -748,9 +748,15 @@ export function ChangesView({
   const handleViewFile = useCallback(
     (filePath: string) => {
       const fullPath = filePath.startsWith("/") ? filePath : `${cwd}/${filePath}`;
-      router.push(`/files?cwd=${encodeURIComponent(cwd)}&file=${encodeURIComponent(fullPath)}`);
+      // Inside a session, open the file as a tab; only fall back to the
+      // standalone /files page when there's no tab context.
+      if (tabActions) {
+        tabActions.openFile(fullPath);
+      } else {
+        router.push(`/files?cwd=${encodeURIComponent(cwd)}&file=${encodeURIComponent(fullPath)}`);
+      }
     },
-    [cwd, router],
+    [cwd, router, tabActions],
   );
 
   useEffect(() => {
