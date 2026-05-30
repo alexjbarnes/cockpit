@@ -49,16 +49,30 @@ Messages render as they arrive:
 
 Long histories use windowed rendering. The initial view loads 50 messages, with 30 more fetched as you scroll up.
 
+## Tabbed layout
+
+A session view is a set of tabs. Alongside the chat you can open file, diff, and changes tabs, plus an [embedded terminal](terminal.md). On wider screens you can split into two panes and drag tabs between them. Tabs persist across page refreshes, so your layout comes back when you return.
+
 ## Session settings
 
 Each session has its own settings, separate from the defaults you set globally. Tap the settings icon next to the message box to change:
 
-- Model (Haiku, Sonnet, Opus, with version switcher)
-- Extended context (200K or 1M tokens)
-- Thinking level (Low, Medium, High, XHigh, Max)
-- Permission bypass for this session
+- Model. Built-in Haiku, Sonnet, and Opus with a version switcher, plus any models from your custom providers (see [Model providers](providers.md)).
+- Context size. 200K or 1M, shown as pills for models that support both.
+- Thinking level. Low, Medium, High, XHigh, Max. Only the levels the model supports are shown.
+- Runtime. Switch this session between Stream and PTY (see [Runtime mode](#runtime-mode)).
+- Permission bypass for this session.
 
-Changes apply on the next turn.
+Changes apply on the next turn. A context-size change restarts the underlying CLI, since the 1M switch is applied when the process spawns.
+
+## Runtime mode
+
+Cockpit can drive Claude Code two ways, chosen per session:
+
+- **Stream (headless).** The default. Cockpit runs the CLI in streaming-JSON mode and renders the structured event stream directly.
+- **PTY (interactive).** Cockpit runs the real CLI inside a pseudo-terminal, the same engine you get in a normal terminal. Message content is read from the CLI's JSONL transcript, so the live view matches a reload. Hook events drive status, permissions, compaction progress, and background tasks.
+
+Pick the runtime when you create a session (the new-session dialog has a two-step backend picker) or switch it later from the session settings. The choice is saved and survives a server restart.
 
 ## Attachments
 
@@ -95,6 +109,10 @@ Permissions are scoped per session, project, or globally. The Settings page has 
 ## Slash commands
 
 Type `/` to open the menu. Cockpit supports the same slash commands as Claude Code.
+
+## Prompt history
+
+Press the up arrow in an empty input to open the prompt history modal, Atuin-style. It lists prompts you have sent, newest first, and is searchable. Pick one to drop it back into the input. History is read from the full session transcript, not just the current view.
 
 ## Session linking via /clear
 
