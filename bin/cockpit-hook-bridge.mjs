@@ -11,9 +11,23 @@
  *   COCKPIT_HOOK_TOKEN    per-session token
  *   COCKPIT_SESSION_ID    cockpit's internal session id
  *
+ * Optional tuning (milliseconds):
+ *   COCKPIT_PERMISSION_HOOK_TIMEOUT_MS  how long to wait for a permission/question
+ *                                       answer before giving up (default 24h)
+ *   COCKPIT_HOOK_TIMEOUT_MS             how long to wait for any other hook (default 60s)
+ *
  * Usage: cockpit-hook-bridge <eventName>
  *   eventName ∈ {PreToolUse, PostToolUse, Stop, UserPromptSubmit, Notification, PermissionRequest}
+ *
+ * NOTE: this uses node:http directly rather than the global fetch(). fetch is
+ * undici, whose default headersTimeout/bodyTimeout are 5 minutes, so a held
+ * PermissionRequest response (the CLI blocks while the user decides) was aborted
+ * after 5 minutes — the CLI then hung with no decision and the user's eventual
+ * answer landed on a dead socket. node:http only times out on the explicit cap
+ * below, so a permission prompt can wait as long as the CLI's own hook timeout.
  */
+
+import { request as httpRequest } from "node:http";
 
 const eventName = process.argv[2];
 if (!eventName) {
@@ -29,6 +43,29 @@ if (!url || !token || !sessionId) {
   process.exit(0);
 }
 
+function envMs(name, fallback) {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
+// A permission/question can block on the user for a long time. Match the CLI's
+// own permission hook timeout (24h) rather than fetch's hidden 5-minute ceiling.
+const TIMEOUT_MS =
+  eventName === "PermissionRequest"
+    ? envMs("COCKPIT_PERMISSION_HOOK_TIMEOUT_MS", 24 * 60 * 60 * 1000)
+    : envMs("COCKPIT_HOOK_TIMEOUT_MS", 60 * 1000);
+
+function permissionDenyJson(message) {
+  return JSON.stringify({
+    hookSpecificOutput: {
+      hookEventName: "PermissionRequest",
+      decision: { behavior: "deny", message },
+    },
+  });
+}
+
 async function readStdin() {
   if (process.stdin.isTTY) return "";
   process.stdin.setEncoding("utf8");
@@ -37,14 +74,51 @@ async function readStdin() {
   return body;
 }
 
-const TIMEOUT_MS = eventName === "PermissionRequest" ? 10 * 60 * 1000 : 60 * 1000;
+/**
+ * POST the payload and resolve with { status, body }. Rejects on transport
+ * error or when the request exceeds TIMEOUT_MS with no response.
+ */
+function postHook(target, payload) {
+  return new Promise((resolve, reject) => {
+    let parsed;
+    try {
+      parsed = new URL(target);
+    } catch (err) {
+      reject(err);
+      return;
+    }
 
-function permissionDenyJson() {
-  return JSON.stringify({
-    hookSpecificOutput: {
-      hookEventName: "PermissionRequest",
-      decision: { behavior: "deny", message: "hook bridge timed out waiting for cockpit" },
-    },
+    const req = httpRequest(
+      {
+        protocol: parsed.protocol,
+        hostname: parsed.hostname,
+        port: parsed.port,
+        path: parsed.pathname + parsed.search,
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Content-Length": Buffer.byteLength(payload),
+          "X-Cockpit-Session": sessionId,
+          "X-Cockpit-Token": token,
+        },
+      },
+      (res) => {
+        res.setEncoding("utf8");
+        let data = "";
+        res.on("data", (chunk) => {
+          data += chunk;
+        });
+        res.on("end", () => resolve({ status: res.statusCode ?? 0, body: data }));
+      },
+    );
+
+    // The socket sits idle while the user decides; this is the only ceiling on
+    // how long we wait for the response.
+    req.setTimeout(TIMEOUT_MS, () => {
+      req.destroy(Object.assign(new Error("timed out waiting for cockpit"), { code: "ETIMEDOUT" }));
+    });
+    req.on("error", reject);
+    req.end(payload);
   });
 }
 
@@ -54,38 +128,33 @@ async function main() {
 
   let res;
   try {
-    res = await fetch(target, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Cockpit-Session": sessionId,
-        "X-Cockpit-Token": token,
-      },
-      body: body || "{}",
-      signal: AbortSignal.timeout(TIMEOUT_MS),
-    });
+    res = await postHook(target, body || "{}");
   } catch (err) {
     const msg = err && err.message ? err.message : String(err);
-    const isTimeout = err && err.name === "TimeoutError";
-    process.stderr.write(`cockpit-hook-bridge: request ${isTimeout ? "timed out" : "failed"}: ${msg}\n`);
-    if (isTimeout && eventName === "PermissionRequest") {
-      process.stdout.write(permissionDenyJson());
+    const timedOut = err && err.code === "ETIMEDOUT";
+    process.stderr.write(`cockpit-hook-bridge: request ${timedOut ? "timed out" : "failed"}: ${msg}\n`);
+    // A permission request must always yield a decision, or the CLI hangs.
+    if (eventName === "PermissionRequest") {
+      process.stdout.write(permissionDenyJson(`hook bridge ${timedOut ? "timed out waiting for" : "could not reach"} cockpit`));
     }
     process.exit(0);
   }
 
-  if (!res.ok) {
+  if (res.status < 200 || res.status >= 300) {
     process.stderr.write(`cockpit-hook-bridge: router returned ${res.status}\n`);
     if (eventName === "PermissionRequest") {
-      process.stdout.write(permissionDenyJson());
+      process.stdout.write(permissionDenyJson(`hook router returned ${res.status}`));
     }
     process.exit(0);
   }
 
   let parsed;
   try {
-    parsed = await res.json();
+    parsed = JSON.parse(res.body);
   } catch {
+    if (eventName === "PermissionRequest") {
+      process.stdout.write(permissionDenyJson("hook router sent an unreadable response"));
+    }
     process.exit(0);
   }
 

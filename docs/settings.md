@@ -12,12 +12,17 @@ To reset the password: set `COCKPIT_RESET_PASSWORD=true` and restart.
 
 The Settings page picks the defaults for new sessions:
 
-- Model. Haiku, Sonnet, or Opus, with the version switcher for selecting between current and previous releases.
-- Extended context. 200K (default) or 1M tokens.
-- Thinking level. Low, Medium, High, XHigh, Max. Trades latency for depth of reasoning.
+- Model. Built-in Haiku, Sonnet, or Opus with a version switcher, or any model from a custom provider (see [Providers](#providers)). Models can be set per slot: main, subagent, and fast.
+- Context size. 200K (default) or 1M, for models that support both.
+- Thinking level. Low, Medium, High, XHigh, Max. Trades latency for depth of reasoning. Only the levels the model supports are offered.
+- Default runtime is Stream; choose Stream or PTY per session (see [Sessions: runtime mode](sessions.md#runtime-mode)).
 - Permission bypass. Off by default. When on, Claude skips permission prompts. An orange warning is shown when active.
 
 Existing sessions keep their own settings. Defaults only apply to new sessions.
+
+## Providers
+
+Beyond the built-in Anthropic models, you can configure custom Anthropic-compatible providers (proxies, gateways, alternate endpoints) from the Providers page, each with its own environment variables and model list. See [Model providers](providers.md) for the full walkthrough.
 
 ## UI preferences
 
@@ -28,9 +33,9 @@ Existing sessions keep their own settings. Defaults only apply to new sessions.
 - Reviews. On by default. Shows the Reviews section in the sidebar and enables PR review features. Turn off to hide reviews entirely.
 - Dismiss keyboard on send. On by default. Automatically dismisses the on-screen keyboard on mobile after sending a message.
 
-## Claude version
+## Versions and updates
 
-Settings shows the installed Claude Code CLI version and checks npm for the latest. The Update button installs the latest globally.
+Settings shows the installed versions of both Cockpit and the Claude Code CLI and checks npm for the latest of each. An Update button installs the latest globally, with native-install detection so it uses the right command for how you installed. Each one links to its changelog.
 
 ## Customizations
 
@@ -111,16 +116,30 @@ Inbox messages are stored in `~/.cockpit/inbox.jsonl`. When a message arrives, i
 | `PORT` | Server port | `3001` |
 | `HOST` | Bind address | `0.0.0.0` |
 | `COCKPIT_RESET_PASSWORD` | Force password reset on next startup | `false` |
+| `COCKPIT_CONFIG_DIR` | Location of Cockpit config (password, providers, defaults, jobs, inbox) | `~/.cockpit` |
+| `CLAUDE_CONFIG_DIR` | Location of Claude config and transcripts that Cockpit reads | `~/.claude` |
+| `COCKPIT_CACHE_DIR` | Location of per-session caches (hook settings, attachments) | `~/.cache/cockpit` |
+| `COCKPIT_DEBUG` | Set to `1` to write a structured debug log (see Troubleshooting) | unset |
+| `COCKPIT_TOKEN` | Auth-bypass token for automated/embedded use; requests presenting it skip the login. Keep it secret | unset |
+
+Setting `COCKPIT_CONFIG_DIR` and `CLAUDE_CONFIG_DIR` lets you run fully isolated Cockpit instances side by side.
 
 Claude Code's own environment variables (`ANTHROPIC_API_KEY`, etc.) are read by the CLI as normal.
 
 ## Paths
 
+Cockpit config paths are under `COCKPIT_CONFIG_DIR` (default `~/.cockpit`); Claude paths are under `CLAUDE_CONFIG_DIR` (default `~/.claude`).
+
 | Path | Used for |
 |---|---|
 | `~/.cockpit/password.json` | Password hash |
+| `~/.cockpit/providers.json` | Custom model providers |
+| `~/.cockpit/defaults.json` | Session defaults (model slots, context size, thinking level) |
 | `~/.cockpit/notifications.json` | Notification provider config |
 | `~/.cockpit/inbox.jsonl` | Inbox messages |
+| `~/.cockpit/scheduled-jobs.json` | Scheduled job definitions |
+| `~/.cockpit/job-runs/` | Scheduled job run history |
+| `~/.cockpit/job-locks/` | Scheduled job locks |
 | `~/.claude/cockpit/pinned_sessions.json` | Pinned session list |
 | `~/.claude/plans/` | Plan files written by Claude |
 | `~/.claude/agents/` | Global agents |

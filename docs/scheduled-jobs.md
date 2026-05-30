@@ -19,7 +19,7 @@ The Jobs page lists your jobs. Add one with:
 - Working directory. Where Claude runs (defaults to your home).
 - Schedule. Cron expression. Cockpit shows the next 3 fire times so you can sanity-check.
 - Prompt. The instruction Claude runs on each fire.
-- Model and thinking level. Same options as interactive sessions.
+- Model, context size, and thinking level. Same options as interactive sessions, including custom [providers](settings.md#providers).
 - Enabled. Toggle to pause the job without deleting it.
 
 Save and the scheduler picks it up immediately.

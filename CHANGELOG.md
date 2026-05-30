@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] - 2026-05-30
+
+### Fixed
+- **Structured questions getting stuck (rendering).** A follow-up `AskUserQuestion` asked right after the previous one was answered now renders instead of staying hidden (blue sidebar status, no prompt) until you pressed stop.
+- **Structured questions getting stuck (slow answers).** Answering a question more than five minutes after it appeared (for example after switching browser tabs) no longer hangs the session. In PTY mode the hook bridge held the CLI's blocking permission request open with the global `fetch`, which Node aborts after a five-minute headers timeout, so a late answer landed on a dead connection and the CLI waited forever. The bridge now uses a plain HTTP request with no such ceiling, waits as long as the CLI's own permission timeout, and always returns a decision so the CLI can never hang without one.
+
 ## [0.3.0] - 2026-05-30
 
 ### Added

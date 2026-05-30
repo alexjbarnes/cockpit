@@ -376,7 +376,10 @@ export function ChatView({
               const { before, questionBlock, after } = splitAtQuestion(msg.blocks || []);
 
               if (questionBlock) {
-                const pending = pendingQuestions.find(() => true);
+                // Match an UNANSWERED pending question. find(() => true) grabbed
+                // the first entry, which after a prior answered question is the
+                // stale answered one — so a follow-up question never rendered.
+                const pending = pendingQuestions.find((q) => !q.answered);
                 const hasOutput = !!questionBlock.toolUse.output;
                 console.log(
                   `[question-debug] Place1 render: msgId=${msg.id.slice(0, 8)}, hasOutput=${hasOutput}, pending=${!!pending}, pendingCount=${pendingQuestions.length}`,
@@ -478,21 +481,28 @@ export function ChatView({
               <PermissionPrompt key={p.requestId} permission={p} onRespond={respondToPermission} />
             ),
           )}
-          {pendingQuestions.length > 0 &&
+          {pendingQuestions.some((q) => !q.answered) &&
             (() => {
-              const hasInline = visibleMessages.some(
+              // Only an UNANSWERED inline block (no output) means Place1 is
+              // already showing the prompt. An answered block (output set)
+              // renders as a QuestionCard and must NOT suppress a new question's
+              // standalone prompt — that stranded follow-up questions.
+              const hasUnansweredInline = visibleMessages.some(
                 (m) =>
-                  m.role === "assistant" && (m.blocks || []).some((b) => b.type === "tool_use" && b.toolUse.name === "AskUserQuestion"),
+                  m.role === "assistant" &&
+                  (m.blocks || []).some((b) => b.type === "tool_use" && b.toolUse.name === "AskUserQuestion" && !b.toolUse.output),
               );
-              return !hasInline;
+              return !hasUnansweredInline;
             })() &&
-            pendingQuestions.map((q) => (
-              <div key={q.requestId} className="flex w-full justify-start">
-                <div className="max-w-[85%]">
-                  <QuestionPrompt questions={parseQuestionsFromInput(q.questions)} onSubmit={respondToQuestion} requestId={q.requestId} />
+            pendingQuestions
+              .filter((q) => !q.answered)
+              .map((q) => (
+                <div key={q.requestId} className="flex w-full justify-start">
+                  <div className="max-w-[85%]">
+                    <QuestionPrompt questions={parseQuestionsFromInput(q.questions)} onSubmit={respondToQuestion} requestId={q.requestId} />
+                  </div>
                 </div>
-              </div>
-            ))}
+              ))}
           {modelPicker !== null && (
             <ModelPicker
               currentModel={modelPicker}
