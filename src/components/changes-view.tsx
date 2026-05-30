@@ -22,7 +22,6 @@ import {
   Sparkles,
   Trash2,
 } from "lucide-react";
-import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useShell } from "@/components/app-shell";
 import { ChatView } from "@/components/chat-view";
@@ -459,7 +458,6 @@ export function ChangesView({
   const { settings } = useSettings();
   const { setSidebarSection, removeSidebarSection, closeSidebar, tabActions } = useShell();
   const { send, subscribe } = useWebSocket();
-  const router = useRouter();
   const isDesktop = useIsDesktop();
   const [status, setStatus] = useState<GitStatus | null>(null);
   const [loading, setLoading] = useState(true);
@@ -748,15 +746,9 @@ export function ChangesView({
   const handleViewFile = useCallback(
     (filePath: string) => {
       const fullPath = filePath.startsWith("/") ? filePath : `${cwd}/${filePath}`;
-      // Inside a session, open the file as a tab; only fall back to the
-      // standalone /files page when there's no tab context.
-      if (tabActions) {
-        tabActions.openFile(fullPath);
-      } else {
-        router.push(`/files?cwd=${encodeURIComponent(cwd)}&file=${encodeURIComponent(fullPath)}`);
-      }
+      tabActions?.openFile(fullPath);
     },
-    [cwd, router, tabActions],
+    [cwd, tabActions],
   );
 
   useEffect(() => {

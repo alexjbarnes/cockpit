@@ -4,7 +4,6 @@ import type { FileDiffMetadata } from "@pierre/diffs";
 import { parsePatchFiles } from "@pierre/diffs";
 import { FileDiff } from "@pierre/diffs/react";
 import { Check, ExternalLink, FileEdit, FileMinus, FilePlus, FileSymlink, Loader2 } from "lucide-react";
-import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useShell } from "@/components/app-shell";
 import { DIFF_SELECTABLE_CSS, DiffErrorBoundary } from "@/components/diff-viewer";
@@ -57,7 +56,6 @@ interface DiffViewProps {
 
 export function DiffView({ cwd, filePath }: DiffViewProps) {
   const { settings } = useSettings();
-  const router = useRouter();
   const { tabActions } = useShell();
   const { subscribe } = useWebSocket();
   const [loading, setLoading] = useState(true);
@@ -139,14 +137,8 @@ export function DiffView({ cwd, filePath }: DiffViewProps) {
 
   const handleViewFile = useCallback(() => {
     const fullPath = filePath.startsWith("/") ? filePath : `${cwd}/${filePath}`;
-    // Inside a session, open the file as a tab; only fall back to the
-    // standalone /files page when there's no tab context (e.g. PR review).
-    if (tabActions) {
-      tabActions.openFile(fullPath);
-    } else {
-      router.push(`/files?cwd=${encodeURIComponent(cwd)}&file=${encodeURIComponent(fullPath)}`);
-    }
-  }, [cwd, filePath, router, tabActions]);
+    tabActions?.openFile(fullPath);
+  }, [cwd, filePath, tabActions]);
 
   if (loading) {
     return (

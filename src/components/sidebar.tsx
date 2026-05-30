@@ -843,20 +843,15 @@ function isMobile() {
 }
 
 function SidebarFileTree({ cwd }: { cwd: string }) {
-  const router = useRouter();
   const { tabActions, closeSidebar } = useShell();
   const [pickerOpen, setPickerOpen] = useState(false);
 
   const handleSelect = useCallback(
     (filePath: string) => {
-      if (tabActions) {
-        tabActions.openFile(filePath);
-      } else {
-        router.push(`/files?cwd=${encodeURIComponent(cwd)}&file=${encodeURIComponent(filePath)}`);
-      }
+      tabActions?.openFile(filePath);
       if (isMobile()) closeSidebar();
     },
-    [router, cwd, tabActions, closeSidebar],
+    [tabActions, closeSidebar],
   );
 
   const handlePickFile = useCallback(
@@ -909,8 +904,7 @@ function changeStatusIcon(status: string) {
   }
 }
 
-function SidebarChanges({ cwd, sessionId }: { cwd: string; sessionId?: string }) {
-  const router = useRouter();
+function SidebarChanges({ cwd }: { cwd: string; sessionId?: string }) {
   const pathname = usePathname();
   const { tabActions } = useShell();
   const { subscribe } = useWebSocket();
@@ -951,7 +945,6 @@ function SidebarChanges({ cwd, sessionId }: { cwd: string; sessionId?: string })
     });
   }, [subscribe, fetchStatus]);
 
-  const sessionParam = sessionId ? `&sessionId=${encodeURIComponent(sessionId)}` : "";
   const totalAdded = files.reduce((sum, f) => sum + f.additions, 0);
   const totalDeleted = files.reduce((sum, f) => sum + f.deletions, 0);
 
@@ -984,11 +977,7 @@ function SidebarChanges({ cwd, sessionId }: { cwd: string; sessionId?: string })
               type="button"
               title="Open commit view"
               onClick={() => {
-                if (tabActions) {
-                  tabActions.openChanges();
-                } else {
-                  router.push(`/changes?cwd=${encodeURIComponent(cwd)}${sessionParam}`);
-                }
+                tabActions?.openChanges();
               }}
               className="hover:text-foreground transition-colors"
             >
@@ -1017,11 +1006,7 @@ function SidebarChanges({ cwd, sessionId }: { cwd: string; sessionId?: string })
               <button
                 type="button"
                 onClick={() => {
-                  if (tabActions) {
-                    tabActions.openDiff(file.path);
-                  } else {
-                    router.push(`/changes?cwd=${encodeURIComponent(cwd)}${sessionParam}`);
-                  }
+                  tabActions?.openDiff(file.path);
                 }}
                 className="flex items-center gap-2 flex-1 min-w-0 text-left"
               >
