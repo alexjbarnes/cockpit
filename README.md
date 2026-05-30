@@ -17,7 +17,9 @@ Three things follow:
 2. **Many Claude Code sessions running at once.** Switch between projects without juggling tmux panes. Sessions live on the server, so closing the browser does not kill them. The chat view stitches across `/clear` so long threads keep their full visual history.
 3. **Cron-driven Claude Code.** Schedule a prompt, walk away. Each run produces a transcript that renders the same as a live session.
 
-Inside a session: a diff viewer for code changes (split or inline), a file viewer with syntax highlighting, global search across all sessions (Ctrl+Shift+F), and plan-mode approvals when Claude proposes a plan. The sidebar shows collapsible sections for sessions, reviews, file changes, and file trees, with status beacons so you can tell at a glance which sessions are working, waiting, or idle.
+Inside a session: a tabbed, split-pane layout holding the chat, a diff viewer for code changes (split or inline), a file viewer with syntax highlighting, and an embedded terminal. Plus global search across all sessions (Ctrl+Shift+F), searchable prompt history on the up arrow, and plan-mode approvals when Claude proposes a plan. The sidebar shows collapsible sections for sessions, reviews, file changes, and file trees, with status beacons so you can tell at a glance which sessions are working, waiting, or idle.
+
+Choose your model per session: built-in Haiku, Sonnet, and Opus, or your own Anthropic-compatible providers (proxies and gateways), with a 200K or 1M context selector. Each session can run in Stream mode (headless) or PTY mode, which drives the real Claude Code CLI through a pseudo-terminal.
 
 It also takes care of things you usually hand-edit: agents, skills, hooks, MCP servers, CLAUDE.md memory. All editable from the UI.
 
@@ -80,6 +82,11 @@ Tested on Linux and macOS. Windows is unverified.
 | `PORT` | Port the server listens on | `3001` |
 | `HOST` | Bind address | `0.0.0.0` |
 | `COCKPIT_RESET_PASSWORD` | Set to `true` to reset password on next startup | `false` |
+| `COCKPIT_CONFIG_DIR` | Cockpit config location (password, providers, defaults, jobs, inbox) | `~/.cockpit` |
+| `CLAUDE_CONFIG_DIR` | Claude config and transcripts Cockpit reads | `~/.claude` |
+| `COCKPIT_DEBUG` | Set to `1` to write a structured debug log | unset |
+
+Setting `COCKPIT_CONFIG_DIR` and `CLAUDE_CONFIG_DIR` together lets you run isolated instances side by side. See [Settings](docs/settings.md#environment-variables) for the full list.
 
 ## Remote access
 
@@ -91,10 +98,12 @@ To restrict Cockpit to the host machine only, set `HOST=127.0.0.1`.
 
 ## Documentation
 
-- [Sessions](docs/sessions.md): chat, sidebar, attachments, plan mode, diffs, file view, todos, search, session linking
+- [Sessions](docs/sessions.md): chat, runtime modes, tabbed layout, sidebar, attachments, plan mode, diffs, file view, prompt history, todos, search, session linking
+- [Model providers](docs/providers.md): built-in and custom Anthropic-compatible providers, context sizes, model slots
+- [Embedded terminal](docs/terminal.md): in-browser shell with themes and mobile support
 - [PR reviews](docs/pr-reviews.md): GitHub PR browsing and review sessions
 - [Scheduled jobs](docs/scheduled-jobs.md): cron-driven Claude Code runs
-- [Settings](docs/settings.md): auth, models, themes, notifications, inbox, agents, skills, hooks, MCP servers, CLAUDE.md
+- [Settings](docs/settings.md): auth, models, providers, themes, notifications, inbox, updates, agents, skills, hooks, MCP servers, CLAUDE.md
 
 ## Development
 
