@@ -475,6 +475,37 @@ describe("transcript module", () => {
       expect(result.lastUsage).toEqual({ used: 5000, total: 200000 });
     });
 
+    it("ignores all-zero usage from an interrupted turn (keeps the last real reading)", async () => {
+      (existsSync as any).mockReturnValue(true);
+      const content = jsonl(
+        { type: "result", modelUsage: { "claude-3-5-sonnet": { contextWindow: 200000 } } },
+        {
+          type: "assistant",
+          message: {
+            id: "a1",
+            content: [{ type: "text", text: "real turn" }],
+            usage: { input_tokens: 120000, cache_read_input_tokens: 5000 },
+          },
+          timestamp: "2024-01-01T00:00:00Z",
+        },
+        {
+          type: "assistant",
+          message: {
+            id: "a2",
+            content: [{ type: "text", text: "" }],
+            usage: { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
+          },
+          timestamp: "2024-01-01T00:00:01Z",
+        },
+      );
+      (readFile as any).mockResolvedValue(content);
+
+      const result = await loadTranscript("session-123", "/tmp");
+
+      // The cancelled turn's zeroed usage must not replace the 125k real reading.
+      expect(result.lastUsage).toEqual({ used: 125000, total: 200000 });
+    });
+
     it("extracts documents (PDFs) from user content arrays", async () => {
       (existsSync as any).mockReturnValue(true);
       const content = jsonl({
@@ -1067,6 +1098,22 @@ describe("transcript module", () => {
 
       const result = await loadLastUsage("session-123", "/tmp");
       expect(result).toEqual({ used: 50, total: 200000 });
+    });
+
+    it("skips an all-zero usage block from an interrupted turn", async () => {
+      const { loadLastUsage } = await import("@/server/transcript");
+      (existsSync as any).mockReturnValue(true);
+      const content = jsonl(
+        { type: "assistant", message: { usage: { input_tokens: 90000, cache_read_input_tokens: 10000 } } },
+        {
+          type: "assistant",
+          message: { usage: { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 } },
+        },
+      );
+      (readFile as any).mockResolvedValue(content);
+
+      const result = await loadLastUsage("session-123", "/tmp");
+      expect(result).toEqual({ used: 100000, total: 200000 });
     });
 
     it("returns null when the most recent turn precedes a compaction boundary", async () => {

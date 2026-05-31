@@ -1396,9 +1396,13 @@ export class SessionManager {
       if (raw.message.model === "<synthetic>") return;
       const u = raw.message.usage;
       const used = (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.cache_read_input_tokens || 0);
-      const usage: ContextUsage = { used, total: session.contextWindowSize };
-      session.contextUsage = usage;
-      session.emitter.emit("usage", sessionId, usage);
+      // Only move the gauge on a real reading. An interrupted/cancelled turn
+      // emits an all-zero usage block; setting it would wipe the gauge to 0.
+      if (used > 0) {
+        const usage: ContextUsage = { used, total: session.contextWindowSize };
+        session.contextUsage = usage;
+        session.emitter.emit("usage", sessionId, usage);
+      }
       session.totalTokens.input += u.input_tokens || 0;
       session.totalTokens.output += u.output_tokens || 0;
       session.totalTokens.cacheCreate += u.cache_creation_input_tokens || 0;

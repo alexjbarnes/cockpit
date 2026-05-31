@@ -270,8 +270,12 @@ export async function loadLastUsage(sessionId: string, cwd: string): Promise<{ u
       if (entry.type === "assistant" && entry.message?.usage) {
         const u = entry.message.usage;
         const used = (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.cache_read_input_tokens || 0);
-        lastUsage = { used, total: contextWindowSize };
-        break;
+        // Skip all-zero usage from an interrupted/cancelled turn; keep scanning
+        // back for the last real reading rather than reporting 0.
+        if (used > 0) {
+          lastUsage = { used, total: contextWindowSize };
+          break;
+        }
       }
     } catch {}
   }
@@ -326,7 +330,10 @@ function parseLines(lines: string[]): { messages: ChatMessage[]; lastUsage: { us
       const usage = (entry.message as Record<string, unknown>).usage as Record<string, number> | undefined;
       if (usage) {
         const used = (usage.input_tokens || 0) + (usage.cache_creation_input_tokens || 0) + (usage.cache_read_input_tokens || 0);
-        lastUsage = { used, total: contextWindowSize };
+        // Ignore all-zero usage: an interrupted/cancelled turn (Stop, killed
+        // process) writes an assistant message with a zeroed usage block that is
+        // not a real context reading and would otherwise wipe the gauge to 0.
+        if (used > 0) lastUsage = { used, total: contextWindowSize };
       }
     }
 
