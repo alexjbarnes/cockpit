@@ -1,4 +1,4 @@
-import { type ChildProcess, execFileSync, spawn } from "node:child_process";
+import { type ChildProcess, spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -15,6 +15,7 @@ import {
   recommendedEffort,
   resolveModel,
 } from "@/lib/models";
+import { getClaudeBin } from "@/server/claude-bin";
 import { getCockpitCacheDir, getCockpitDir } from "@/server/paths";
 import { resolveProviderModel } from "@/server/providers";
 import type {
@@ -46,18 +47,6 @@ export type { SessionRuntime };
 
 function defaultRuntime(): SessionRuntime {
   return "stream";
-}
-
-let resolvedClaudeBin: string | null = null;
-function getClaudeBin(): string {
-  if (resolvedClaudeBin) return resolvedClaudeBin;
-  const cmd = process.platform === "win32" ? "where" : "which";
-  try {
-    resolvedClaudeBin = execFileSync(cmd, ["claude"], { encoding: "utf-8" }).trim().split("\n")[0];
-  } catch {
-    resolvedClaudeBin = "claude";
-  }
-  return resolvedClaudeBin;
 }
 
 const smLog = (sessionId: string, msg: string) => {

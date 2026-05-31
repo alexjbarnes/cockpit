@@ -371,6 +371,7 @@ export default function SettingsPage() {
         <div className="border-t border-border pt-4 mt-4 space-y-0.5">
           <NavRow label="Agents" onClick={() => router.push("/agents")} />
           <NavRow label="MCP Servers" onClick={() => router.push("/mcp-servers")} />
+          <NavRow label="Plugins" onClick={() => router.push("/plugins")} />
           <NavRow label="Skills" onClick={() => router.push("/skills")} />
           <NavRow label="Commands" onClick={() => router.push("/commands")} />
           <NavRow label="Hooks" onClick={() => router.push("/hooks")} />
