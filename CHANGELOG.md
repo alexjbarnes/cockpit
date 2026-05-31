@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Image previews in the file viewer.** Opening an image (PNG, JPEG, GIF, WebP, SVG, BMP, ICO, AVIF, APNG) now renders the image instead of showing "Binary file". Bytes are served from the file-read endpoint with a sandboxed content-security-policy, so an opened SVG can't execute scripts.
+
 ### Changed
 - **Run history polish.** A job's run-history list now uses uniform-width status pills (Success/Failed/Timeout/Running), and shows durations over a minute as `Xm Ys` instead of raw seconds.
 
