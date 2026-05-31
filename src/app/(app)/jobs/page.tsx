@@ -203,9 +203,7 @@ function JobDirGroup({
         <Folder className="h-4 w-4 shrink-0 text-muted-foreground" />
         <span className="font-medium text-sm truncate flex-1">{group.dirName}</span>
         <div className="flex items-center gap-2 shrink-0">
-          {failedCount > 0 && (
-            <span className="text-xs bg-destructive text-destructive-foreground px-1.5 py-0.5 rounded">{failedCount} failed</span>
-          )}
+          {failedCount > 0 && <Badge variant="destructive">{failedCount} failed</Badge>}
           <span className="text-xs text-muted-foreground">
             {group.jobs.length} job{group.jobs.length !== 1 ? "s" : ""}
           </span>

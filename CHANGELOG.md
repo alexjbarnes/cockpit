@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - **File links open in a tab.** The "Open in editor" link on a diff or changes panel now opens the file in a session tab, matching file links in tool cards and the file tree.
+- **Empty red pill on the Jobs page.** A directory's failed-job count rendered as an empty red pill — the `destructive-foreground` theme token was set to the same red as its background, so the "N failed" text was invisible. The token is fixed and the badge now uses the shared destructive `Badge` component.
 
 ## [0.3.1] - 2026-05-30
 
