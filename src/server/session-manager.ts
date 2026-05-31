@@ -1740,6 +1740,10 @@ export class SessionManager {
       }
 
       case "/context": {
+        // PTY drives the real CLI REPL, which has its own /context. Forward it so
+        // the user sees the CLI's live breakdown and its ACTUAL window, instead of
+        // cockpit's readout of the picked size. Stream mode keeps the local readout.
+        if (session.runtime === "pty") break;
         if (!session.contextUsage) {
           this.emitSystem(session, sessionId, "Context usage data not available yet.");
           return true;
