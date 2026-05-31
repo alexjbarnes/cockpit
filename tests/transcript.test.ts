@@ -205,6 +205,26 @@ describe("transcript module", () => {
       });
     });
 
+    it("strips ANSI escape codes from local_command output (e.g. forwarded /context)", async () => {
+      (existsSync as any).mockReturnValue(true);
+      const content = jsonl({
+        type: "system",
+        subtype: "local_command",
+        content:
+          "<local-command-stdout>\x1b[1mContext Usage\x1b[22m\n\x1b[38;5;141m342.4k/200k tokens (171%)\x1b[39m</local-command-stdout>",
+        timestamp: "2024-01-01T00:00:00Z",
+        uuid: "sys-ansi",
+      });
+      (readFile as any).mockResolvedValue(content);
+
+      const result = await loadTranscript("session-123", "/tmp");
+
+      expect(result.messages).toHaveLength(1);
+      expect(result.messages[0].content).toBe("Context Usage\n342.4k/200k tokens (171%)");
+      // biome-ignore lint/suspicious/noControlCharactersInRegex: asserting ANSI escapes are gone
+      expect(result.messages[0].content).not.toMatch(/\x1b/);
+    });
+
     it("strips CLI XML tags from text", async () => {
       (existsSync as any).mockReturnValue(true);
       const content = jsonl({

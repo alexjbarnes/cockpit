@@ -1740,10 +1740,17 @@ export class SessionManager {
       }
 
       case "/context": {
-        // PTY drives the real CLI REPL, which has its own /context. Forward it so
-        // the user sees the CLI's live breakdown and its ACTUAL window, instead of
-        // cockpit's readout of the picked size. Stream mode keeps the local readout.
-        if (session.runtime === "pty") break;
+        // The CLI's own /context shows the live breakdown and ACTUAL window, which
+        // cockpit's readout (picked size only) can't. In PTY, route it straight to
+        // the REPL and do NOT enter the running state: /context is a local command
+        // with no model turn, so no Stop hook would fire to clear "running" and the
+        // session would hang on "processing". Its output arrives as a local_command
+        // transcript entry (ANSI-stripped on parse). Fall back to cockpit's readout
+        // in stream mode, when no PTY is live, or mid-turn.
+        if (session.runtime === "pty" && session.ptyRuntime?.isAlive && session.info.status !== "running") {
+          session.ptyRuntime.sendText("/context").catch(() => {});
+          return true;
+        }
         if (!session.contextUsage) {
           this.emitSystem(session, sessionId, "Context usage data not available yet.");
           return true;

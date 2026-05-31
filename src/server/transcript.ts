@@ -285,6 +285,14 @@ export interface TranscriptResult {
   lastUsage: { used: number; total: number } | null;
 }
 
+// CLI local commands (e.g. /context) emit ANSI-colored output. Strip escape
+// sequences so the transcript renders clean text instead of raw codes.
+// biome-ignore lint/suspicious/noControlCharactersInRegex: strip ANSI escape sequences
+const ANSI_RE = /\x1b\[[0-9;]*[a-zA-Z]/g;
+function stripAnsi(s: string): string {
+  return s.replace(ANSI_RE, "");
+}
+
 function parseLines(lines: string[]): { messages: ChatMessage[]; lastUsage: { used: number; total: number } | null } {
   const messages: ChatMessage[] = [];
   const messageById = new Map<string, ChatMessage>();
@@ -366,7 +374,7 @@ function parseLines(lines: string[]): { messages: ChatMessage[]; lastUsage: { us
     if (entry.type === "system" && entry.subtype === "local_command" && entry.content) {
       const rawContent = entry.content as string;
       const match = rawContent.match(/<local-command-stdout>([\s\S]*?)<\/local-command-stdout>/);
-      const text = match ? match[1].trim() : rawContent;
+      const text = stripAnsi(match ? match[1].trim() : rawContent);
       if (text) {
         messages.push({
           id: entry.uuid || uuidv4(),
