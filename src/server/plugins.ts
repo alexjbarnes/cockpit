@@ -12,6 +12,12 @@ const PLUGIN_CMD_MAX_BUFFER = 32 * 1024 * 1024;
 
 export type PluginScope = "user" | "project" | "local";
 
+const PLUGIN_SCOPES = new Set<PluginScope>(["user", "project", "local"]);
+/** Narrow an arbitrary string to a PluginScope, or undefined to let the CLI decide. */
+export function coercePluginScope(value: string | null | undefined): PluginScope | undefined {
+  return value && PLUGIN_SCOPES.has(value as PluginScope) ? (value as PluginScope) : undefined;
+}
+
 export interface InstalledPlugin {
   /** "name@marketplace" */
   id: string;
@@ -92,4 +98,9 @@ export async function uninstallPlugin(id: string, scope?: PluginScope): Promise<
   const args = ["uninstall", id, "-y"];
   if (scope) args.push("-s", scope);
   return runClaudePlugin(args);
+}
+
+/** Install a plugin (id is "name@marketplace"). Clones from the marketplace source, so it can be slow. */
+export async function installPlugin(id: string, scope: PluginScope = "user"): Promise<PluginCommandResult> {
+  return runClaudePlugin(["install", id, "-s", scope]);
 }

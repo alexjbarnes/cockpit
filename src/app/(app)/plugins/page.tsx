@@ -1,24 +1,35 @@
 "use client";
 
 import { Loader2, RefreshCw, Trash2 } from "lucide-react";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { usePageHeader } from "@/components/app-shell";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { type InstalledPlugin, usePlugins } from "@/hooks/use-plugins";
+import { Input } from "@/components/ui/input";
+import { type AvailablePlugin, type InstalledPlugin, usePlugins } from "@/hooks/use-plugins";
 
 type Tab = "installed" | "browse" | "marketplaces";
 
 export default function PluginsPage() {
   usePageHeader("Plugins", { hideActions: true });
 
-  const { installed, available, marketplaces, loading, error, refresh, setEnabled, uninstall } = usePlugins();
+  const { installed, available, marketplaces, loading, error, refresh, setEnabled, uninstall, install } = usePlugins();
   const [tab, setTab] = useState<Tab>("installed");
   const [busyId, setBusyId] = useState<string | null>(null);
   const [confirmRemove, setConfirmRemove] = useState<InstalledPlugin | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+
+  const installedIds = useMemo(() => new Set(installed.map((p) => p.id)), [installed]);
+
+  async function handleInstall(pluginId: string) {
+    setBusyId(pluginId);
+    setActionError(null);
+    const res = await install(pluginId, "user");
+    if (!res.ok) setActionError(res.error ?? "Failed to install plugin");
+    setBusyId(null);
+  }
 
   async function handleToggle(p: InstalledPlugin) {
     setBusyId(p.id);
@@ -82,7 +93,9 @@ export default function PluginsPage() {
         </Card>
       )}
 
-      {tab === "browse" && <Placeholder text={`Catalog browser coming next (${available.length} plugins available).`} />}
+      {tab === "browse" && !loading && (
+        <BrowseTab available={available} installedIds={installedIds} busyId={busyId} onInstall={handleInstall} />
+      )}
       {tab === "marketplaces" && <Placeholder text={`Marketplace management coming next (${marketplaces.length} configured).`} />}
 
       <Dialog open={!!confirmRemove} onOpenChange={() => setConfirmRemove(null)}>
@@ -122,6 +135,95 @@ function TabButton({ active, onClick, label, count }: { active: boolean; onClick
 
 function Placeholder({ text }: { text: string }) {
   return <p className="text-sm text-muted-foreground">{text}</p>;
+}
+
+const BROWSE_LIMIT = 100;
+
+function BrowseTab({
+  available,
+  installedIds,
+  busyId,
+  onInstall,
+}: {
+  available: AvailablePlugin[];
+  installedIds: Set<string>;
+  busyId: string | null;
+  onInstall: (pluginId: string) => void;
+}) {
+  const [query, setQuery] = useState("");
+  const q = query.trim().toLowerCase();
+  const filtered = q
+    ? available.filter((p) => p.name.toLowerCase().includes(q) || (p.description?.toLowerCase().includes(q) ?? false))
+    : available;
+  const shown = filtered.slice(0, BROWSE_LIMIT);
+
+  return (
+    <div className="space-y-3">
+      <Input placeholder="Search plugins..." value={query} onChange={(e) => setQuery(e.target.value)} />
+      <p className="text-xs text-muted-foreground">Installs to user scope.</p>
+      {filtered.length === 0 ? (
+        <p className="text-sm text-muted-foreground">No plugins match your search.</p>
+      ) : (
+        <Card>
+          <CardContent className="space-y-1 pt-4">
+            {shown.map((p) => (
+              <AvailableRow
+                key={p.pluginId}
+                plugin={p}
+                installed={installedIds.has(p.pluginId)}
+                busy={busyId === p.pluginId}
+                onInstall={() => onInstall(p.pluginId)}
+              />
+            ))}
+          </CardContent>
+        </Card>
+      )}
+      {filtered.length > shown.length && (
+        <p className="text-xs text-muted-foreground">
+          Showing {shown.length} of {filtered.length}. Refine your search to narrow the list.
+        </p>
+      )}
+    </div>
+  );
+}
+
+function AvailableRow({
+  plugin,
+  installed,
+  busy,
+  onInstall,
+}: {
+  plugin: AvailablePlugin;
+  installed: boolean;
+  busy: boolean;
+  onInstall: () => void;
+}) {
+  const { name, marketplace } = splitId(plugin.pluginId);
+  return (
+    <div className="flex items-center gap-3 rounded px-2 py-2 hover:bg-muted transition-colors">
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2">
+          <span className="font-mono font-bold text-sm truncate">{name}</span>
+          {marketplace && <span className="text-xs text-muted-foreground truncate">@{marketplace}</span>}
+          {typeof plugin.installCount === "number" && (
+            <Badge variant="secondary" className="text-[10px]">
+              {plugin.installCount} installs
+            </Badge>
+          )}
+        </div>
+        {plugin.description && <p className="text-xs text-muted-foreground truncate mt-0.5">{plugin.description}</p>}
+      </div>
+      <div className="shrink-0">
+        {installed ? (
+          <span className="px-2 text-xs text-muted-foreground">Installed</span>
+        ) : (
+          <Button size="sm" variant="outline" onClick={onInstall} disabled={busy}>
+            {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Install"}
+          </Button>
+        )}
+      </div>
+    </div>
+  );
 }
 
 function splitId(id: string): { name: string; marketplace: string } {

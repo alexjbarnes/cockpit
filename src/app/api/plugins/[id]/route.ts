@@ -1,15 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { validateSession } from "@/server/auth";
-import { type PluginScope, setPluginEnabled, uninstallPlugin } from "@/server/plugins";
+import { coercePluginScope, setPluginEnabled, uninstallPlugin } from "@/server/plugins";
 
 function authenticate(req: NextRequest): boolean {
   const token = req.cookies.get("cockpit_session")?.value || req.headers.get("authorization")?.replace("Bearer ", "");
   return !!token && validateSession(token);
-}
-
-const SCOPES = new Set<PluginScope>(["user", "project", "local"]);
-function parseScope(value: string | null | undefined): PluginScope | undefined {
-  return value && SCOPES.has(value as PluginScope) ? (value as PluginScope) : undefined;
 }
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -19,7 +14,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
   const { id } = await params;
   const body = (await req.json().catch(() => ({}))) as { action?: string; scope?: string };
-  const scope = parseScope(body.scope);
+  const scope = coercePluginScope(body.scope);
 
   let result: Awaited<ReturnType<typeof setPluginEnabled>>;
   if (body.action === "enable") {
@@ -42,7 +37,7 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
   }
 
   const { id } = await params;
-  const scope = parseScope(new URL(req.url).searchParams.get("scope"));
+  const scope = coercePluginScope(new URL(req.url).searchParams.get("scope"));
   const result = await uninstallPlugin(id, scope);
 
   if (!result.ok) {

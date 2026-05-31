@@ -101,5 +101,18 @@ export function usePlugins() {
     [refresh],
   );
 
-  return { installed, available, marketplaces, loading, error, refresh, setEnabled, uninstall };
+  const install = useCallback(
+    async (id: string, scope: PluginScope = "user"): Promise<MutationResult> => {
+      const result = await mutate("/api/plugins/install", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ plugin: id, scope }),
+      });
+      if (result.ok) refresh();
+      return result;
+    },
+    [refresh],
+  );
+
+  return { installed, available, marketplaces, loading, error, refresh, setEnabled, uninstall, install };
 }
