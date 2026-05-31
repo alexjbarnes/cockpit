@@ -1740,15 +1740,21 @@ export class SessionManager {
       }
 
       case "/context": {
-        // The CLI's own /context shows the live breakdown and ACTUAL window, which
-        // cockpit's readout (picked size only) can't. In PTY, route it straight to
-        // the REPL and do NOT enter the running state: /context is a local command
-        // with no model turn, so no Stop hook would fire to clear "running" and the
-        // session would hang on "processing". Its output arrives as a local_command
-        // transcript entry (ANSI-stripped on parse). Fall back to cockpit's readout
-        // in stream mode, when no PTY is live, or mid-turn.
-        if (session.runtime === "pty" && session.ptyRuntime?.isAlive && session.info.status !== "running") {
-          session.ptyRuntime.sendText("/context").catch(() => {});
+        // Forward to the CLI's own /context: it shows the live per-category
+        // breakdown and the ACTUAL window, which cockpit's readout (picked size
+        // only) can't. /context is a local command (no model turn → no Stop hook),
+        // so never enter the running state — that would hang the session on
+        // "processing". If no CLI is live (e.g. a context-size switch just killed
+        // it), spawn one rather than showing cockpit's one-liner; the spawn applies
+        // the freshly-picked window so /context reflects the switch immediately.
+        // Output arrives as a local_command transcript entry (ANSI-stripped). When a
+        // turn is already running we don't interfere — fall back to the local readout.
+        if (session.runtime === "pty" && session.info.status !== "running") {
+          if (session.ptyRuntime?.isAlive) {
+            session.ptyRuntime.sendText("/context").catch(() => {});
+          } else {
+            this.spawnPtyProcess(session, sessionId, "/context");
+          }
           return true;
         }
         if (!session.contextUsage) {
