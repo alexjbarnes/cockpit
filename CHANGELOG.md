@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Run history polish.** A job's run-history list now uses uniform-width status pills (Success/Failed/Timeout/Running), and shows durations over a minute as `Xm Ys` instead of raw seconds.
+
 ### Removed
 - **Standalone `/files` and `/changes` pages.** These full-page viewers predated the tabbed session view and had no reachable entry point left in the UI. File and changes viewing now happens entirely in session tabs. Bookmarked `/files?…` or `/changes?…` URLs no longer resolve.
 
