@@ -406,6 +406,55 @@ describe("transcript module", () => {
       });
     });
 
+    it("resets lastUsage at a compact_boundary (no post-compaction turn yet)", async () => {
+      (existsSync as any).mockReturnValue(true);
+      const content = jsonl(
+        { type: "result", modelUsage: { "claude-3-5-sonnet": { contextWindow: 200000 } } },
+        {
+          type: "assistant",
+          message: { id: "a1", content: [{ type: "text", text: "pre-compaction" }], usage: { input_tokens: 150000 } },
+          timestamp: "2024-01-01T00:00:00Z",
+        },
+        { type: "system", subtype: "compact_boundary", uuid: "cb-1", timestamp: "2024-01-01T00:00:01Z" },
+        {
+          type: "user",
+          message: { id: null, content: "This session is being continued from a previous conversation" },
+          timestamp: "2024-01-01T00:00:02Z",
+          cwd: "/tmp",
+        },
+      );
+      (readFile as any).mockResolvedValue(content);
+
+      const result = await loadTranscript("session-123", "/tmp");
+
+      // The large pre-compaction usage must not leak past the boundary, otherwise
+      // the PTY transcript watcher re-emits it and clobbers the post-compact estimate.
+      expect(result.lastUsage).toBeNull();
+    });
+
+    it("reports post-compaction usage from the first assistant turn after the boundary", async () => {
+      (existsSync as any).mockReturnValue(true);
+      const content = jsonl(
+        { type: "result", modelUsage: { "claude-3-5-sonnet": { contextWindow: 200000 } } },
+        {
+          type: "assistant",
+          message: { id: "a1", content: [{ type: "text", text: "pre-compaction" }], usage: { input_tokens: 150000 } },
+          timestamp: "2024-01-01T00:00:00Z",
+        },
+        { type: "system", subtype: "compact_boundary", uuid: "cb-1", timestamp: "2024-01-01T00:00:01Z" },
+        {
+          type: "assistant",
+          message: { id: "a2", content: [{ type: "text", text: "post-compaction" }], usage: { input_tokens: 5000 } },
+          timestamp: "2024-01-01T00:00:02Z",
+        },
+      );
+      (readFile as any).mockResolvedValue(content);
+
+      const result = await loadTranscript("session-123", "/tmp");
+
+      expect(result.lastUsage).toEqual({ used: 5000, total: 200000 });
+    });
+
     it("extracts documents (PDFs) from user content arrays", async () => {
       (existsSync as any).mockReturnValue(true);
       const content = jsonl({
@@ -998,6 +1047,34 @@ describe("transcript module", () => {
 
       const result = await loadLastUsage("session-123", "/tmp");
       expect(result).toEqual({ used: 50, total: 200000 });
+    });
+
+    it("returns null when the most recent turn precedes a compaction boundary", async () => {
+      const { loadLastUsage } = await import("@/server/transcript");
+      (existsSync as any).mockReturnValue(true);
+      const content = jsonl(
+        { type: "assistant", message: { usage: { input_tokens: 150000 } } },
+        { type: "system", subtype: "compact_boundary", uuid: "cb-1" },
+        { type: "user", message: { content: "This session is being continued from a previous conversation" } },
+      );
+      (readFile as any).mockResolvedValue(content);
+
+      const result = await loadLastUsage("session-123", "/tmp");
+      expect(result).toBeNull();
+    });
+
+    it("ignores pre-compaction usage and reports the post-boundary turn", async () => {
+      const { loadLastUsage } = await import("@/server/transcript");
+      (existsSync as any).mockReturnValue(true);
+      const content = jsonl(
+        { type: "assistant", message: { usage: { input_tokens: 150000 } } },
+        { type: "system", subtype: "compact_boundary", uuid: "cb-1" },
+        { type: "assistant", message: { usage: { input_tokens: 5000 } } },
+      );
+      (readFile as any).mockResolvedValue(content);
+
+      const result = await loadLastUsage("session-123", "/tmp");
+      expect(result).toEqual({ used: 5000, total: 200000 });
     });
   });
 

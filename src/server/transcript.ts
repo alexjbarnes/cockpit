@@ -263,6 +263,10 @@ export async function loadLastUsage(sessionId: string, cwd: string): Promise<{ u
   for (let i = lines.length - 1; i >= 0; i--) {
     try {
       const entry = JSON.parse(lines[i]);
+      // Stop at a compaction boundary: anything before it predates the live
+      // window. Reaching it without an assistant turn means there is no
+      // post-compaction usage yet, so leave lastUsage null.
+      if (entry.type === "system" && entry.subtype === "compact_boundary") break;
       if (entry.type === "assistant" && entry.message?.usage) {
         const u = entry.message.usage;
         const used = (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.cache_read_input_tokens || 0);
@@ -377,6 +381,12 @@ function parseLines(lines: string[]): { messages: ChatMessage[]; lastUsage: { us
     }
 
     if (entry.type === "system" && entry.subtype === "compact_boundary") {
+      // Compaction discards prior context, so usage from messages before this
+      // boundary no longer reflects the live window. Reset so lastUsage tracks
+      // only post-compaction turns (null until the next assistant message),
+      // otherwise the PTY transcript watcher re-emits the stale pre-compaction
+      // total and clobbers the post-compact estimate.
+      lastUsage = null;
       messages.push({
         id: "compact-" + uuidv4(),
         role: "system",
