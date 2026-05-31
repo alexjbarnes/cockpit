@@ -2126,6 +2126,10 @@ Additional Cockpit rules beyond the CLI's defaults:
     const sizeKey = session.info.contextSize ?? DEFAULT_CONTEXT_SIZE;
     if (CONTEXT_SIZES[sizeKey].disableEnv) {
       env.CLAUDE_CODE_DISABLE_1M_CONTEXT = "1";
+    } else {
+      // 1m: drop any inherited override so cockpit's pick stays authoritative and
+      // a CLAUDE_CODE_DISABLE_1M_CONTEXT in cockpit's own env can't force 200k.
+      delete env.CLAUDE_CODE_DISABLE_1M_CONTEXT;
     }
 
     if (session.modelSlots.subagent && session.modelSlots.subagent !== session.modelSlots.main) {
