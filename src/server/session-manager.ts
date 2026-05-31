@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "
 import path from "node:path";
 import { type Writable } from "node:stream";
 import { v4 as uuidv4 } from "uuid";
+import { classifyCliCommand } from "@/lib/cli-commands";
 import {
   allowedEffortLevels,
   CONTEXT_SIZES,
@@ -1783,11 +1784,22 @@ export class SessionManager {
       }
     }
 
-    // In PTY mode, intercept commands that render CLI dialogs to prevent hangs
+    // In PTY mode, only model-invoking commands are safe to forward to the REPL:
+    // they run a turn that fires a Stop hook, which clears the running state.
+    // CLI-local commands don't: "local-jsx" opens an interactive panel cockpit
+    // renders from the transcript, not the raw PTY, so it can't show or drive; and
+    // "local" acts with no Stop hook, hanging the session on "processing". Block
+    // both. Classification (incl. aliases) is generated from the CLI binary; see
+    // src/lib/cli-commands.ts. Unknown commands (custom/project/plugin) are
+    // prompt-style and pass through.
     if (session.ptyRuntime?.isAlive) {
-      const dialogCmd = cmd.replace("/", "");
-      if (SessionManager.DIALOG_COMMANDS.has(dialogCmd)) {
-        this.emitSystem(session, sessionId, `"${cmd}" opens an interactive CLI dialog that isn't available in remote mode.`);
+      const kind = classifyCliCommand(cmd);
+      // /compact is CLI-local but cockpit drives compaction through it (PostCompact
+      // clears the running state), so it must reach the CLI -- let it pass through.
+      const passThrough = SessionManager.PTY_FORWARD_LOCAL.has(cmd.replace(/^\//, ""));
+      if (!passThrough && (kind === "local" || kind === "local-jsx")) {
+        const detail = kind === "local-jsx" ? "opens an interactive CLI dialog" : "runs in the CLI only";
+        this.emitSystem(session, sessionId, `"${cmd}" ${detail} and isn't available in remote mode.`);
         return true;
       }
     }
@@ -1796,55 +1808,10 @@ export class SessionManager {
     return false;
   }
 
-  private static readonly DIALOG_COMMANDS = new Set([
-    "config",
-    "usage",
-    "session",
-    "stats",
-    "doctor",
-    "diff",
-    "mcp",
-    "permissions",
-    "hooks",
-    "tasks",
-    "agents",
-    "skills",
-    "memory",
-    "theme",
-    "fast",
-    "feedback",
-    "copy",
-    "branch",
-    "plan",
-    "chrome",
-    "desktop",
-    "ide",
-    "mobile",
-    "bridge",
-    "sandbox",
-    "export",
-    "login",
-    "logout",
-    "upgrade",
-    "rate-limit-options",
-    "privacy-settings",
-    "terminal-setup",
-    "install-github-app",
-    "remote-env",
-    "remote-setup",
-    "resume",
-    "add-dir",
-    "btw",
-    "extra-usage",
-    "passes",
-    "think-back",
-    "ultrareview",
-    "tag",
-    "exit",
-    "effort",
-    "color",
-    "files",
-  ]);
+  // CLI-local commands cockpit intentionally forwards in PTY despite their type,
+  // because their lifecycle is handled (e.g. /compact fires PostCompact, which
+  // clears the running state the same way a Stop hook would).
+  private static readonly PTY_FORWARD_LOCAL = new Set(["compact"]);
 
   private static readonly MEDIA_EXT: Record<string, string> = {
     "image/png": ".png",
