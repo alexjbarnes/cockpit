@@ -274,9 +274,9 @@ function AvailableRow({
   return (
     <div className="flex items-center gap-3 rounded px-2 py-2 hover:bg-muted transition-colors">
       <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2">
-          <span className="font-mono font-bold text-sm truncate">{name}</span>
-          {marketplace && <span className="text-xs text-muted-foreground truncate">@{marketplace}</span>}
+        <span className="block font-mono font-bold text-sm truncate">{name}</span>
+        <div className="flex flex-wrap items-center gap-1.5 mt-0.5">
+          {marketplace && <span className="text-xs text-muted-foreground">@{marketplace}</span>}
           {typeof plugin.installCount === "number" && (
             <Badge variant="secondary" className="text-[10px]">
               {plugin.installCount} installs
@@ -318,9 +318,9 @@ function PluginRow({
   return (
     <div className="flex items-center gap-3 rounded px-2 py-2 hover:bg-muted transition-colors">
       <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2">
-          <span className="font-mono font-bold text-sm truncate">{name}</span>
-          {marketplace && <span className="text-xs text-muted-foreground truncate">@{marketplace}</span>}
+        <span className="block font-mono font-bold text-sm truncate">{name}</span>
+        <div className="flex flex-wrap items-center gap-1.5 mt-0.5">
+          {marketplace && <span className="text-xs text-muted-foreground">@{marketplace}</span>}
           <Badge variant="secondary" className="text-[10px]">
             v{plugin.version}
           </Badge>
