@@ -104,3 +104,24 @@ export async function uninstallPlugin(id: string, scope?: PluginScope): Promise<
 export async function installPlugin(id: string, scope: PluginScope = "user"): Promise<PluginCommandResult> {
   return runClaudePlugin(["install", id, "-s", scope]);
 }
+
+/** Add a marketplace from a URL, path, or GitHub repo. Clones from the source, so it can be slow. Scope defaults to user. */
+export async function addMarketplace(source: string, scope?: PluginScope): Promise<PluginCommandResult> {
+  const args = ["marketplace", "add", source];
+  if (scope) args.push("--scope", scope);
+  return runClaudePlugin(args);
+}
+
+/** Remove a configured marketplace. Omitting scope removes its declaration from every settings scope. */
+export async function removeMarketplace(name: string, scope?: PluginScope): Promise<PluginCommandResult> {
+  const args = ["marketplace", "remove", name];
+  if (scope) args.push("--scope", scope);
+  return runClaudePlugin(args);
+}
+
+/** Update one marketplace from its source, or all when name is omitted. Hits git, so it can be slow. */
+export async function updateMarketplace(name?: string): Promise<PluginCommandResult> {
+  const args = ["marketplace", "update"];
+  if (name) args.push(name);
+  return runClaudePlugin(args);
+}

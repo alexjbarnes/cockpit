@@ -114,5 +114,59 @@ export function usePlugins() {
     [refresh],
   );
 
-  return { installed, available, marketplaces, loading, error, refresh, setEnabled, uninstall, install };
+  const addMarketplace = useCallback(
+    async (source: string): Promise<MutationResult> => {
+      const result = await mutate("/api/plugins/marketplaces", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "add", source }),
+      });
+      if (result.ok) refresh();
+      return result;
+    },
+    [refresh],
+  );
+
+  const removeMarketplace = useCallback(
+    async (name: string): Promise<MutationResult> => {
+      const result = await mutate(`/api/plugins/marketplaces/${encodeURIComponent(name)}`, { method: "DELETE" });
+      if (result.ok) refresh();
+      return result;
+    },
+    [refresh],
+  );
+
+  const updateMarketplace = useCallback(
+    async (name?: string): Promise<MutationResult> => {
+      const result = name
+        ? await mutate(`/api/plugins/marketplaces/${encodeURIComponent(name)}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ action: "update" }),
+          })
+        : await mutate("/api/plugins/marketplaces", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ action: "update" }),
+          });
+      if (result.ok) refresh();
+      return result;
+    },
+    [refresh],
+  );
+
+  return {
+    installed,
+    available,
+    marketplaces,
+    loading,
+    error,
+    refresh,
+    setEnabled,
+    uninstall,
+    install,
+    addMarketplace,
+    removeMarketplace,
+    updateMarketplace,
+  };
 }

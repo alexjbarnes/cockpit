@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- **Plugin management.** A new Plugins page (under Settings) for managing Claude Code plugins. The Installed tab lists your plugins with version and scope and lets you enable, disable, or uninstall each one. The Browse tab searches the marketplace catalog and installs any plugin (user scope) in one click. Every action runs the CLI's own `claude plugin` commands, so install/git logic and the security blocklist stay owned by the CLI rather than reimplemented in cockpit.
+- **Plugin management.** A new Plugins page (under Settings) for managing Claude Code plugins. The Installed tab lists your plugins with version and scope and lets you enable, disable, or uninstall each one. The Browse tab searches the marketplace catalog and installs any plugin (user scope) in one click. The Marketplaces tab lists configured marketplaces and lets you add one (from a GitHub repo, URL, or local path), update it, or remove it. Every action runs the CLI's own `claude plugin` commands, so install/git logic and the security blocklist stay owned by the CLI rather than reimplemented in cockpit.
 - **Image previews in the file viewer.** Opening an image (PNG, JPEG, GIF, WebP, SVG, BMP, ICO, AVIF, APNG) now renders the image instead of showing "Binary file". Bytes are served from the file-read endpoint with a sandboxed content-security-policy, so an opened SVG can't execute scripts.
 
 ### Changed
