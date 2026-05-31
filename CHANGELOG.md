@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Standalone `/files` and `/changes` pages.** These full-page viewers predated the tabbed session view and had no reachable entry point left in the UI. File and changes viewing now happens entirely in session tabs. Bookmarked `/files?…` or `/changes?…` URLs no longer resolve.
 
 ### Fixed
+- **Mobile terminal shortcut bar.** The Esc/Ctrl/Tab/arrow-key bar above the soft keyboard in the in-session terminal had stopped appearing. Keyboard-open detection compared the visual viewport against the live layout viewport, but the app's `resizes-content` viewport shrinks both together, so the ratio never tripped. Detection now measures against the tallest height seen.
 - **File links open in a tab.** The "Open in editor" link on a diff or changes panel now opens the file in a session tab, matching file links in tool cards and the file tree.
 - **Empty red pill on the Jobs page.** A directory's failed-job count rendered as an empty red pill — the `destructive-foreground` theme token was set to the same red as its background, so the "N failed" text was invisible. The token is fixed and the badge now uses the shared destructive `Badge` component.
 

@@ -177,25 +177,23 @@ function TerminalPanelInner({ terminalId, cwd: _cwd, active = true, onReconnect,
   const { settings, updateSetting } = useSettings();
 
   useEffect(() => {
+    // interactiveWidget is "resizes-content" (see app/layout.tsx), so the soft
+    // keyboard shrinks the layout viewport AND visualViewport together. Comparing
+    // the two against each other never crosses a threshold; instead track the
+    // tallest height seen (keyboard closed) and flag kbOpen when we drop well below it.
     const vv = window.visualViewport;
-    if (vv) {
-      const handler = () => {
-        setKbOpen(vv.height < window.innerHeight * 0.75);
-        if (!activeRef.current || !fitRef.current) return;
-        fitRef.current.fit();
-      };
-      vv.addEventListener("resize", handler);
-      return () => vv.removeEventListener("resize", handler);
-    }
-    fullHeightRef.current = Math.max(fullHeightRef.current, window.innerHeight);
+    const measure = () => (vv ? vv.height : window.innerHeight);
+    fullHeightRef.current = Math.max(fullHeightRef.current, measure());
     const handler = () => {
-      fullHeightRef.current = Math.max(fullHeightRef.current, window.innerHeight);
-      setKbOpen(window.innerHeight < fullHeightRef.current * 0.75);
+      const h = measure();
+      fullHeightRef.current = Math.max(fullHeightRef.current, h);
+      setKbOpen(h < fullHeightRef.current * 0.75);
       if (!activeRef.current || !fitRef.current) return;
       fitRef.current.fit();
     };
-    window.addEventListener("resize", handler);
-    return () => window.removeEventListener("resize", handler);
+    const target: EventTarget = vv ?? window;
+    target.addEventListener("resize", handler);
+    return () => target.removeEventListener("resize", handler);
   }, []);
 
   useEffect(() => {
