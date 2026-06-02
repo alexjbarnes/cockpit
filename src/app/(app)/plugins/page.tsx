@@ -23,6 +23,7 @@ export default function PluginsPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const detailId = searchParams.get("detail");
+  const mktId = searchParams.get("mkt");
 
   const {
     installed,
@@ -42,12 +43,12 @@ export default function PluginsPage() {
 
   // When a detail param is present, show the detail view for that plugin.
   const detailPlugin = detailId ? (installed.find((p) => p.id === detailId) ?? null) : null;
+  const detailMkt = mktId ? (marketplaces.find((m) => m.name === mktId) ?? null) : null;
 
   const [tab, setTab] = useState<Tab>("installed");
   const [busyId, setBusyId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [mktBusy, setMktBusy] = useState<string | null>(null);
-  const [confirmRemoveMkt, setConfirmRemoveMkt] = useState<Marketplace | null>(null);
 
   const installedIds = useMemo(() => new Set(installed.map((p) => p.id)), [installed]);
 
@@ -76,17 +77,6 @@ export default function PluginsPage() {
     setMktBusy(null);
   }
 
-  async function handleRemoveMarketplace() {
-    if (!confirmRemoveMkt) return;
-    const target = confirmRemoveMkt;
-    setConfirmRemoveMkt(null);
-    setMktBusy(target.name);
-    setActionError(null);
-    const res = await removeMarketplace(target.name);
-    if (!res.ok) setActionError(res.error ?? "Failed to remove marketplace");
-    setMktBusy(null);
-  }
-
   if (detailId) {
     return (
       <PluginDetailView
@@ -105,6 +95,23 @@ export default function PluginsPage() {
           const res = await update(id);
           if (res.ok) refresh();
           return res;
+        }}
+      />
+    );
+  }
+
+  if (mktId) {
+    return (
+      <MarketplaceDetailView
+        marketplace={detailMkt}
+        onBack={() => router.push("/plugins")}
+        onUpdate={async (name) => {
+          await updateMarketplace(name);
+          refresh();
+        }}
+        onRemove={async (name) => {
+          await removeMarketplace(name);
+          refresh();
         }}
       />
     );
@@ -149,34 +156,8 @@ export default function PluginsPage() {
         <BrowseTab available={available} installedIds={installedIds} busyId={busyId} onInstall={handleInstall} />
       )}
       {tab === "marketplaces" && !loading && (
-        <MarketplacesTab
-          marketplaces={marketplaces}
-          busy={mktBusy}
-          onAdd={handleAddMarketplace}
-          onUpdate={handleUpdateMarketplace}
-          onRequestRemove={setConfirmRemoveMkt}
-        />
+        <MarketplacesTab marketplaces={marketplaces} busy={mktBusy} onAdd={handleAddMarketplace} onUpdate={handleUpdateMarketplace} />
       )}
-
-      <Dialog open={!!confirmRemoveMkt} onOpenChange={() => setConfirmRemoveMkt(null)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Remove Marketplace</DialogTitle>
-          </DialogHeader>
-          <p className="text-sm text-muted-foreground mb-4">
-            Remove <span className="font-mono font-bold">{confirmRemoveMkt?.name}</span>? This removes the marketplace from your
-            configuration.
-          </p>
-          <div className="flex justify-end gap-2">
-            <Button variant="outline" onClick={() => setConfirmRemoveMkt(null)}>
-              Cancel
-            </Button>
-            <Button variant="destructive" onClick={handleRemoveMarketplace}>
-              Remove
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }
@@ -558,16 +539,14 @@ function MarketplacesTab({
   busy,
   onAdd,
   onUpdate,
-  onRequestRemove,
 }: {
   marketplaces: Marketplace[];
   busy: string | null;
   onAdd: (source: string) => Promise<boolean>;
   onUpdate: (name?: string) => void;
-  onRequestRemove: (marketplace: Marketplace) => void;
 }) {
   const [source, setSource] = useState("");
-  const [selectedMkt, setSelectedMkt] = useState<Marketplace | null>(null);
+  const router = useRouter();
   const anyBusy = busy !== null;
 
   async function submit() {
@@ -607,50 +586,127 @@ function MarketplacesTab({
         <Card>
           <CardContent className="space-y-1 pt-4">
             {marketplaces.map((m) => (
-              <MarketplaceRow key={m.name} marketplace={m} disabled={anyBusy} onClick={() => setSelectedMkt(m)} />
+              <MarketplaceRow
+                key={m.name}
+                marketplace={m}
+                disabled={anyBusy}
+                onClick={() => router.push(`/plugins?mkt=${encodeURIComponent(m.name)}`)}
+              />
             ))}
           </CardContent>
         </Card>
       )}
+    </div>
+  );
+}
 
-      <Dialog open={!!selectedMkt} onOpenChange={() => setSelectedMkt(null)}>
+function MarketplaceDetailView({
+  marketplace: raw,
+  onBack,
+  onUpdate,
+  onRemove,
+}: {
+  marketplace: Marketplace | null;
+  onBack: () => void;
+  onUpdate: (name: string) => void;
+  onRemove: (name: string) => Promise<void>;
+}) {
+  const [actionBusy, setActionBusy] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [confirmRemove, setConfirmRemove] = useState(false);
+
+  if (!raw) {
+    return (
+      <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-4">
+        <BackLink onClick={onBack} />
+        <p className="text-sm text-muted-foreground">Marketplace not found.</p>
+      </div>
+    );
+  }
+
+  const mkt = raw;
+
+  async function handleUpdate() {
+    setActionBusy("update");
+    setActionError(null);
+    try {
+      await onUpdate(mkt.name);
+    } catch {
+      setActionError("Failed to update marketplace");
+    }
+    setActionBusy(null);
+  }
+
+  async function handleRemove() {
+    setConfirmRemove(false);
+    setActionBusy("remove");
+    setActionError(null);
+    try {
+      await onRemove(mkt.name);
+      onBack();
+    } catch {
+      setActionError("Failed to remove marketplace");
+      setActionBusy(null);
+    }
+  }
+
+  return (
+    <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-6">
+      <BackLink onClick={onBack} />
+
+      <div>
+        <h1 className="font-mono font-bold text-lg">{mkt.name}</h1>
+      </div>
+
+      {actionError && <div className="rounded border border-red-500/30 bg-red-500/5 p-3 text-sm text-red-500">{actionError}</div>}
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-sm">Details</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3 text-sm">
+          <DetailRow label="Source" value={mkt.source} mono />
+          {mkt.repo && <DetailRow label="Repo" value={mkt.repo} mono />}
+          <DetailRow label="Install location" value={mkt.installLocation} mono />
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-sm">Actions</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="flex items-center justify-between">
+            <span className="text-sm">Update from marketplace source</span>
+            <Button size="sm" variant="outline" onClick={handleUpdate} disabled={actionBusy !== null}>
+              {actionBusy === "update" ? <Loader2 className="h-4 w-4 animate-spin" /> : "Update"}
+            </Button>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-sm">Remove marketplace configuration</span>
+            <Button size="sm" variant="destructive" onClick={() => setConfirmRemove(true)} disabled={actionBusy !== null}>
+              {actionBusy === "remove" ? <Loader2 className="h-4 w-4 animate-spin" /> : "Remove"}
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Dialog open={confirmRemove} onOpenChange={setConfirmRemove}>
         <DialogContent>
-          {selectedMkt && (
-            <>
-              <DialogHeader>
-                <DialogTitle className="font-mono font-bold">{selectedMkt.name}</DialogTitle>
-              </DialogHeader>
-              <div className="space-y-3 text-sm">
-                <DetailRow label="Source" value={selectedMkt.source} mono />
-                {selectedMkt.repo && <DetailRow label="Repo" value={selectedMkt.repo} mono />}
-                <DetailRow label="Install location" value={selectedMkt.installLocation} mono />
-                <div className="flex items-center gap-2 pt-3 border-t">
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => {
-                      onUpdate(selectedMkt.name);
-                      setSelectedMkt(null);
-                    }}
-                    disabled={anyBusy}
-                  >
-                    {busy === selectedMkt.name ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Update"}
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="destructive"
-                    onClick={() => {
-                      onRequestRemove(selectedMkt);
-                      setSelectedMkt(null);
-                    }}
-                    disabled={anyBusy}
-                  >
-                    Remove
-                  </Button>
-                </div>
-              </div>
-            </>
-          )}
+          <DialogHeader>
+            <DialogTitle>Remove Marketplace</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground mb-4">
+            Remove <span className="font-mono font-bold">{mkt.name}</span>? This removes the marketplace from your configuration.
+          </p>
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" onClick={() => setConfirmRemove(false)}>
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={handleRemove}>
+              Remove
+            </Button>
+          </div>
         </DialogContent>
       </Dialog>
     </div>
