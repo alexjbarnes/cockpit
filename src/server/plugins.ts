@@ -105,6 +105,11 @@ export async function installPlugin(id: string, scope: PluginScope = "user"): Pr
   return runClaudePlugin(["install", id, "-s", scope]);
 }
 
+/** Update an installed plugin from its marketplace source. Runs git pull on the plugin's source. */
+export async function updatePlugin(id: string): Promise<PluginCommandResult> {
+  return runClaudePlugin(["update", id]);
+}
+
 /** Add a marketplace from a URL, path, or GitHub repo. Clones from the source, so it can be slow. Scope defaults to user. */
 export async function addMarketplace(source: string, scope?: PluginScope): Promise<PluginCommandResult> {
   const args = ["marketplace", "add", source];

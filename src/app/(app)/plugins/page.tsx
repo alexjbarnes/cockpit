@@ -1,6 +1,7 @@
 "use client";
 
-import { Loader2, RefreshCw, Trash2 } from "lucide-react";
+import { ChevronRight, Loader2, RefreshCw, Trash2 } from "lucide-react";
+import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
 import { usePageHeader } from "@/components/app-shell";
 import { Badge } from "@/components/ui/badge";
@@ -20,23 +21,10 @@ const MKT_ALL = "__all__";
 export default function PluginsPage() {
   usePageHeader("Plugins", { hideActions: true });
 
-  const {
-    installed,
-    available,
-    marketplaces,
-    loading,
-    error,
-    refresh,
-    setEnabled,
-    uninstall,
-    install,
-    addMarketplace,
-    removeMarketplace,
-    updateMarketplace,
-  } = usePlugins();
+  const { installed, available, marketplaces, loading, error, refresh, install, addMarketplace, removeMarketplace, updateMarketplace } =
+    usePlugins();
   const [tab, setTab] = useState<Tab>("installed");
   const [busyId, setBusyId] = useState<string | null>(null);
-  const [confirmRemove, setConfirmRemove] = useState<InstalledPlugin | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [mktBusy, setMktBusy] = useState<string | null>(null);
   const [confirmRemoveMkt, setConfirmRemoveMkt] = useState<Marketplace | null>(null);
@@ -48,25 +36,6 @@ export default function PluginsPage() {
     setActionError(null);
     const res = await install(pluginId, "user");
     if (!res.ok) setActionError(res.error ?? "Failed to install plugin");
-    setBusyId(null);
-  }
-
-  async function handleToggle(p: InstalledPlugin) {
-    setBusyId(p.id);
-    setActionError(null);
-    const res = await setEnabled(p.id, !p.enabled, p.scope);
-    if (!res.ok) setActionError(res.error ?? "Failed to update plugin");
-    setBusyId(null);
-  }
-
-  async function handleRemove() {
-    if (!confirmRemove) return;
-    const target = confirmRemove;
-    setConfirmRemove(null);
-    setBusyId(target.id);
-    setActionError(null);
-    const res = await uninstall(target.id, target.scope);
-    if (!res.ok) setActionError(res.error ?? "Failed to uninstall plugin");
     setBusyId(null);
   }
 
@@ -127,15 +96,7 @@ export default function PluginsPage() {
             {installed.length === 0 ? (
               <p className="text-sm text-muted-foreground">No plugins installed. Browse a marketplace to add one.</p>
             ) : (
-              installed.map((p) => (
-                <PluginRow
-                  key={p.id}
-                  plugin={p}
-                  busy={busyId === p.id}
-                  onToggle={() => handleToggle(p)}
-                  onRemove={() => setConfirmRemove(p)}
-                />
-              ))
+              installed.map((p) => <PluginRow key={p.id} plugin={p} />)
             )}
           </CardContent>
         </Card>
@@ -153,25 +114,6 @@ export default function PluginsPage() {
           onRequestRemove={setConfirmRemoveMkt}
         />
       )}
-
-      <Dialog open={!!confirmRemove} onOpenChange={() => setConfirmRemove(null)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Uninstall Plugin</DialogTitle>
-          </DialogHeader>
-          <p className="text-sm text-muted-foreground mb-4">
-            Uninstall <span className="font-mono font-bold">{confirmRemove?.id}</span>? This removes it from disk.
-          </p>
-          <div className="flex justify-end gap-2">
-            <Button variant="outline" onClick={() => setConfirmRemove(null)}>
-              Cancel
-            </Button>
-            <Button variant="destructive" onClick={handleRemove}>
-              Uninstall
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
 
       <Dialog open={!!confirmRemoveMkt} onOpenChange={() => setConfirmRemoveMkt(null)}>
         <DialogContent>
@@ -303,20 +245,15 @@ function splitId(id: string): { name: string; marketplace: string } {
   return at > 0 ? { name: id.slice(0, at), marketplace: id.slice(at + 1) } : { name: id, marketplace: "" };
 }
 
-function PluginRow({
-  plugin,
-  busy,
-  onToggle,
-  onRemove,
-}: {
-  plugin: InstalledPlugin;
-  busy: boolean;
-  onToggle: () => void;
-  onRemove: () => void;
-}) {
+function PluginRow({ plugin }: { plugin: InstalledPlugin }) {
   const { name, marketplace } = splitId(plugin.id);
+  const router = useRouter();
   return (
-    <div className="flex items-center gap-3 rounded px-2 py-2 hover:bg-muted transition-colors">
+    <button
+      type="button"
+      onClick={() => router.push(`/plugins/${encodeURIComponent(plugin.id)}`)}
+      className="flex w-full items-center gap-3 rounded px-2 py-2 hover:bg-muted transition-colors text-left"
+    >
       <div className="flex-1 min-w-0">
         <span className="block font-mono font-bold text-sm truncate">{name}</span>
         <div className="flex flex-wrap items-center gap-1.5 mt-0.5">
@@ -327,34 +264,11 @@ function PluginRow({
           <Badge variant="secondary" className="text-[10px]">
             {plugin.scope}
           </Badge>
+          <span className={`inline-block h-1.5 w-1.5 rounded-full ${plugin.enabled ? "bg-green-500" : "bg-muted-foreground/40"}`} />
         </div>
       </div>
-      <div className="flex items-center gap-1 shrink-0">
-        <button
-          type="button"
-          onClick={onToggle}
-          disabled={busy}
-          title={plugin.enabled ? "Disable" : "Enable"}
-          className="flex items-center gap-1.5 rounded px-2 py-1 text-xs text-muted-foreground hover:bg-background disabled:opacity-50 transition-colors"
-        >
-          {busy ? (
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-          ) : (
-            <span className={`inline-block h-2 w-2 rounded-full ${plugin.enabled ? "bg-green-500" : "bg-muted-foreground/40"}`} />
-          )}
-          {plugin.enabled ? "Enabled" : "Disabled"}
-        </button>
-        <button
-          type="button"
-          onClick={onRemove}
-          disabled={busy}
-          title="Uninstall"
-          className="p-1 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive disabled:opacity-50 transition-colors"
-        >
-          <Trash2 className="h-4 w-4" />
-        </button>
-      </div>
-    </div>
+      <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0" />
+    </button>
   );
 }
 

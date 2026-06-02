@@ -101,6 +101,19 @@ export function usePlugins() {
     [refresh],
   );
 
+  const update = useCallback(
+    async (id: string): Promise<MutationResult> => {
+      const result = await mutate(`/api/plugins/${encodeURIComponent(id)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "update" }),
+      });
+      if (result.ok) refresh();
+      return result;
+    },
+    [refresh],
+  );
+
   const install = useCallback(
     async (id: string, scope: PluginScope = "user"): Promise<MutationResult> => {
       const result = await mutate("/api/plugins/install", {
@@ -164,6 +177,7 @@ export function usePlugins() {
     refresh,
     setEnabled,
     uninstall,
+    update,
     install,
     addMarketplace,
     removeMarketplace,
