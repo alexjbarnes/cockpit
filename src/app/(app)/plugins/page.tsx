@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowLeft, ChevronRight, Loader2, RefreshCw, Trash2 } from "lucide-react";
+import { ArrowLeft, ChevronRight, Loader2, RefreshCw } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useMemo, useState } from "react";
 import { usePageHeader } from "@/components/app-shell";
@@ -567,6 +567,7 @@ function MarketplacesTab({
   onRequestRemove: (marketplace: Marketplace) => void;
 }) {
   const [source, setSource] = useState("");
+  const [selectedMkt, setSelectedMkt] = useState<Marketplace | null>(null);
   const anyBusy = busy !== null;
 
   async function submit() {
@@ -606,62 +607,78 @@ function MarketplacesTab({
         <Card>
           <CardContent className="space-y-1 pt-4">
             {marketplaces.map((m) => (
-              <MarketplaceRow
-                key={m.name}
-                marketplace={m}
-                updating={busy === m.name}
-                disabled={anyBusy}
-                onUpdate={() => onUpdate(m.name)}
-                onRemove={() => onRequestRemove(m)}
-              />
+              <MarketplaceRow key={m.name} marketplace={m} disabled={anyBusy} onClick={() => setSelectedMkt(m)} />
             ))}
           </CardContent>
         </Card>
       )}
+
+      <Dialog open={!!selectedMkt} onOpenChange={() => setSelectedMkt(null)}>
+        <DialogContent>
+          {selectedMkt && (
+            <>
+              <DialogHeader>
+                <DialogTitle className="font-mono font-bold">{selectedMkt.name}</DialogTitle>
+              </DialogHeader>
+              <div className="space-y-3 text-sm">
+                <DetailRow label="Source" value={selectedMkt.source} mono />
+                {selectedMkt.repo && <DetailRow label="Repo" value={selectedMkt.repo} mono />}
+                <DetailRow label="Install location" value={selectedMkt.installLocation} mono />
+                <div className="flex items-center gap-2 pt-3 border-t">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => {
+                      onUpdate(selectedMkt.name);
+                      setSelectedMkt(null);
+                    }}
+                    disabled={anyBusy}
+                  >
+                    {busy === selectedMkt.name ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Update"}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="destructive"
+                    onClick={() => {
+                      onRequestRemove(selectedMkt);
+                      setSelectedMkt(null);
+                    }}
+                    disabled={anyBusy}
+                  >
+                    Remove
+                  </Button>
+                </div>
+              </div>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
 
-function MarketplaceRow({
-  marketplace,
-  updating,
-  disabled,
-  onUpdate,
-  onRemove,
-}: {
-  marketplace: Marketplace;
-  updating: boolean;
-  disabled: boolean;
-  onUpdate: () => void;
-  onRemove: () => void;
-}) {
+function DetailRow({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
   return (
-    <div className="flex items-center gap-3 rounded px-2 py-2 hover:bg-muted transition-colors">
+    <div className="flex justify-between gap-2">
+      <span className="text-muted-foreground shrink-0">{label}</span>
+      <span className={`text-right break-all max-w-[70%] ${mono ? "font-mono text-xs" : ""}`}>{value}</span>
+    </div>
+  );
+}
+
+function MarketplaceRow({ marketplace, disabled, onClick }: { marketplace: Marketplace; disabled: boolean; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      className="flex w-full items-center gap-3 rounded px-2 py-2 hover:bg-muted transition-colors text-left disabled:opacity-50"
+    >
       <div className="flex-1 min-w-0">
         <span className="font-mono font-bold text-sm truncate">{marketplace.name}</span>
         <p className="text-xs text-muted-foreground truncate mt-0.5">{marketplace.source}</p>
       </div>
-      <div className="flex items-center gap-1 shrink-0">
-        <button
-          type="button"
-          onClick={onUpdate}
-          disabled={disabled}
-          title="Update"
-          className="flex items-center gap-1.5 rounded px-2 py-1 text-xs text-muted-foreground hover:bg-background disabled:opacity-50 transition-colors"
-        >
-          {updating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
-          Update
-        </button>
-        <button
-          type="button"
-          onClick={onRemove}
-          disabled={disabled}
-          title="Remove"
-          className="p-1 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive disabled:opacity-50 transition-colors"
-        >
-          <Trash2 className="h-4 w-4" />
-        </button>
-      </div>
-    </div>
+      <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0" />
+    </button>
   );
 }
