@@ -1,15 +1,15 @@
 "use client";
 
-import { ChevronRight, Loader2, RefreshCw, Trash2 } from "lucide-react";
-import { useRouter } from "next/navigation";
+import { ArrowLeft, ChevronRight, Loader2, RefreshCw, Trash2 } from "lucide-react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useMemo, useState } from "react";
 import { usePageHeader } from "@/components/app-shell";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { type AvailablePlugin, type InstalledPlugin, type Marketplace, usePlugins } from "@/hooks/use-plugins";
+import { type AvailablePlugin, type InstalledPlugin, type Marketplace, type PluginScope, usePlugins } from "@/hooks/use-plugins";
 
 type Tab = "installed" | "browse" | "marketplaces";
 
@@ -20,9 +20,29 @@ const MKT_ALL = "__all__";
 
 export default function PluginsPage() {
   usePageHeader("Plugins", { hideActions: true });
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const detailId = searchParams.get("detail");
 
-  const { installed, available, marketplaces, loading, error, refresh, install, addMarketplace, removeMarketplace, updateMarketplace } =
-    usePlugins();
+  const {
+    installed,
+    available,
+    marketplaces,
+    loading,
+    error,
+    refresh,
+    install,
+    setEnabled,
+    uninstall,
+    update,
+    addMarketplace,
+    removeMarketplace,
+    updateMarketplace,
+  } = usePlugins();
+
+  // When a detail param is present, show the detail view for that plugin.
+  const detailPlugin = detailId ? (installed.find((p) => p.id === detailId) ?? null) : null;
+
   const [tab, setTab] = useState<Tab>("installed");
   const [busyId, setBusyId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -65,6 +85,29 @@ export default function PluginsPage() {
     const res = await removeMarketplace(target.name);
     if (!res.ok) setActionError(res.error ?? "Failed to remove marketplace");
     setMktBusy(null);
+  }
+
+  if (detailId) {
+    return (
+      <PluginDetailView
+        plugin={detailPlugin}
+        onBack={() => router.push("/plugins")}
+        onSetEnabled={async (id, enabled, scope) => {
+          const res = await setEnabled(id, enabled, scope);
+          if (res.ok) refresh();
+          return res;
+        }}
+        onUninstall={async (id, scope) => {
+          const res = await uninstall(id, scope);
+          return res;
+        }}
+        onUpdate={async (id) => {
+          const res = await update(id);
+          if (res.ok) refresh();
+          return res;
+        }}
+      />
+    );
   }
 
   return (
@@ -240,6 +283,188 @@ function AvailableRow({
   );
 }
 
+function PluginDetailView({
+  plugin: rawPlugin,
+  onBack,
+  onSetEnabled,
+  onUninstall,
+  onUpdate,
+}: {
+  plugin: InstalledPlugin | null;
+  onBack: () => void;
+  onSetEnabled: (id: string, enabled: boolean, scope?: PluginScope) => Promise<{ ok: boolean; error?: string }>;
+  onUninstall: (id: string, scope?: PluginScope) => Promise<{ ok: boolean; error?: string }>;
+  onUpdate: (id: string) => Promise<{ ok: boolean; error?: string }>;
+}) {
+  const [actionBusy, setActionBusy] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [confirmUninstall, setConfirmUninstall] = useState(false);
+
+  if (!rawPlugin) {
+    return (
+      <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-4">
+        <BackLink onClick={onBack} />
+        <p className="text-sm text-muted-foreground">Plugin not found.</p>
+      </div>
+    );
+  }
+
+  const plugin = rawPlugin;
+
+  const { name, marketplace } = splitId(plugin.id);
+  const mcpKeys = plugin.mcpServers ? Object.keys(plugin.mcpServers) : [];
+
+  async function handleEnable(enabled: boolean) {
+    setActionBusy("toggle");
+    setActionError(null);
+    const res = await onSetEnabled(plugin.id, enabled, plugin.scope);
+    if (!res.ok) setActionError(res.error ?? "Failed to update plugin");
+    setActionBusy(null);
+  }
+
+  async function handleUpdate() {
+    setActionBusy("update");
+    setActionError(null);
+    const res = await onUpdate(plugin.id);
+    if (!res.ok) setActionError(res.error ?? "Failed to update plugin");
+    setActionBusy(null);
+  }
+
+  async function handleUninstall() {
+    setConfirmUninstall(false);
+    setActionBusy("uninstall");
+    setActionError(null);
+    const res = await onUninstall(plugin.id, plugin.scope);
+    if (!res.ok) {
+      setActionError(res.error ?? "Failed to uninstall plugin");
+      setActionBusy(null);
+    } else {
+      onBack();
+    }
+  }
+
+  return (
+    <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-6">
+      <BackLink onClick={onBack} />
+
+      <div>
+        <h1 className="font-mono font-bold text-lg">{name}</h1>
+        {marketplace && <p className="text-sm text-muted-foreground">@{marketplace}</p>}
+      </div>
+
+      {actionError && <div className="rounded border border-red-500/30 bg-red-500/5 p-3 text-sm text-red-500">{actionError}</div>}
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-sm">Details</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3 text-sm">
+          <div className="flex justify-between">
+            <span className="text-muted-foreground">Version</span>
+            <span className="font-mono">{plugin.version}</span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-muted-foreground">Scope</span>
+            <Badge variant="secondary" className="text-[10px]">
+              {plugin.scope}
+            </Badge>
+          </div>
+          <div className="flex justify-between items-center">
+            <span className="text-muted-foreground">Status</span>
+            <span className="flex items-center gap-1.5">
+              <span className={`inline-block h-2 w-2 rounded-full ${plugin.enabled ? "bg-green-500" : "bg-muted-foreground/40"}`} />
+              {plugin.enabled ? "Enabled" : "Disabled"}
+            </span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-muted-foreground">Install path</span>
+            <span className="font-mono text-xs truncate ml-4 max-w-[60%] text-right" title={plugin.installPath}>
+              {plugin.installPath}
+            </span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-muted-foreground">Installed at</span>
+            <span>{formatDate(plugin.installedAt)}</span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-muted-foreground">Last updated</span>
+            <span>{formatDate(plugin.lastUpdated)}</span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-muted-foreground">MCP servers</span>
+            <span className="text-right max-w-[60%] truncate" title={mcpKeys.join(", ")}>
+              {mcpKeys.length > 0 ? mcpKeys.join(", ") : "None"}
+            </span>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-sm">Actions</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="flex items-center justify-between">
+            <span className="text-sm">Update from marketplace source</span>
+            <Button size="sm" variant="outline" onClick={handleUpdate} disabled={actionBusy !== null}>
+              {actionBusy === "update" ? <Loader2 className="h-4 w-4 animate-spin" /> : "Update"}
+            </Button>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-sm">{plugin.enabled ? "Disable" : "Enable"} plugin</span>
+            <Button
+              size="sm"
+              variant={plugin.enabled ? "outline" : "default"}
+              onClick={() => handleEnable(!plugin.enabled)}
+              disabled={actionBusy !== null}
+            >
+              {actionBusy === "toggle" ? <Loader2 className="h-4 w-4 animate-spin" /> : plugin.enabled ? "Disable" : "Enable"}
+            </Button>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-sm">Remove from disk</span>
+            <Button size="sm" variant="destructive" onClick={() => setConfirmUninstall(true)} disabled={actionBusy !== null}>
+              {actionBusy === "uninstall" ? <Loader2 className="h-4 w-4 animate-spin" /> : "Uninstall"}
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Dialog open={confirmUninstall} onOpenChange={setConfirmUninstall}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Uninstall Plugin</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground mb-4">
+            Uninstall <span className="font-mono font-bold">{plugin.id}</span>? This removes it from disk.
+          </p>
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" onClick={() => setConfirmUninstall(false)}>
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={handleUninstall}>
+              Uninstall
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
+function BackLink({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
+    >
+      <ArrowLeft className="h-4 w-4" />
+      Back to Installed
+    </button>
+  );
+}
+
 function splitId(id: string): { name: string; marketplace: string } {
   const at = id.lastIndexOf("@");
   return at > 0 ? { name: id.slice(0, at), marketplace: id.slice(at + 1) } : { name: id, marketplace: "" };
@@ -251,7 +476,7 @@ function PluginRow({ plugin }: { plugin: InstalledPlugin }) {
   return (
     <button
       type="button"
-      onClick={() => router.push(`/plugins/${encodeURIComponent(plugin.id)}`)}
+      onClick={() => router.push(`/plugins?detail=${encodeURIComponent(plugin.id)}`)}
       className="flex w-full items-center gap-3 rounded px-2 py-2 hover:bg-muted transition-colors text-left"
     >
       <div className="flex-1 min-w-0">
@@ -270,6 +495,14 @@ function PluginRow({ plugin }: { plugin: InstalledPlugin }) {
       <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0" />
     </button>
   );
+}
+
+function formatDate(iso?: string): string {
+  if (!iso) return "Unknown";
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime())
+    ? "Unknown"
+    : d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
 }
 
 function MarketplacesTab({
