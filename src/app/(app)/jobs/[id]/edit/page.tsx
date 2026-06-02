@@ -178,6 +178,8 @@ export default function JobEditPage() {
   const [mcpToolFilters, setMcpToolFilters] = useState<Record<string, string[]>>({});
   const [mcpFilterInputs, setMcpFilterInputs] = useState<Record<string, string>>({});
   const [expandedMcpFilters, setExpandedMcpFilters] = useState<Set<string>>(new Set());
+  const [mcpDiscoveredTools, setMcpDiscoveredTools] = useState<Record<string, string[]>>({});
+  const [mcpToolsLoading, setMcpToolsLoading] = useState<Record<string, boolean>>({});
   const [availableMcp, setAvailableMcp] = useState<string[]>([]);
   const [skipIfMissed, setSkipIfMissed] = useState(false);
   const [retentionDays, setRetentionDays] = useState(90);
@@ -277,6 +279,34 @@ export default function JobEditPage() {
 
   function removeTool(tool: string) {
     setAllowedTools(allowedTools.filter((t) => t !== tool));
+  }
+
+  async function discoverMcpTools(server: string) {
+    if (mcpDiscoveredTools[server] || mcpToolsLoading[server]) return;
+    setMcpToolsLoading((prev) => ({ ...prev, [server]: true }));
+    const params = new URLSearchParams();
+    const mcpCwd = cwd;
+    if (mcpCwd) params.set("cwd", mcpCwd);
+    try {
+      const res = await fetch(`/api/mcp-servers/${encodeURIComponent(server)}/tools?${params}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.tools) {
+          setMcpDiscoveredTools((prev) => ({ ...prev, [server]: data.tools }));
+        }
+      }
+    } catch {
+      // Silently fail - text entry fallback still works
+    } finally {
+      setMcpToolsLoading((prev) => ({ ...prev, [server]: false }));
+    }
+  }
+
+  function addMcpToolFilter(server: string, tool: string) {
+    if (!tool) return;
+    const filters = mcpToolFilters[server] || [];
+    if (filters.includes(tool)) return;
+    setMcpToolFilters({ ...mcpToolFilters, [server]: [...filters, tool] });
   }
 
   const applyJob = useCallback((job: ScheduledJob, isDuplicate: boolean) => {
@@ -732,14 +762,18 @@ export default function JobEditPage() {
                     <div key={server} className="border rounded-md p-2 space-y-2">
                       <button
                         type="button"
-                        onClick={() =>
+                        onClick={() => {
                           setExpandedMcpFilters((prev) => {
                             const next = new Set(prev);
                             if (next.has(server)) next.delete(server);
-                            else next.add(server);
+                            else {
+                              next.add(server);
+                              // Deferred: discover tools after state update
+                              setTimeout(() => discoverMcpTools(server), 0);
+                            }
                             return next;
-                          })
-                        }
+                          });
+                        }}
                         className="w-full flex items-center justify-between text-xs text-muted-foreground hover:text-primary"
                       >
                         <span className="font-mono">{server}</span>
@@ -776,6 +810,35 @@ export default function JobEditPage() {
                               ))}
                             </div>
                           )}
+
+                          {mcpToolsLoading[server] ? (
+                            <p className="text-xs text-muted-foreground italic">Discovering tools...</p>
+                          ) : mcpDiscoveredTools[server]?.length > 0 ? (
+                            <div className="space-y-1">
+                              <p className="text-[11px] text-muted-foreground">Discovered tools — click to add:</p>
+                              <div className="flex flex-wrap gap-1">
+                                {mcpDiscoveredTools[server].map((tool) => {
+                                  const inFilter = filters.includes(tool);
+                                  return (
+                                    <button
+                                      key={tool}
+                                      type="button"
+                                      disabled={inFilter}
+                                      onClick={() => addMcpToolFilter(server, tool)}
+                                      className={`inline-flex items-center text-xs px-2 py-0.5 rounded font-mono transition-colors ${
+                                        inFilter
+                                          ? "text-muted-foreground/40 line-through cursor-not-allowed"
+                                          : "text-muted-foreground hover:text-foreground hover:bg-muted"
+                                      }`}
+                                    >
+                                      {tool}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          ) : null}
+
                           <div className="flex gap-2">
                             <Input
                               value={filterInput}
@@ -785,7 +848,7 @@ export default function JobEditPage() {
                                   e.preventDefault();
                                   const val = filterInput.trim();
                                   if (val && !filters.includes(val)) {
-                                    setMcpToolFilters({ ...mcpToolFilters, [server]: [...filters, val] });
+                                    addMcpToolFilter(server, val);
                                     setMcpFilterInputs({ ...mcpFilterInputs, [server]: "" });
                                   }
                                 }
@@ -799,7 +862,7 @@ export default function JobEditPage() {
                               onClick={() => {
                                 const val = filterInput.trim();
                                 if (val && !filters.includes(val)) {
-                                  setMcpToolFilters({ ...mcpToolFilters, [server]: [...filters, val] });
+                                  addMcpToolFilter(server, val);
                                   setMcpFilterInputs({ ...mcpFilterInputs, [server]: "" });
                                 }
                               }}
