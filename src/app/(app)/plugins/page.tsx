@@ -208,6 +208,7 @@ function BrowseTab({
   onInstall: (pluginId: string) => void;
 }) {
   const [query, setQuery] = useState("");
+  const [selected, setSelected] = useState<AvailablePlugin | null>(null);
   const q = query.trim().toLowerCase();
   const filtered = q
     ? available.filter((p) => p.name.toLowerCase().includes(q) || (p.description?.toLowerCase().includes(q) ?? false))
@@ -230,6 +231,7 @@ function BrowseTab({
                 installed={installedIds.has(p.pluginId)}
                 busy={busyId === p.pluginId}
                 onInstall={() => onInstall(p.pluginId)}
+                onClick={() => setSelected(p)}
               />
             ))}
           </CardContent>
@@ -240,6 +242,50 @@ function BrowseTab({
           Showing {shown.length} of {filtered.length}. Refine your search to narrow the list.
         </p>
       )}
+
+      <Dialog open={!!selected} onOpenChange={() => setSelected(null)}>
+        <DialogContent>
+          {selected && (
+            <>
+              <DialogHeader>
+                <DialogTitle className="font-mono font-bold">{selected.name}</DialogTitle>
+              </DialogHeader>
+              <div className="space-y-3 text-sm">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-muted-foreground">@{selected.marketplaceName}</span>
+                  {typeof selected.installCount === "number" && (
+                    <Badge variant="secondary" className="text-[10px]">
+                      {selected.installCount} installs
+                    </Badge>
+                  )}
+                </div>
+                {selected.description ? (
+                  <p className="text-sm whitespace-pre-wrap">{selected.description}</p>
+                ) : (
+                  <p className="text-sm text-muted-foreground italic">No description available.</p>
+                )}
+                <div className="flex justify-end pt-2">
+                  {installedIds.has(selected.pluginId) ? (
+                    <span className="text-xs text-muted-foreground">Already installed</span>
+                  ) : (
+                    <Button
+                      size="sm"
+                      variant="default"
+                      onClick={() => {
+                        onInstall(selected.pluginId);
+                        setSelected(null);
+                      }}
+                      disabled={busyId === selected.pluginId}
+                    >
+                      {busyId === selected.pluginId ? <Loader2 className="h-4 w-4 animate-spin" /> : "Install"}
+                    </Button>
+                  )}
+                </div>
+              </div>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -249,16 +295,18 @@ function AvailableRow({
   installed,
   busy,
   onInstall,
+  onClick,
 }: {
   plugin: AvailablePlugin;
   installed: boolean;
   busy: boolean;
   onInstall: () => void;
+  onClick: () => void;
 }) {
   const { name, marketplace } = splitId(plugin.pluginId);
   return (
     <div className="flex items-center gap-3 rounded px-2 py-2 hover:bg-muted transition-colors">
-      <div className="flex-1 min-w-0">
+      <button type="button" onClick={onClick} className="flex-1 min-w-0 text-left">
         <span className="block font-mono font-bold text-sm truncate">{name}</span>
         <div className="flex flex-wrap items-center gap-1.5 mt-0.5">
           {marketplace && <span className="text-xs text-muted-foreground">@{marketplace}</span>}
@@ -269,7 +317,7 @@ function AvailableRow({
           )}
         </div>
         {plugin.description && <p className="text-xs text-muted-foreground truncate mt-0.5">{plugin.description}</p>}
-      </div>
+      </button>
       <div className="shrink-0">
         {installed ? (
           <span className="px-2 text-xs text-muted-foreground">Installed</span>
