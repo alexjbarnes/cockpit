@@ -2422,10 +2422,15 @@ Additional Cockpit rules beyond the CLI's defaults:
       .catch((err: unknown) => {
         const msg = err instanceof Error ? err.message : String(err);
         this.log(sessionId, `pty runtime start failed: ${msg}`);
+        const dead = session.ptyRuntime;
         session.ptyRuntime = null;
+        // Emit error BEFORE idle: a job's onStatus("idle") maps to success, so an
+        // idle-first order would mark a failed spawn as a successful empty run.
+        session.emitter.emit("error", sessionId, msg);
         session.info.status = "idle";
         session.emitter.emit("status", sessionId, "idle");
-        session.emitter.emit("error", sessionId, msg);
+        // Reap the half-started PTY so a failed delivery can't leak an idle CLI.
+        dead?.kill().catch(() => {});
       });
   }
 

@@ -48,6 +48,8 @@ export class PtyRuntime {
   private readonly pendingPermissions = new Map<string, (decision: PermissionDecision) => void>();
   private exited = false;
   private cleaned = false;
+  /** Resolver armed by deliverInitialPrompt; fired when UserPromptSubmit confirms the first prompt landed. */
+  private promptAccepted: (() => void) | null = null;
   private ptyOutputBuffer = "";
   private errorDebounce: ReturnType<typeof setTimeout> | null = null;
 
@@ -101,10 +103,43 @@ export class PtyRuntime {
     }
 
     if (initialText) {
-      await this.pty.sendText(initialText);
+      await this.deliverInitialPrompt(initialText);
     }
 
     this.fetchInitData();
+  }
+
+  /**
+   * Type the first prompt into the freshly spawned TUI and confirm the CLI
+   * accepted it. waitForReplReady is only a heuristic (first 100 bytes plus a
+   * 2s settle), so on a slow or quiet machine the input box may not be live
+   * when the keystrokes land and they are swallowed with no error. Without a
+   * check the turn never starts and the only backstop is the caller's watchdog,
+   * which for scheduled jobs is a silent 30-60 minute timeout with an empty
+   * transcript. Resend until the UserPromptSubmit hook confirms acceptance,
+   * then fail fast so the job reports an error instead of hanging.
+   */
+  private async deliverInitialPrompt(text: string): Promise<void> {
+    const MAX_ATTEMPTS = 4;
+    const CONFIRM_TIMEOUT_MS = 8000;
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      const pty = this.pty;
+      if (this.exited || !pty) throw new Error("claude exited before the initial prompt was delivered");
+      let timer: ReturnType<typeof setTimeout> | null = null;
+      const accepted = new Promise<boolean>((resolve) => {
+        this.promptAccepted = () => resolve(true);
+        timer = setTimeout(() => resolve(false), CONFIRM_TIMEOUT_MS);
+      });
+      await pty.sendText(text);
+      const ok = await accepted;
+      if (timer) clearTimeout(timer);
+      this.promptAccepted = null;
+      if (ok) return;
+      console.log(
+        `[pty-runtime] initial prompt not accepted for ${this.opts.sessionId.slice(0, 8)} (attempt ${attempt}/${MAX_ATTEMPTS}), resending`,
+      );
+    }
+    throw new Error(`claude did not accept the initial prompt after ${MAX_ATTEMPTS} attempts`);
   }
 
   private fetchInitData(): void {
@@ -216,11 +251,13 @@ export class PtyRuntime {
       onUserPromptSubmit: (payload) => {
         this.cancelErrorDebounce();
         this.ptyOutputBuffer = "";
+        this.promptAccepted?.();
         this.emit(translateHookEvent("UserPromptSubmit", payload));
       },
       onUserPromptExpansion: (payload) => {
         this.cancelErrorDebounce();
         this.ptyOutputBuffer = "";
+        this.promptAccepted?.();
         const cmd = typeof payload.command_name === "string" ? payload.command_name : "unknown";
         const sid = this.opts.sessionId.slice(0, 8);
         console.log(`[pty-runtime] UserPromptExpansion: command=${cmd}, session=${sid}`);
