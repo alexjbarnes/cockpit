@@ -85,9 +85,9 @@ export function markRead(id: string, read = true): boolean {
   return true;
 }
 
-export function markAllRead(): void {
+export function markAllRead(read = true): void {
   const messages = readAll();
-  for (const m of messages) m.read = true;
+  for (const m of messages) m.read = read;
   writeAll(messages);
 }
 
