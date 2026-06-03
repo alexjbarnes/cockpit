@@ -146,7 +146,7 @@ export class PtyRuntime {
         timer = setTimeout(() => resolve(false), CONFIRM_TIMEOUT_MS);
       });
       const attemptAt = Date.now();
-      logDiag(sessionId, "pty:deliver-attempt", { attempt });
+      logDiag(sessionId, "pty:deliver-attempt", { attempt, screenBefore: this.recentScreen() });
       await pty.sendText(text);
       const ok = await accepted;
       if (timer) clearTimeout(timer);
@@ -155,7 +155,7 @@ export class PtyRuntime {
         logDiag(sessionId, "pty:deliver-accepted", { attempt, waitedMs: Date.now() - attemptAt });
         return;
       }
-      logDiag(sessionId, "pty:deliver-timeout", { attempt, waitedMs: Date.now() - attemptAt });
+      logDiag(sessionId, "pty:deliver-timeout", { attempt, waitedMs: Date.now() - attemptAt, screenAfter: this.recentScreen() });
       console.log(`[pty-runtime] initial prompt not accepted for ${sessionId.slice(0, 8)} (attempt ${attempt}/${MAX_ATTEMPTS}), resending`);
     }
     logDiag(sessionId, "pty:deliver-failed", { attempts: MAX_ATTEMPTS });
@@ -382,6 +382,23 @@ export class PtyRuntime {
       clearTimeout(this.errorDebounce);
       this.errorDebounce = null;
     }
+  }
+
+  /**
+   * ANSI/control-stripped, whitespace-collapsed tail of the recent PTY output.
+   * Debug aid for diagnosing why an initial prompt isn't accepted — shows what
+   * the TUI is actually displaying (input box, a startup interstitial, a stuck
+   * dialog) at the moment we type or time out.
+   */
+  private recentScreen(maxChars = 600): string {
+    const clean = this.ptyOutputBuffer
+      .replace(ANSI_RE, "")
+      // biome-ignore lint/suspicious/noControlCharactersInRegex: strip terminal control chars
+      .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, "")
+      .replace(/[ \t]+/g, " ")
+      .replace(/\n{2,}/g, "\n")
+      .trim();
+    return clean.length > maxChars ? clean.slice(-maxChars) : clean;
   }
 
   private scanForErrors(chunk: string): void {
