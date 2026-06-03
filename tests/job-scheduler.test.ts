@@ -127,6 +127,8 @@ describe("JobScheduler", () => {
       expect(run.durationMs).toBeGreaterThanOrEqual(0);
       expect(vi.mocked(saveRun)).toHaveBeenCalled();
       expect(vi.mocked(releaseJobLock)).toHaveBeenCalledWith("job-1");
+      // One-shot job session must be torn down so its PTY claude doesn't linger.
+      expect(sm.destroySession).toHaveBeenCalledWith("session-1");
     });
 
     it("sets model and thinking level when job specifies them", async () => {
@@ -150,6 +152,8 @@ describe("JobScheduler", () => {
       expect(run.status).toBe("failure");
       expect(run.error).toBe("CLI crashed");
       expect(vi.mocked(addInboxMessage)).toHaveBeenCalled();
+      // Failed runs must also tear the session down, or the half-spawned PTY leaks.
+      expect(sm.destroySession).toHaveBeenCalledWith("session-1");
     });
 
     it("marks run as timeout when max duration exceeded", async () => {

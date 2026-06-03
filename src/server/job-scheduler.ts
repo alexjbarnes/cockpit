@@ -517,6 +517,11 @@ export class JobScheduler {
           error: run.error,
         });
 
+        // A one-shot job's PTY claude sits idle at the prompt after answering;
+        // without this it never exits and leaks ~310MB per run until the next
+        // server restart. Idempotent — a timeout already destroyed it above.
+        this.sessionManager.destroySession(sessionId);
+
         this.runningJobs.delete(job.id);
         releaseJobLock(job.id);
         resolve(run);
