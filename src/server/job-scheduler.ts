@@ -4,6 +4,7 @@ import { v4 as uuidv4 } from "uuid";
 import { getCockpitDir } from "@/server/paths";
 import type { JobRun, JobRunToolUse, ScheduledJob } from "@/types";
 import { findMissedRun, getJobSchedules, matchesCron, scheduleToCron } from "./cron-utils";
+import { logDiag } from "./debug-logger";
 import { addInboxMessage, parseErrorBlock, parseInboxBlock } from "./inbox";
 import { acquireJobLock, clearStaleLocks, forceReleaseJobLock, releaseJobLock } from "./job-lock";
 import { getLatestRun, loadJobs, loadRuns, pruneAllRuns, saveRun } from "./job-storage";
@@ -265,11 +266,26 @@ export class JobScheduler {
 
   async executeJob(job: ScheduledJob): Promise<JobRun> {
     const runId = uuidv4();
+    logDiag(job.id, "job:execute-start", {
+      runId,
+      name: job.name,
+      runtime: job.runtime ?? "stream",
+      model: job.model,
+      thinkingLevel: job.thinkingLevel,
+      contextSize: job.contextSize,
+      mcpServers: job.mcpServers ?? [],
+      allowedTools: job.allowedTools ?? [],
+      bypassPermissions: !!job.bypassPermissions,
+      inboxOutput: !!job.inboxOutput,
+      maxDurationMinutes: job.maxDurationMinutes ?? 30,
+    });
 
     if (!acquireJobLock(job.id, runId)) {
+      logDiag(job.id, "job:lock-failed", { runId });
       console.log(`[scheduler] skipping job ${job.name}: another process holds the lock`);
       throw new Error("Could not acquire job lock - another process is running this job");
     }
+    logDiag(job.id, "job:lock-acquired", { runId });
 
     const jobCwd = job.cwd || path.join(scratchpadDir(), job.id);
     mkdirSync(path.join(scratchpadDir(), job.id), { recursive: true });
@@ -278,6 +294,8 @@ export class JobScheduler {
       runtime: job.runtime,
     });
     const sessionId = sessionInfo.id;
+    const jlog = (label: string, data?: Record<string, unknown>) => logDiag(sessionId, `job:${label}`, { jobId: job.id, runId, ...data });
+    jlog("session-created", { cwd: jobCwd, runtime: sessionInfo.runtime });
 
     const run: JobRun = {
       id: runId,
@@ -306,6 +324,7 @@ export class JobScheduler {
           output: "",
           timestamp: Date.now(),
         });
+        jlog("tool-start", { toolId: event.toolId, toolName: event.toolName ?? "unknown" });
       } else if (event.type === "tool_result" && event.toolId) {
         const entry = toolTracker.get(event.toolId);
         if (entry) {
@@ -313,9 +332,11 @@ export class JobScheduler {
           entry.durationMs = Date.now() - entry.timestamp;
           run.toolsUsed.push(entry);
           toolTracker.delete(event.toolId);
+          jlog("tool-result", { toolId: event.toolId, name: entry.name, durationMs: entry.durationMs, outputLen: entry.output.length });
         }
       } else if (event.type === "message_done") {
         run.messageCount++;
+        let textLen = 0;
         if (event.message) {
           let text = event.message.content;
           if (!text && event.message.blocks) {
@@ -324,17 +345,28 @@ export class JobScheduler {
               .map((b) => b.text)
               .join("\n");
           }
-          if (text) lastAssistantText = text;
+          if (text) {
+            lastAssistantText = text;
+            textLen = text.length;
+          }
         }
+        jlog("message-done", { count: run.messageCount, textLen });
       } else if (event.type === "permission_request" && event.requestId) {
         if (job.bypassPermissions) {
+          jlog("permission", { toolName: event.toolName ?? "unknown", requestId: event.requestId, bypass: true, allowed: true });
           this.sessionManager.respondToPermission(sessionId, event.requestId, true, event.rawToolInput);
         } else {
           const toolName = event.toolName || "unknown";
           const inputStr = event.toolInput || "";
           const mcpResult = isMcpToolAllowed(toolName, inputStr, enabledServers, job.mcpToolFilters);
           const allowed = mcpResult !== null ? mcpResult : isToolAllowed(toolName, inputStr, job.allowedTools || []);
-          console.log(`[scheduler] permission: ${toolName} mcpResult=${mcpResult} allowed=${allowed} servers=[${[...enabledServers]}]`);
+          jlog("permission", {
+            toolName,
+            requestId: event.requestId,
+            mcpResult,
+            allowed,
+            enabledServers: [...enabledServers],
+          });
           this.sessionManager.respondToPermission(sessionId, event.requestId, allowed, allowed ? (event.rawToolInput ?? {}) : undefined);
 
           const permEntry: JobRunToolUse = {
@@ -350,41 +382,84 @@ export class JobScheduler {
     });
 
     const initCleanup = this.sessionManager.onInit(sessionId, (initData) => {
+      const disabling: string[] = [];
       for (const server of initData.mcpServers) {
         if (!enabledServers.has(server.name)) {
+          disabling.push(server.name);
           this.sessionManager.mcpToggle(sessionId, server.name, false).catch(() => {});
         }
       }
+      jlog("init", { available: initData.mcpServers.map((s) => s.name), disabling, enabled: [...enabledServers] });
     });
 
     if (job.model) {
       this.sessionManager.setModel(sessionId, job.model, job.contextSize);
+      jlog("set-model", { model: job.model, contextSize: job.contextSize });
     }
     if (job.thinkingLevel) {
       this.sessionManager.setThinkingLevel(sessionId, job.thinkingLevel);
+      jlog("set-thinking", { thinkingLevel: job.thinkingLevel });
     }
 
     return new Promise<JobRun>((resolve) => {
       const maxMs = (job.maxDurationMinutes || 30) * 60 * 1000;
+      const sentAt = Date.now();
+      let sawRunning = false;
+      let statusEvents = 0;
+
       const timeout = setTimeout(() => {
+        jlog("watchdog-fired", {
+          maxMs,
+          elapsedMs: Date.now() - sentAt,
+          sawRunning,
+          messageCount: run.messageCount,
+          toolCount: run.toolsUsed.length,
+        });
         cleanup("timeout");
       }, maxMs);
 
       const unsubStatus = this.sessionManager.onStatus(sessionId, (status) => {
+        statusEvents++;
+        if (status === "running") sawRunning = true;
+        // An "idle" that arrives while the process is still alive is the orphan
+        // signature: the run gets marked done but the PTY keeps going untracked.
+        const processAlive = this.sessionManager.hasRunningProcess(sessionId);
+        jlog("status-event", {
+          status,
+          n: statusEvents,
+          elapsedMs: Date.now() - sentAt,
+          sawRunning,
+          processAlive,
+          messageCount: run.messageCount,
+          toolCount: run.toolsUsed.length,
+        });
         if (status === "idle") {
           cleanup("success");
         }
       });
 
       const unsubError = this.sessionManager.onError(sessionId, (error) => {
+        jlog("error-event", { error, elapsedMs: Date.now() - sentAt });
         run.error = error;
         cleanup("failure");
       });
 
       let cleaned = false;
       const cleanup = (finalStatus: "success" | "failure" | "timeout") => {
-        if (cleaned) return;
+        if (cleaned) {
+          jlog("cleanup-skipped", { requestedStatus: finalStatus, elapsedMs: Date.now() - sentAt });
+          return;
+        }
         cleaned = true;
+        jlog("cleanup-begin", {
+          finalStatus,
+          elapsedMs: Date.now() - sentAt,
+          sawRunning,
+          statusEvents,
+          messageCount: run.messageCount,
+          toolCount: run.toolsUsed.length,
+          lastTextLen: lastAssistantText.length,
+        });
         clearTimeout(timeout);
         unsubEvent?.();
         unsubStatus?.();
@@ -403,18 +478,21 @@ export class JobScheduler {
           if (errorBlock) {
             finalStatus = "failure";
             run.error = errorBlock.details ? `${errorBlock.error}: ${errorBlock.details}` : errorBlock.error;
+            jlog("error-block-detected", { error: run.error });
           }
         }
 
         run.status = finalStatus;
 
         const transcriptCount = countTranscriptMessages(sessionId, jobCwd);
+        jlog("transcript-count", { transcriptCount, runMessageCount: run.messageCount });
         if (transcriptCount > run.messageCount) run.messageCount = transcriptCount;
 
         saveRun(run);
 
         if (job.inboxOutput && lastAssistantText && finalStatus === "success") {
           const inbox = parseInboxBlock(lastAssistantText);
+          jlog("inbox-parse", { found: !!inbox });
           if (inbox) {
             addInboxMessage({ ...inbox, jobId: job.id, jobName: job.name, runId: run.id, notifyProviders: job.notifyProviders });
           }
@@ -431,12 +509,22 @@ export class JobScheduler {
           });
         }
 
+        jlog("cleanup-done", {
+          finalStatus,
+          durationMs: run.durationMs,
+          messageCount: run.messageCount,
+          toolCount: run.toolsUsed.length,
+          error: run.error,
+        });
+
         this.runningJobs.delete(job.id);
         releaseJobLock(job.id);
         resolve(run);
       };
 
-      this.sessionManager.sendMessage(sessionId, buildJobPrompt(job));
+      const promptText = buildJobPrompt(job);
+      jlog("send-message", { promptLen: promptText.length, maxMs });
+      this.sessionManager.sendMessage(sessionId, promptText);
     });
   }
 }

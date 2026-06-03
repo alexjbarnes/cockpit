@@ -125,6 +125,10 @@ interface Session {
    *  creation time; future revisions may expose this on SessionInfo. */
   runtime: SessionRuntime;
   ptyRuntime: PtyRuntime | null;
+  /** True while a PTY spawn is in flight (status is "running" but the PTY is
+   *  not yet alive). Observability only -- lets the stale-check log distinguish
+   *  "process died" from "process still spawning". Does not gate any behavior. */
+  spawning?: boolean;
   transcriptWatcher: TranscriptWatcher | null;
   todoWatcher: TodoWatcher | null;
   attachmentPaths: string[];
@@ -141,7 +145,12 @@ export class SessionManager {
         if (session.info.status === "running" && !session.process && !session.ptyRuntime?.isAlive) {
           const short = id.slice(0, 8);
           debugLog(`[session:${short}] stale check: status=running but no live process, correcting to idle`);
-          logDiag(id, "idle:stale-check");
+          logDiag(id, "idle:stale-check", {
+            runtime: session.runtime,
+            spawning: session.spawning ?? false,
+            hasPtyRuntime: !!session.ptyRuntime,
+            hasSpawnedBefore: session.hasSpawnedBefore,
+          });
           session.info.status = "idle";
           session.emitter.emit("status", id, "idle");
         }
@@ -2290,6 +2299,14 @@ Additional Cockpit rules beyond the CLI's defaults:
     }
 
     this.log(sessionId, `spawning PTY claude (resume=${session.hasSpawnedBefore}, model=${session.info.model || "sonnet"})`);
+    const spawnBeginAt = Date.now();
+    session.spawning = true;
+    logDiag(sessionId, "pty:spawn-begin", {
+      hasSpawnedBefore: session.hasSpawnedBefore,
+      model: session.info.model,
+      hasText: !!text,
+      status: session.info.status,
+    });
     mkdirSync(session.info.cwd, { recursive: true });
 
     const streamState = createStreamState();
@@ -2347,8 +2364,14 @@ Additional Cockpit rules beyond the CLI's defaults:
         this.log(sessionId, `PTY claude exited (code=${exitCode}, signal=${signal ?? "none"})`);
         if (session.ptyRuntime !== runtime) return;
         session.ptyRuntime = null;
+        session.spawning = false;
         session.streamingSnapshot = null;
-        logDiag(sessionId, "idle:pty-exit", { exitCode, flushedOnMessageDone: streamState.flushedOnMessageDone });
+        logDiag(sessionId, "idle:pty-exit", {
+          exitCode,
+          signal: signal ?? null,
+          flushedOnMessageDone: streamState.flushedOnMessageDone,
+          sinceSpawnMs: Date.now() - spawnBeginAt,
+        });
         if (session.transcriptWatcher) {
           session.transcriptWatcher.stop();
           session.transcriptWatcher = null;
@@ -2381,6 +2404,7 @@ Additional Cockpit rules beyond the CLI's defaults:
 
     session.ptyRuntime = runtime;
     session.hasSpawnedBefore = true;
+    logDiag(sessionId, "pty:runtime-assigned", { elapsedMs: Date.now() - spawnBeginAt });
 
     this.cleanupAttachments(session);
     const attachments = this.writeAttachments(images, documents);
@@ -2416,12 +2440,21 @@ Additional Cockpit rules beyond the CLI's defaults:
     runtime
       .start(ptyText)
       .then(() => {
+        session.spawning = false;
         this.log(sessionId, `PTY claude ready (pid=${runtime.pid})`);
+        logDiag(sessionId, "pty:start-resolved", {
+          pid: runtime.pid,
+          elapsedMs: Date.now() - spawnBeginAt,
+          isAlive: runtime.isAlive,
+          status: session.info.status,
+        });
         watcher.start();
       })
       .catch((err: unknown) => {
+        session.spawning = false;
         const msg = err instanceof Error ? err.message : String(err);
         this.log(sessionId, `pty runtime start failed: ${msg}`);
+        logDiag(sessionId, "pty:start-rejected", { error: msg, elapsedMs: Date.now() - spawnBeginAt });
         const dead = session.ptyRuntime;
         session.ptyRuntime = null;
         // Emit error BEFORE idle: a job's onStatus("idle") maps to success, so an
