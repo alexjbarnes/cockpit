@@ -4,7 +4,7 @@ import { Check, Copy, Save } from "lucide-react";
 import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { usePageHeader } from "@/components/app-shell";
-import { CodeEditor } from "@/components/code-editor";
+import { MarkdownEditor } from "@/components/markdown-editor";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 
@@ -112,15 +112,14 @@ export default function ClaudeMdEditPage() {
       </div>
 
       <div className="flex-1 min-h-0">
-        <CodeEditor
+        <MarkdownEditor
           value={content}
           onChange={(v) => {
             setContent(v);
             setFeedback(null);
           }}
-          language="markdown"
           onSave={save}
-          className="h-full [&_.cm-editor]:min-h-[400px]"
+          className="h-full"
         />
       </div>
     </div>

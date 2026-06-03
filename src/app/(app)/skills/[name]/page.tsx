@@ -4,7 +4,7 @@ import { Check, Copy, Save } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { use, useCallback, useEffect, useState } from "react";
 import { usePageHeader } from "@/components/app-shell";
-import { CodeEditor } from "@/components/code-editor";
+import { MarkdownEditor } from "@/components/markdown-editor";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -142,7 +142,7 @@ export default function SkillEditorPage({ params }: { params: Promise<{ name: st
 
       {feedback && <p className={`text-sm ${feedback === "Saved" ? "text-green-600" : "text-destructive"}`}>{feedback}</p>}
 
-      <CodeEditor value={content} onChange={setContent} language="markdown" onSave={save} className="flex-1" />
+      <MarkdownEditor value={content} onChange={setContent} onSave={save} className="flex-1 min-h-0" />
     </div>
   );
 }
