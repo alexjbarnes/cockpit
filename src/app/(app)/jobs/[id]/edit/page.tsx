@@ -455,6 +455,13 @@ export default function JobEditPage() {
 
         <Card>
           <CardContent className="pt-6 space-y-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <label className="text-sm font-medium">Enabled</label>
+                {!enabled && <p className="text-xs text-muted-foreground mt-0.5">Paused — this job will not run on its schedule.</p>}
+              </div>
+              <Toggle checked={enabled} onChange={setEnabled} />
+            </div>
             <div className="space-y-1.5">
               <label className="text-sm font-medium">Name</label>
               <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Weekly dependency update" />
@@ -914,11 +921,6 @@ export default function JobEditPage() {
             <div className="space-y-1.5">
               <label className="text-sm font-medium">Audit log retention (days)</label>
               <Input type="number" min={1} value={retentionDays} onChange={(e) => setRetentionDays(Number(e.target.value))} />
-            </div>
-
-            <div className="flex items-center justify-between">
-              <label className="text-sm font-medium">Enabled</label>
-              <Toggle checked={enabled} onChange={setEnabled} />
             </div>
           </CardContent>
         </Card>
