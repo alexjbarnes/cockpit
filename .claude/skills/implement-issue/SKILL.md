@@ -158,7 +158,7 @@ The human verifies the feature by clicking a link, not by checking out the branc
 5. Poll readiness with `curl --retry` (foreground `sleep` is blocked). Then set the password via the `/login` setup screen (see `.claude/skills/browser-test/SKILL.md` for the React-input setter), using the password from step 2.
 6. Record the server details so `accept-issue` can find and kill it: write `<worktree>/.review-server.json` with `{ "port": <port>, "configDir": "/tmp/cockpit-review-<ISSUE-ID>", "password": "<pw>" }`.
 7. Post a comment on the issue with the URL and credentials:
-   - Host: `process.env.COCKPIT_REVIEW_HOST || "192.168.0.39"`. URL is `http://<host>:<port>`.
+   - URL is `http://192.168.0.39:<port>`. The host is hardcoded here on purpose (this review-server flow is personal, not a general cockpit feature). When the host moves to `conduit.lan`, edit this line.
    - Include the password and which screens to check (from the plan's User-Facing Behaviour).
 
 ### 13. Link the PR and transition to Human Review
