@@ -66,9 +66,12 @@ Write the tests named in the plan's Testing section, at the file paths and with 
 
 ### 7. Verify
 Run the project's checks. All must pass:
+- `npx tsc --noEmit -p tsconfig.json` (typechecks the app **and `tests/`**)
 - `npm run build` (Next build + `tsc -p tsconfig.server.json` + `tsc-alias`)
 - `npm run lint` (biome; `npm run lint:fix` for mechanical issues)
 - `npx vitest run` (unit tests; there is no `test` script alias)
+
+Run the `tsc --noEmit` typecheck explicitly. Neither `npm run build` nor the server tsc covers `tests/`, and `vitest` strips types rather than checking them, so a type error in a test file passes all of build/lint/vitest and then the pre-commit hook (which does typecheck `tests/`) blocks the commit. Catch it here, not at commit time.
 
 Fix failures until green. Skip the Playwright integration suite unless the plan calls for it; note in the PR if integration coverage is warranted but not run.
 

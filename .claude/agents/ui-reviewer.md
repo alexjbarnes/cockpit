@@ -40,7 +40,8 @@ Read `.claude/skills/browser-test/SKILL.md` and follow its setup exactly, with o
 Load the Playwright tools via ToolSearch. For each affected screen:
 - Navigate, trigger any interaction needed to reach the changed UI.
 - Screenshot at a desktop viewport and a mobile viewport (`browser_resize`, e.g. `1280x800` and `393x600`). Mobile catches the layout breaks that matter most.
-- Keep screenshots viewport-sized, not full-page. The Linear attachment path takes small files only (see step 5).
+- Take screenshots as **JPEG** (`browser_take_screenshot` with `type: "jpeg"`), not PNG. A JPEG of a UI screen is a fraction of the PNG size, and the Linear attachment path takes inline base64 with a size limit (see step 5). PNG desktop captures routinely blow past it; JPEG usually fits.
+- Keep screenshots viewport-sized, not full-page.
 
 ### 4. Review what you see
 Assess against the plan's intended behaviour. Do not just eyeball the image, verify with geometry:
@@ -67,9 +68,20 @@ Do not flag the absence of decorative flourish (gradients, textures, atmosphere)
 Classify findings: CRITICAL (broken or unusable), HIGH (clearly wrong vs the plan, broken on mobile, or hardcoded colour that breaks theming), MEDIUM (off-system styling or density mismatch that renders fine but diverges), LOW (nit).
 
 ### 5. Attach the screenshots to the issue
-For each screenshot, base64-encode the file (`base64 -w0 <path>` via Bash) and attach it to the issue with `create_attachment` (server `Linear`): pass `issue`, `base64Content`, `filename`, `contentType` (`image/png`), and a `title` naming the screen and viewport (e.g. "Job edit form — mobile 393x600").
+Attach **every** captured screen. Do not drop oversized ones, shrink them until they fit.
 
-`create_attachment` is for small files. Keep each screenshot viewport-sized. If an attachment is rejected as too large, attach the mobile shot (smaller) and note in the comment that the desktop capture exceeded the limit.
+`create_attachment` (server `Linear`) takes inline base64 and rejects images past a parameter-size limit. base64 inflates the file by ~1.33x, so keep each file under ~100KB. For each screenshot:
+
+1. Check the file size (`stat -c%s <path>`). If it is over ~100KB, shrink it before attaching, do not skip it:
+   - Downscale and recompress with sharp (installed in the repo), targeting ~1000px wide and quality ~65:
+     ```
+     node -e "require('sharp')('in.jpg').resize({width:1000,withoutEnlargement:true}).jpeg({quality:65}).toFile('out.jpg')"
+     ```
+   - If it is still too large, drop quality to ~45 or width to ~800 and repeat. A UI screen reaches well under 100KB at these settings.
+2. base64-encode the final file (`base64 -w0 <path>`).
+3. Attach with `create_attachment`: pass `issue`, `base64Content`, `filename`, `contentType` (`image/jpeg`), and a `title` naming the screen and viewport (e.g. "Assistant modal — mobile 393x600").
+
+Only after shrinking has genuinely failed for a specific image should you note it in the comment; that should be rare. The default outcome is that every captured screen is attached.
 
 ### 6. Post a findings comment
 Post a comment on the issue via `save_comment` headed "UI review". Include: the screens captured, the verdict, and each finding with its severity and what is wrong. Reference the attached screenshots by their titles.
@@ -100,5 +112,5 @@ If no findings, write `(none)` under findings. Verdict is FAIL if any Critical o
 - Run against the worktree given in the input, never the live instance (port 3001) or the main repo checkout.
 - Always clear the service worker before trusting a screenshot.
 - Verify with geometry, not just the image.
-- Keep screenshots viewport-sized so the attachments stay small.
-- Always attach the screenshots and post the findings comment, even on PASS. The visual evidence is the point.
+- Capture JPEG, viewport-sized. Shrink any image over ~100KB with sharp until it fits, never drop a screen for being too large.
+- Attach every captured screen and post the findings comment, even on PASS. The visual evidence is the point.

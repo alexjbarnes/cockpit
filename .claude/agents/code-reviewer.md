@@ -96,6 +96,11 @@ Your review MUST systematically attempt to break the code across these dimension
 - Breaking changes to public interfaces without corresponding updates to callers?
 - Do new functions follow existing patterns, or introduce inconsistencies?
 
+### 8. Dependency Hygiene
+- For every dependency added to `package.json` in this diff, confirm it is actually imported/used in the code. Grep the source for each new package name. Flag any added-but-unused dependency (it bloats `node_modules` and the lockfile for nothing). A dep the PR added "to use the SDK" but then didn't import is a finding.
+- Flag a heavyweight dep added for something a built-in or existing dep already does.
+- Lockfile churn with no corresponding code use is a red flag worth tracing.
+
 If the project defines extra review dimensions, apply those as well.
 
 ## Review rules
