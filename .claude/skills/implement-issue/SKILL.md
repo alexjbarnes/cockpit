@@ -11,7 +11,13 @@ The plan is the contract. Follow it. It names the files, symbols, and exact chan
 Implementation and code review are one stage. The skill codes the plan, then dispatches the `code-reviewer` agent against its own diff and fixes what it finds, looping in warm context. There is no separate code-review stage in the autonomous pipeline. The issue moves Implementation -> Human Review (the code-level gate) directly.
 
 ## Input
-The issue ID (e.g. ALE-123) from the invocation. If none was given, ask which issue, or use `list_issues` with `state: "Implementation Ready"` to show candidates and confirm one.
+Either an explicit issue ID, or none (the skill selects one).
+
+- **An issue ID was given** (e.g. ALE-123): use it.
+- **No ID, pipeline mode** (a scheduled job ran the skill): select one. `list_issues` (server `Linear`) with `state: "Implementation Ready"`. If there are none, stop, there is no work this run, do nothing else. Otherwise pick exactly ONE, highest priority then oldest by `updatedAt`, and implement only that. Ignore the rest; a later run picks them up. Selecting one and immediately moving it to `Implementation` (step 3) is what stops two runs grabbing the same issue.
+- **No ID, interactive mode** (a human ran the skill): `list_issues` with `state: "Implementation Ready"` and ask which one to implement. Do not auto-pick.
+
+This is why a scheduled implementation job needs no selection logic in its prompt. "Run the implement-issue skill" is the whole job; the skill picks the issue.
 
 ## Linear access
 Linear is a downstream server behind conduit. Call tools with `mcp__conduit__call_tool`, server `Linear`. If this is the first Linear call in the session, run `describe_server` for `Linear` first. Pass markdown with literal newlines, never escaped.
