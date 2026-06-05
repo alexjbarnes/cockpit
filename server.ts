@@ -5,6 +5,7 @@ import next from "next";
 import { deletePasswordFile, needsSetup } from "./src/server/auth";
 import { HookRouter } from "./src/server/hook-router";
 import { JobScheduler } from "./src/server/job-scheduler";
+import { ensureCockpitConfigServer } from "./src/server/mcp/register";
 import { SessionManager } from "./src/server/session-manager";
 import { setHookRouter, setJobScheduler, setSessionManager, setTerminalManager } from "./src/server/singleton";
 import { TerminalManager } from "./src/server/terminal-manager";
@@ -67,6 +68,7 @@ async function main() {
 
   const sessionManager = new SessionManager();
   setSessionManager(sessionManager);
+  ensureCockpitConfigServer();
 
   const terminalManager = new TerminalManager();
   setTerminalManager(terminalManager);

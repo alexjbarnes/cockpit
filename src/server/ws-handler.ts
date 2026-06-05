@@ -396,6 +396,9 @@ export function createWebSocketHandler(
                   permMsg.planFilePath = req.planFilePath;
                   permMsg.planContent = req.planContent;
                 }
+                if (req.configProposal) {
+                  permMsg.configProposal = req.configProposal;
+                }
                 send(ws, permMsg);
               }
             }
@@ -1025,6 +1028,15 @@ function handleParsedEvent(ws: WebSocket, sessionId: string, event: ParsedEvent,
             permMsg.planFilePath = planPath;
             permMsg.planContent = readPlanFile(planPath);
           }
+        }
+        // For cockpit-agent sessions, include configProposal from the pending request if present
+        // biome-ignore lint/complexity/useLiteralKeys: private property access
+        const session = sessionManager["sessions"]?.get(sessionId) as
+          | { pendingRequests?: Map<string, { configProposal?: { toolName: string; domain: string; action: string } }> }
+          | undefined;
+        const pending = session?.pendingRequests?.get(requestId);
+        if (pending?.configProposal) {
+          permMsg.configProposal = pending.configProposal;
         }
         send(ws, permMsg);
       }

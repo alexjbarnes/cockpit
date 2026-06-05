@@ -15,6 +15,7 @@ import {
   GripVertical,
   Inbox,
   LayoutGrid,
+  MessageCircle,
   Plus,
   Settings,
   X,
@@ -33,6 +34,7 @@ import { useWebSocket } from "@/hooks/use-websocket";
 import { useCheckedFiles } from "@/lib/checked-files";
 import { cn } from "@/lib/utils";
 import type { SessionInfo } from "@/types";
+import { AssistantModal } from "./assistant-modal";
 import { NewSessionDialog } from "./new-session-dialog";
 
 const SIDEBAR_WIDTH_KEY = "cockpit_sidebar_width";
@@ -312,6 +314,7 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
   const [unread, setUnread] = useState<Set<string>>(new Set());
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [assistantOpen, setAssistantOpen] = useState(false);
   const [width, setWidth] = useState(DEFAULT_WIDTH);
 
   useEffect(() => {
@@ -624,6 +627,7 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
         </div>
 
         <div className="border-t px-3 py-2 flex items-center justify-end gap-2">
+          <AssistantButton onClick={() => setAssistantOpen(true)} />
           <JobsButton
             onClick={() => {
               close();
@@ -653,6 +657,7 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
       </div>
 
       <NewSessionDialog open={dialogOpen} onOpenChange={setDialogOpen} onSubmit={createSession} />
+      <AssistantModal open={assistantOpen} onOpenChange={setAssistantOpen} />
     </>
   );
 });
@@ -1069,6 +1074,20 @@ function InboxButton({ onClick }: { onClick: () => void }) {
     >
       <Inbox className="h-4 w-4" />
       {unread > 0 && <span className="absolute top-1 right-1 h-2 w-2 rounded-full bg-blue-500" />}
+    </Button>
+  );
+}
+
+function AssistantButton({ onClick }: { onClick: () => void }) {
+  return (
+    <Button
+      variant="ghost"
+      size="icon"
+      className="shrink-0 h-8 w-8 text-muted-foreground hover:text-foreground"
+      onClick={onClick}
+      title="Cockpit Assistant"
+    >
+      <MessageCircle className="h-4 w-4" />
     </Button>
   );
 }

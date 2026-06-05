@@ -72,6 +72,7 @@ export interface PendingRequest {
   permissionSuggestions?: Record<string, unknown>[];
   planFilePath?: string;
   planContent?: string;
+  configProposal?: { toolName: string; domain: string; action: string };
 }
 
 export interface StreamingSnapshot {
@@ -125,6 +126,8 @@ interface Session {
    *  creation time; future revisions may expose this on SessionInfo. */
   runtime: SessionRuntime;
   ptyRuntime: PtyRuntime | null;
+  cockpitAgent: boolean;
+  cockpitAgentCleanups: (() => void)[];
   /** True while a PTY spawn is in flight (status is "running" but the PTY is
    *  not yet alive). Observability only -- lets the stale-check log distinguish
    *  "process died" from "process still spawning". Does not gate any behavior. */
@@ -158,15 +161,21 @@ export class SessionManager {
     }, 15000);
   }
 
-  createSession(cwd: string, name?: string, options?: { bypassPermissions?: boolean; runtime?: SessionRuntime }): SessionInfo {
+  createSession(
+    cwd: string,
+    name?: string,
+    options?: { bypassPermissions?: boolean; runtime?: SessionRuntime; cockpitAgent?: boolean },
+  ): SessionInfo {
     const id = uuidv4();
     const now = Date.now();
     const defaults = getDefaults();
     const modelSlots: ModelSlots = { main: defaults.modelSlots.main ?? "sonnet" };
+    const isCockpitAgent = options?.cockpitAgent === true;
     const rt = options?.runtime ?? defaultRuntime();
+    const sessionName = isCockpitAgent ? "Cockpit Assistant" : name || path.basename(cwd) || cwd;
     const info: SessionInfo = {
       id,
-      name: name || path.basename(cwd) || cwd,
+      name: sessionName,
       cwd,
       createdAt: now,
       lastActiveAt: now,
@@ -185,7 +194,7 @@ export class SessionManager {
       hasSpawnedBefore: false,
       cliSessionId: id,
       previousCliSessionIds: [],
-      bypassAllPermissions: options?.bypassPermissions ?? defaults.bypassAllPermissions,
+      bypassAllPermissions: isCockpitAgent ? false : (options?.bypassPermissions ?? defaults.bypassAllPermissions),
       planMode: false,
       needsRespawnForPermissions: false,
       compacting: false,
@@ -211,9 +220,33 @@ export class SessionManager {
       todoWatcher: null,
       attachmentPaths: [],
       totalTokens: { input: 0, output: 0, cacheCreate: 0, cacheRead: 0 },
+      cockpitAgent: isCockpitAgent,
+      cockpitAgentCleanups: [],
     });
 
     setSessionPrefs(id, { runtime: rt });
+
+    if (isCockpitAgent) {
+      const cleanup = this.onInit(id, async (data: InitData) => {
+        for (const server of data.mcpServers) {
+          if (server.name !== "cockpit-config" && server.status !== "disabled") {
+            try {
+              await this.mcpToggle(id, server.name, false);
+            } catch {
+              // best effort — server may not be started yet
+            }
+          }
+        }
+      });
+      if (cleanup) {
+        const session = this.sessions.get(id);
+        if (session) {
+          session.cockpitAgentCleanups.push(cleanup);
+        }
+      } else {
+        console.warn(`[cockpit-agent] onInit returned null for session ${id.slice(0, 8)}`);
+      }
+    }
 
     return info;
   }
@@ -284,6 +317,8 @@ export class SessionManager {
         todoWatcher: null,
         attachmentPaths: [],
         totalTokens: { input: 0, output: 0, cacheCreate: 0, cacheRead: 0 },
+        cockpitAgent: false,
+        cockpitAgentCleanups: [],
       };
       this.sessions.set(id, session);
     }
@@ -709,6 +744,13 @@ export class SessionManager {
       session.todoWatcher = null;
     }
     this.cleanupAttachments(session);
+    for (const cleanup of session.cockpitAgentCleanups) {
+      try {
+        cleanup();
+      } catch {
+        /* best effort */
+      }
+    }
     session.emitter.removeAllListeners();
     this.sessions.delete(id);
     return true;
@@ -1554,6 +1596,45 @@ export class SessionManager {
         this.respondToPermission(sessionId, pa.requestId, true, pa.rawToolInput);
       } else if (pa.type === "auto_deny") {
         this.respondToPermission(sessionId, pa.requestId, false, undefined, undefined, pa.denyReason);
+      } else if (session.cockpitAgent && pa.toolName !== "AskUserQuestion") {
+        const tool = pa.toolName;
+        const isReadOnlyBuiltin = ["Read", "Grep", "Glob"].includes(tool);
+        const cockpitPrefix = "mcp__cockpit_config__";
+        const isCockpitTool = tool.startsWith(cockpitPrefix);
+        const cockpitAction = isCockpitTool ? tool.slice(cockpitPrefix.length).split("_")[0] : "";
+        const isCockpitRead = isCockpitTool && (cockpitAction === "list" || cockpitAction === "get");
+        const isCockpitWrite = isCockpitTool && !isCockpitRead;
+        logDiag(sessionId, "cockpit-agent:permission", {
+          toolName: tool,
+          decision: isReadOnlyBuiltin || isCockpitRead ? "auto_approve" : isCockpitWrite ? "proposal" : "auto_deny",
+        });
+
+        if (isReadOnlyBuiltin || isCockpitRead) {
+          this.respondToPermission(sessionId, pa.requestId, true, pa.rawToolInput);
+        } else if (isCockpitWrite) {
+          const suffix = tool.replace("mcp__cockpit_config__", "");
+          const parts = suffix.split("_");
+          const action = parts[0];
+          const domain = parts.slice(1).join("_");
+          session.pendingRequests.set(pa.requestId, {
+            type: "permission",
+            requestId: pa.requestId,
+            toolName: pa.toolName,
+            toolInput: pa.toolInput || "",
+            rawToolInput: pa.rawToolInput,
+            configProposal: { toolName: tool, domain, action },
+          });
+          this.notifyPendingChanged(session, sessionId);
+        } else {
+          this.respondToPermission(
+            sessionId,
+            pa.requestId,
+            false,
+            undefined,
+            undefined,
+            "This tool is not available in the cockpit assistant",
+          );
+        }
       } else if (session.bypassAllPermissions && !session.planMode && pa.toolName !== "AskUserQuestion") {
         this.respondToPermission(sessionId, pa.requestId, true, pa.rawToolInput);
         bypassedRequestIds.add(pa.requestId);
@@ -2055,14 +2136,14 @@ Additional Cockpit rules beyond the CLI's defaults:
     // natively enforces tool restrictions and sends permission_requests for
     // write tools (which the server auto-denies).
     // Outside plan mode, enable bypass so it can be toggled mid-session.
-    if (!session.planMode) {
+    if (!session.planMode && !session.cockpitAgent) {
       args.push("--allow-dangerously-skip-permissions");
     }
     args.push("--permission-prompt-tool", "stdio");
 
     if (session.planMode) {
       args.push("--permission-mode", "plan");
-    } else if (session.bypassAllPermissions) {
+    } else if (session.bypassAllPermissions && !session.cockpitAgent) {
       args.push("--permission-mode", "bypassPermissions");
     }
 

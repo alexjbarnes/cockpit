@@ -27,6 +27,7 @@ export interface PendingPermission {
   suggestions?: import("@/types").PermissionSuggestion[];
   planFilePath?: string;
   planContent?: string;
+  configProposal?: { toolName: string; domain: string; action: string };
 }
 
 export interface PendingQuestion {
@@ -969,6 +970,7 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
               suggestions: msg.suggestions,
               planFilePath: msg.planFilePath,
               planContent: msg.planContent,
+              configProposal: msg.configProposal,
             },
           ]);
           break;
