@@ -1,5 +1,5 @@
 ---
-description: Implement a refined Linear issue. Branches off next in an isolated git worktree, writes the code following the approved plan, runs build/lint/tests, self-reviews with the code-reviewer agent (up to 4 rounds), runs the ui-reviewer agent for screenshots when UI changed, opens a PR, and moves the issue to Human Review. Use when asked to implement, build, or code up a Linear issue, e.g. "implement ALE-123".
+description: Implement a refined Linear issue. Branches off next in an isolated git worktree, writes the code following the approved plan, runs build/lint/tests, self-reviews with the code-reviewer agent (up to 4 rounds), runs the ui-reviewer agent for screenshots when UI changed, opens a PR, starts a live test server and posts its URL for the human to verify, then moves the issue to Human Review. Use when asked to implement, build, or code up a Linear issue, e.g. "implement ALE-123".
 ---
 
 # Implement a Linear issue
@@ -43,12 +43,17 @@ Set the issue status to `Implementation` via `save_issue` (id + state).
 ### 4. Create an isolated worktree off next
 Work in a git worktree so the implementation is isolated from the main working tree.
 
+If this issue is being re-implemented after a rejection, a worktree and branch from the prior attempt may already exist. Clear the stale worktree first (the branch is reused so the existing PR updates rather than spawning a new one):
+
 ```
+git worktree remove --force ../cockpit-<ISSUE-ID> 2>/dev/null || true
 git fetch origin
-git worktree add ../cockpit-<ISSUE-ID> -b <gitBranchName> origin/next
+git worktree add ../cockpit-<ISSUE-ID> -B <gitBranchName> origin/next
 ```
 
-Use the branch name from the issue's `gitBranchName`. Do all subsequent work with that worktree as the cwd. The branch is based on `next`, and the PR will target `next`.
+`-B` resets the branch to `origin/next` if it already exists, else creates it. Use the branch name from the issue's `gitBranchName`. Do all subsequent work with that worktree as the cwd. The branch is based on `next`, and the PR will target `next`.
+
+Install deps in the worktree with dev dependencies: `NODE_ENV=development npm install --include=dev`. The shell exports `NODE_ENV=production`, under which npm omits devDependencies and biome/vitest go missing.
 
 The plan is anchored to a base commit SHA. `next` has likely moved since, so line numbers in the plan are stale. Re-anchor by symbol name (function, struct, method), not line number.
 
@@ -122,16 +127,31 @@ Re-verify after every fix. Never let a UI fix break the build, lint, or tests.
 
 ### 11. Link the PR and transition to Human Review
 - Attach the PR to the issue: `save_issue` with `links: [{ url: <pr-url>, title: <pr-title> }]`.
-- Resolve the correct Human Review state. There are two states named "Human Review" (one in the Unstarted group, one in the Started group). Setting by name is ambiguous. This is the code-level gate, the **Started** one. Call `list_issue_statuses` for the issue's team, find the status whose name is "Human Review" and whose type is `started`, and use its **ID**.
-- Set the issue status via `save_issue` (id + state = that status ID). This is the code-level human gate: a human reviews the PR before merge.
-- **If either review loop (code or UI) hit the 4-round cap with blocking findings still open**, post a final comment listing each unresolved Critical/High finding with the reason it could not be resolved, so the human knows exactly what to weigh before merging or sending it back. The UI screenshots are already attached for the visual ones.
+- Resolve the correct Human Review state. There are two states named "Human Review" (one in the Unstarted group, one in the Started group). Setting by name is ambiguous. This is the post-implementation gate, the **Started** one. Call `list_issue_statuses` for the issue's team, find the status whose name is "Human Review" and whose type is `started`, and use its **ID**.
+- Set the issue status via `save_issue` (id + state = that status ID). This is a requirements/feature gate: a human checks the change does what the issue asked and behaves correctly. The code review already happened inline (step 8); this is not a second code review.
+- **If either review loop (code or UI) hit the 4-round cap with blocking findings still open**, post a final comment listing each unresolved Critical/High finding with the reason it could not be resolved, so the human knows exactly what to weigh. The UI screenshots are already attached for the visual ones.
 
-### 12. Clean up the worktree
-After the branch is pushed and the PR is open, remove the worktree (the pushed branch is the durable artifact):
+### 12. Start a live test server for the human review
+The human verifies the feature by clicking a link, not by checking out the branch. Start a persistent dev server from the worktree so the running feature is reachable.
 
-```
-git worktree remove ../cockpit-<ISSUE-ID>
-```
+1. Pick a free port (scan upward from 3010; skip 3001, the live instance).
+2. Generate a fresh random password for this server: `openssl rand -hex 12`.
+3. Use a throwaway, per-issue config dir so it does not collide with the live scheduler or other test servers: `/tmp/cockpit-review-<ISSUE-ID>`.
+4. Start the server **detached into its own session with `setsid`** so it survives this job ending. A plain `nohup ... &` does NOT survive: the job kills its whole process group on completion (`destroySession` → `killProcessGroup`), and the server would be in that group. `setsid` puts it in a new group.
+
+   ```
+   cd ../cockpit-<ISSUE-ID>
+   NODE_ENV=development COCKPIT_CONFIG_DIR=/tmp/cockpit-review-<ISSUE-ID> PORT=<port> \
+     setsid nohup npx tsx server.ts > /tmp/cockpit-review-<ISSUE-ID>.log 2>&1 &
+   ```
+5. Poll readiness with `curl --retry` (foreground `sleep` is blocked). Then set the password via the `/login` setup screen (see `.claude/skills/browser-test/SKILL.md` for the React-input setter), using the password from step 2.
+6. Record the server details so `accept-issue` can find and kill it: write `<worktree>/.review-server.json` with `{ "port": <port>, "configDir": "/tmp/cockpit-review-<ISSUE-ID>", "password": "<pw>" }`.
+7. Post a comment on the issue with the URL and credentials:
+   - Host: `process.env.COCKPIT_REVIEW_HOST || "192.168.0.39"`. URL is `http://<host>:<port>`.
+   - Include the password and which screens to check (from the plan's User-Facing Behaviour).
+
+### 13. Do not clean up
+Leave the worktree and the test server running. They are the human's review surface, and the `accept-issue` skill reaps them (kills the server, removes the worktree) when the issue is accepted, or when it leaves Human Review without being accepted (e.g. rejected back to Implementation Ready). The pushed branch and PR are the durable artifacts; the worktree and server are ephemeral review aids.
 
 ## Rules
 - The plan is the contract. Follow it. Record deviations in the PR body; do not improvise silently.
@@ -141,4 +161,6 @@ git worktree remove ../cockpit-<ISSUE-ID>
 - Re-verify after every fix. Never open a PR with a failing build, lint, or test run.
 - Four review rounds max. Still failing after four: open the PR, route to Human Review, and comment the unresolved findings with reasons.
 - If the change touches UI, run the ui-reviewer agent (up to 4 rounds, same as code review) so screenshots of the change are attached to the issue before the human gate. Still failing after four: carry the findings to Human Review with the screenshots attached.
+- Start the test server with `setsid` (not bare `nohup`) so it survives the job. Bind a free port (never 3001), use a per-issue throwaway config dir, and a freshly generated password each time.
+- Do NOT remove the worktree or kill the test server. The `accept-issue` skill owns that cleanup.
 - Honor Out of Scope. Match the codebase's conventions from the plan's Reference Patterns.

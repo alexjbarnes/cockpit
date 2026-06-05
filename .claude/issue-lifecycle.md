@@ -23,7 +23,8 @@ Linear workflow states for the agent pipeline. Issues flow top to bottom. Each t
 |-------|---------|
 | Implementation Ready | Human has approved the plan. The implement-issue skill can pick it up. |
 | Implementation | The `implement-issue` skill is coding the plan and self-reviewing it (code-reviewer agent) in an isolated worktree off next. Implementation and code review happen in this one stage. |
-| Human Review | PR open and self-reviewed. A human reviews the PR before merge. This is the code-level human gate. |
+| Human Review | PR open and code-reviewed inline; a live test server is running and its URL is in a comment. A human checks the feature against the requirement: does it do what was asked, does it behave right. Requirements/feature gate, not a code review. Accept it (-> Accepted) or reject it (-> Implementation Ready, with feedback). |
+| Accepted | The human verified the feature. The `accept-issue` skill picks it up: brings the branch up to date with next, merges the PR, tears down the test server and worktree, and moves it to Done. |
 
 ## Terminal
 
@@ -101,23 +102,31 @@ Implementation Ready
   -> Implementation          (implement-issue skill picks up)
 
 Implementation              (implement-issue skill, in a worktree off next:
-                             code the plan -> build/lint/vitest must pass ->
+                             code the plan -> tsc/build/lint/vitest must pass ->
                              code-reviewer self-review loop, every round's findings
                              posted as a comment, up to 4 rounds ->
-                             if UI changed: ui-reviewer loop (up to 4 rounds) screenshots
-                             the affected screens (desktop + mobile), attaches them to the
-                             issue, and posts findings each round ->
-                             push -> open PR vs next)
-  -> Human Review            (review clean, OR 4-round cap hit with unresolved findings
-                             posted as comments with reasons)
+                             if UI changed: ui-reviewer loop (up to 4 rounds), screenshots
+                             attached to the issue ->
+                             push -> open PR vs next ->
+                             start a live test server (setsid, own port) and post its URL)
+  -> Human Review            (review clean, OR 4-round cap hit with unresolved findings)
 
-Human Review (Started)
-  -> Implementation          (human requests changes)
-  -> Done                    (human approves and merges)
+Human Review (Started)        (human opens the posted URL and verifies the feature)
+  -> Accepted                (human: feature is correct)
+  -> Implementation Ready    (human: feature is wrong, with feedback; the leftover
+                             test server + worktree are reaped on the next accept-issue run)
+
+Accepted                     (accept-issue skill picks up:
+                             reap orphans -> merge next into the branch, resolve conflicts ->
+                             re-verify -> squash-merge PR into next -> kill server +
+                             remove worktree)
+  -> Done                    (merged and cleaned up)
+  -> Human Review            (unresolvable conflict or post-merge breakage, with a comment;
+                             review surface left in place)
 ```
 
-Branches off `next`, in an isolated git worktree, PR targets `next`. Verify is `npm run build`, `npm run lint`, `npx vitest run`. The plan is the contract; deviations are recorded in the PR body, not improvised silently.
+Branches off `next`, in an isolated git worktree, PR targets `next`. Verify is `npx tsc --noEmit -p tsconfig.json`, `npm run build`, `npm run lint`, `npx vitest run`. The plan is the contract; deviations are recorded in the PR body, not improvised silently.
 
-Why one stage: same reasoning as refinement. Reviewing inline keeps the implementation context warm for fixing, and the findings comments preserve the observability a separate stage would give. Both outcomes (clean, or 4-round cap with blockers) land at Human Review; the human decides whether to merge, send back, or fix the residual findings noted in the comments.
+The worktree and test server are kept alive through Human Review so the human verifies the feature by clicking a URL rather than checking out the branch. The `accept-issue` skill (a scheduled job) owns teardown: it merges accepted issues and reaps the review surface of any issue that left Human Review without being accepted.
 
-There are no separate `Code Review Ready` / `Code Review` states. Code review is inline, so those states were removed from Linear (along with the Issue Review states from the refinement phase).
+Why implementation+code-review is one stage: same reasoning as refinement. Reviewing inline keeps the context warm for fixing, and the findings comments preserve observability. There are no separate `Code Review Ready` / `Code Review` states (removed from Linear, along with the Issue Review states).
