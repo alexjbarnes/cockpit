@@ -107,6 +107,8 @@ Implementation              (implement-issue skill, in a worktree off next:
                              posted as a comment, up to 4 rounds ->
                              if UI changed: ui-reviewer loop (up to 4 rounds), screenshots
                              attached to the issue ->
+                             completeness-reviewer loop (up to 4 rounds): every acceptance
+                             criterion mapped to evidence, INCOMPLETE -> fix -> re-review ->
                              push -> open PR vs next ->
                              start a live test server (setsid, own port) and post its URL)
   -> Human Review            (review clean, OR 4-round cap hit with unresolved findings)

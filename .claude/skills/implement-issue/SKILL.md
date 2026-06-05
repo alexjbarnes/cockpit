@@ -1,5 +1,5 @@
 ---
-description: Implement a refined Linear issue. Branches off next in an isolated git worktree, writes the code following the approved plan, runs build/lint/tests, self-reviews with the code-reviewer agent (up to 4 rounds), runs the ui-reviewer agent for screenshots when UI changed, opens a PR, starts a live test server and posts its URL for the human to verify, then moves the issue to Human Review. Use when asked to implement, build, or code up a Linear issue, e.g. "implement ALE-123".
+description: Implement a refined Linear issue. Branches off next in an isolated git worktree, writes the code following the approved plan, runs build/lint/tests, self-reviews with the code-reviewer agent (up to 4 rounds), runs the ui-reviewer agent for screenshots when UI changed, runs the completeness-reviewer agent to confirm every acceptance criterion is met, opens a PR, starts a live test server and posts its URL for the human to verify, then moves the issue to Human Review. Use when asked to implement, build, or code up a Linear issue, e.g. "implement ALE-123".
 ---
 
 # Implement a Linear issue
@@ -115,21 +115,32 @@ Loop the same way as the code review:
 
 **When to stop iterating** (first match wins):
 1. **PASS or only Medium/Low remain.** Apply Medium fixes. Proceed.
-2. **Hard cap: 4 rounds.** If Critical/High UI findings still remain after the fourth review, stop. Proceed to the PR and carry the unresolved findings to step 11; the screenshots are already attached for the human to judge.
+2. **Hard cap: 4 rounds.** If Critical/High UI findings still remain after the fourth review, stop. Proceed and carry the unresolved findings to the Human Review transition; the screenshots are already attached for the human to judge.
 
 Re-verify after every fix. Never let a UI fix break the build, lint, or tests.
 
-### 10. Commit, push, open the PR
+### 10. Feature-completeness review
+The last automated gate before the human. Code review and UI review confirmed the change is correct and renders well; this confirms it actually delivers what the issue asked. Dispatch the `completeness-reviewer` agent (`subagent_type: "completeness-reviewer"`) with:
+
+```
+**Issue:** <ALE-123>
+**Worktree:** <absolute worktree path>
+**UI review verdict:** <the ui-reviewer's verdict + findings, or "n/a — no UI change">
+```
+
+The agent maps the issue's Request and every acceptance criterion against the diff, tests, and the ui-reviewer's verdict, and returns COMPLETE/INCOMPLETE with an acceptance-criteria coverage table. Post its output as a comment on the issue each round.
+
+**On INCOMPLETE:** implement the missing pieces, re-run verify (step 7), and re-run the relevant earlier review on the additions, if the fix adds non-trivial logic, re-run the code-reviewer on it; if it adds UI, re-run the ui-reviewer. Then re-dispatch the completeness-reviewer.
+
+**When to stop iterating** (first match wins):
+1. **COMPLETE.** Proceed.
+2. **Hard cap: 4 rounds.** If criteria are still unmet after the fourth, stop. Proceed and carry the unmet criteria to the Human Review transition as a comment so the human knows exactly what is missing.
+
+### 11. Commit, push, open the PR
 - Commit with a conventional message matching the repo style: `fix(scope): ...` for bugs, `feat(scope): ...` for features, `chore(scope): ...` for chores.
 - In interactive mode, confirm with the human before pushing.
 - Push the branch.
 - Open the PR with `gh pr create`, base `next`. Title from the issue. Body: a short summary, the acceptance criteria as a ticked checklist, a `**Deviations from plan:**` section (or "none"), and a `**Review:**` line stating the verdict and round count. Reference the issue.
-
-### 11. Link the PR and transition to Human Review
-- Attach the PR to the issue: `save_issue` with `links: [{ url: <pr-url>, title: <pr-title> }]`.
-- Resolve the correct Human Review state. There are two states named "Human Review" (one in the Unstarted group, one in the Started group). Setting by name is ambiguous. This is the post-implementation gate, the **Started** one. Call `list_issue_statuses` for the issue's team, find the status whose name is "Human Review" and whose type is `started`, and use its **ID**.
-- Set the issue status via `save_issue` (id + state = that status ID). This is a requirements/feature gate: a human checks the change does what the issue asked and behaves correctly. The code review already happened inline (step 8); this is not a second code review.
-- **If either review loop (code or UI) hit the 4-round cap with blocking findings still open**, post a final comment listing each unresolved Critical/High finding with the reason it could not be resolved, so the human knows exactly what to weigh. The UI screenshots are already attached for the visual ones.
 
 ### 12. Start a live test server for the human review
 The human verifies the feature by clicking a link, not by checking out the branch. Start a persistent dev server from the worktree so the running feature is reachable.
@@ -150,7 +161,14 @@ The human verifies the feature by clicking a link, not by checking out the branc
    - Host: `process.env.COCKPIT_REVIEW_HOST || "192.168.0.39"`. URL is `http://<host>:<port>`.
    - Include the password and which screens to check (from the plan's User-Facing Behaviour).
 
-### 13. Do not clean up
+### 13. Link the PR and transition to Human Review
+Do this last, after the test server is up and its URL is posted, so the human never lands on Human Review before the link exists.
+- Attach the PR to the issue: `save_issue` with `links: [{ url: <pr-url>, title: <pr-title> }]`.
+- Resolve the correct Human Review state. There are two states named "Human Review" (one in the Unstarted group, one in the Started group). Setting by name is ambiguous. This is the post-implementation gate, the **Started** one. Call `list_issue_statuses` for the issue's team, find the status whose name is "Human Review" and whose type is `started`, and use its **ID**.
+- Set the issue status via `save_issue` (id + state = that status ID). This is a requirements/feature gate: a human checks the change does what the issue asked and behaves correctly. The code, UI, and completeness reviews already ran inline; this is not a repeat of them.
+- **If any review loop (code, UI, or completeness) hit the 4-round cap with blocking findings still open**, post a final comment listing each unresolved finding with the reason it could not be resolved, so the human knows exactly what to weigh. The UI screenshots are already attached for the visual ones.
+
+### 14. Do not clean up
 Leave the worktree and the test server running. They are the human's review surface, and the `accept-issue` skill reaps them (kills the server, removes the worktree) when the issue is accepted, or when it leaves Human Review without being accepted (e.g. rejected back to Implementation Ready). The pushed branch and PR are the durable artifacts; the worktree and server are ephemeral review aids.
 
 ## Rules
@@ -161,6 +179,7 @@ Leave the worktree and the test server running. They are the human's review surf
 - Re-verify after every fix. Never open a PR with a failing build, lint, or test run.
 - Four review rounds max. Still failing after four: open the PR, route to Human Review, and comment the unresolved findings with reasons.
 - If the change touches UI, run the ui-reviewer agent (up to 4 rounds, same as code review) so screenshots of the change are attached to the issue before the human gate. Still failing after four: carry the findings to Human Review with the screenshots attached.
+- Run the completeness-reviewer agent last (after code and UI review, up to 4 rounds) to confirm every acceptance criterion is actually met. Unmet after four: carry the gaps to Human Review as a comment.
 - Start the test server with `setsid` (not bare `nohup`) so it survives the job. Bind a free port (never 3001), use a per-issue throwaway config dir, and a freshly generated password each time.
 - Do NOT remove the worktree or kill the test server. The `accept-issue` skill owns that cleanup.
 - Honor Out of Scope. Match the codebase's conventions from the plan's Reference Patterns.
