@@ -1,5 +1,5 @@
 ---
-description: Implement a refined Linear issue. Branches off next in an isolated git worktree, writes the code following the approved plan, runs build/lint/tests, self-reviews with the code-reviewer agent (up to 4 rounds), opens a PR, and moves the issue to Human Review. Use when asked to implement, build, or code up a Linear issue, e.g. "implement ALE-123".
+description: Implement a refined Linear issue. Branches off next in an isolated git worktree, writes the code following the approved plan, runs build/lint/tests, self-reviews with the code-reviewer agent (up to 4 rounds), runs the ui-reviewer agent for screenshots when UI changed, opens a PR, and moves the issue to Human Review. Use when asked to implement, build, or code up a Linear issue, e.g. "implement ALE-123".
 ---
 
 # Implement a Linear issue
@@ -81,19 +81,43 @@ The agent returns Critical/High/Medium/Low findings and a PASS/FAIL verdict.
 
 Re-verify after every fix. Never let a fix break the build, lint, or tests.
 
-### 9. Commit, push, open the PR
+### 9. UI review (only if the change touches UI)
+Check the diff for UI files: `src/components/**`, `src/app/**/*.tsx`, or any `*.css`. If none changed, skip this step.
+
+If UI changed, dispatch the `ui-reviewer` agent (`subagent_type: "ui-reviewer"`) once, after the code-review loop has converged. Pass a labelled payload:
+
+```
+**Issue:** <ALE-123>
+**Worktree:** <absolute worktree path>
+**Changed UI files:** <the UI files from the diff>
+**Plan UI sections:** <the plan's User-Facing Behaviour and UI Changes sections, verbatim>
+```
+
+The agent drives the running app in the worktree with Playwright, screenshots the affected screens at desktop and mobile, attaches the screenshots to the Linear issue, posts its own "UI review" findings comment, and returns a verdict. It writes its own Linear attachments and comment each round (it owns the screenshot artifacts), so you do not repost them.
+
+Loop the same way as the code review:
+
+**On FAIL or any Critical/High UI findings:** fix them, re-run the verify checks (step 7), then re-dispatch the ui-reviewer. Each round attaches fresh screenshots and posts a fresh findings comment.
+
+**When to stop iterating** (first match wins):
+1. **PASS or only Medium/Low remain.** Apply Medium fixes. Proceed.
+2. **Hard cap: 4 rounds.** If Critical/High UI findings still remain after the fourth review, stop. Proceed to the PR and carry the unresolved findings to step 11; the screenshots are already attached for the human to judge.
+
+Re-verify after every fix. Never let a UI fix break the build, lint, or tests.
+
+### 10. Commit, push, open the PR
 - Commit with a conventional message matching the repo style: `fix(scope): ...` for bugs, `feat(scope): ...` for features, `chore(scope): ...` for chores.
 - In interactive mode, confirm with the human before pushing.
 - Push the branch.
 - Open the PR with `gh pr create`, base `next`. Title from the issue. Body: a short summary, the acceptance criteria as a ticked checklist, a `**Deviations from plan:**` section (or "none"), and a `**Review:**` line stating the verdict and round count. Reference the issue.
 
-### 10. Link the PR and transition to Human Review
+### 11. Link the PR and transition to Human Review
 - Attach the PR to the issue: `save_issue` with `links: [{ url: <pr-url>, title: <pr-title> }]`.
 - Resolve the correct Human Review state. There are two states named "Human Review" (one in the Unstarted group, one in the Started group). Setting by name is ambiguous. This is the code-level gate, the **Started** one. Call `list_issue_statuses` for the issue's team, find the status whose name is "Human Review" and whose type is `started`, and use its **ID**.
 - Set the issue status via `save_issue` (id + state = that status ID). This is the code-level human gate: a human reviews the PR before merge.
-- **If the review loop hit the 4-round cap with blocking findings still open**, post a final comment listing each unresolved Critical/High finding with the reason it could not be resolved, so the human knows exactly what to weigh before merging or sending it back.
+- **If either review loop (code or UI) hit the 4-round cap with blocking findings still open**, post a final comment listing each unresolved Critical/High finding with the reason it could not be resolved, so the human knows exactly what to weigh before merging or sending it back. The UI screenshots are already attached for the visual ones.
 
-### 11. Clean up the worktree
+### 12. Clean up the worktree
 After the branch is pushed and the PR is open, remove the worktree (the pushed branch is the durable artifact):
 
 ```
@@ -107,4 +131,5 @@ git worktree remove ../cockpit-<ISSUE-ID>
 - Post the full review of every round as a comment (verbatim, all buckets, round number in the header), on both PASS and FAIL.
 - Re-verify after every fix. Never open a PR with a failing build, lint, or test run.
 - Four review rounds max. Still failing after four: open the PR, route to Human Review, and comment the unresolved findings with reasons.
+- If the change touches UI, run the ui-reviewer agent (up to 4 rounds, same as code review) so screenshots of the change are attached to the issue before the human gate. Still failing after four: carry the findings to Human Review with the screenshots attached.
 - Honor Out of Scope. Match the codebase's conventions from the plan's Reference Patterns.

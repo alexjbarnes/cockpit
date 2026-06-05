@@ -103,7 +103,11 @@ Implementation Ready
 Implementation              (implement-issue skill, in a worktree off next:
                              code the plan -> build/lint/vitest must pass ->
                              code-reviewer self-review loop, every round's findings
-                             posted as a comment, up to 4 rounds -> push -> open PR vs next)
+                             posted as a comment, up to 4 rounds ->
+                             if UI changed: ui-reviewer loop (up to 4 rounds) screenshots
+                             the affected screens (desktop + mobile), attaches them to the
+                             issue, and posts findings each round ->
+                             push -> open PR vs next)
   -> Human Review            (review clean, OR 4-round cap hit with unresolved findings
                              posted as comments with reasons)
 
