@@ -1,6 +1,6 @@
 # Model providers
 
-Cockpit can drive Claude Code against more than the built-in Anthropic models. A provider is a named set of environment variables plus a list of models. Selecting a provider model injects that provider's environment into the Claude Code process when the session spawns, so you can point the same UI at a proxy, a gateway, or an Anthropic-compatible endpoint.
+Cockpit can drive Claude Code against more than the built-in Anthropic models. A provider is a named set of environment variables plus a list of models. Selecting a provider model injects that provider's environment into the Claude Code process when the session spawns, so you can point the same UI at a proxy, a gateway, or an Anthropic-compatible endpoint. Run cheaper or faster models through a gateway like OpenRouter, route to a self-hosted or local model, or keep traffic inside your own proxy, while the rest of Cockpit behaves exactly the same. Provider models are selectable per session and per scheduled job.
 
 The built-in **Anthropic** provider is always present and needs no configuration. It exposes Haiku, Sonnet, and Opus with their version and context-size options.
 
