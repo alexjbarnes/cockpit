@@ -1,96 +1,25 @@
 import { randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
-import path from "node:path";
-import { createInterface } from "node:readline";
-
-const COCKPIT_DIR = process.env.COCKPIT_CONFIG_DIR ?? path.join(homedir(), ".cockpit");
-const CLAUDE_FILE = path.join(process.env.CLAUDE_CONFIG_DIR ?? homedir(), ".claude.json");
-
-function uuid(): string {
-  try {
-    return randomUUID();
-  } catch {
-    return Array.from({ length: 36 }, () => Math.floor(Math.random() * 16).toString(16))
-      .map((c, i) => ([8, 13, 18, 23].includes(i) ? "-" : c))
-      .join("");
-  }
-}
-
-function readJson<T>(filePath: string, fallback: T): T {
-  try {
-    return JSON.parse(readFileSync(filePath, "utf-8")) as T;
-  } catch {
-    return fallback;
-  }
-}
-
-function writeJson(filePath: string, data: unknown): void {
-  mkdirSync(path.dirname(filePath), { recursive: true });
-  writeFileSync(filePath, JSON.stringify(data, null, 2) + "\n");
-}
-
-function mcpEntry<T>(filePath: string, fallback: T): { read: () => T; write: (data: T) => void } {
-  return { read: () => readJson(filePath, fallback), write: (data: T) => writeJson(filePath, data) };
-}
-
-interface ScheduledJob {
-  id: string;
-  name: string;
-  schedule: { type: string };
-  prompt: string;
-  cwd: string;
-  enabled: boolean;
-  createdAt: number;
-  updatedAt: number;
-  model?: string;
-  contextSize?: string;
-  thinkingLevel?: string;
-  allowedTools?: string[];
-  mcpServers?: string[];
-  mcpToolFilters?: Record<string, string[]>;
-  bypassPermissions?: boolean;
-  maxDurationMinutes?: number;
-  retentionDays?: number;
-  skipIfMissed?: boolean;
-  inboxOutput?: boolean;
-  notifyProviders?: string[];
-  runtime?: string;
-}
-
-interface AppDefaults {
-  thinkingLevel: string;
-  bypassAllPermissions: boolean;
-  diffStyle: string;
-  dismissKeyboardOnSend: boolean;
-  thinkingExpanded: boolean;
-  readExpanded: boolean;
-  editExpanded: boolean;
-  toolCallsExpanded: boolean;
-  modelSlots: Record<string, string>;
-  messageStitching: boolean;
-  reviewsEnabled: boolean;
-}
-
-interface Provider {
-  id: string;
-  name: string;
-  envVars: Record<string, string>;
-  models: unknown[];
-  isBuiltin?: boolean;
-}
+import { createServer, type Server } from "node:http";
+import { dirname } from "node:path";
+import { Server as McpServer } from "@modelcontextprotocol/sdk/server/index.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+import { getDefaults, setDefaults } from "@/server/defaults";
+import { deleteJob, getJob, loadJobs, saveJob } from "@/server/job-storage";
+import { getNotificationSettings, updateNotificationSettings } from "@/server/notification-settings";
+import { getClaudeUserConfigFile } from "@/server/paths";
+import { addProvider, deleteProvider, getProviders, updateProvider } from "@/server/providers";
+import type { ScheduledJob } from "@/types";
+import { isValidToken } from "./run-context";
 
 interface McpServerEntry {
-  command: string;
-  args: string[];
+  command?: string;
+  args?: string[];
   env?: Record<string, string>;
+  type?: string;
+  url?: string;
 }
-
-const jobsStore = mcpEntry<{ jobs: ScheduledJob[] }>(path.join(COCKPIT_DIR, "scheduled-jobs.json"), { jobs: [] });
-const settingsStore = mcpEntry<Partial<AppDefaults>>(path.join(COCKPIT_DIR, "defaults.json"), {});
-const providersStore = mcpEntry<Provider[]>(path.join(COCKPIT_DIR, "providers.json"), []);
-const notificationsStore = mcpEntry<{ providers: unknown[] }>(path.join(COCKPIT_DIR, "notifications.json"), { providers: [] });
-const mcpServersStore = mcpEntry<{ mcpServers: Record<string, McpServerEntry> }>(CLAUDE_FILE, { mcpServers: {} });
 
 const TOOL_DEFINITIONS = [
   {
@@ -129,7 +58,26 @@ const TOOL_DEFINITIONS = [
   {
     name: "update_job",
     description: "Update an existing scheduled job",
-    inputSchema: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string" },
+        name: { type: "string" },
+        schedule: { type: "object", properties: { type: { type: "string", enum: ["simple", "cron"] } }, required: ["type"] },
+        prompt: { type: "string" },
+        cwd: { type: "string" },
+        enabled: { type: "boolean" },
+        model: { type: "string" },
+        contextSize: { type: "string" },
+        thinkingLevel: { type: "string" },
+        bypassPermissions: { type: "boolean" },
+        maxDurationMinutes: { type: "number" },
+        retentionDays: { type: "number" },
+        skipIfMissed: { type: "boolean" },
+        inboxOutput: { type: "boolean" },
+      },
+      required: ["id"],
+    },
   },
   {
     name: "delete_job",
@@ -144,7 +92,20 @@ const TOOL_DEFINITIONS = [
   {
     name: "update_settings",
     description: "Update application settings",
-    inputSchema: { type: "object", properties: { thinkingLevel: { type: "string", enum: ["low", "medium", "high", "xhigh", "max"] } } },
+    inputSchema: {
+      type: "object",
+      properties: {
+        thinkingLevel: { type: "string", enum: ["low", "medium", "high", "xhigh", "max"] },
+        diffStyle: { type: "string", enum: ["split", "unified"] },
+        dismissKeyboardOnSend: { type: "boolean" },
+        thinkingExpanded: { type: "boolean" },
+        readExpanded: { type: "boolean" },
+        editExpanded: { type: "boolean" },
+        toolCallsExpanded: { type: "boolean" },
+        messageStitching: { type: "boolean" },
+        reviewsEnabled: { type: "boolean" },
+      },
+    },
   },
   {
     name: "list_providers",
@@ -159,7 +120,15 @@ const TOOL_DEFINITIONS = [
   {
     name: "update_provider",
     description: "Update an existing model provider",
-    inputSchema: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string" },
+        name: { type: "string" },
+        envVars: { type: "object" },
+      },
+      required: ["id"],
+    },
   },
   {
     name: "delete_provider",
@@ -198,27 +167,47 @@ const TOOL_DEFINITIONS = [
   {
     name: "update_notification_settings",
     description: "Update notification settings",
-    inputSchema: { type: "object", properties: {}, required: [] },
+    inputSchema: {
+      type: "object",
+      properties: {
+        baseUrl: { type: "string", description: "Webhook URL for notifications" },
+      },
+    },
   },
 ];
 
-function handleToolCall(name: string, args: Record<string, unknown>): { content: { type: string; text: string }[]; isError?: boolean } {
+function readClaudeConfig(): { mcpServers: Record<string, McpServerEntry> } {
+  try {
+    return JSON.parse(readFileSync(getClaudeUserConfigFile(), "utf-8"));
+  } catch {
+    return { mcpServers: {} };
+  }
+}
+
+function writeClaudeConfig(data: { mcpServers: Record<string, McpServerEntry> }): void {
+  const file = getClaudeUserConfigFile();
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(file, JSON.stringify(data, null, 2) + "\n");
+}
+
+function handleToolCall(
+  name: string,
+  args: Record<string, unknown>,
+  _token: string,
+): { content: { type: string; text: string }[]; isError?: boolean } {
   try {
     switch (name) {
-      case "list_jobs": {
-        return { content: [{ type: "text", text: JSON.stringify(jobsStore.read().jobs, null, 2) }] };
-      }
+      case "list_jobs":
+        return { content: [{ type: "text", text: JSON.stringify(loadJobs(), null, 2) }] };
       case "get_job": {
-        const { id } = args;
-        const job = jobsStore.read().jobs.find((j) => j.id === id);
-        if (!job) return { content: [{ type: "text", text: JSON.stringify({ error: `Job not found: ${id}` }) }], isError: true };
+        const job = getJob(args.id as string);
+        if (!job) return { content: [{ type: "text", text: JSON.stringify({ error: `Job not found: ${args.id}` }) }], isError: true };
         return { content: [{ type: "text", text: JSON.stringify(job, null, 2) }] };
       }
       case "create_job": {
-        const data = jobsStore.read();
         const now = Date.now();
         const job: ScheduledJob = {
-          id: uuid(),
+          id: randomUUID(),
           name: args.name as string,
           schedule: args.schedule as ScheduledJob["schedule"],
           prompt: args.prompt as string,
@@ -227,129 +216,109 @@ function handleToolCall(name: string, args: Record<string, unknown>): { content:
           createdAt: now,
           updatedAt: now,
         };
-        data.jobs.push(job);
-        jobsStore.write(data);
+        saveJob(job);
         return { content: [{ type: "text", text: JSON.stringify({ created: job }, null, 2) }] };
       }
       case "update_job": {
-        const data = jobsStore.read();
-        const idx = data.jobs.findIndex((j) => j.id === args.id);
-        if (idx === -1) return { content: [{ type: "text", text: JSON.stringify({ error: `Job not found: ${args.id}` }) }], isError: true };
-        const before = { ...data.jobs[idx] };
+        const existing = getJob(args.id as string);
+        if (!existing) return { content: [{ type: "text", text: JSON.stringify({ error: `Job not found: ${args.id}` }) }], isError: true };
+        const before = { ...existing };
         const update = { ...args };
         delete (update as Record<string, unknown>).id;
-        data.jobs[idx] = { ...data.jobs[idx], ...update, updatedAt: Date.now() };
-        jobsStore.write(data);
-        return { content: [{ type: "text", text: JSON.stringify({ before, after: data.jobs[idx] }, null, 2) }] };
+        const updated: ScheduledJob = { ...existing, ...update, updatedAt: Date.now() };
+        saveJob(updated);
+        return { content: [{ type: "text", text: JSON.stringify({ before, after: updated }, null, 2) }] };
       }
       case "delete_job": {
-        const data = jobsStore.read();
-        const idx = data.jobs.findIndex((j) => j.id === args.id);
-        if (idx === -1) return { content: [{ type: "text", text: JSON.stringify({ error: `Job not found: ${args.id}` }) }], isError: true };
-        const deleted = data.jobs.splice(idx, 1)[0];
-        jobsStore.write(data);
-        return { content: [{ type: "text", text: JSON.stringify({ deleted }, null, 2) }] };
+        const job = getJob(args.id as string);
+        if (!job) return { content: [{ type: "text", text: JSON.stringify({ error: `Job not found: ${args.id}` }) }], isError: true };
+        deleteJob(args.id as string);
+        return { content: [{ type: "text", text: JSON.stringify({ deleted: job }, null, 2) }] };
       }
-      case "get_settings": {
-        const fallback: AppDefaults = {
-          thinkingLevel: "high",
-          bypassAllPermissions: false,
-          diffStyle: "split",
-          dismissKeyboardOnSend: true,
-          thinkingExpanded: false,
-          readExpanded: false,
-          editExpanded: false,
-          toolCallsExpanded: false,
-          modelSlots: { main: "sonnet" },
-          messageStitching: true,
-          reviewsEnabled: true,
-        };
-        return { content: [{ type: "text", text: JSON.stringify({ ...fallback, ...settingsStore.read() }, null, 2) }] };
-      }
+      case "get_settings":
+        return { content: [{ type: "text", text: JSON.stringify(getDefaults(), null, 2) }] };
       case "update_settings": {
-        const before = settingsStore.read();
-        const after = { ...before, ...args };
-        settingsStore.write(after);
+        const before = getDefaults();
+        const allowed: (keyof Parameters<typeof setDefaults>[0])[] = [
+          "thinkingLevel",
+          "diffStyle",
+          "dismissKeyboardOnSend",
+          "thinkingExpanded",
+          "readExpanded",
+          "editExpanded",
+          "toolCallsExpanded",
+          "messageStitching",
+          "reviewsEnabled",
+        ];
+        const safe = Object.fromEntries(
+          Object.entries(args).filter(([k]) => allowed.includes(k as (typeof allowed)[number])),
+        ) as Parameters<typeof setDefaults>[0];
+        const after = setDefaults(safe);
         return { content: [{ type: "text", text: JSON.stringify({ before, after }, null, 2) }] };
       }
-      case "list_providers": {
-        return { content: [{ type: "text", text: JSON.stringify(providersStore.read(), null, 2) }] };
-      }
+      case "list_providers":
+        return { content: [{ type: "text", text: JSON.stringify(getProviders(), null, 2) }] };
       case "add_provider": {
-        const providers = providersStore.read();
-        const provider: Provider = {
-          id: uuid(),
+        const provider = addProvider({
           name: args.name as string,
           envVars: args.envVars as Record<string, string>,
-          models: (args.models as unknown[]) ?? [],
-        };
-        providers.push(provider);
-        providersStore.write(providers);
+          models: [],
+        });
         return { content: [{ type: "text", text: JSON.stringify({ created: provider }, null, 2) }] };
       }
       case "update_provider": {
-        const providers = providersStore.read();
-        const idx = providers.findIndex((p) => p.id === args.id);
-        if (idx === -1)
-          return { content: [{ type: "text", text: JSON.stringify({ error: `Provider not found: ${args.id}` }) }], isError: true };
-        const before = { ...providers[idx] };
-        const update = { ...args };
-        delete (update as Record<string, unknown>).id;
-        providers[idx] = { ...providers[idx], ...update };
-        providersStore.write(providers);
-        return { content: [{ type: "text", text: JSON.stringify({ before, after: providers[idx] }, null, 2) }] };
+        const { id, ...rest } = args;
+        const before = getProviders().find((p) => p.id === id);
+        if (!before) return { content: [{ type: "text", text: JSON.stringify({ error: `Provider not found: ${id}` }) }], isError: true };
+        const after = updateProvider(id as string, rest as Parameters<typeof updateProvider>[1]);
+        return { content: [{ type: "text", text: JSON.stringify({ before, after }, null, 2) }] };
       }
       case "delete_provider": {
-        const providers = providersStore.read();
-        const idx = providers.findIndex((p) => p.id === args.id);
-        if (idx === -1)
+        const provider = getProviders().find((p) => p.id === args.id);
+        if (!provider)
           return { content: [{ type: "text", text: JSON.stringify({ error: `Provider not found: ${args.id}` }) }], isError: true };
-        const deleted = providers.splice(idx, 1)[0];
-        providersStore.write(providers);
-        return { content: [{ type: "text", text: JSON.stringify({ deleted }, null, 2) }] };
+        deleteProvider(args.id as string);
+        return { content: [{ type: "text", text: JSON.stringify({ deleted: provider }, null, 2) }] };
       }
       case "list_mcp_servers": {
-        const entries = Object.entries(mcpServersStore.read().mcpServers).map(([name, config]) => ({
-          name,
-          command: config.command,
-          args: config.args,
-        }));
+        const config = readClaudeConfig();
+        const entries = Object.entries(config.mcpServers ?? {}).map(([n, c]) => ({ name: n, ...c }));
         return { content: [{ type: "text", text: JSON.stringify(entries, null, 2) }] };
       }
       case "get_mcp_server": {
-        const entry = mcpServersStore.read().mcpServers[args.name as string];
+        const config = readClaudeConfig();
+        const entry = config.mcpServers?.[args.name as string];
         if (!entry)
           return { content: [{ type: "text", text: JSON.stringify({ error: `MCP server not found: ${args.name}` }) }], isError: true };
         return { content: [{ type: "text", text: JSON.stringify({ name: args.name, ...entry }, null, 2) }] };
       }
       case "save_mcp_server": {
-        const mcpData = mcpServersStore.read();
-        const entryName = args.name as string;
-        const before = mcpData.mcpServers[entryName] ? { ...mcpData.mcpServers[entryName] } : null;
-        mcpData.mcpServers[entryName] = {
+        const config = readClaudeConfig();
+        const servers = config.mcpServers ?? {};
+        const before = servers[args.name as string] ? { ...servers[args.name as string] } : null;
+        servers[args.name as string] = {
           command: args.command as string,
           args: args.args as string[],
           env: args.env as Record<string, string> | undefined,
         };
-        mcpServersStore.write(mcpData);
-        return { content: [{ type: "text", text: JSON.stringify({ before, after: mcpData.mcpServers[entryName] }, null, 2) }] };
+        writeClaudeConfig({ ...config, mcpServers: servers });
+        return { content: [{ type: "text", text: JSON.stringify({ before, after: servers[args.name as string] }, null, 2) }] };
       }
       case "delete_mcp_server": {
-        const mcpData = mcpServersStore.read();
-        if (!mcpData.mcpServers[args.name as string])
+        const config = readClaudeConfig();
+        const servers = config.mcpServers ?? {};
+        if (!servers[args.name as string])
           return { content: [{ type: "text", text: JSON.stringify({ error: `MCP server not found: ${args.name}` }) }], isError: true };
-        const deleted = mcpData.mcpServers[args.name as string];
-        delete mcpData.mcpServers[args.name as string];
-        mcpServersStore.write(mcpData);
+        const deleted = servers[args.name as string];
+        delete servers[args.name as string];
+        writeClaudeConfig({ ...config, mcpServers: servers });
         return { content: [{ type: "text", text: JSON.stringify({ deleted }, null, 2) }] };
       }
-      case "get_notification_settings": {
-        return { content: [{ type: "text", text: JSON.stringify(notificationsStore.read(), null, 2) }] };
-      }
+      case "get_notification_settings":
+        return { content: [{ type: "text", text: JSON.stringify(getNotificationSettings(), null, 2) }] };
       case "update_notification_settings": {
-        const before = notificationsStore.read();
-        const after = { ...before, ...args };
-        notificationsStore.write(after);
+        const before = getNotificationSettings();
+        const after = updateNotificationSettings(args as Parameters<typeof updateNotificationSettings>[0]);
         return { content: [{ type: "text", text: JSON.stringify({ before, after }, null, 2) }] };
       }
       default:
@@ -363,69 +332,65 @@ function handleToolCall(name: string, args: Record<string, unknown>): { content:
   }
 }
 
-const rl = createInterface({ input: process.stdin, output: process.stdout, terminal: false });
+export class CockpitMcpServer {
+  private httpServer: Server | null = null;
+  private port = 0;
 
-rl.on("line", (line: string) => {
-  if (!line.trim()) return;
+  async start(host = "127.0.0.1", port = 0): Promise<void> {
+    this.httpServer = createServer((req, res) => {
+      (async () => {
+        if (req.url !== "/mcp" || req.method !== "POST") {
+          res.writeHead(404, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "not found" }));
+          return;
+        }
 
-  let request: { jsonrpc?: string; id?: number | string; method?: string; params?: Record<string, unknown> };
-  try {
-    request = JSON.parse(line);
-  } catch {
-    return;
-  }
+        const authHeader = req.headers.authorization ?? "";
+        const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
+        if (!isValidToken(token)) {
+          res.writeHead(401, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "unauthorized" }));
+          return;
+        }
 
-  const id = request.id;
-  const method = request.method;
+        const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+        const mcpServer = new McpServer({ name: "cockpit-config", version: "1.0.0" }, { capabilities: { tools: {} } });
 
-  // Handle JSON-RPC notifications (no id)
-  if (!id) return;
+        mcpServer.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOL_DEFINITIONS }));
+        mcpServer.setRequestHandler(CallToolRequestSchema, async (request) => {
+          const toolName = request.params.name;
+          const toolArgs = (request.params.arguments as Record<string, unknown>) ?? {};
+          return handleToolCall(toolName, toolArgs, token);
+        });
 
-  function sendResponse(
-    result:
-      | Record<string, unknown>
-      | { content: { type: string; text: string }[]; isError?: boolean }
-      | { serverInfo: { name: string; version: string }; capabilities: { tools: Record<string, unknown> } },
-  ) {
-    const response = { jsonrpc: "2.0", id, result };
-    process.stdout.write(JSON.stringify(response) + "\n");
-  }
-
-  function sendError(code: number, message: string) {
-    const response = { jsonrpc: "2.0", id, error: { code, message } };
-    process.stdout.write(JSON.stringify(response) + "\n");
-  }
-
-  switch (method) {
-    case "initialize":
-      sendResponse({
-        serverInfo: { name: "cockpit-config", version: "1.0.0" },
-        capabilities: { tools: {} },
+        await mcpServer.connect(transport);
+        await transport.handleRequest(req, res);
+      })().catch((err) => {
+        console.error("[cockpit-mcp] request handler error:", err);
+        if (!res.writableEnded) {
+          res.writeHead(500, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "internal error" }));
+        }
       });
-      break;
+    });
 
-    case "notifications/initialized":
-      // no response expected
-      break;
-
-    case "tools/list":
-      sendResponse({ tools: TOOL_DEFINITIONS });
-      break;
-
-    case "tools/call": {
-      const toolName = request.params?.name as string;
-      const toolArgs = (request.params?.arguments as Record<string, unknown>) || {};
-      const result = handleToolCall(toolName, toolArgs);
-      sendResponse(result);
-      break;
-    }
-
-    default:
-      sendError(-32601, `Method not found: ${method}`);
+    await new Promise<void>((resolve, reject) => {
+      this.httpServer!.once("error", reject);
+      this.httpServer!.listen(port, host, () => {
+        const addr = this.httpServer!.address();
+        if (addr && typeof addr === "object") this.port = addr.port;
+        resolve();
+      });
+    });
   }
-});
 
-process.on("uncaughtException", (err) => {
-  process.stderr.write(`cockpit-config-server fatal: ${err}\n`);
-  process.exit(1);
-});
+  getUrl(host = "127.0.0.1"): string {
+    return `http://${host}:${this.port}`;
+  }
+
+  async stop(): Promise<void> {
+    if (!this.httpServer) return;
+    await new Promise<void>((resolve) => this.httpServer!.close(() => resolve()));
+    this.httpServer = null;
+  }
+}

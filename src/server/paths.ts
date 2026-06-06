@@ -1,4 +1,3 @@
-import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 
@@ -16,10 +15,4 @@ export function getClaudeDir(): string {
 
 export function getClaudeUserConfigFile(): string {
   return path.join(process.env.CLAUDE_CONFIG_DIR ?? homedir(), ".claude.json");
-}
-
-export function getCockpitConfigServerPath(): string {
-  const jsPath = path.resolve(__dirname, "mcp", "cockpit-config-server.js");
-  const tsPath = path.resolve(__dirname, "mcp", "cockpit-config-server.ts");
-  return existsSync(tsPath) ? tsPath : jsPath;
 }

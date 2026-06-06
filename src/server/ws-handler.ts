@@ -1029,12 +1029,7 @@ function handleParsedEvent(ws: WebSocket, sessionId: string, event: ParsedEvent,
             permMsg.planContent = readPlanFile(planPath);
           }
         }
-        // For cockpit-agent sessions, include configProposal from the pending request if present
-        // biome-ignore lint/complexity/useLiteralKeys: private property access
-        const session = sessionManager["sessions"]?.get(sessionId) as
-          | { pendingRequests?: Map<string, { configProposal?: { toolName: string; domain: string; action: string } }> }
-          | undefined;
-        const pending = session?.pendingRequests?.get(requestId);
+        const pending = sessionManager.getPendingRequest(sessionId, requestId);
         if (pending?.configProposal) {
           permMsg.configProposal = pending.configProposal;
         }
