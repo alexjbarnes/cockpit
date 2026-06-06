@@ -33,6 +33,7 @@ export function ChatView({
   historyView,
   onSendMessage,
   className,
+  showPlanToggle = true,
 }: {
   sessionId: string;
   cwd?: string;
@@ -41,6 +42,7 @@ export function ChatView({
   historyView?: boolean;
   onSendMessage?: (fn: (text: string) => void) => void;
   className?: string;
+  showPlanToggle?: boolean;
 }) {
   const {
     messages,
@@ -551,6 +553,7 @@ export function ChatView({
           onSetBypass={setBypassAll}
           planMode={planMode}
           onSetPlanMode={setPlanMode}
+          showPlanToggle={showPlanToggle}
           thinkingLevel={thinkingLevel}
           onSetThinking={setThinkingLevel}
           currentModel={currentModel}

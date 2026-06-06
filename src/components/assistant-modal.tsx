@@ -1,6 +1,6 @@
 "use client";
 
-import { Bot, Loader2 } from "lucide-react";
+import { Bot, Loader2, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { ChatView } from "./chat-view";
@@ -84,6 +84,14 @@ export function AssistantModal({ open, onOpenChange }: AssistantModalProps) {
         <div className="flex items-center gap-2 px-4 py-3 border-b shrink-0">
           <Bot className="h-4 w-4 text-muted-foreground" />
           <span className="text-sm font-medium">Cockpit Assistant</span>
+          <button
+            type="button"
+            onClick={() => handleOpenChange(false)}
+            aria-label="Close assistant"
+            className="ml-auto rounded-sm text-muted-foreground opacity-70 transition-opacity hover:opacity-100"
+          >
+            <X className="h-4 w-4" />
+          </button>
         </div>
         <div className="flex-1 min-h-0 flex flex-col">
           {loading && (
@@ -92,7 +100,7 @@ export function AssistantModal({ open, onOpenChange }: AssistantModalProps) {
             </div>
           )}
           {error && <div className="flex items-center justify-center h-full text-sm text-muted-foreground px-4">{error}</div>}
-          {sessionId && !loading && !error && <ChatView sessionId={sessionId} cwd={cwd} />}
+          {sessionId && !loading && !error && <ChatView sessionId={sessionId} cwd={cwd} showPlanToggle={false} />}
         </div>
       </DialogContent>
     </Dialog>
