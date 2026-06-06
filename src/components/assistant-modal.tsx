@@ -1,6 +1,6 @@
 "use client";
 
-import { Bot, Loader2 } from "lucide-react";
+import { Bot, Loader2, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { ChatView } from "./chat-view";
@@ -41,35 +41,9 @@ export function AssistantModal({ open, onOpenChange }: AssistantModalProps) {
 
     async function init() {
       try {
-        // Fetch cwd and settings
-        const [cwdRes, settingsRes] = await Promise.all([fetch("/api/config/cwd"), fetch("/api/assistant-settings")]);
-
-        if (!cwdRes.ok || !settingsRes.ok) {
-          throw new Error("Failed to initialize assistant");
-        }
-
-        const { cwd: cockpitCwd } = await cwdRes.json();
-        const settings = await settingsRes.json();
-
-        // Create cockpit-agent session
-        const sessionRes = await fetch("/api/sessions", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            cwd: cockpitCwd,
-            cockpitAgent: true,
-            model: settings.model || "sonnet",
-            thinkingLevel: settings.thinkingLevel || "high",
-            runtime: settings.runtime,
-            contextSize: settings.contextSize,
-          }),
-        });
-
-        if (!sessionRes.ok) {
-          throw new Error("Failed to create assistant session");
-        }
-
-        const { sessionId: newId } = await sessionRes.json();
+        const res = await fetch("/api/assistant-session");
+        if (!res.ok) throw new Error("Failed to initialize assistant");
+        const { sessionId: newId, cwd: cockpitCwd } = await res.json();
         if (!cancelled) {
           sessionIdRef.current = newId;
           setSessionId(newId);
@@ -110,6 +84,14 @@ export function AssistantModal({ open, onOpenChange }: AssistantModalProps) {
         <div className="flex items-center gap-2 px-4 py-3 border-b shrink-0">
           <Bot className="h-4 w-4 text-muted-foreground" />
           <span className="text-sm font-medium">Cockpit Assistant</span>
+          <button
+            type="button"
+            onClick={() => handleOpenChange(false)}
+            aria-label="Close assistant"
+            className="ml-auto rounded-sm text-muted-foreground opacity-70 transition-opacity hover:opacity-100"
+          >
+            <X className="h-4 w-4" />
+          </button>
         </div>
         <div className="flex-1 min-h-0 flex flex-col">
           {loading && (
@@ -118,7 +100,7 @@ export function AssistantModal({ open, onOpenChange }: AssistantModalProps) {
             </div>
           )}
           {error && <div className="flex items-center justify-center h-full text-sm text-muted-foreground px-4">{error}</div>}
-          {sessionId && !loading && !error && <ChatView sessionId={sessionId} cwd={cwd} />}
+          {sessionId && !loading && !error && <ChatView sessionId={sessionId} cwd={cwd} showPlanToggle={false} />}
         </div>
       </DialogContent>
     </Dialog>

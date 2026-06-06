@@ -26,6 +26,7 @@ export interface SessionPrefs {
   openTabs?: PersistedTab[];
   activeTabId?: string;
   runtime?: SessionRuntime;
+  cockpitAgent?: boolean;
 }
 
 function prefsDir(): string {

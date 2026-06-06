@@ -17,6 +17,7 @@ import {
   recommendedEffort,
   resolveModel,
 } from "@/lib/models";
+import { getAssistantSettings, updateAssistantSettings } from "@/server/assistant-settings";
 import { getClaudeBin } from "@/server/claude-bin";
 import { getCockpitCacheDir, getCockpitDir } from "@/server/paths";
 import { resolveProviderModel } from "@/server/providers";
@@ -163,6 +164,7 @@ export function buildMcpConfigArg(url: string, token: string): { path: string } 
 
 export class SessionManager {
   private sessions = new Map<string, Session>();
+  private _cockpitAgentSessionPromise: Promise<string> | null = null;
   constructor() {
     // Periodically check for sessions stuck in "running" with a dead process
     setInterval(() => {
@@ -246,31 +248,34 @@ export class SessionManager {
       cockpitAgentCleanups: [],
     });
 
-    setSessionPrefs(id, { runtime: rt });
+    setSessionPrefs(id, { runtime: rt, ...(isCockpitAgent ? { cockpitAgent: true } : {}) });
 
     if (isCockpitAgent) {
-      const cleanup = this.onInit(id, async (data: InitData) => {
-        for (const server of data.mcpServers) {
-          if (server.name !== "cockpit-config" && server.status !== "disabled") {
-            try {
-              await this.mcpToggle(id, server.name, false);
-            } catch {
-              // best effort — server may not be started yet
-            }
-          }
-        }
-      });
-      if (cleanup) {
-        const session = this.sessions.get(id);
-        if (session) {
-          session.cockpitAgentCleanups.push(cleanup);
-        }
-      } else {
-        console.warn(`[cockpit-agent] onInit returned null for session ${id.slice(0, 8)}`);
-      }
+      this.registerCockpitAgentOnInit(id);
     }
 
     return info;
+  }
+
+  private registerCockpitAgentOnInit(id: string): void {
+    const session = this.sessions.get(id);
+    if (!session) return; // TypeScript narrows to Session below; push is safe
+    const cleanup = this.onInit(id, async (data: InitData) => {
+      for (const server of data.mcpServers) {
+        if (server.name !== "cockpit-config" && server.status !== "disabled") {
+          try {
+            await this.mcpToggle(id, server.name, false);
+          } catch {
+            // best effort — server may not be started yet
+          }
+        }
+      }
+    });
+    if (cleanup) {
+      session.cockpitAgentCleanups.push(cleanup); // destroySession iterates this to unsubscribe
+    } else {
+      console.warn(`[cockpit-agent] onInit returned null for session ${id.slice(0, 8)}`);
+    }
   }
 
   ensureSession(id: string, cwd: string): Session {
@@ -308,7 +313,7 @@ export class SessionManager {
         hasSpawnedBefore: true,
         cliSessionId: cliId,
         previousCliSessionIds: prevIds,
-        bypassAllPermissions: prefs?.bypassAllPermissions ?? defaults.bypassAllPermissions,
+        bypassAllPermissions: (prefs?.cockpitAgent ? false : prefs?.bypassAllPermissions) ?? defaults.bypassAllPermissions,
         planMode: prefs?.planMode ?? false,
         pendingPlanReminder: prefs?.planMode ?? false,
         needsRespawnForPermissions: false,
@@ -339,12 +344,85 @@ export class SessionManager {
         todoWatcher: null,
         attachmentPaths: [],
         totalTokens: { input: 0, output: 0, cacheCreate: 0, cacheRead: 0 },
-        cockpitAgent: false,
+        cockpitAgent: prefs?.cockpitAgent ?? false,
         cockpitAgentCleanups: [],
       };
       this.sessions.set(id, session);
+      if (prefs?.cockpitAgent) {
+        this.registerCockpitAgentOnInit(id);
+      }
     }
     return session!;
+  }
+
+  async getOrCreateCockpitAgentSession(): Promise<string> {
+    // Fast path: the session is already live in memory (the common case once the
+    // modal has been opened this server lifetime). Returns synchronously.
+    const stored = getAssistantSettings().sessionId;
+    if (stored && this.sessions.has(stored)) return stored;
+
+    // Slow path: restore-from-disk or create-new. There is no `await` between the
+    // null-check and the assignment below, so the first caller sets the promise
+    // before any other caller can run; every concurrent first-open then awaits
+    // that same single execution. The finally clears it for the next miss.
+    if (!this._cockpitAgentSessionPromise) {
+      this._cockpitAgentSessionPromise = this._resolveOrCreateCockpitAgentSession().finally(() => {
+        this._cockpitAgentSessionPromise = null;
+      });
+    }
+    return this._cockpitAgentSessionPromise;
+  }
+
+  private async _resolveOrCreateCockpitAgentSession(): Promise<string> {
+    const settings = getAssistantSettings();
+    const stored = settings.sessionId;
+    if (stored) {
+      if (this.sessions.has(stored)) return stored; // restored by an earlier caller
+      const prefs = getSessionPrefs(stored);
+      // Only restore a stored id that is genuinely a cockpit agent session. A
+      // pointer to a regular session (e.g. a hand-edited assistant.json) must not
+      // be rehydrated here — it would lack the MCP-disable/permission restrictions.
+      if (prefs?.cockpitAgent) {
+        const cwd = (await findSessionCwd(prefs.cliSessionId || stored)) ?? (await findSessionCwd(stored));
+        if (cwd) {
+          // ensureSession rebuilds in-memory state and (Step 5) registers the MCP-disable
+          // onInit listener. Model/thinking are restored from session-prefs — which the
+          // in-modal selector and the settings-page write-through both keep current —
+          // so no re-apply is needed here.
+          this.ensureSession(stored, cwd);
+          return stored;
+        }
+      }
+    }
+    // No stored id, or its transcript is gone — create a fresh session seeded from
+    // assistant.json. createSession is synchronous (this.sessions.set before return).
+    const info = this.createSession(getCockpitDir(), undefined, {
+      cockpitAgent: true,
+      runtime: settings.runtime,
+    });
+    if (settings.model) this.setModel(info.id, settings.model, settings.contextSize);
+    if (settings.thinkingLevel) this.setThinkingLevel(info.id, settings.thinkingLevel);
+    updateAssistantSettings({ sessionId: info.id });
+    return info.id;
+  }
+
+  async applyCockpitAgentSettings(update: { model?: string; thinkingLevel?: ThinkingLevel; contextSize?: ContextSize }): Promise<void> {
+    const stored = getAssistantSettings().sessionId;
+    if (!stored) return; // no session yet — assistant.json seeds the next create
+    if (!this.sessions.has(stored)) {
+      // Bring a dormant (on-disk) session into memory so the setters persist to its
+      // session-prefs. Do NOT create one if no transcript exists — a settings tweak
+      // must not spawn a session from nothing; the next create seeds from assistant.json.
+      const prefs = getSessionPrefs(stored);
+      const cwd = (await findSessionCwd(prefs?.cliSessionId || stored)) ?? (await findSessionCwd(stored));
+      if (!cwd) return;
+      this.ensureSession(stored, cwd);
+    }
+    // setModel couples model+contextSize; a context-size-only change reuses the current model.
+    if (update.model || update.contextSize) {
+      this.setModel(stored, update.model ?? this.getModel(stored), update.contextSize);
+    }
+    if (update.thinkingLevel) this.setThinkingLevel(stored, update.thinkingLevel);
   }
 
   async getSession(id: string): Promise<{

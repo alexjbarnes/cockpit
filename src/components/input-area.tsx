@@ -225,6 +225,7 @@ interface InputAreaProps {
   onSetBypass: (enabled: boolean) => void;
   planMode: boolean;
   onSetPlanMode: (enabled: boolean) => void;
+  showPlanToggle?: boolean;
   thinkingLevel: ThinkingLevel;
   onSetThinking: (level: ThinkingLevel) => void;
   currentModel: string;
@@ -278,6 +279,7 @@ export function InputArea({
   onSetBypass,
   planMode,
   onSetPlanMode,
+  showPlanToggle = true,
   thinkingLevel,
   onSetThinking,
   currentModel,
@@ -500,7 +502,7 @@ export function InputArea({
         }
       }
 
-      if (e.key === "Tab" && !e.shiftKey) {
+      if (e.key === "Tab" && !e.shiftKey && showPlanToggle) {
         e.preventDefault();
         onSetPlanMode(!planMode);
         return;
@@ -539,6 +541,7 @@ export function InputArea({
       onInterrupt,
       planMode,
       onSetPlanMode,
+      showPlanToggle,
       promptHistory,
     ],
   );
@@ -1283,18 +1286,20 @@ export function InputArea({
                 <Send className="h-4 w-4" />
               </Button>
             )}
-            <button
-              onClick={() => onSetPlanMode(!planMode)}
-              title={planMode ? "Switch to Build mode (Tab)" : "Switch to Plan mode (Tab)"}
-              className={`mt-4 flex items-center gap-0.5 whitespace-nowrap rounded-full px-1.5 py-0.5 text-[10px] font-medium transition-colors ${
-                planMode
-                  ? "bg-blue-500/15 text-blue-500 hover:bg-blue-500/25"
-                  : "bg-muted text-muted-foreground hover:bg-muted/80 hover:text-foreground"
-              }`}
-            >
-              {planMode ? <Eye className="h-2.5 w-2.5" /> : <Hammer className="h-2.5 w-2.5" />}
-              {planMode ? "Plan" : "Build"}
-            </button>
+            {showPlanToggle && (
+              <button
+                onClick={() => onSetPlanMode(!planMode)}
+                title={planMode ? "Switch to Build mode (Tab)" : "Switch to Plan mode (Tab)"}
+                className={`mt-4 flex items-center gap-0.5 whitespace-nowrap rounded-full px-1.5 py-0.5 text-[10px] font-medium transition-colors ${
+                  planMode
+                    ? "bg-blue-500/15 text-blue-500 hover:bg-blue-500/25"
+                    : "bg-muted text-muted-foreground hover:bg-muted/80 hover:text-foreground"
+                }`}
+              >
+                {planMode ? <Eye className="h-2.5 w-2.5" /> : <Hammer className="h-2.5 w-2.5" />}
+                {planMode ? "Plan" : "Build"}
+              </button>
+            )}
           </div>
         </div>
       </div>

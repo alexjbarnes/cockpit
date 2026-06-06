@@ -86,7 +86,7 @@ export default function AssistantSettingsPage() {
         await fetch("/api/assistant-settings", {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(next),
+          body: JSON.stringify(partial),
         });
       } catch {
         // best effort
