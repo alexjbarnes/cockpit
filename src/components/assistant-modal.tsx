@@ -41,35 +41,9 @@ export function AssistantModal({ open, onOpenChange }: AssistantModalProps) {
 
     async function init() {
       try {
-        // Fetch cwd and settings
-        const [cwdRes, settingsRes] = await Promise.all([fetch("/api/config/cwd"), fetch("/api/assistant-settings")]);
-
-        if (!cwdRes.ok || !settingsRes.ok) {
-          throw new Error("Failed to initialize assistant");
-        }
-
-        const { cwd: cockpitCwd } = await cwdRes.json();
-        const settings = await settingsRes.json();
-
-        // Create cockpit-agent session
-        const sessionRes = await fetch("/api/sessions", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            cwd: cockpitCwd,
-            cockpitAgent: true,
-            model: settings.model || "sonnet",
-            thinkingLevel: settings.thinkingLevel || "high",
-            runtime: settings.runtime,
-            contextSize: settings.contextSize,
-          }),
-        });
-
-        if (!sessionRes.ok) {
-          throw new Error("Failed to create assistant session");
-        }
-
-        const { sessionId: newId } = await sessionRes.json();
+        const res = await fetch("/api/assistant-session");
+        if (!res.ok) throw new Error("Failed to initialize assistant");
+        const { sessionId: newId, cwd: cockpitCwd } = await res.json();
         if (!cancelled) {
           sessionIdRef.current = newId;
           setSessionId(newId);

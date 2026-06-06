@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { validateSession } from "@/server/auth";
+import { getCockpitDir } from "@/server/paths";
 import { getSessionManager } from "@/server/singleton";
 import { scanSessionsForCwd } from "@/server/transcript";
 import type { SessionInfo } from "@/types";
@@ -17,6 +18,10 @@ export async function GET(req: NextRequest) {
   const cwd = req.nextUrl.searchParams.get("cwd");
   if (!cwd) {
     return NextResponse.json({ error: "cwd is required" }, { status: 400 });
+  }
+
+  if (cwd === getCockpitDir()) {
+    return NextResponse.json({ sessions: [] });
   }
 
   const sessions = await scanSessionsForCwd(cwd);

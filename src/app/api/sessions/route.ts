@@ -2,6 +2,7 @@ import path from "node:path";
 import { NextRequest, NextResponse } from "next/server";
 import { validateSession } from "@/server/auth";
 import { debugLog } from "@/server/debug-logger";
+import { getCockpitDir } from "@/server/paths";
 import { getSessionManager } from "@/server/singleton";
 import { scanAllSessions } from "@/server/transcript";
 
@@ -44,8 +45,11 @@ export async function GET(req: NextRequest) {
     }
   }
 
+  const cockpitConfigDir = getCockpitDir();
+
   // Include in-memory sessions that have no transcript file yet
   for (const mem of known) {
+    if (mem.cwd === cockpitConfigDir) continue;
     if (onDiskIds.has(mem.id)) continue;
     const group = groups.find((g) => g.cwd === mem.cwd);
     if (group) {
@@ -71,7 +75,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ sessions: allReviews.slice(0, limit) });
   }
 
-  const filtered = groups.filter((g) => g.sessions.length > 0 && !g.cwd.endsWith(".cockpit/jobs"));
+  const filtered = groups.filter((g) => g.sessions.length > 0 && !g.cwd.endsWith(".cockpit/jobs") && g.cwd !== cockpitConfigDir);
 
   // Re-sort after merging in-memory sessions
   for (const group of filtered) {

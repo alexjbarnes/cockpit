@@ -9,6 +9,7 @@ export interface AssistantSettings {
   thinkingLevel: ThinkingLevel;
   runtime?: "stream" | "pty";
   contextSize?: ContextSize;
+  sessionId?: string;
 }
 
 const fallback: AssistantSettings = {
