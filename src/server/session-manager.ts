@@ -1,6 +1,8 @@
 import { type ChildProcess, spawn } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { type Writable } from "node:stream";
 import { v4 as uuidv4 } from "uuid";
@@ -34,10 +36,11 @@ import type {
 import { debugLog, isDebugEnabled, logDiag, logRawLine } from "./debug-logger";
 import { getDefaults } from "./defaults";
 import { EventParser, type ParsedEvent } from "./event-parser";
+import { clearToken, type RunContext, registerAuthToken, registerRunContext } from "./mcp/run-context";
 import { findLatestPlanFile, readPlanFile } from "./plans";
 import { PtyRuntime } from "./pty-runtime";
 import { findChainForCliSession, getSessionPrefs, type SessionRuntime, setSessionPrefs } from "./session-prefs";
-import { getHookRouter } from "./singleton";
+import { getCockpitMcp, getHookRouter } from "./singleton";
 import { createStreamState, processEvents, type StreamState } from "./stream-processor";
 import { TodoWatcher } from "./todo-watcher";
 import { findSessionCwd, loadMoreMessages, loadPromptHistory, loadTranscript, transcriptExists } from "./transcript";
@@ -72,6 +75,7 @@ export interface PendingRequest {
   permissionSuggestions?: Record<string, unknown>[];
   planFilePath?: string;
   planContent?: string;
+  configProposal?: { toolName: string; domain: string; action: string };
 }
 
 export interface StreamingSnapshot {
@@ -125,6 +129,10 @@ interface Session {
    *  creation time; future revisions may expose this on SessionInfo. */
   runtime: SessionRuntime;
   ptyRuntime: PtyRuntime | null;
+  cockpitAgent: boolean;
+  cockpitAgentCleanups: (() => void)[];
+  mcpToken?: string;
+  runContext?: RunContext;
   /** True while a PTY spawn is in flight (status is "running" but the PTY is
    *  not yet alive). Observability only -- lets the stale-check log distinguish
    *  "process died" from "process still spawning". Does not gate any behavior. */
@@ -134,6 +142,23 @@ interface Session {
   attachmentPaths: string[];
   /** Cumulative token counts for the current session (used by /cost). */
   totalTokens: { input: number; output: number; cacheCreate: number; cacheRead: number };
+}
+
+export function buildMcpConfigArg(url: string, token: string): { path: string } {
+  const dir = path.join(tmpdir(), "cockpit-mcp-config");
+  mkdirSync(dir, { recursive: true });
+  const filePath = path.join(dir, `${token.slice(0, 16)}.json`);
+  const config = {
+    mcpServers: {
+      "cockpit-config": {
+        type: "http",
+        url: `${url}/mcp`,
+        headers: { Authorization: `Bearer ${token}` },
+      },
+    },
+  };
+  writeFileSync(filePath, JSON.stringify(config, null, 2), { mode: 0o600 });
+  return { path: filePath };
 }
 
 export class SessionManager {
@@ -158,15 +183,21 @@ export class SessionManager {
     }, 15000);
   }
 
-  createSession(cwd: string, name?: string, options?: { bypassPermissions?: boolean; runtime?: SessionRuntime }): SessionInfo {
+  createSession(
+    cwd: string,
+    name?: string,
+    options?: { bypassPermissions?: boolean; runtime?: SessionRuntime; cockpitAgent?: boolean },
+  ): SessionInfo {
     const id = uuidv4();
     const now = Date.now();
     const defaults = getDefaults();
     const modelSlots: ModelSlots = { main: defaults.modelSlots.main ?? "sonnet" };
+    const isCockpitAgent = options?.cockpitAgent === true;
     const rt = options?.runtime ?? defaultRuntime();
+    const sessionName = isCockpitAgent ? "Cockpit Assistant" : name || path.basename(cwd) || cwd;
     const info: SessionInfo = {
       id,
-      name: name || path.basename(cwd) || cwd,
+      name: sessionName,
       cwd,
       createdAt: now,
       lastActiveAt: now,
@@ -185,7 +216,7 @@ export class SessionManager {
       hasSpawnedBefore: false,
       cliSessionId: id,
       previousCliSessionIds: [],
-      bypassAllPermissions: options?.bypassPermissions ?? defaults.bypassAllPermissions,
+      bypassAllPermissions: isCockpitAgent ? false : (options?.bypassPermissions ?? defaults.bypassAllPermissions),
       planMode: false,
       needsRespawnForPermissions: false,
       compacting: false,
@@ -211,9 +242,33 @@ export class SessionManager {
       todoWatcher: null,
       attachmentPaths: [],
       totalTokens: { input: 0, output: 0, cacheCreate: 0, cacheRead: 0 },
+      cockpitAgent: isCockpitAgent,
+      cockpitAgentCleanups: [],
     });
 
     setSessionPrefs(id, { runtime: rt });
+
+    if (isCockpitAgent) {
+      const cleanup = this.onInit(id, async (data: InitData) => {
+        for (const server of data.mcpServers) {
+          if (server.name !== "cockpit-config" && server.status !== "disabled") {
+            try {
+              await this.mcpToggle(id, server.name, false);
+            } catch {
+              // best effort — server may not be started yet
+            }
+          }
+        }
+      });
+      if (cleanup) {
+        const session = this.sessions.get(id);
+        if (session) {
+          session.cockpitAgentCleanups.push(cleanup);
+        }
+      } else {
+        console.warn(`[cockpit-agent] onInit returned null for session ${id.slice(0, 8)}`);
+      }
+    }
 
     return info;
   }
@@ -284,6 +339,8 @@ export class SessionManager {
         todoWatcher: null,
         attachmentPaths: [],
         totalTokens: { input: 0, output: 0, cacheCreate: 0, cacheRead: 0 },
+        cockpitAgent: false,
+        cockpitAgentCleanups: [],
       };
       this.sessions.set(id, session);
     }
@@ -709,6 +766,22 @@ export class SessionManager {
       session.todoWatcher = null;
     }
     this.cleanupAttachments(session);
+    for (const cleanup of session.cockpitAgentCleanups) {
+      try {
+        cleanup();
+      } catch {
+        /* best effort */
+      }
+    }
+    if (session.mcpToken) {
+      clearToken(session.mcpToken);
+      const configPath = path.join(tmpdir(), "cockpit-mcp-config", `${session.mcpToken.slice(0, 16)}.json`);
+      try {
+        unlinkSync(configPath);
+      } catch {
+        /* best effort */
+      }
+    }
     session.emitter.removeAllListeners();
     this.sessions.delete(id);
     return true;
@@ -937,7 +1010,7 @@ export class SessionManager {
 
   setBypassAllPermissions(sessionId: string): void {
     const session = this.sessions.get(sessionId);
-    if (!session || session.bypassAllPermissions) return;
+    if (!session || session.bypassAllPermissions || session.cockpitAgent) return;
     session.bypassAllPermissions = true;
     setSessionPrefs(sessionId, { bypassAllPermissions: true });
     // Don't change CLI mode while in plan mode; bypass will restore on plan exit
@@ -1554,6 +1627,45 @@ export class SessionManager {
         this.respondToPermission(sessionId, pa.requestId, true, pa.rawToolInput);
       } else if (pa.type === "auto_deny") {
         this.respondToPermission(sessionId, pa.requestId, false, undefined, undefined, pa.denyReason);
+      } else if (session.cockpitAgent && pa.toolName !== "AskUserQuestion") {
+        const tool = pa.toolName;
+        const isReadOnlyBuiltin = ["Read", "Grep", "Glob"].includes(tool);
+        const cockpitPrefix = "mcp__cockpit-config__";
+        const isCockpitTool = tool.startsWith(cockpitPrefix);
+        const cockpitAction = isCockpitTool ? tool.slice(cockpitPrefix.length).split("_")[0] : "";
+        const isCockpitRead = isCockpitTool && (cockpitAction === "list" || cockpitAction === "get");
+        const isCockpitWrite = isCockpitTool && !isCockpitRead;
+        logDiag(sessionId, "cockpit-agent:permission", {
+          toolName: tool,
+          decision: isReadOnlyBuiltin || isCockpitRead ? "auto_approve" : isCockpitWrite ? "proposal" : "auto_deny",
+        });
+
+        if (isReadOnlyBuiltin || isCockpitRead) {
+          this.respondToPermission(sessionId, pa.requestId, true, pa.rawToolInput);
+        } else if (isCockpitWrite) {
+          const suffix = tool.replace("mcp__cockpit-config__", "");
+          const parts = suffix.split("_");
+          const action = parts[0];
+          const domain = parts.slice(1).join("_");
+          session.pendingRequests.set(pa.requestId, {
+            type: "permission",
+            requestId: pa.requestId,
+            toolName: pa.toolName,
+            toolInput: pa.toolInput || "",
+            rawToolInput: pa.rawToolInput,
+            configProposal: { toolName: tool, domain, action },
+          });
+          this.notifyPendingChanged(session, sessionId);
+        } else {
+          this.respondToPermission(
+            sessionId,
+            pa.requestId,
+            false,
+            undefined,
+            undefined,
+            "This tool is not available in the cockpit assistant",
+          );
+        }
       } else if (session.bypassAllPermissions && !session.planMode && pa.toolName !== "AskUserQuestion") {
         this.respondToPermission(sessionId, pa.requestId, true, pa.rawToolInput);
         bypassedRequestIds.add(pa.requestId);
@@ -2055,14 +2167,14 @@ Additional Cockpit rules beyond the CLI's defaults:
     // natively enforces tool restrictions and sends permission_requests for
     // write tools (which the server auto-denies).
     // Outside plan mode, enable bypass so it can be toggled mid-session.
-    if (!session.planMode) {
+    if (!session.planMode && !session.cockpitAgent) {
       args.push("--allow-dangerously-skip-permissions");
     }
     args.push("--permission-prompt-tool", "stdio");
 
     if (session.planMode) {
       args.push("--permission-mode", "plan");
-    } else if (session.bypassAllPermissions) {
+    } else if (session.bypassAllPermissions && !session.cockpitAgent) {
       args.push("--permission-mode", "bypassPermissions");
     }
 
@@ -2112,6 +2224,29 @@ Additional Cockpit rules beyond the CLI's defaults:
       env.ANTHROPIC_SMALL_FAST_MODEL = resolvedSub ? resolvedSub.model.modelId : session.modelSlots.subagent;
     }
 
+    if (session.cockpitAgent) {
+      const cockpitMcp = getCockpitMcp();
+      if (cockpitMcp) {
+        if (session.mcpToken) {
+          clearToken(session.mcpToken);
+          try {
+            unlinkSync(path.join(tmpdir(), "cockpit-mcp-config", `${session.mcpToken.slice(0, 16)}.json`));
+          } catch {
+            /* best effort */
+          }
+        }
+        const token = randomBytes(24).toString("hex");
+        if (session.runContext) {
+          registerRunContext(token, session.runContext);
+        } else {
+          registerAuthToken(token);
+        }
+        session.mcpToken = token;
+        const configFile = buildMcpConfigArg(cockpitMcp.getUrl(), token);
+        args.push("--mcp-config", configFile.path);
+      }
+    }
+
     mkdirSync(session.info.cwd, { recursive: true });
 
     const isWin = process.platform === "win32";
@@ -2142,7 +2277,7 @@ Additional Cockpit rules beyond the CLI's defaults:
     // even if --permission-mode was ignored on resume.
     if (session.planMode) {
       this.sendPermissionMode(session, sessionId, "plan");
-    } else if (session.bypassAllPermissions) {
+    } else if (session.bypassAllPermissions && !session.cockpitAgent) {
       this.sendPermissionMode(session, sessionId, "bypassPermissions");
     }
 
@@ -2327,7 +2462,7 @@ Additional Cockpit rules beyond the CLI's defaults:
     }
     if (session.planMode) {
       extraArgs.push("--permission-mode", "plan");
-    } else if (session.bypassAllPermissions) {
+    } else if (session.bypassAllPermissions && !session.cockpitAgent) {
       extraArgs.push("--permission-mode", "bypassPermissions");
     }
 
@@ -2340,6 +2475,29 @@ Additional Cockpit rules beyond the CLI's defaults:
     if (session.modelSlots.subagent && session.modelSlots.subagent !== session.modelSlots.main) {
       const resolvedSub = resolveProviderModel(session.modelSlots.subagent);
       extraEnv.ANTHROPIC_SMALL_FAST_MODEL = resolvedSub ? resolvedSub.model.modelId : session.modelSlots.subagent;
+    }
+
+    if (session.cockpitAgent) {
+      const cockpitMcp = getCockpitMcp();
+      if (cockpitMcp) {
+        if (session.mcpToken) {
+          clearToken(session.mcpToken);
+          try {
+            unlinkSync(path.join(tmpdir(), "cockpit-mcp-config", `${session.mcpToken.slice(0, 16)}.json`));
+          } catch {
+            /* best effort */
+          }
+        }
+        const token = randomBytes(24).toString("hex");
+        if (session.runContext) {
+          registerRunContext(token, session.runContext);
+        } else {
+          registerAuthToken(token);
+        }
+        session.mcpToken = token;
+        const configFile = buildMcpConfigArg(cockpitMcp.getUrl(), token);
+        extraArgs.push("--mcp-config", configFile.path);
+      }
     }
 
     const runtime = new PtyRuntime({

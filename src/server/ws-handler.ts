@@ -396,6 +396,9 @@ export function createWebSocketHandler(
                   permMsg.planFilePath = req.planFilePath;
                   permMsg.planContent = req.planContent;
                 }
+                if (req.configProposal) {
+                  permMsg.configProposal = req.configProposal;
+                }
                 send(ws, permMsg);
               }
             }
@@ -1025,6 +1028,10 @@ function handleParsedEvent(ws: WebSocket, sessionId: string, event: ParsedEvent,
             permMsg.planFilePath = planPath;
             permMsg.planContent = readPlanFile(planPath);
           }
+        }
+        const pending = sessionManager.getPendingRequest(sessionId, requestId);
+        if (pending?.configProposal) {
+          permMsg.configProposal = pending.configProposal;
         }
         send(ws, permMsg);
       }

@@ -172,7 +172,7 @@ export const MessageBubble = memo(function MessageBubble({
     >
       <div
         className={cn(
-          "max-w-[85%] rounded-lg px-4 py-2 overflow-hidden transition-colors",
+          "max-w-[85%] rounded-lg px-4 py-2 overflow-hidden transition-colors select-text",
           !isUser && hasToolCard && "w-full",
           isUser && !collapsedByDefault ? "bg-primary text-primary-foreground" : "bg-muted text-foreground",
           selected && "ring-2 ring-blue-500",

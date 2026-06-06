@@ -4122,4 +4122,122 @@ describe("SessionManager", () => {
       expect(args).not.toContain("--resume");
     });
   });
+
+  describe("cockpit agent session", () => {
+    it("creates session with cockpitAgent=true", () => {
+      const session = manager.createSession("/tmp", undefined, { cockpitAgent: true });
+      const s = (manager as any).sessions.get(session.id);
+      expect(s.cockpitAgent).toBe(true);
+      expect(session.name).toBe("Cockpit Assistant");
+      expect(s.bypassAllPermissions).toBe(false);
+    });
+
+    it("creates session with cockpitAgent=false by default", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id);
+      expect(s.cockpitAgent).toBe(false);
+    });
+
+    it("forces bypassAllPermissions to false for cockpitAgent sessions", () => {
+      const session = manager.createSession("/tmp", undefined, { cockpitAgent: true, bypassPermissions: true });
+      const s = (manager as any).sessions.get(session.id);
+      expect(s.bypassAllPermissions).toBe(false);
+    });
+  });
+
+  describe("cockpit agent permission handling", () => {
+    it("auto-approves Read tool", () => {
+      const session = manager.createSession("/tmp", undefined, { cockpitAgent: true });
+      const s = (manager as any).sessions.get(session.id);
+      const respondToPermission = vi.spyOn(manager, "respondToPermission" as any);
+
+      const result = {
+        permissionActions: [
+          {
+            type: "store" as const,
+            toolName: "Read",
+            requestId: "req-1",
+            toolInput: JSON.stringify({ file_path: "/tmp/test.txt" }),
+            rawToolInput: { file_path: "/tmp/test.txt" },
+          },
+        ],
+        errors: [],
+        compactDone: false,
+        emit: [],
+        statusChange: undefined,
+        snapshot: null,
+        intermediateMessages: [],
+        systemMessages: [],
+      };
+
+      (manager as any).applyProcessedResult(s, session.id, result);
+      expect(respondToPermission).toHaveBeenCalledWith(session.id, "req-1", true, { file_path: "/tmp/test.txt" });
+    });
+
+    it("auto-denies Bash tool", () => {
+      const session = manager.createSession("/tmp", undefined, { cockpitAgent: true });
+      const s = (manager as any).sessions.get(session.id);
+      const respondToPermission = vi.spyOn(manager, "respondToPermission" as any);
+
+      const result = {
+        permissionActions: [
+          {
+            type: "store" as const,
+            toolName: "Bash",
+            requestId: "req-2",
+            toolInput: JSON.stringify({ command: "echo hi" }),
+            rawToolInput: { command: "echo hi" },
+          },
+        ],
+        errors: [],
+        compactDone: false,
+        emit: [],
+        statusChange: undefined,
+        snapshot: null,
+        intermediateMessages: [],
+        systemMessages: [],
+      };
+
+      (manager as any).applyProcessedResult(s, session.id, result);
+      expect(respondToPermission).toHaveBeenCalledWith(
+        session.id,
+        "req-2",
+        false,
+        undefined,
+        undefined,
+        "This tool is not available in the cockpit assistant",
+      );
+    });
+
+    it("stores mcp__cockpit-config__create_job as PendingRequest with configProposal", () => {
+      const session = manager.createSession("/tmp", undefined, { cockpitAgent: true });
+      const s = (manager as any).sessions.get(session.id);
+
+      const result = {
+        permissionActions: [
+          {
+            type: "store" as const,
+            toolName: "mcp__cockpit-config__create_job",
+            requestId: "req-3",
+            toolInput: JSON.stringify({ name: "test" }),
+            rawToolInput: { name: "test" },
+          },
+        ],
+        errors: [],
+        compactDone: false,
+        emit: [],
+        statusChange: undefined,
+        snapshot: null,
+        intermediateMessages: [],
+        systemMessages: [],
+      };
+
+      (manager as any).applyProcessedResult(s, session.id, result);
+      expect(s.pendingRequests.has("req-3")).toBe(true);
+      const pending = s.pendingRequests.get("req-3");
+      expect(pending.configProposal).toBeDefined();
+      expect(pending.configProposal.action).toBe("create");
+      expect(pending.configProposal.domain).toBe("job");
+    });
+  });
 });

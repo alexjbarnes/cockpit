@@ -109,14 +109,25 @@ export async function POST(req: NextRequest) {
   const contextSizeRaw = typeof body.contextSize === "string" ? body.contextSize : undefined;
   const contextSize = contextSizeRaw === "200k" || contextSizeRaw === "1m" ? contextSizeRaw : undefined;
   const bypassPermissions = body.bypassPermissions === true;
+  const cockpitAgent = body.cockpitAgent === true;
 
   if (!cwd) {
     return NextResponse.json({ error: "cwd is required" }, { status: 400 });
   }
 
-  const session = getSessionManager().createSession(cwd, name, { runtime, bypassPermissions: bypassPermissions || undefined });
+  const session = getSessionManager().createSession(cwd, name, {
+    runtime,
+    bypassPermissions: bypassPermissions || undefined,
+    cockpitAgent: cockpitAgent || undefined,
+  });
   if (model) {
     getSessionManager().setModel(session.id, model, contextSize);
+  }
+  if (cockpitAgent) {
+    const thinkingLevel = typeof body.thinkingLevel === "string" ? body.thinkingLevel : undefined;
+    if (thinkingLevel) {
+      getSessionManager().setThinkingLevel(session.id, thinkingLevel as import("@/types").ThinkingLevel);
+    }
   }
   return NextResponse.json({ sessionId: session.id });
 }
