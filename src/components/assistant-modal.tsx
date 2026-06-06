@@ -106,12 +106,12 @@ export function AssistantModal({ open, onOpenChange }: AssistantModalProps) {
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="sm:max-w-3xl h-[80vh] flex flex-col p-0 gap-0">
+      <DialogContent className="sm:max-w-3xl h-[80vh] flex flex-col p-0 gap-0 overflow-hidden">
         <div className="flex items-center gap-2 px-4 py-3 border-b shrink-0">
           <Bot className="h-4 w-4 text-muted-foreground" />
           <span className="text-sm font-medium">Cockpit Assistant</span>
         </div>
-        <div className="flex-1 min-h-0">
+        <div className="flex-1 min-h-0 flex flex-col">
           {loading && (
             <div className="flex items-center justify-center h-full">
               <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
