@@ -58,9 +58,15 @@ Then `browser_navigate` to `http://localhost:3010/login` and submit the setup fo
 
 You land on `/`, authenticated.
 
-## 3. Clear the service worker — the one that wastes the most time
+## 3. The service worker — now auto-handled in dev (was the #1 time sink)
 
-cockpit registers a service worker that caches the app shell (cache name like `cockpit-shell-v2`). It serves stale JS **across server restarts and `.next` deletes**. Until you clear it, you are looking at OLD code no matter what you change. After navigating, run this, then navigate again:
+cockpit's PWA service worker (`sw.js`, cache `cockpit-shell-v2`) is **cache-first for `/_next/static`**. That is correct in production (content-hashed URLs) but poison in dev: turbopack dev chunk URLs are stable while their contents change across edits and server restarts, so the SW serves a stale chunk against a fresh shell. As of the layout.tsx fix, **the SW is no longer registered in development**, and a dev page actively unregisters any leftover SW and clears its caches on load. So a fresh spare port is clean, and a port previously poisoned by an old SW self-heals.
+
+**The symptom this caused** (worth recognising — it cost hours): a **blank page** where every `/_next/static/*.js` chunk loads `200`, React never mounts (`document.body.innerText` empty, only a `<div hidden><!--$--><!--/$--></div>` placeholder), and the console shows **only** HMR-websocket failures. That is a stale SW serving mismatched cached chunks, not a code bug.
+
+Why it bit the MCP but not the ui-reviewer: SW scope is **per origin including port**. The ui-reviewer uses a fresh spare port (and a fresh browser profile) each run, so its origin never has a prior SW. The MCP reuses a small set of ports/profile, so a port that hosted an earlier server still carries that origin's stale SW. Two consequences:
+- **Prefer a unique, not-recently-used port** per run (and vary it if you hit a blank page).
+- If you do hit the blank page on a reused port, just **reload once** — the dev cleanup script already unregistered the SW on the first load; the reload lands clean. Belt-and-braces manual clear (rarely needed now):
 
 ```js
 async () => {
@@ -69,7 +75,7 @@ async () => {
 }
 ```
 
-Confirm you're on current code before trusting anything: read a class or text you just changed off the live DOM via `browser_evaluate` and compare to source.
+After it, navigate again. Confirm you're on current code: read a class or text you just changed off the live DOM via `browser_evaluate` and compare to source. A quick tell that no SW is interfering: `navigator.serviceWorker.controller === null`.
 
 ## 4. Drive the UI
 
@@ -92,9 +98,9 @@ Skip either and you keep seeing stale code.
 ## 6. Teardown
 
 ```bash
-kill $(lsof -ti:3010) 2>/dev/null; pkill -f "tsx server.ts" 2>/dev/null
+kill $(lsof -ti:3010) 2>/dev/null || true   # kill by PORT only
 rm -rf /tmp/cockpit-verify /tmp/cockpit-verify.log
 rm -f /home/dev/repos/cockpit/*.png   # screenshots browser_take_screenshot saved into the repo root
 ```
 
-Leave `.next` (gitignored). The live instance on 3001 is untouched throughout.
+Kill by **port**, not `pkill -f "tsx server.ts"` — that pattern matches every cockpit dev server (sibling worktrees, the implement-issue review server, the ui-reviewer's server) and will take them all down. Leave `.next` (gitignored). The live instance on 3001 is untouched throughout.
