@@ -4209,7 +4209,7 @@ describe("SessionManager", () => {
       );
     });
 
-    it("stores mcp__cockpit_config__create_job as PendingRequest with configProposal", () => {
+    it("stores mcp__cockpit-config__create_job as PendingRequest with configProposal", () => {
       const session = manager.createSession("/tmp", undefined, { cockpitAgent: true });
       const s = (manager as any).sessions.get(session.id);
 
@@ -4217,7 +4217,7 @@ describe("SessionManager", () => {
         permissionActions: [
           {
             type: "store" as const,
-            toolName: "mcp__cockpit_config__create_job",
+            toolName: "mcp__cockpit-config__create_job",
             requestId: "req-3",
             toolInput: JSON.stringify({ name: "test" }),
             rawToolInput: { name: "test" },

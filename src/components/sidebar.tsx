@@ -4,6 +4,7 @@ import { DndContext, type DragEndEvent, PointerSensor, useSensor, useSensors } f
 import { arrayMove, SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import {
+  Bot,
   CalendarClock,
   Check,
   ExternalLink,
@@ -15,7 +16,6 @@ import {
   GripVertical,
   Inbox,
   LayoutGrid,
-  MessageCircle,
   Plus,
   Settings,
   X,
@@ -1087,7 +1087,7 @@ function AssistantButton({ onClick }: { onClick: () => void }) {
       onClick={onClick}
       title="Cockpit Assistant"
     >
-      <MessageCircle className="h-4 w-4" />
+      <Bot className="h-4 w-4" />
     </Button>
   );
 }

@@ -1,11 +1,14 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import type { ContextSize } from "@/lib/models";
 import { getCockpitDir } from "@/server/paths";
 import type { ThinkingLevel } from "@/types";
 
 export interface AssistantSettings {
   model: string;
   thinkingLevel: ThinkingLevel;
+  runtime?: "stream" | "pty";
+  contextSize?: ContextSize;
 }
 
 const fallback: AssistantSettings = {

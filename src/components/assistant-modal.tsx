@@ -1,6 +1,6 @@
 "use client";
 
-import { Loader2, MessageCircle } from "lucide-react";
+import { Bot, Loader2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { ChatView } from "./chat-view";
@@ -60,6 +60,8 @@ export function AssistantModal({ open, onOpenChange }: AssistantModalProps) {
             cockpitAgent: true,
             model: settings.model || "sonnet",
             thinkingLevel: settings.thinkingLevel || "high",
+            runtime: settings.runtime,
+            contextSize: settings.contextSize,
           }),
         });
 
@@ -106,7 +108,7 @@ export function AssistantModal({ open, onOpenChange }: AssistantModalProps) {
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="sm:max-w-3xl h-[80vh] flex flex-col p-0 gap-0">
         <div className="flex items-center gap-2 px-4 py-3 border-b shrink-0">
-          <MessageCircle className="h-4 w-4 text-muted-foreground" />
+          <Bot className="h-4 w-4 text-muted-foreground" />
           <span className="text-sm font-medium">Cockpit Assistant</span>
         </div>
         <div className="flex-1 min-h-0">

@@ -9,6 +9,8 @@ import { Button } from "@/components/ui/button";
 interface AssistantSettings {
   model: string;
   thinkingLevel: string;
+  runtime?: string;
+  contextSize?: string;
 }
 
 const MODEL_OPTIONS = [
@@ -23,6 +25,16 @@ const THINKING_OPTIONS = [
   { value: "high", label: "High" },
   { value: "xhigh", label: "X-High" },
   { value: "max", label: "Max" },
+];
+
+const RUNTIME_OPTIONS = [
+  { value: "stream", label: "Stream" },
+  { value: "pty", label: "PTY" },
+];
+
+const CONTEXT_OPTIONS = [
+  { value: "200k", label: "200K" },
+  { value: "1m", label: "1M" },
 ];
 
 function ButtonGroup<T extends string>({
@@ -48,7 +60,12 @@ function ButtonGroup<T extends string>({
 export default function AssistantSettingsPage() {
   usePageHeader("Cockpit Agent", { hideActions: true });
   const router = useRouter();
-  const [settings, setSettings] = useState<AssistantSettings>({ model: "sonnet", thinkingLevel: "high" });
+  const [settings, setSettings] = useState<AssistantSettings>({
+    model: "sonnet",
+    thinkingLevel: "high",
+    runtime: "stream",
+    contextSize: "200k",
+  });
   const [_loaded, setLoaded] = useState(false);
 
   useEffect(() => {
@@ -92,6 +109,18 @@ export default function AssistantSettingsPage() {
         <div className="flex items-start justify-between py-2.5 text-sm">
           <span className="py-1">Thinking level</span>
           <ButtonGroup options={THINKING_OPTIONS} value={settings.thinkingLevel} onChange={(v) => updateSetting({ thinkingLevel: v })} />
+        </div>
+        <div className="flex items-start justify-between py-2.5 text-sm">
+          <span className="py-1">Runtime</span>
+          <ButtonGroup options={RUNTIME_OPTIONS} value={settings.runtime ?? "stream"} onChange={(v) => updateSetting({ runtime: v })} />
+        </div>
+        <div className="flex items-start justify-between py-2.5 text-sm">
+          <span className="py-1">Context size</span>
+          <ButtonGroup
+            options={CONTEXT_OPTIONS}
+            value={settings.contextSize ?? "200k"}
+            onChange={(v) => updateSetting({ contextSize: v })}
+          />
         </div>
       </div>
     </div>

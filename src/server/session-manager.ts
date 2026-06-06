@@ -1630,7 +1630,7 @@ export class SessionManager {
       } else if (session.cockpitAgent && pa.toolName !== "AskUserQuestion") {
         const tool = pa.toolName;
         const isReadOnlyBuiltin = ["Read", "Grep", "Glob"].includes(tool);
-        const cockpitPrefix = "mcp__cockpit_config__";
+        const cockpitPrefix = "mcp__cockpit-config__";
         const isCockpitTool = tool.startsWith(cockpitPrefix);
         const cockpitAction = isCockpitTool ? tool.slice(cockpitPrefix.length).split("_")[0] : "";
         const isCockpitRead = isCockpitTool && (cockpitAction === "list" || cockpitAction === "get");
@@ -1643,7 +1643,7 @@ export class SessionManager {
         if (isReadOnlyBuiltin || isCockpitRead) {
           this.respondToPermission(sessionId, pa.requestId, true, pa.rawToolInput);
         } else if (isCockpitWrite) {
-          const suffix = tool.replace("mcp__cockpit_config__", "");
+          const suffix = tool.replace("mcp__cockpit-config__", "");
           const parts = suffix.split("_");
           const action = parts[0];
           const domain = parts.slice(1).join("_");
