@@ -177,3 +177,5 @@ Then write the final converged plan in one `save_issue` call with `id`, `descrip
 - Exact over vague. If you cannot name the symbol and the change, you have not finished investigating.
 - Separate fact from hypothesis. The review stage attacks the assumptions, so make them visible.
 - Name specific test cases with file paths, scenarios, and assertions. "Add tests" is not a test plan.
+- For any runtime/behavioural acceptance criterion, name an EXERCISING test, an integration test against the mock CLI (see the integration-test skill) or a spawn-arg unit test, not just a helper unit test. A criterion that can only be proven by running the feature needs a test that runs it.
+- A load-bearing assumption (one the feature's behaviour depends on, e.g. "the CLI reports the injected server under this name, which the permission filter keys on") must become a specific test or a runtime check in the plan, not sit in Open Questions as prose. An unverified assumption on a critical path is how a feature ships dead.

@@ -1,6 +1,6 @@
 ---
 name: ui-reviewer
-description: Reviews UI changes in a Linear issue's implementation by driving the running app with Playwright. Spins up an isolated cockpit dev server from the implementation worktree, navigates to the affected screens at desktop and mobile viewports, screenshots them, assesses the change against the plan's intended behaviour, attaches the screenshots to the Linear issue, and returns a verdict with findings. Invoked by the implement-issue skill when a change touches UI.
+description: Reviews UI changes in a Linear issue's implementation by driving the running app with Playwright. Spins up an isolated cockpit dev server from the implementation worktree, navigates to the affected screens at desktop and mobile viewports, exercises the key interactions, screenshots them, assesses the change against the plan's intended behaviour, attaches the screenshots to the Linear issue, and returns a verdict with findings. Invoked by the implement-issue skill when a change touches UI.
 model: sonnet
 ---
 
@@ -42,6 +42,9 @@ Load the Playwright tools via ToolSearch. For each affected screen:
 - Screenshot at a desktop viewport and a mobile viewport (`browser_resize`, e.g. `1280x800` and `393x600`). Mobile catches the layout breaks that matter most.
 - Take screenshots as **JPEG** (`browser_take_screenshot` with `type: "jpeg"`), not PNG. A JPEG of a UI screen is a fraction of the PNG size, and the Linear attachment path takes inline base64 with a size limit (see step 5). PNG desktop captures routinely blow past it; JPEG usually fits.
 - Keep screenshots viewport-sized, not full-page.
+
+### 3a. Exercise the feature, not just the screen
+A screen can render perfectly and the feature still be dead. If the change's value is an interaction — the cockpit assistant calling a tool, a form submitting, a control mutating state, a live update — perform that action and confirm the result, do not stop at a screenshot. Open the assistant and send a message; submit the form; toggle the control. Then read the outcome off the live DOM (`browser_evaluate`): the expected element or text appeared, no error banner, no "not available" or denied message. Click via `browser_evaluate` (find by text, `.click()`) per browser-test. A change that renders but errors, no-ops, or denies the core action is a **CRITICAL** finding, not a pass — this is the single most common thing a screenshot-only review misses.
 
 ### 4. Review what you see
 Assess against the plan's intended behaviour. Do not just eyeball the image, verify with geometry:
@@ -112,5 +115,6 @@ If no findings, write `(none)` under findings. Verdict is FAIL if any Critical o
 - Run against the worktree given in the input, never the live instance (port 3001) or the main repo checkout.
 - Always clear the service worker before trusting a screenshot.
 - Verify with geometry, not just the image.
+- Exercise the core interaction, do not stop at a static screenshot. "Renders but errors, no-ops, or denies the action" is CRITICAL.
 - Capture JPEG, viewport-sized. Shrink any image over ~100KB with sharp until it fits, never drop a screen for being too large.
 - Attach every captured screen and post the findings comment, even on PASS. The visual evidence is the point.

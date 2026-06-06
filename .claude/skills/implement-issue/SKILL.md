@@ -1,5 +1,5 @@
 ---
-description: Implement a refined Linear issue. Branches off next in an isolated git worktree, writes the code following the approved plan, runs build/lint/tests, self-reviews with the code-reviewer agent (up to 4 rounds), runs the ui-reviewer agent for screenshots when UI changed, runs the completeness-reviewer agent to confirm every acceptance criterion is met, opens a PR, starts a live test server and posts its URL for the human to verify, then moves the issue to Human Review. Use when asked to implement, build, or code up a Linear issue, e.g. "implement ALE-123".
+description: Implement a refined Linear issue. Branches off next in an isolated git worktree, writes the code following the approved plan, runs build/lint/tests, runs the completeness-reviewer agent first to confirm every acceptance criterion has implementing code, self-reviews with the code-reviewer agent (up to 4 rounds), runs the ui-reviewer agent for screenshots when UI changed, opens a PR, starts a live test server and posts its URL for the human to verify, then moves the issue to Human Review. Use when asked to implement, build, or code up a Linear issue, e.g. "implement ALE-123".
 ---
 
 # Implement a Linear issue
@@ -35,7 +35,11 @@ The default is pipeline mode. Treat it as interactive only when a human invoked 
 - `list_comments`. The Human Review gate often leaves approval conditions or change requests in comments. Read them; they override the plan where they conflict.
 
 ### 2. Readiness check
-Confirm the description is a real refined plan, not a rough ticket. It should have an Implementation Plan section with file-and-symbol steps, plus Acceptance Criteria. If it does not, stop, add a comment saying it needs refinement first, and do not implement.
+Confirm the description is a real refined plan, not a rough ticket. It should have an Implementation Plan section with file-and-symbol steps, plus Acceptance Criteria. Hand the issue back early rather than improvising when:
+- **It was never refined.** A hand-written ticket can carry the right section headings and still be ungrounded. If there is no sign it went through refine-issue (no refinement self-review comment, or the issue is still in Backlog and was never in Issue Refinement), stop, comment that it needs `refine-issue` first, and do not implement.
+- **The plan's anchors do not exist on the base branch.** Spot-check that the files and symbols the plan names are actually present where it says. If the plan references code that is not there (e.g. it assumes an unmerged refactor has already landed, or names "the block which already does X" and that block does not exist), stop and comment exactly what is missing. Do not invent the missing surface.
+
+If the plan is sound, continue. Context missing here costs minutes; the same gap found after a PR costs a full review cycle.
 
 ### 3. Set status to Implementation
 Set the issue status to `Implementation` via `save_issue` (id + state).
@@ -69,6 +73,8 @@ Match the surrounding code's style, naming, and idioms. Read neighbouring code b
 ### 6. Write the tests
 Write the tests named in the plan's Testing section, at the file paths and with the scenarios and assertions it specifies. Not "add tests" but exactly the cases listed.
 
+For any acceptance criterion that is **behavioural** (the feature does something at runtime: an agent tool resolves, a session spawns with a flag, a job posts output, a permission is allowed or denied), write a test that EXERCISES that path, not a unit test of a helper in isolation. Use the integration-test skill (the real CLI driven by the mock Anthropic API) or a spawn-arg unit test. "The code is present and the build is green" has shipped entirely dead features here; a test that runs the path is what proves it works, and it is what the completeness reviewer now requires for behavioural criteria.
+
 ### 7. Verify
 Run the project's checks. All must pass:
 - `npx tsc --noEmit -p tsconfig.json` (typechecks the app **and `tests/`**)
@@ -78,10 +84,29 @@ Run the project's checks. All must pass:
 
 Run the `tsc --noEmit` typecheck explicitly. Neither `npm run build` nor the server tsc covers `tests/`, and `vitest` strips types rather than checking them, so a type error in a test file passes all of build/lint/vitest and then the pre-commit hook (which does typecheck `tests/`) blocks the commit. Catch it here, not at commit time.
 
-Fix failures until green. Skip the Playwright integration suite unless the plan calls for it; note in the PR if integration coverage is warranted but not run.
+Fix failures until green. Run the Playwright integration suite (`npm run test:integration`) when the plan names an integration test or the change touches a runtime path (session spawn, agent tools, permission flow, jobs); note in the PR if it was warranted but not run.
 
-### 8. Adversarial self-review loop
-Dispatch the `code-reviewer` agent (`subagent_type: "code-reviewer"`) against the diff. Tell it the base branch is `next` so it reviews `git diff next` in the worktree. Request a standard single-pass sweep (the autonomous run has no human to confirm a fan-out).
+Coverage gate: vitest enforces an 80% global threshold (lines, functions, branches; see `vitest.config`). A new source file with thin tests fails it. Check new files with `npx vitest run --coverage` and write branch tests up front, instead of discovering the shortfall after the review loops.
+
+### 8. Feature-completeness coverage check
+The first review gate. Before reviewing whether the code is correct or renders well, confirm it contains everything the issue asked for, so the deeper reviews run once, on a complete feature, not on half-built work. Dispatch the `completeness-reviewer` agent (`subagent_type: "completeness-reviewer"`) with:
+
+```
+**Issue:** <ALE-123>
+**Worktree:** <absolute worktree path>
+**Mode:** coverage (UI not yet reviewed)
+```
+
+It maps the issue's Request and every acceptance criterion against the diff and the tests, and returns COMPLETE/INCOMPLETE with a coverage table. A criterion with no implementing code or test is a real gap and blocks. A purely-visual criterion it cannot confirm from code or tests is marked "pending UI" and does NOT block here; the ui-reviewer (step 10) and the human gate confirm those. Post its output as a comment on the issue each round.
+
+**On INCOMPLETE:** implement the missing pieces, re-run the verify checks (step 7), then re-dispatch the completeness-reviewer. Nothing earlier needs re-running, code and UI review have not run yet.
+
+**When to stop iterating** (first match wins):
+1. **COMPLETE** (every criterion has implementing code or a test, or is pending-UI). Proceed to code review.
+2. **Hard cap: 4 rounds.** If criteria are still genuinely unmet after the fourth, stop. Proceed and carry the unmet criteria to the Human Review transition as a comment so the human knows exactly what is missing.
+
+### 9. Adversarial self-review loop
+The feature is complete; now confirm the code is correct. Dispatch the `code-reviewer` agent (`subagent_type: "code-reviewer"`) against the diff. Tell it the base branch is `next` so it reviews `git diff next` in the worktree. Request a standard single-pass sweep (the autonomous run has no human to confirm a fan-out).
 
 The agent returns Critical/High/Medium/Low findings and a PASS/FAIL verdict.
 
@@ -90,15 +115,15 @@ The agent returns Critical/High/Medium/Low findings and a PASS/FAIL verdict.
 **On FAIL or any Critical/High findings:** fix the named issues, re-run the verify checks (step 7), then re-dispatch the reviewer.
 
 **When to stop iterating** (first match wins):
-1. **PASS or only Medium/Low remain.** Apply Medium fixes. Proceed to PR.
-2. **Hard cap: 4 rounds.** If Critical/High findings still remain after the fourth review, stop iterating. Proceed to PR but carry the unresolved findings to step 10.
+1. **PASS or only Medium/Low remain.** Apply Medium fixes. Proceed.
+2. **Hard cap: 4 rounds.** If Critical/High findings still remain after the fourth review, stop iterating. Proceed but carry the unresolved findings to the Human Review transition.
 
 Re-verify after every fix. Never let a fix break the build, lint, or tests.
 
-### 9. UI review (only if the change touches UI)
+### 10. UI review (only if the change touches UI)
 Check the diff for UI files: `src/components/**`, `src/app/**/*.tsx`, or any `*.css`. If none changed, skip this step.
 
-If UI changed, dispatch the `ui-reviewer` agent (`subagent_type: "ui-reviewer"`) once, after the code-review loop has converged. Pass a labelled payload:
+If UI changed, dispatch the `ui-reviewer` agent (`subagent_type: "ui-reviewer"`) once, after the completeness and code-review loops have converged. Pass a labelled payload:
 
 ```
 **Issue:** <ALE-123>
@@ -113,28 +138,13 @@ Loop the same way as the code review:
 
 **On FAIL or any Critical/High UI findings:** fix them, re-run the verify checks (step 7), then re-dispatch the ui-reviewer. Each round attaches fresh screenshots and posts a fresh findings comment.
 
+**If a UI fix changes non-trivial logic** (not just markup or CSS), re-run the `code-reviewer` (step 9) on that delta before finishing, so a behavioural change introduced this late still gets a correctness pass. Skip this for purely presentational fixes.
+
 **When to stop iterating** (first match wins):
 1. **PASS or only Medium/Low remain.** Apply Medium fixes. Proceed.
 2. **Hard cap: 4 rounds.** If Critical/High UI findings still remain after the fourth review, stop. Proceed and carry the unresolved findings to the Human Review transition; the screenshots are already attached for the human to judge.
 
 Re-verify after every fix. Never let a UI fix break the build, lint, or tests.
-
-### 10. Feature-completeness review
-The last automated gate before the human. Code review and UI review confirmed the change is correct and renders well; this confirms it actually delivers what the issue asked. Dispatch the `completeness-reviewer` agent (`subagent_type: "completeness-reviewer"`) with:
-
-```
-**Issue:** <ALE-123>
-**Worktree:** <absolute worktree path>
-**UI review verdict:** <the ui-reviewer's verdict + findings, or "n/a — no UI change">
-```
-
-The agent maps the issue's Request and every acceptance criterion against the diff, tests, and the ui-reviewer's verdict, and returns COMPLETE/INCOMPLETE with an acceptance-criteria coverage table. Post its output as a comment on the issue each round.
-
-**On INCOMPLETE:** implement the missing pieces, re-run verify (step 7), and re-run the relevant earlier review on the additions, if the fix adds non-trivial logic, re-run the code-reviewer on it; if it adds UI, re-run the ui-reviewer. Then re-dispatch the completeness-reviewer.
-
-**When to stop iterating** (first match wins):
-1. **COMPLETE.** Proceed.
-2. **Hard cap: 4 rounds.** If criteria are still unmet after the fourth, stop. Proceed and carry the unmet criteria to the Human Review transition as a comment so the human knows exactly what is missing.
 
 ### 11. Commit, push, open the PR
 - Commit with a conventional message matching the repo style: `fix(scope): ...` for bugs, `feat(scope): ...` for features, `chore(scope): ...` for chores.
@@ -143,7 +153,7 @@ The agent maps the issue's Request and every acceptance criterion against the di
 - Open the PR with `gh pr create`, base `next`. Title from the issue. Body: a short summary, the acceptance criteria as a ticked checklist, a `**Deviations from plan:**` section (or "none"), and a `**Review:**` line stating the verdict and round count. Reference the issue.
 
 ### 12. Start a live test server for the human review
-The human verifies the feature by clicking a link, not by checking out the branch. Start a persistent dev server from the worktree so the running feature is reachable.
+The human verifies the feature by clicking a link, not by checking out the branch. Start a persistent dev server from the worktree so the running feature is reachable. The cockpit cache gotchas in `.claude/skills/browser-test/SKILL.md` apply here (NODE_ENV, a stale `.next`, the service worker); clear them so the human sees current code, not a stale bundle.
 
 1. Pick a free port (scan upward from 3010; skip 3001, the live instance).
 2. Generate a fresh random password for this server: `openssl rand -hex 12`.
@@ -152,6 +162,7 @@ The human verifies the feature by clicking a link, not by checking out the branc
 
    ```
    cd ../cockpit-<ISSUE-ID>
+   rm -rf .next   # Next resolves the workspace root at the parent dir and can serve the MAIN repo's stale .next; clear it or the reviewer sees old code
    NODE_ENV=development COCKPIT_CONFIG_DIR=/tmp/cockpit-review-<ISSUE-ID> PORT=<port> \
      setsid nohup npx tsx server.ts > /tmp/cockpit-review-<ISSUE-ID>.log 2>&1 &
    ```
@@ -160,6 +171,7 @@ The human verifies the feature by clicking a link, not by checking out the branc
 7. Post a comment on the issue with the URL and credentials:
    - URL is `http://192.168.0.39:<port>`. The host is hardcoded here on purpose (this review-server flow is personal, not a general cockpit feature). When the host moves to `conduit.lan`, edit this line.
    - Include the password and which screens to check (from the plan's User-Facing Behaviour).
+   - Add a one-line hint: if the UI looks stale or wrong, hard-reload (Ctrl+Shift+R) to clear the cached service worker.
 
 ### 13. Link the PR and transition to Human Review
 Do this last, after the test server is up and its URL is posted, so the human never lands on Human Review before the link exists.
@@ -179,7 +191,8 @@ Leave the worktree and the test server running. They are the human's review surf
 - Re-verify after every fix. Never open a PR with a failing build, lint, or test run.
 - Four review rounds max. Still failing after four: open the PR, route to Human Review, and comment the unresolved findings with reasons.
 - If the change touches UI, run the ui-reviewer agent (up to 4 rounds, same as code review) so screenshots of the change are attached to the issue before the human gate. Still failing after four: carry the findings to Human Review with the screenshots attached.
-- Run the completeness-reviewer agent last (after code and UI review, up to 4 rounds) to confirm every acceptance criterion is actually met. Unmet after four: carry the gaps to Human Review as a comment.
+- Run the completeness-reviewer agent first (before code and UI review, up to 4 rounds) as a coverage check that every acceptance criterion has implementing code or a test; purely-visual criteria are deferred to the ui-reviewer and the human. Genuinely unmet after four: carry the gaps to Human Review as a comment.
+- If a late UI fix changes non-trivial logic (not just markup or CSS), re-run the code-reviewer on that delta so the behavioural change still gets a correctness pass.
 - Start the test server with `setsid` (not bare `nohup`) so it survives the job. Bind a free port (never 3001), use a per-issue throwaway config dir, and a freshly generated password each time.
 - Do NOT remove the worktree or kill the test server. The `accept-issue` skill owns that cleanup.
 - Honor Out of Scope. Match the codebase's conventions from the plan's Reference Patterns.
