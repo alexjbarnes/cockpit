@@ -406,25 +406,6 @@ export class SessionManager {
     return info.id;
   }
 
-  async applyCockpitAgentSettings(update: { model?: string; thinkingLevel?: ThinkingLevel; contextSize?: ContextSize }): Promise<void> {
-    const stored = getAssistantSettings().sessionId;
-    if (!stored) return; // no session yet — assistant.json seeds the next create
-    if (!this.sessions.has(stored)) {
-      // Bring a dormant (on-disk) session into memory so the setters persist to its
-      // session-prefs. Do NOT create one if no transcript exists — a settings tweak
-      // must not spawn a session from nothing; the next create seeds from assistant.json.
-      const prefs = getSessionPrefs(stored);
-      const cwd = (await findSessionCwd(prefs?.cliSessionId || stored)) ?? (await findSessionCwd(stored));
-      if (!cwd) return;
-      this.ensureSession(stored, cwd);
-    }
-    // setModel couples model+contextSize; a context-size-only change reuses the current model.
-    if (update.model || update.contextSize) {
-      this.setModel(stored, update.model ?? this.getModel(stored), update.contextSize);
-    }
-    if (update.thinkingLevel) this.setThinkingLevel(stored, update.thinkingLevel);
-  }
-
   async getSession(id: string): Promise<{
     info: SessionInfo;
     messages: ChatMessage[];
