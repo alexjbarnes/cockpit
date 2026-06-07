@@ -37,6 +37,14 @@ vi.mock("@/server/cli-init-fetch", () => ({
   fetchCliInitData: vi.fn().mockResolvedValue(null),
 }));
 
+// Controllable transcript message count. deliverInitialPrompt reads this to
+// detect that a turn started (the prompt was accepted) even when the
+// UserPromptSubmit hook is lost.
+const transcriptMock = vi.hoisted(() => ({ count: 0 }));
+vi.mock("@/server/transcript", () => ({
+  countTranscriptMessages: () => transcriptMock.count,
+}));
+
 import { PtyRuntime } from "@/server/pty-runtime";
 
 function makeRuntime(): { runtime: PtyRuntime; getHandler: () => SessionHookHandler | null } {
@@ -68,6 +76,7 @@ describe("PtyRuntime initial-prompt delivery", () => {
     ptySessionMock.start.mockClear().mockResolvedValue(undefined);
     ptySessionMock.sendText.mockClear().mockResolvedValue(undefined);
     ptySessionMock.kill.mockClear();
+    transcriptMock.count = 0;
   });
 
   afterEach(() => {
@@ -107,6 +116,26 @@ describe("PtyRuntime initial-prompt delivery", () => {
 
     await started;
     expect(ptySessionMock.sendText).toHaveBeenCalledTimes(2);
+  });
+
+  it("treats a started turn as acceptance when the hook is lost, instead of resending or failing", async () => {
+    vi.useFakeTimers();
+    const { runtime } = makeRuntime();
+
+    const started = runtime.start("run the job");
+
+    // Attempt 1 types the prompt, then waits for confirmation.
+    await vi.advanceTimersByTimeAsync(0);
+    expect(ptySessionMock.sendText).toHaveBeenCalledTimes(1);
+
+    // The hook never fires, but the CLI accepts the prompt and writes a turn to
+    // the transcript. The end-of-window transcript check picks it up.
+    transcriptMock.count = 1;
+    await vi.advanceTimersByTimeAsync(8000);
+
+    // Resolves instead of throwing, and never resends into the live turn.
+    await started;
+    expect(ptySessionMock.sendText).toHaveBeenCalledTimes(1);
   });
 
   it("rejects after exhausting retries so the caller fails fast instead of hanging", async () => {

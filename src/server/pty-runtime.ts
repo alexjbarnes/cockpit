@@ -6,6 +6,7 @@ import type { ParsedEvent } from "./event-parser";
 import { newPermissionRequestId, translateHookEvent } from "./hook-event-translator";
 import type { HookRouter, PermissionDecision, SessionHookHandler } from "./hook-router";
 import { PtySession } from "./pty-session";
+import { countTranscriptMessages } from "./transcript";
 
 export interface PtyRuntimeOptions {
   sessionId: string;
@@ -133,7 +134,16 @@ export class PtyRuntime {
     const { sessionId } = this.opts;
     const MAX_ATTEMPTS = 4;
     const CONFIRM_TIMEOUT_MS = 8000;
-    logDiag(sessionId, "pty:deliver-begin", { textLen: text.length, maxAttempts: MAX_ATTEMPTS });
+    // A submitted prompt writes a user turn to the JSONL transcript. Growth past
+    // this baseline proves the CLI accepted the prompt even when the
+    // UserPromptSubmit hook never arrives — that hook is the only other
+    // acceptance signal, and its loss used to fail an actively-working run (it
+    // resent the 7KB prompt into a live turn, then killed the process). The
+    // transcript is hook- and echo-independent, so we check it at the end of
+    // each attempt's window before resending or failing.
+    const baselineMsgs = countTranscriptMessages(this.opts.cliSessionId, this.opts.cwd);
+    const turnStarted = () => countTranscriptMessages(this.opts.cliSessionId, this.opts.cwd) > baselineMsgs;
+    logDiag(sessionId, "pty:deliver-begin", { textLen: text.length, maxAttempts: MAX_ATTEMPTS, baselineMsgs });
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       const pty = this.pty;
       if (this.exited || !pty) {
@@ -155,8 +165,18 @@ export class PtyRuntime {
         logDiag(sessionId, "pty:deliver-accepted", { attempt, waitedMs: Date.now() - attemptAt });
         return;
       }
+      // The hook did not fire in this window. It can be lost even though the CLI
+      // accepted the prompt and started working, so before resending or failing,
+      // check whether a turn has actually started. If it has, the prompt landed;
+      // do not resend into a live turn or kill a working run.
+      if (turnStarted()) {
+        logDiag(sessionId, "pty:deliver-accepted-via-transcript", { attempt, waitedMs: Date.now() - attemptAt });
+        return;
+      }
       logDiag(sessionId, "pty:deliver-timeout", { attempt, waitedMs: Date.now() - attemptAt, screenAfter: this.recentScreen() });
-      console.log(`[pty-runtime] initial prompt not accepted for ${sessionId.slice(0, 8)} (attempt ${attempt}/${MAX_ATTEMPTS}), resending`);
+      console.log(
+        `[pty-runtime] initial prompt not confirmed for ${sessionId.slice(0, 8)} (attempt ${attempt}/${MAX_ATTEMPTS}), resending`,
+      );
     }
     logDiag(sessionId, "pty:deliver-failed", { attempts: MAX_ATTEMPTS });
     throw new Error(`claude did not accept the initial prompt after ${MAX_ATTEMPTS} attempts`);
