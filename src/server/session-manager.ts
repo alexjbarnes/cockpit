@@ -792,9 +792,7 @@ export class SessionManager {
     }
 
     this.killProcess(session);
-    if (!transcriptExists(session.cliSessionId, session.info.cwd)) {
-      session.hasSpawnedBefore = false;
-    }
+    this.recomputeResumeEligibility(session);
     session.pendingRequests.clear();
     this.notifyPendingChanged(session, sessionId);
     session.streamingSnapshot = null;
@@ -1100,7 +1098,7 @@ export class SessionManager {
     if (!session.process && !session.ptyRuntime?.isAlive) return;
     if (session.info.status === "idle") {
       this.killProcess(session);
-      session.hasSpawnedBefore = transcriptExists(session.cliSessionId, session.info.cwd);
+      this.recomputeResumeEligibility(session);
     } else {
       session.needsRespawnForPermissions = true;
     }
@@ -1113,6 +1111,7 @@ export class SessionManager {
     session.info.runtime = runtime;
     setSessionPrefs(sessionId, { runtime });
     this.killProcess(session);
+    this.recomputeResumeEligibility(session);
     this.emitInfoUpdated(session, sessionId);
     return true;
   }
@@ -1132,6 +1131,7 @@ export class SessionManager {
     // which lets the CLI natively enforce plan mode tool restrictions.
     if (session.process || session.ptyRuntime?.isAlive) {
       this.killProcess(session);
+      this.recomputeResumeEligibility(session);
       session.info.status = "idle";
       session.emitter.emit("status", sessionId, "idle");
     }
@@ -1150,6 +1150,7 @@ export class SessionManager {
     // restoring bypass capability for build mode.
     if (session.process || session.ptyRuntime?.isAlive) {
       this.killProcess(session);
+      this.recomputeResumeEligibility(session);
       session.info.status = "idle";
       session.emitter.emit("status", sessionId, "idle");
     }
@@ -1233,9 +1234,7 @@ export class SessionManager {
     } else {
       this.log(sessionId, `setModel: killing process (hasStdin=${!!session.stdin}, contextChanged=${contextChanged})`);
       this.killProcess(session);
-      if (!transcriptExists(session.cliSessionId, session.info.cwd)) {
-        session.hasSpawnedBefore = false;
-      }
+      this.recomputeResumeEligibility(session);
       session.queuedMessages.length = 0;
       session.queuePaused = false;
       session.info.status = "idle";
@@ -1264,6 +1263,7 @@ export class SessionManager {
       this.setModel(sessionId, modelId);
     } else {
       this.killProcess(session);
+      this.recomputeResumeEligibility(session);
       session.queuedMessages.length = 0;
       session.queuePaused = false;
       session.info.status = "idle";
@@ -1292,6 +1292,7 @@ export class SessionManager {
       session.stdin.write(JSON.stringify(request) + "\n");
     } else if (!session.stdin) {
       this.killProcess(session);
+      this.recomputeResumeEligibility(session);
       session.queuedMessages.length = 0;
       session.queuePaused = false;
       session.info.status = "idle";
@@ -1594,6 +1595,18 @@ export class SessionManager {
     session.compacting = false;
   }
 
+  /**
+   * Recompute whether the next spawn may --resume, after killing the CLI for a
+   * settings change. hasSpawnedBefore is set at spawn time, before the CLI
+   * persists a transcript, so a kill-then-respawn before the first turn would
+   * otherwise --resume a session the CLI never wrote (it exits at startup:
+   * "session cannot be found"). A transcript on disk is the only durable proof
+   * the session is resumable, so derive the flag from it.
+   */
+  private recomputeResumeEligibility(session: Session): void {
+    session.hasSpawnedBefore = transcriptExists(session.cliSessionId, session.info.cwd);
+  }
+
   private emitSystem(session: Session, sessionId: string, text: string): void {
     session.emitter.emit("system", sessionId, text);
   }
@@ -1863,6 +1876,7 @@ export class SessionManager {
         }
         this.log(sessionId, `/model command: args="${args}", was=${session.info.model}`);
         this.killProcess(session);
+        this.recomputeResumeEligibility(session);
         session.info.model = args;
         session.info.status = "idle";
         session.emitter.emit("status", sessionId, "idle");

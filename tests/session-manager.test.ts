@@ -30,7 +30,7 @@ vi.mock("@/server/debug-logger", () => ({
 vi.mock("@/server/transcript", () => ({
   loadTranscript: () => Promise.resolve({ messages: [], byteOffset: 0, totalSize: 0, lastUsage: null }),
   loadMoreMessages: () => Promise.resolve({ messages: [], newByteOffset: 0 }),
-  transcriptExists: () => false,
+  transcriptExists: vi.fn(() => false),
   findSessionCwd: () => Promise.resolve(null),
   getTranscriptPath: () => "/tmp/fake-transcript.jsonl",
   loadPromptHistory: () => Promise.resolve([]),
@@ -76,6 +76,11 @@ vi.mock("@/server/singleton", () => ({
     unregister: vi.fn(),
   })),
   getSessionManager: vi.fn(),
+  getCockpitMcp: vi.fn(() => ({
+    callTool: vi.fn(),
+    isConnected: vi.fn().mockReturnValue(false),
+    getUrl: vi.fn(() => "http://127.0.0.1:3001"),
+  })),
 }));
 
 vi.mock("@/server/transcript-watcher", () => {
@@ -4142,6 +4147,247 @@ describe("SessionManager", () => {
       const session = manager.createSession("/tmp", undefined, { cockpitAgent: true, bypassPermissions: true });
       const s = (manager as any).sessions.get(session.id);
       expect(s.bypassAllPermissions).toBe(false);
+    });
+  });
+
+  describe("settings change on PTY session before first message", () => {
+    it("setThinkingLevel resets hasSpawnedBefore when PTY is killed and no transcript exists", async () => {
+      const session = manager.createSession("/tmp", "PTY-think-flag", { runtime: "pty" });
+      const s = (manager as any).sessions.get(session.id)!;
+
+      // Eagerly spawn the PTY
+      capturedPtyOpts = null;
+      manager.ensureProcess(session.id);
+      await vi.waitFor(() => expect(capturedPtyOpts).not.toBeNull());
+      expect(s.hasSpawnedBefore).toBe(true);
+
+      // Change thinking level (default is "high", so changing to "low" triggers a kill)
+      manager.setThinkingLevel(session.id, "low");
+
+      // hasSpawnedBefore should be reset since there's no transcript
+      expect(s.hasSpawnedBefore).toBe(false);
+    });
+
+    it("setThinkingLevel uses --session-id (not --resume) on respawn", async () => {
+      const session = manager.createSession("/tmp", "PTY-think-respawn", { runtime: "pty" });
+      const s = (manager as any).sessions.get(session.id)!;
+
+      capturedPtyOpts = null;
+      manager.ensureProcess(session.id);
+      await vi.waitFor(() => expect(capturedPtyOpts).not.toBeNull());
+
+      // Change thinking level (kills the PTY)
+      manager.setThinkingLevel(session.id, "low");
+
+      // Now send first message, triggering a new PTY spawn
+      capturedPtyOpts = null;
+      s.info.status = "idle";
+      manager.sendMessage(session.id, "hello");
+      await vi.waitFor(() => expect(capturedPtyOpts).not.toBeNull());
+
+      const args = capturedPtyOpts!.extraArgs as string[];
+      expect(args).toContain("--session-id");
+      expect(args).not.toContain("--resume");
+    });
+
+    it("setRuntime kills process and recomputes resume eligibility", async () => {
+      const session = manager.createSession("/tmp", "PTY-runtime", { runtime: "pty" });
+      const s = (manager as any).sessions.get(session.id)!;
+
+      capturedPtyOpts = null;
+      manager.ensureProcess(session.id);
+      await vi.waitFor(() => expect(capturedPtyOpts).not.toBeNull());
+      expect(s.hasSpawnedBefore).toBe(true);
+
+      // Switch to stream runtime — kills PTY, recomputes
+      manager.setRuntime(session.id, "stream");
+      expect(s.hasSpawnedBefore).toBe(false);
+
+      // Stream spawn path — assert on vi.mocked(spawn), not capturedPtyOpts
+      const mockSpawn = vi.mocked(spawn);
+      s.info.status = "idle";
+      manager.sendMessage(session.id, "hello");
+      const lastSpawnArgs = mockSpawn.mock.calls[mockSpawn.mock.calls.length - 1][1] as string[];
+      expect(lastSpawnArgs).toContain("--session-id");
+      expect(lastSpawnArgs).not.toContain("--resume");
+    });
+
+    it("setPlanMode uses --session-id (not --resume) on respawn", async () => {
+      const session = manager.createSession("/tmp", "PTY-planmode", { runtime: "pty" });
+      const s = (manager as any).sessions.get(session.id)!;
+
+      capturedPtyOpts = null;
+      manager.ensureProcess(session.id);
+      await vi.waitFor(() => expect(capturedPtyOpts).not.toBeNull());
+      expect(s.hasSpawnedBefore).toBe(true);
+
+      // Enter plan mode — kills the PTY
+      manager.setPlanMode(session.id);
+      expect(s.hasSpawnedBefore).toBe(false);
+
+      // Send first message
+      capturedPtyOpts = null;
+      s.info.status = "idle";
+      manager.sendMessage(session.id, "hello");
+      await vi.waitFor(() => expect(capturedPtyOpts).not.toBeNull());
+
+      const args = capturedPtyOpts!.extraArgs as string[];
+      expect(args).toContain("--session-id");
+      expect(args).not.toContain("--resume");
+      expect(args).toContain("--permission-mode");
+      expect(args[args.indexOf("--permission-mode") + 1]).toBe("plan");
+    });
+
+    it("clearPlanMode uses --session-id (not --resume) on respawn", async () => {
+      const session = manager.createSession("/tmp", "PTY-clearmode", { runtime: "pty" });
+      const s = (manager as any).sessions.get(session.id)!;
+
+      // Set plan mode first (no live process yet — no kill)
+      manager.setPlanMode(session.id);
+
+      // Eagerly spawn the PTY (in plan mode)
+      capturedPtyOpts = null;
+      manager.ensureProcess(session.id);
+      await vi.waitFor(() => expect(capturedPtyOpts).not.toBeNull());
+      expect(s.hasSpawnedBefore).toBe(true);
+
+      // Clear plan mode — process is alive, so it kills + recomputes
+      manager.clearPlanMode(session.id);
+      expect(s.hasSpawnedBefore).toBe(false);
+
+      // Send first message
+      capturedPtyOpts = null;
+      s.info.status = "idle";
+      manager.sendMessage(session.id, "hello");
+      await vi.waitFor(() => expect(capturedPtyOpts).not.toBeNull());
+
+      const args = capturedPtyOpts!.extraArgs as string[];
+      expect(args).toContain("--session-id");
+      expect(args).not.toContain("--resume");
+    });
+
+    it("setModelSlot non-main uses --session-id (not --resume) on respawn", async () => {
+      const session = manager.createSession("/tmp", "PTY-slots", { runtime: "pty" });
+      const s = (manager as any).sessions.get(session.id)!;
+
+      capturedPtyOpts = null;
+      manager.ensureProcess(session.id);
+      await vi.waitFor(() => expect(capturedPtyOpts).not.toBeNull());
+      expect(s.hasSpawnedBefore).toBe(true);
+
+      // Set a non-main model slot (kills the PTY)
+      manager.setModelSlot(session.id, "fast", "haiku");
+      expect(s.hasSpawnedBefore).toBe(false);
+
+      // Send first message
+      capturedPtyOpts = null;
+      s.info.status = "idle";
+      manager.sendMessage(session.id, "hello");
+      await vi.waitFor(() => expect(capturedPtyOpts).not.toBeNull());
+
+      const args = capturedPtyOpts!.extraArgs as string[];
+      expect(args).toContain("--session-id");
+      expect(args).not.toContain("--resume");
+    });
+
+    it("/model slash command uses --session-id (not --resume) on respawn", async () => {
+      const session = manager.createSession("/tmp", "PTY-slash", { runtime: "pty" });
+      const s = (manager as any).sessions.get(session.id)!;
+
+      capturedPtyOpts = null;
+      manager.ensureProcess(session.id);
+      await vi.waitFor(() => expect(capturedPtyOpts).not.toBeNull());
+      expect(s.hasSpawnedBefore).toBe(true);
+
+      // Send /model opus as the first message (intercepted by handleCommand, kills)
+      manager.sendMessage(session.id, "/model opus");
+
+      // Now send a real message
+      capturedPtyOpts = null;
+      s.info.status = "idle";
+      manager.sendMessage(session.id, "hello");
+      await vi.waitFor(() => expect(capturedPtyOpts).not.toBeNull());
+
+      const args = capturedPtyOpts!.extraArgs as string[];
+      expect(args).toContain("--session-id");
+      expect(args).not.toContain("--resume");
+    });
+
+    it("cockpit agent uses --session-id (not --resume) after setThinkingLevel before first message", async () => {
+      const session = manager.createSession("/tmp", undefined, { cockpitAgent: true, runtime: "pty" });
+      const s = (manager as any).sessions.get(session.id)!;
+
+      capturedPtyOpts = null;
+      manager.ensureProcess(session.id);
+      await vi.waitFor(() => expect(capturedPtyOpts).not.toBeNull());
+      expect(s.hasSpawnedBefore).toBe(true);
+
+      // Change thinking level
+      manager.setThinkingLevel(session.id, "low");
+
+      // Send first message
+      capturedPtyOpts = null;
+      s.info.status = "idle";
+      manager.sendMessage(session.id, "hello");
+      await vi.waitFor(() => expect(capturedPtyOpts).not.toBeNull());
+
+      const args = capturedPtyOpts!.extraArgs as string[];
+      expect(args).toContain("--session-id");
+      expect(args).not.toContain("--resume");
+    });
+
+    it("cockpit agent uses --session-id (not --resume) after setModel before first message", async () => {
+      const session = manager.createSession("/tmp", undefined, { cockpitAgent: true, runtime: "pty" });
+      const s = (manager as any).sessions.get(session.id)!;
+
+      capturedPtyOpts = null;
+      manager.ensureProcess(session.id);
+      await vi.waitFor(() => expect(capturedPtyOpts).not.toBeNull());
+      expect(s.hasSpawnedBefore).toBe(true);
+
+      // Change model
+      s.ptyRuntime = null;
+      manager.setModel(session.id, "opus");
+
+      // Send first message
+      capturedPtyOpts = null;
+      s.info.status = "idle";
+      manager.sendMessage(session.id, "hello");
+      await vi.waitFor(() => expect(capturedPtyOpts).not.toBeNull());
+
+      const args = capturedPtyOpts!.extraArgs as string[];
+      expect(args).toContain("--session-id");
+      expect(args).not.toContain("--resume");
+    });
+
+    it("regression: transcript exists keeps --resume after settings change", async () => {
+      // Override transcriptExists mock to return true (as if a mid-session change)
+      const transcriptModule = await import("@/server/transcript");
+      vi.mocked(transcriptModule.transcriptExists).mockReturnValue(true);
+      try {
+        const session = manager.createSession("/tmp", "PTY-transcript", { runtime: "pty" });
+        const s = (manager as any).sessions.get(session.id)!;
+
+        capturedPtyOpts = null;
+        manager.ensureProcess(session.id);
+        await vi.waitFor(() => expect(capturedPtyOpts).not.toBeNull());
+        expect(s.hasSpawnedBefore).toBe(true);
+
+        // Change thinking level (guarded setter — helper recomputes from transcriptExists)
+        manager.setThinkingLevel(session.id, "low");
+
+        // Send first message
+        capturedPtyOpts = null;
+        s.info.status = "idle";
+        manager.sendMessage(session.id, "hello");
+        await vi.waitFor(() => expect(capturedPtyOpts).not.toBeNull());
+
+        const args = capturedPtyOpts!.extraArgs as string[];
+        expect(args).toContain("--resume");
+        expect(args).not.toContain("--session-id");
+      } finally {
+        vi.mocked(transcriptModule.transcriptExists).mockReturnValue(false);
+      }
     });
   });
 
