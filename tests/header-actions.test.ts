@@ -23,6 +23,13 @@ describe("headerActionsVisibility", () => {
     });
   });
 
+  it("undefined config -> nothing shows (guard)", () => {
+    expect(headerActionsVisibility(undefined as any)).toEqual({
+      showSessionActions: false,
+      showUsage: false,
+    });
+  });
+
   it("hideActions overrides usageOnly", () => {
     expect(headerActionsVisibility({ hideActions: true, usageOnly: true })).toEqual({
       showSessionActions: false,
