@@ -3,6 +3,7 @@ import { open, readdir, readFile, stat, unlink, writeFile } from "node:fs/promis
 import path from "node:path";
 import { createInterface } from "node:readline";
 import { v4 as uuidv4 } from "uuid";
+import { extractTextFiles } from "@/lib/paste-detect";
 import { getClaudeDir } from "@/server/paths";
 import type {
   ChatMessage,
@@ -12,7 +13,6 @@ import type {
   ImageAttachment,
   SessionGroup,
   SessionInfo,
-  TextFileAttachment,
   ToolUse,
 } from "@/types";
 import { debugLog } from "./debug-logger";
@@ -93,20 +93,6 @@ export function countTranscriptMessages(sessionId: string, cwd: string): number 
 
 const CLI_XML_RE =
   /<(?:task-notification|local-command-caveat|local-command-stdout|system-reminder)[^>]*>[\s\S]*?<\/(?:task-notification|local-command-caveat|local-command-stdout|system-reminder)>[\s\S]*/g;
-
-const FILE_TAG_RE = /<file\s+path="([^"]+)">\n([\s\S]*?)\n<\/file>/g;
-
-function extractTextFiles(text: string): { cleaned: string; textFiles: TextFileAttachment[] } {
-  const textFiles: TextFileAttachment[] = [];
-  const cleaned = text
-    .replace(FILE_TAG_RE, (_match, name: string, content: string) => {
-      textFiles.push({ name, content });
-      return "";
-    })
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
-  return { cleaned, textFiles };
-}
 
 function stripCommandXml(text: string): string {
   const trimmed = text.trimStart();

@@ -6,6 +6,17 @@ function msg(id: string, role: "user" | "assistant" | "system", content: string)
   return { id, role, content, toolUses: [], blocks: [], timestamp: Date.now() };
 }
 
+function msgWithFiles(
+  id: string,
+  role: "user" | "assistant" | "system",
+  content: string,
+  textFiles?: ChatMessage["textFiles"],
+  images?: ChatMessage["images"],
+  documents?: ChatMessage["documents"],
+): ChatMessage {
+  return { id, role, content, toolUses: [], blocks: [], timestamp: Date.now(), textFiles, images, documents };
+}
+
 describe("applyMessageDone", () => {
   it("replaces streaming with finalized message at the same position", () => {
     const prev = [msg("user-1", "user", "hello"), msg("streaming", "assistant", "response"), msg("user-queued-2", "user", "follow up")];
@@ -131,5 +142,30 @@ describe("applyTranscript", () => {
     const result = applyTranscript(prev, transcript);
 
     expect(result.map((m) => m.id)).toEqual(["server-u1", "server-a1"]);
+  });
+
+  it("deduplicates injected paste bubble against transcript message by content", () => {
+    const prev = [
+      msgWithFiles("user-queued-1", "user", "review this", [{ name: "paste.ts", content: "const x = 1" }]),
+      msg("server-a1", "assistant", "response"),
+    ];
+    const transcript = [
+      msgWithFiles("t-user-1", "user", "review this", [{ name: "paste.ts", content: "const x = 1" }]),
+      msg("server-a1", "assistant", "response"),
+    ];
+
+    const result = applyTranscript(prev, transcript);
+
+    const userMessages = result.filter((m) => m.role === "user");
+    expect(userMessages).toHaveLength(1);
+    expect(userMessages[0].id).toBe("t-user-1");
+    expect(userMessages[0].textFiles).toEqual([{ name: "paste.ts", content: "const x = 1" }]);
+  });
+
+  it("preserves textFiles on transcript user message through enrichment when no images/documents", () => {
+    const result = applyTranscript([], [msgWithFiles("t-user-1", "user", "review this", [{ name: "paste.ts", content: "const x = 1" }])]);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].textFiles).toEqual([{ name: "paste.ts", content: "const x = 1" }]);
   });
 });

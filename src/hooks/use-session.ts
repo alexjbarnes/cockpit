@@ -17,7 +17,7 @@ import type {
   TodoItem,
   ToolUse,
 } from "@/types";
-import { applyMessageDone, applyTranscript } from "./message-ordering";
+import { applyMessageDone, applyTranscript, buildQueuedUserMessage, type QueuedText } from "./message-ordering";
 import { useWebSocket } from "./use-websocket";
 
 export interface PendingPermission {
@@ -163,9 +163,7 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
   // Each is injected into the UI when the server confirms delivery
   // via session:queued sentText. Using an array (not a single ref)
   // so rapid-fire messages don't overwrite each other.
-  const queuedTextsRef = useRef<
-    Array<{ text: string; images?: ImageAttachment[]; documents?: DocumentAttachment[]; textFiles?: TextFileAttachment[] }>
-  >([]);
+  const queuedTextsRef = useRef<QueuedText[]>([]);
   const loadedSessionRef = useRef<string | null>(null);
 
   // Reset when switching sessions
@@ -801,21 +799,14 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
           // Inject the user message bubble now (after the assistant
           // response, before the next response starts streaming).
           if (msg.sentText) {
-            const q = queuedTextsRef.current;
-            const idx = q.findIndex((m) => m.text === msg.sentText);
-            const matched = idx !== -1 ? q.splice(idx, 1)[0] : null;
-            const userMsg: ChatMessage = {
-              id: "user-queued-" + Date.now(),
-              role: "user",
-              content: msg.sentText,
-              toolUses: [],
-              blocks: [],
-              timestamp: Date.now(),
-              images: matched?.images,
-              documents: matched?.documents,
-              textFiles: matched?.textFiles,
-            };
-            setMessages((prev) => [...prev, userMsg]);
+            const { message, matchedIndex } = buildQueuedUserMessage(
+              msg.sentText,
+              queuedTextsRef.current,
+              "user-queued-" + Date.now(),
+              Date.now(),
+            );
+            if (matchedIndex !== -1) queuedTextsRef.current.splice(matchedIndex, 1);
+            setMessages((prev) => [...prev, message]);
           }
           break;
         }
@@ -1140,7 +1131,7 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
 
       // Queue message server-side when responding
       if (isRespondingRef.current) {
-        queuedTextsRef.current.push({ text, images, documents, textFiles });
+        queuedTextsRef.current.push({ text, apiText, images, documents, textFiles });
         send({
           type: "message:send",
           sessionId,
