@@ -98,7 +98,6 @@ interface Session {
   process: ChildProcess | null;
   stdin: Writable | null;
   emitter: EventEmitter;
-  hasSpawnedBefore: boolean;
   cliSessionId: string;
   previousCliSessionIds: string[];
   bypassAllPermissions: boolean;
@@ -134,9 +133,12 @@ interface Session {
   cockpitAgentCleanups: (() => void)[];
   mcpToken?: string;
   runContext?: RunContext;
-  /** True while a PTY spawn is in flight (status is "running" but the PTY is
-   *  not yet alive). Observability only -- lets the stale-check log distinguish
-   *  "process died" from "process still spawning". Does not gate any behavior. */
+  /** True while a PTY spawn is in flight: set immediately before the async
+   *  PtyRuntime.start() and cleared when it resolves, rejects, or the PTY exits.
+   *  Gates ensureProcess so a reconnect or startup race cannot spawn a duplicate
+   *  PTY during the start() window (the runtime is assigned but its isAlive is
+   *  still false). Also read by the stale-check log to tell "process died" from
+   *  "still spawning". */
   spawning?: boolean;
   transcriptWatcher: TranscriptWatcher | null;
   todoWatcher: TodoWatcher | null;
@@ -176,7 +178,6 @@ export class SessionManager {
             runtime: session.runtime,
             spawning: session.spawning ?? false,
             hasPtyRuntime: !!session.ptyRuntime,
-            hasSpawnedBefore: session.hasSpawnedBefore,
           });
           session.info.status = "idle";
           session.emitter.emit("status", id, "idle");
@@ -215,7 +216,6 @@ export class SessionManager {
       process: null,
       stdin: null,
       emitter: new EventEmitter(),
-      hasSpawnedBefore: false,
       cliSessionId: id,
       previousCliSessionIds: [],
       bypassAllPermissions: isCockpitAgent ? false : (options?.bypassPermissions ?? defaults.bypassAllPermissions),
@@ -310,7 +310,6 @@ export class SessionManager {
         process: null,
         stdin: null,
         emitter: new EventEmitter(),
-        hasSpawnedBefore: true,
         cliSessionId: cliId,
         previousCliSessionIds: prevIds,
         bypassAllPermissions: (prefs?.cockpitAgent ? false : prefs?.bypassAllPermissions) ?? defaults.bypassAllPermissions,
@@ -792,9 +791,6 @@ export class SessionManager {
     }
 
     this.killProcess(session);
-    if (!transcriptExists(session.cliSessionId, session.info.cwd)) {
-      session.hasSpawnedBefore = false;
-    }
     session.pendingRequests.clear();
     this.notifyPendingChanged(session, sessionId);
     session.streamingSnapshot = null;
@@ -1100,7 +1096,6 @@ export class SessionManager {
     if (!session.process && !session.ptyRuntime?.isAlive) return;
     if (session.info.status === "idle") {
       this.killProcess(session);
-      session.hasSpawnedBefore = transcriptExists(session.cliSessionId, session.info.cwd);
     } else {
       session.needsRespawnForPermissions = true;
     }
@@ -1233,9 +1228,6 @@ export class SessionManager {
     } else {
       this.log(sessionId, `setModel: killing process (hasStdin=${!!session.stdin}, contextChanged=${contextChanged})`);
       this.killProcess(session);
-      if (!transcriptExists(session.cliSessionId, session.info.cwd)) {
-        session.hasSpawnedBefore = false;
-      }
       session.queuedMessages.length = 0;
       session.queuePaused = false;
       session.info.status = "idle";
@@ -1591,6 +1583,10 @@ export class SessionManager {
       session.ptyRuntime = null;
       runtime.kill().catch(() => {});
     }
+    // A kill ends any in-flight spawn, so clear the ensureProcess guard now. A
+    // deliberate kill-then-respawn (settings change, /clear, restart) must not
+    // be blocked until the dying runtime's start() promise happens to settle.
+    session.spawning = false;
     session.compacting = false;
   }
 
@@ -1841,7 +1837,6 @@ export class SessionManager {
         // generate a new CLI session ID to get a fresh context.
         session.previousCliSessionIds.push(session.cliSessionId);
         session.cliSessionId = uuidv4();
-        session.hasSpawnedBefore = false;
         session.queuedMessages.length = 0;
         session.queuePaused = false;
         session.todoItems = [];
@@ -2193,7 +2188,13 @@ Additional Cockpit rules beyond the CLI's defaults:
 
   ensureProcess(sessionId: string): void {
     const session = this.sessions.get(sessionId);
-    if (!session || session.process || session.ptyRuntime?.isAlive) return;
+    // `spawning` guards the PTY startup window: the runtime is assigned before
+    // its async start() resolves, and during that window ptyRuntime.isAlive is
+    // false, so a second ensureProcess (a WS reconnect, or a startup race)
+    // would otherwise spawn a duplicate CLI for the same session — two
+    // processes racing on the same --session-id. (Stream sets session.process
+    // synchronously, so it is already covered by that check.)
+    if (!session || session.process || session.ptyRuntime?.isAlive || session.spawning) return;
     this.spawnProcess(session, sessionId);
   }
 
@@ -2219,7 +2220,8 @@ Additional Cockpit rules beyond the CLI's defaults:
       return;
     }
 
-    this.log(sessionId, `spawning CLI process (resume=${session.hasSpawnedBefore}, model=${session.info.model || "sonnet"})`);
+    const willResume = transcriptExists(session.cliSessionId, session.info.cwd);
+    this.log(sessionId, `spawning CLI process (resume=${willResume}, model=${session.info.model || "sonnet"})`);
     const args = ["-p", "--verbose", "--output-format", "stream-json", "--input-format", "stream-json"];
 
     // In plan mode, omit --allow-dangerously-skip-permissions so the CLI
@@ -2237,7 +2239,7 @@ Additional Cockpit rules beyond the CLI's defaults:
       args.push("--permission-mode", "bypassPermissions");
     }
 
-    if (session.hasSpawnedBefore || transcriptExists(session.cliSessionId, session.info.cwd)) {
+    if (willResume) {
       args.push("--resume", session.cliSessionId);
     } else {
       args.push("--session-id", session.cliSessionId);
@@ -2318,7 +2320,6 @@ Additional Cockpit rules beyond the CLI's defaults:
 
     session.process = proc;
     session.stdin = proc.stdin!;
-    session.hasSpawnedBefore = true;
     this.log(sessionId, `CLI process spawned (pid=${proc.pid})`);
 
     this.startTodoWatcher(session, sessionId);
@@ -2492,11 +2493,10 @@ Additional Cockpit rules beyond the CLI's defaults:
       return;
     }
 
-    this.log(sessionId, `spawning PTY claude (resume=${session.hasSpawnedBefore}, model=${session.info.model || "sonnet"})`);
+    const willResume = transcriptExists(session.cliSessionId, session.info.cwd);
+    this.log(sessionId, `spawning PTY claude (resume=${willResume}, model=${session.info.model || "sonnet"})`);
     const spawnBeginAt = Date.now();
-    session.spawning = true;
     logDiag(sessionId, "pty:spawn-begin", {
-      hasSpawnedBefore: session.hasSpawnedBefore,
       model: session.info.model,
       hasText: !!text,
       status: session.info.status,
@@ -2508,7 +2508,7 @@ Additional Cockpit rules beyond the CLI's defaults:
     streamState.thinkingStartedAt = Date.now();
 
     const extraArgs: string[] = [];
-    if (session.hasSpawnedBefore || transcriptExists(session.cliSessionId, session.info.cwd)) {
+    if (transcriptExists(session.cliSessionId, session.info.cwd)) {
       extraArgs.push("--resume", session.cliSessionId);
     } else {
       extraArgs.push("--session-id", session.cliSessionId);
@@ -2620,7 +2620,6 @@ Additional Cockpit rules beyond the CLI's defaults:
     });
 
     session.ptyRuntime = runtime;
-    session.hasSpawnedBefore = true;
     logDiag(sessionId, "pty:runtime-assigned", { elapsedMs: Date.now() - spawnBeginAt });
 
     this.cleanupAttachments(session);
@@ -2654,6 +2653,11 @@ Additional Cockpit rules beyond the CLI's defaults:
 
     this.startTodoWatcher(session, sessionId);
 
+    // Set the in-flight guard immediately before start(). Everything above is
+    // synchronous (no re-entrancy is possible until start() yields to the event
+    // loop), so a synchronous throw in the setup above can never strand
+    // spawning=true and permanently block ensureProcess for this session.
+    session.spawning = true;
     runtime
       .start(ptyText)
       .then(() => {

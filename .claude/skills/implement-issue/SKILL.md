@@ -160,10 +160,16 @@ The human verifies the feature by clicking a link, not by checking out the branc
 3. Use a throwaway, per-issue config dir so it does not collide with the live scheduler or other test servers: `/tmp/cockpit-review-<ISSUE-ID>`.
 4. Start the server **detached into its own session with `setsid`** so it survives this job ending. A plain `nohup ... &` does NOT survive: the job kills its whole process group on completion (`destroySession` → `killProcessGroup`), and the server would be in that group. `setsid` puts it in a new group.
 
+   **Strip inherited provider env vars** with `env -u`. If the agent launching this skill is itself running under a custom provider (e.g. a Deepseek-backed run), its `ANTHROPIC_BASE_URL` / `ANTHROPIC_DEFAULT_*_MODEL` / `ANTHROPIC_AUTH_TOKEN` vars are in the shell environment and the spawned cockpit server passes them straight through to every Claude CLI it spawns. The session then runs that provider's model while the UI still shows the built-in Anthropic selection (the picker says Sonnet, the CLI is really on `deepseek-v4-pro`). Unsetting them forces the review server onto real Anthropic so the human reviews against the model the UI claims.
+
    ```
    cd ../cockpit-<ISSUE-ID>
    rm -rf .next   # Next resolves the workspace root at the parent dir and can serve the MAIN repo's stale .next; clear it or the reviewer sees old code
-   NODE_ENV=development COCKPIT_CONFIG_DIR=/tmp/cockpit-review-<ISSUE-ID> PORT=<port> \
+   env -u ANTHROPIC_BASE_URL -u ANTHROPIC_AUTH_TOKEN -u ANTHROPIC_API_KEY \
+       -u ANTHROPIC_MODEL -u ANTHROPIC_DEFAULT_OPUS_MODEL -u ANTHROPIC_DEFAULT_SONNET_MODEL \
+       -u ANTHROPIC_DEFAULT_HAIKU_MODEL -u ANTHROPIC_SMALL_FAST_MODEL \
+       -u CLAUDE_CODE_SUBAGENT_MODEL -u CLAUDE_CODE_EFFORT_LEVEL \
+     NODE_ENV=development COCKPIT_CONFIG_DIR=/tmp/cockpit-review-<ISSUE-ID> PORT=<port> \
      setsid nohup npx tsx server.ts > /tmp/cockpit-review-<ISSUE-ID>.log 2>&1 &
    ```
 5. Poll readiness with `curl --retry` (foreground `sleep` is blocked). Then set the password via the `/login` setup screen (see `.claude/skills/browser-test/SKILL.md` for the React-input setter), using the password from step 2.
@@ -193,6 +199,6 @@ Leave the worktree and the test server running. They are the human's review surf
 - If the change touches UI, run the ui-reviewer agent (up to 4 rounds, same as code review) so screenshots of the change are attached to the issue before the human gate. Still failing after four: carry the findings to Human Review with the screenshots attached.
 - Run the completeness-reviewer agent first (before code and UI review, up to 4 rounds) as a coverage check that every acceptance criterion has implementing code or a test; purely-visual criteria are deferred to the ui-reviewer and the human. Genuinely unmet after four: carry the gaps to Human Review as a comment.
 - If a late UI fix changes non-trivial logic (not just markup or CSS), re-run the code-reviewer on that delta so the behavioural change still gets a correctness pass.
-- Start the test server with `setsid` (not bare `nohup`) so it survives the job. Bind a free port (never 3001), use a per-issue throwaway config dir, and a freshly generated password each time.
+- Start the test server with `setsid` (not bare `nohup`) so it survives the job, and strip inherited provider env vars with `env -u` (see step 12) so a Deepseek-backed agent run does not leak its `ANTHROPIC_*` model overrides into the review server. Bind a free port (never 3001), use a per-issue throwaway config dir, and a freshly generated password each time.
 - Do NOT remove the worktree or kill the test server. The `accept-issue` skill owns that cleanup.
 - Honor Out of Scope. Match the codebase's conventions from the plan's Reference Patterns.
