@@ -25,6 +25,7 @@ vi.mock("@/server/plans", () => ({
 import { createSession as createAuthSession, setupPassword } from "@/server/auth";
 import type { ParsedEvent } from "@/server/event-parser";
 import { SessionManager } from "@/server/session-manager";
+import { appendToBuffer, MAX_BUFFER } from "@/server/terminal-buffer";
 import { TerminalManager } from "@/server/terminal-manager";
 import { createWebSocketHandler } from "@/server/ws-handler";
 
@@ -2829,6 +2830,66 @@ describe("WebSocket handler", () => {
       await new Promise((r) => setTimeout(r, 50));
       const term = (terminalMgr as any).terminals.get("term-6");
       expect(!term || term.client === null).toBe(true);
+    });
+
+    it("stale socket close does not detach newer client on same terminalId", async () => {
+      injectFakeTerminal("term-7");
+
+      // Connect socket1 and wait for its client to be attached
+      const ws1 = await connectTerminalWs("term-7");
+      let client1: unknown;
+      while (true) {
+        const c = (terminalMgr as any).terminals.get("term-7")!.client;
+        if (c !== null) {
+          client1 = c;
+          break;
+        }
+        await new Promise((r) => setTimeout(r, 10));
+      }
+
+      // Connect socket2 and wait until its client has replaced socket1's
+      const ws2 = await connectTerminalWs("term-7");
+      while (true) {
+        const c = (terminalMgr as any).terminals.get("term-7")!.client;
+        if (c !== null && c !== client1) break;
+        await new Promise((r) => setTimeout(r, 10));
+      }
+
+      // Close socket1 (the stale socket); its close handler should not detach socket2's client
+      ws1.close();
+      await new Promise((r) => setTimeout(r, 50));
+
+      const term = (terminalMgr as any).terminals.get("term-7");
+      expect(term.client).not.toBeNull();
+      ws2.close();
+    });
+
+    it("reconnects with replay=0 after buffer trim returns correct delta", async () => {
+      // Simulate a busy terminal that hit the buffer cap and was detached
+      const buffer = "x".repeat(MAX_BUFFER);
+      injectFakeTerminal("term-8", buffer);
+      const term = (terminalMgr as any).terminals.get("term-8")!;
+      term.detachOffset = MAX_BUFFER;
+
+      // Simulate output produced while away (after the buffer was at cap)
+      appendToBuffer(term, "y".repeat(51200));
+
+      // Use the same term reference for assertion before connect
+      const expectedSlice = "y".repeat(51200);
+
+      // Reconnect with replay=0
+      const url = `ws://localhost:${port}/ws/terminal?token=${validToken}&terminalId=term-8&replay=0`;
+      const ws = new WebSocket(url);
+      const dataPromise = new Promise<string>((resolve) => {
+        ws.on("message", (d) => resolve(d.toString()));
+      });
+      await new Promise<void>((resolve) => ws.on("open", () => resolve()));
+      const data = await dataPromise;
+
+      // The delta should be only the new data, not the full buffer
+      expect(data).toBe(expectedSlice);
+      expect(data.length).toBeLessThan(MAX_BUFFER);
+      ws.close();
     });
   });
 });
