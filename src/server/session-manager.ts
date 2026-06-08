@@ -98,7 +98,6 @@ interface Session {
   process: ChildProcess | null;
   stdin: Writable | null;
   emitter: EventEmitter;
-  hasSpawnedBefore: boolean;
   cliSessionId: string;
   previousCliSessionIds: string[];
   bypassAllPermissions: boolean;
@@ -179,7 +178,6 @@ export class SessionManager {
             runtime: session.runtime,
             spawning: session.spawning ?? false,
             hasPtyRuntime: !!session.ptyRuntime,
-            hasSpawnedBefore: session.hasSpawnedBefore,
           });
           session.info.status = "idle";
           session.emitter.emit("status", id, "idle");
@@ -218,7 +216,6 @@ export class SessionManager {
       process: null,
       stdin: null,
       emitter: new EventEmitter(),
-      hasSpawnedBefore: false,
       cliSessionId: id,
       previousCliSessionIds: [],
       bypassAllPermissions: isCockpitAgent ? false : (options?.bypassPermissions ?? defaults.bypassAllPermissions),
@@ -313,7 +310,6 @@ export class SessionManager {
         process: null,
         stdin: null,
         emitter: new EventEmitter(),
-        hasSpawnedBefore: true,
         cliSessionId: cliId,
         previousCliSessionIds: prevIds,
         bypassAllPermissions: (prefs?.cockpitAgent ? false : prefs?.bypassAllPermissions) ?? defaults.bypassAllPermissions,
@@ -795,7 +791,6 @@ export class SessionManager {
     }
 
     this.killProcess(session);
-    this.recomputeResumeEligibility(session);
     session.pendingRequests.clear();
     this.notifyPendingChanged(session, sessionId);
     session.streamingSnapshot = null;
@@ -1101,7 +1096,6 @@ export class SessionManager {
     if (!session.process && !session.ptyRuntime?.isAlive) return;
     if (session.info.status === "idle") {
       this.killProcess(session);
-      this.recomputeResumeEligibility(session);
     } else {
       session.needsRespawnForPermissions = true;
     }
@@ -1114,7 +1108,6 @@ export class SessionManager {
     session.info.runtime = runtime;
     setSessionPrefs(sessionId, { runtime });
     this.killProcess(session);
-    this.recomputeResumeEligibility(session);
     this.emitInfoUpdated(session, sessionId);
     return true;
   }
@@ -1134,7 +1127,6 @@ export class SessionManager {
     // which lets the CLI natively enforce plan mode tool restrictions.
     if (session.process || session.ptyRuntime?.isAlive) {
       this.killProcess(session);
-      this.recomputeResumeEligibility(session);
       session.info.status = "idle";
       session.emitter.emit("status", sessionId, "idle");
     }
@@ -1153,7 +1145,6 @@ export class SessionManager {
     // restoring bypass capability for build mode.
     if (session.process || session.ptyRuntime?.isAlive) {
       this.killProcess(session);
-      this.recomputeResumeEligibility(session);
       session.info.status = "idle";
       session.emitter.emit("status", sessionId, "idle");
     }
@@ -1237,7 +1228,6 @@ export class SessionManager {
     } else {
       this.log(sessionId, `setModel: killing process (hasStdin=${!!session.stdin}, contextChanged=${contextChanged})`);
       this.killProcess(session);
-      this.recomputeResumeEligibility(session);
       session.queuedMessages.length = 0;
       session.queuePaused = false;
       session.info.status = "idle";
@@ -1266,7 +1256,6 @@ export class SessionManager {
       this.setModel(sessionId, modelId);
     } else {
       this.killProcess(session);
-      this.recomputeResumeEligibility(session);
       session.queuedMessages.length = 0;
       session.queuePaused = false;
       session.info.status = "idle";
@@ -1295,7 +1284,6 @@ export class SessionManager {
       session.stdin.write(JSON.stringify(request) + "\n");
     } else if (!session.stdin) {
       this.killProcess(session);
-      this.recomputeResumeEligibility(session);
       session.queuedMessages.length = 0;
       session.queuePaused = false;
       session.info.status = "idle";
@@ -1595,19 +1583,11 @@ export class SessionManager {
       session.ptyRuntime = null;
       runtime.kill().catch(() => {});
     }
+    // A kill ends any in-flight spawn, so clear the ensureProcess guard now. A
+    // deliberate kill-then-respawn (settings change, /clear, restart) must not
+    // be blocked until the dying runtime's start() promise happens to settle.
+    session.spawning = false;
     session.compacting = false;
-  }
-
-  /**
-   * Recompute whether the next spawn may --resume, after killing the CLI for a
-   * settings change. hasSpawnedBefore is set at spawn time, before the CLI
-   * persists a transcript, so a kill-then-respawn before the first turn would
-   * otherwise --resume a session the CLI never wrote (it exits at startup:
-   * "session cannot be found"). A transcript on disk is the only durable proof
-   * the session is resumable, so derive the flag from it.
-   */
-  private recomputeResumeEligibility(session: Session): void {
-    session.hasSpawnedBefore = transcriptExists(session.cliSessionId, session.info.cwd);
   }
 
   private emitSystem(session: Session, sessionId: string, text: string): void {
@@ -1857,7 +1837,6 @@ export class SessionManager {
         // generate a new CLI session ID to get a fresh context.
         session.previousCliSessionIds.push(session.cliSessionId);
         session.cliSessionId = uuidv4();
-        session.hasSpawnedBefore = false;
         session.queuedMessages.length = 0;
         session.queuePaused = false;
         session.todoItems = [];
@@ -1879,7 +1858,6 @@ export class SessionManager {
         }
         this.log(sessionId, `/model command: args="${args}", was=${session.info.model}`);
         this.killProcess(session);
-        this.recomputeResumeEligibility(session);
         session.info.model = args;
         session.info.status = "idle";
         session.emitter.emit("status", sessionId, "idle");
@@ -2213,11 +2191,9 @@ Additional Cockpit rules beyond the CLI's defaults:
     // `spawning` guards the PTY startup window: the runtime is assigned before
     // its async start() resolves, and during that window ptyRuntime.isAlive is
     // false, so a second ensureProcess (a WS reconnect, or a startup race)
-    // would otherwise spawn a duplicate. The duplicate inherits the eager
-    // spawn's hasSpawnedBefore=true and --resumes a session the CLI never
-    // persisted, surfacing "No conversation found with session ID" before the
-    // user has sent anything. (Stream sets session.process synchronously, so it
-    // is already covered by that check.)
+    // would otherwise spawn a duplicate CLI for the same session — two
+    // processes racing on the same --session-id. (Stream sets session.process
+    // synchronously, so it is already covered by that check.)
     if (!session || session.process || session.ptyRuntime?.isAlive || session.spawning) return;
     this.spawnProcess(session, sessionId);
   }
@@ -2244,7 +2220,8 @@ Additional Cockpit rules beyond the CLI's defaults:
       return;
     }
 
-    this.log(sessionId, `spawning CLI process (resume=${session.hasSpawnedBefore}, model=${session.info.model || "sonnet"})`);
+    const willResume = transcriptExists(session.cliSessionId, session.info.cwd);
+    this.log(sessionId, `spawning CLI process (resume=${willResume}, model=${session.info.model || "sonnet"})`);
     const args = ["-p", "--verbose", "--output-format", "stream-json", "--input-format", "stream-json"];
 
     // In plan mode, omit --allow-dangerously-skip-permissions so the CLI
@@ -2262,7 +2239,7 @@ Additional Cockpit rules beyond the CLI's defaults:
       args.push("--permission-mode", "bypassPermissions");
     }
 
-    if (session.hasSpawnedBefore || transcriptExists(session.cliSessionId, session.info.cwd)) {
+    if (willResume) {
       args.push("--resume", session.cliSessionId);
     } else {
       args.push("--session-id", session.cliSessionId);
@@ -2343,7 +2320,6 @@ Additional Cockpit rules beyond the CLI's defaults:
 
     session.process = proc;
     session.stdin = proc.stdin!;
-    session.hasSpawnedBefore = true;
     this.log(sessionId, `CLI process spawned (pid=${proc.pid})`);
 
     this.startTodoWatcher(session, sessionId);
@@ -2517,10 +2493,10 @@ Additional Cockpit rules beyond the CLI's defaults:
       return;
     }
 
-    this.log(sessionId, `spawning PTY claude (resume=${session.hasSpawnedBefore}, model=${session.info.model || "sonnet"})`);
+    const willResume = transcriptExists(session.cliSessionId, session.info.cwd);
+    this.log(sessionId, `spawning PTY claude (resume=${willResume}, model=${session.info.model || "sonnet"})`);
     const spawnBeginAt = Date.now();
     logDiag(sessionId, "pty:spawn-begin", {
-      hasSpawnedBefore: session.hasSpawnedBefore,
       model: session.info.model,
       hasText: !!text,
       status: session.info.status,
@@ -2532,7 +2508,7 @@ Additional Cockpit rules beyond the CLI's defaults:
     streamState.thinkingStartedAt = Date.now();
 
     const extraArgs: string[] = [];
-    if (session.hasSpawnedBefore || transcriptExists(session.cliSessionId, session.info.cwd)) {
+    if (transcriptExists(session.cliSessionId, session.info.cwd)) {
       extraArgs.push("--resume", session.cliSessionId);
     } else {
       extraArgs.push("--session-id", session.cliSessionId);
@@ -2644,7 +2620,6 @@ Additional Cockpit rules beyond the CLI's defaults:
     });
 
     session.ptyRuntime = runtime;
-    session.hasSpawnedBefore = true;
     logDiag(sessionId, "pty:runtime-assigned", { elapsedMs: Date.now() - spawnBeginAt });
 
     this.cleanupAttachments(session);
