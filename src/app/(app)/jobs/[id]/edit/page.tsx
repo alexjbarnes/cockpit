@@ -19,6 +19,8 @@ import {
   resolveModel,
   versionsForAlias,
 } from "@/lib/models";
+import { isPositiveNumberField, parseNumberField } from "@/lib/number-field";
+import { cn } from "@/lib/utils";
 import { describeSchedule, getJobSchedules } from "@/server/cron-utils";
 import type { JobSchedule, Provider, ProviderModel, ScheduledJob, SimpleSchedule, SimpleScheduleFrequency, ThinkingLevel } from "@/types";
 
@@ -169,7 +171,7 @@ export default function JobEditPage() {
   const [selectedProviderId, setSelectedProviderId] = useState("anthropic");
   const [runtime, setRuntime] = useState<"stream" | "pty">("stream");
 
-  const [maxDuration, setMaxDuration] = useState(30);
+  const [maxDuration, setMaxDuration] = useState<number | "">(30);
   const [bypassPermissions, setBypassPermissions] = useState(false);
   const [allowedTools, setAllowedTools] = useState<string[]>([]);
   const [toolInput, setToolInput] = useState("");
@@ -182,7 +184,7 @@ export default function JobEditPage() {
   const [mcpToolsLoading, setMcpToolsLoading] = useState<Record<string, boolean>>({});
   const [availableMcp, setAvailableMcp] = useState<string[]>([]);
   const [skipIfMissed, setSkipIfMissed] = useState(false);
-  const [retentionDays, setRetentionDays] = useState(90);
+  const [retentionDays, setRetentionDays] = useState<number | "">(90);
   const [inboxOutput, setInboxOutput] = useState(false);
   const [notifyProviders, setNotifyProviders] = useState<string[]>([]);
   const [availableProviders, setAvailableProviders] = useState<{ id: string; name: string; type: string }[]>([]);
@@ -190,6 +192,7 @@ export default function JobEditPage() {
 
   const [showDirPicker, setShowDirPicker] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [fieldErrors, setFieldErrors] = useState<{ maxDuration?: string; retentionDays?: string }>({});
   const [loading, setLoading] = useState(!isNew || !!duplicateFrom);
 
   const isBuiltinProvider = selectedProviderId === "anthropic";
@@ -389,6 +392,14 @@ export default function JobEditPage() {
   }, []);
 
   async function handleSave() {
+    const durationValid = isPositiveNumberField(maxDuration);
+    const retentionValid = isPositiveNumberField(retentionDays);
+    setFieldErrors({
+      maxDuration: durationValid ? undefined : "Enter a duration of at least 1 minute.",
+      retentionDays: retentionValid ? undefined : "Enter a retention of at least 1 day.",
+    });
+    if (!durationValid || !retentionValid) return;
+
     setSaving(true);
     let modelStr = modelId;
     if (!isBuiltinProvider && selectedProviderId) {
@@ -910,7 +921,14 @@ export default function JobEditPage() {
 
             <div className="space-y-1.5">
               <label className="text-sm font-medium">Max Duration (minutes)</label>
-              <Input type="number" min={1} value={maxDuration} onChange={(e) => setMaxDuration(Number(e.target.value))} />
+              <Input
+                type="number"
+                min={1}
+                value={maxDuration}
+                onChange={(e) => setMaxDuration(parseNumberField(e.target.value))}
+                className={cn(fieldErrors.maxDuration && "border-destructive")}
+              />
+              {fieldErrors.maxDuration && <p className="text-xs text-destructive">{fieldErrors.maxDuration}</p>}
             </div>
 
             <div className="flex items-center justify-between">
@@ -920,7 +938,14 @@ export default function JobEditPage() {
 
             <div className="space-y-1.5">
               <label className="text-sm font-medium">Audit log retention (days)</label>
-              <Input type="number" min={1} value={retentionDays} onChange={(e) => setRetentionDays(Number(e.target.value))} />
+              <Input
+                type="number"
+                min={1}
+                value={retentionDays}
+                onChange={(e) => setRetentionDays(parseNumberField(e.target.value))}
+                className={cn(fieldErrors.retentionDays && "border-destructive")}
+              />
+              {fieldErrors.retentionDays && <p className="text-xs text-destructive">{fieldErrors.retentionDays}</p>}
             </div>
           </CardContent>
         </Card>
