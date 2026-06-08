@@ -11,6 +11,7 @@ import { TodoIndicator } from "@/components/todo-indicator";
 import { Button } from "@/components/ui/button";
 import { UsageButton } from "@/components/usage-modal";
 import { WebSocketProvider } from "@/hooks/use-websocket";
+import { headerActionsVisibility } from "@/lib/header-actions";
 import type { BackgroundTask, InitData, TodoItem } from "@/types";
 
 export interface SidebarSectionConfig {
@@ -26,6 +27,7 @@ interface HeaderConfig {
   title: string;
   onRename?: (name: string) => void;
   hideActions?: boolean;
+  usageOnly?: boolean;
 }
 
 export interface TabActions {
@@ -83,12 +85,13 @@ export function useShell() {
   return useContext(ShellContext);
 }
 
-export function usePageHeader(title: string, options?: { hideActions?: boolean }) {
+export function usePageHeader(title: string, options?: { hideActions?: boolean; usageOnly?: boolean }) {
   const { setHeader } = useShell();
   const hideActions = options?.hideActions;
+  const usageOnly = options?.usageOnly;
   useEffect(() => {
-    setHeader({ title, hideActions });
-  }, [title, hideActions, setHeader]);
+    setHeader({ title, hideActions, usageOnly });
+  }, [title, hideActions, usageOnly, setHeader]);
 }
 
 export function useShellCwd(cwd: string | undefined) {
@@ -254,6 +257,8 @@ export function AppShell({ children }: { children: ReactNode }) {
     return () => window.removeEventListener("keydown", handler);
   }, [toggleSidebar]);
 
+  const actions = headerActionsVisibility(header);
+
   return (
     <AuthGuard>
       <WebSocketProvider>
@@ -291,13 +296,17 @@ export function AppShell({ children }: { children: ReactNode }) {
                   <Image src="/icon-192.png" alt="" width={22} height={22} className="shrink-0 dark:invert" />
                   <EditableTitle title={header.title} onRename={header.onRename} />
                 </div>
-                {!header.hideActions && (
+                {(actions.showSessionActions || actions.showUsage) && (
                   <div className="flex items-center gap-2 shrink-0 ml-auto">
-                    {cwd && <NewTerminalButton cwd={cwd} />}
-                    <SearchButton />
-                    {cwd && <TodoIndicator todos={todos} />}
-                    {cwd && <BackgroundTasksButton tasks={backgroundTasks} />}
-                    <UsageButton />
+                    {actions.showSessionActions && (
+                      <>
+                        {cwd && <NewTerminalButton cwd={cwd} />}
+                        <SearchButton />
+                        {cwd && <TodoIndicator todos={todos} />}
+                        {cwd && <BackgroundTasksButton tasks={backgroundTasks} />}
+                      </>
+                    )}
+                    {actions.showUsage && <UsageButton />}
                   </div>
                 )}
               </header>
