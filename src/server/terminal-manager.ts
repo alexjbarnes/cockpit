@@ -3,7 +3,7 @@ import os from "node:os";
 import { type IPty, spawn } from "node-pty";
 import { v4 as uuidv4 } from "uuid";
 
-const MAX_BUFFER = 100 * 1024;
+import { appendToBuffer } from "./terminal-buffer";
 
 function getLoginShell(): string {
   if (process.platform === "win32") {
@@ -67,13 +67,7 @@ export class TerminalManager {
     this.terminals.set(id, instance);
 
     pty.onData((data: string) => {
-      instance.buffer += data;
-      if (instance.buffer.length > MAX_BUFFER) {
-        instance.buffer = instance.buffer.slice(-MAX_BUFFER);
-        if (instance.detachOffset > 0) {
-          instance.detachOffset = Math.max(0, instance.detachOffset - (instance.buffer.length - MAX_BUFFER));
-        }
-      }
+      appendToBuffer(instance, data);
       if (instance.client) {
         instance.client(data);
       }
@@ -108,12 +102,12 @@ export class TerminalManager {
     return term.buffer.slice(term.detachOffset);
   }
 
-  detachClient(id: string): void {
+  detachClient(id: string, sendFn?: (data: string) => void): void {
     const term = this.terminals.get(id);
-    if (term) {
-      term.detachOffset = term.buffer.length;
-      term.client = null;
-    }
+    if (!term) return;
+    if (sendFn && term.client !== sendFn) return; // a newer client already attached; ignore this stale close
+    term.detachOffset = term.buffer.length;
+    term.client = null;
   }
 
   getTerminal(id: string): TerminalInstance | undefined {

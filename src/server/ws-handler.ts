@@ -55,11 +55,12 @@ function setupTerminalWebSocket(terminalWss: WebSocketServer, terminalManager: T
     const wantsReplay = url.searchParams.get("replay") !== "0";
     console.log(`[terminal-ws] connected: ${terminalId.slice(0, 8)} replay=${wantsReplay}`);
 
-    terminalManager.attachClient(terminalId, (data) => {
+    const sendFn = (data: string) => {
       if (ws.readyState === WebSocket.OPEN) {
         ws.send(data);
       }
-    });
+    };
+    terminalManager.attachClient(terminalId, sendFn);
 
     if (!wantsReplay) {
       const delta = terminalManager.getDelta(terminalId);
@@ -94,7 +95,7 @@ function setupTerminalWebSocket(terminalWss: WebSocketServer, terminalManager: T
 
     ws.on("close", () => {
       console.log(`[terminal-ws] disconnected: ${terminalId.slice(0, 8)}`);
-      terminalManager.detachClient(terminalId);
+      terminalManager.detachClient(terminalId, sendFn);
     });
   });
 }
