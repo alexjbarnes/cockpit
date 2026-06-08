@@ -134,9 +134,12 @@ interface Session {
   cockpitAgentCleanups: (() => void)[];
   mcpToken?: string;
   runContext?: RunContext;
-  /** True while a PTY spawn is in flight (status is "running" but the PTY is
-   *  not yet alive). Observability only -- lets the stale-check log distinguish
-   *  "process died" from "process still spawning". Does not gate any behavior. */
+  /** True while a PTY spawn is in flight: set immediately before the async
+   *  PtyRuntime.start() and cleared when it resolves, rejects, or the PTY exits.
+   *  Gates ensureProcess so a reconnect or startup race cannot spawn a duplicate
+   *  PTY during the start() window (the runtime is assigned but its isAlive is
+   *  still false). Also read by the stale-check log to tell "process died" from
+   *  "still spawning". */
   spawning?: boolean;
   transcriptWatcher: TranscriptWatcher | null;
   todoWatcher: TodoWatcher | null;
@@ -2207,7 +2210,15 @@ Additional Cockpit rules beyond the CLI's defaults:
 
   ensureProcess(sessionId: string): void {
     const session = this.sessions.get(sessionId);
-    if (!session || session.process || session.ptyRuntime?.isAlive) return;
+    // `spawning` guards the PTY startup window: the runtime is assigned before
+    // its async start() resolves, and during that window ptyRuntime.isAlive is
+    // false, so a second ensureProcess (a WS reconnect, or a startup race)
+    // would otherwise spawn a duplicate. The duplicate inherits the eager
+    // spawn's hasSpawnedBefore=true and --resumes a session the CLI never
+    // persisted, surfacing "No conversation found with session ID" before the
+    // user has sent anything. (Stream sets session.process synchronously, so it
+    // is already covered by that check.)
+    if (!session || session.process || session.ptyRuntime?.isAlive || session.spawning) return;
     this.spawnProcess(session, sessionId);
   }
 
@@ -2508,7 +2519,6 @@ Additional Cockpit rules beyond the CLI's defaults:
 
     this.log(sessionId, `spawning PTY claude (resume=${session.hasSpawnedBefore}, model=${session.info.model || "sonnet"})`);
     const spawnBeginAt = Date.now();
-    session.spawning = true;
     logDiag(sessionId, "pty:spawn-begin", {
       hasSpawnedBefore: session.hasSpawnedBefore,
       model: session.info.model,
@@ -2668,6 +2678,11 @@ Additional Cockpit rules beyond the CLI's defaults:
 
     this.startTodoWatcher(session, sessionId);
 
+    // Set the in-flight guard immediately before start(). Everything above is
+    // synchronous (no re-entrancy is possible until start() yields to the event
+    // loop), so a synchronous throw in the setup above can never strand
+    // spawning=true and permanently block ensureProcess for this session.
+    session.spawning = true;
     runtime
       .start(ptyText)
       .then(() => {

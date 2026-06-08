@@ -4391,6 +4391,35 @@ describe("SessionManager", () => {
     });
   });
 
+  describe("ensureProcess concurrency guard", () => {
+    it("does not spawn while a PTY spawn is in flight (session.spawning)", () => {
+      const session = manager.createSession("/tmp", "PTY-spawning", { runtime: "pty" });
+      const s = (manager as any).sessions.get(session.id)!;
+
+      // Simulate the PTY startup window: spawning is set, but the runtime is
+      // not yet alive (ptyRuntime assigned before start() resolves, isAlive
+      // false). A second ensureProcess here must NOT spawn a duplicate.
+      s.spawning = true;
+      s.ptyRuntime = null;
+
+      capturedPtyOpts = null;
+      manager.ensureProcess(session.id);
+
+      expect(capturedPtyOpts).toBeNull();
+    });
+
+    it("spawns when idle with no in-flight spawn", async () => {
+      const session = manager.createSession("/tmp", "PTY-idle", { runtime: "pty" });
+      const s = (manager as any).sessions.get(session.id)!;
+      expect(s.spawning).toBeFalsy();
+
+      capturedPtyOpts = null;
+      manager.ensureProcess(session.id);
+
+      await vi.waitFor(() => expect(capturedPtyOpts).not.toBeNull());
+    });
+  });
+
   describe("cockpit agent permission handling", () => {
     it("auto-approves Read tool", () => {
       const session = manager.createSession("/tmp", undefined, { cockpitAgent: true });
