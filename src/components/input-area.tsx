@@ -226,6 +226,7 @@ interface InputAreaProps {
   planMode: boolean;
   onSetPlanMode: (enabled: boolean) => void;
   showPlanToggle?: boolean;
+  isCockpitAgent?: boolean;
   thinkingLevel: ThinkingLevel;
   onSetThinking: (level: ThinkingLevel) => void;
   currentModel: string;
@@ -280,6 +281,7 @@ export function InputArea({
   planMode,
   onSetPlanMode,
   showPlanToggle = true,
+  isCockpitAgent = false,
   thinkingLevel,
   onSetThinking,
   currentModel,
@@ -1050,32 +1052,35 @@ export function InputArea({
                             Restart agent harness
                           </button>
 
-                          <button
-                            onClick={() => onSetBypass(!bypassActive)}
-                            className="flex w-full items-center justify-between rounded-lg border border-border px-4 py-3 text-xs hover:bg-muted/50 transition-colors"
-                          >
-                            <div className="flex items-center gap-3">
-                              {bypassActive ? (
-                                <ShieldOff className="h-4 w-4 text-orange-500" />
-                              ) : (
-                                <ShieldCheck className="h-4 w-4 text-muted-foreground" />
-                              )}
-                              <span className={bypassActive ? "text-orange-500 font-medium" : "text-muted-foreground"}>
-                                Bypass all permissions
-                              </span>
-                            </div>
-                            <span
-                              className={`inline-flex h-5 w-9 items-center rounded-full transition-colors shrink-0 ${
-                                bypassActive ? "bg-orange-500" : "bg-muted-foreground/30"
-                              }`}
+                          {!isCockpitAgent && (
+                            <button
+                              onClick={() => onSetBypass(!bypassActive)}
+                              className="flex w-full items-center justify-between rounded-lg border border-border px-4 py-3 text-xs hover:bg-muted/50 transition-colors"
+                              data-testid="bypass-toggle"
                             >
+                              <div className="flex items-center gap-3">
+                                {bypassActive ? (
+                                  <ShieldOff className="h-4 w-4 text-orange-500" />
+                                ) : (
+                                  <ShieldCheck className="h-4 w-4 text-muted-foreground" />
+                                )}
+                                <span className={bypassActive ? "text-orange-500 font-medium" : "text-muted-foreground"}>
+                                  Bypass all permissions
+                                </span>
+                              </div>
                               <span
-                                className={`inline-block h-4 w-4 rounded-full bg-white transition-transform shadow-sm ${
-                                  bypassActive ? "translate-x-4.5" : "translate-x-0.5"
+                                className={`inline-flex h-5 w-9 items-center rounded-full transition-colors shrink-0 ${
+                                  bypassActive ? "bg-orange-500" : "bg-muted-foreground/30"
                                 }`}
-                              />
-                            </span>
-                          </button>
+                              >
+                                <span
+                                  className={`inline-block h-4 w-4 rounded-full bg-white transition-transform shadow-sm ${
+                                    bypassActive ? "translate-x-4.5" : "translate-x-0.5"
+                                  }`}
+                                />
+                              </span>
+                            </button>
+                          )}
 
                           {initData?.mcpServers && initData.mcpServers.length > 0 && (
                             <button

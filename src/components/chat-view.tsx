@@ -34,6 +34,7 @@ export function ChatView({
   onSendMessage,
   className,
   showPlanToggle = true,
+  isCockpitAgent = false,
 }: {
   sessionId: string;
   cwd?: string;
@@ -43,6 +44,7 @@ export function ChatView({
   onSendMessage?: (fn: (text: string) => void) => void;
   className?: string;
   showPlanToggle?: boolean;
+  isCockpitAgent?: boolean;
 }) {
   const {
     messages,
@@ -554,6 +556,7 @@ export function ChatView({
           planMode={planMode}
           onSetPlanMode={setPlanMode}
           showPlanToggle={showPlanToggle}
+          isCockpitAgent={isCockpitAgent}
           thinkingLevel={thinkingLevel}
           onSetThinking={setThinkingLevel}
           currentModel={currentModel}

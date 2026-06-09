@@ -1001,10 +1001,13 @@ function handleParsedEvent(ws: WebSocket, sessionId: string, event: ParsedEvent,
       break;
 
     case "permission_request": {
-      // Auto-allow and pending storage are handled in session-manager
-      // before this event reaches us. If we get here, it needs user input.
-      const toolName = event.toolName || "";
       const requestId = event.requestId || "";
+      // auto_approve / auto_deny / cockpit-denied requests are resolved
+      // synchronously in applyProcessedResult before this event is emitted,
+      // which deletes their pendingRequests entry. Forward a prompt only for
+      // a request the server is still waiting on.
+      if (!sessionManager.getPendingRequest(sessionId, requestId)) break;
+      const toolName = event.toolName || "";
 
       if (toolName === "AskUserQuestion") {
         console.log(`[question-debug] live question:request for session ${sessionId.slice(0, 8)}, requestId=${requestId}`);

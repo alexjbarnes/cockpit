@@ -4133,6 +4133,14 @@ describe("SessionManager", () => {
       const s = (manager as any).sessions.get(session.id);
       expect(s.bypassAllPermissions).toBe(false);
     });
+
+    it("setBypassAllPermissions is a no-op for cockpitAgent sessions", () => {
+      const session = manager.createSession("/tmp", undefined, { cockpitAgent: true });
+      manager.setBypassAllPermissions(session.id);
+      const s = (manager as any).sessions.get(session.id);
+      expect(s.bypassAllPermissions).toBe(false);
+      expect(s.cockpitAgent).toBe(true);
+    });
   });
 
   describe("settings change on PTY session before first message", () => {

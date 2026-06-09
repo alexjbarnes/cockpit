@@ -1059,6 +1059,12 @@ describe("WebSocket handler", () => {
 
       await waitForConnect(ws, session.id);
 
+      (manager as any).sessions.get(session.id).pendingRequests.set("req-1", {
+        type: "permission",
+        requestId: "req-1",
+        toolName: "Bash",
+        toolInput: "rm -rf /",
+      });
       emitEvent(session.id, {
         type: "permission_request",
         toolName: "Bash",
@@ -1079,6 +1085,12 @@ describe("WebSocket handler", () => {
 
       await waitForConnect(ws, session.id);
 
+      (manager as any).sessions.get(session.id).pendingRequests.set("req-2", {
+        type: "question",
+        requestId: "req-2",
+        toolName: "AskUserQuestion",
+        toolInput: "What color?",
+      });
       emitEvent(session.id, {
         type: "permission_request",
         toolName: "AskUserQuestion",
@@ -1088,6 +1100,87 @@ describe("WebSocket handler", () => {
       } as ParsedEvent);
       const msg = await readMessage(ws);
       expect(msg.type).toBe("question:request");
+
+      ws.close();
+    });
+
+    it("drops permission_request with no pending entry (auto-resolved)", async () => {
+      const session = manager.createSession("/tmp");
+      const ws = await connectWs();
+
+      await waitForConnect(ws, session.id);
+
+      // No pending entry set — the guard should drop this.
+      emitEvent(session.id, {
+        type: "permission_request",
+        toolName: "Bash",
+        requestId: "req-auto",
+        toolInput: "ls",
+        rawToolInput: { command: "ls" },
+      } as ParsedEvent);
+      // Emit a rate_limit probe and assert the first received message is that probe.
+      emitEvent(session.id, {
+        type: "rate_limit",
+        rateLimitInfo: { status: "rate_limited", retryAfterMs: 1000 },
+      } as ParsedEvent);
+      const msg = await readMessage(ws);
+      expect(msg.type).toBe("session:rate_limit");
+      expect(msg).not.toHaveProperty("requestId");
+
+      ws.close();
+    });
+
+    it("forwards genuine permission request with pending entry", async () => {
+      const session = manager.createSession("/tmp");
+      const ws = await connectWs();
+
+      await waitForConnect(ws, session.id);
+
+      (manager as any).sessions.get(session.id).pendingRequests.set("req-gen", {
+        type: "permission",
+        requestId: "req-gen",
+        toolName: "Bash",
+        toolInput: "ls",
+      });
+      emitEvent(session.id, {
+        type: "permission_request",
+        toolName: "Bash",
+        requestId: "req-gen",
+        toolInput: "ls",
+        rawToolInput: { command: "ls" },
+      } as ParsedEvent);
+      const msg = await readMessage(ws);
+      expect(msg.type).toBe("permission:request");
+      expect(msg.requestId).toBe("req-gen");
+      expect(msg.toolName).toBe("Bash");
+
+      ws.close();
+    });
+
+    it("forwards genuine question with pending entry", async () => {
+      const session = manager.createSession("/tmp");
+      const ws = await connectWs();
+
+      await waitForConnect(ws, session.id);
+
+      (manager as any).sessions.get(session.id).pendingRequests.set("req-q", {
+        type: "question",
+        requestId: "req-q",
+        toolName: "AskUserQuestion",
+        toolInput: "What is your favorite color?",
+      });
+      emitEvent(session.id, {
+        type: "permission_request",
+        toolName: "AskUserQuestion",
+        requestId: "req-q",
+        toolInput: "What is your favorite color?",
+        rawToolInput: { question: "What is your favorite color?" },
+      } as ParsedEvent);
+      const msg = await readMessage(ws);
+      expect(msg.type).toBe("question:request");
+      expect(msg.requestId).toBe("req-q");
+      // No permission:request should be sent
+      expect(msg).not.toHaveProperty("toolName");
 
       ws.close();
     });
@@ -1800,6 +1893,12 @@ describe("WebSocket handler", () => {
       await waitForConnect(ws, session.id);
 
       const s = (manager as any).sessions.get(session.id)!;
+      s.pendingRequests.set("req-1", {
+        type: "question",
+        requestId: "req-1",
+        toolName: "AskUserQuestion",
+        toolInput: "What do you think?",
+      });
       s.emitter.emit("event", session.id, {
         type: "permission_request",
         toolName: "AskUserQuestion",
@@ -1819,6 +1918,12 @@ describe("WebSocket handler", () => {
       await waitForConnect(ws, session.id);
 
       const s = (manager as any).sessions.get(session.id)!;
+      s.pendingRequests.set("req-2", {
+        type: "permission",
+        requestId: "req-2",
+        toolName: "Bash",
+        toolInput: "rm -rf /",
+      });
       s.emitter.emit("event", session.id, {
         type: "permission_request",
         toolName: "Bash",
@@ -1984,6 +2089,12 @@ describe("WebSocket handler", () => {
 
       const s = (manager as any).sessions.get(session.id)!;
       s.runtime = "pty";
+      s.pendingRequests.set("req-pty", {
+        type: "permission",
+        requestId: "req-pty",
+        toolName: "Bash",
+        toolInput: "ls",
+      });
       s.emitter.emit("event", session.id, {
         type: "permission_request",
         toolName: "Bash",
@@ -2341,6 +2452,12 @@ describe("WebSocket handler", () => {
       await waitForConnect(ws, session.id);
 
       const s = (manager as any).sessions.get(session.id)!;
+      s.pendingRequests.set("req-plan", {
+        type: "permission",
+        requestId: "req-plan",
+        toolName: "ExitPlanMode",
+        toolInput: "exit plan",
+      });
       s.emitter.emit("event", session.id, {
         type: "permission_request",
         toolName: "ExitPlanMode",
@@ -2355,7 +2472,7 @@ describe("WebSocket handler", () => {
       ws.close();
     });
 
-    it("handles permission_request without requestId or rawToolInput", async () => {
+    it("drops permission_request with no pending entry", async () => {
       const session = manager.createSession("/tmp");
       const ws = await connectWs();
       await waitForConnect(ws, session.id);
@@ -2366,9 +2483,14 @@ describe("WebSocket handler", () => {
         toolName: "Bash",
         toolInput: "ls",
       });
+      // No pending entry set, so the guard should drop it.
+      // Emit a rate_limit probe and assert the first received message is that probe.
+      s.emitter.emit("event", session.id, {
+        type: "rate_limit",
+        rateLimitInfo: { status: "rate_limited", retryAfterMs: 1000 },
+      });
       const msg = await readMessage(ws);
-      expect(msg.type).toBe("permission:request");
-      expect(msg.requestId).toBe("");
+      expect(msg.type).toBe("session:rate_limit");
       ws.close();
     });
 
@@ -2590,6 +2712,12 @@ describe("WebSocket handler", () => {
       await waitForConnect(ws, session.id);
 
       const s = (manager as any).sessions.get(session.id)!;
+      s.pendingRequests.set("req-sug", {
+        type: "permission",
+        requestId: "req-sug",
+        toolName: "Bash",
+        toolInput: "ls",
+      });
       s.emitter.emit("event", session.id, {
         type: "permission_request",
         toolName: "Bash",
@@ -2621,6 +2749,12 @@ describe("WebSocket handler", () => {
       await waitForConnect(ws, session.id);
 
       const s = (manager as any).sessions.get(session.id)!;
+      s.pendingRequests.set("req-sug2", {
+        type: "permission",
+        requestId: "req-sug2",
+        toolName: "Bash",
+        toolInput: "ls",
+      });
       s.emitter.emit("event", session.id, {
         type: "permission_request",
         toolName: "Bash",
