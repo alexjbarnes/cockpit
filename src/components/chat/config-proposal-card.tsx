@@ -2,7 +2,6 @@
 
 import { Check, X } from "lucide-react";
 import { useMemo } from "react";
-import { CodeBlock } from "@/components/code-block";
 import type { PendingPermission } from "@/hooks/use-session";
 import { formatConfigChange } from "@/lib/config-change";
 import type { PermissionMode } from "@/types";
@@ -50,9 +49,9 @@ export function ConfigProposalCard({ permission, onRespond }: ConfigProposalCard
                 <div key={i}>
                   <div className="text-[11px] text-muted-foreground">{row.label}</div>
                   {row.block ? (
-                    <div className="mt-0.5">
-                      <CodeBlock code={row.value} language="text" />
-                    </div>
+                    <pre className="mt-0.5 rounded bg-muted/50 px-2 py-1.5 text-[11px] text-foreground leading-relaxed whitespace-pre-wrap break-words max-h-48 overflow-y-auto">
+                      {row.value}
+                    </pre>
                   ) : (
                     <div className="text-sm text-foreground">{row.value}</div>
                   )}
