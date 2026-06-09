@@ -703,15 +703,14 @@ async function extractSessionMeta(filePath: string): Promise<SessionMeta | null>
   let cwd = "";
   let title = "";
   let createdAt = 0;
+  let stream: ReturnType<typeof createReadStream> | null = null;
 
   try {
     const fileStat = await stat(filePath);
     const lastActiveAt = fileStat.mtimeMs;
 
-    const rl = createInterface({
-      input: createReadStream(filePath, { encoding: "utf-8" }),
-      crlfDelay: Infinity,
-    });
+    stream = createReadStream(filePath, { encoding: "utf-8" });
+    const rl = createInterface({ input: stream, crlfDelay: Infinity });
 
     let linesRead = 0;
     for await (const line of rl) {
@@ -764,6 +763,8 @@ async function extractSessionMeta(filePath: string): Promise<SessionMeta | null>
     };
   } catch {
     return null;
+  } finally {
+    stream?.destroy();
   }
 }
 

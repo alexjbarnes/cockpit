@@ -1193,10 +1193,45 @@ describe("transcript module", () => {
         close: vi.fn(),
       };
       (createInterface as any).mockReturnValue(mockRl);
-      (createReadStream as any).mockReturnValue({});
+      (createReadStream as any).mockReturnValue({ destroy: () => {} });
 
       const result = await findSessionCwd("session-123");
       expect(result).toBe("/home/user/my-project");
+    });
+
+    it("destroys the read stream after scanning a transcript (rl.close alone leaks the FD)", async () => {
+      const { findSessionCwd } = await import("@/server/transcript");
+      const { createReadStream } = await import("node:fs");
+      const { createInterface } = await import("node:readline");
+
+      (existsSync as any).mockReturnValue(true);
+      (readdir as any).mockResolvedValue(["project-a"]);
+      (stat as any).mockResolvedValue({ mtimeMs: 1000 });
+
+      const lines = [
+        JSON.stringify({ type: "user", cwd: "/home/user/my-project", message: { content: "hello" }, timestamp: "2024-01-01T00:00:00Z" }),
+      ];
+      let lineIndex = 0;
+      const mockRl = {
+        [Symbol.asyncIterator]: () => ({
+          next: () => {
+            if (lineIndex < lines.length) {
+              return Promise.resolve({ value: lines[lineIndex++], done: false });
+            }
+            return Promise.resolve({ value: undefined, done: true });
+          },
+        }),
+        close: vi.fn(),
+      };
+      (createInterface as any).mockReturnValue(mockRl);
+      const destroy = vi.fn();
+      (createReadStream as any).mockReturnValue({ destroy });
+
+      await findSessionCwd("session-123");
+
+      // extractSessionMeta breaks out of the read loop early; rl.close() does not
+      // release the underlying createReadStream FD, so it must destroy the stream.
+      expect(destroy).toHaveBeenCalled();
     });
 
     it("returns null when session file not found in any project dir", async () => {
@@ -1255,7 +1290,7 @@ describe("transcript module", () => {
         };
       };
 
-      (createReadStream as any).mockReturnValue({});
+      (createReadStream as any).mockReturnValue({ destroy: () => {} });
       (createInterface as any)
         .mockReturnValueOnce(makeRl("/tmp/project", "First session"))
         .mockReturnValueOnce(makeRl("/tmp/project", "Second session"));
@@ -1298,7 +1333,7 @@ describe("transcript module", () => {
         };
       };
 
-      (createReadStream as any).mockReturnValue({});
+      (createReadStream as any).mockReturnValue({ destroy: () => {} });
       (stat as any).mockResolvedValueOnce({ mtimeMs: 1000 }).mockResolvedValueOnce({ mtimeMs: 3000 });
       (createInterface as any).mockReturnValueOnce(makeRl("/tmp/old-project")).mockReturnValueOnce(makeRl("/tmp/new-project"));
 
@@ -2140,7 +2175,7 @@ describe("transcript module", () => {
         };
       };
 
-      (createReadStream as any).mockReturnValue({});
+      (createReadStream as any).mockReturnValue({ destroy: () => {} });
       (createInterface as any).mockReturnValueOnce(makeRl("/tmp/project")).mockReturnValueOnce(makeRl("/other/dir"));
 
       const result = await scanSessionsForCwd("/tmp/project");
@@ -2174,7 +2209,7 @@ describe("transcript module", () => {
         };
       };
 
-      (createReadStream as any).mockReturnValue({});
+      (createReadStream as any).mockReturnValue({ destroy: () => {} });
       (createInterface as any).mockReturnValueOnce(makeRl("/tmp/project"));
 
       const result = await scanSessionsForCwd("/tmp/project");
@@ -2223,7 +2258,7 @@ describe("transcript module", () => {
         };
       };
 
-      (createReadStream as any).mockReturnValue({});
+      (createReadStream as any).mockReturnValue({ destroy: () => {} });
       (createInterface as any).mockReturnValueOnce(makeRl("/tmp/a")).mockReturnValueOnce(makeRl("/tmp/b"));
 
       const result = await scanSessionsByIds(["sess-1"]);
