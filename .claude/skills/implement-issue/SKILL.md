@@ -1,5 +1,5 @@
 ---
-description: Implement a refined Linear issue. Branches off next in an isolated git worktree, writes the code following the approved plan, runs build/lint/tests, runs the completeness-reviewer agent first to confirm every acceptance criterion has implementing code, self-reviews with the code-reviewer agent (up to 4 rounds), runs the ui-reviewer agent for screenshots when UI changed, opens a PR, starts a live test server and posts its URL for the human to verify, then moves the issue to Human Review. Use when asked to implement, build, or code up a Linear issue, e.g. "implement ALE-123".
+description: Implement a refined Linear issue. Branches off next in an isolated git worktree, writes the code following the approved plan, runs build/lint/tests, runs the completeness-reviewer agent first to confirm every acceptance criterion has implementing code, self-reviews with the code-reviewer agent (up to 4 rounds), runs the ui-reviewer agent for screenshots when UI changed, opens a PR, waits for CI to pass, starts a live test server and posts its URL for the human to verify, then moves the issue to Human Review. Use when asked to implement, build, or code up a Linear issue, e.g. "implement ALE-123".
 ---
 
 # Implement a Linear issue
@@ -152,6 +152,17 @@ Re-verify after every fix. Never let a UI fix break the build, lint, or tests.
 - Push the branch.
 - Open the PR with `gh pr create`, base `next`. Title from the issue. Body: a short summary, the acceptance criteria as a ticked checklist, a `**Deviations from plan:**` section (or "none"), and a `**Review:**` line stating the verdict and round count. Reference the issue.
 
+**Then confirm CI is green before going further.** The PR's GitHub Actions checks (typecheck, lint, test, secrets, socket) run in a clean environment and catch what the local verify in step 7 cannot (CI-only checks, environment differences). They, not the local run, are the gate for reaching the human. Watch them to completion:
+
+```
+gh pr checks <pr-number> --watch --fail-fast --interval 30
+```
+
+Checks take a few seconds to register after the PR is created; if `gh pr checks` reports none yet, poll briefly with `curl` (foreground `sleep` is blocked) and retry, then watch.
+- **Green** (exit 0): continue to step 12.
+- **Red**: a check failed that the local verify did not surface. Read the failing job (`gh run view <run-id> --log-failed`, or the check's details URL), fix the cause, re-run the local verify (step 7), push, and watch again. Bounded to 3 fix attempts.
+- **Still red after 3 attempts, or CI never completes:** stop. Do NOT start the test server (step 12) or move to Human Review (step 13). Leave the issue in `Implementation` and post a comment naming the failing check(s) with the run URL. A red PR must never reach the human review gate.
+
 ### 12. Start a live test server for the human review
 The human verifies the feature by clicking a link, not by checking out the branch. Start a persistent dev server from the worktree so the running feature is reachable. The cockpit cache gotchas in `.claude/skills/browser-test/SKILL.md` apply here (NODE_ENV, a stale `.next`, the service worker); clear them so the human sees current code, not a stale bundle.
 
@@ -195,6 +206,7 @@ Leave the worktree and the test server running. They are the human's review surf
 - Work in the worktree off `next`. The PR targets `next`.
 - Post the full review of every round as a comment (verbatim, all buckets, round number in the header), on both PASS and FAIL.
 - Re-verify after every fix. Never open a PR with a failing build, lint, or test run.
+- CI is the gate to the human, not the local run. After opening the PR, watch its GitHub checks (`gh pr checks --watch`) and only proceed to the test server and Human Review when they pass. If CI cannot be made green in 3 fix attempts, leave the issue in Implementation with a comment naming the failing checks. Never move a red PR to Human Review.
 - Four review rounds max. Still failing after four: open the PR, route to Human Review, and comment the unresolved findings with reasons.
 - If the change touches UI, run the ui-reviewer agent (up to 4 rounds, same as code review) so screenshots of the change are attached to the issue before the human gate. Still failing after four: carry the findings to Human Review with the screenshots attached.
 - Run the completeness-reviewer agent first (before code and UI review, up to 4 rounds) as a coverage check that every acceptance criterion has implementing code or a test; purely-visual criteria are deferred to the ui-reviewer and the human. Genuinely unmet after four: carry the gaps to Human Review as a comment.
