@@ -1,13 +1,16 @@
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 process.env.COCKPIT_CONFIG_DIR = mkdtempSync(join(tmpdir(), "cockpit-test-"));
 process.env.CLAUDE_CONFIG_DIR = mkdtempSync(join(tmpdir(), "claude-test-"));
 
+vi.mock("@/server/singleton", () => ({ getJobScheduler: vi.fn() }));
+
 import { CockpitMcpServer } from "@/server/mcp/cockpit-config-server";
 import { registerAuthToken } from "@/server/mcp/run-context";
+import { getJobScheduler } from "@/server/singleton";
 
 const HOST = "127.0.0.1";
 let server: CockpitMcpServer;
@@ -132,6 +135,8 @@ describe("cockpit-config MCP server (in-process HTTP)", () => {
       "delete_mcp_server",
       "get_notification_settings",
       "update_notification_settings",
+      "run_job",
+      "list_running_jobs",
     ]) {
       expect(names).toContain(name);
     }
@@ -214,6 +219,207 @@ describe("cockpit-config MCP server (in-process HTTP)", () => {
       });
       const text = (res.body as { result?: { content: { text: string }[] } })?.result?.content?.[0]?.text ?? "";
       expect(JSON.parse(text).error).toContain("not found");
+    });
+  });
+
+  describe("job tools (run_job / list_running_jobs / batch)", () => {
+    beforeEach(() => {
+      vi.clearAllMocks();
+    });
+
+    it("run_job started", async () => {
+      const stubScheduler = {
+        getRunningJobs: () => new Map(),
+        triggerJob: vi.fn(() => new Promise(() => {})),
+      };
+      vi.mocked(getJobScheduler).mockReturnValue(stubScheduler as never);
+
+      const created = (await callToolParsed("create_job", {
+        name: "run-test-job",
+        schedule: { type: "simple", frequency: "hourly" },
+        prompt: "echo hello",
+        cwd: "/tmp",
+      })) as { created: { id: string; name: string } };
+
+      const result = (await callToolParsed("run_job", { id: created.created.id })) as { results: { id: string; status: string }[] };
+      expect(result.results[0].status).toBe("started");
+      expect(stubScheduler.triggerJob).toHaveBeenCalledWith(created.created.id);
+    });
+
+    it("run_job not_found", async () => {
+      vi.mocked(getJobScheduler).mockReturnValue({
+        getRunningJobs: () => new Map(),
+        triggerJob: vi.fn(),
+      } as never);
+
+      const result = (await callToolParsed("run_job", { id: "nonexistent-id" })) as { results: { id: string; status: string }[] };
+      expect(result.results[0].status).toBe("not_found");
+    });
+
+    it("run_job already_running", async () => {
+      const runningMap = new Map();
+      runningMap.set("running-job-id", { jobId: "running-job-id" });
+      vi.mocked(getJobScheduler).mockReturnValue({
+        getRunningJobs: () => runningMap,
+        triggerJob: vi.fn(),
+      } as never);
+
+      const created = (await callToolParsed("create_job", {
+        name: "already-running-test",
+        schedule: { type: "simple", frequency: "hourly" },
+        prompt: "echo hello",
+        cwd: "/tmp",
+      })) as { created: { id: string; name: string } };
+      runningMap.set(created.created.id, { jobId: created.created.id });
+
+      const result = (await callToolParsed("run_job", { id: created.created.id })) as { results: { id: string; status: string }[] };
+      expect(result.results[0].status).toBe("already_running");
+    });
+
+    it("run_job no scheduler", async () => {
+      vi.mocked(getJobScheduler).mockReturnValue(null as never);
+
+      const result = (await callToolParsed("run_job", { id: "any-id" })) as { results: { id: string; status: string }[] };
+      expect(result.results[0].status).toBe("scheduler not available");
+    });
+
+    it("run_job batch ids", async () => {
+      const stubScheduler = {
+        getRunningJobs: () => new Map(),
+        triggerJob: vi.fn(() => new Promise(() => {})),
+      };
+      vi.mocked(getJobScheduler).mockReturnValue(stubScheduler as never);
+
+      const a = (await callToolParsed("create_job", {
+        name: "batch-run-a",
+        schedule: { type: "simple", frequency: "hourly" },
+        prompt: "echo a",
+        cwd: "/tmp",
+      })) as { created: { id: string } };
+      const b = (await callToolParsed("create_job", {
+        name: "batch-run-b",
+        schedule: { type: "simple", frequency: "hourly" },
+        prompt: "echo b",
+        cwd: "/tmp",
+      })) as { created: { id: string } };
+
+      const result = (await callToolParsed("run_job", { ids: [a.created.id, "nonexistent", b.created.id] })) as {
+        results: { id: string; status: string }[];
+      };
+      expect(result.results).toHaveLength(3);
+      expect(result.results[0].status).toBe("started");
+      expect(result.results[1].status).toBe("not_found");
+      expect(result.results[2].status).toBe("started");
+    });
+
+    it("run_job no id provided", async () => {
+      const res = await mcpPost({
+        jsonrpc: "2.0",
+        id: 99,
+        method: "tools/call",
+        params: { name: "run_job", arguments: {} },
+      });
+      const text = (res.body as { result?: { content: { text: string }[] } })?.result?.content?.[0]?.text ?? "";
+      expect(JSON.parse(text).error).toContain("no job id provided");
+    });
+
+    it("list_running_jobs empty", async () => {
+      vi.mocked(getJobScheduler).mockReturnValue({
+        getRunningJobs: () => new Map(),
+      } as never);
+
+      const result = (await callToolParsed("list_running_jobs")) as { running: unknown[]; count: number };
+      expect(result.running).toHaveLength(0);
+      expect(result.count).toBe(0);
+    });
+
+    it("list_running_jobs populated", async () => {
+      vi.mocked(getJobScheduler).mockReturnValue({
+        getRunningJobs: () =>
+          new Map([
+            [
+              "job-1",
+              {
+                id: "run-1",
+                jobId: "job-1",
+                sessionId: "session-1",
+                status: "running",
+                startedAt: Date.now() - 5000,
+                toolsUsed: [{ name: "Read" }],
+                messageCount: 3,
+              },
+            ],
+          ]),
+      } as never);
+
+      const result = (await callToolParsed("list_running_jobs")) as {
+        running: { jobId: string; name: string; runId: string; sessionId: string; elapsedMs: number }[];
+        count: number;
+      };
+      expect(result.count).toBe(1);
+      expect(result.running[0].runId).toBe("run-1");
+      expect(result.running[0].sessionId).toBe("session-1");
+      expect(result.running[0].elapsedMs).toBeGreaterThanOrEqual(0);
+    });
+
+    it("list_running_jobs no scheduler", async () => {
+      vi.mocked(getJobScheduler).mockReturnValue(null as never);
+
+      const result = (await callToolParsed("list_running_jobs")) as { running: unknown[]; count: number; note: string };
+      expect(result.running).toHaveLength(0);
+      expect(result.count).toBe(0);
+      expect(result.note).toContain("scheduler not available");
+    });
+
+    it("delete_job batch", async () => {
+      const a = (await callToolParsed("create_job", {
+        name: "batch-del-a",
+        schedule: { type: "simple", frequency: "hourly" },
+        prompt: "echo a",
+        cwd: "/tmp",
+      })) as { created: { id: string } };
+      const b = (await callToolParsed("create_job", {
+        name: "batch-del-b",
+        schedule: { type: "simple", frequency: "hourly" },
+        prompt: "echo b",
+        cwd: "/tmp",
+      })) as { created: { id: string } };
+
+      const result = (await callToolParsed("delete_job", { ids: [a.created.id, "nonexistent", b.created.id] })) as {
+        results: { id: string; deleted?: boolean; error?: string }[];
+      };
+      expect(result.results).toHaveLength(3);
+      expect(result.results[0].deleted).toBe(true);
+      expect(result.results[1].error).toContain("not found");
+      expect(result.results[2].deleted).toBe(true);
+    });
+
+    it("update_job batch", async () => {
+      const a = (await callToolParsed("create_job", {
+        name: "batch-upd-a",
+        schedule: { type: "simple", frequency: "hourly" },
+        prompt: "echo a",
+        cwd: "/tmp",
+      })) as { created: { id: string } };
+      const b = (await callToolParsed("create_job", {
+        name: "batch-upd-b",
+        schedule: { type: "simple", frequency: "hourly" },
+        prompt: "echo b",
+        cwd: "/tmp",
+      })) as { created: { id: string } };
+
+      const result = (await callToolParsed("update_job", {
+        updates: [
+          { id: a.created.id, enabled: false },
+          { id: "nonexistent", name: "x" },
+          { id: b.created.id, name: "renamed-b" },
+        ],
+      })) as { results: { id: string; before?: Record<string, unknown>; after?: Record<string, unknown>; error?: string }[] };
+      expect(result.results).toHaveLength(3);
+      expect(result.results[0].after).toBeDefined();
+      expect((result.results[0].after as { enabled: boolean }).enabled).toBe(false);
+      expect(result.results[1].error).toContain("not found");
+      expect((result.results[2].after as { name: string }).name).toBe("renamed-b");
     });
   });
 

@@ -4495,5 +4495,64 @@ describe("SessionManager", () => {
       expect(pending.configProposal.action).toBe("create");
       expect(pending.configProposal.domain).toBe("job");
     });
+
+    it("auto-approves mcp__cockpit-config__list_running_jobs as a read tool", () => {
+      const session = manager.createSession("/tmp", undefined, { cockpitAgent: true });
+      const s = (manager as any).sessions.get(session.id);
+      const respondToPermission = vi.spyOn(manager, "respondToPermission" as any);
+
+      const result = {
+        permissionActions: [
+          {
+            type: "store" as const,
+            toolName: "mcp__cockpit-config__list_running_jobs",
+            requestId: "req-list",
+            toolInput: JSON.stringify({}),
+            rawToolInput: {},
+          },
+        ],
+        errors: [],
+        compactDone: false,
+        emit: [],
+        statusChange: undefined,
+        snapshot: null,
+        intermediateMessages: [],
+        systemMessages: [],
+      };
+
+      (manager as any).applyProcessedResult(s, session.id, result);
+      expect(respondToPermission).toHaveBeenCalledWith(session.id, "req-list", true, {});
+    });
+
+    it("stores mcp__cockpit-config__run_job as PendingRequest with configProposal", () => {
+      const session = manager.createSession("/tmp", undefined, { cockpitAgent: true });
+      const s = (manager as any).sessions.get(session.id);
+
+      const result = {
+        permissionActions: [
+          {
+            type: "store" as const,
+            toolName: "mcp__cockpit-config__run_job",
+            requestId: "req-run",
+            toolInput: JSON.stringify({ id: "job-1" }),
+            rawToolInput: { id: "job-1" },
+          },
+        ],
+        errors: [],
+        compactDone: false,
+        emit: [],
+        statusChange: undefined,
+        snapshot: null,
+        intermediateMessages: [],
+        systemMessages: [],
+      };
+
+      (manager as any).applyProcessedResult(s, session.id, result);
+      expect(s.pendingRequests.has("req-run")).toBe(true);
+      const pending = s.pendingRequests.get("req-run");
+      expect(pending.configProposal).toBeDefined();
+      expect(pending.configProposal.action).toBe("run");
+      expect(pending.configProposal.domain).toBe("job");
+    });
   });
 });

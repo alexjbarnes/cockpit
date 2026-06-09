@@ -37,6 +37,7 @@ import type {
 import { debugLog, isDebugEnabled, logDiag, logRawLine } from "./debug-logger";
 import { getDefaults } from "./defaults";
 import { EventParser, type ParsedEvent } from "./event-parser";
+import { COCKPIT_AGENT_SYSTEM_PROMPT } from "./mcp/cockpit-agent-prompt";
 import { clearToken, type RunContext, registerAuthToken, registerRunContext } from "./mcp/run-context";
 import { findLatestPlanFile, readPlanFile } from "./plans";
 import { PtyRuntime } from "./pty-runtime";
@@ -2286,6 +2287,7 @@ Additional Cockpit rules beyond the CLI's defaults:
     }
 
     if (session.cockpitAgent) {
+      args.push("--append-system-prompt", COCKPIT_AGENT_SYSTEM_PROMPT);
       const cockpitMcp = getCockpitMcp();
       if (cockpitMcp) {
         if (session.mcpToken) {
@@ -2537,6 +2539,7 @@ Additional Cockpit rules beyond the CLI's defaults:
     }
 
     if (session.cockpitAgent) {
+      extraArgs.push("--append-system-prompt", COCKPIT_AGENT_SYSTEM_PROMPT);
       const cockpitMcp = getCockpitMcp();
       if (cockpitMcp) {
         if (session.mcpToken) {

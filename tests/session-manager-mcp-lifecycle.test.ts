@@ -52,10 +52,15 @@ vi.mock("@/server/defaults", () => ({
   }),
 }));
 
+const ptyInstances: { opts: { extraArgs: string[] } }[] = [];
 vi.mock("@/server/pty-runtime", () => {
   class MockPtyRuntime {
     isAlive = false;
     kill = vi.fn().mockResolvedValue(undefined);
+    start = vi.fn().mockResolvedValue(undefined);
+    constructor(public opts: { extraArgs: string[] }) {
+      ptyInstances.push(this);
+    }
   }
   return { PtyRuntime: MockPtyRuntime };
 });
@@ -96,6 +101,8 @@ vi.mock("@/server/todo-watcher", () => {
   return { TodoWatcher: MockTodoWatcher };
 });
 
+import { spawn } from "node:child_process";
+import { COCKPIT_AGENT_SYSTEM_PROMPT } from "@/server/mcp/cockpit-agent-prompt";
 import { SessionManager } from "@/server/session-manager";
 
 describe("SessionManager MCP token lifecycle", () => {
@@ -103,6 +110,7 @@ describe("SessionManager MCP token lifecycle", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    ptyInstances.length = 0;
     manager = new SessionManager();
   });
 
@@ -135,5 +143,43 @@ describe("SessionManager MCP token lifecycle", () => {
     await manager.destroySession(info.id);
 
     expect(mockClearToken).toHaveBeenCalledWith(token);
+  });
+
+  it("cockpit-agent stream spawn includes --append-system-prompt", () => {
+    const info = manager.createSession("/tmp", undefined, { cockpitAgent: true });
+    const mgr = manager as unknown as { sessions: Map<string, unknown>; spawnProcess: (s: unknown, id: string) => void };
+    const s = mgr.sessions.get(info.id);
+    mgr.spawnProcess(s, info.id);
+
+    const args = vi.mocked(spawn).mock.calls[0][1] as string[];
+    const idx = args.indexOf("--append-system-prompt");
+    expect(idx).toBeGreaterThanOrEqual(0);
+    expect(args[idx + 1]).toBe(COCKPIT_AGENT_SYSTEM_PROMPT);
+  });
+
+  it("non-cockpit stream spawn does not include --append-system-prompt", () => {
+    const info = manager.createSession("/tmp");
+    const mgr = manager as unknown as { sessions: Map<string, unknown>; spawnProcess: (s: unknown, id: string) => void };
+    const s = mgr.sessions.get(info.id);
+    mgr.spawnProcess(s, info.id);
+
+    const args = vi.mocked(spawn).mock.calls[0][1] as string[];
+    expect(args).not.toContain("--append-system-prompt");
+  });
+
+  it("cockpit-agent PTY spawn includes --append-system-prompt in extraArgs", () => {
+    const info = manager.createSession("/tmp", undefined, { cockpitAgent: true, runtime: "pty" });
+    const mgr = manager as unknown as {
+      sessions: Map<string, unknown>;
+      spawnPtyProcess: (s: unknown, id: string) => void;
+    };
+    const s = mgr.sessions.get(info.id);
+    mgr.spawnPtyProcess(s, info.id);
+
+    expect(ptyInstances.length).toBeGreaterThan(0);
+    const last = ptyInstances[ptyInstances.length - 1];
+    expect(last.opts.extraArgs).toContain("--append-system-prompt");
+    const idx = last.opts.extraArgs.indexOf("--append-system-prompt");
+    expect(last.opts.extraArgs[idx + 1]).toBe(COCKPIT_AGENT_SYSTEM_PROMPT);
   });
 });
