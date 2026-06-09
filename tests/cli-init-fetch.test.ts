@@ -40,7 +40,7 @@ describe("fetchCliInitData", () => {
 
     expect(spawn).toHaveBeenCalledWith(
       "claude",
-      ["-p", "--verbose", "--output-format", "stream-json", "hi"],
+      ["-p", "--no-session-persistence", "--verbose", "--output-format", "stream-json", "hi"],
       expect.objectContaining({ cwd: "/tmp" }),
     );
     expect(result).toEqual({
