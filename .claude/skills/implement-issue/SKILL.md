@@ -41,27 +41,52 @@ Confirm the description is a real refined plan, not a rough ticket. It should ha
 
 If the plan is sound, continue. Context missing here costs minutes; the same gap found after a PR costs a full review cycle.
 
+### 2a. First implementation or rework?
+Decide which this run is, because a rejection re-attempt must NOT rebuild from scratch.
+
+- **First implementation**: no PR exists for the issue's branch yet (`gh pr list --head <gitBranchName>` is empty). Do the full flow below.
+- **Rework**: a PR already exists for the branch AND the latest human comment (posted after the last "Review server" comment, at the Started Human Review gate) asks for changes. That comment is the contract for this pass.
+
+**In rework the prior attempt is ~right and the human flagged a delta — fix only that delta. Do NOT re-walk the plan or rebuild the branch off `next`.** It changes three later steps: step 4 restores the prior branch instead of resetting to `next`; step 5 makes only what the comment asks; steps 8-10 review just the delta. Verify, CI watch, the test server, and the Human Review transition are unchanged. Re-implementing the whole plan and re-running every review loop on a small feedback delta is the single biggest waste of the human's time after a reject.
+
+**Exception:** if the comment says the approach is wrong or to start over, treat it as a first implementation (reset to `next`, rebuild). Default to rework; escalate only when the comment asks for it.
+
 ### 3. Set status to Implementation
 Set the issue status to `Implementation` via `save_issue` (id + state).
 
 ### 4. Create an isolated worktree off next
 Work in a git worktree so the implementation is isolated from the main working tree.
 
-If this issue is being re-implemented after a rejection, a worktree and branch from the prior attempt may already exist. Clear the stale worktree first (the branch is reused so the existing PR updates rather than spawning a new one):
+Clear any stale worktree first (the reaper usually removed it on rejection, but be safe), then create it according to the mode from step 2a:
 
 ```
 git worktree remove --force ../cockpit-<ISSUE-ID> 2>/dev/null || true
 git fetch origin
+```
+
+**First implementation** — branch fresh off `next`:
+
+```
 git worktree add ../cockpit-<ISSUE-ID> -B <gitBranchName> origin/next
 ```
 
-`-B` resets the branch to `origin/next` if it already exists, else creates it. Use the branch name from the issue's `gitBranchName`. Do all subsequent work in that worktree by **absolute path** or `git -C <worktree>`, never by relying on a `cd`. The job's cwd is the shared base checkout (the main repo, which also serves the live instance and is used interactively), and the shell cwd does not persist between Bash calls — it resets to that base checkout — so a `cd <worktree> && …` in one call does not carry to the next, and a later bare `git add` / edit / build then lands in the main repo and pollutes it. The branch is based on `next`, and the PR will target `next`.
+**Rework** — restore the prior attempt's commits (they are on the PR), do NOT reset to `next`; check the branch out and rebase it onto current `next`:
+
+```
+git fetch origin <gitBranchName>
+git worktree add ../cockpit-<ISSUE-ID> -B <gitBranchName> origin/<gitBranchName>
+git -C ../cockpit-<ISSUE-ID> rebase origin/next
+```
+
+Resolve any rebase conflicts (usually trivial, far cheaper than rebuilding); if one is genuinely unresolvable, fall back to a full re-implement off `next`. Record the rebased HEAD (`git -C ../cockpit-<ISSUE-ID> rev-parse HEAD`) as the **rework base** — the code review later diffs only against it. Use the branch name from the issue's `gitBranchName`. Do all subsequent work in that worktree by **absolute path** or `git -C <worktree>`, never by relying on a `cd`. The job's cwd is the shared base checkout (the main repo, which also serves the live instance and is used interactively), and the shell cwd does not persist between Bash calls — it resets to that base checkout — so a `cd <worktree> && …` in one call does not carry to the next, and a later bare `git add` / edit / build then lands in the main repo and pollutes it. The branch is based on `next`, and the PR will target `next`.
 
 Install deps in the worktree with dev dependencies: `NODE_ENV=development npm install --include=dev`. The shell exports `NODE_ENV=production`, under which npm omits devDependencies and biome/vitest go missing.
 
 The plan is anchored to a base commit SHA. `next` has likely moved since, so line numbers in the plan are stale. Re-anchor by symbol name (function, struct, method), not line number.
 
 ### 5. Implement the plan
+**Rework (step 2a):** do not re-walk the plan. The human's rejection comment is the spec — make only the changes it requires on top of the restored prior work, then go to step 7 (verify). The rest of this step is for a first implementation.
+
 Work through the Implementation Plan in order. For each step:
 - Make the change at the named file and symbol.
 - Follow the Reference Patterns section. Match the conventions shown there, not generic best practice.
@@ -89,6 +114,8 @@ Fix failures until green. Run the Playwright integration suite (`npm run test:in
 Coverage gate: vitest enforces an 80% global threshold (lines, functions, branches; see `vitest.config`). A new source file with thin tests fails it. Check new files with `npx vitest run --coverage` and write branch tests up front, instead of discovering the shortfall after the review loops.
 
 ### 8. Feature-completeness coverage check
+**Rework (step 2a):** the feature already passed these gates last attempt; you changed only the rejection delta. Skip the full loops — run the `code-reviewer` (step 9) scoped to this pass's changes (`git diff <rework-base>`, the SHA recorded in step 4) and, if the rejection was visual or the delta touched UI, the `ui-reviewer` (step 10). Skip the completeness check unless the rejection added new scope. Then go to step 11. The full gates below are for a first implementation.
+
 The first review gate. Before reviewing whether the code is correct or renders well, confirm it contains everything the issue asked for, so the deeper reviews run once, on a complete feature, not on half-built work. Dispatch the `completeness-reviewer` agent (`subagent_type: "completeness-reviewer"`) with:
 
 ```
@@ -203,6 +230,7 @@ Leave the worktree and the test server running. They are the human's review surf
 ## Rules
 - The plan is the contract. Follow it. Record deviations in the PR body; do not improvise silently.
 - Comments at the Human Review gate override the plan where they conflict.
+- Rejection re-attempt (rework) is incremental, not a rebuild (step 2a): restore the prior branch instead of resetting to `next`, change only what the human's rejection comment asks, and review only that delta. Re-implementing the whole plan and re-running every review loop on a feedback delta is the main thing that wastes the human's time after a reject. Escalate to a full re-implement only if the comment says the approach is wrong.
 - Work in the worktree off `next`, addressing it by absolute path or `git -C <worktree>`. Never write to, stage in, build in, or save artifacts into the job's cwd (the shared main checkout) — the cwd resets to it between Bash calls, which is how stray staged changes and files leak into the main repo. The PR targets `next`.
 - Post the full review of every round as a comment (verbatim, all buckets, round number in the header), on both PASS and FAIL.
 - Re-verify after every fix. Never open a PR with a failing build, lint, or test run.
