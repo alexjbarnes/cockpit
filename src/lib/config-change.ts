@@ -25,6 +25,8 @@ const DOMAIN_LABELS: Record<string, Record<string, string>> = {
     toolCallsExpanded: "Tool calls expanded",
     messageStitching: "Message stitching",
     reviewsEnabled: "Reviews enabled",
+    bypassAllPermissions: "Bypass all permissions",
+    modelSlots: "Model",
   },
   provider: {
     id: "Provider ID",
@@ -38,6 +40,19 @@ const DOMAIN_LABELS: Record<string, Record<string, string>> = {
   },
   notification_settings: {
     baseUrl: "Base URL",
+  },
+  notification_provider: {
+    id: "Provider ID",
+    type: "Type",
+    name: "Name",
+    enabled: "Enabled",
+    botToken: "Bot token",
+    chatId: "Chat ID",
+    serverUrl: "Server URL",
+    topic: "Topic",
+    token: "Token",
+    filterPriorities: "Filter priorities",
+    filterSources: "Filter sources",
   },
 };
 
@@ -78,7 +93,11 @@ export function formatConfigChange(
   const titleAction = action.charAt(0).toUpperCase() + action.slice(1);
   const title = `${titleAction} ${domain.replace(/_/g, " ")}`;
   const labels = DOMAIN_LABELS[domain] || {};
-  const entries = Object.entries(input);
+
+  // For job update, the id is shown in the proposal card title via displayName; skip it in rows.
+  const skipKeys = new Set<string>(domain === "job" && action === "update" ? ["id"] : []);
+
+  const entries = Object.entries(input).filter(([k]) => !skipKeys.has(k));
 
   if (entries.length === 0) {
     return {
@@ -87,7 +106,19 @@ export function formatConfigChange(
     };
   }
 
-  const rows = entries.map(([key, val]) => {
+  // For notification_provider, flatten the nested config object into individual rows.
+  const flatEntries: [string, unknown][] = [];
+  for (const [key, val] of entries) {
+    if (key === "config" && typeof val === "object" && val !== null && !Array.isArray(val)) {
+      for (const [ck, cv] of Object.entries(val as Record<string, unknown>)) {
+        flatEntries.push([ck, cv]);
+      }
+    } else {
+      flatEntries.push([key, val]);
+    }
+  }
+
+  const rows = flatEntries.map(([key, val]) => {
     const label = labels[key] || humaniseKey(key);
     const { value, block } = formatValue(val);
     const row: { label: string; value: string; block?: boolean } = { label, value };

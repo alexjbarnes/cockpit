@@ -120,6 +120,34 @@ describe("formatConfigChange", () => {
     expect(result.rows[0].label).toBe("Change");
   });
 
+  it("formats notification_provider+add with telegram config flattened", () => {
+    const result = formatConfigChange("notification_provider", "add", {
+      type: "telegram",
+      name: "My Bot",
+      enabled: true,
+      config: { botToken: "123:ABC", chatId: "-1001" },
+    });
+
+    expect(result.title).toBe("Add notification provider");
+    expect(result.rows.find((r) => r.label === "Type")?.value).toBe("telegram");
+    expect(result.rows.find((r) => r.label === "Name")?.value).toBe("My Bot");
+    expect(result.rows.find((r) => r.label === "Bot token")?.value).toBe("123:ABC");
+    expect(result.rows.find((r) => r.label === "Chat ID")?.value).toBe("-1001");
+    expect(result.rows.find((r) => r.label === "Enabled")?.value).toBe("Yes");
+  });
+
+  it("formats job+update skips id row", () => {
+    const result = formatConfigChange("job", "update", {
+      id: "job-uuid-123",
+      schedule: { cron: "0 3 * * *" },
+      enabled: false,
+    });
+
+    expect(result.title).toBe("Update job");
+    expect(result.rows.find((r) => r.label === "Job ID")).toBeUndefined();
+    expect(result.rows.find((r) => r.label === "Enabled")?.value).toBe("No");
+  });
+
   it("handles unknown domain with humanised-key fallback labels", () => {
     const result = formatConfigChange("unknown_domain", "create", {
       myCustomKey: "value1",

@@ -36,12 +36,15 @@ export function ConfigProposalCard({ permission, onRespond }: ConfigProposalCard
     };
   }, [domain, action, permission.input]);
 
+  const { displayName } = permission.configProposal || {};
+  const title = displayName ? `${display.title}: ${displayName}` : display.title;
+
   return (
     <div className="mx-auto max-w-3xl" data-testid="config-proposal-card">
       <div className="rounded-lg border border-blue-500/50 bg-blue-500/10 p-4">
         <div className="flex items-start gap-3">
           <div className="flex-1 min-w-0 space-y-3">
-            <div className="text-sm font-medium capitalize">{display.title}</div>
+            <div className="text-sm font-medium capitalize text-foreground">{title}</div>
             <div className="space-y-1.5">
               {display.rows.map((row, i) => (
                 <div key={i}>
@@ -51,7 +54,7 @@ export function ConfigProposalCard({ permission, onRespond }: ConfigProposalCard
                       <CodeBlock code={row.value} language="text" />
                     </div>
                   ) : (
-                    <div className="text-sm">{row.value}</div>
+                    <div className="text-sm text-foreground">{row.value}</div>
                   )}
                 </div>
               ))}

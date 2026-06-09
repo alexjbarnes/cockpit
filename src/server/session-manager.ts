@@ -37,6 +37,7 @@ import type {
 import { debugLog, isDebugEnabled, logDiag, logRawLine } from "./debug-logger";
 import { getDefaults } from "./defaults";
 import { EventParser, type ParsedEvent } from "./event-parser";
+import { getJob } from "./job-storage";
 import { COCKPIT_AGENT_SYSTEM_PROMPT } from "./mcp/cockpit-agent-prompt";
 import { clearToken, type RunContext, registerAuthToken, registerRunContext } from "./mcp/run-context";
 import { findLatestPlanFile, readPlanFile } from "./plans";
@@ -77,7 +78,7 @@ export interface PendingRequest {
   permissionSuggestions?: Record<string, unknown>[];
   planFilePath?: string;
   planContent?: string;
-  configProposal?: { toolName: string; domain: string; action: string };
+  configProposal?: { toolName: string; domain: string; action: string; displayName?: string };
 }
 
 export interface StreamingSnapshot {
@@ -1703,13 +1704,20 @@ export class SessionManager {
           const parts = suffix.split("_");
           const action = parts[0];
           const domain = parts.slice(1).join("_");
+          let displayName: string | undefined;
+          if (domain === "job" && (action === "update" || action === "delete")) {
+            const jobId = (pa.rawToolInput as Record<string, unknown>)?.id;
+            if (typeof jobId === "string") {
+              displayName = getJob(jobId)?.name;
+            }
+          }
           session.pendingRequests.set(pa.requestId, {
             type: "permission",
             requestId: pa.requestId,
             toolName: pa.toolName,
             toolInput: pa.toolInput || "",
             rawToolInput: pa.rawToolInput,
-            configProposal: { toolName: tool, domain, action },
+            configProposal: { toolName: tool, domain, action, ...(displayName ? { displayName } : {}) },
           });
           this.notifyPendingChanged(session, sessionId);
         } else {
