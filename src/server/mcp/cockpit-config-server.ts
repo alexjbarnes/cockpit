@@ -10,7 +10,8 @@ import { deleteJob, getJob, loadJobs, saveJob } from "@/server/job-storage";
 import { getNotificationSettings, updateNotificationSettings } from "@/server/notification-settings";
 import { getClaudeUserConfigFile } from "@/server/paths";
 import { addProvider, deleteProvider, getProviders, updateProvider } from "@/server/providers";
-import type { ScheduledJob } from "@/types";
+import { getJobScheduler } from "@/server/singleton";
+import type { JobRun, ScheduledJob } from "@/types";
 import { isValidToken } from "./run-context";
 
 interface McpServerEntry {
@@ -75,14 +76,17 @@ const TOOL_DEFINITIONS = [
         retentionDays: { type: "number" },
         skipIfMissed: { type: "boolean" },
         inboxOutput: { type: "boolean" },
+        updates: { type: "array", items: { type: "object" } },
       },
-      required: ["id"],
     },
   },
   {
     name: "delete_job",
     description: "Delete a scheduled job by ID",
-    inputSchema: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
+    inputSchema: {
+      type: "object",
+      properties: { id: { type: "string" }, ids: { type: "array", items: { type: "string" } } },
+    },
   },
   {
     name: "get_settings",
@@ -174,6 +178,17 @@ const TOOL_DEFINITIONS = [
       },
     },
   },
+  {
+    name: "run_job",
+    description:
+      "Trigger one or more scheduled jobs to run immediately, regardless of their enabled state; returns as soon as the run is queued and does not wait for completion",
+    inputSchema: { type: "object", properties: { id: { type: "string" }, ids: { type: "array", items: { type: "string" } } } },
+  },
+  {
+    name: "list_running_jobs",
+    description: "List scheduled jobs that are currently running",
+    inputSchema: { type: "object", properties: {}, required: [] },
+  },
 ];
 
 function readClaudeConfig(): { mcpServers: Record<string, McpServerEntry> } {
@@ -220,6 +235,23 @@ function handleToolCall(
         return { content: [{ type: "text", text: JSON.stringify({ created: job }, null, 2) }] };
       }
       case "update_job": {
+        if (Array.isArray(args.updates)) {
+          const results = (args.updates as Record<string, unknown>[]).map((entry) => {
+            const id = entry.id as string;
+            const existing = getJob(id);
+            if (!existing) return { id, error: `Job not found: ${id}` };
+            const before = { ...existing };
+            const update = { ...entry };
+            delete (update as Record<string, unknown>).id;
+            const updated: ScheduledJob = { ...existing, ...update, updatedAt: Date.now() };
+            saveJob(updated);
+            return { id, before, after: updated };
+          });
+          return { content: [{ type: "text", text: JSON.stringify({ results }, null, 2) }] };
+        }
+        if (!args.id) {
+          return { content: [{ type: "text", text: JSON.stringify({ error: "missing id or updates" }) }], isError: true };
+        }
         const existing = getJob(args.id as string);
         if (!existing) return { content: [{ type: "text", text: JSON.stringify({ error: `Job not found: ${args.id}` }) }], isError: true };
         const before = { ...existing };
@@ -230,6 +262,15 @@ function handleToolCall(
         return { content: [{ type: "text", text: JSON.stringify({ before, after: updated }, null, 2) }] };
       }
       case "delete_job": {
+        if (Array.isArray(args.ids)) {
+          const results = (args.ids as string[]).map((id) => {
+            const job = getJob(id);
+            if (!job) return { id, error: `Job not found: ${id}` };
+            deleteJob(id);
+            return { id, deleted: true };
+          });
+          return { content: [{ type: "text", text: JSON.stringify({ results }, null, 2) }] };
+        }
         const job = getJob(args.id as string);
         if (!job) return { content: [{ type: "text", text: JSON.stringify({ error: `Job not found: ${args.id}` }) }], isError: true };
         deleteJob(args.id as string);
@@ -320,6 +361,48 @@ function handleToolCall(
         const before = getNotificationSettings();
         const after = updateNotificationSettings(args as Parameters<typeof updateNotificationSettings>[0]);
         return { content: [{ type: "text", text: JSON.stringify({ before, after }, null, 2) }] };
+      }
+      case "run_job": {
+        const ids = Array.isArray(args.ids) ? (args.ids as string[]) : args.id ? [args.id as string] : [];
+        if (ids.length === 0) {
+          return { content: [{ type: "text", text: JSON.stringify({ error: "no job id provided" }) }], isError: true };
+        }
+        const scheduler = getJobScheduler();
+        if (!scheduler) {
+          return {
+            content: [{ type: "text", text: JSON.stringify({ results: ids.map((id) => ({ id, status: "scheduler not available" })) }) }],
+          };
+        }
+        const running = scheduler.getRunningJobs();
+        const jobs = loadJobs();
+        const results = ids.map((id) => {
+          const job = jobs.find((j) => j.id === id);
+          if (!job) return { id, status: "not_found" };
+          if (running.has(id)) return { id, name: job.name, status: "already_running" };
+          void scheduler.triggerJob(id).catch((err) => console.error("[cockpit-mcp] run_job", id, err));
+          return { id, name: job.name, status: "started" };
+        });
+        return { content: [{ type: "text", text: JSON.stringify({ results }, null, 2) }] };
+      }
+      case "list_running_jobs": {
+        const scheduler = getJobScheduler();
+        if (!scheduler) {
+          return { content: [{ type: "text", text: JSON.stringify({ running: [], count: 0, note: "scheduler not available" }) }] };
+        }
+        const jobs = loadJobs();
+        const nameMap = new Map(jobs.map((j) => [j.id, j.name]));
+        const running = Array.from(scheduler.getRunningJobs().values()).map((r: JobRun) => ({
+          jobId: r.jobId,
+          name: nameMap.get(r.jobId) ?? "unknown",
+          runId: r.id,
+          sessionId: r.sessionId,
+          status: r.status,
+          startedAt: r.startedAt,
+          elapsedMs: Date.now() - r.startedAt,
+          messageCount: r.messageCount,
+          toolCount: r.toolsUsed.length,
+        }));
+        return { content: [{ type: "text", text: JSON.stringify({ running, count: running.length }, null, 2) }] };
       }
       default:
         return { content: [{ type: "text", text: JSON.stringify({ error: `Unknown tool: ${name}` }) }], isError: true };
