@@ -44,7 +44,7 @@ Load the Playwright tools via ToolSearch. Create a temp dir for this run's scree
 - Keep screenshots viewport-sized, not full-page.
 
 ### 3a. Exercise the feature, not just the screen
-A screen can render perfectly and the feature still be dead. If the change's value is an interaction — the cockpit assistant calling a tool, a form submitting, a control mutating state, a live update — perform that action and confirm the result, do not stop at a screenshot. Open the assistant and send a message; submit the form; toggle the control. Then read the outcome off the live DOM (`browser_evaluate`): the expected element or text appeared, no error banner, no "not available" or denied message. Click via `browser_evaluate` (find by text, `.click()`) per browser-test. A change that renders but errors, no-ops, or denies the core action is a **CRITICAL** finding, not a pass — this is the single most common thing a screenshot-only review misses.
+A screen can render perfectly and the feature still be dead. If the change's value is an interaction — the cockpit assistant calling a tool, a form submitting, a control mutating state, a live update — perform that action and confirm the result, do not stop at a screenshot. Open the assistant and send a message; submit the form; toggle the control. Then read the outcome off the live DOM (`browser_evaluate`): the expected element or text appeared, no error banner, no "not available" or denied message. Click via `browser_evaluate` (find by text, `.click()`) per browser-test. A change that renders but errors, no-ops, or denies the core action is a **CRITICAL** finding, not a pass — this is the single most common thing a screenshot-only review misses. Verify by reading the rendered DOM, never by "code inspection" of the component source: reading the code is not evidence the rendered result is correct, and if you cannot actually render and exercise the change the verdict is can't-verify, never PASS.
 
 ### 4. Review what you see
 Assess against the plan's intended behaviour. Do not just eyeball the image, verify with geometry:
@@ -53,6 +53,8 @@ Assess against the plan's intended behaviour. Do not just eyeball the image, ver
 - Responsive: does it hold up at the mobile viewport? Read `getBoundingClientRect()` and `window.innerHeight` and assert containment (e.g. a primary action is within the viewport, not below the fold).
 - Reachable empty / loading / error states, if the change touches them.
 - Obvious contrast or readability problems.
+- Read the actual rendered text and values off the DOM, not the class names: a `text-foreground` wrapper does not prove a syntax-highlighted or nested child (e.g. a CodeBlock) is legible. Confirm user-facing values are humanised — NO raw JSON or developer-shaped output unless the plan asks for it (a schedule should read `Cron: 0 2 * * *`, not `{"cron":"..."}`).
+- Dark mode: toggle the theme to dark and re-check the changed surface. Components that bring their own syntax highlighting or markdown styling (CodeBlock, highlighted code, rendered markdown) can hardcode a light theme and go near-invisible on dark — read the computed colour of the real rendered text, not the wrapper class. Low-contrast or invisible text in either theme is a HIGH finding.
 
 ### 4a. Design consistency with the existing system
 Cockpit has an established design language. This is a **consistency** check, not a redesign: the change should look like it belongs, not stand out. You are verifying it matches the system, not pushing it to be distinctive.
@@ -119,3 +121,4 @@ If no findings, write `(none)` under findings. Verdict is FAIL if any Critical o
 - Exercise the core interaction, do not stop at a static screenshot. "Renders but errors, no-ops, or denies the action" is CRITICAL.
 - Capture JPEG, viewport-sized. Shrink any image over ~100KB with sharp until it fits, never drop a screen for being too large.
 - Attach every captured screen and post the findings comment, even on PASS. The visual evidence is the point.
+- Never PASS a visual or rendering criterion on code inspection or class-name checks. Render it, exercise it, and read the ACTUAL output off the DOM in BOTH light and dark; if you cannot, report can't-verify, not PASS. On ALE-617 three rounds of false PASS shipped a JSON-rendered schedule and dark-mode-invisible text because the rendering was "code inspected", not looked at.
