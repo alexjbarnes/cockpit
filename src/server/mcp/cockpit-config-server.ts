@@ -7,11 +7,11 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { getDefaults, setDefaults } from "@/server/defaults";
 import { deleteJob, getJob, loadJobs, saveJob } from "@/server/job-storage";
-import { getNotificationSettings, updateNotificationSettings } from "@/server/notification-settings";
+import { getNotificationSettings, setNotificationSettings, updateNotificationSettings } from "@/server/notification-settings";
 import { getClaudeUserConfigFile } from "@/server/paths";
 import { addProvider, deleteProvider, getProviders, updateProvider } from "@/server/providers";
 import { getJobScheduler } from "@/server/singleton";
-import type { JobRun, ScheduledJob } from "@/types";
+import type { InboxPriority, JobRun, NotificationProviderEntry, ScheduledJob } from "@/types";
 import { isValidToken } from "./run-context";
 
 interface McpServerEntry {
@@ -41,6 +41,11 @@ const TOOL_DEFINITIONS = [
       properties: {
         name: { type: "string" },
         schedule: { type: "object", properties: { type: { type: "string", enum: ["simple", "cron"] } }, required: ["type"] },
+        schedules: {
+          type: "array",
+          items: { type: "object" },
+          description: "Multiple schedules (use instead of schedule for multi-schedule jobs)",
+        },
         prompt: { type: "string" },
         cwd: { type: "string" },
         enabled: { type: "boolean" },
@@ -52,6 +57,11 @@ const TOOL_DEFINITIONS = [
         retentionDays: { type: "number" },
         skipIfMissed: { type: "boolean" },
         inboxOutput: { type: "boolean" },
+        runtime: { type: "string", enum: ["stream", "pty"], description: "Execution runtime: stream (default) or pty" },
+        allowedTools: { type: "array", items: { type: "string" }, description: "Tool names the job is allowed to use" },
+        mcpServers: { type: "array", items: { type: "string" }, description: "MCP server names to enable for this job" },
+        mcpToolFilters: { type: "object", description: 'Per-MCP-server tool filter: { serverName: ["tool1", "tool2"] }' },
+        notifyProviders: { type: "array", items: { type: "string" }, description: "Notification provider IDs to alert on job completion" },
       },
       required: ["name", "schedule", "prompt", "cwd"],
     },
@@ -65,6 +75,7 @@ const TOOL_DEFINITIONS = [
         id: { type: "string" },
         name: { type: "string" },
         schedule: { type: "object", properties: { type: { type: "string", enum: ["simple", "cron"] } }, required: ["type"] },
+        schedules: { type: "array", items: { type: "object" } },
         prompt: { type: "string" },
         cwd: { type: "string" },
         enabled: { type: "boolean" },
@@ -76,6 +87,11 @@ const TOOL_DEFINITIONS = [
         retentionDays: { type: "number" },
         skipIfMissed: { type: "boolean" },
         inboxOutput: { type: "boolean" },
+        runtime: { type: "string", enum: ["stream", "pty"] },
+        allowedTools: { type: "array", items: { type: "string" } },
+        mcpServers: { type: "array", items: { type: "string" } },
+        mcpToolFilters: { type: "object" },
+        notifyProviders: { type: "array", items: { type: "string" } },
         updates: { type: "array", items: { type: "object" } },
       },
     },
@@ -108,6 +124,14 @@ const TOOL_DEFINITIONS = [
         toolCallsExpanded: { type: "boolean" },
         messageStitching: { type: "boolean" },
         reviewsEnabled: { type: "boolean" },
+        bypassAllPermissions: { type: "boolean" },
+        modelSlots: {
+          type: "object",
+          properties: {
+            main: { type: "string", description: "Model ID (e.g. claude-sonnet-4-5, claude-opus-4-5, claude-haiku-4-5)" },
+            mainContext: { type: "string", enum: ["50k", "100k", "200k"], description: "Context window size" },
+          },
+        },
       },
     },
   },
@@ -177,6 +201,46 @@ const TOOL_DEFINITIONS = [
         baseUrl: { type: "string", description: "Webhook URL for notifications" },
       },
     },
+  },
+  {
+    name: "list_notification_providers",
+    description: "List all notification providers",
+    inputSchema: { type: "object", properties: {}, required: [] },
+  },
+  {
+    name: "add_notification_provider",
+    description: "Add a notification provider (telegram or ntfy)",
+    inputSchema: {
+      type: "object",
+      properties: {
+        type: { type: "string", enum: ["telegram", "ntfy"] },
+        name: { type: "string" },
+        enabled: { type: "boolean" },
+        config: { type: "object", description: "For telegram: {botToken, chatId}. For ntfy: {serverUrl, topic, token?}" },
+        filterPriorities: { type: "array", items: { type: "string", enum: ["info", "warning", "error"] } },
+      },
+      required: ["type", "name", "config"],
+    },
+  },
+  {
+    name: "update_notification_provider",
+    description: "Update an existing notification provider by ID",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string" },
+        name: { type: "string" },
+        enabled: { type: "boolean" },
+        config: { type: "object" },
+        filterPriorities: { type: "array", items: { type: "string", enum: ["info", "warning", "error"] } },
+      },
+      required: ["id"],
+    },
+  },
+  {
+    name: "delete_notification_provider",
+    description: "Delete a notification provider by ID",
+    inputSchema: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
   },
   {
     name: "run_job",
@@ -290,6 +354,8 @@ function handleToolCall(
           "toolCallsExpanded",
           "messageStitching",
           "reviewsEnabled",
+          "bypassAllPermissions",
+          "modelSlots",
         ];
         const safe = Object.fromEntries(
           Object.entries(args).filter(([k]) => allowed.includes(k as (typeof allowed)[number])),
@@ -361,6 +427,61 @@ function handleToolCall(
         const before = getNotificationSettings();
         const after = updateNotificationSettings(args as Parameters<typeof updateNotificationSettings>[0]);
         return { content: [{ type: "text", text: JSON.stringify({ before, after }, null, 2) }] };
+      }
+      case "list_notification_providers": {
+        const settings = getNotificationSettings();
+        return { content: [{ type: "text", text: JSON.stringify(settings.providers, null, 2) }] };
+      }
+      case "add_notification_provider": {
+        const settings = getNotificationSettings();
+        const entry: NotificationProviderEntry = {
+          id: randomUUID(),
+          type: args.type as NotificationProviderEntry["type"],
+          name: args.name as string,
+          enabled: (args.enabled as boolean) ?? true,
+          config: args.config as NotificationProviderEntry["config"],
+          filter:
+            Array.isArray(args.filterPriorities) && args.filterPriorities.length > 0
+              ? { priorities: args.filterPriorities as InboxPriority[] }
+              : undefined,
+        };
+        const after = setNotificationSettings({ ...settings, providers: [...settings.providers, entry] });
+        return { content: [{ type: "text", text: JSON.stringify({ created: entry, providers: after.providers }, null, 2) }] };
+      }
+      case "update_notification_provider": {
+        const settings = getNotificationSettings();
+        const idx = settings.providers.findIndex((p) => p.id === args.id);
+        if (idx === -1)
+          return { content: [{ type: "text", text: JSON.stringify({ error: `Provider not found: ${args.id}` }) }], isError: true };
+        const before = settings.providers[idx];
+        const updated: NotificationProviderEntry = {
+          ...before,
+          ...(args.name !== undefined ? { name: args.name as string } : {}),
+          ...(args.enabled !== undefined ? { enabled: args.enabled as boolean } : {}),
+          ...(args.config !== undefined ? { config: args.config as NotificationProviderEntry["config"] } : {}),
+          ...(Array.isArray(args.filterPriorities)
+            ? {
+                filter:
+                  args.filterPriorities.length > 0
+                    ? { ...before.filter, priorities: args.filterPriorities as InboxPriority[] }
+                    : before.filter?.sources?.length
+                      ? { ...before.filter, priorities: undefined }
+                      : undefined,
+              }
+            : {}),
+        };
+        const providers = [...settings.providers];
+        providers[idx] = updated;
+        const after = setNotificationSettings({ ...settings, providers });
+        return { content: [{ type: "text", text: JSON.stringify({ before, after: after.providers[idx] }, null, 2) }] };
+      }
+      case "delete_notification_provider": {
+        const settings = getNotificationSettings();
+        const provider = settings.providers.find((p) => p.id === args.id);
+        if (!provider)
+          return { content: [{ type: "text", text: JSON.stringify({ error: `Provider not found: ${args.id}` }) }], isError: true };
+        const after = setNotificationSettings({ ...settings, providers: settings.providers.filter((p) => p.id !== args.id) });
+        return { content: [{ type: "text", text: JSON.stringify({ deleted: provider, providers: after.providers }, null, 2) }] };
       }
       case "run_job": {
         const ids = Array.isArray(args.ids) ? (args.ids as string[]) : args.id ? [args.id as string] : [];

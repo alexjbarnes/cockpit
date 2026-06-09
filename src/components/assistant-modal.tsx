@@ -100,7 +100,7 @@ export function AssistantModal({ open, onOpenChange }: AssistantModalProps) {
             </div>
           )}
           {error && <div className="flex items-center justify-center h-full text-sm text-muted-foreground px-4">{error}</div>}
-          {sessionId && !loading && !error && <ChatView sessionId={sessionId} cwd={cwd} showPlanToggle={false} />}
+          {sessionId && !loading && !error && <ChatView sessionId={sessionId} cwd={cwd} showPlanToggle={false} isCockpitAgent />}
         </div>
       </DialogContent>
     </Dialog>

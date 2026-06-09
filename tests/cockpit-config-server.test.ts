@@ -135,6 +135,10 @@ describe("cockpit-config MCP server (in-process HTTP)", () => {
       "delete_mcp_server",
       "get_notification_settings",
       "update_notification_settings",
+      "list_notification_providers",
+      "add_notification_provider",
+      "update_notification_provider",
+      "delete_notification_provider",
       "run_job",
       "list_running_jobs",
     ]) {
@@ -438,10 +442,18 @@ describe("cockpit-config MCP server (in-process HTTP)", () => {
       expect(result.after.thinkingLevel).toBe("low");
     });
 
-    it("update_settings blocks bypassAllPermissions", async () => {
+    it("update_settings allows bypassAllPermissions", async () => {
       await callTool("update_settings", { bypassAllPermissions: true });
       const settings = (await callToolParsed("get_settings")) as { bypassAllPermissions?: boolean };
-      expect(settings.bypassAllPermissions).not.toBe(true);
+      expect(settings.bypassAllPermissions).toBe(true);
+    });
+
+    it("update_settings allows modelSlots", async () => {
+      const modelSlots = { main: "claude-opus-4-5-20251101", mainContext: "100k" };
+      await callTool("update_settings", { modelSlots });
+      const settings = (await callToolParsed("get_settings")) as { modelSlots?: Record<string, string> };
+      expect(settings.modelSlots?.main).toBe("claude-opus-4-5-20251101");
+      expect(settings.modelSlots?.mainContext).toBe("100k");
     });
   });
 
@@ -561,6 +573,46 @@ describe("cockpit-config MCP server (in-process HTTP)", () => {
         after: { baseUrl?: string };
       };
       expect(result.after.baseUrl).toBe("https://example.com/hook");
+    });
+
+    it("add/update/delete notification provider round-trip", async () => {
+      const empty = (await callToolParsed("list_notification_providers")) as unknown[];
+      expect(Array.isArray(empty)).toBe(true);
+
+      // add
+      const added = (await callToolParsed("add_notification_provider", {
+        type: "telegram",
+        name: "My Bot",
+        config: { botToken: "123:ABC", chatId: "-1001" },
+      })) as { created: { id: string; name: string; type: string } };
+      expect(added.created.name).toBe("My Bot");
+      expect(added.created.type).toBe("telegram");
+      const id = added.created.id;
+
+      // update
+      const updated = (await callToolParsed("update_notification_provider", { id, name: "Renamed Bot", enabled: false })) as {
+        after: { name: string; enabled: boolean };
+      };
+      expect(updated.after.name).toBe("Renamed Bot");
+      expect(updated.after.enabled).toBe(false);
+
+      // delete
+      const deleted = (await callToolParsed("delete_notification_provider", { id })) as { deleted: { id: string } };
+      expect(deleted.deleted.id).toBe(id);
+
+      const afterDel = (await callToolParsed("list_notification_providers")) as { id: string }[];
+      expect(afterDel.find((p) => p.id === id)).toBeUndefined();
+    });
+
+    it("update_notification_provider returns error for unknown id", async () => {
+      const res = await mcpPost({
+        jsonrpc: "2.0",
+        id: 90,
+        method: "tools/call",
+        params: { name: "update_notification_provider", arguments: { id: "nonexistent-id" } },
+      });
+      const text = (res.body as { result?: { content: { text: string }[] } })?.result?.content?.[0]?.text ?? "";
+      expect(JSON.parse(text).error).toContain("not found");
     });
   });
 

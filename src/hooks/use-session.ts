@@ -27,7 +27,7 @@ export interface PendingPermission {
   suggestions?: import("@/types").PermissionSuggestion[];
   planFilePath?: string;
   planContent?: string;
-  configProposal?: { toolName: string; domain: string; action: string };
+  configProposal?: { toolName: string; domain: string; action: string; displayName?: string };
 }
 
 export interface PendingQuestion {
