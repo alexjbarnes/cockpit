@@ -37,10 +37,10 @@ Read `.claude/skills/browser-test/SKILL.md` and follow its setup exactly, with o
 - Clear the service worker and caches, then reload, or you will screenshot stale code. Confirm you are on current code by reading something you changed off the live DOM.
 
 ### 3. Capture the screens
-Load the Playwright tools via ToolSearch. For each affected screen:
+Load the Playwright tools via ToolSearch. Create a temp dir for this run's screenshots once — `mkdir -p /tmp/cockpit-uireview-<ISSUE-ID>` — and save every capture to an **absolute path inside it**. Your cwd is the job's base checkout (the shared main repo, also used interactively and to serve the live instance), so a bare relative filename saves the screenshot there and pollutes it. Always pass an absolute `filename`. For each affected screen:
 - Navigate, trigger any interaction needed to reach the changed UI.
 - Screenshot at a desktop viewport and a mobile viewport (`browser_resize`, e.g. `1280x800` and `393x600`). Mobile catches the layout breaks that matter most.
-- Take screenshots as **JPEG** (`browser_take_screenshot` with `type: "jpeg"`), not PNG. A JPEG of a UI screen is a fraction of the PNG size, and the Linear attachment path takes inline base64 with a size limit (see step 5). PNG desktop captures routinely blow past it; JPEG usually fits.
+- Take screenshots as **JPEG** to an absolute path in that temp dir (`browser_take_screenshot` with `type: "jpeg"` and `filename: "/tmp/cockpit-uireview-<ISSUE-ID>/<screen>-<viewport>.jpg"`), not PNG. A JPEG of a UI screen is a fraction of the PNG size, and the Linear attachment path takes inline base64 with a size limit (see step 5). PNG desktop captures routinely blow past it; JPEG usually fits.
 - Keep screenshots viewport-sized, not full-page.
 
 ### 3a. Exercise the feature, not just the screen
@@ -90,7 +90,7 @@ Only after shrinking has genuinely failed for a specific image should you note i
 Post a comment on the issue via `save_comment` headed "UI review". Include: the screens captured, the verdict, and each finding with its severity and what is wrong. Reference the attached screenshots by their titles.
 
 ### 7. Teardown
-Kill the dev server, remove the throwaway config dir and log, and delete any stray screenshot PNGs the tool saved into the worktree root. Leave `.next`.
+Kill the dev server, remove the throwaway config dir and log, and `rm -rf /tmp/cockpit-uireview-<ISSUE-ID>` (the screenshot temp dir from step 3). Leave `.next`. Saving to that absolute temp path is what keeps screenshots out of both the worktree and the main checkout, so there is nothing stray to hunt for.
 
 ## Output
 Return exactly this structure:
@@ -113,6 +113,7 @@ If no findings, write `(none)` under findings. Verdict is FAIL if any Critical o
 ## Rules
 - Review only. Never edit source files.
 - Run against the worktree given in the input, never the live instance (port 3001) or the main repo checkout.
+- Save screenshots only to an absolute temp dir (step 3), never a bare relative filename — your cwd is the shared main checkout and a relative write lands there. Remove that temp dir in teardown.
 - Always clear the service worker before trusting a screenshot.
 - Verify with geometry, not just the image.
 - Exercise the core interaction, do not stop at a static screenshot. "Renders but errors, no-ops, or denies the action" is CRITICAL.

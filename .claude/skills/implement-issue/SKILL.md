@@ -55,7 +55,7 @@ git fetch origin
 git worktree add ../cockpit-<ISSUE-ID> -B <gitBranchName> origin/next
 ```
 
-`-B` resets the branch to `origin/next` if it already exists, else creates it. Use the branch name from the issue's `gitBranchName`. Do all subsequent work with that worktree as the cwd. The branch is based on `next`, and the PR will target `next`.
+`-B` resets the branch to `origin/next` if it already exists, else creates it. Use the branch name from the issue's `gitBranchName`. Do all subsequent work in that worktree by **absolute path** or `git -C <worktree>`, never by relying on a `cd`. The job's cwd is the shared base checkout (the main repo, which also serves the live instance and is used interactively), and the shell cwd does not persist between Bash calls — it resets to that base checkout — so a `cd <worktree> && …` in one call does not carry to the next, and a later bare `git add` / edit / build then lands in the main repo and pollutes it. The branch is based on `next`, and the PR will target `next`.
 
 Install deps in the worktree with dev dependencies: `NODE_ENV=development npm install --include=dev`. The shell exports `NODE_ENV=production`, under which npm omits devDependencies and biome/vitest go missing.
 
@@ -203,7 +203,7 @@ Leave the worktree and the test server running. They are the human's review surf
 ## Rules
 - The plan is the contract. Follow it. Record deviations in the PR body; do not improvise silently.
 - Comments at the Human Review gate override the plan where they conflict.
-- Work in the worktree off `next`. The PR targets `next`.
+- Work in the worktree off `next`, addressing it by absolute path or `git -C <worktree>`. Never write to, stage in, build in, or save artifacts into the job's cwd (the shared main checkout) — the cwd resets to it between Bash calls, which is how stray staged changes and files leak into the main repo. The PR targets `next`.
 - Post the full review of every round as a comment (verbatim, all buckets, round number in the header), on both PASS and FAIL.
 - Re-verify after every fix. Never open a PR with a failing build, lint, or test run.
 - CI is the gate to the human, not the local run. After opening the PR, watch its GitHub checks (`gh pr checks --watch`) and only proceed to the test server and Human Review when they pass. If CI cannot be made green in 3 fix attempts, leave the issue in Implementation with a comment naming the failing checks. Never move a red PR to Human Review.
