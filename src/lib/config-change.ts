@@ -2,6 +2,7 @@ const DOMAIN_LABELS: Record<string, Record<string, string>> = {
   job: {
     name: "Name",
     schedule: "Schedule",
+    schedules: "Schedules",
     prompt: "Prompt",
     cwd: "Working directory",
     enabled: "Enabled",
@@ -13,6 +14,11 @@ const DOMAIN_LABELS: Record<string, Record<string, string>> = {
     retentionDays: "Retention days",
     skipIfMissed: "Skip if missed",
     inboxOutput: "Inbox output",
+    runtime: "Runtime",
+    allowedTools: "Allowed tools",
+    mcpServers: "MCP servers",
+    mcpToolFilters: "MCP tool filters",
+    notifyProviders: "Notify providers",
     id: "Job ID",
   },
   settings: {
