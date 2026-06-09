@@ -696,9 +696,7 @@ describe("WebSocket handler", () => {
       await readMessages(ws, 5);
 
       ws.send(JSON.stringify({ type: "session:set_thinking", sessionId: session.id, level: "low" }));
-      await new Promise((resolve) => setTimeout(resolve, 50));
-
-      expect(manager.getThinkingLevel(session.id)).toBe("low");
+      await vi.waitFor(() => expect(manager.getThinkingLevel(session.id)).toBe("low"));
       ws.close();
     });
 
@@ -710,9 +708,7 @@ describe("WebSocket handler", () => {
       await readMessages(ws, 5);
 
       ws.send(JSON.stringify({ type: "session:set_model", sessionId: session.id, model: "opus" }));
-      await new Promise((resolve) => setTimeout(resolve, 50));
-
-      expect(manager.getModel(session.id)).toBe("opus");
+      await vi.waitFor(() => expect(manager.getModel(session.id)).toBe("opus"));
       ws.close();
     });
 
@@ -760,12 +756,10 @@ describe("WebSocket handler", () => {
       await readMessages(ws, 5);
 
       ws.send(JSON.stringify({ type: "permission:set_bypass", sessionId: session.id, enabled: true }));
-      await new Promise((resolve) => setTimeout(resolve, 50));
-      expect(manager.isBypassActive(session.id)).toBe(true);
+      await vi.waitFor(() => expect(manager.isBypassActive(session.id)).toBe(true));
 
       ws.send(JSON.stringify({ type: "permission:set_bypass", sessionId: session.id, enabled: false }));
-      await new Promise((resolve) => setTimeout(resolve, 50));
-      expect(manager.isBypassActive(session.id)).toBe(false);
+      await vi.waitFor(() => expect(manager.isBypassActive(session.id)).toBe(false));
 
       ws.close();
     });
@@ -778,12 +772,10 @@ describe("WebSocket handler", () => {
       await readMessages(ws, 5);
 
       ws.send(JSON.stringify({ type: "session:set_plan_mode", sessionId: session.id, enabled: true }));
-      await new Promise((resolve) => setTimeout(resolve, 50));
-      expect(manager.isPlanModeActive(session.id)).toBe(true);
+      await vi.waitFor(() => expect(manager.isPlanModeActive(session.id)).toBe(true));
 
       ws.send(JSON.stringify({ type: "session:set_plan_mode", sessionId: session.id, enabled: false }));
-      await new Promise((resolve) => setTimeout(resolve, 50));
-      expect(manager.isPlanModeActive(session.id)).toBe(false);
+      await vi.waitFor(() => expect(manager.isPlanModeActive(session.id)).toBe(false));
 
       ws.close();
     });
@@ -1541,8 +1533,7 @@ describe("WebSocket handler", () => {
           level: "low",
         }),
       );
-      await new Promise((r) => setTimeout(r, 50));
-      expect(manager.getThinkingLevel(session.id)).toBe("low");
+      await vi.waitFor(() => expect(manager.getThinkingLevel(session.id)).toBe("low"));
       ws.close();
     });
 
@@ -1558,8 +1549,7 @@ describe("WebSocket handler", () => {
           model: "opus",
         }),
       );
-      await new Promise((r) => setTimeout(r, 50));
-      expect(manager.getModel(session.id)).toBe("opus");
+      await vi.waitFor(() => expect(manager.getModel(session.id)).toBe("opus"));
       ws.close();
     });
   });
@@ -1591,8 +1581,7 @@ describe("WebSocket handler", () => {
           enabled: true,
         }),
       );
-      await new Promise((r) => setTimeout(r, 50));
-      expect(manager.isBypassActive(session.id)).toBe(true);
+      await vi.waitFor(() => expect(manager.isBypassActive(session.id)).toBe(true));
       ws.close();
     });
 
@@ -1609,8 +1598,7 @@ describe("WebSocket handler", () => {
           enabled: false,
         }),
       );
-      await new Promise((r) => setTimeout(r, 50));
-      expect(manager.isBypassActive(session.id)).toBe(false);
+      await vi.waitFor(() => expect(manager.isBypassActive(session.id)).toBe(false));
       ws.close();
     });
   });
@@ -1642,8 +1630,7 @@ describe("WebSocket handler", () => {
           enabled: true,
         }),
       );
-      await new Promise((r) => setTimeout(r, 50));
-      expect(manager.isPlanModeActive(session.id)).toBe(true);
+      await vi.waitFor(() => expect(manager.isPlanModeActive(session.id)).toBe(true));
       ws.close();
     });
 
@@ -1660,8 +1647,7 @@ describe("WebSocket handler", () => {
           enabled: false,
         }),
       );
-      await new Promise((r) => setTimeout(r, 50));
-      expect(manager.isPlanModeActive(session.id)).toBe(false);
+      await vi.waitFor(() => expect(manager.isPlanModeActive(session.id)).toBe(false));
       ws.close();
     });
   });
@@ -2688,8 +2674,7 @@ describe("WebSocket handler", () => {
           permissionMode: "allow_all",
         }),
       );
-      await new Promise((r) => setTimeout(r, 50));
-      expect(manager.isBypassActive(session.id)).toBe(true);
+      await vi.waitFor(() => expect(manager.isBypassActive(session.id)).toBe(true));
       ws.close();
     });
 
@@ -2805,9 +2790,10 @@ describe("WebSocket handler", () => {
       ws.send("\x01R80;24");
       await new Promise((r) => setTimeout(r, 50));
       ws.send("ls -la\r");
-      await new Promise((r) => setTimeout(r, 50));
-      const term = (terminalMgr as any).terminals.get("term-4")!;
-      expect(term.pty.write).toHaveBeenCalledWith("ls -la\r");
+      await vi.waitFor(() => {
+        const term = (terminalMgr as any).terminals.get("term-4")!;
+        expect(term.pty.write).toHaveBeenCalledWith("ls -la\r");
+      });
       ws.close();
     });
 
@@ -2816,9 +2802,10 @@ describe("WebSocket handler", () => {
       const ws = await connectTerminalWs("term-5", { replay: "0" });
       await new Promise((r) => setTimeout(r, 50));
       ws.send("\x01R120;50");
-      await new Promise((r) => setTimeout(r, 50));
-      const term = (terminalMgr as any).terminals.get("term-5")!;
-      expect(term.pty.resize).toHaveBeenCalledWith(120, 50);
+      await vi.waitFor(() => {
+        const term = (terminalMgr as any).terminals.get("term-5")!;
+        expect(term.pty.resize).toHaveBeenCalledWith(120, 50);
+      });
       ws.close();
     });
 
@@ -2827,9 +2814,10 @@ describe("WebSocket handler", () => {
       const ws = await connectTerminalWs("term-6");
       await new Promise((r) => setTimeout(r, 50));
       ws.close();
-      await new Promise((r) => setTimeout(r, 50));
-      const term = (terminalMgr as any).terminals.get("term-6");
-      expect(!term || term.client === null).toBe(true);
+      await vi.waitFor(() => {
+        const term = (terminalMgr as any).terminals.get("term-6");
+        expect(!term || term.client === null).toBe(true);
+      });
     });
 
     it("stale socket close does not detach newer client on same terminalId", async () => {
