@@ -130,12 +130,14 @@ function JobCard({
   return (
     <Card className="cursor-pointer hover:bg-accent/50 transition-colors" onClick={() => onClick(job.id)}>
       <CardContent className="p-4">
+        {/* Row 1: title spans the full card width; status badge trails at the right */}
+        <div className="flex items-center gap-2 mb-2">
+          <span className="font-medium text-sm truncate flex-1 min-w-0">{job.name}</span>
+          {statusBadge(job)}
+        </div>
+        {/* Row 2: schedule/next/last-run metadata on the left, actions on the right */}
         <div className="flex items-center gap-3">
           <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2 mb-1">
-              <span className="font-medium text-sm truncate">{job.name}</span>
-              {statusBadge(job)}
-            </div>
             <p className="text-xs text-muted-foreground">{describeAllSchedules(getJobSchedules(job))}</p>
             <p className="text-xs text-muted-foreground mt-0.5">Next: {formatNextRun(job)}</p>
             {lastRunInfo(job) && <p className="text-xs mt-0.5">{lastRunInfo(job)}</p>}
