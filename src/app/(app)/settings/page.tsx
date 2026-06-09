@@ -313,53 +313,61 @@ export default function SettingsPage() {
   return (
     <div className="flex-1 min-h-0 overflow-y-auto p-4 sm:p-6">
       <div className="max-w-lg space-y-3">
-        {version && (
-          <VersionCard
-            label="Claude Code"
-            installed={version.installed}
-            latest={version.latest}
-            loading={versionLoading}
-            onRefresh={fetchVersion}
-            onUpdate={triggerUpdate}
-            updating={updating}
-            updateResult={updateResult}
-            updateCommand={version.updateCommand}
-          >
-            <ChangelogAccordion
-              releases={ccReleases}
-              expanded={ccChangelogExpanded}
-              onToggle={() => setCcChangelogExpanded(!ccChangelogExpanded)}
-              expandedVersions={ccExpandedVersions}
-              onToggleVersion={(v) => setCcExpandedVersions(toggleVersion(ccExpandedVersions, v))}
-              repoUrl="https://github.com/anthropics/claude-code/blob/main/CHANGELOG.md"
-            />
-          </VersionCard>
-        )}
+        <div className="min-h-[104px]">
+          {(versionLoading || version) && (
+            <VersionCard
+              label="Claude Code"
+              installed={version?.installed ?? ""}
+              latest={version?.latest ?? ""}
+              loading={versionLoading}
+              onRefresh={fetchVersion}
+              onUpdate={triggerUpdate}
+              updating={updating}
+              updateResult={updateResult}
+              updateCommand={version?.updateCommand ?? ""}
+            >
+              {version && (
+                <ChangelogAccordion
+                  releases={ccReleases}
+                  expanded={ccChangelogExpanded}
+                  onToggle={() => setCcChangelogExpanded(!ccChangelogExpanded)}
+                  expandedVersions={ccExpandedVersions}
+                  onToggleVersion={(v) => setCcExpandedVersions(toggleVersion(ccExpandedVersions, v))}
+                  repoUrl="https://github.com/anthropics/claude-code/blob/main/CHANGELOG.md"
+                />
+              )}
+            </VersionCard>
+          )}
+        </div>
 
-        {cockpitVersion && (
-          <VersionCard
-            label="Cockpit"
-            installed={cockpitVersion.installed}
-            latest={cockpitVersion.latest}
-            loading={cockpitVersionLoading}
-            onRefresh={fetchCockpitVersion}
-            onUpdate={triggerCockpitUpdate}
-            updating={cockpitUpdating}
-            updateResult={cockpitUpdateResult}
-            updateCommand={cockpitVersion.updateCommand}
-            installMethod={cockpitVersion.installMethod}
-          >
-            <ChangelogAccordion
-              releases={changelogReleases}
-              expanded={changelogExpanded}
-              onToggle={() => setChangelogExpanded(!changelogExpanded)}
-              expandedVersions={expandedVersions}
-              onToggleVersion={(v) => setExpandedVersions(toggleVersion(expandedVersions, v))}
-              repoUrl={changelogRepo ? `https://github.com/${changelogRepo}/blob/main/CHANGELOG.md` : undefined}
-              formatVersion={(v) => `Version ${v}`}
-            />
-          </VersionCard>
-        )}
+        <div className="min-h-[104px]">
+          {(cockpitVersionLoading || cockpitVersion) && (
+            <VersionCard
+              label="Cockpit"
+              installed={cockpitVersion?.installed ?? ""}
+              latest={cockpitVersion?.latest ?? ""}
+              loading={cockpitVersionLoading}
+              onRefresh={fetchCockpitVersion}
+              onUpdate={triggerCockpitUpdate}
+              updating={cockpitUpdating}
+              updateResult={cockpitUpdateResult}
+              updateCommand={cockpitVersion?.updateCommand ?? ""}
+              installMethod={cockpitVersion?.installMethod}
+            >
+              {cockpitVersion && (
+                <ChangelogAccordion
+                  releases={changelogReleases}
+                  expanded={changelogExpanded}
+                  onToggle={() => setChangelogExpanded(!changelogExpanded)}
+                  expandedVersions={expandedVersions}
+                  onToggleVersion={(v) => setExpandedVersions(toggleVersion(expandedVersions, v))}
+                  repoUrl={changelogRepo ? `https://github.com/${changelogRepo}/blob/main/CHANGELOG.md` : undefined}
+                  formatVersion={(v) => `Version ${v}`}
+                />
+              )}
+            </VersionCard>
+          )}
+        </div>
 
         <div className="border-t border-border pt-4 mt-4 space-y-0.5">
           <NavRow label="Session Defaults" onClick={() => router.push("/settings/session")} />
