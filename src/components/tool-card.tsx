@@ -178,17 +178,25 @@ export function ToolCard({ tool, expandedToolIds }: ToolCardProps) {
 function FilePathIcon({ filePath }: { filePath: string }) {
   const { tabActions } = useShell();
   return (
-    <button
-      type="button"
+    <span
+      role="button"
+      tabIndex={0}
       onClick={(e) => {
         e.stopPropagation();
         tabActions?.openFile(filePath);
       }}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          e.stopPropagation();
+          tabActions?.openFile(filePath);
+        }
+      }}
       title={filePath}
-      className="shrink-0 text-muted-foreground hover:text-foreground"
+      className="shrink-0 text-muted-foreground hover:text-foreground cursor-pointer"
     >
       <ExternalLink className="h-3 w-3" />
-    </button>
+    </span>
   );
 }
 
