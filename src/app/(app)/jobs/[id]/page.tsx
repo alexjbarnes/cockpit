@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowLeft, ChevronDown, ChevronUp, Loader2, Pencil, Play, Trash2 } from "lucide-react";
+import { ArrowLeft, ChevronDown, ChevronUp, Loader2, Pencil, Play, Square, Trash2 } from "lucide-react";
 import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { usePageHeader } from "@/components/app-shell";
@@ -65,6 +65,12 @@ function runStatusBadge(status: string) {
       return <Badge className={`${STATUS_PILL} bg-yellow-600 text-white`}>Timeout</Badge>;
     case "running":
       return <Badge className={`${STATUS_PILL} bg-blue-600 text-white`}>Running</Badge>;
+    case "stopped":
+      return (
+        <Badge variant="secondary" className={STATUS_PILL}>
+          Stopped
+        </Badge>
+      );
     default:
       return (
         <Badge variant="secondary" className={STATUS_PILL}>
@@ -96,6 +102,7 @@ export default function JobDetailPage() {
   const [job, setJob] = useState<ScheduledJob | null>(null);
   const [loading, setLoading] = useState(true);
   const [triggering, setTriggering] = useState(false);
+  const [stopping, setStopping] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
 
   usePageHeader(job?.name || "Job", { hideActions: true });
@@ -125,6 +132,16 @@ export default function JobDetailPage() {
     await fetch(`/api/jobs/${id}/trigger`, { method: "POST" });
     setTriggering(false);
     refreshRuns();
+  }
+
+  async function handleStop() {
+    setStopping(true);
+    try {
+      const res = await fetch(`/api/jobs/${id}/stop`, { method: "POST" });
+      if (res.ok) refreshRuns();
+    } finally {
+      setStopping(false);
+    }
   }
 
   async function handleDelete() {
@@ -165,6 +182,12 @@ export default function JobDetailPage() {
             {triggering ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Play className="h-4 w-4 mr-1" />}
             Run Now
           </Button>
+          {runs.some((r) => r.status === "running") && (
+            <Button variant="outline" size="sm" onClick={handleStop} disabled={stopping}>
+              {stopping ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Square className="h-4 w-4 mr-1" />}
+              Stop
+            </Button>
+          )}
           <Button variant="ghost" size="sm" className="text-destructive hover:text-destructive" onClick={() => setConfirmDelete(true)}>
             <Trash2 className="h-4 w-4 mr-1" />
             Delete

@@ -249,6 +249,15 @@ const TOOL_DEFINITIONS = [
     inputSchema: { type: "object", properties: { id: { type: "string" }, ids: { type: "array", items: { type: "string" } } } },
   },
   {
+    name: "stop_job",
+    description: "Stop a currently running scheduled job by ID",
+    inputSchema: {
+      type: "object",
+      properties: { id: { type: "string" } },
+      required: ["id"],
+    },
+  },
+  {
     name: "list_running_jobs",
     description: "List scheduled jobs that are currently running",
     inputSchema: { type: "object", properties: {}, required: [] },
@@ -504,6 +513,47 @@ function handleToolCall(
           return { id, name: job.name, status: "started" };
         });
         return { content: [{ type: "text", text: JSON.stringify({ results }, null, 2) }] };
+      }
+      case "stop_job": {
+        const jobId = args.id as string;
+        if (!jobId) {
+          return { content: [{ type: "text", text: JSON.stringify({ error: "no job id provided" }) }], isError: true };
+        }
+        const scheduler = getJobScheduler();
+        if (!scheduler) {
+          return { content: [{ type: "text", text: JSON.stringify({ error: "scheduler not available" }) }], isError: true };
+        }
+        try {
+          const run = scheduler.stopJob(jobId);
+          const jobs = loadJobs();
+          const nameMap = new Map(jobs.map((j) => [j.id, j.name]));
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify(
+                  {
+                    jobId: run.jobId,
+                    name: nameMap.get(run.jobId) ?? "unknown",
+                    runId: run.id,
+                    status: run.status,
+                    startedAt: run.startedAt,
+                    elapsedMs: run.durationMs ?? Date.now() - run.startedAt,
+                    messageCount: run.messageCount,
+                    toolCount: run.toolsUsed.length,
+                  },
+                  null,
+                  2,
+                ),
+              },
+            ],
+          };
+        } catch (err) {
+          return {
+            content: [{ type: "text", text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }],
+            isError: true,
+          };
+        }
       }
       case "list_running_jobs": {
         const scheduler = getJobScheduler();

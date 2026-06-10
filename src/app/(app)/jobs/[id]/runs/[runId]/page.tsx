@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowLeft, ChevronDown, ChevronRight, ChevronUp, FileText, Loader2, MessageSquare, X } from "lucide-react";
+import { ArrowLeft, ChevronDown, ChevronRight, ChevronUp, FileText, Loader2, MessageSquare, Square, X } from "lucide-react";
 import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { usePageHeader } from "@/components/app-shell";
@@ -45,6 +45,8 @@ function statusBadge(status: string) {
       return <Badge className="bg-yellow-600 text-white">Timeout</Badge>;
     case "running":
       return <Badge className="bg-blue-600 text-white">Running</Badge>;
+    case "stopped":
+      return <Badge variant="secondary">Stopped</Badge>;
     default:
       return <Badge variant="secondary">{status}</Badge>;
   }
@@ -172,6 +174,7 @@ export default function RunDetailPage() {
   const [run, setRun] = useState<JobRun | null>(null);
   const [loading, setLoading] = useState(true);
   const [showTranscript, setShowTranscript] = useState(false);
+  const [stopping, setStopping] = useState(false);
 
   const loadRun = useCallback(async () => {
     try {
@@ -190,6 +193,19 @@ export default function RunDetailPage() {
   useEffect(() => {
     loadRun();
   }, [loadRun]);
+
+  async function handleStop() {
+    setStopping(true);
+    try {
+      const res = await fetch(`/api/jobs/${jobId}/stop`, { method: "POST" });
+      if (res.ok) {
+        await loadRun();
+      }
+      setStopping(false);
+    } catch {
+      setStopping(false);
+    }
+  }
 
   if (loading || !run) {
     return (
@@ -251,6 +267,12 @@ export default function RunDetailPage() {
               <MessageSquare className="h-3 w-3 mr-1" />
               Continue Session
             </Button>
+            {run.status === "running" && (
+              <Button variant="destructive" size="sm" onClick={handleStop} disabled={stopping}>
+                {stopping ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Square className="h-3 w-3 mr-1" />}
+                Stop Now
+              </Button>
+            )}
           </div>
         </CardContent>
       </Card>

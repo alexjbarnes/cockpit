@@ -1,6 +1,6 @@
 "use client";
 
-import { AlertCircle, CalendarClock, CheckCircle2, ChevronRight, Copy, Folder, Loader2, Play, Plus, Trash2 } from "lucide-react";
+import { AlertCircle, CalendarClock, CheckCircle2, ChevronRight, Copy, Folder, Loader2, Play, Plus, Square, Trash2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
 import { usePageHeader } from "@/components/app-shell";
@@ -23,6 +23,7 @@ function statusBadge(status: JobDisplayStatus) {
   if (status === "running") return <Badge variant="default">Running</Badge>;
   if (status === "disabled") return <Badge variant="secondary">Disabled</Badge>;
   if (status === "failed") return <Badge variant="destructive">Failed</Badge>;
+  if (status === "stopped") return <Badge variant="secondary">Stopped</Badge>;
   return <Badge variant="default">Enabled</Badge>;
 }
 
@@ -44,6 +45,9 @@ function lastRunInfo(job: JobWithStatus) {
         Succeeded {ago}
       </span>
     );
+  }
+  if (job.lastRunStatus === "stopped") {
+    return <span className="flex items-center gap-1 text-muted-foreground">Stopped {ago}</span>;
   }
   return null;
 }
@@ -113,14 +117,18 @@ function groupJobsByDir(jobs: JobWithStatus[]): JobGroupData[] {
 function JobCard({
   job,
   triggeringJobs,
+  stoppingJobs,
   onTrigger,
+  onStop,
   onDuplicate,
   onDelete,
   onClick,
 }: {
   job: JobWithStatus;
   triggeringJobs: Set<string>;
+  stoppingJobs?: Set<string>;
   onTrigger: (e: React.MouseEvent, id: string) => void;
+  onStop?: (e: React.MouseEvent, id: string) => void;
   onDuplicate: (e: React.MouseEvent, id: string) => void;
   onDelete: (e: React.MouseEvent, id: string) => void;
   onClick: (id: string) => void;
@@ -147,6 +155,18 @@ function JobCard({
             )}
           </div>
           <div className="flex items-center gap-1 shrink-0">
+            {status === "running" && onStop && (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8"
+                title="Stop now"
+                disabled={stoppingJobs?.has(job.id)}
+                onClick={(e) => onStop(e, job.id)}
+              >
+                {stoppingJobs?.has(job.id) ? <Loader2 className="h-4 w-4 animate-spin" /> : <Square className="h-4 w-4" />}
+              </Button>
+            )}
             <Button
               variant="ghost"
               size="icon"
@@ -179,7 +199,9 @@ function JobCard({
 function JobDirGroup({
   group,
   triggeringJobs,
+  stoppingJobs,
   onTrigger,
+  onStop,
   onDuplicate,
   onDelete,
   onClickJob,
@@ -188,7 +210,9 @@ function JobDirGroup({
 }: {
   group: JobGroupData;
   triggeringJobs: Set<string>;
+  stoppingJobs?: Set<string>;
   onTrigger: (e: React.MouseEvent, id: string) => void;
+  onStop?: (e: React.MouseEvent, id: string) => void;
   onDuplicate: (e: React.MouseEvent, id: string) => void;
   onDelete: (e: React.MouseEvent, id: string) => void;
   onClickJob: (id: string) => void;
@@ -232,7 +256,9 @@ function JobDirGroup({
               key={job.id}
               job={job}
               triggeringJobs={triggeringJobs}
+              stoppingJobs={stoppingJobs}
               onTrigger={onTrigger}
+              onStop={onStop}
               onDuplicate={onDuplicate}
               onDelete={onDelete}
               onClick={onClickJob}
@@ -247,10 +273,11 @@ function JobDirGroup({
 export default function JobsPage() {
   usePageHeader("Scheduled Jobs", { hideActions: true });
 
-  const { jobs, loading, deleteJob, triggerJob, refresh } = useJobs();
+  const { jobs, loading, deleteJob, triggerJob, stopJob, refresh } = useJobs();
   const router = useRouter();
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const [triggeringJobs, setTriggeringJobs] = useState<Set<string>>(new Set());
+  const [stoppingJobs, setStoppingJobs] = useState<Set<string>>(new Set());
 
   const groups = useMemo(() => groupJobsByDir(jobs as JobWithStatus[]), [jobs]);
 
@@ -265,6 +292,23 @@ export default function JobsPage() {
     setTriggeringJobs((prev) => new Set(prev).add(jobId));
     await triggerJob(jobId);
     setTriggeringJobs((prev) => {
+      const next = new Set(prev);
+      next.delete(jobId);
+      return next;
+    });
+    refresh();
+  }
+
+  async function handleStopClick(e: React.MouseEvent, jobId: string) {
+    e.stopPropagation();
+    setStoppingJobs((prev) => new Set(prev).add(jobId));
+    setTriggeringJobs((prev) => {
+      const next = new Set(prev);
+      next.delete(jobId);
+      return next;
+    });
+    await stopJob(jobId);
+    setStoppingJobs((prev) => {
       const next = new Set(prev);
       next.delete(jobId);
       return next;
@@ -301,7 +345,9 @@ export default function JobsPage() {
                 key={job.id}
                 job={job}
                 triggeringJobs={triggeringJobs}
+                stoppingJobs={stoppingJobs}
                 onTrigger={handleTrigger}
+                onStop={handleStopClick}
                 onDuplicate={handleDuplicate}
                 onDelete={handleDeleteClick}
                 onClick={(id) => router.push(`/jobs/${id}`)}
@@ -312,7 +358,9 @@ export default function JobsPage() {
                 key={group.cwd}
                 group={group}
                 triggeringJobs={triggeringJobs}
+                stoppingJobs={stoppingJobs}
                 onTrigger={handleTrigger}
+                onStop={handleStopClick}
                 onDuplicate={handleDuplicate}
                 onDelete={handleDeleteClick}
                 onClickJob={(id) => router.push(`/jobs/${id}`)}

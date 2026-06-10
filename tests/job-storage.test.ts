@@ -138,6 +138,14 @@ describe("run CRUD", () => {
     expect(runs).toHaveLength(1);
     expect(runs[0].status).toBe("success");
   });
+
+  it("saveRun with stopped status round-trips", () => {
+    saveRun(makeRun("a", "r-stopped", { status: "stopped", error: "Stopped by user" }));
+    const runs = loadRuns("a");
+    expect(runs).toHaveLength(1);
+    expect(runs[0].status).toBe("stopped");
+    expect(runs[0].error).toBe("Stopped by user");
+  });
 });
 
 describe("getLatestRun", () => {
@@ -175,6 +183,13 @@ describe("getRecentFailureCount", () => {
     saveJob(makeJob("j"));
     saveRun(makeRun("j", "older", { status: "failure", startedAt: now - 10_000 }));
     saveRun(makeRun("j", "newer", { status: "success", startedAt: now }));
+    expect(getRecentFailureCount()).toBe(0);
+  });
+
+  it("does not count stopped runs as failures", () => {
+    const now = Date.now();
+    saveJob(makeJob("stopped-job"));
+    saveRun(makeRun("stopped-job", "r", { status: "stopped", startedAt: now }));
     expect(getRecentFailureCount()).toBe(0);
   });
 });
