@@ -130,6 +130,28 @@ describe("providers", () => {
     expect(result!.provider.id).toBe("proxy-1");
   });
 
+  it("resolveProviderModel strips a legacy context suffix from a qualified model", async () => {
+    const fs = await import("node:fs");
+    const custom = [
+      {
+        id: "ds-1",
+        name: "Deepseek",
+        envVars: {},
+        models: [{ modelId: "deepseek-v4-pro", displayName: "Deepseek V4 Pro", effortLevels: [], contextSizes: ["200k", "1m"] }],
+      },
+    ];
+    vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(custom));
+
+    const { resolveProviderModel } = await import("@/server/providers");
+    // A job whose stored model still carries the legacy "[1m]" suffix must
+    // resolve to the cleaned provider model.
+    const result = resolveProviderModel("ds-1:deepseek-v4-pro[1m]");
+
+    expect(result).not.toBeNull();
+    expect(result!.provider.id).toBe("ds-1");
+    expect(result!.model.modelId).toBe("deepseek-v4-pro");
+  });
+
   it("addProvider generates UUID and persists", async () => {
     const fs = await import("node:fs");
     vi.mocked(fs.readFileSync).mockImplementation(() => {

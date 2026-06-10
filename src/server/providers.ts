@@ -109,7 +109,9 @@ export function resolveProviderModel(modelId: string): { provider: Provider; mod
   const colon = modelId.indexOf(":");
   if (colon > 0) {
     const providerId = modelId.slice(0, colon);
-    const bareModel = modelId.slice(colon + 1);
+    // Strip a legacy context suffix (e.g. "deepseek-v4-pro[1m]") so a job whose
+    // stored model still carries one resolves to the cleaned provider model.
+    const bareModel = modelId.slice(colon + 1).replace(/\[.*\]$/, "");
     const provider = getProvider(providerId);
     if (provider) {
       const model = provider.models.find((m) => m.modelId === bareModel);
