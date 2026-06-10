@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { fuzzyMatch } from "@/lib/fuzzy-search";
 import { pathBasename, pathDirname } from "@/lib/path";
 import type { InitAgentInfo } from "@/types";
 
@@ -69,8 +70,6 @@ export function MentionMenu({ query, cwd, selectedIndex, onSelect, onItemsChange
     };
   }, [query, cwd]);
 
-  const lowerQuery = query.toLowerCase();
-
   const allAgents = useMemo(() => {
     if (initAgents && initAgents.length > 0) {
       return initAgents.map((a) => ({ name: a.name, description: a.description }));
@@ -86,10 +85,18 @@ export function MentionMenu({ query, cwd, selectedIndex, onSelect, onItemsChange
 
   const matchedAgents: MentionItem[] = useMemo(
     () =>
-      allAgents
-        .filter((a) => a.name.toLowerCase().includes(lowerQuery))
-        .map((a) => ({ value: a.name, label: a.name, description: a.description, kind: "agent" as const })),
-    [lowerQuery, allAgents],
+      fuzzyMatch(
+        query,
+        allAgents,
+        (a) => a.name,
+        (a) => a.description,
+      ).map((a) => ({
+        value: a.name,
+        label: a.name,
+        description: a.description,
+        kind: "agent" as const,
+      })),
+    [query, allAgents],
   );
 
   const fileItems: MentionItem[] = useMemo(() => files.map((f) => ({ value: f, label: f, kind: "file" as const })), [files]);

@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { type SlashCommand, slashCommands } from "@/lib/commands";
+import { fuzzyMatch } from "@/lib/fuzzy-search";
 
 // Commands handled client-side by Cockpit, always included
 const cockpitCommands: SlashCommand[] = [
@@ -88,7 +89,12 @@ export function SlashCommandMenu({ query, selectedIndex, onSelect, cwd, onItemsC
     }
   }
 
-  const filtered = allCommands.filter((cmd) => cmd.command.startsWith("/" + query));
+  const filtered = fuzzyMatch(
+    query,
+    allCommands,
+    (cmd) => cmd.command.slice(1),
+    (cmd) => cmd.description,
+  );
 
   useEffect(() => {
     onItemsChange?.(filtered);
