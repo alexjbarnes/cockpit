@@ -150,7 +150,7 @@ export default function JobDetailPage() {
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2">
               <h2 className="font-semibold truncate">{job.name}</h2>
-              {job.enabled ? <Badge variant="default">Active</Badge> : <Badge variant="secondary">Disabled</Badge>}
+              {job.enabled ? <Badge variant="default">Enabled</Badge> : <Badge variant="secondary">Disabled</Badge>}
             </div>
             <p className="text-xs text-muted-foreground">{describeAllSchedules(getJobSchedules(job))}</p>
           </div>

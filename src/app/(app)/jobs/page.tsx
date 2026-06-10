@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useJobs } from "@/hooks/use-jobs";
+import { type JobDisplayStatus, jobDisplayStatus } from "@/lib/job-display";
 import { describeAllSchedules, getJobSchedules, getNextRunTimeAny } from "@/server/cron-utils";
 import type { ScheduledJob } from "@/types";
 
@@ -18,15 +19,11 @@ type JobWithStatus = ScheduledJob & {
   lastRunError?: string;
 };
 
-function statusBadge(job: JobWithStatus) {
-  if (!job.enabled) return <Badge variant="secondary">Disabled</Badge>;
-  if (job.lastRunStatus === "failure" || job.lastRunStatus === "timeout") {
-    return <Badge variant="destructive">Failed</Badge>;
-  }
-  if (job.lastRunStatus === "running") {
-    return <Badge variant="default">Running</Badge>;
-  }
-  return <Badge variant="default">Active</Badge>;
+function statusBadge(status: JobDisplayStatus) {
+  if (status === "running") return <Badge variant="default">Running</Badge>;
+  if (status === "disabled") return <Badge variant="secondary">Disabled</Badge>;
+  if (status === "failed") return <Badge variant="destructive">Failed</Badge>;
+  return <Badge variant="default">Enabled</Badge>;
 }
 
 function lastRunInfo(job: JobWithStatus) {
@@ -48,15 +45,16 @@ function lastRunInfo(job: JobWithStatus) {
       </span>
     );
   }
-  if (job.lastRunStatus === "running") {
-    return (
-      <span className="flex items-center gap-1">
-        <Loader2 className="h-3 w-3 animate-spin" />
-        Running
-      </span>
-    );
-  }
   return null;
+}
+
+function runningIndicator() {
+  return (
+    <span className="flex items-center gap-1">
+      <Loader2 className="h-3 w-3 animate-spin" />
+      Running
+    </span>
+  );
 }
 
 function timeAgo(ts: number): string {
@@ -127,20 +125,26 @@ function JobCard({
   onDelete: (e: React.MouseEvent, id: string) => void;
   onClick: (id: string) => void;
 }) {
+  const status = jobDisplayStatus(job, triggeringJobs.has(job.id));
+  const running = status === "running";
   return (
     <Card className="cursor-pointer hover:bg-accent/50 transition-colors" onClick={() => onClick(job.id)}>
       <CardContent className="p-4">
         {/* Row 1: title spans the full card width; status badge trails at the right */}
         <div className="flex items-center gap-2 mb-2">
           <span className="font-medium text-sm truncate flex-1 min-w-0">{job.name}</span>
-          {statusBadge(job)}
+          {statusBadge(status)}
         </div>
         {/* Row 2: schedule/next/last-run metadata on the left, actions on the right */}
         <div className="flex items-center gap-3">
           <div className="flex-1 min-w-0">
             <p className="text-xs text-muted-foreground">{describeAllSchedules(getJobSchedules(job))}</p>
             <p className="text-xs text-muted-foreground mt-0.5">Next: {formatNextRun(job)}</p>
-            {lastRunInfo(job) && <p className="text-xs mt-0.5">{lastRunInfo(job)}</p>}
+            {running ? (
+              <p className="text-xs mt-0.5">{runningIndicator()}</p>
+            ) : (
+              lastRunInfo(job) && <p className="text-xs mt-0.5">{lastRunInfo(job)}</p>
+            )}
           </div>
           <div className="flex items-center gap-1 shrink-0">
             <Button
