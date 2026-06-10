@@ -214,7 +214,7 @@ export interface ScheduledJob {
   runtime?: "stream" | "pty";
 }
 
-export type JobRunStatus = "running" | "success" | "failure" | "timeout";
+export type JobRunStatus = "running" | "success" | "failure" | "timeout" | "stopped";
 
 export interface JobRunToolUse {
   name: string;

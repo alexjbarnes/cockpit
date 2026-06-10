@@ -45,7 +45,23 @@ export function useJobs() {
     }
   }, []);
 
-  return { jobs, loading, refresh, deleteJob, triggerJob };
+  const stopJob = useCallback(
+    async (id: string): Promise<boolean> => {
+      try {
+        const res = await fetch(`/api/jobs/${id}/stop`, { method: "POST" });
+        if (res.ok) {
+          refresh();
+          return true;
+        }
+        return false;
+      } catch {
+        return false;
+      }
+    },
+    [refresh],
+  );
+
+  return { jobs, loading, refresh, deleteJob, triggerJob, stopJob };
 }
 
 const PAGE_SIZE = 25;

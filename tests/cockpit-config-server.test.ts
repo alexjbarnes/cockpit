@@ -375,6 +375,53 @@ describe("cockpit-config MCP server (in-process HTTP)", () => {
       expect(result.note).toContain("scheduler not available");
     });
 
+    it("stop_job returns stopped record for a running job", async () => {
+      const stopJob = vi.fn(() => ({
+        jobId: "job-1",
+        id: "run-1",
+        status: "stopped",
+        startedAt: Date.now() - 5000,
+        durationMs: 5000,
+        messageCount: 3,
+        toolsUsed: [{ name: "Read" }],
+      }));
+      vi.mocked(getJobScheduler).mockReturnValue({
+        stopJob,
+      } as never);
+
+      const result = (await callToolParsed("stop_job", { id: "job-1" })) as {
+        status: string;
+        jobId: string;
+        runId: string;
+      };
+      expect(result.status).toBe("stopped");
+      expect(result.jobId).toBe("job-1");
+      expect(result.runId).toBe("run-1");
+    });
+
+    it("stop_job returns error when job is not running", async () => {
+      vi.mocked(getJobScheduler).mockReturnValue({
+        stopJob: vi.fn(() => {
+          throw new Error("Job is not currently running");
+        }),
+      } as never);
+
+      const result = (await callToolParsed("stop_job", { id: "not-running" })) as { error: string };
+      expect(result.error).toContain("Job is not currently running");
+    });
+
+    it("stop_job returns error for missing id", async () => {
+      const result = (await callToolParsed("stop_job", {})) as { error: string };
+      expect(result.error).toContain("no job id provided");
+    });
+
+    it("stop_job returns error when no scheduler", async () => {
+      vi.mocked(getJobScheduler).mockReturnValue(null as never);
+
+      const result = (await callToolParsed("stop_job", { id: "any" })) as { error: string };
+      expect(result.error).toContain("scheduler not available");
+    });
+
     it("delete_job batch", async () => {
       const a = (await callToolParsed("create_job", {
         name: "batch-del-a",

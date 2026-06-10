@@ -146,6 +146,7 @@ export class JobScheduler {
   private timer: ReturnType<typeof setInterval> | null = null;
   private lastFiredAt = new Map<string, Date>();
   private runningJobs = new Map<string, JobRun>();
+  private jobResolvers = new Map<string, (run: JobRun) => void>();
   private lastPruneAt = 0;
 
   constructor(sessionManager: SessionManager) {
@@ -182,6 +183,54 @@ export class JobScheduler {
     const job = jobs.find((j) => j.id === jobId);
     if (!job) throw new Error(`Job not found: ${jobId}`);
     return this.executeJob(job);
+  }
+
+  stopJob(jobId: string): JobRun {
+    const run = this.runningJobs.get(jobId);
+    if (!run) throw new Error("Job is not currently running");
+    // Guard against the cleanup timeout having already fired.
+    // cleanup ALWAYS sets completedAt (line 469), so this is a race-free signal.
+    if (run.completedAt) throw new Error("Job is no longer running");
+
+    // Set status BEFORE destroySession -- same object reference as closure's run
+    run.status = "stopped";
+    run.error = "Stopped by user";
+    run.completedAt = Date.now();
+    run.durationMs = run.completedAt - run.startedAt;
+
+    // Count transcript BEFORE destroySession -- destroySession stops the watcher
+    const transcriptCount = countTranscriptMessages(run.sessionId, run.cwd);
+
+    this.sessionManager.destroySession(run.sessionId);
+    if (transcriptCount > run.messageCount) run.messageCount = transcriptCount;
+
+    saveRun(run);
+
+    addInboxMessage({
+      title: `Job stopped: ${run.jobId}`,
+      body: `**Status:** stopped\n\nStopped by user after ${Math.round((run.durationMs ?? 0) / 1000)}s`,
+      priority: "info",
+      jobId: run.jobId,
+      runId: run.id,
+    });
+
+    this.runningJobs.delete(jobId);
+    releaseJobLock(jobId);
+
+    // Resolve the executeJob Promise. If cleanup already resolved it
+    // (via the guard), this is a no-op (Promise can only settle once).
+    const resolve = this.jobResolvers.get(jobId);
+    if (resolve) {
+      resolve(run);
+      this.jobResolvers.delete(jobId);
+    }
+
+    logDiag(jobId, "job:stopped", {
+      runId: run.id,
+      messageCount: run.messageCount,
+      toolCount: run.toolsUsed.length,
+    });
+    return run;
   }
 
   private recoverState(): void {
@@ -402,6 +451,7 @@ export class JobScheduler {
     }
 
     return new Promise<JobRun>((resolve) => {
+      this.jobResolvers.set(job.id, resolve);
       const maxMs = (job.maxDurationMinutes || 30) * 60 * 1000;
       const sentAt = Date.now();
       let sawRunning = false;
@@ -448,6 +498,14 @@ export class JobScheduler {
       const cleanup = (finalStatus: "success" | "failure" | "timeout") => {
         if (cleaned) {
           jlog("cleanup-skipped", { requestedStatus: finalStatus, elapsedMs: Date.now() - sentAt });
+          return;
+        }
+        if (run.status === "stopped") {
+          cleaned = true;
+          jlog("cleanup-guard-stopped", { elapsedMs: Date.now() - sentAt });
+          clearTimeout(timeout);
+          resolve(run);
+          this.jobResolvers.delete(job.id);
           return;
         }
         cleaned = true;
@@ -525,6 +583,7 @@ export class JobScheduler {
         this.runningJobs.delete(job.id);
         releaseJobLock(job.id);
         resolve(run);
+        this.jobResolvers.delete(job.id);
       };
 
       const promptText = buildJobPrompt(job);
