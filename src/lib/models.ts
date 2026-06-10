@@ -146,3 +146,10 @@ export function splitLegacyModel(stored: string | undefined | null): {
     contextSize: hasOneM ? "1m" : "200k",
   };
 }
+
+export function resolveProviderId(currentModel: string, providers: { id: string; models: { modelId: string }[] }[] | undefined): string {
+  if (!providers) return "anthropic";
+  const stripped = currentModel.replace(/\[.*\]$/, "");
+  const provider = providers.find((p) => p.models.some((m) => m.modelId === stripped || `${p.id}:${m.modelId}` === stripped));
+  return provider?.id ?? "anthropic";
+}

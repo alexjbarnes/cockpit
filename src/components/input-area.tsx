@@ -43,6 +43,7 @@ import {
   findModelById,
   type ModelAlias,
   type ModelEntry,
+  resolveProviderId,
   versionsForAlias,
 } from "@/lib/models";
 import { detectLanguage, extensionForLabel, shouldCollapsePaste } from "@/lib/paste-detect";
@@ -861,6 +862,7 @@ export function InputArea({
                             </div>
                             <select
                               value={viewProvider}
+                              data-testid="provider-select"
                               onChange={(e) => setViewProvider(e.target.value)}
                               className="rounded border border-input bg-background px-2 py-1 text-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                             >
@@ -1225,8 +1227,7 @@ export function InputArea({
                   if (!v) {
                     const p = parseCurrentModel(currentModel, currentContextSize);
                     if (!p.alias) {
-                      const prov = providers?.find((x) => x.models.some((m) => m.modelId === currentModel));
-                      setViewProvider(prov?.id ?? "anthropic");
+                      setViewProvider(resolveProviderId(currentModel, providers));
                     } else {
                       setViewProvider("anthropic");
                     }

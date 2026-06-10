@@ -54,12 +54,39 @@ test("session-settings dialog opens for a custom model with no contextSizes", as
     await page.getByTestId("btn-session-settings").click();
 
     // The dialog header must render. With the bug, the error boundary replaced
-    // the whole page with "This page couldn't load".
+    // the whole page with "This page couldn’t load".
     await expect(page.getByRole("heading", { name: "Session settings" })).toBeVisible();
     await expect(page.getByText("This page couldn’t load")).toHaveCount(0);
 
-    // No uncaught "reading 'length'" (or any) error should have fired.
+    // No uncaught "reading ‘length’" (or any) error should have fired.
     expect(pageErrors, `unexpected page errors: ${pageErrors.join(" | ")}`).toHaveLength(0);
+  } finally {
+    rmSync(workDir, { recursive: true, force: true });
+  }
+});
+
+test("provider dropdown defaults to the current custom provider", async ({ page, harness }) => {
+  const workDir = mkdtempSync(path.join(tmpdir(), "cockpit-it-provdflt-"));
+  mkdirSync(path.join(workDir, ".git"), { recursive: true });
+
+  try {
+    // Session with a model that matches the harness mock provider’s modelId.
+    const createRes = await page.request.post(`${harness.cockpitUrl}/api/sessions`, {
+      data: { cwd: workDir, runtime: "pty", model: "mock:claude-sonnet-4-6" },
+    });
+    expect(createRes.ok()).toBe(true);
+    const { sessionId } = await createRes.json();
+
+    await page.goto(`${harness.cockpitUrl}/sessions/${sessionId}?cwd=${encodeURIComponent(workDir)}`);
+    await expect(page.getByTestId("message-input")).toBeVisible();
+    await page.waitForTimeout(2000);
+
+    // Open the settings dialog.
+    await page.getByTestId("btn-session-settings").click();
+    await expect(page.getByRole("heading", { name: "Session settings" })).toBeVisible();
+
+    // The provider dropdown should show "mock" (the custom provider), not "anthropic".
+    await expect(page.locator('[data-testid="provider-select"]')).toHaveValue("mock");
   } finally {
     rmSync(workDir, { recursive: true, force: true });
   }
