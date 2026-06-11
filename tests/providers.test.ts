@@ -299,4 +299,29 @@ describe("providers", () => {
       }),
     ).toThrow(/contextSizes/);
   });
+
+  it("reloads providers when providers.json changes out of band (different mtime)", async () => {
+    const fs = await import("node:fs");
+    const listA = [
+      { id: "p-a", name: "A", envVars: {}, models: [{ modelId: "m-a", displayName: "m-a", effortLevels: [], contextSizes: ["200k"] }] },
+    ];
+    const listB = [
+      { id: "p-b", name: "B", envVars: {}, models: [{ modelId: "m-b", displayName: "m-b", effortLevels: [], contextSizes: ["200k"] }] },
+    ];
+    vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(listA));
+    vi.mocked(fs.statSync).mockReturnValue({ mtimeMs: 1 } as unknown as ReturnType<typeof fs.statSync>);
+
+    const { getProviders } = await import("@/server/providers");
+    expect(getProviders().find((p) => p.id === "p-a")).toBeDefined();
+    expect(getProviders().find((p) => p.id === "p-b")).toBeUndefined();
+
+    // Another module graph (the settings route) or a hand edit rewrites the file:
+    // content + mtime change, with no mutator called in THIS graph. mtime-gating
+    // must pick it up so a session spawn sees the new provider without a restart.
+    vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(listB));
+    vi.mocked(fs.statSync).mockReturnValue({ mtimeMs: 2 } as unknown as ReturnType<typeof fs.statSync>);
+
+    expect(getProviders().find((p) => p.id === "p-b")).toBeDefined();
+    expect(getProviders().find((p) => p.id === "p-a")).toBeUndefined();
+  });
 });
