@@ -19,13 +19,13 @@ Three things follow:
 
 Inside a session: a tabbed, split-pane layout holding the chat, a diff viewer for code changes (split or inline), a file viewer with syntax highlighting, and an embedded terminal. Plus global search across all sessions (Ctrl+Shift+F), searchable prompt history on the up arrow, and plan-mode approvals when Claude proposes a plan. The sidebar shows collapsible sections for sessions, reviews, file changes, and file trees, with status beacons so you can tell at a glance which sessions are working, waiting, or idle.
 
-Choose your model per session: built-in Haiku, Sonnet, and Opus, or your own Anthropic-compatible providers (proxies and gateways), with a 200K or 1M context selector. Each session can run in Stream mode (headless) or PTY mode, which drives the real Claude Code CLI through a pseudo-terminal.
+**Bring your own models.** Built-in Haiku, Sonnet, and Opus, or point Cockpit at any Anthropic-compatible endpoint, a proxy, a gateway, or your own deployment, each with its own credentials and model list. Choose the model per session and per scheduled job, with a 200K or 1M context selector. Each session runs in Stream mode (headless) or PTY mode, which drives the real Claude Code CLI through a pseudo-terminal.
 
 It also takes care of things you usually hand-edit: agents, skills, hooks, MCP servers, CLAUDE.md memory. All editable from the UI.
 
 PR reviews are a first-class flow. Pick an org, pick a repo, pick a PR. Cockpit reads the diff via the GitHub CLI and starts a Claude session scoped to it. Diff on one side, chat on the other. Active reviews pin to the sidebar alongside your sessions.
 
-Scheduled jobs post results to an inbox with optional push notifications via Telegram or ntfy.sh.
+**Scheduled jobs** turn Claude Code into a cron worker. Give one a prompt and a schedule (a cron expression or a simple interval) and scope it tightly: its own model and thinking level, the exact tools and MCP servers it is allowed to touch, a run-time budget, how long to keep transcripts. It runs unattended, and each run renders as a normal session transcript you can open later. Results land in an inbox, with optional push to Telegram or ntfy.sh, so a nightly dependency bump or a morning PR-triage pass reaches your phone while you are away from the machine.
 
 Run it on your laptop the way you'd run the TUI. Or run it on a home server and reach it from your phone. Same UI either way.
 

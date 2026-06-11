@@ -17,9 +17,13 @@ The Jobs page lists your jobs. Add one with:
 
 - Name. Used in the dashboard and run history.
 - Working directory. Where Claude runs (defaults to your home).
-- Schedule. Cron expression. Cockpit shows the next 3 fire times so you can sanity-check.
+- Schedule. Either **Simple** (hourly, daily, weekly, or monthly, at a chosen time and day) or a raw **Cron** expression. A single job can hold more than one schedule. Cockpit shows the next 3 fire times so you can sanity-check.
 - Prompt. The instruction Claude runs on each fire.
 - Model, context size, and thinking level. Same options as interactive sessions, including custom [providers](settings.md#providers).
+- Runtime. Stream (headless, the default) or PTY, the same choice as interactive sessions.
+- Run-time budget. The maximum minutes a run may take before it is stopped (default 30).
+- Retention. How many days of run history and transcripts to keep (default 90).
+- Skip if missed. If the server was down when a run was due, skip the late catch-up rather than firing on startup.
 - Enabled. Toggle to pause the job without deleting it.
 
 Save and the scheduler picks it up immediately.
