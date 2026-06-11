@@ -114,7 +114,7 @@ export default function SessionSettingsPage() {
         <ArrowLeft className="h-4 w-4 mr-1" />
         Settings
       </Button>
-      <div className="max-w-lg space-y-1">
+      <div className="max-w-lg mx-auto space-y-1" data-testid="settings-content">
         <SettingRow label="Model">
           <ButtonGroup
             options={

@@ -29,7 +29,7 @@ export default function NewProviderPage() {
         <ArrowLeft className="h-4 w-4 mr-1" />
         Settings
       </Button>
-      <div className="max-w-xl flex-1 min-h-0">
+      <div className="max-w-xl mx-auto flex-1 min-h-0" data-testid="settings-content">
         <ProviderForm
           provider={{
             id: "",

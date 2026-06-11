@@ -31,7 +31,7 @@ export default function ProvidersPage() {
         <ArrowLeft className="h-4 w-4 mr-1" />
         Settings
       </Button>
-      <div className="max-w-lg space-y-1">
+      <div className="max-w-lg mx-auto space-y-1" data-testid="settings-content">
         {providers.map((provider) => (
           <button
             key={provider.id}
