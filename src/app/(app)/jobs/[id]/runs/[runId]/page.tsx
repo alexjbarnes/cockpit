@@ -252,9 +252,9 @@ export default function RunDetailPage() {
           {run.error && <div className="mt-2 p-2 rounded bg-destructive/10 text-destructive text-xs">{run.error}</div>}
           <CollapsiblePrompt prompt={run.prompt} />
           <div>
-            <span className="text-muted-foreground">Working Directory:</span> <span className="font-mono text-xs">{run.cwd}</span>
+            <span className="text-muted-foreground">Working Directory:</span> <span className="font-mono text-xs break-all">{run.cwd}</span>
           </div>
-          <div className="pt-2 flex gap-2">
+          <div className="pt-2 flex flex-wrap gap-2">
             <Button variant="outline" size="sm" onClick={() => setShowTranscript(true)}>
               <FileText className="h-3 w-3 mr-1" />
               View Transcript
