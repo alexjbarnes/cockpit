@@ -81,7 +81,6 @@ export default function EditProviderPage() {
             "ANTHROPIC_DEFAULT_SONNET_MODEL",
             "ANTHROPIC_DEFAULT_HAIKU_MODEL",
             "CLAUDE_CODE_SUBAGENT_MODEL",
-            "CLAUDE_CODE_EFFORT_LEVEL",
           ]}
           onSave={handleSave}
           onCancel={() => router.push("/settings")}
