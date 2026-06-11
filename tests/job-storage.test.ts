@@ -3,13 +3,14 @@
 // the env var per call, so no fs mocking is needed). The legacy [1m] model
 // migration on read is covered separately in job-storage-context.test.ts.
 
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   deleteJob,
   getJob,
+  getJobSessionIds,
   getLatestRun,
   getRecentFailureCount,
   getRun,
@@ -66,6 +67,36 @@ function makeRun(jobId: string, id: string, overrides: Partial<JobRun> = {}): Jo
     ...overrides,
   };
 }
+
+describe("getJobSessionIds", () => {
+  it("collects sessionIds across all job run files", () => {
+    saveRun(makeRun("job-1", "r1", { sessionId: "sess-a" }));
+    saveRun(makeRun("job-1", "r2", { sessionId: "sess-b" }));
+    saveRun(makeRun("job-2", "r3", { sessionId: "sess-c" }));
+    expect([...getJobSessionIds()].sort()).toEqual(["sess-a", "sess-b", "sess-c"]);
+  });
+
+  it("returns an empty set when no runs exist", () => {
+    expect(getJobSessionIds().size).toBe(0);
+  });
+
+  it("skips runs without a sessionId, non-json files, and unreadable files", () => {
+    const dirRuns = path.join(dir, "job-runs");
+    mkdirSync(dirRuns, { recursive: true });
+    writeFileSync(
+      path.join(dirRuns, "job-x.json"),
+      JSON.stringify({
+        runs: [
+          { id: "r1", jobId: "job-x" },
+          { id: "r2", jobId: "job-x", sessionId: "sess-x" },
+        ],
+      }),
+    );
+    writeFileSync(path.join(dirRuns, "notes.txt"), "ignore me");
+    writeFileSync(path.join(dirRuns, "broken.json"), "{not valid json");
+    expect([...getJobSessionIds()]).toEqual(["sess-x"]);
+  });
+});
 
 describe("job CRUD", () => {
   it("returns [] when no jobs file exists", () => {

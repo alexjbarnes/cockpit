@@ -2,6 +2,7 @@ import path from "node:path";
 import { NextRequest, NextResponse } from "next/server";
 import { validateSession } from "@/server/auth";
 import { debugLog } from "@/server/debug-logger";
+import { getJobSessionIds } from "@/server/job-storage";
 import { getCockpitDir } from "@/server/paths";
 import { getSessionManager } from "@/server/singleton";
 import { scanAllSessions } from "@/server/transcript";
@@ -60,10 +61,15 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  // Filter out scheduled job sessions
+  // Filter out scheduled job sessions. The reliable signal is the run's recorded
+  // sessionId (a job spawns a real session whose transcript looks like any other);
+  // the name checks remain as a fallback for sessions whose run record was pruned.
   const JOB_TITLE_PREFIX = "You are running as an autonomous scheduled job";
+  const jobSessionIds = getJobSessionIds();
   for (const group of groups) {
-    group.sessions = group.sessions.filter((s) => !s.name?.startsWith("[job] ") && !s.name?.startsWith(JOB_TITLE_PREFIX));
+    group.sessions = group.sessions.filter(
+      (s) => !jobSessionIds.has(s.id) && !s.name?.startsWith("[job] ") && !s.name?.startsWith(JOB_TITLE_PREFIX),
+    );
   }
 
   const typeParam = req.nextUrl.searchParams.get("type");
