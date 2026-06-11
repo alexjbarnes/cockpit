@@ -5,19 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.4.0] - 2026-06-11
 
 ### Added
+- **Cockpit Assistant.** An AI agent embedded in cockpit, opened from a modal anywhere in the app, that inspects and changes cockpit's own configuration through conversation instead of clicking the UI. It runs as a single persistent session backed by a `cockpit-config` MCP server. Read tools (list/get) answer questions about your jobs, providers, MCP servers, app settings, and notification settings and run automatically. Write tools (create/update/delete/run/stop a scheduled job, add or edit providers, MCP servers, settings, and notification providers) are shown as a proposal card you approve or reject before anything changes. It can also run a job now, stop a running one, and tell you which jobs are currently running.
 - **Plugin management.** A new Plugins page (under Settings) for managing Claude Code plugins. The Installed tab lists your plugins with version and scope and lets you enable, disable, or uninstall each one. The Browse tab searches the marketplace catalog and installs any plugin (user scope) in one click. The Marketplaces tab lists configured marketplaces and lets you add one (from a GitHub repo, URL, or local path), update it, or remove it. Every action runs the CLI's own `claude plugin` commands, so install/git logic and the security blocklist stay owned by the CLI rather than reimplemented in cockpit.
+- **Stop a running job.** A Stop Now button on the job, run-detail, and run-history views ends an in-flight scheduled run, exposed to the assistant as a `stop_job` MCP tool. Stopped runs record a `stopped` status distinct from failure.
+- **MCP tool discovery in the job editor.** A scheduled job can list a configured MCP server's tools and pick which ones to allow, instead of typing tool names by hand. MCP servers also gained a detail view with inline actions.
+- **Fuzzy search in the slash and mention menus.** The `/` command menu and `@` agent/skill mention menu now match by subsequence, so a few characters surface the right skill or agent without an exact prefix.
 - **Image previews in the file viewer.** Opening an image (PNG, JPEG, GIF, WebP, SVG, BMP, ICO, AVIF, APNG) now renders the image instead of showing "Binary file". Bytes are served from the file-read endpoint with a sandboxed content-security-policy, so an opened SVG can't execute scripts.
+- **Edit/Preview toggle in markdown editors.** Multi-line markdown fields (job prompts and similar) switch between raw editing and a rendered preview.
+- **Inbox read/unread toggle.** The inbox header now toggles all messages between read and unread, rather than only marking them read.
 
 ### Changed
+- **Full-bleed layout.** Settings sub-pages (Sessions defaults, Appearance, Model providers, the provider editor) and the main sessions feed now use the full window width instead of a centred mobile-width column, matching the inbox and other full-container screens.
+- **Scheduled-job sessions hidden from the all-sessions feed.** The feed no longer lists the throwaway sessions a scheduled job spawns on each run; reach them from the job's run detail instead. Filtering is by the run's recorded session id, so it catches job sessions regardless of name.
+- **Job form clarity.** The job edit form renames "Active" to "Enabled", moves the toggle to the top with a paused hint, and shows a Running indicator when a job is triggered manually.
+- **Provider env template no longer seeds `CLAUDE_CODE_EFFORT_LEVEL`.** The add/edit provider screen used to pre-fill this variable, which forces a `reasoning_effort` some providers reject (it broke subagent spawns on, for example, a Deepseek-backed provider). New providers start without it; see `docs/providers.md` for the subagent/effort-level interaction.
 - **Run history polish.** A job's run-history list now uses uniform-width status pills (Success/Failed/Timeout/Running), and shows durations over a minute as `Xm Ys` instead of raw seconds.
 
 ### Removed
 - **Standalone `/files` and `/changes` pages.** These full-page viewers predated the tabbed session view and had no reachable entry point left in the UI. File and changes viewing now happens entirely in session tabs. Bookmarked `/files?…` or `/changes?…` URLs no longer resolve.
 
 ### Fixed
+- **Notifications dropped intermittently.** A push (ntfy or Telegram) was a single fire-and-forget request with no timeout, so one hung socket, rate-limit, or network blip silently dropped the alert even though the inbox entry had already persisted. Delivery now retries transient failures (network errors, timeouts, 429, 5xx) up to three times with a per-attempt timeout, and fails fast on configuration errors. Applies to both ntfy and Telegram.
+- **Custom-provider model ID reaching the CLI with a provider prefix.** A custom-provider session could spawn with a qualified id like `<provider-id>:openai/gpt-oss-20b` passed to `--model`, which the CLI rejected. The root cause was cockpit's two module graphs (the custom server and the Next.js API routes) each caching `providers.json` independently, so a provider saved through one was invisible to the other until a restart. The cache now reloads when the file changes on disk.
+- **Legacy custom-provider models.** Models saved with an older bracketed suffix (for example `[1m]`) are now read and resolved cleanly instead of being passed through verbatim.
+- **Session-settings provider dropdown.** The provider picker in the in-chat session settings now resolves to the session's current provider instead of defaulting to the first one.
+- **PTY initial prompt occasionally lost.** When the `UserPromptSubmit` hook didn't arrive, a scheduled job's (or session's) first prompt could silently never run. Cockpit now confirms delivery against the transcript and resends on a miss.
+- **Stray "hi" sessions.** The CLI init probe no longer leaves throwaway "hi" sessions behind in the list.
+- **node-pty process leak on job completion.** Each job completion now destroys its session, so PTY-backed job runs no longer accumulate leaked processes.
+- **Transcript file-descriptor leak.** Transcript read streams are now closed after use.
 - **Slash-command handling in PTY sessions.** CLI-only commands no longer hang the session on "processing" or open a panel cockpit can't render. Interactive dialogs (`/config`, `/mcp`, `/agents`, …) and local actions (`/usage`, `/release-notes`, …) are blocked with a short explanation; model-invoking commands (`/review`, custom skills) still pass through and `/compact` is forwarded as before. The old hand-maintained blocklist was stale (listed commands that no longer exist), incomplete (missed real ones), and ignored aliases. Routing is now driven by a classification generated from the installed CLI binary (`scripts/gen-cli-commands.mjs`), so it covers aliases — `/rc`, `/bg`, `/stats` route like their canonical command — and regenerates with one command after a CLI upgrade.
 - **Context gauge wiped to 0 on Stop or a killed turn.** Interrupting a turn (or one ending before any response) writes an assistant message with an all-zero usage block; the gauge took that verbatim and dropped to 0 until the next turn. Zero-usage readings from cancelled turns are now ignored, so the gauge holds the last real value.
 - **1M context window silently forced to 200K.** If `CLAUDE_CODE_DISABLE_1M_CONTEXT` was present in cockpit's own environment (for example exported in the shell that launched it), selecting 1M had no effect — the 200K spawn path set the override but the 1M path never cleared an inherited one, so every CLI ran at 200K regardless of the per-session pick. Both spawn paths now make the session's context-size choice authoritative: 200K sets the flag, 1M removes it.
@@ -26,6 +44,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Mobile terminal shortcut bar.** The Esc/Ctrl/Tab/arrow-key bar above the soft keyboard in the in-session terminal had stopped appearing. Keyboard-open detection compared the visual viewport against the live layout viewport, but the app's `resizes-content` viewport shrinks both together, so the ratio never tripped. Detection now measures against the tallest height seen.
 - **File links open in a tab.** The "Open in editor" link on a diff or changes panel now opens the file in a session tab, matching file links in tool cards and the file tree.
 - **Empty red pill on the Jobs page.** A directory's failed-job count rendered as an empty red pill — the `destructive-foreground` theme token was set to the same red as its background, so the "N failed" text was invisible. The token is fixed and the badge now uses the shared destructive `Badge` component.
+- **`--resume` after a restart or model change.** Resolves the conversation to resume from the on-disk transcript, so the first message after a restart or model switch attaches to the right session.
+- **Terminal scrollback on detach.** Corrected the detach-offset trim math and scoped the detach to the closing socket, so one client disconnecting no longer truncates another's scrollback.
+- **Clearing job duration and retention fields.** The max-duration and retention number fields can be cleared while editing without snapping back to 0.
+- **Pasted text in queued messages.** A queued message that flushes now shows pasted text as a chip instead of expanding to the full pasted file content.
+- **Misc layout.** Job card title spans the full width; settings version cards keep their height while loading (no jump); the all-sessions header shows only the usage icon; tool-card messages fill the column width; the new-session dialog keeps its action button visible on small viewports; run-detail action buttons wrap on mobile instead of overflowing; plugin card names stay readable on narrow screens; and clicking a file path in a tool card no longer nests a button inside a button.
+
+### Internal
+- **Linear issue pipeline.** A refine → implement → accept workflow lives in `.claude/skills`, with adversarial reviewer agents (plan, code, ui, completeness) in `.claude/agents`. The implement and accept stages run functional verification against a live test server and gate on CI.
+- **Repo skills.** A `browser-test` skill (isolated dev server plus Playwright for UI checks) and a `/regen-cli-commands` skill that regenerates the PTY slash-command classification from the installed CLI.
+- **In-process cockpit-config MCP server.** Converted from a stdio child process to an in-process HTTP server.
+- **Debugging.** Debug-gated tracing across the job-run and PTY spawn lifecycle, and TUI screen snapshots around initial-prompt delivery.
+- **Dev correctness.** The shell-cache service worker is disabled in development so source changes show up without a hard reload, and `@pierre/diffs` is pinned to 1.2.2 (1.2.9 pulled an unpublished transitive dependency).
+- **Tests.** Broad additions across the assistant, cockpit-config server, fuzzy search, job display, providers, notifications, session manager, and transcript paths, plus replacing fixed-sleep races with `vi.waitFor`.
 
 ## [0.3.1] - 2026-05-30
 
