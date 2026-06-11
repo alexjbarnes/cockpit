@@ -286,6 +286,73 @@ describe("dispatchNotification", () => {
     fetchSpy.mockRestore();
     consoleSpy.mockRestore();
   });
+
+  it("retries a transient network failure and then delivers", async () => {
+    mockSettings.providers = [
+      { id: "ntfy-1", type: "ntfy", enabled: true, name: "Ntfy", config: { serverUrl: "https://ntfy.sh", topic: "test" } },
+    ];
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockRejectedValueOnce(new Error("socket hang up")).mockResolvedValue(new Response("ok"));
+    const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { dispatchNotification } = await import("@/server/notifications");
+
+    dispatchNotification({ title: "Test", body: "body", priority: "info", source: "inbox" });
+
+    await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(2));
+    expect(consoleSpy).not.toHaveBeenCalled();
+    fetchSpy.mockRestore();
+    consoleSpy.mockRestore();
+  });
+
+  it("retries a 429 then delivers", async () => {
+    mockSettings.providers = [
+      { id: "ntfy-1", type: "ntfy", enabled: true, name: "Ntfy", config: { serverUrl: "https://ntfy.sh", topic: "test" } },
+    ];
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response("rate limited", { status: 429 }))
+      .mockResolvedValue(new Response("ok"));
+    const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { dispatchNotification } = await import("@/server/notifications");
+
+    dispatchNotification({ title: "Test", body: "body", priority: "info", source: "inbox" });
+
+    await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(2));
+    expect(consoleSpy).not.toHaveBeenCalled();
+    fetchSpy.mockRestore();
+    consoleSpy.mockRestore();
+  });
+
+  it("does not retry a 4xx config error", async () => {
+    mockSettings.providers = [
+      { id: "ntfy-1", type: "ntfy", enabled: true, name: "Ntfy", config: { serverUrl: "https://ntfy.sh", topic: "test" } },
+    ];
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("Forbidden", { status: 403 }));
+    const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { dispatchNotification } = await import("@/server/notifications");
+
+    dispatchNotification({ title: "Test", body: "body", priority: "info", source: "inbox" });
+
+    await vi.waitFor(() => expect(consoleSpy).toHaveBeenCalled());
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    fetchSpy.mockRestore();
+    consoleSpy.mockRestore();
+  });
+
+  it("gives up after the retry cap on persistent failure", async () => {
+    mockSettings.providers = [
+      { id: "ntfy-1", type: "ntfy", enabled: true, name: "Ntfy", config: { serverUrl: "https://ntfy.sh", topic: "test" } },
+    ];
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("ECONNRESET"));
+    const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { dispatchNotification } = await import("@/server/notifications");
+
+    dispatchNotification({ title: "Test", body: "body", priority: "info", source: "inbox" });
+
+    await vi.waitFor(() => expect(consoleSpy).toHaveBeenCalled());
+    expect(fetchSpy).toHaveBeenCalledTimes(3);
+    fetchSpy.mockRestore();
+    consoleSpy.mockRestore();
+  });
 });
 
 describe("sendTestNotification", () => {
