@@ -55,11 +55,12 @@ function setupTerminalWebSocket(terminalWss: WebSocketServer, terminalManager: T
     const wantsReplay = url.searchParams.get("replay") !== "0";
     console.log(`[terminal-ws] connected: ${terminalId.slice(0, 8)} replay=${wantsReplay}`);
 
-    terminalManager.attachClient(terminalId, (data) => {
+    const sendFn = (data: string) => {
       if (ws.readyState === WebSocket.OPEN) {
         ws.send(data);
       }
-    });
+    };
+    terminalManager.attachClient(terminalId, sendFn);
 
     if (!wantsReplay) {
       const delta = terminalManager.getDelta(terminalId);
@@ -94,7 +95,7 @@ function setupTerminalWebSocket(terminalWss: WebSocketServer, terminalManager: T
 
     ws.on("close", () => {
       console.log(`[terminal-ws] disconnected: ${terminalId.slice(0, 8)}`);
-      terminalManager.detachClient(terminalId);
+      terminalManager.detachClient(terminalId, sendFn);
     });
   });
 }
@@ -395,6 +396,9 @@ export function createWebSocketHandler(
                 if (req.planFilePath) {
                   permMsg.planFilePath = req.planFilePath;
                   permMsg.planContent = req.planContent;
+                }
+                if (req.configProposal) {
+                  permMsg.configProposal = req.configProposal;
                 }
                 send(ws, permMsg);
               }
@@ -997,10 +1001,13 @@ function handleParsedEvent(ws: WebSocket, sessionId: string, event: ParsedEvent,
       break;
 
     case "permission_request": {
-      // Auto-allow and pending storage are handled in session-manager
-      // before this event reaches us. If we get here, it needs user input.
-      const toolName = event.toolName || "";
       const requestId = event.requestId || "";
+      // auto_approve / auto_deny / cockpit-denied requests are resolved
+      // synchronously in applyProcessedResult before this event is emitted,
+      // which deletes their pendingRequests entry. Forward a prompt only for
+      // a request the server is still waiting on.
+      if (!sessionManager.getPendingRequest(sessionId, requestId)) break;
+      const toolName = event.toolName || "";
 
       if (toolName === "AskUserQuestion") {
         console.log(`[question-debug] live question:request for session ${sessionId.slice(0, 8)}, requestId=${requestId}`);
@@ -1025,6 +1032,10 @@ function handleParsedEvent(ws: WebSocket, sessionId: string, event: ParsedEvent,
             permMsg.planFilePath = planPath;
             permMsg.planContent = readPlanFile(planPath);
           }
+        }
+        const pending = sessionManager.getPendingRequest(sessionId, requestId);
+        if (pending?.configProposal) {
+          permMsg.configProposal = pending.configProposal;
         }
         send(ws, permMsg);
       }

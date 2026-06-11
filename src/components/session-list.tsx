@@ -261,7 +261,7 @@ export function SessionList() {
   const otherGroups = groups.filter((g) => !favorites.has(g.cwd));
 
   return (
-    <div className="mx-auto max-w-lg p-4 pb-24 space-y-3">
+    <div className="p-4 pb-24 space-y-3">
       <h1 className="text-2xl font-bold">Sessions</h1>
       <GlobalSearchButton />
 

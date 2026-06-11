@@ -42,3 +42,11 @@ Custom providers are stored in `~/.cockpit/providers.json`. The built-in Anthrop
 - Context size drives the CLI's 1M-context switch: choosing 200K sets `CLAUDE_CODE_DISABLE_1M_CONTEXT` for that spawn.
 - A context-size change takes effect on the next CLI start, because the switch is applied at spawn time. Cockpit restarts the process for you when the size changes.
 - The context gauge denominator reflects the size you picked, not what the API reports.
+
+## Subagents and effort levels
+
+When a session spawns a subagent via the Agent tool, the subagent inherits the provider's environment variables. This means any `CLAUDE_CODE_EFFORT_LEVEL` you put in a provider's env vars applies to subagents too, not just the main session.
+
+That causes a conflict if a subagent disables thinking (for example, the Explore agent type) while `CLAUDE_CODE_EFFORT_LEVEL=max` is also in the environment. The provider endpoint receives both `reasoning_effort=max` and `thinking.type=disabled` in the same request, which is invalid and returns a 400 error. The session then terminates without completing.
+
+**Do not set `CLAUDE_CODE_EFFORT_LEVEL` in a provider's environment variables.** Use the job's Thinking Level setting instead. Cockpit passes the thinking level as a `--effort` CLI flag to the main session, which does not propagate to subagents. Subagents then use the model's default effort, which avoids the conflict.

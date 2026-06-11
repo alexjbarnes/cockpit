@@ -7,6 +7,7 @@ import {
   MODELS,
   recommendedEffort,
   resolveModel,
+  resolveProviderId,
   versionsForAlias,
 } from "@/lib/models";
 
@@ -287,5 +288,36 @@ describe("coerceEffort", () => {
 
   it("returns recommended for opus 4.6 when level not allowed", () => {
     expect(coerceEffort("xhigh", opus46)).toBe("high");
+  });
+});
+
+describe("resolveProviderId", () => {
+  const providers = [
+    { id: "anthropic", models: [{ modelId: "claude-sonnet-4-6" }] },
+    { id: "custom", models: [{ modelId: "some-model" }] },
+  ];
+
+  it("resolves prefixed model to custom provider", () => {
+    expect(resolveProviderId("custom:some-model", providers)).toBe("custom");
+  });
+
+  it("resolves prefixed model with suffix to custom provider", () => {
+    expect(resolveProviderId("custom:some-model[1m]", providers)).toBe("custom");
+  });
+
+  it("resolves bare anthropic model to anthropic", () => {
+    expect(resolveProviderId("claude-sonnet-4-6", providers)).toBe("anthropic");
+  });
+
+  it("falls back to anthropic for nonexistent model", () => {
+    expect(resolveProviderId("nonexistent", providers)).toBe("anthropic");
+  });
+
+  it("falls back to anthropic when providers is undefined", () => {
+    expect(resolveProviderId("custom:some-model", undefined)).toBe("anthropic");
+  });
+
+  it("falls back to anthropic when providers is empty array", () => {
+    expect(resolveProviderId("custom:some-model", [])).toBe("anthropic");
   });
 });

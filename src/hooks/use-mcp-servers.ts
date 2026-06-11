@@ -12,6 +12,15 @@ export interface McpServerInfo {
   url?: string;
 }
 
+export interface McpServerConfig {
+  type?: string;
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  url?: string;
+  headers?: Record<string, string>;
+}
+
 export function useMcpServers(cwd?: string) {
   const [servers, setServers] = useState<McpServerInfo[]>([]);
   const [loading, setLoading] = useState(true);
@@ -31,6 +40,25 @@ export function useMcpServers(cwd?: string) {
   useEffect(() => {
     refresh();
   }, [refresh]);
+
+  const getServer = useCallback(
+    async (
+      name: string,
+      scope: "user" | "project",
+      cwd?: string,
+    ): Promise<{ name: string; scope: string; config: McpServerConfig } | null> => {
+      const params = new URLSearchParams({ scope });
+      if (scope === "project" && cwd) params.set("cwd", cwd);
+      try {
+        const res = await fetch(`/api/mcp-servers/${encodeURIComponent(name)}?${params}`);
+        if (!res.ok) return null;
+        return res.json();
+      } catch {
+        return null;
+      }
+    },
+    [],
+  );
 
   const deleteServer = useCallback(
     async (name: string, scope: "user" | "project"): Promise<boolean> => {
@@ -53,5 +81,5 @@ export function useMcpServers(cwd?: string) {
     [cwd, refresh],
   );
 
-  return { servers, loading, refresh, deleteServer };
+  return { servers, loading, refresh, getServer, deleteServer };
 }

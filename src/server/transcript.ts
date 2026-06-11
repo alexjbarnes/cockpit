@@ -3,6 +3,7 @@ import { open, readdir, readFile, stat, unlink, writeFile } from "node:fs/promis
 import path from "node:path";
 import { createInterface } from "node:readline";
 import { v4 as uuidv4 } from "uuid";
+import { extractTextFiles } from "@/lib/paste-detect";
 import { getClaudeDir } from "@/server/paths";
 import type {
   ChatMessage,
@@ -12,7 +13,6 @@ import type {
   ImageAttachment,
   SessionGroup,
   SessionInfo,
-  TextFileAttachment,
   ToolUse,
 } from "@/types";
 import { debugLog } from "./debug-logger";
@@ -93,20 +93,6 @@ export function countTranscriptMessages(sessionId: string, cwd: string): number 
 
 const CLI_XML_RE =
   /<(?:task-notification|local-command-caveat|local-command-stdout|system-reminder)[^>]*>[\s\S]*?<\/(?:task-notification|local-command-caveat|local-command-stdout|system-reminder)>[\s\S]*/g;
-
-const FILE_TAG_RE = /<file\s+path="([^"]+)">\n([\s\S]*?)\n<\/file>/g;
-
-function extractTextFiles(text: string): { cleaned: string; textFiles: TextFileAttachment[] } {
-  const textFiles: TextFileAttachment[] = [];
-  const cleaned = text
-    .replace(FILE_TAG_RE, (_match, name: string, content: string) => {
-      textFiles.push({ name, content });
-      return "";
-    })
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
-  return { cleaned, textFiles };
-}
 
 function stripCommandXml(text: string): string {
   const trimmed = text.trimStart();
@@ -263,11 +249,19 @@ export async function loadLastUsage(sessionId: string, cwd: string): Promise<{ u
   for (let i = lines.length - 1; i >= 0; i--) {
     try {
       const entry = JSON.parse(lines[i]);
+      // Stop at a compaction boundary: anything before it predates the live
+      // window. Reaching it without an assistant turn means there is no
+      // post-compaction usage yet, so leave lastUsage null.
+      if (entry.type === "system" && entry.subtype === "compact_boundary") break;
       if (entry.type === "assistant" && entry.message?.usage) {
         const u = entry.message.usage;
         const used = (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.cache_read_input_tokens || 0);
-        lastUsage = { used, total: contextWindowSize };
-        break;
+        // Skip all-zero usage from an interrupted/cancelled turn; keep scanning
+        // back for the last real reading rather than reporting 0.
+        if (used > 0) {
+          lastUsage = { used, total: contextWindowSize };
+          break;
+        }
       }
     } catch {}
   }
@@ -279,6 +273,14 @@ export interface TranscriptResult {
   byteOffset: number;
   totalSize: number;
   lastUsage: { used: number; total: number } | null;
+}
+
+// CLI local commands (e.g. /context) emit ANSI-colored output. Strip escape
+// sequences so the transcript renders clean text instead of raw codes.
+// biome-ignore lint/suspicious/noControlCharactersInRegex: strip ANSI escape sequences
+const ANSI_RE = /\x1b\[[0-9;]*[a-zA-Z]/g;
+function stripAnsi(s: string): string {
+  return s.replace(ANSI_RE, "");
 }
 
 function parseLines(lines: string[]): { messages: ChatMessage[]; lastUsage: { used: number; total: number } | null } {
@@ -314,7 +316,10 @@ function parseLines(lines: string[]): { messages: ChatMessage[]; lastUsage: { us
       const usage = (entry.message as Record<string, unknown>).usage as Record<string, number> | undefined;
       if (usage) {
         const used = (usage.input_tokens || 0) + (usage.cache_creation_input_tokens || 0) + (usage.cache_read_input_tokens || 0);
-        lastUsage = { used, total: contextWindowSize };
+        // Ignore all-zero usage: an interrupted/cancelled turn (Stop, killed
+        // process) writes an assistant message with a zeroed usage block that is
+        // not a real context reading and would otherwise wipe the gauge to 0.
+        if (used > 0) lastUsage = { used, total: contextWindowSize };
       }
     }
 
@@ -362,7 +367,7 @@ function parseLines(lines: string[]): { messages: ChatMessage[]; lastUsage: { us
     if (entry.type === "system" && entry.subtype === "local_command" && entry.content) {
       const rawContent = entry.content as string;
       const match = rawContent.match(/<local-command-stdout>([\s\S]*?)<\/local-command-stdout>/);
-      const text = match ? match[1].trim() : rawContent;
+      const text = stripAnsi(match ? match[1].trim() : rawContent);
       if (text) {
         messages.push({
           id: entry.uuid || uuidv4(),
@@ -377,6 +382,12 @@ function parseLines(lines: string[]): { messages: ChatMessage[]; lastUsage: { us
     }
 
     if (entry.type === "system" && entry.subtype === "compact_boundary") {
+      // Compaction discards prior context, so usage from messages before this
+      // boundary no longer reflects the live window. Reset so lastUsage tracks
+      // only post-compaction turns (null until the next assistant message),
+      // otherwise the PTY transcript watcher re-emits the stale pre-compaction
+      // total and clobbers the post-compact estimate.
+      lastUsage = null;
       messages.push({
         id: "compact-" + uuidv4(),
         role: "system",
@@ -692,15 +703,14 @@ async function extractSessionMeta(filePath: string): Promise<SessionMeta | null>
   let cwd = "";
   let title = "";
   let createdAt = 0;
+  let stream: ReturnType<typeof createReadStream> | null = null;
 
   try {
     const fileStat = await stat(filePath);
     const lastActiveAt = fileStat.mtimeMs;
 
-    const rl = createInterface({
-      input: createReadStream(filePath, { encoding: "utf-8" }),
-      crlfDelay: Infinity,
-    });
+    stream = createReadStream(filePath, { encoding: "utf-8" });
+    const rl = createInterface({ input: stream, crlfDelay: Infinity });
 
     let linesRead = 0;
     for await (const line of rl) {
@@ -753,6 +763,8 @@ async function extractSessionMeta(filePath: string): Promise<SessionMeta | null>
     };
   } catch {
     return null;
+  } finally {
+    stream?.destroy();
   }
 }
 

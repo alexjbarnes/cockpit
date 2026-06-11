@@ -47,11 +47,10 @@ async function readClaudeMdFile(scope: Scope, cwd?: string): Promise<ClaudeMdFil
 }
 
 async function extractCwdFromJsonl(filePath: string): Promise<string | null> {
+  let stream: ReturnType<typeof createReadStream> | null = null;
   try {
-    const rl = createInterface({
-      input: createReadStream(filePath, { encoding: "utf-8" }),
-      crlfDelay: Infinity,
-    });
+    stream = createReadStream(filePath, { encoding: "utf-8" });
+    const rl = createInterface({ input: stream, crlfDelay: Infinity });
 
     let linesRead = 0;
     for await (const line of rl) {
@@ -60,14 +59,14 @@ async function extractCwdFromJsonl(filePath: string): Promise<string | null> {
       try {
         const entry = JSON.parse(line);
         if (entry.type === "user" && entry.cwd) {
-          rl.close();
           return entry.cwd;
         }
       } catch {}
     }
-    rl.close();
   } catch {
     // ignore
+  } finally {
+    stream?.destroy();
   }
   return null;
 }

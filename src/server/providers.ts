@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { v4 as uuidv4 } from "uuid";
 import { toProviderModels } from "@/lib/models";
@@ -31,6 +31,21 @@ function buildAnthropicProvider(): Provider {
 }
 
 let cache: Provider[] | null = null;
+// mtime of providers.json at the last load. Cockpit runs as two separate module
+// graphs — the custom server (dist/, which spawns sessions) and the Next.js API
+// routes (settings CRUD) — so a provider added/edited via settings only resets
+// that graph's `cache`, never the spawner's, leaving new sessions on a stale list
+// until restart. Gating the cache on the file mtime makes either graph (and a
+// hand-edit of the file) reload when the file changes.
+let cacheMtimeMs = 0;
+
+function providersMtimeMs(): number {
+  try {
+    return statSync(providersFile()).mtimeMs;
+  } catch {
+    return 0; // file absent — no custom providers yet
+  }
+}
 
 function loadCustom(): Provider[] {
   try {
@@ -50,8 +65,10 @@ function saveCustom(providers: Provider[]): void {
 }
 
 export function getProviders(): Provider[] {
-  if (!cache) {
+  const mtime = providersMtimeMs();
+  if (cache === null || mtime !== cacheMtimeMs) {
     cache = [buildAnthropicProvider(), ...loadCustom()];
+    cacheMtimeMs = mtime;
   }
   return cache;
 }
@@ -68,6 +85,7 @@ export function addProvider(provider: Omit<Provider, "id">): Provider {
   custom.push(newProvider);
   saveCustom(custom);
   cache = [buildAnthropicProvider(), ...custom];
+  cacheMtimeMs = providersMtimeMs();
   return newProvider;
 }
 
@@ -82,6 +100,7 @@ export function updateProvider(id: string, partial: Partial<Provider>): Provider
   custom[idx] = merged;
   saveCustom(custom);
   cache = [buildAnthropicProvider(), ...custom];
+  cacheMtimeMs = providersMtimeMs();
   return custom[idx];
 }
 
@@ -94,6 +113,7 @@ export function deleteProvider(id: string): void {
   }
   saveCustom(custom);
   cache = [buildAnthropicProvider(), ...custom];
+  cacheMtimeMs = providersMtimeMs();
 }
 
 export function setProviders(providers: Provider[]): void {
@@ -101,6 +121,7 @@ export function setProviders(providers: Provider[]): void {
   for (const p of custom) validateProvider(p);
   saveCustom(custom);
   cache = [buildAnthropicProvider(), ...custom];
+  cacheMtimeMs = providersMtimeMs();
 }
 
 export function resolveProviderModel(modelId: string): { provider: Provider; model: ProviderModel } | null {
@@ -109,7 +130,9 @@ export function resolveProviderModel(modelId: string): { provider: Provider; mod
   const colon = modelId.indexOf(":");
   if (colon > 0) {
     const providerId = modelId.slice(0, colon);
-    const bareModel = modelId.slice(colon + 1);
+    // Strip a legacy context suffix (e.g. "deepseek-v4-pro[1m]") so a job whose
+    // stored model still carries one resolves to the cleaned provider model.
+    const bareModel = modelId.slice(colon + 1).replace(/\[.*\]$/, "");
     const provider = getProvider(providerId);
     if (provider) {
       const model = provider.models.find((m) => m.modelId === bareModel);

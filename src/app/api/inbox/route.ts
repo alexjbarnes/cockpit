@@ -28,7 +28,7 @@ export function POST(req: NextRequest) {
   return req.json().then((body) => {
     const action = body.action;
     if (action === "mark_all_read") {
-      markAllRead();
+      markAllRead(body.read !== false);
       return NextResponse.json({ ok: true });
     }
     if (action === "clear") {

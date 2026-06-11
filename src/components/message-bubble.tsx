@@ -44,6 +44,11 @@ export const MessageBubble = memo(function MessageBubble({
   const hiddenTools = new Set(["AskUserQuestion", "TodoWrite"]);
   const visibleBlocks = message.blocks?.filter((b) => !(b.type === "tool_use" && hiddenTools.has(b.toolUse.name))) || [];
   const hasBlocks = visibleBlocks.length > 0;
+  // Tool cards (esp. expanded diffs) use overflow-x-auto, which doesn't push a
+  // shrink-to-fit bubble wider — so a tool-only message collapses to the width
+  // of its short header and the diff renders unreadably narrow. Fill the column
+  // (capped by max-w) for assistant messages that carry tool cards.
+  const hasToolCard = visibleBlocks.some((b) => b.type === "tool_use") || message.toolUses.some((t) => !hiddenTools.has(t.name));
 
   const lastInputWasTouch = useRef(false);
   const lastTap = useRef<{ time: number; x: number; y: number } | null>(null);
@@ -167,7 +172,8 @@ export const MessageBubble = memo(function MessageBubble({
     >
       <div
         className={cn(
-          "max-w-[85%] rounded-lg px-4 py-2 overflow-hidden transition-colors",
+          "max-w-[85%] rounded-lg px-4 py-2 overflow-hidden transition-colors select-text",
+          !isUser && hasToolCard && "w-full",
           isUser && !collapsedByDefault ? "bg-primary text-primary-foreground" : "bg-muted text-foreground",
           selected && "ring-2 ring-blue-500",
         )}

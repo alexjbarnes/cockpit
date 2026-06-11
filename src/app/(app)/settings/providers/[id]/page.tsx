@@ -69,7 +69,7 @@ export default function EditProviderPage() {
         <ArrowLeft className="h-4 w-4 mr-1" />
         Settings
       </Button>
-      <div className="max-w-xl flex-1 min-h-0">
+      <div className="flex-1 min-h-0">
         <ProviderForm
           provider={provider}
           isNew={false}
@@ -81,7 +81,6 @@ export default function EditProviderPage() {
             "ANTHROPIC_DEFAULT_SONNET_MODEL",
             "ANTHROPIC_DEFAULT_HAIKU_MODEL",
             "CLAUDE_CODE_SUBAGENT_MODEL",
-            "CLAUDE_CODE_EFFORT_LEVEL",
           ]}
           onSave={handleSave}
           onCancel={() => router.push("/settings")}

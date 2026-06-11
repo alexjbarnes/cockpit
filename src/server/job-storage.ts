@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { splitLegacyModel } from "@/lib/models";
 import { getCockpitDir } from "@/server/paths";
@@ -85,6 +85,35 @@ export function loadRuns(jobId: string): JobRun[] {
 
 export function getRun(jobId: string, runId: string): JobRun | undefined {
   return loadRuns(jobId).find((r) => r.id === runId);
+}
+
+/**
+ * Every session id recorded across all job runs. Used to hide scheduled-job
+ * sessions from the all-sessions feed: a job spawns a real CLI session whose
+ * transcript lands in the project dir like any other, so the run's recorded
+ * sessionId (which equals the transcript filename) is the only reliable join.
+ * A session reappears in the feed if its run record is pruned by retention.
+ */
+export function getJobSessionIds(): Set<string> {
+  const ids = new Set<string>();
+  let files: string[];
+  try {
+    files = readdirSync(runsDir());
+  } catch {
+    return ids; // no runs dir yet
+  }
+  for (const file of files) {
+    if (!file.endsWith(".json")) continue;
+    try {
+      const data = JSON.parse(readFileSync(join(runsDir(), file), "utf-8"));
+      for (const run of data.runs || []) {
+        if (run.sessionId) ids.add(run.sessionId);
+      }
+    } catch {
+      // skip unreadable/corrupt run files
+    }
+  }
+  return ids;
 }
 
 export function saveRun(run: JobRun): void {

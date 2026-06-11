@@ -1,3 +1,19 @@
+import type { TextFileAttachment } from "@/types";
+
+const FILE_TAG_RE = /<file\s+path="([^"]+)">\n([\s\S]*?)\n<\/file>/g;
+
+export function extractTextFiles(text: string): { cleaned: string; textFiles: TextFileAttachment[] } {
+  const textFiles: TextFileAttachment[] = [];
+  const cleaned = text
+    .replace(FILE_TAG_RE, (_match, name: string, content: string) => {
+      textFiles.push({ name, content });
+      return "";
+    })
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  return { cleaned, textFiles };
+}
+
 const MIN_LINES = 10;
 
 // Map Magika content type labels to file extensions for naming and syntax highlighting.

@@ -126,12 +126,13 @@ export function ProviderForm({ provider, isNew, onSave, onCancel, onDelete, lock
   };
 
   const addModel = () => {
-    if (newModelId.trim() && newModelContextSizes.length > 0) {
+    const cleanId = newModelId.trim().replace(/\[.*\]$/, "");
+    if (cleanId && newModelContextSizes.length > 0) {
       setModels([
         ...models,
         {
-          modelId: newModelId.trim(),
-          displayName: newModelName.trim() || newModelId.trim(),
+          modelId: cleanId,
+          displayName: newModelName.trim() || cleanId,
           effortLevels: newModelEffort,
           contextSizes: newModelContextSizes,
         },
@@ -146,12 +147,13 @@ export function ProviderForm({ provider, isNew, onSave, onCancel, onDelete, lock
   const saveEditingModel = () => {
     if (!editingModel) return;
     if (editingModel.contextSizes.length === 0) return;
+    const cleanId = editingModel.modelId.trim().replace(/\[.*\]$/, "");
     setModels(
       models.map((m, i) =>
         i === editingModel.index
           ? {
-              modelId: editingModel.modelId.trim(),
-              displayName: editingModel.displayName.trim() || editingModel.modelId.trim(),
+              modelId: cleanId,
+              displayName: editingModel.displayName.trim() || cleanId,
               effortLevels: editingModel.effortLevels,
               contextSizes: editingModel.contextSizes,
             }
@@ -330,8 +332,8 @@ export function ProviderForm({ provider, isNew, onSave, onCancel, onDelete, lock
                         index: i,
                         modelId: model.modelId,
                         displayName: model.displayName,
-                        effortLevels: model.effortLevels,
-                        contextSizes: model.contextSizes,
+                        effortLevels: model.effortLevels ?? [],
+                        contextSizes: model.contextSizes ?? ["200k"],
                       })
                     }
                     className="flex w-full items-center gap-2 sm:gap-3 rounded-lg border border-border px-3 sm:px-4 py-2.5 text-xs hover:bg-muted/50 transition-colors text-left"
@@ -344,7 +346,7 @@ export function ProviderForm({ provider, isNew, onSave, onCancel, onDelete, lock
                       {model.effortLevels.length > 0 && (
                         <span className="text-muted-foreground hidden sm:inline">{model.effortLevels.join(", ")}</span>
                       )}
-                      {model.contextSizes
+                      {(model.contextSizes ?? [])
                         .filter((s) => s !== "200k")
                         .map((s) => (
                           <span key={s} className="text-muted-foreground">

@@ -127,6 +127,8 @@ describe("JobScheduler", () => {
       expect(run.durationMs).toBeGreaterThanOrEqual(0);
       expect(vi.mocked(saveRun)).toHaveBeenCalled();
       expect(vi.mocked(releaseJobLock)).toHaveBeenCalledWith("job-1");
+      // One-shot job session must be torn down so its PTY claude doesn't linger.
+      expect(sm.destroySession).toHaveBeenCalledWith("session-1");
     });
 
     it("sets model and thinking level when job specifies them", async () => {
@@ -150,6 +152,8 @@ describe("JobScheduler", () => {
       expect(run.status).toBe("failure");
       expect(run.error).toBe("CLI crashed");
       expect(vi.mocked(addInboxMessage)).toHaveBeenCalled();
+      // Failed runs must also tear the session down, or the half-spawned PTY leaks.
+      expect(sm.destroySession).toHaveBeenCalledWith("session-1");
     });
 
     it("marks run as timeout when max duration exceeded", async () => {
@@ -310,6 +314,59 @@ describe("JobScheduler", () => {
       sm.emitStatus("idle");
       const run = await promise;
       expect(run.status).toBe("success");
+    });
+  });
+
+  describe("stopJob", () => {
+    it("stops a running job, sets status stopped, releases lock, resolves promise", async () => {
+      const job = makeJob();
+      const promise = scheduler.executeJob(job);
+      await vi.waitFor(() => expect(sm.sendMessage).toHaveBeenCalled());
+
+      expect(scheduler.getRunningJobs().has("job-1")).toBe(true);
+
+      const run = scheduler.stopJob("job-1");
+      expect(run.status).toBe("stopped");
+      expect(run.error).toBe("Stopped by user");
+      expect(run.completedAt).toBeDefined();
+      expect(run.durationMs).toBeGreaterThanOrEqual(0);
+      expect(sm.destroySession).toHaveBeenCalledWith("session-1");
+      expect(vi.mocked(saveRun)).toHaveBeenCalledWith(expect.objectContaining({ id: run.id, status: "stopped" }));
+      expect(vi.mocked(addInboxMessage)).toHaveBeenCalledWith(expect.objectContaining({ title: "Job stopped: job-1", priority: "info" }));
+      expect(vi.mocked(releaseJobLock)).toHaveBeenCalledWith("job-1");
+      expect(scheduler.getRunningJobs().has("job-1")).toBe(false);
+
+      // executeJob Promise must resolve (no hang)
+      const resolvedRun = await promise;
+      expect(resolvedRun.status).toBe("stopped");
+    });
+
+    it("throws when job is not running", () => {
+      expect(() => scheduler.stopJob("nonexistent")).toThrow("Job is not currently running");
+    });
+
+    it("throws when job has completedAt already set (timeout fired)", async () => {
+      const job = makeJob({ maxDurationMinutes: 0.001 });
+      const promise = scheduler.executeJob(job);
+      // Wait for the watchdog timeout to fire naturally
+      const run = await promise;
+      expect(run.status).toBe("timeout");
+      expect(run.completedAt).toBeDefined();
+
+      // Now try to stop the already-completed job
+      // The run is no longer in runningJobs (cleanup removed it)
+      expect(() => scheduler.stopJob("job-1")).toThrow("Job is not currently running");
+    });
+
+    it("double-stop throws (job removed from runningJobs)", async () => {
+      const job = makeJob();
+      const promise = scheduler.executeJob(job);
+      await vi.waitFor(() => expect(sm.sendMessage).toHaveBeenCalled());
+
+      scheduler.stopJob("job-1");
+      await promise;
+
+      expect(() => scheduler.stopJob("job-1")).toThrow("Job is not currently running");
     });
   });
 

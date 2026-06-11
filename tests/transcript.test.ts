@@ -205,6 +205,26 @@ describe("transcript module", () => {
       });
     });
 
+    it("strips ANSI escape codes from local_command output (e.g. forwarded /context)", async () => {
+      (existsSync as any).mockReturnValue(true);
+      const content = jsonl({
+        type: "system",
+        subtype: "local_command",
+        content:
+          "<local-command-stdout>\x1b[1mContext Usage\x1b[22m\n\x1b[38;5;141m342.4k/200k tokens (171%)\x1b[39m</local-command-stdout>",
+        timestamp: "2024-01-01T00:00:00Z",
+        uuid: "sys-ansi",
+      });
+      (readFile as any).mockResolvedValue(content);
+
+      const result = await loadTranscript("session-123", "/tmp");
+
+      expect(result.messages).toHaveLength(1);
+      expect(result.messages[0].content).toBe("Context Usage\n342.4k/200k tokens (171%)");
+      // biome-ignore lint/suspicious/noControlCharactersInRegex: asserting ANSI escapes are gone
+      expect(result.messages[0].content).not.toMatch(/\x1b/);
+    });
+
     it("strips CLI XML tags from text", async () => {
       (existsSync as any).mockReturnValue(true);
       const content = jsonl({
@@ -404,6 +424,86 @@ describe("transcript module", () => {
         used: 45, // 10 + 20 + 15
         total: 200000,
       });
+    });
+
+    it("resets lastUsage at a compact_boundary (no post-compaction turn yet)", async () => {
+      (existsSync as any).mockReturnValue(true);
+      const content = jsonl(
+        { type: "result", modelUsage: { "claude-3-5-sonnet": { contextWindow: 200000 } } },
+        {
+          type: "assistant",
+          message: { id: "a1", content: [{ type: "text", text: "pre-compaction" }], usage: { input_tokens: 150000 } },
+          timestamp: "2024-01-01T00:00:00Z",
+        },
+        { type: "system", subtype: "compact_boundary", uuid: "cb-1", timestamp: "2024-01-01T00:00:01Z" },
+        {
+          type: "user",
+          message: { id: null, content: "This session is being continued from a previous conversation" },
+          timestamp: "2024-01-01T00:00:02Z",
+          cwd: "/tmp",
+        },
+      );
+      (readFile as any).mockResolvedValue(content);
+
+      const result = await loadTranscript("session-123", "/tmp");
+
+      // The large pre-compaction usage must not leak past the boundary, otherwise
+      // the PTY transcript watcher re-emits it and clobbers the post-compact estimate.
+      expect(result.lastUsage).toBeNull();
+    });
+
+    it("reports post-compaction usage from the first assistant turn after the boundary", async () => {
+      (existsSync as any).mockReturnValue(true);
+      const content = jsonl(
+        { type: "result", modelUsage: { "claude-3-5-sonnet": { contextWindow: 200000 } } },
+        {
+          type: "assistant",
+          message: { id: "a1", content: [{ type: "text", text: "pre-compaction" }], usage: { input_tokens: 150000 } },
+          timestamp: "2024-01-01T00:00:00Z",
+        },
+        { type: "system", subtype: "compact_boundary", uuid: "cb-1", timestamp: "2024-01-01T00:00:01Z" },
+        {
+          type: "assistant",
+          message: { id: "a2", content: [{ type: "text", text: "post-compaction" }], usage: { input_tokens: 5000 } },
+          timestamp: "2024-01-01T00:00:02Z",
+        },
+      );
+      (readFile as any).mockResolvedValue(content);
+
+      const result = await loadTranscript("session-123", "/tmp");
+
+      expect(result.lastUsage).toEqual({ used: 5000, total: 200000 });
+    });
+
+    it("ignores all-zero usage from an interrupted turn (keeps the last real reading)", async () => {
+      (existsSync as any).mockReturnValue(true);
+      const content = jsonl(
+        { type: "result", modelUsage: { "claude-3-5-sonnet": { contextWindow: 200000 } } },
+        {
+          type: "assistant",
+          message: {
+            id: "a1",
+            content: [{ type: "text", text: "real turn" }],
+            usage: { input_tokens: 120000, cache_read_input_tokens: 5000 },
+          },
+          timestamp: "2024-01-01T00:00:00Z",
+        },
+        {
+          type: "assistant",
+          message: {
+            id: "a2",
+            content: [{ type: "text", text: "" }],
+            usage: { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
+          },
+          timestamp: "2024-01-01T00:00:01Z",
+        },
+      );
+      (readFile as any).mockResolvedValue(content);
+
+      const result = await loadTranscript("session-123", "/tmp");
+
+      // The cancelled turn's zeroed usage must not replace the 125k real reading.
+      expect(result.lastUsage).toEqual({ used: 125000, total: 200000 });
     });
 
     it("extracts documents (PDFs) from user content arrays", async () => {
@@ -999,6 +1099,50 @@ describe("transcript module", () => {
       const result = await loadLastUsage("session-123", "/tmp");
       expect(result).toEqual({ used: 50, total: 200000 });
     });
+
+    it("skips an all-zero usage block from an interrupted turn", async () => {
+      const { loadLastUsage } = await import("@/server/transcript");
+      (existsSync as any).mockReturnValue(true);
+      const content = jsonl(
+        { type: "assistant", message: { usage: { input_tokens: 90000, cache_read_input_tokens: 10000 } } },
+        {
+          type: "assistant",
+          message: { usage: { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 } },
+        },
+      );
+      (readFile as any).mockResolvedValue(content);
+
+      const result = await loadLastUsage("session-123", "/tmp");
+      expect(result).toEqual({ used: 100000, total: 200000 });
+    });
+
+    it("returns null when the most recent turn precedes a compaction boundary", async () => {
+      const { loadLastUsage } = await import("@/server/transcript");
+      (existsSync as any).mockReturnValue(true);
+      const content = jsonl(
+        { type: "assistant", message: { usage: { input_tokens: 150000 } } },
+        { type: "system", subtype: "compact_boundary", uuid: "cb-1" },
+        { type: "user", message: { content: "This session is being continued from a previous conversation" } },
+      );
+      (readFile as any).mockResolvedValue(content);
+
+      const result = await loadLastUsage("session-123", "/tmp");
+      expect(result).toBeNull();
+    });
+
+    it("ignores pre-compaction usage and reports the post-boundary turn", async () => {
+      const { loadLastUsage } = await import("@/server/transcript");
+      (existsSync as any).mockReturnValue(true);
+      const content = jsonl(
+        { type: "assistant", message: { usage: { input_tokens: 150000 } } },
+        { type: "system", subtype: "compact_boundary", uuid: "cb-1" },
+        { type: "assistant", message: { usage: { input_tokens: 5000 } } },
+      );
+      (readFile as any).mockResolvedValue(content);
+
+      const result = await loadLastUsage("session-123", "/tmp");
+      expect(result).toEqual({ used: 5000, total: 200000 });
+    });
   });
 
   describe("findSessionCwd", () => {
@@ -1049,10 +1193,45 @@ describe("transcript module", () => {
         close: vi.fn(),
       };
       (createInterface as any).mockReturnValue(mockRl);
-      (createReadStream as any).mockReturnValue({});
+      (createReadStream as any).mockReturnValue({ destroy: () => {} });
 
       const result = await findSessionCwd("session-123");
       expect(result).toBe("/home/user/my-project");
+    });
+
+    it("destroys the read stream after scanning a transcript (rl.close alone leaks the FD)", async () => {
+      const { findSessionCwd } = await import("@/server/transcript");
+      const { createReadStream } = await import("node:fs");
+      const { createInterface } = await import("node:readline");
+
+      (existsSync as any).mockReturnValue(true);
+      (readdir as any).mockResolvedValue(["project-a"]);
+      (stat as any).mockResolvedValue({ mtimeMs: 1000 });
+
+      const lines = [
+        JSON.stringify({ type: "user", cwd: "/home/user/my-project", message: { content: "hello" }, timestamp: "2024-01-01T00:00:00Z" }),
+      ];
+      let lineIndex = 0;
+      const mockRl = {
+        [Symbol.asyncIterator]: () => ({
+          next: () => {
+            if (lineIndex < lines.length) {
+              return Promise.resolve({ value: lines[lineIndex++], done: false });
+            }
+            return Promise.resolve({ value: undefined, done: true });
+          },
+        }),
+        close: vi.fn(),
+      };
+      (createInterface as any).mockReturnValue(mockRl);
+      const destroy = vi.fn();
+      (createReadStream as any).mockReturnValue({ destroy });
+
+      await findSessionCwd("session-123");
+
+      // extractSessionMeta breaks out of the read loop early; rl.close() does not
+      // release the underlying createReadStream FD, so it must destroy the stream.
+      expect(destroy).toHaveBeenCalled();
     });
 
     it("returns null when session file not found in any project dir", async () => {
@@ -1111,7 +1290,7 @@ describe("transcript module", () => {
         };
       };
 
-      (createReadStream as any).mockReturnValue({});
+      (createReadStream as any).mockReturnValue({ destroy: () => {} });
       (createInterface as any)
         .mockReturnValueOnce(makeRl("/tmp/project", "First session"))
         .mockReturnValueOnce(makeRl("/tmp/project", "Second session"));
@@ -1154,7 +1333,7 @@ describe("transcript module", () => {
         };
       };
 
-      (createReadStream as any).mockReturnValue({});
+      (createReadStream as any).mockReturnValue({ destroy: () => {} });
       (stat as any).mockResolvedValueOnce({ mtimeMs: 1000 }).mockResolvedValueOnce({ mtimeMs: 3000 });
       (createInterface as any).mockReturnValueOnce(makeRl("/tmp/old-project")).mockReturnValueOnce(makeRl("/tmp/new-project"));
 
@@ -1996,7 +2175,7 @@ describe("transcript module", () => {
         };
       };
 
-      (createReadStream as any).mockReturnValue({});
+      (createReadStream as any).mockReturnValue({ destroy: () => {} });
       (createInterface as any).mockReturnValueOnce(makeRl("/tmp/project")).mockReturnValueOnce(makeRl("/other/dir"));
 
       const result = await scanSessionsForCwd("/tmp/project");
@@ -2030,7 +2209,7 @@ describe("transcript module", () => {
         };
       };
 
-      (createReadStream as any).mockReturnValue({});
+      (createReadStream as any).mockReturnValue({ destroy: () => {} });
       (createInterface as any).mockReturnValueOnce(makeRl("/tmp/project"));
 
       const result = await scanSessionsForCwd("/tmp/project");
@@ -2079,7 +2258,7 @@ describe("transcript module", () => {
         };
       };
 
-      (createReadStream as any).mockReturnValue({});
+      (createReadStream as any).mockReturnValue({ destroy: () => {} });
       (createInterface as any).mockReturnValueOnce(makeRl("/tmp/a")).mockReturnValueOnce(makeRl("/tmp/b"));
 
       const result = await scanSessionsByIds(["sess-1"]);

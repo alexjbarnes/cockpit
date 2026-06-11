@@ -1,9 +1,12 @@
-import { type ChildProcess, execFileSync, spawn } from "node:child_process";
+import { type ChildProcess, spawn } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { type Writable } from "node:stream";
 import { v4 as uuidv4 } from "uuid";
+import { classifyCliCommand } from "@/lib/cli-commands";
 import {
   allowedEffortLevels,
   CONTEXT_SIZES,
@@ -14,6 +17,8 @@ import {
   recommendedEffort,
   resolveModel,
 } from "@/lib/models";
+import { getAssistantSettings, updateAssistantSettings } from "@/server/assistant-settings";
+import { getClaudeBin } from "@/server/claude-bin";
 import { getCockpitCacheDir, getCockpitDir } from "@/server/paths";
 import { resolveProviderModel } from "@/server/providers";
 import type {
@@ -32,10 +37,13 @@ import type {
 import { debugLog, isDebugEnabled, logDiag, logRawLine } from "./debug-logger";
 import { getDefaults } from "./defaults";
 import { EventParser, type ParsedEvent } from "./event-parser";
+import { getJob } from "./job-storage";
+import { COCKPIT_AGENT_SYSTEM_PROMPT } from "./mcp/cockpit-agent-prompt";
+import { clearToken, type RunContext, registerAuthToken, registerRunContext } from "./mcp/run-context";
 import { findLatestPlanFile, readPlanFile } from "./plans";
 import { PtyRuntime } from "./pty-runtime";
 import { findChainForCliSession, getSessionPrefs, type SessionRuntime, setSessionPrefs } from "./session-prefs";
-import { getHookRouter } from "./singleton";
+import { getCockpitMcp, getHookRouter } from "./singleton";
 import { createStreamState, processEvents, type StreamState } from "./stream-processor";
 import { TodoWatcher } from "./todo-watcher";
 import { findSessionCwd, loadMoreMessages, loadPromptHistory, loadTranscript, transcriptExists } from "./transcript";
@@ -45,18 +53,6 @@ export type { SessionRuntime };
 
 function defaultRuntime(): SessionRuntime {
   return "stream";
-}
-
-let resolvedClaudeBin: string | null = null;
-function getClaudeBin(): string {
-  if (resolvedClaudeBin) return resolvedClaudeBin;
-  const cmd = process.platform === "win32" ? "where" : "which";
-  try {
-    resolvedClaudeBin = execFileSync(cmd, ["claude"], { encoding: "utf-8" }).trim().split("\n")[0];
-  } catch {
-    resolvedClaudeBin = "claude";
-  }
-  return resolvedClaudeBin;
 }
 
 const smLog = (sessionId: string, msg: string) => {
@@ -82,6 +78,7 @@ export interface PendingRequest {
   permissionSuggestions?: Record<string, unknown>[];
   planFilePath?: string;
   planContent?: string;
+  configProposal?: { toolName: string; domain: string; action: string; displayName?: string };
 }
 
 export interface StreamingSnapshot {
@@ -103,7 +100,6 @@ interface Session {
   process: ChildProcess | null;
   stdin: Writable | null;
   emitter: EventEmitter;
-  hasSpawnedBefore: boolean;
   cliSessionId: string;
   previousCliSessionIds: string[];
   bypassAllPermissions: boolean;
@@ -135,6 +131,17 @@ interface Session {
    *  creation time; future revisions may expose this on SessionInfo. */
   runtime: SessionRuntime;
   ptyRuntime: PtyRuntime | null;
+  cockpitAgent: boolean;
+  cockpitAgentCleanups: (() => void)[];
+  mcpToken?: string;
+  runContext?: RunContext;
+  /** True while a PTY spawn is in flight: set immediately before the async
+   *  PtyRuntime.start() and cleared when it resolves, rejects, or the PTY exits.
+   *  Gates ensureProcess so a reconnect or startup race cannot spawn a duplicate
+   *  PTY during the start() window (the runtime is assigned but its isAlive is
+   *  still false). Also read by the stale-check log to tell "process died" from
+   *  "still spawning". */
+  spawning?: boolean;
   transcriptWatcher: TranscriptWatcher | null;
   todoWatcher: TodoWatcher | null;
   attachmentPaths: string[];
@@ -142,8 +149,26 @@ interface Session {
   totalTokens: { input: number; output: number; cacheCreate: number; cacheRead: number };
 }
 
+export function buildMcpConfigArg(url: string, token: string): { path: string } {
+  const dir = path.join(tmpdir(), "cockpit-mcp-config");
+  mkdirSync(dir, { recursive: true });
+  const filePath = path.join(dir, `${token.slice(0, 16)}.json`);
+  const config = {
+    mcpServers: {
+      "cockpit-config": {
+        type: "http",
+        url: `${url}/mcp`,
+        headers: { Authorization: `Bearer ${token}` },
+      },
+    },
+  };
+  writeFileSync(filePath, JSON.stringify(config, null, 2), { mode: 0o600 });
+  return { path: filePath };
+}
+
 export class SessionManager {
   private sessions = new Map<string, Session>();
+  private _cockpitAgentSessionPromise: Promise<string> | null = null;
   constructor() {
     // Periodically check for sessions stuck in "running" with a dead process
     setInterval(() => {
@@ -151,7 +176,11 @@ export class SessionManager {
         if (session.info.status === "running" && !session.process && !session.ptyRuntime?.isAlive) {
           const short = id.slice(0, 8);
           debugLog(`[session:${short}] stale check: status=running but no live process, correcting to idle`);
-          logDiag(id, "idle:stale-check");
+          logDiag(id, "idle:stale-check", {
+            runtime: session.runtime,
+            spawning: session.spawning ?? false,
+            hasPtyRuntime: !!session.ptyRuntime,
+          });
           session.info.status = "idle";
           session.emitter.emit("status", id, "idle");
         }
@@ -159,15 +188,21 @@ export class SessionManager {
     }, 15000);
   }
 
-  createSession(cwd: string, name?: string, options?: { bypassPermissions?: boolean; runtime?: SessionRuntime }): SessionInfo {
+  createSession(
+    cwd: string,
+    name?: string,
+    options?: { bypassPermissions?: boolean; runtime?: SessionRuntime; cockpitAgent?: boolean },
+  ): SessionInfo {
     const id = uuidv4();
     const now = Date.now();
     const defaults = getDefaults();
     const modelSlots: ModelSlots = { main: defaults.modelSlots.main ?? "sonnet" };
+    const isCockpitAgent = options?.cockpitAgent === true;
     const rt = options?.runtime ?? defaultRuntime();
+    const sessionName = isCockpitAgent ? "Cockpit Assistant" : name || path.basename(cwd) || cwd;
     const info: SessionInfo = {
       id,
-      name: name || path.basename(cwd) || cwd,
+      name: sessionName,
       cwd,
       createdAt: now,
       lastActiveAt: now,
@@ -183,10 +218,9 @@ export class SessionManager {
       process: null,
       stdin: null,
       emitter: new EventEmitter(),
-      hasSpawnedBefore: false,
       cliSessionId: id,
       previousCliSessionIds: [],
-      bypassAllPermissions: options?.bypassPermissions ?? defaults.bypassAllPermissions,
+      bypassAllPermissions: isCockpitAgent ? false : (options?.bypassPermissions ?? defaults.bypassAllPermissions),
       planMode: false,
       needsRespawnForPermissions: false,
       compacting: false,
@@ -212,11 +246,38 @@ export class SessionManager {
       todoWatcher: null,
       attachmentPaths: [],
       totalTokens: { input: 0, output: 0, cacheCreate: 0, cacheRead: 0 },
+      cockpitAgent: isCockpitAgent,
+      cockpitAgentCleanups: [],
     });
 
-    setSessionPrefs(id, { runtime: rt });
+    setSessionPrefs(id, { runtime: rt, ...(isCockpitAgent ? { cockpitAgent: true } : {}) });
+
+    if (isCockpitAgent) {
+      this.registerCockpitAgentOnInit(id);
+    }
 
     return info;
+  }
+
+  private registerCockpitAgentOnInit(id: string): void {
+    const session = this.sessions.get(id);
+    if (!session) return; // TypeScript narrows to Session below; push is safe
+    const cleanup = this.onInit(id, async (data: InitData) => {
+      for (const server of data.mcpServers) {
+        if (server.name !== "cockpit-config" && server.status !== "disabled") {
+          try {
+            await this.mcpToggle(id, server.name, false);
+          } catch {
+            // best effort — server may not be started yet
+          }
+        }
+      }
+    });
+    if (cleanup) {
+      session.cockpitAgentCleanups.push(cleanup); // destroySession iterates this to unsubscribe
+    } else {
+      console.warn(`[cockpit-agent] onInit returned null for session ${id.slice(0, 8)}`);
+    }
   }
 
   ensureSession(id: string, cwd: string): Session {
@@ -251,10 +312,9 @@ export class SessionManager {
         process: null,
         stdin: null,
         emitter: new EventEmitter(),
-        hasSpawnedBefore: true,
         cliSessionId: cliId,
         previousCliSessionIds: prevIds,
-        bypassAllPermissions: prefs?.bypassAllPermissions ?? defaults.bypassAllPermissions,
+        bypassAllPermissions: (prefs?.cockpitAgent ? false : prefs?.bypassAllPermissions) ?? defaults.bypassAllPermissions,
         planMode: prefs?.planMode ?? false,
         pendingPlanReminder: prefs?.planMode ?? false,
         needsRespawnForPermissions: false,
@@ -285,10 +345,66 @@ export class SessionManager {
         todoWatcher: null,
         attachmentPaths: [],
         totalTokens: { input: 0, output: 0, cacheCreate: 0, cacheRead: 0 },
+        cockpitAgent: prefs?.cockpitAgent ?? false,
+        cockpitAgentCleanups: [],
       };
       this.sessions.set(id, session);
+      if (prefs?.cockpitAgent) {
+        this.registerCockpitAgentOnInit(id);
+      }
     }
     return session!;
+  }
+
+  async getOrCreateCockpitAgentSession(): Promise<string> {
+    // Fast path: the session is already live in memory (the common case once the
+    // modal has been opened this server lifetime). Returns synchronously.
+    const stored = getAssistantSettings().sessionId;
+    if (stored && this.sessions.has(stored)) return stored;
+
+    // Slow path: restore-from-disk or create-new. There is no `await` between the
+    // null-check and the assignment below, so the first caller sets the promise
+    // before any other caller can run; every concurrent first-open then awaits
+    // that same single execution. The finally clears it for the next miss.
+    if (!this._cockpitAgentSessionPromise) {
+      this._cockpitAgentSessionPromise = this._resolveOrCreateCockpitAgentSession().finally(() => {
+        this._cockpitAgentSessionPromise = null;
+      });
+    }
+    return this._cockpitAgentSessionPromise;
+  }
+
+  private async _resolveOrCreateCockpitAgentSession(): Promise<string> {
+    const settings = getAssistantSettings();
+    const stored = settings.sessionId;
+    if (stored) {
+      if (this.sessions.has(stored)) return stored; // restored by an earlier caller
+      const prefs = getSessionPrefs(stored);
+      // Only restore a stored id that is genuinely a cockpit agent session. A
+      // pointer to a regular session (e.g. a hand-edited assistant.json) must not
+      // be rehydrated here — it would lack the MCP-disable/permission restrictions.
+      if (prefs?.cockpitAgent) {
+        const cwd = (await findSessionCwd(prefs.cliSessionId || stored)) ?? (await findSessionCwd(stored));
+        if (cwd) {
+          // ensureSession rebuilds in-memory state and (Step 5) registers the MCP-disable
+          // onInit listener. Model/thinking are restored from session-prefs — which the
+          // in-modal selector and the settings-page write-through both keep current —
+          // so no re-apply is needed here.
+          this.ensureSession(stored, cwd);
+          return stored;
+        }
+      }
+    }
+    // No stored id, or its transcript is gone — create a fresh session seeded from
+    // assistant.json. createSession is synchronous (this.sessions.set before return).
+    const info = this.createSession(getCockpitDir(), undefined, {
+      cockpitAgent: true,
+      runtime: settings.runtime,
+    });
+    if (settings.model) this.setModel(info.id, settings.model, settings.contextSize);
+    if (settings.thinkingLevel) this.setThinkingLevel(info.id, settings.thinkingLevel);
+    updateAssistantSettings({ sessionId: info.id });
+    return info.id;
   }
 
   async getSession(id: string): Promise<{
@@ -677,9 +793,6 @@ export class SessionManager {
     }
 
     this.killProcess(session);
-    if (!transcriptExists(session.cliSessionId, session.info.cwd)) {
-      session.hasSpawnedBefore = false;
-    }
     session.pendingRequests.clear();
     this.notifyPendingChanged(session, sessionId);
     session.streamingSnapshot = null;
@@ -710,6 +823,22 @@ export class SessionManager {
       session.todoWatcher = null;
     }
     this.cleanupAttachments(session);
+    for (const cleanup of session.cockpitAgentCleanups) {
+      try {
+        cleanup();
+      } catch {
+        /* best effort */
+      }
+    }
+    if (session.mcpToken) {
+      clearToken(session.mcpToken);
+      const configPath = path.join(tmpdir(), "cockpit-mcp-config", `${session.mcpToken.slice(0, 16)}.json`);
+      try {
+        unlinkSync(configPath);
+      } catch {
+        /* best effort */
+      }
+    }
     session.emitter.removeAllListeners();
     this.sessions.delete(id);
     return true;
@@ -938,7 +1067,7 @@ export class SessionManager {
 
   setBypassAllPermissions(sessionId: string): void {
     const session = this.sessions.get(sessionId);
-    if (!session || session.bypassAllPermissions) return;
+    if (!session || session.bypassAllPermissions || session.cockpitAgent) return;
     session.bypassAllPermissions = true;
     setSessionPrefs(sessionId, { bypassAllPermissions: true });
     // Don't change CLI mode while in plan mode; bypass will restore on plan exit
@@ -969,7 +1098,6 @@ export class SessionManager {
     if (!session.process && !session.ptyRuntime?.isAlive) return;
     if (session.info.status === "idle") {
       this.killProcess(session);
-      session.hasSpawnedBefore = transcriptExists(session.cliSessionId, session.info.cwd);
     } else {
       session.needsRespawnForPermissions = true;
     }
@@ -1102,9 +1230,6 @@ export class SessionManager {
     } else {
       this.log(sessionId, `setModel: killing process (hasStdin=${!!session.stdin}, contextChanged=${contextChanged})`);
       this.killProcess(session);
-      if (!transcriptExists(session.cliSessionId, session.info.cwd)) {
-        session.hasSpawnedBefore = false;
-      }
       session.queuedMessages.length = 0;
       session.queuePaused = false;
       session.info.status = "idle";
@@ -1396,9 +1521,13 @@ export class SessionManager {
       if (raw.message.model === "<synthetic>") return;
       const u = raw.message.usage;
       const used = (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.cache_read_input_tokens || 0);
-      const usage: ContextUsage = { used, total: session.contextWindowSize };
-      session.contextUsage = usage;
-      session.emitter.emit("usage", sessionId, usage);
+      // Only move the gauge on a real reading. An interrupted/cancelled turn
+      // emits an all-zero usage block; setting it would wipe the gauge to 0.
+      if (used > 0) {
+        const usage: ContextUsage = { used, total: session.contextWindowSize };
+        session.contextUsage = usage;
+        session.emitter.emit("usage", sessionId, usage);
+      }
       session.totalTokens.input += u.input_tokens || 0;
       session.totalTokens.output += u.output_tokens || 0;
       session.totalTokens.cacheCreate += u.cache_creation_input_tokens || 0;
@@ -1456,6 +1585,10 @@ export class SessionManager {
       session.ptyRuntime = null;
       runtime.kill().catch(() => {});
     }
+    // A kill ends any in-flight spawn, so clear the ensureProcess guard now. A
+    // deliberate kill-then-respawn (settings change, /clear, restart) must not
+    // be blocked until the dying runtime's start() promise happens to settle.
+    session.spawning = false;
     session.compacting = false;
   }
 
@@ -1551,6 +1684,52 @@ export class SessionManager {
         this.respondToPermission(sessionId, pa.requestId, true, pa.rawToolInput);
       } else if (pa.type === "auto_deny") {
         this.respondToPermission(sessionId, pa.requestId, false, undefined, undefined, pa.denyReason);
+      } else if (session.cockpitAgent && pa.toolName !== "AskUserQuestion") {
+        const tool = pa.toolName;
+        const isReadOnlyBuiltin = ["Read", "Grep", "Glob"].includes(tool);
+        const cockpitPrefix = "mcp__cockpit-config__";
+        const isCockpitTool = tool.startsWith(cockpitPrefix);
+        const cockpitAction = isCockpitTool ? tool.slice(cockpitPrefix.length).split("_")[0] : "";
+        const isCockpitRead = isCockpitTool && (cockpitAction === "list" || cockpitAction === "get");
+        const isCockpitWrite = isCockpitTool && !isCockpitRead;
+        logDiag(sessionId, "cockpit-agent:permission", {
+          toolName: tool,
+          decision: isReadOnlyBuiltin || isCockpitRead ? "auto_approve" : isCockpitWrite ? "proposal" : "auto_deny",
+        });
+
+        if (isReadOnlyBuiltin || isCockpitRead) {
+          this.respondToPermission(sessionId, pa.requestId, true, pa.rawToolInput);
+        } else if (isCockpitWrite) {
+          const suffix = tool.replace("mcp__cockpit-config__", "");
+          const parts = suffix.split("_");
+          const action = parts[0];
+          const domain = parts.slice(1).join("_");
+          let displayName: string | undefined;
+          if (domain === "job" && (action === "update" || action === "delete")) {
+            const jobId = (pa.rawToolInput as Record<string, unknown>)?.id;
+            if (typeof jobId === "string") {
+              displayName = getJob(jobId)?.name;
+            }
+          }
+          session.pendingRequests.set(pa.requestId, {
+            type: "permission",
+            requestId: pa.requestId,
+            toolName: pa.toolName,
+            toolInput: pa.toolInput || "",
+            rawToolInput: pa.rawToolInput,
+            configProposal: { toolName: tool, domain, action, ...(displayName ? { displayName } : {}) },
+          });
+          this.notifyPendingChanged(session, sessionId);
+        } else {
+          this.respondToPermission(
+            sessionId,
+            pa.requestId,
+            false,
+            undefined,
+            undefined,
+            "This tool is not available in the cockpit assistant",
+          );
+        }
       } else if (session.bypassAllPermissions && !session.planMode && pa.toolName !== "AskUserQuestion") {
         this.respondToPermission(sessionId, pa.requestId, true, pa.rawToolInput);
         bypassedRequestIds.add(pa.requestId);
@@ -1667,7 +1846,6 @@ export class SessionManager {
         // generate a new CLI session ID to get a fresh context.
         session.previousCliSessionIds.push(session.cliSessionId);
         session.cliSessionId = uuidv4();
-        session.hasSpawnedBefore = false;
         session.queuedMessages.length = 0;
         session.queuePaused = false;
         session.todoItems = [];
@@ -1740,6 +1918,23 @@ export class SessionManager {
       }
 
       case "/context": {
+        // Forward to the CLI's own /context: it shows the live per-category
+        // breakdown and the ACTUAL window, which cockpit's readout (picked size
+        // only) can't. /context is a local command (no model turn → no Stop hook),
+        // so never enter the running state — that would hang the session on
+        // "processing". If no CLI is live (e.g. a context-size switch just killed
+        // it), spawn one rather than showing cockpit's one-liner; the spawn applies
+        // the freshly-picked window so /context reflects the switch immediately.
+        // Output arrives as a local_command transcript entry (ANSI-stripped). When a
+        // turn is already running we don't interfere — fall back to the local readout.
+        if (session.runtime === "pty" && session.info.status !== "running") {
+          if (session.ptyRuntime?.isAlive) {
+            session.ptyRuntime.sendText("/context").catch(() => {});
+          } else {
+            this.spawnPtyProcess(session, sessionId, "/context");
+          }
+          return true;
+        }
         if (!session.contextUsage) {
           this.emitSystem(session, sessionId, "Context usage data not available yet.");
           return true;
@@ -1762,11 +1957,22 @@ export class SessionManager {
       }
     }
 
-    // In PTY mode, intercept commands that render CLI dialogs to prevent hangs
+    // In PTY mode, only model-invoking commands are safe to forward to the REPL:
+    // they run a turn that fires a Stop hook, which clears the running state.
+    // CLI-local commands don't: "local-jsx" opens an interactive panel cockpit
+    // renders from the transcript, not the raw PTY, so it can't show or drive; and
+    // "local" acts with no Stop hook, hanging the session on "processing". Block
+    // both. Classification (incl. aliases) is generated from the CLI binary; see
+    // src/lib/cli-commands.ts. Unknown commands (custom/project/plugin) are
+    // prompt-style and pass through.
     if (session.ptyRuntime?.isAlive) {
-      const dialogCmd = cmd.replace("/", "");
-      if (SessionManager.DIALOG_COMMANDS.has(dialogCmd)) {
-        this.emitSystem(session, sessionId, `"${cmd}" opens an interactive CLI dialog that isn't available in remote mode.`);
+      const kind = classifyCliCommand(cmd);
+      // /compact is CLI-local but cockpit drives compaction through it (PostCompact
+      // clears the running state), so it must reach the CLI -- let it pass through.
+      const passThrough = SessionManager.PTY_FORWARD_LOCAL.has(cmd.replace(/^\//, ""));
+      if (!passThrough && (kind === "local" || kind === "local-jsx")) {
+        const detail = kind === "local-jsx" ? "opens an interactive CLI dialog" : "runs in the CLI only";
+        this.emitSystem(session, sessionId, `"${cmd}" ${detail} and isn't available in remote mode.`);
         return true;
       }
     }
@@ -1775,55 +1981,10 @@ export class SessionManager {
     return false;
   }
 
-  private static readonly DIALOG_COMMANDS = new Set([
-    "config",
-    "usage",
-    "session",
-    "stats",
-    "doctor",
-    "diff",
-    "mcp",
-    "permissions",
-    "hooks",
-    "tasks",
-    "agents",
-    "skills",
-    "memory",
-    "theme",
-    "fast",
-    "feedback",
-    "copy",
-    "branch",
-    "plan",
-    "chrome",
-    "desktop",
-    "ide",
-    "mobile",
-    "bridge",
-    "sandbox",
-    "export",
-    "login",
-    "logout",
-    "upgrade",
-    "rate-limit-options",
-    "privacy-settings",
-    "terminal-setup",
-    "install-github-app",
-    "remote-env",
-    "remote-setup",
-    "resume",
-    "add-dir",
-    "btw",
-    "extra-usage",
-    "passes",
-    "think-back",
-    "ultrareview",
-    "tag",
-    "exit",
-    "effort",
-    "color",
-    "files",
-  ]);
+  // CLI-local commands cockpit intentionally forwards in PTY despite their type,
+  // because their lifecycle is handled (e.g. /compact fires PostCompact, which
+  // clears the running state the same way a Stop hook would).
+  private static readonly PTY_FORWARD_LOCAL = new Set(["compact"]);
 
   private static readonly MEDIA_EXT: Record<string, string> = {
     "image/png": ".png",
@@ -2036,7 +2197,13 @@ Additional Cockpit rules beyond the CLI's defaults:
 
   ensureProcess(sessionId: string): void {
     const session = this.sessions.get(sessionId);
-    if (!session || session.process || session.ptyRuntime?.isAlive) return;
+    // `spawning` guards the PTY startup window: the runtime is assigned before
+    // its async start() resolves, and during that window ptyRuntime.isAlive is
+    // false, so a second ensureProcess (a WS reconnect, or a startup race)
+    // would otherwise spawn a duplicate CLI for the same session — two
+    // processes racing on the same --session-id. (Stream sets session.process
+    // synchronously, so it is already covered by that check.)
+    if (!session || session.process || session.ptyRuntime?.isAlive || session.spawning) return;
     this.spawnProcess(session, sessionId);
   }
 
@@ -2062,25 +2229,26 @@ Additional Cockpit rules beyond the CLI's defaults:
       return;
     }
 
-    this.log(sessionId, `spawning CLI process (resume=${session.hasSpawnedBefore}, model=${session.info.model || "sonnet"})`);
+    const willResume = transcriptExists(session.cliSessionId, session.info.cwd);
+    this.log(sessionId, `spawning CLI process (resume=${willResume}, model=${session.info.model || "sonnet"})`);
     const args = ["-p", "--verbose", "--output-format", "stream-json", "--input-format", "stream-json"];
 
     // In plan mode, omit --allow-dangerously-skip-permissions so the CLI
     // natively enforces tool restrictions and sends permission_requests for
     // write tools (which the server auto-denies).
     // Outside plan mode, enable bypass so it can be toggled mid-session.
-    if (!session.planMode) {
+    if (!session.planMode && !session.cockpitAgent) {
       args.push("--allow-dangerously-skip-permissions");
     }
     args.push("--permission-prompt-tool", "stdio");
 
     if (session.planMode) {
       args.push("--permission-mode", "plan");
-    } else if (session.bypassAllPermissions) {
+    } else if (session.bypassAllPermissions && !session.cockpitAgent) {
       args.push("--permission-mode", "bypassPermissions");
     }
 
-    if (session.hasSpawnedBefore || transcriptExists(session.cliSessionId, session.info.cwd)) {
+    if (willResume) {
       args.push("--resume", session.cliSessionId);
     } else {
       args.push("--session-id", session.cliSessionId);
@@ -2115,11 +2283,39 @@ Additional Cockpit rules beyond the CLI's defaults:
     const sizeKey = session.info.contextSize ?? DEFAULT_CONTEXT_SIZE;
     if (CONTEXT_SIZES[sizeKey].disableEnv) {
       env.CLAUDE_CODE_DISABLE_1M_CONTEXT = "1";
+    } else {
+      // 1m: drop any inherited override so cockpit's pick stays authoritative and
+      // a CLAUDE_CODE_DISABLE_1M_CONTEXT in cockpit's own env can't force 200k.
+      delete env.CLAUDE_CODE_DISABLE_1M_CONTEXT;
     }
 
     if (session.modelSlots.subagent && session.modelSlots.subagent !== session.modelSlots.main) {
       const resolvedSub = resolveProviderModel(session.modelSlots.subagent);
       env.ANTHROPIC_SMALL_FAST_MODEL = resolvedSub ? resolvedSub.model.modelId : session.modelSlots.subagent;
+    }
+
+    if (session.cockpitAgent) {
+      args.push("--append-system-prompt", COCKPIT_AGENT_SYSTEM_PROMPT);
+      const cockpitMcp = getCockpitMcp();
+      if (cockpitMcp) {
+        if (session.mcpToken) {
+          clearToken(session.mcpToken);
+          try {
+            unlinkSync(path.join(tmpdir(), "cockpit-mcp-config", `${session.mcpToken.slice(0, 16)}.json`));
+          } catch {
+            /* best effort */
+          }
+        }
+        const token = randomBytes(24).toString("hex");
+        if (session.runContext) {
+          registerRunContext(token, session.runContext);
+        } else {
+          registerAuthToken(token);
+        }
+        session.mcpToken = token;
+        const configFile = buildMcpConfigArg(cockpitMcp.getUrl(), token);
+        args.push("--mcp-config", configFile.path);
+      }
     }
 
     mkdirSync(session.info.cwd, { recursive: true });
@@ -2134,7 +2330,6 @@ Additional Cockpit rules beyond the CLI's defaults:
 
     session.process = proc;
     session.stdin = proc.stdin!;
-    session.hasSpawnedBefore = true;
     this.log(sessionId, `CLI process spawned (pid=${proc.pid})`);
 
     this.startTodoWatcher(session, sessionId);
@@ -2152,7 +2347,7 @@ Additional Cockpit rules beyond the CLI's defaults:
     // even if --permission-mode was ignored on resume.
     if (session.planMode) {
       this.sendPermissionMode(session, sessionId, "plan");
-    } else if (session.bypassAllPermissions) {
+    } else if (session.bypassAllPermissions && !session.cockpitAgent) {
       this.sendPermissionMode(session, sessionId, "bypassPermissions");
     }
 
@@ -2308,7 +2503,14 @@ Additional Cockpit rules beyond the CLI's defaults:
       return;
     }
 
-    this.log(sessionId, `spawning PTY claude (resume=${session.hasSpawnedBefore}, model=${session.info.model || "sonnet"})`);
+    const willResume = transcriptExists(session.cliSessionId, session.info.cwd);
+    this.log(sessionId, `spawning PTY claude (resume=${willResume}, model=${session.info.model || "sonnet"})`);
+    const spawnBeginAt = Date.now();
+    logDiag(sessionId, "pty:spawn-begin", {
+      model: session.info.model,
+      hasText: !!text,
+      status: session.info.status,
+    });
     mkdirSync(session.info.cwd, { recursive: true });
 
     const streamState = createStreamState();
@@ -2316,7 +2518,7 @@ Additional Cockpit rules beyond the CLI's defaults:
     streamState.thinkingStartedAt = Date.now();
 
     const extraArgs: string[] = [];
-    if (session.hasSpawnedBefore || transcriptExists(session.cliSessionId, session.info.cwd)) {
+    if (transcriptExists(session.cliSessionId, session.info.cwd)) {
       extraArgs.push("--resume", session.cliSessionId);
     } else {
       extraArgs.push("--session-id", session.cliSessionId);
@@ -2329,7 +2531,7 @@ Additional Cockpit rules beyond the CLI's defaults:
     }
     if (session.planMode) {
       extraArgs.push("--permission-mode", "plan");
-    } else if (session.bypassAllPermissions) {
+    } else if (session.bypassAllPermissions && !session.cockpitAgent) {
       extraArgs.push("--permission-mode", "bypassPermissions");
     }
 
@@ -2342,6 +2544,30 @@ Additional Cockpit rules beyond the CLI's defaults:
     if (session.modelSlots.subagent && session.modelSlots.subagent !== session.modelSlots.main) {
       const resolvedSub = resolveProviderModel(session.modelSlots.subagent);
       extraEnv.ANTHROPIC_SMALL_FAST_MODEL = resolvedSub ? resolvedSub.model.modelId : session.modelSlots.subagent;
+    }
+
+    if (session.cockpitAgent) {
+      extraArgs.push("--append-system-prompt", COCKPIT_AGENT_SYSTEM_PROMPT);
+      const cockpitMcp = getCockpitMcp();
+      if (cockpitMcp) {
+        if (session.mcpToken) {
+          clearToken(session.mcpToken);
+          try {
+            unlinkSync(path.join(tmpdir(), "cockpit-mcp-config", `${session.mcpToken.slice(0, 16)}.json`));
+          } catch {
+            /* best effort */
+          }
+        }
+        const token = randomBytes(24).toString("hex");
+        if (session.runContext) {
+          registerRunContext(token, session.runContext);
+        } else {
+          registerAuthToken(token);
+        }
+        session.mcpToken = token;
+        const configFile = buildMcpConfigArg(cockpitMcp.getUrl(), token);
+        extraArgs.push("--mcp-config", configFile.path);
+      }
     }
 
     const runtime = new PtyRuntime({
@@ -2366,8 +2592,14 @@ Additional Cockpit rules beyond the CLI's defaults:
         this.log(sessionId, `PTY claude exited (code=${exitCode}, signal=${signal ?? "none"})`);
         if (session.ptyRuntime !== runtime) return;
         session.ptyRuntime = null;
+        session.spawning = false;
         session.streamingSnapshot = null;
-        logDiag(sessionId, "idle:pty-exit", { exitCode, flushedOnMessageDone: streamState.flushedOnMessageDone });
+        logDiag(sessionId, "idle:pty-exit", {
+          exitCode,
+          signal: signal ?? null,
+          flushedOnMessageDone: streamState.flushedOnMessageDone,
+          sinceSpawnMs: Date.now() - spawnBeginAt,
+        });
         if (session.transcriptWatcher) {
           session.transcriptWatcher.stop();
           session.transcriptWatcher = null;
@@ -2399,7 +2631,7 @@ Additional Cockpit rules beyond the CLI's defaults:
     });
 
     session.ptyRuntime = runtime;
-    session.hasSpawnedBefore = true;
+    logDiag(sessionId, "pty:runtime-assigned", { elapsedMs: Date.now() - spawnBeginAt });
 
     this.cleanupAttachments(session);
     const attachments = this.writeAttachments(images, documents);
@@ -2432,19 +2664,38 @@ Additional Cockpit rules beyond the CLI's defaults:
 
     this.startTodoWatcher(session, sessionId);
 
+    // Set the in-flight guard immediately before start(). Everything above is
+    // synchronous (no re-entrancy is possible until start() yields to the event
+    // loop), so a synchronous throw in the setup above can never strand
+    // spawning=true and permanently block ensureProcess for this session.
+    session.spawning = true;
     runtime
       .start(ptyText)
       .then(() => {
+        session.spawning = false;
         this.log(sessionId, `PTY claude ready (pid=${runtime.pid})`);
+        logDiag(sessionId, "pty:start-resolved", {
+          pid: runtime.pid,
+          elapsedMs: Date.now() - spawnBeginAt,
+          isAlive: runtime.isAlive,
+          status: session.info.status,
+        });
         watcher.start();
       })
       .catch((err: unknown) => {
+        session.spawning = false;
         const msg = err instanceof Error ? err.message : String(err);
         this.log(sessionId, `pty runtime start failed: ${msg}`);
+        logDiag(sessionId, "pty:start-rejected", { error: msg, elapsedMs: Date.now() - spawnBeginAt });
+        const dead = session.ptyRuntime;
         session.ptyRuntime = null;
+        // Emit error BEFORE idle: a job's onStatus("idle") maps to success, so an
+        // idle-first order would mark a failed spawn as a successful empty run.
+        session.emitter.emit("error", sessionId, msg);
         session.info.status = "idle";
         session.emitter.emit("status", sessionId, "idle");
-        session.emitter.emit("error", sessionId, msg);
+        // Reap the half-started PTY so a failed delivery can't leak an idle CLI.
+        dead?.kill().catch(() => {});
       });
   }
 

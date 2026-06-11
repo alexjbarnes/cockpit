@@ -130,6 +130,28 @@ describe("providers", () => {
     expect(result!.provider.id).toBe("proxy-1");
   });
 
+  it("resolveProviderModel strips a legacy context suffix from a qualified model", async () => {
+    const fs = await import("node:fs");
+    const custom = [
+      {
+        id: "ds-1",
+        name: "Deepseek",
+        envVars: {},
+        models: [{ modelId: "deepseek-v4-pro", displayName: "Deepseek V4 Pro", effortLevels: [], contextSizes: ["200k", "1m"] }],
+      },
+    ];
+    vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(custom));
+
+    const { resolveProviderModel } = await import("@/server/providers");
+    // A job whose stored model still carries the legacy "[1m]" suffix must
+    // resolve to the cleaned provider model.
+    const result = resolveProviderModel("ds-1:deepseek-v4-pro[1m]");
+
+    expect(result).not.toBeNull();
+    expect(result!.provider.id).toBe("ds-1");
+    expect(result!.model.modelId).toBe("deepseek-v4-pro");
+  });
+
   it("addProvider generates UUID and persists", async () => {
     const fs = await import("node:fs");
     vi.mocked(fs.readFileSync).mockImplementation(() => {
@@ -276,5 +298,30 @@ describe("providers", () => {
         models: [{ modelId: "m1", displayName: "m1", effortLevels: [], contextSizes: [] }],
       }),
     ).toThrow(/contextSizes/);
+  });
+
+  it("reloads providers when providers.json changes out of band (different mtime)", async () => {
+    const fs = await import("node:fs");
+    const listA = [
+      { id: "p-a", name: "A", envVars: {}, models: [{ modelId: "m-a", displayName: "m-a", effortLevels: [], contextSizes: ["200k"] }] },
+    ];
+    const listB = [
+      { id: "p-b", name: "B", envVars: {}, models: [{ modelId: "m-b", displayName: "m-b", effortLevels: [], contextSizes: ["200k"] }] },
+    ];
+    vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(listA));
+    vi.mocked(fs.statSync).mockReturnValue({ mtimeMs: 1 } as unknown as ReturnType<typeof fs.statSync>);
+
+    const { getProviders } = await import("@/server/providers");
+    expect(getProviders().find((p) => p.id === "p-a")).toBeDefined();
+    expect(getProviders().find((p) => p.id === "p-b")).toBeUndefined();
+
+    // Another module graph (the settings route) or a hand edit rewrites the file:
+    // content + mtime change, with no mutator called in THIS graph. mtime-gating
+    // must pick it up so a session spawn sees the new provider without a restart.
+    vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(listB));
+    vi.mocked(fs.statSync).mockReturnValue({ mtimeMs: 2 } as unknown as ReturnType<typeof fs.statSync>);
+
+    expect(getProviders().find((p) => p.id === "p-b")).toBeDefined();
+    expect(getProviders().find((p) => p.id === "p-a")).toBeUndefined();
   });
 });

@@ -43,12 +43,15 @@ export class PtySession {
 
     const bin = this.opts.bin ?? "claude";
     const args = ["--verbose", "--settings", this.opts.settingsPath, ...(this.opts.extraArgs ?? [])];
-    const env: Record<string, string> = {
-      ...(process.env as Record<string, string>),
-      ...(this.opts.env ?? {}),
-    };
+    const env: Record<string, string> = { ...(process.env as Record<string, string>) };
     delete env.CLAUDECODE;
     delete env.CLAUDE_CODE_ENTRYPOINT;
+    // Drop any inherited 1M-context override BEFORE applying the caller's env, so a
+    // CLAUDE_CODE_DISABLE_1M_CONTEXT sitting in cockpit's own environment can't pin
+    // every session to 200k and defeat a 1m pick. The caller sets it per-session
+    // via opts.env (200k → "1"; 1m → absent), which is applied on top here.
+    delete env.CLAUDE_CODE_DISABLE_1M_CONTEXT;
+    Object.assign(env, this.opts.env ?? {});
 
     const spawnFile = process.platform === "darwin" ? "/bin/zsh" : bin;
     const spawnArgs = process.platform === "darwin" ? ["-l", "-c", `exec ${[bin, ...args].map(shellQuote).join(" ")}`] : args;

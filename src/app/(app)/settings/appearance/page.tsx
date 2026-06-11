@@ -133,7 +133,7 @@ export default function AppearanceSettingsPage() {
         <ArrowLeft className="h-4 w-4 mr-1" />
         Settings
       </Button>
-      <div className="max-w-lg space-y-1">
+      <div className="space-y-1">
         <SettingRow label="Theme">
           <ButtonGroup options={themeOptions} value={theme} onChange={selectTheme} />
         </SettingRow>

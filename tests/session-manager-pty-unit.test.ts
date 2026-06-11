@@ -483,6 +483,7 @@ describe("SessionManager PTY runtime (unit)", () => {
     it("/context emits context usage without throwing", () => {
       const session = manager.createSession("/tmp", undefined, { runtime: "pty" });
       const msgs: string[] = [];
+      manager.sendMessage(session.id, "hello"); // start a turn: /context shows the local readout while running, forwards otherwise
       manager.onSystem(session.id, (m) => msgs.push(m));
       expect(manager.sendMessage(session.id, "/context")).toBe(true);
       expect(msgs.some((m) => m.includes("Context"))).toBe(true);
@@ -522,6 +523,44 @@ describe("SessionManager PTY runtime (unit)", () => {
       manager.onSystem(session.id, (m) => msgs.push(m));
       manager.sendMessage(session.id, "/config");
       expect(msgs.every((m) => !m.includes("interactive CLI dialog"))).toBe(true);
+    });
+
+    it("resolves aliases when blocking dialog commands in PTY mode", () => {
+      const session = manager.createSession("/tmp", undefined, { runtime: "pty" });
+      manager.sendMessage(session.id, "hello");
+      const msgs: string[] = [];
+      manager.onSystem(session.id, (m) => msgs.push(m));
+      expect(manager.sendMessage(session.id, "/rc")).toBe(true); // alias for /remote-control
+      expect(msgs.some((m) => m.includes("interactive CLI dialog"))).toBe(true);
+    });
+
+    it("blocks local action commands with a CLI-only warning in PTY mode", () => {
+      const session = manager.createSession("/tmp", undefined, { runtime: "pty" });
+      manager.sendMessage(session.id, "hello");
+      const msgs: string[] = [];
+      manager.onSystem(session.id, (m) => msgs.push(m));
+      expect(manager.sendMessage(session.id, "/usage")).toBe(true);
+      expect(msgs.some((m) => m.includes("runs in the CLI only"))).toBe(true);
+    });
+
+    it("does not block /compact in PTY mode (forwarded for compaction)", () => {
+      const session = manager.createSession("/tmp", undefined, { runtime: "pty" });
+      manager.sendMessage(session.id, "hello");
+      const msgs: string[] = [];
+      manager.onSystem(session.id, (m) => msgs.push(m));
+      manager.sendMessage(session.id, "/compact");
+      expect(msgs.every((m) => !m.includes("isn't available in remote mode"))).toBe(true);
+      expect(msgs.some((m) => m.includes("__compact::start"))).toBe(true);
+    });
+
+    it("passes through prompt and custom commands in PTY mode", () => {
+      const session = manager.createSession("/tmp", undefined, { runtime: "pty" });
+      manager.sendMessage(session.id, "hello");
+      const msgs: string[] = [];
+      manager.onSystem(session.id, (m) => msgs.push(m));
+      manager.sendMessage(session.id, "/review"); // prompt type
+      manager.sendMessage(session.id, "/my-custom-command"); // unknown
+      expect(msgs.every((m) => !m.includes("isn't available in remote mode"))).toBe(true);
     });
   });
 });

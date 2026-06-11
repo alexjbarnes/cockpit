@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { validateSession } from "@/server/auth";
+import { getJobSessionIds } from "@/server/job-storage";
+import { getCockpitDir } from "@/server/paths";
 import { getSessionManager } from "@/server/singleton";
 import { scanSessionsForCwd } from "@/server/transcript";
 import type { SessionInfo } from "@/types";
@@ -17,6 +19,10 @@ export async function GET(req: NextRequest) {
   const cwd = req.nextUrl.searchParams.get("cwd");
   if (!cwd) {
     return NextResponse.json({ error: "cwd is required" }, { status: 400 });
+  }
+
+  if (cwd === getCockpitDir()) {
+    return NextResponse.json({ sessions: [] });
   }
 
   const sessions = await scanSessionsForCwd(cwd);
@@ -47,7 +53,10 @@ export async function GET(req: NextRequest) {
   }
 
   const JOB_TITLE_PREFIX = "You are running as an autonomous scheduled job";
-  const filtered: SessionInfo[] = sessions.filter((s) => !s.name?.startsWith("[job] ") && !s.name?.startsWith(JOB_TITLE_PREFIX));
+  const jobSessionIds = getJobSessionIds();
+  const filtered: SessionInfo[] = sessions.filter(
+    (s) => !jobSessionIds.has(s.id) && !s.name?.startsWith("[job] ") && !s.name?.startsWith(JOB_TITLE_PREFIX),
+  );
   filtered.sort((a, b) => b.lastActiveAt - a.lastActiveAt);
 
   return NextResponse.json({ sessions: filtered });

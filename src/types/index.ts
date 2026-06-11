@@ -214,7 +214,7 @@ export interface ScheduledJob {
   runtime?: "stream" | "pty";
 }
 
-export type JobRunStatus = "running" | "success" | "failure" | "timeout";
+export type JobRunStatus = "running" | "success" | "failure" | "timeout" | "stopped";
 
 export interface JobRunToolUse {
   name: string;
@@ -346,6 +346,7 @@ export type ServerMessage =
       suggestions?: PermissionSuggestion[];
       planFilePath?: string;
       planContent?: string;
+      configProposal?: { toolName: string; domain: string; action: string };
     }
   | { type: "question:request"; sessionId: string; requestId: string; questions: string }
   | { type: "session:clear"; sessionId: string }

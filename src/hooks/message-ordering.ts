@@ -1,6 +1,46 @@
-import type { ChatMessage } from "@/types";
+import { extractTextFiles } from "@/lib/paste-detect";
+import type { ChatMessage, DocumentAttachment, ImageAttachment, TextFileAttachment } from "@/types";
 
 const stripAttachments = (s: string) => s.replace(/^\[Attached [^\]]+\]\n*/gm, "").trim();
+
+export type QueuedText = {
+  text: string;
+  apiText: string;
+  images?: ImageAttachment[];
+  documents?: DocumentAttachment[];
+  textFiles?: TextFileAttachment[];
+};
+
+/** Build the optimistic user bubble for a flushed queued message.
+ *  `sentText` is the EXPANDED apiText the server echoes back. Content is set
+ *  to the cleaned (collapsed) form so it equals what the transcript parser
+ *  produces -> applyTranscript dedups it. Paste/image/doc metadata is recovered
+ *  from the queued entry matched EXACTLY on apiText (whitespace-proof), with a
+ *  parse-from-sentText fallback for the chip if the local queue ref was cleared. */
+export function buildQueuedUserMessage(
+  sentText: string,
+  queued: QueuedText[],
+  id: string,
+  timestamp: number,
+): { message: ChatMessage; matchedIndex: number } {
+  const { cleaned, textFiles: parsed } = extractTextFiles(sentText);
+  const matchedIndex = queued.findIndex((m) => m.apiText === sentText);
+  const matched = matchedIndex !== -1 ? queued[matchedIndex] : null;
+  return {
+    matchedIndex,
+    message: {
+      id,
+      role: "user",
+      content: cleaned,
+      toolUses: [],
+      blocks: [],
+      timestamp,
+      images: matched?.images,
+      documents: matched?.documents,
+      textFiles: matched?.textFiles ?? (parsed.length > 0 ? parsed : undefined),
+    },
+  };
+}
 
 /**
  * Replace the "streaming" placeholder with a finalized assistant message,

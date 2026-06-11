@@ -1,10 +1,12 @@
 import { v4 as uuidv4 } from "uuid";
 import { cleanupHookSettings, prepareHookSettings } from "./claude-settings";
 import { fetchCliInitData } from "./cli-init-fetch";
+import { logDiag } from "./debug-logger";
 import type { ParsedEvent } from "./event-parser";
 import { newPermissionRequestId, translateHookEvent } from "./hook-event-translator";
 import type { HookRouter, PermissionDecision, SessionHookHandler } from "./hook-router";
 import { PtySession } from "./pty-session";
+import { countTranscriptMessages } from "./transcript";
 
 export interface PtyRuntimeOptions {
   sessionId: string;
@@ -48,6 +50,8 @@ export class PtyRuntime {
   private readonly pendingPermissions = new Map<string, (decision: PermissionDecision) => void>();
   private exited = false;
   private cleaned = false;
+  /** Resolver armed by deliverInitialPrompt; fired when UserPromptSubmit confirms the first prompt landed. */
+  private promptAccepted: (() => void) | null = null;
   private ptyOutputBuffer = "";
   private errorDebounce: ReturnType<typeof setTimeout> | null = null;
 
@@ -65,6 +69,8 @@ export class PtyRuntime {
 
   async start(initialText?: string): Promise<void> {
     const { sessionId, cwd, hookRouter } = this.opts;
+    const startAt = Date.now();
+    logDiag(sessionId, "pty:start-enter", { hasInitialText: !!initialText });
 
     const token = hookRouter.register(sessionId, this.buildHandler());
     const { settingsPath, env } = await prepareHookSettings({
@@ -75,6 +81,7 @@ export class PtyRuntime {
       denyList: this.opts.denyList,
     });
     this.settingsPath = settingsPath;
+    logDiag(sessionId, "pty:hooks-ready", { elapsedMs: Date.now() - startAt });
 
     this.pty = new PtySession({
       cwd,
@@ -96,31 +103,107 @@ export class PtyRuntime {
     try {
       await this.pty.start();
     } catch (err) {
+      logDiag(sessionId, "pty:process-start-failed", {
+        elapsedMs: Date.now() - startAt,
+        error: err instanceof Error ? err.message : String(err),
+      });
       await this.cleanup();
       throw err;
     }
+    logDiag(sessionId, "pty:process-started", { pid: this.pid, elapsedMs: Date.now() - startAt });
 
     if (initialText) {
-      await this.pty.sendText(initialText);
+      await this.deliverInitialPrompt(initialText);
     }
 
+    logDiag(sessionId, "pty:start-complete", { elapsedMs: Date.now() - startAt });
     this.fetchInitData();
   }
 
+  /**
+   * Type the first prompt into the freshly spawned TUI and confirm the CLI
+   * accepted it. waitForReplReady is only a heuristic (first 100 bytes plus a
+   * 2s settle), so on a slow or quiet machine the input box may not be live
+   * when the keystrokes land and they are swallowed with no error. Without a
+   * check the turn never starts and the only backstop is the caller's watchdog,
+   * which for scheduled jobs is a silent 30-60 minute timeout with an empty
+   * transcript. Resend until the UserPromptSubmit hook confirms acceptance,
+   * then fail fast so the job reports an error instead of hanging.
+   */
+  private async deliverInitialPrompt(text: string): Promise<void> {
+    const { sessionId } = this.opts;
+    const MAX_ATTEMPTS = 4;
+    const CONFIRM_TIMEOUT_MS = 8000;
+    // A submitted prompt writes a user turn to the JSONL transcript. Growth past
+    // this baseline proves the CLI accepted the prompt even when the
+    // UserPromptSubmit hook never arrives — that hook is the only other
+    // acceptance signal, and its loss used to fail an actively-working run (it
+    // resent the 7KB prompt into a live turn, then killed the process). The
+    // transcript is hook- and echo-independent, so we check it at the end of
+    // each attempt's window before resending or failing.
+    const baselineMsgs = countTranscriptMessages(this.opts.cliSessionId, this.opts.cwd);
+    const turnStarted = () => countTranscriptMessages(this.opts.cliSessionId, this.opts.cwd) > baselineMsgs;
+    logDiag(sessionId, "pty:deliver-begin", { textLen: text.length, maxAttempts: MAX_ATTEMPTS, baselineMsgs });
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      const pty = this.pty;
+      if (this.exited || !pty) {
+        logDiag(sessionId, "pty:deliver-aborted", { attempt, exited: this.exited, hasPty: !!pty });
+        throw new Error("claude exited before the initial prompt was delivered");
+      }
+      let timer: ReturnType<typeof setTimeout> | null = null;
+      const accepted = new Promise<boolean>((resolve) => {
+        this.promptAccepted = () => resolve(true);
+        timer = setTimeout(() => resolve(false), CONFIRM_TIMEOUT_MS);
+      });
+      const attemptAt = Date.now();
+      logDiag(sessionId, "pty:deliver-attempt", { attempt, screenBefore: this.recentScreen() });
+      await pty.sendText(text);
+      const ok = await accepted;
+      if (timer) clearTimeout(timer);
+      this.promptAccepted = null;
+      if (ok) {
+        logDiag(sessionId, "pty:deliver-accepted", { attempt, waitedMs: Date.now() - attemptAt });
+        return;
+      }
+      // The hook did not fire in this window. It can be lost even though the CLI
+      // accepted the prompt and started working, so before resending or failing,
+      // check whether a turn has actually started. If it has, the prompt landed;
+      // do not resend into a live turn or kill a working run.
+      if (turnStarted()) {
+        logDiag(sessionId, "pty:deliver-accepted-via-transcript", { attempt, waitedMs: Date.now() - attemptAt });
+        return;
+      }
+      logDiag(sessionId, "pty:deliver-timeout", { attempt, waitedMs: Date.now() - attemptAt, screenAfter: this.recentScreen() });
+      console.log(
+        `[pty-runtime] initial prompt not confirmed for ${sessionId.slice(0, 8)} (attempt ${attempt}/${MAX_ATTEMPTS}), resending`,
+      );
+    }
+    logDiag(sessionId, "pty:deliver-failed", { attempts: MAX_ATTEMPTS });
+    throw new Error(`claude did not accept the initial prompt after ${MAX_ATTEMPTS} attempts`);
+  }
+
   private fetchInitData(): void {
-    const sid = this.opts.sessionId.slice(0, 8);
+    const { sessionId } = this.opts;
+    const sid = sessionId.slice(0, 8);
     console.log(`[pty-runtime] fetching CLI init data for session ${sid}`);
+    logDiag(sessionId, "pty:init-fetch-begin");
     fetchCliInitData({ cwd: this.opts.cwd, bin: this.opts.claudeBin })
       .then((initData) => {
         if (initData && !this.exited) {
           console.log(`[pty-runtime] emitting init event for session ${sid}: ${initData.slashCommands.length} commands`);
+          logDiag(sessionId, "pty:init-fetch-done", {
+            slashCommands: initData.slashCommands.length,
+            mcpServers: initData.mcpServers?.length ?? 0,
+          });
           this.emit([{ type: "init", initData }]);
         } else {
           console.log(`[pty-runtime] init fetch returned ${initData ? "data but session exited" : "null"} for session ${sid}`);
+          logDiag(sessionId, "pty:init-fetch-empty", { exited: this.exited, hadData: !!initData });
         }
       })
       .catch((err) => {
         console.log(`[pty-runtime] init fetch failed for session ${sid}: ${err}`);
+        logDiag(sessionId, "pty:init-fetch-failed", { error: err instanceof Error ? err.message : String(err) });
       });
   }
 
@@ -170,8 +253,16 @@ export class PtyRuntime {
   /** Called by SessionManager.respondToPermission when this session is on the pty runtime. */
   notifyPermissionDecision(requestId: string, decision: PermissionDecision): boolean {
     const resolver = this.pendingPermissions.get(requestId);
-    if (!resolver) return false;
+    if (!resolver) {
+      logDiag(this.opts.sessionId, "pty:permission-decision-unmatched", { requestId, behavior: decision.behavior });
+      return false;
+    }
     this.pendingPermissions.delete(requestId);
+    logDiag(this.opts.sessionId, "pty:permission-decision", {
+      requestId,
+      behavior: decision.behavior,
+      pending: this.pendingPermissions.size,
+    });
     resolver(decision);
     return true;
   }
@@ -216,11 +307,14 @@ export class PtyRuntime {
       onUserPromptSubmit: (payload) => {
         this.cancelErrorDebounce();
         this.ptyOutputBuffer = "";
+        logDiag(this.opts.sessionId, "pty:hook-user-prompt-submit", { armed: !!this.promptAccepted });
+        this.promptAccepted?.();
         this.emit(translateHookEvent("UserPromptSubmit", payload));
       },
       onUserPromptExpansion: (payload) => {
         this.cancelErrorDebounce();
         this.ptyOutputBuffer = "";
+        this.promptAccepted?.();
         const cmd = typeof payload.command_name === "string" ? payload.command_name : "unknown";
         const sid = this.opts.sessionId.slice(0, 8);
         console.log(`[pty-runtime] UserPromptExpansion: command=${cmd}, session=${sid}`);
@@ -280,12 +374,14 @@ export class PtyRuntime {
       rawToolInput: toolInput,
     };
 
+    logDiag(this.opts.sessionId, "pty:permission-request", { requestId, toolName });
     return new Promise<PermissionDecision>((resolve) => {
       this.pendingPermissions.set(requestId, resolve);
       try {
         this.opts.onEvents([event]);
       } catch (err) {
         this.pendingPermissions.delete(requestId);
+        logDiag(this.opts.sessionId, "pty:permission-handler-error", { requestId, toolName, error: String(err) });
         resolve({ behavior: "deny", message: `cockpit handler error: ${String(err)}` });
       }
     });
@@ -306,6 +402,23 @@ export class PtyRuntime {
       clearTimeout(this.errorDebounce);
       this.errorDebounce = null;
     }
+  }
+
+  /**
+   * ANSI/control-stripped, whitespace-collapsed tail of the recent PTY output.
+   * Debug aid for diagnosing why an initial prompt isn't accepted — shows what
+   * the TUI is actually displaying (input box, a startup interstitial, a stuck
+   * dialog) at the moment we type or time out.
+   */
+  private recentScreen(maxChars = 600): string {
+    const clean = this.ptyOutputBuffer
+      .replace(ANSI_RE, "")
+      // biome-ignore lint/suspicious/noControlCharactersInRegex: strip terminal control chars
+      .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, "")
+      .replace(/[ \t]+/g, " ")
+      .replace(/\n{2,}/g, "\n")
+      .trim();
+    return clean.length > maxChars ? clean.slice(-maxChars) : clean;
   }
 
   private scanForErrors(chunk: string): void {

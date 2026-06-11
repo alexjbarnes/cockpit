@@ -22,7 +22,6 @@ import {
   Sparkles,
   Trash2,
 } from "lucide-react";
-import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useShell } from "@/components/app-shell";
 import { ChatView } from "@/components/chat-view";
@@ -457,9 +456,8 @@ export function ChangesView({
   manageSidebar?: boolean;
 }) {
   const { settings } = useSettings();
-  const { setSidebarSection, removeSidebarSection, closeSidebar } = useShell();
+  const { setSidebarSection, removeSidebarSection, closeSidebar, tabActions } = useShell();
   const { send, subscribe } = useWebSocket();
-  const router = useRouter();
   const isDesktop = useIsDesktop();
   const [status, setStatus] = useState<GitStatus | null>(null);
   const [loading, setLoading] = useState(true);
@@ -748,9 +746,9 @@ export function ChangesView({
   const handleViewFile = useCallback(
     (filePath: string) => {
       const fullPath = filePath.startsWith("/") ? filePath : `${cwd}/${filePath}`;
-      router.push(`/files?cwd=${encodeURIComponent(cwd)}&file=${encodeURIComponent(fullPath)}`);
+      tabActions?.openFile(fullPath);
     },
-    [cwd, router],
+    [cwd, tabActions],
   );
 
   useEffect(() => {

@@ -2,6 +2,8 @@ import path from "node:path";
 import { NextRequest, NextResponse } from "next/server";
 import { validateSession } from "@/server/auth";
 import { debugLog } from "@/server/debug-logger";
+import { getJobSessionIds } from "@/server/job-storage";
+import { getCockpitDir } from "@/server/paths";
 import { getSessionManager } from "@/server/singleton";
 import { scanAllSessions } from "@/server/transcript";
 
@@ -44,8 +46,11 @@ export async function GET(req: NextRequest) {
     }
   }
 
+  const cockpitConfigDir = getCockpitDir();
+
   // Include in-memory sessions that have no transcript file yet
   for (const mem of known) {
+    if (mem.cwd === cockpitConfigDir) continue;
     if (onDiskIds.has(mem.id)) continue;
     const group = groups.find((g) => g.cwd === mem.cwd);
     if (group) {
@@ -56,10 +61,15 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  // Filter out scheduled job sessions
+  // Filter out scheduled job sessions. The reliable signal is the run's recorded
+  // sessionId (a job spawns a real session whose transcript looks like any other);
+  // the name checks remain as a fallback for sessions whose run record was pruned.
   const JOB_TITLE_PREFIX = "You are running as an autonomous scheduled job";
+  const jobSessionIds = getJobSessionIds();
   for (const group of groups) {
-    group.sessions = group.sessions.filter((s) => !s.name?.startsWith("[job] ") && !s.name?.startsWith(JOB_TITLE_PREFIX));
+    group.sessions = group.sessions.filter(
+      (s) => !jobSessionIds.has(s.id) && !s.name?.startsWith("[job] ") && !s.name?.startsWith(JOB_TITLE_PREFIX),
+    );
   }
 
   const typeParam = req.nextUrl.searchParams.get("type");
@@ -71,7 +81,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ sessions: allReviews.slice(0, limit) });
   }
 
-  const filtered = groups.filter((g) => g.sessions.length > 0 && !g.cwd.endsWith(".cockpit/jobs"));
+  const filtered = groups.filter((g) => g.sessions.length > 0 && !g.cwd.endsWith(".cockpit/jobs") && g.cwd !== cockpitConfigDir);
 
   // Re-sort after merging in-memory sessions
   for (const group of filtered) {
@@ -109,14 +119,25 @@ export async function POST(req: NextRequest) {
   const contextSizeRaw = typeof body.contextSize === "string" ? body.contextSize : undefined;
   const contextSize = contextSizeRaw === "200k" || contextSizeRaw === "1m" ? contextSizeRaw : undefined;
   const bypassPermissions = body.bypassPermissions === true;
+  const cockpitAgent = body.cockpitAgent === true;
 
   if (!cwd) {
     return NextResponse.json({ error: "cwd is required" }, { status: 400 });
   }
 
-  const session = getSessionManager().createSession(cwd, name, { runtime, bypassPermissions: bypassPermissions || undefined });
+  const session = getSessionManager().createSession(cwd, name, {
+    runtime,
+    bypassPermissions: bypassPermissions || undefined,
+    cockpitAgent: cockpitAgent || undefined,
+  });
   if (model) {
     getSessionManager().setModel(session.id, model, contextSize);
+  }
+  if (cockpitAgent) {
+    const thinkingLevel = typeof body.thinkingLevel === "string" ? body.thinkingLevel : undefined;
+    if (thinkingLevel) {
+      getSessionManager().setThinkingLevel(session.id, thinkingLevel as import("@/types").ThinkingLevel);
+    }
   }
   return NextResponse.json({ sessionId: session.id });
 }

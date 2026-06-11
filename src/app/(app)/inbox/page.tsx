@@ -75,13 +75,15 @@ export default function InboxPage() {
     setConfirmDelete(null);
   };
 
-  const handleMarkAllRead = async () => {
+  const handleToggleAllRead = async () => {
+    const allRead = unreadCount === 0;
+    const targetRead = !allRead;
     await fetch("/api/inbox", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "mark_all_read" }),
+      body: JSON.stringify({ action: "mark_all_read", read: targetRead }),
     });
-    setMessages((prev) => prev.map((m) => ({ ...m, read: true })));
+    setMessages((prev) => prev.map((m) => ({ ...m, read: targetRead })));
   };
 
   const handleClearConfirm = async () => {
@@ -109,12 +111,10 @@ export default function InboxPage() {
         </div>
         {messages.length > 0 && (
           <div className="flex items-center gap-2">
-            {unreadCount > 0 && (
-              <Button variant="outline" size="sm" onClick={handleMarkAllRead}>
-                <CheckCheck className="h-3.5 w-3.5 mr-1" />
-                Mark all read
-              </Button>
-            )}
+            <Button variant="outline" size="sm" onClick={handleToggleAllRead}>
+              <CheckCheck className="h-3.5 w-3.5 mr-1" />
+              {unreadCount === 0 ? "Mark all unread" : "Mark all read"}
+            </Button>
             <Button variant="outline" size="sm" onClick={() => setConfirmClear(true)}>
               <Trash2 className="h-3.5 w-3.5 mr-1" />
               Clear all

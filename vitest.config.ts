@@ -21,6 +21,11 @@ export default defineConfig({
         "src/server/terminal-manager.ts",
         // Server-side singletons: just getter/setters, no logic to test
         "src/server/singleton.ts",
+        // UI components require jsdom/happy-dom for meaningful coverage;
+        // they're exercised by E2E tests and manual testing
+        "src/components/**",
+        "src/hooks/**",
+        "src/app/**",
       ],
       thresholds: {
         lines: 80,

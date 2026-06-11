@@ -25,6 +25,7 @@ vi.mock("@/server/plans", () => ({
 import { createSession as createAuthSession, setupPassword } from "@/server/auth";
 import type { ParsedEvent } from "@/server/event-parser";
 import { SessionManager } from "@/server/session-manager";
+import { appendToBuffer, MAX_BUFFER } from "@/server/terminal-buffer";
 import { TerminalManager } from "@/server/terminal-manager";
 import { createWebSocketHandler } from "@/server/ws-handler";
 
@@ -695,9 +696,7 @@ describe("WebSocket handler", () => {
       await readMessages(ws, 5);
 
       ws.send(JSON.stringify({ type: "session:set_thinking", sessionId: session.id, level: "low" }));
-      await new Promise((resolve) => setTimeout(resolve, 50));
-
-      expect(manager.getThinkingLevel(session.id)).toBe("low");
+      await vi.waitFor(() => expect(manager.getThinkingLevel(session.id)).toBe("low"));
       ws.close();
     });
 
@@ -709,9 +708,7 @@ describe("WebSocket handler", () => {
       await readMessages(ws, 5);
 
       ws.send(JSON.stringify({ type: "session:set_model", sessionId: session.id, model: "opus" }));
-      await new Promise((resolve) => setTimeout(resolve, 50));
-
-      expect(manager.getModel(session.id)).toBe("opus");
+      await vi.waitFor(() => expect(manager.getModel(session.id)).toBe("opus"));
       ws.close();
     });
 
@@ -759,12 +756,10 @@ describe("WebSocket handler", () => {
       await readMessages(ws, 5);
 
       ws.send(JSON.stringify({ type: "permission:set_bypass", sessionId: session.id, enabled: true }));
-      await new Promise((resolve) => setTimeout(resolve, 50));
-      expect(manager.isBypassActive(session.id)).toBe(true);
+      await vi.waitFor(() => expect(manager.isBypassActive(session.id)).toBe(true));
 
       ws.send(JSON.stringify({ type: "permission:set_bypass", sessionId: session.id, enabled: false }));
-      await new Promise((resolve) => setTimeout(resolve, 50));
-      expect(manager.isBypassActive(session.id)).toBe(false);
+      await vi.waitFor(() => expect(manager.isBypassActive(session.id)).toBe(false));
 
       ws.close();
     });
@@ -777,12 +772,10 @@ describe("WebSocket handler", () => {
       await readMessages(ws, 5);
 
       ws.send(JSON.stringify({ type: "session:set_plan_mode", sessionId: session.id, enabled: true }));
-      await new Promise((resolve) => setTimeout(resolve, 50));
-      expect(manager.isPlanModeActive(session.id)).toBe(true);
+      await vi.waitFor(() => expect(manager.isPlanModeActive(session.id)).toBe(true));
 
       ws.send(JSON.stringify({ type: "session:set_plan_mode", sessionId: session.id, enabled: false }));
-      await new Promise((resolve) => setTimeout(resolve, 50));
-      expect(manager.isPlanModeActive(session.id)).toBe(false);
+      await vi.waitFor(() => expect(manager.isPlanModeActive(session.id)).toBe(false));
 
       ws.close();
     });
@@ -1066,6 +1059,12 @@ describe("WebSocket handler", () => {
 
       await waitForConnect(ws, session.id);
 
+      (manager as any).sessions.get(session.id).pendingRequests.set("req-1", {
+        type: "permission",
+        requestId: "req-1",
+        toolName: "Bash",
+        toolInput: "rm -rf /",
+      });
       emitEvent(session.id, {
         type: "permission_request",
         toolName: "Bash",
@@ -1086,6 +1085,12 @@ describe("WebSocket handler", () => {
 
       await waitForConnect(ws, session.id);
 
+      (manager as any).sessions.get(session.id).pendingRequests.set("req-2", {
+        type: "question",
+        requestId: "req-2",
+        toolName: "AskUserQuestion",
+        toolInput: "What color?",
+      });
       emitEvent(session.id, {
         type: "permission_request",
         toolName: "AskUserQuestion",
@@ -1095,6 +1100,87 @@ describe("WebSocket handler", () => {
       } as ParsedEvent);
       const msg = await readMessage(ws);
       expect(msg.type).toBe("question:request");
+
+      ws.close();
+    });
+
+    it("drops permission_request with no pending entry (auto-resolved)", async () => {
+      const session = manager.createSession("/tmp");
+      const ws = await connectWs();
+
+      await waitForConnect(ws, session.id);
+
+      // No pending entry set — the guard should drop this.
+      emitEvent(session.id, {
+        type: "permission_request",
+        toolName: "Bash",
+        requestId: "req-auto",
+        toolInput: "ls",
+        rawToolInput: { command: "ls" },
+      } as ParsedEvent);
+      // Emit a rate_limit probe and assert the first received message is that probe.
+      emitEvent(session.id, {
+        type: "rate_limit",
+        rateLimitInfo: { status: "rate_limited", retryAfterMs: 1000 },
+      } as ParsedEvent);
+      const msg = await readMessage(ws);
+      expect(msg.type).toBe("session:rate_limit");
+      expect(msg).not.toHaveProperty("requestId");
+
+      ws.close();
+    });
+
+    it("forwards genuine permission request with pending entry", async () => {
+      const session = manager.createSession("/tmp");
+      const ws = await connectWs();
+
+      await waitForConnect(ws, session.id);
+
+      (manager as any).sessions.get(session.id).pendingRequests.set("req-gen", {
+        type: "permission",
+        requestId: "req-gen",
+        toolName: "Bash",
+        toolInput: "ls",
+      });
+      emitEvent(session.id, {
+        type: "permission_request",
+        toolName: "Bash",
+        requestId: "req-gen",
+        toolInput: "ls",
+        rawToolInput: { command: "ls" },
+      } as ParsedEvent);
+      const msg = await readMessage(ws);
+      expect(msg.type).toBe("permission:request");
+      expect(msg.requestId).toBe("req-gen");
+      expect(msg.toolName).toBe("Bash");
+
+      ws.close();
+    });
+
+    it("forwards genuine question with pending entry", async () => {
+      const session = manager.createSession("/tmp");
+      const ws = await connectWs();
+
+      await waitForConnect(ws, session.id);
+
+      (manager as any).sessions.get(session.id).pendingRequests.set("req-q", {
+        type: "question",
+        requestId: "req-q",
+        toolName: "AskUserQuestion",
+        toolInput: "What is your favorite color?",
+      });
+      emitEvent(session.id, {
+        type: "permission_request",
+        toolName: "AskUserQuestion",
+        requestId: "req-q",
+        toolInput: "What is your favorite color?",
+        rawToolInput: { question: "What is your favorite color?" },
+      } as ParsedEvent);
+      const msg = await readMessage(ws);
+      expect(msg.type).toBe("question:request");
+      expect(msg.requestId).toBe("req-q");
+      // No permission:request should be sent
+      expect(msg).not.toHaveProperty("toolName");
 
       ws.close();
     });
@@ -1540,8 +1626,7 @@ describe("WebSocket handler", () => {
           level: "low",
         }),
       );
-      await new Promise((r) => setTimeout(r, 50));
-      expect(manager.getThinkingLevel(session.id)).toBe("low");
+      await vi.waitFor(() => expect(manager.getThinkingLevel(session.id)).toBe("low"));
       ws.close();
     });
 
@@ -1557,8 +1642,7 @@ describe("WebSocket handler", () => {
           model: "opus",
         }),
       );
-      await new Promise((r) => setTimeout(r, 50));
-      expect(manager.getModel(session.id)).toBe("opus");
+      await vi.waitFor(() => expect(manager.getModel(session.id)).toBe("opus"));
       ws.close();
     });
   });
@@ -1590,8 +1674,7 @@ describe("WebSocket handler", () => {
           enabled: true,
         }),
       );
-      await new Promise((r) => setTimeout(r, 50));
-      expect(manager.isBypassActive(session.id)).toBe(true);
+      await vi.waitFor(() => expect(manager.isBypassActive(session.id)).toBe(true));
       ws.close();
     });
 
@@ -1608,8 +1691,7 @@ describe("WebSocket handler", () => {
           enabled: false,
         }),
       );
-      await new Promise((r) => setTimeout(r, 50));
-      expect(manager.isBypassActive(session.id)).toBe(false);
+      await vi.waitFor(() => expect(manager.isBypassActive(session.id)).toBe(false));
       ws.close();
     });
   });
@@ -1641,8 +1723,7 @@ describe("WebSocket handler", () => {
           enabled: true,
         }),
       );
-      await new Promise((r) => setTimeout(r, 50));
-      expect(manager.isPlanModeActive(session.id)).toBe(true);
+      await vi.waitFor(() => expect(manager.isPlanModeActive(session.id)).toBe(true));
       ws.close();
     });
 
@@ -1659,8 +1740,7 @@ describe("WebSocket handler", () => {
           enabled: false,
         }),
       );
-      await new Promise((r) => setTimeout(r, 50));
-      expect(manager.isPlanModeActive(session.id)).toBe(false);
+      await vi.waitFor(() => expect(manager.isPlanModeActive(session.id)).toBe(false));
       ws.close();
     });
   });
@@ -1813,6 +1893,12 @@ describe("WebSocket handler", () => {
       await waitForConnect(ws, session.id);
 
       const s = (manager as any).sessions.get(session.id)!;
+      s.pendingRequests.set("req-1", {
+        type: "question",
+        requestId: "req-1",
+        toolName: "AskUserQuestion",
+        toolInput: "What do you think?",
+      });
       s.emitter.emit("event", session.id, {
         type: "permission_request",
         toolName: "AskUserQuestion",
@@ -1832,6 +1918,12 @@ describe("WebSocket handler", () => {
       await waitForConnect(ws, session.id);
 
       const s = (manager as any).sessions.get(session.id)!;
+      s.pendingRequests.set("req-2", {
+        type: "permission",
+        requestId: "req-2",
+        toolName: "Bash",
+        toolInput: "rm -rf /",
+      });
       s.emitter.emit("event", session.id, {
         type: "permission_request",
         toolName: "Bash",
@@ -1997,6 +2089,12 @@ describe("WebSocket handler", () => {
 
       const s = (manager as any).sessions.get(session.id)!;
       s.runtime = "pty";
+      s.pendingRequests.set("req-pty", {
+        type: "permission",
+        requestId: "req-pty",
+        toolName: "Bash",
+        toolInput: "ls",
+      });
       s.emitter.emit("event", session.id, {
         type: "permission_request",
         toolName: "Bash",
@@ -2354,6 +2452,12 @@ describe("WebSocket handler", () => {
       await waitForConnect(ws, session.id);
 
       const s = (manager as any).sessions.get(session.id)!;
+      s.pendingRequests.set("req-plan", {
+        type: "permission",
+        requestId: "req-plan",
+        toolName: "ExitPlanMode",
+        toolInput: "exit plan",
+      });
       s.emitter.emit("event", session.id, {
         type: "permission_request",
         toolName: "ExitPlanMode",
@@ -2368,7 +2472,7 @@ describe("WebSocket handler", () => {
       ws.close();
     });
 
-    it("handles permission_request without requestId or rawToolInput", async () => {
+    it("drops permission_request with no pending entry", async () => {
       const session = manager.createSession("/tmp");
       const ws = await connectWs();
       await waitForConnect(ws, session.id);
@@ -2379,9 +2483,14 @@ describe("WebSocket handler", () => {
         toolName: "Bash",
         toolInput: "ls",
       });
+      // No pending entry set, so the guard should drop it.
+      // Emit a rate_limit probe and assert the first received message is that probe.
+      s.emitter.emit("event", session.id, {
+        type: "rate_limit",
+        rateLimitInfo: { status: "rate_limited", retryAfterMs: 1000 },
+      });
       const msg = await readMessage(ws);
-      expect(msg.type).toBe("permission:request");
-      expect(msg.requestId).toBe("");
+      expect(msg.type).toBe("session:rate_limit");
       ws.close();
     });
 
@@ -2603,6 +2712,12 @@ describe("WebSocket handler", () => {
       await waitForConnect(ws, session.id);
 
       const s = (manager as any).sessions.get(session.id)!;
+      s.pendingRequests.set("req-sug", {
+        type: "permission",
+        requestId: "req-sug",
+        toolName: "Bash",
+        toolInput: "ls",
+      });
       s.emitter.emit("event", session.id, {
         type: "permission_request",
         toolName: "Bash",
@@ -2634,6 +2749,12 @@ describe("WebSocket handler", () => {
       await waitForConnect(ws, session.id);
 
       const s = (manager as any).sessions.get(session.id)!;
+      s.pendingRequests.set("req-sug2", {
+        type: "permission",
+        requestId: "req-sug2",
+        toolName: "Bash",
+        toolInput: "ls",
+      });
       s.emitter.emit("event", session.id, {
         type: "permission_request",
         toolName: "Bash",
@@ -2687,8 +2808,7 @@ describe("WebSocket handler", () => {
           permissionMode: "allow_all",
         }),
       );
-      await new Promise((r) => setTimeout(r, 50));
-      expect(manager.isBypassActive(session.id)).toBe(true);
+      await vi.waitFor(() => expect(manager.isBypassActive(session.id)).toBe(true));
       ws.close();
     });
 
@@ -2804,9 +2924,10 @@ describe("WebSocket handler", () => {
       ws.send("\x01R80;24");
       await new Promise((r) => setTimeout(r, 50));
       ws.send("ls -la\r");
-      await new Promise((r) => setTimeout(r, 50));
-      const term = (terminalMgr as any).terminals.get("term-4")!;
-      expect(term.pty.write).toHaveBeenCalledWith("ls -la\r");
+      await vi.waitFor(() => {
+        const term = (terminalMgr as any).terminals.get("term-4")!;
+        expect(term.pty.write).toHaveBeenCalledWith("ls -la\r");
+      });
       ws.close();
     });
 
@@ -2815,9 +2936,10 @@ describe("WebSocket handler", () => {
       const ws = await connectTerminalWs("term-5", { replay: "0" });
       await new Promise((r) => setTimeout(r, 50));
       ws.send("\x01R120;50");
-      await new Promise((r) => setTimeout(r, 50));
-      const term = (terminalMgr as any).terminals.get("term-5")!;
-      expect(term.pty.resize).toHaveBeenCalledWith(120, 50);
+      await vi.waitFor(() => {
+        const term = (terminalMgr as any).terminals.get("term-5")!;
+        expect(term.pty.resize).toHaveBeenCalledWith(120, 50);
+      });
       ws.close();
     });
 
@@ -2826,9 +2948,70 @@ describe("WebSocket handler", () => {
       const ws = await connectTerminalWs("term-6");
       await new Promise((r) => setTimeout(r, 50));
       ws.close();
+      await vi.waitFor(() => {
+        const term = (terminalMgr as any).terminals.get("term-6");
+        expect(!term || term.client === null).toBe(true);
+      });
+    });
+
+    it("stale socket close does not detach newer client on same terminalId", async () => {
+      injectFakeTerminal("term-7");
+
+      // Connect socket1 and wait for its client to be attached
+      const ws1 = await connectTerminalWs("term-7");
+      let client1: unknown;
+      while (true) {
+        const c = (terminalMgr as any).terminals.get("term-7")!.client;
+        if (c !== null) {
+          client1 = c;
+          break;
+        }
+        await new Promise((r) => setTimeout(r, 10));
+      }
+
+      // Connect socket2 and wait until its client has replaced socket1's
+      const ws2 = await connectTerminalWs("term-7");
+      while (true) {
+        const c = (terminalMgr as any).terminals.get("term-7")!.client;
+        if (c !== null && c !== client1) break;
+        await new Promise((r) => setTimeout(r, 10));
+      }
+
+      // Close socket1 (the stale socket); its close handler should not detach socket2's client
+      ws1.close();
       await new Promise((r) => setTimeout(r, 50));
-      const term = (terminalMgr as any).terminals.get("term-6");
-      expect(!term || term.client === null).toBe(true);
+
+      const term = (terminalMgr as any).terminals.get("term-7");
+      expect(term.client).not.toBeNull();
+      ws2.close();
+    });
+
+    it("reconnects with replay=0 after buffer trim returns correct delta", async () => {
+      // Simulate a busy terminal that hit the buffer cap and was detached
+      const buffer = "x".repeat(MAX_BUFFER);
+      injectFakeTerminal("term-8", buffer);
+      const term = (terminalMgr as any).terminals.get("term-8")!;
+      term.detachOffset = MAX_BUFFER;
+
+      // Simulate output produced while away (after the buffer was at cap)
+      appendToBuffer(term, "y".repeat(51200));
+
+      // Use the same term reference for assertion before connect
+      const expectedSlice = "y".repeat(51200);
+
+      // Reconnect with replay=0
+      const url = `ws://localhost:${port}/ws/terminal?token=${validToken}&terminalId=term-8&replay=0`;
+      const ws = new WebSocket(url);
+      const dataPromise = new Promise<string>((resolve) => {
+        ws.on("message", (d) => resolve(d.toString()));
+      });
+      await new Promise<void>((resolve) => ws.on("open", () => resolve()));
+      const data = await dataPromise;
+
+      // The delta should be only the new data, not the full buffer
+      expect(data).toBe(expectedSlice);
+      expect(data.length).toBeLessThan(MAX_BUFFER);
+      ws.close();
     });
   });
 });

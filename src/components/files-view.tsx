@@ -16,6 +16,8 @@ interface FileContent {
   size: number;
   truncated: boolean;
   binary: boolean;
+  image?: boolean;
+  mediaType?: string;
   mtimeMs?: number;
 }
 
@@ -124,6 +126,7 @@ export function FilesView({
   const [pathInputOpen, setPathInputOpen] = useState(false);
   const [wrap, setWrap] = useState(false);
   const [preview, setPreview] = useState(false);
+  const [imgError, setImgError] = useState(false);
   const fetchRef = useRef(0);
   const contentRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -284,6 +287,8 @@ export function FilesView({
       return;
     }
 
+    setImgError(false);
+
     const cached = fileContentCache.get(selectedFile);
     if (cached) {
       setFileData(cached);
@@ -371,6 +376,7 @@ export function FilesView({
   const lang = languageFromPath(selectedFile);
   const isMarkdown = lang === "markdown" || lang === "mdx";
   const showPreview = isMarkdown && preview;
+  const isText = !fileData.binary && !fileData.image;
 
   return (
     <div className="flex flex-col h-full min-h-0">
@@ -379,7 +385,7 @@ export function FilesView({
         <span className="font-bold">{fileName}</span>
         {fileData.truncated && <span className="ml-2 text-muted-foreground">(truncated to 100KB)</span>}
         <div className="ml-auto flex items-center gap-1">
-          {!fileData.binary && (
+          {isText && (
             <button
               type="button"
               onClick={searchOpen ? closeSearch : openSearch}
@@ -402,7 +408,7 @@ export function FilesView({
               <Eye className="h-3.5 w-3.5" />
             </button>
           )}
-          {!showPreview && (
+          {isText && !showPreview && (
             <button
               type="button"
               onClick={toggleWrap}
@@ -459,7 +465,20 @@ export function FilesView({
       )}
 
       <div ref={contentRef} className="flex-1 min-h-0 flex flex-col">
-        {fileData.binary ? (
+        {fileData.image ? (
+          <div ref={scrollRef} className="flex-1 min-h-0 overflow-auto flex items-center justify-center p-4">
+            {imgError ? (
+              <div className="text-sm text-muted-foreground">Could not display image</div>
+            ) : (
+              <img
+                src={`/api/filesystem/read?path=${encodeURIComponent(selectedFile)}&raw=true${fileData.mtimeMs ? `&t=${fileData.mtimeMs}` : ""}`}
+                alt={fileName}
+                className="max-w-full max-h-full object-contain"
+                onError={() => setImgError(true)}
+              />
+            )}
+          </div>
+        ) : fileData.binary ? (
           <div className="flex items-center justify-center flex-1 text-sm text-muted-foreground">Binary file</div>
         ) : showPreview ? (
           <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto p-4">

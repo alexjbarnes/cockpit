@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowLeft, ChevronDown, ChevronUp, Loader2, Pencil, Play, Trash2 } from "lucide-react";
+import { ArrowLeft, ChevronDown, ChevronUp, Loader2, Pencil, Play, Square, Trash2 } from "lucide-react";
 import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { usePageHeader } from "@/components/app-shell";
@@ -42,18 +42,41 @@ function PromptCard({ prompt }: { prompt: string }) {
   );
 }
 
+function formatDuration(ms: number): string {
+  const totalSec = Math.round(ms / 1000);
+  if (totalSec < 60) return `${totalSec}s`;
+  return `${Math.floor(totalSec / 60)}m ${totalSec % 60}s`;
+}
+
+// Fixed min-width + centred text so every status pill is the same size.
+const STATUS_PILL = "min-w-[5rem] justify-center";
+
 function runStatusBadge(status: string) {
   switch (status) {
     case "success":
-      return <Badge className="bg-green-600 text-white">Success</Badge>;
+      return <Badge className={`${STATUS_PILL} bg-green-600 text-white`}>Success</Badge>;
     case "failure":
-      return <Badge variant="destructive">Failed</Badge>;
+      return (
+        <Badge variant="destructive" className={STATUS_PILL}>
+          Failed
+        </Badge>
+      );
     case "timeout":
-      return <Badge className="bg-yellow-600 text-white">Timeout</Badge>;
+      return <Badge className={`${STATUS_PILL} bg-yellow-600 text-white`}>Timeout</Badge>;
     case "running":
-      return <Badge className="bg-blue-600 text-white">Running</Badge>;
+      return <Badge className={`${STATUS_PILL} bg-blue-600 text-white`}>Running</Badge>;
+    case "stopped":
+      return (
+        <Badge variant="secondary" className={STATUS_PILL}>
+          Stopped
+        </Badge>
+      );
     default:
-      return <Badge variant="secondary">{status}</Badge>;
+      return (
+        <Badge variant="secondary" className={STATUS_PILL}>
+          {status}
+        </Badge>
+      );
   }
 }
 
@@ -79,6 +102,7 @@ export default function JobDetailPage() {
   const [job, setJob] = useState<ScheduledJob | null>(null);
   const [loading, setLoading] = useState(true);
   const [triggering, setTriggering] = useState(false);
+  const [stopping, setStopping] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
 
   usePageHeader(job?.name || "Job", { hideActions: true });
@@ -110,6 +134,16 @@ export default function JobDetailPage() {
     refreshRuns();
   }
 
+  async function handleStop() {
+    setStopping(true);
+    try {
+      const res = await fetch(`/api/jobs/${id}/stop`, { method: "POST" });
+      if (res.ok) refreshRuns();
+    } finally {
+      setStopping(false);
+    }
+  }
+
   async function handleDelete() {
     const res = await fetch(`/api/jobs/${id}`, { method: "DELETE" });
     if (res.ok) router.push("/jobs");
@@ -133,7 +167,7 @@ export default function JobDetailPage() {
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2">
               <h2 className="font-semibold truncate">{job.name}</h2>
-              {job.enabled ? <Badge variant="default">Active</Badge> : <Badge variant="secondary">Disabled</Badge>}
+              {job.enabled ? <Badge variant="default">Enabled</Badge> : <Badge variant="secondary">Disabled</Badge>}
             </div>
             <p className="text-xs text-muted-foreground">{describeAllSchedules(getJobSchedules(job))}</p>
           </div>
@@ -148,6 +182,12 @@ export default function JobDetailPage() {
             {triggering ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Play className="h-4 w-4 mr-1" />}
             Run Now
           </Button>
+          {runs.some((r) => r.status === "running") && (
+            <Button variant="outline" size="sm" onClick={handleStop} disabled={stopping}>
+              {stopping ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Square className="h-4 w-4 mr-1" />}
+              Stop
+            </Button>
+          )}
           <Button variant="ghost" size="sm" className="text-destructive hover:text-destructive" onClick={() => setConfirmDelete(true)}>
             <Trash2 className="h-4 w-4 mr-1" />
             Delete
@@ -208,7 +248,7 @@ export default function JobDetailPage() {
                 >
                   {runStatusBadge(run.status)}
                   <span className="text-xs text-muted-foreground flex-1">{new Date(run.startedAt).toLocaleString()}</span>
-                  {run.durationMs != null && <span className="text-xs text-muted-foreground">{Math.round(run.durationMs / 1000)}s</span>}
+                  {run.durationMs != null && <span className="text-xs text-muted-foreground">{formatDuration(run.durationMs)}</span>}
                 </button>
               ))}
             </div>

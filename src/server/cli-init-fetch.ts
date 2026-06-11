@@ -7,10 +7,15 @@ const FETCH_TIMEOUT_MS = 30_000;
  * Spawn a one-shot `claude -p --output-format stream-json` process and extract
  * the system/init event. Kills the process as soon as init is received (before
  * any API call for the prompt), so this costs zero tokens.
+ *
+ * `--no-session-persistence` stops this throwaway probe from writing a session
+ * transcript to ~/.claude/projects. Without it the CLI persists the "hi" prompt
+ * at startup (before we can kill it), and that transcript then surfaces in the
+ * session history as a stray "hi" session, once per init fetch, per cwd. Keep it.
  */
 export function fetchCliInitData(opts: { cwd: string; bin?: string }): Promise<InitData | null> {
   const bin = opts.bin ?? "claude";
-  const args = ["-p", "--verbose", "--output-format", "stream-json", "hi"];
+  const args = ["-p", "--no-session-persistence", "--verbose", "--output-format", "stream-json", "hi"];
 
   return new Promise((resolve) => {
     let resolved = false;

@@ -1,6 +1,6 @@
 "use client";
 
-import { AlertCircle, CalendarClock, CheckCircle2, ChevronRight, Copy, Folder, Loader2, Play, Plus, Trash2 } from "lucide-react";
+import { AlertCircle, CalendarClock, CheckCircle2, ChevronRight, Copy, Folder, Loader2, Play, Plus, Square, Trash2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
 import { usePageHeader } from "@/components/app-shell";
@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useJobs } from "@/hooks/use-jobs";
+import { type JobDisplayStatus, jobDisplayStatus } from "@/lib/job-display";
 import { describeAllSchedules, getJobSchedules, getNextRunTimeAny } from "@/server/cron-utils";
 import type { ScheduledJob } from "@/types";
 
@@ -18,15 +19,12 @@ type JobWithStatus = ScheduledJob & {
   lastRunError?: string;
 };
 
-function statusBadge(job: JobWithStatus) {
-  if (!job.enabled) return <Badge variant="secondary">Disabled</Badge>;
-  if (job.lastRunStatus === "failure" || job.lastRunStatus === "timeout") {
-    return <Badge variant="destructive">Failed</Badge>;
-  }
-  if (job.lastRunStatus === "running") {
-    return <Badge variant="default">Running</Badge>;
-  }
-  return <Badge variant="default">Active</Badge>;
+function statusBadge(status: JobDisplayStatus) {
+  if (status === "running") return <Badge variant="default">Running</Badge>;
+  if (status === "disabled") return <Badge variant="secondary">Disabled</Badge>;
+  if (status === "failed") return <Badge variant="destructive">Failed</Badge>;
+  if (status === "stopped") return <Badge variant="secondary">Stopped</Badge>;
+  return <Badge variant="default">Enabled</Badge>;
 }
 
 function lastRunInfo(job: JobWithStatus) {
@@ -48,15 +46,19 @@ function lastRunInfo(job: JobWithStatus) {
       </span>
     );
   }
-  if (job.lastRunStatus === "running") {
-    return (
-      <span className="flex items-center gap-1">
-        <Loader2 className="h-3 w-3 animate-spin" />
-        Running
-      </span>
-    );
+  if (job.lastRunStatus === "stopped") {
+    return <span className="flex items-center gap-1 text-muted-foreground">Stopped {ago}</span>;
   }
   return null;
+}
+
+function runningIndicator() {
+  return (
+    <span className="flex items-center gap-1">
+      <Loader2 className="h-3 w-3 animate-spin" />
+      Running
+    </span>
+  );
 }
 
 function timeAgo(ts: number): string {
@@ -115,32 +117,56 @@ function groupJobsByDir(jobs: JobWithStatus[]): JobGroupData[] {
 function JobCard({
   job,
   triggeringJobs,
+  stoppingJobs,
   onTrigger,
+  onStop,
   onDuplicate,
   onDelete,
   onClick,
 }: {
   job: JobWithStatus;
   triggeringJobs: Set<string>;
+  stoppingJobs?: Set<string>;
   onTrigger: (e: React.MouseEvent, id: string) => void;
+  onStop?: (e: React.MouseEvent, id: string) => void;
   onDuplicate: (e: React.MouseEvent, id: string) => void;
   onDelete: (e: React.MouseEvent, id: string) => void;
   onClick: (id: string) => void;
 }) {
+  const status = jobDisplayStatus(job, triggeringJobs.has(job.id));
+  const running = status === "running";
   return (
     <Card className="cursor-pointer hover:bg-accent/50 transition-colors" onClick={() => onClick(job.id)}>
       <CardContent className="p-4">
+        {/* Row 1: title spans the full card width; status badge trails at the right */}
+        <div className="flex items-center gap-2 mb-2">
+          <span className="font-medium text-sm truncate flex-1 min-w-0">{job.name}</span>
+          {statusBadge(status)}
+        </div>
+        {/* Row 2: schedule/next/last-run metadata on the left, actions on the right */}
         <div className="flex items-center gap-3">
           <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2 mb-1">
-              <span className="font-medium text-sm truncate">{job.name}</span>
-              {statusBadge(job)}
-            </div>
             <p className="text-xs text-muted-foreground">{describeAllSchedules(getJobSchedules(job))}</p>
             <p className="text-xs text-muted-foreground mt-0.5">Next: {formatNextRun(job)}</p>
-            {lastRunInfo(job) && <p className="text-xs mt-0.5">{lastRunInfo(job)}</p>}
+            {running ? (
+              <p className="text-xs mt-0.5">{runningIndicator()}</p>
+            ) : (
+              lastRunInfo(job) && <p className="text-xs mt-0.5">{lastRunInfo(job)}</p>
+            )}
           </div>
           <div className="flex items-center gap-1 shrink-0">
+            {status === "running" && onStop && (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8"
+                title="Stop now"
+                disabled={stoppingJobs?.has(job.id)}
+                onClick={(e) => onStop(e, job.id)}
+              >
+                {stoppingJobs?.has(job.id) ? <Loader2 className="h-4 w-4 animate-spin" /> : <Square className="h-4 w-4" />}
+              </Button>
+            )}
             <Button
               variant="ghost"
               size="icon"
@@ -173,7 +199,9 @@ function JobCard({
 function JobDirGroup({
   group,
   triggeringJobs,
+  stoppingJobs,
   onTrigger,
+  onStop,
   onDuplicate,
   onDelete,
   onClickJob,
@@ -182,7 +210,9 @@ function JobDirGroup({
 }: {
   group: JobGroupData;
   triggeringJobs: Set<string>;
+  stoppingJobs?: Set<string>;
   onTrigger: (e: React.MouseEvent, id: string) => void;
+  onStop?: (e: React.MouseEvent, id: string) => void;
   onDuplicate: (e: React.MouseEvent, id: string) => void;
   onDelete: (e: React.MouseEvent, id: string) => void;
   onClickJob: (id: string) => void;
@@ -203,9 +233,7 @@ function JobDirGroup({
         <Folder className="h-4 w-4 shrink-0 text-muted-foreground" />
         <span className="font-medium text-sm truncate flex-1">{group.dirName}</span>
         <div className="flex items-center gap-2 shrink-0">
-          {failedCount > 0 && (
-            <span className="text-xs bg-destructive text-destructive-foreground px-1.5 py-0.5 rounded">{failedCount} failed</span>
-          )}
+          {failedCount > 0 && <Badge variant="destructive">{failedCount} failed</Badge>}
           <span className="text-xs text-muted-foreground">
             {group.jobs.length} job{group.jobs.length !== 1 ? "s" : ""}
           </span>
@@ -228,7 +256,9 @@ function JobDirGroup({
               key={job.id}
               job={job}
               triggeringJobs={triggeringJobs}
+              stoppingJobs={stoppingJobs}
               onTrigger={onTrigger}
+              onStop={onStop}
               onDuplicate={onDuplicate}
               onDelete={onDelete}
               onClick={onClickJob}
@@ -243,10 +273,11 @@ function JobDirGroup({
 export default function JobsPage() {
   usePageHeader("Scheduled Jobs", { hideActions: true });
 
-  const { jobs, loading, deleteJob, triggerJob, refresh } = useJobs();
+  const { jobs, loading, deleteJob, triggerJob, stopJob, refresh } = useJobs();
   const router = useRouter();
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const [triggeringJobs, setTriggeringJobs] = useState<Set<string>>(new Set());
+  const [stoppingJobs, setStoppingJobs] = useState<Set<string>>(new Set());
 
   const groups = useMemo(() => groupJobsByDir(jobs as JobWithStatus[]), [jobs]);
 
@@ -261,6 +292,23 @@ export default function JobsPage() {
     setTriggeringJobs((prev) => new Set(prev).add(jobId));
     await triggerJob(jobId);
     setTriggeringJobs((prev) => {
+      const next = new Set(prev);
+      next.delete(jobId);
+      return next;
+    });
+    refresh();
+  }
+
+  async function handleStopClick(e: React.MouseEvent, jobId: string) {
+    e.stopPropagation();
+    setStoppingJobs((prev) => new Set(prev).add(jobId));
+    setTriggeringJobs((prev) => {
+      const next = new Set(prev);
+      next.delete(jobId);
+      return next;
+    });
+    await stopJob(jobId);
+    setStoppingJobs((prev) => {
       const next = new Set(prev);
       next.delete(jobId);
       return next;
@@ -297,7 +345,9 @@ export default function JobsPage() {
                 key={job.id}
                 job={job}
                 triggeringJobs={triggeringJobs}
+                stoppingJobs={stoppingJobs}
                 onTrigger={handleTrigger}
+                onStop={handleStopClick}
                 onDuplicate={handleDuplicate}
                 onDelete={handleDeleteClick}
                 onClick={(id) => router.push(`/jobs/${id}`)}
@@ -308,7 +358,9 @@ export default function JobsPage() {
                 key={group.cwd}
                 group={group}
                 triggeringJobs={triggeringJobs}
+                stoppingJobs={stoppingJobs}
                 onTrigger={handleTrigger}
+                onStop={handleStopClick}
                 onDuplicate={handleDuplicate}
                 onDelete={handleDeleteClick}
                 onClickJob={(id) => router.push(`/jobs/${id}`)}

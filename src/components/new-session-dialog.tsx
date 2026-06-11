@@ -103,6 +103,7 @@ export function NewSessionDialog({ open, onOpenChange, onSubmit }: NewSessionDia
       }}
     >
       <DialogContent
+        className="flex flex-col"
         onClose={() => {
           reset();
           onOpenChange(false);
@@ -145,8 +146,8 @@ export function NewSessionDialog({ open, onOpenChange, onSubmit }: NewSessionDia
         )}
 
         {step === "details" && (
-          <>
-            <div className="flex gap-1 border-b mt-2">
+          <div className="flex flex-1 flex-col min-h-0 mt-2">
+            <div className="flex gap-1 border-b shrink-0">
               <button
                 type="button"
                 onClick={() => setTab("session")}
@@ -169,96 +170,104 @@ export function NewSessionDialog({ open, onOpenChange, onSubmit }: NewSessionDia
             </div>
 
             {tab === "session" && (
-              <form onSubmit={handleSubmit} className="space-y-4 mt-2">
-                <div>
-                  <label className="text-sm font-medium">Working Directory</label>
-                  <div className="flex gap-2">
-                    <Input value={cwd} onChange={(e) => setCwd(e.target.value)} placeholder="/home/user/project" required />
-                    <Button type="button" variant="outline" size="icon" onClick={() => setBrowsing(!browsing)} title="Browse directories">
-                      <FolderOpen className="h-4 w-4" />
-                    </Button>
+              <form onSubmit={handleSubmit} className="flex flex-1 flex-col min-h-0">
+                <div className="flex-1 min-h-0 overflow-y-auto space-y-4 pt-3">
+                  <div>
+                    <label className="text-sm font-medium">Working Directory</label>
+                    <div className="flex gap-2">
+                      <Input value={cwd} onChange={(e) => setCwd(e.target.value)} placeholder="/home/user/project" required />
+                      <Button type="button" variant="outline" size="icon" onClick={() => setBrowsing(!browsing)} title="Browse directories">
+                        <FolderOpen className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  </div>
+                  {browsing && (
+                    <DirectoryPicker
+                      onSelect={(path) => {
+                        setCwd(path);
+                        setBrowsing(false);
+                      }}
+                      onCancel={() => setBrowsing(false)}
+                    />
+                  )}
+                  <div>
+                    <label className="text-sm font-medium">Name (optional)</label>
+                    <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="My Project" />
                   </div>
                 </div>
-                {browsing && (
-                  <DirectoryPicker
-                    onSelect={(path) => {
-                      setCwd(path);
-                      setBrowsing(false);
-                    }}
-                    onCancel={() => setBrowsing(false)}
-                  />
-                )}
-                <div>
-                  <label className="text-sm font-medium">Name (optional)</label>
-                  <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="My Project" />
+                <div className="shrink-0 -mx-6 border-t bg-background px-6 pt-3">
+                  <Button type="submit" className="w-full" disabled={!cwd.trim()}>
+                    Create Session
+                  </Button>
                 </div>
-                <Button type="submit" className="w-full" disabled={!cwd.trim()}>
-                  Create Session
-                </Button>
               </form>
             )}
 
             {tab === "clone" && (
-              <form onSubmit={handleClone} className="space-y-4 mt-2">
-                <div>
-                  <label className="text-sm font-medium">Repository URL</label>
-                  <Input
-                    value={cloneUrl}
-                    onChange={(e) => setCloneUrl(e.target.value)}
-                    placeholder="https://github.com/user/repo.git"
-                    required
-                  />
-                </div>
-                <div>
-                  <label className="text-sm font-medium">Clone Into</label>
-                  <div className="flex gap-2">
-                    <Input value={cloneDest} onChange={(e) => setCloneDest(e.target.value)} placeholder="/home/user/projects" required />
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="icon"
-                      onClick={() => setCloneBrowsing(!cloneBrowsing)}
-                      title="Browse directories"
-                    >
-                      <FolderOpen className="h-4 w-4" />
-                    </Button>
+              <form onSubmit={handleClone} className="flex flex-1 flex-col min-h-0">
+                <div className="flex-1 min-h-0 overflow-y-auto space-y-4 pt-3">
+                  <div>
+                    <label className="text-sm font-medium">Repository URL</label>
+                    <Input
+                      value={cloneUrl}
+                      onChange={(e) => setCloneUrl(e.target.value)}
+                      placeholder="https://github.com/user/repo.git"
+                      required
+                    />
                   </div>
-                </div>
-                {cloneBrowsing && (
-                  <DirectoryPicker
-                    onSelect={(path) => {
-                      setCloneDest(path);
-                      setCloneBrowsing(false);
-                    }}
-                    onCancel={() => setCloneBrowsing(false)}
-                  />
-                )}
-                <div>
-                  <label className="text-sm font-medium">Folder Name (optional)</label>
-                  <Input
-                    value={cloneFolderName}
-                    onChange={(e) => setCloneFolderName(e.target.value)}
-                    placeholder="Defaults to repository name"
-                  />
-                </div>
-                <div>
-                  <label className="text-sm font-medium">Session Name (optional)</label>
-                  <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="My Project" />
-                </div>
-                {cloneError && <p className="text-sm text-destructive">{cloneError}</p>}
-                <Button type="submit" className="w-full" disabled={!cloneUrl.trim() || !cloneDest.trim() || cloning}>
-                  {cloning ? (
-                    <>
-                      <Loader2 className="h-4 w-4 animate-spin mr-2" />
-                      Cloning...
-                    </>
-                  ) : (
-                    "Clone & Create Session"
+                  <div>
+                    <label className="text-sm font-medium">Clone Into</label>
+                    <div className="flex gap-2">
+                      <Input value={cloneDest} onChange={(e) => setCloneDest(e.target.value)} placeholder="/home/user/projects" required />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="icon"
+                        onClick={() => setCloneBrowsing(!cloneBrowsing)}
+                        title="Browse directories"
+                      >
+                        <FolderOpen className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  </div>
+                  {cloneBrowsing && (
+                    <DirectoryPicker
+                      onSelect={(path) => {
+                        setCloneDest(path);
+                        setCloneBrowsing(false);
+                      }}
+                      onCancel={() => setCloneBrowsing(false)}
+                    />
                   )}
-                </Button>
+                  <div>
+                    <label className="text-sm font-medium">Folder Name (optional)</label>
+                    <Input
+                      value={cloneFolderName}
+                      onChange={(e) => setCloneFolderName(e.target.value)}
+                      placeholder="Defaults to repository name"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-sm font-medium">Session Name (optional)</label>
+                    <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="My Project" />
+                  </div>
+                  {cloneError && <p className="text-sm text-destructive">{cloneError}</p>}
+                </div>
+                <div className="shrink-0 -mx-6 border-t bg-background px-6 pt-3">
+                  <Button type="submit" className="w-full" disabled={!cloneUrl.trim() || !cloneDest.trim() || cloning}>
+                    {cloning ? (
+                      <>
+                        <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                        Cloning...
+                      </>
+                    ) : (
+                      "Clone & Create Session"
+                    )}
+                  </Button>
+                </div>
               </form>
             )}
-          </>
+          </div>
         )}
       </DialogContent>
     </Dialog>

@@ -12,6 +12,7 @@ import { splitAtQuestion } from "@/lib/split-question-blocks";
 import { cn } from "@/lib/utils";
 import type { Provider } from "@/types";
 import { useShell } from "./app-shell";
+import { ConfigProposalCard } from "./chat/config-proposal-card";
 import { InputArea } from "./input-area";
 import { MessageBubble } from "./message-bubble";
 import { ModelPicker } from "./model-picker";
@@ -32,6 +33,8 @@ export function ChatView({
   historyView,
   onSendMessage,
   className,
+  showPlanToggle = true,
+  isCockpitAgent = false,
 }: {
   sessionId: string;
   cwd?: string;
@@ -40,6 +43,8 @@ export function ChatView({
   historyView?: boolean;
   onSendMessage?: (fn: (text: string) => void) => void;
   className?: string;
+  showPlanToggle?: boolean;
+  isCockpitAgent?: boolean;
 }) {
   const {
     messages,
@@ -477,6 +482,8 @@ export function ChatView({
                 onSetBypass={setBypassAll}
                 onSetPlanMode={setPlanMode}
               />
+            ) : p.configProposal ? (
+              <ConfigProposalCard key={p.requestId} permission={p} onRespond={respondToPermission} />
             ) : (
               <PermissionPrompt key={p.requestId} permission={p} onRespond={respondToPermission} />
             ),
@@ -548,6 +555,8 @@ export function ChatView({
           onSetBypass={setBypassAll}
           planMode={planMode}
           onSetPlanMode={setPlanMode}
+          showPlanToggle={showPlanToggle}
+          isCockpitAgent={isCockpitAgent}
           thinkingLevel={thinkingLevel}
           onSetThinking={setThinkingLevel}
           currentModel={currentModel}

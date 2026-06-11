@@ -1,7 +1,6 @@
 "use client";
 
 import { ChevronRight, ClipboardList, ExternalLink, Loader2 } from "lucide-react";
-import { useRouter } from "next/navigation";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSettings } from "@/hooks/use-settings";
 import { shortPath } from "@/lib/path";
@@ -176,62 +175,45 @@ export function ToolCard({ tool, expandedToolIds }: ToolCardProps) {
   );
 }
 
-function useFileViewerHref(filePath: string) {
-  const { cwd } = useShell();
-  return `/files?cwd=${encodeURIComponent(cwd || "")}&file=${encodeURIComponent(filePath)}`;
-}
-
-function saveScrollPosition() {
-  const el = document.querySelector("[data-chat-scroll]");
-  if (el) {
-    sessionStorage.setItem("cockpit:scrollPos:" + window.location.pathname, String(el.scrollTop));
-  }
-}
-
 function FilePathIcon({ filePath }: { filePath: string }) {
   const { tabActions } = useShell();
-  const href = useFileViewerHref(filePath);
-  const router = useRouter();
   return (
-    <button
+    <span
+      role="button"
+      tabIndex={0}
       onClick={(e) => {
         e.stopPropagation();
-        if (tabActions) {
-          tabActions.openFile(filePath);
-        } else {
-          saveScrollPosition();
-          router.push(href);
+        tabActions?.openFile(filePath);
+      }}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          e.stopPropagation();
+          tabActions?.openFile(filePath);
         }
       }}
       title={filePath}
-      className="shrink-0 text-muted-foreground hover:text-foreground"
+      className="shrink-0 text-muted-foreground hover:text-foreground cursor-pointer"
     >
       <ExternalLink className="h-3 w-3" />
-    </button>
+    </span>
   );
 }
 
 function FilePathLink({ filePath, children }: { filePath: string; children: React.ReactNode }) {
   const { tabActions } = useShell();
-  const href = useFileViewerHref(filePath);
-  const router = useRouter();
   return (
-    <a
-      href={href}
+    <button
+      type="button"
       onClick={(e) => {
-        e.preventDefault();
-        if (tabActions) {
-          tabActions.openFile(filePath);
-        } else {
-          saveScrollPosition();
-          router.push(href);
-        }
+        e.stopPropagation();
+        tabActions?.openFile(filePath);
       }}
       title={filePath}
-      className="font-mono text-muted-foreground break-all hover:underline"
+      className="font-mono text-muted-foreground break-all hover:underline text-left"
     >
       {children}
-    </a>
+    </button>
   );
 }
 

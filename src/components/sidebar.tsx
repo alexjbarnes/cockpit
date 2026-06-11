@@ -4,6 +4,7 @@ import { DndContext, type DragEndEvent, PointerSensor, useSensor, useSensors } f
 import { arrayMove, SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import {
+  Bot,
   CalendarClock,
   Check,
   ExternalLink,
@@ -33,6 +34,7 @@ import { useWebSocket } from "@/hooks/use-websocket";
 import { useCheckedFiles } from "@/lib/checked-files";
 import { cn } from "@/lib/utils";
 import type { SessionInfo } from "@/types";
+import { AssistantModal } from "./assistant-modal";
 import { NewSessionDialog } from "./new-session-dialog";
 
 const SIDEBAR_WIDTH_KEY = "cockpit_sidebar_width";
@@ -312,6 +314,7 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
   const [unread, setUnread] = useState<Set<string>>(new Set());
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [assistantOpen, setAssistantOpen] = useState(false);
   const [width, setWidth] = useState(DEFAULT_WIDTH);
 
   useEffect(() => {
@@ -624,6 +627,7 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
         </div>
 
         <div className="border-t px-3 py-2 flex items-center justify-end gap-2">
+          <AssistantButton onClick={() => setAssistantOpen(true)} />
           <JobsButton
             onClick={() => {
               close();
@@ -653,6 +657,7 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
       </div>
 
       <NewSessionDialog open={dialogOpen} onOpenChange={setDialogOpen} onSubmit={createSession} />
+      <AssistantModal open={assistantOpen} onOpenChange={setAssistantOpen} />
     </>
   );
 });
@@ -843,20 +848,15 @@ function isMobile() {
 }
 
 function SidebarFileTree({ cwd }: { cwd: string }) {
-  const router = useRouter();
   const { tabActions, closeSidebar } = useShell();
   const [pickerOpen, setPickerOpen] = useState(false);
 
   const handleSelect = useCallback(
     (filePath: string) => {
-      if (tabActions) {
-        tabActions.openFile(filePath);
-      } else {
-        router.push(`/files?cwd=${encodeURIComponent(cwd)}&file=${encodeURIComponent(filePath)}`);
-      }
+      tabActions?.openFile(filePath);
       if (isMobile()) closeSidebar();
     },
-    [router, cwd, tabActions, closeSidebar],
+    [tabActions, closeSidebar],
   );
 
   const handlePickFile = useCallback(
@@ -909,8 +909,7 @@ function changeStatusIcon(status: string) {
   }
 }
 
-function SidebarChanges({ cwd, sessionId }: { cwd: string; sessionId?: string }) {
-  const router = useRouter();
+function SidebarChanges({ cwd }: { cwd: string; sessionId?: string }) {
   const pathname = usePathname();
   const { tabActions } = useShell();
   const { subscribe } = useWebSocket();
@@ -951,7 +950,6 @@ function SidebarChanges({ cwd, sessionId }: { cwd: string; sessionId?: string })
     });
   }, [subscribe, fetchStatus]);
 
-  const sessionParam = sessionId ? `&sessionId=${encodeURIComponent(sessionId)}` : "";
   const totalAdded = files.reduce((sum, f) => sum + f.additions, 0);
   const totalDeleted = files.reduce((sum, f) => sum + f.deletions, 0);
 
@@ -984,11 +982,7 @@ function SidebarChanges({ cwd, sessionId }: { cwd: string; sessionId?: string })
               type="button"
               title="Open commit view"
               onClick={() => {
-                if (tabActions) {
-                  tabActions.openChanges();
-                } else {
-                  router.push(`/changes?cwd=${encodeURIComponent(cwd)}${sessionParam}`);
-                }
+                tabActions?.openChanges();
               }}
               className="hover:text-foreground transition-colors"
             >
@@ -1017,11 +1011,7 @@ function SidebarChanges({ cwd, sessionId }: { cwd: string; sessionId?: string })
               <button
                 type="button"
                 onClick={() => {
-                  if (tabActions) {
-                    tabActions.openDiff(file.path);
-                  } else {
-                    router.push(`/changes?cwd=${encodeURIComponent(cwd)}${sessionParam}`);
-                  }
+                  tabActions?.openDiff(file.path);
                 }}
                 className="flex items-center gap-2 flex-1 min-w-0 text-left"
               >
@@ -1084,6 +1074,20 @@ function InboxButton({ onClick }: { onClick: () => void }) {
     >
       <Inbox className="h-4 w-4" />
       {unread > 0 && <span className="absolute top-1 right-1 h-2 w-2 rounded-full bg-blue-500" />}
+    </Button>
+  );
+}
+
+function AssistantButton({ onClick }: { onClick: () => void }) {
+  return (
+    <Button
+      variant="ghost"
+      size="icon"
+      className="shrink-0 h-8 w-8 text-muted-foreground hover:text-foreground"
+      onClick={onClick}
+      title="Cockpit Assistant"
+    >
+      <Bot className="h-4 w-4" />
     </Button>
   );
 }
