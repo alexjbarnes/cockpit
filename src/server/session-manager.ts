@@ -389,15 +389,16 @@ export class SessionManager {
       // pointer to a regular session (e.g. a hand-edited assistant.json) must not
       // be rehydrated here — it would lack the MCP-disable/permission restrictions.
       if (prefs?.cockpitAgent) {
-        const cwd = (await findSessionCwd(prefs.cliSessionId || stored)) ?? (await findSessionCwd(stored));
-        if (cwd) {
-          // ensureSession rebuilds in-memory state and (Step 5) registers the MCP-disable
-          // onInit listener. Model/thinking are restored from session-prefs — which the
-          // in-modal selector and the settings-page write-through both keep current —
-          // so no re-apply is needed here.
-          this.ensureSession(stored, cwd);
-          return stored;
-        }
+        // The assistant's cwd is always getCockpitDir(); fall back to it when no
+        // transcript exists yet (the assistant was changed but never messaged) so
+        // its model/thinking still restore from session-prefs instead of the
+        // session being recreated from the assistant.json fallback (Sonnet/High).
+        const cwd = (await findSessionCwd(prefs.cliSessionId || stored)) ?? (await findSessionCwd(stored)) ?? getCockpitDir();
+        // ensureSession rebuilds in-memory state and (Step 5) registers the MCP-disable
+        // onInit listener. Model/thinking are restored from session-prefs — which the
+        // in-modal selector keeps current — so no re-apply is needed here.
+        this.ensureSession(stored, cwd);
+        return stored;
       }
     }
     // No stored id, or its transcript is gone — create a fresh session seeded from
@@ -1881,13 +1882,12 @@ export class SessionManager {
           return true;
         }
         this.log(sessionId, `/model command: args="${args}", was=${session.info.model}`);
-        this.killProcess(session);
-        session.info.model = args;
-        session.info.status = "idle";
-        session.emitter.emit("status", sessionId, "idle");
-        setSessionPrefs(sessionId, { model: args });
+        // Route through setModel so model + modelSlots.main + contextSize persist
+        // together (and the process restarts correctly per runtime). Writing only
+        // prefs.model left modelSlots.main stale, and rehydrate prefers modelSlots,
+        // so the switch reverted on restart.
+        this.setModel(sessionId, args);
         this.emitSystem(session, sessionId, `Model switched to ${args}`);
-        this.emitInfoUpdated(session, sessionId);
         return true;
       }
 
