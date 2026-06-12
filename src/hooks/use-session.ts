@@ -1179,9 +1179,14 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
         text: apiText,
         images: images?.length ? images : undefined,
         documents: documents?.length ? documents : undefined,
+        cwd: cwd || undefined,
+        // When sending from a history view, the server must resume the exact
+        // transcript link being viewed (not the chain head) so the view and the
+        // agent stay in sync.
+        historyView: historyView || undefined,
       });
     },
-    [send, sessionId, queuePaused, cwd],
+    [send, sessionId, queuePaused, cwd, historyView],
   );
 
   const interrupt = useCallback(() => {

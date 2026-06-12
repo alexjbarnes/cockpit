@@ -280,12 +280,17 @@ export class SessionManager {
     }
   }
 
-  ensureSession(id: string, cwd: string): Session {
+  ensureSession(id: string, cwd: string, opts?: { pinCliSessionId?: string }): Session {
     let session = this.sessions.get(id);
     if (!session) {
       const prefs = getSessionPrefs(id);
-      const cliId = prefs?.cliSessionId || id;
-      const prevIds = prefs?.previousCliSessionIds || [];
+      // pinCliSessionId forces the session to resume an exact transcript link
+      // (history-view continue), with that link's ancestors as the stitch chain,
+      // overriding the usual "resolve to the chain head" behaviour.
+      const cliId = opts?.pinCliSessionId || prefs?.cliSessionId || id;
+      const prevIds = opts?.pinCliSessionId
+        ? (findChainForCliSession(opts.pinCliSessionId)?.truncatedPrevIds ?? [])
+        : prefs?.previousCliSessionIds || [];
       const short = id.slice(0, 8);
       debugLog(
         `[session:${short}] ensureSession: cliSessionId=${cliId.slice(0, 8)}, prevIds=[${prevIds.map((p) => p.slice(0, 8)).join(",")}], hasPrefs=${!!prefs}`,
@@ -2076,16 +2081,25 @@ Additional Cockpit rules beyond the CLI's defaults:
 </system-reminder>`;
   }
 
-  async recoverSession(id: string): Promise<boolean> {
+  async recoverSession(id: string, opts?: { cwd?: string; pinExact?: boolean }): Promise<boolean> {
     if (this.sessions.has(id)) return true;
     smLog(id, "recovering session: not in memory, searching disk");
     const prefs = getSessionPrefs(id);
-    const cwd = (await findSessionCwd(prefs?.cliSessionId || id)) || (await findSessionCwd(id));
+    const cwd = (await findSessionCwd(prefs?.cliSessionId || id)) || (await findSessionCwd(id)) || opts?.cwd;
     if (!cwd) {
       smLog(id, "recovery failed: no transcript found on disk");
       return false;
     }
-    this.ensureSession(id, cwd);
+    // When recovered from a history-view deep link, `id` is the exact transcript
+    // link being viewed, which may be an older link of a compacted/cleared chain.
+    // Pin it as the cliSessionId so the resume continues that link (--resume
+    // appends to the same file) instead of jumping to the chain head — otherwise
+    // the view and the agent diverge.
+    if (opts?.pinExact && transcriptExists(id, cwd)) {
+      this.ensureSession(id, cwd, { pinCliSessionId: id });
+    } else {
+      this.ensureSession(id, cwd);
+    }
     smLog(id, `recovery succeeded: restored from ${cwd}`);
     return true;
   }

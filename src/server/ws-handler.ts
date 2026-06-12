@@ -596,7 +596,7 @@ export function createWebSocketHandler(
           }
           const sent = sessionManager.sendMessage(msg.sessionId, msg.text, msg.images, msg.documents);
           if (!sent) {
-            sessionManager.recoverSession(msg.sessionId).then((recovered) => {
+            sessionManager.recoverSession(msg.sessionId, { cwd: msg.cwd, pinExact: msg.historyView }).then((recovered) => {
               if (recovered) {
                 subscribeSession(msg.sessionId);
                 sessionManager.sendMessage(msg.sessionId, msg.text, msg.images, msg.documents);
