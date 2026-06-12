@@ -9,9 +9,11 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useCommands } from "@/hooks/use-commands";
+import { useScrollRestoration } from "@/hooks/use-scroll-restoration";
 
 export default function CommandsPage() {
   usePageHeader("Commands", { hideActions: true });
+  const scrollRef = useScrollRestoration<HTMLDivElement>("commands-scroll");
 
   const cwd = typeof localStorage !== "undefined" ? localStorage.getItem("cockpit-agents-cwd") || undefined : undefined;
 
@@ -43,7 +45,7 @@ export default function CommandsPage() {
   }
 
   return (
-    <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-4">
+    <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto p-4 space-y-4">
       <div className="flex items-center justify-between">
         <div />
         <Button size="sm" onClick={() => setScopeDialog(true)}>

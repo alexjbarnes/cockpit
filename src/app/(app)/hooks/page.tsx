@@ -5,6 +5,7 @@ import { usePageHeader } from "@/components/app-shell";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useHooks } from "@/hooks/use-hooks";
+import { useScrollRestoration } from "@/hooks/use-scroll-restoration";
 
 const SCOPE_LABELS: Record<string, string> = {
   global: "Global",
@@ -16,6 +17,7 @@ const BLOCKING_EVENTS = new Set(["UserPromptSubmit", "PreToolUse", "PermissionRe
 
 export default function HooksPage() {
   usePageHeader("Hooks", { hideActions: true });
+  const scrollRef = useScrollRestoration<HTMLDivElement>("hooks-scroll");
 
   const cwd = typeof localStorage !== "undefined" ? localStorage.getItem("cockpit-agents-cwd") || undefined : undefined;
 
@@ -43,7 +45,7 @@ export default function HooksPage() {
   }
 
   return (
-    <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-4">
+    <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto p-4 space-y-4">
       <div className="flex items-center justify-between">
         <div />
         <button
