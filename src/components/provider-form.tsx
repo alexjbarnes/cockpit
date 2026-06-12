@@ -31,6 +31,17 @@ interface EditingModel {
   contextSizes: ContextSize[];
 }
 
+function buildModel(modelId: string, displayName: string, effortLevels: ThinkingLevel[], contextSizes: ContextSize[]): ProviderModel {
+  const cleanId = modelId.trim().replace(/\[.*\]$/, "");
+  return { modelId: cleanId, displayName: displayName.trim() || cleanId, effortLevels, contextSizes };
+}
+
+// A draft / inline edit is committable on the same terms as the explicit
+// "Add model" / inner "Save" buttons: a non-empty id and at least one context size.
+function isCommittable(modelId: string, contextSizes: ContextSize[]): boolean {
+  return modelId.trim().replace(/\[.*\]$/, "") !== "" && contextSizes.length > 0;
+}
+
 function EffortPills({ selected, onChange }: { selected: ThinkingLevel[]; onChange: (levels: ThinkingLevel[]) => void }) {
   return (
     <div className="ml-auto flex flex-wrap gap-1 justify-end">
@@ -104,13 +115,28 @@ export function ProviderForm({ provider, isNew, onSave, onCancel, onDelete, lock
 
   const handleSave = async () => {
     if (!name.trim()) return;
+
+    // Fold any in-progress inline edit and the unsaved draft into the list so the
+    // bottom Save never silently drops a model the user typed but didn't commit
+    // with the inner "Save" / "Add model" button. This was a repeated footgun.
+    let nextModels = models;
+    if (editingModel && isCommittable(editingModel.modelId, editingModel.contextSizes)) {
+      const edit = editingModel;
+      nextModels = nextModels.map((m, i) =>
+        i === edit.index ? buildModel(edit.modelId, edit.displayName, edit.effortLevels, edit.contextSizes) : m,
+      );
+    }
+    if (isCommittable(newModelId, newModelContextSizes)) {
+      nextModels = [...nextModels, buildModel(newModelId, newModelName, newModelEffort, newModelContextSizes)];
+    }
+
     setSaving(true);
     try {
       await onSave({
         ...provider,
         name,
         envVars: Object.fromEntries(envVars),
-        models,
+        models: nextModels,
       });
     } finally {
       setSaving(false);
@@ -126,39 +152,20 @@ export function ProviderForm({ provider, isNew, onSave, onCancel, onDelete, lock
   };
 
   const addModel = () => {
-    const cleanId = newModelId.trim().replace(/\[.*\]$/, "");
-    if (cleanId && newModelContextSizes.length > 0) {
-      setModels([
-        ...models,
-        {
-          modelId: cleanId,
-          displayName: newModelName.trim() || cleanId,
-          effortLevels: newModelEffort,
-          contextSizes: newModelContextSizes,
-        },
-      ]);
-      setNewModelId("");
-      setNewModelName("");
-      setNewModelEffort([]);
-      setNewModelContextSizes(["200k"]);
-    }
+    if (!isCommittable(newModelId, newModelContextSizes)) return;
+    setModels([...models, buildModel(newModelId, newModelName, newModelEffort, newModelContextSizes)]);
+    setNewModelId("");
+    setNewModelName("");
+    setNewModelEffort([]);
+    setNewModelContextSizes(["200k"]);
   };
 
   const saveEditingModel = () => {
     if (!editingModel) return;
-    if (editingModel.contextSizes.length === 0) return;
-    const cleanId = editingModel.modelId.trim().replace(/\[.*\]$/, "");
+    if (!isCommittable(editingModel.modelId, editingModel.contextSizes)) return;
+    const edit = editingModel;
     setModels(
-      models.map((m, i) =>
-        i === editingModel.index
-          ? {
-              modelId: cleanId,
-              displayName: editingModel.displayName.trim() || cleanId,
-              effortLevels: editingModel.effortLevels,
-              contextSizes: editingModel.contextSizes,
-            }
-          : m,
-      ),
+      models.map((m, i) => (i === edit.index ? buildModel(edit.modelId, edit.displayName, edit.effortLevels, edit.contextSizes) : m)),
     );
     setEditingModel(null);
   };
