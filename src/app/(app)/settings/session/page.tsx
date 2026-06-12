@@ -17,6 +17,7 @@ import {
 } from "@/lib/models";
 
 const thinkingOptions: { value: ThinkingLevel; label: string }[] = [
+  { value: "off", label: "Off" },
   { value: "low", label: "Low" },
   { value: "medium", label: "Medium" },
   { value: "high", label: "High" },
@@ -78,7 +79,9 @@ export default function SessionSettingsPage() {
   const versions = versionsForAlias(selectedAlias);
   const showVersions = versions.length > 1;
   const effortLevels = allowedEffortLevels(entry);
-  const visibleThinking = thinkingOptions.filter((opt) => effortLevels.includes(opt.value as ThinkingLevel));
+  const visibleThinking = thinkingOptions.filter((opt) =>
+    opt.value === "off" ? effortLevels.length > 0 : effortLevels.includes(opt.value as ThinkingLevel),
+  );
 
   function selectAlias(alias: ModelAlias) {
     const def = defaultForAlias(alias);
@@ -122,6 +125,7 @@ export default function SessionSettingsPage() {
                 { value: "haiku", label: "Haiku" },
                 { value: "sonnet", label: "Sonnet" },
                 { value: "opus", label: "Opus" },
+                { value: "fable", label: "Fable" },
               ] as { value: string; label: string }[]
             }
             value={selectedAlias}

@@ -115,7 +115,7 @@ const TOOL_DEFINITIONS = [
     inputSchema: {
       type: "object",
       properties: {
-        thinkingLevel: { type: "string", enum: ["low", "medium", "high", "xhigh", "max"] },
+        thinkingLevel: { type: "string", enum: ["off", "low", "medium", "high", "xhigh", "max"] },
         diffStyle: { type: "string", enum: ["split", "unified"] },
         dismissKeyboardOnSend: { type: "boolean" },
         thinkingExpanded: { type: "boolean" },

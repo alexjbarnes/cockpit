@@ -151,7 +151,7 @@ export interface PermissionSuggestion {
   destination?: string;
 }
 
-export type ThinkingLevel = "low" | "medium" | "high" | "xhigh" | "max";
+export type ThinkingLevel = "off" | "low" | "medium" | "high" | "xhigh" | "max";
 
 export interface UsageLimit {
   /** Percentage 0-100 */

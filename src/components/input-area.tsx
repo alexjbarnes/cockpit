@@ -40,6 +40,7 @@ import {
   CONTEXT_SIZES,
   type ContextSize,
   defaultForAlias,
+  describeModelSelection,
   findModelById,
   type ModelAlias,
   type ModelEntry,
@@ -65,6 +66,7 @@ const aliases: { value: ModelAlias; label: string }[] = [
   { value: "haiku", label: "Haiku" },
   { value: "sonnet", label: "Sonnet" },
   { value: "opus", label: "Opus" },
+  { value: "fable", label: "Fable" },
 ];
 
 function parseCurrentModel(
@@ -72,7 +74,7 @@ function parseCurrentModel(
   currentContextSize: ContextSize,
 ): { alias: ModelAlias | null; entry: ModelEntry | null; contextSize: ContextSize } {
   const base = currentModel.replace(/\[.*\]$/, "");
-  if (base === "opus" || base === "sonnet" || base === "haiku") {
+  if (base === "opus" || base === "sonnet" || base === "haiku" || base === "fable") {
     return { alias: base, entry: defaultForAlias(base) ?? null, contextSize: currentContextSize };
   }
   const entry = findModelById(base) ?? null;
@@ -92,6 +94,7 @@ function valueForAlias(alias: ModelAlias): string {
 }
 
 const thinkingLevels: { value: ThinkingLevel; label: string }[] = [
+  { value: "off", label: "Off" },
   { value: "low", label: "Low" },
   { value: "medium", label: "Medium" },
   { value: "high", label: "High" },
@@ -332,6 +335,7 @@ export function InputArea({
   const [historyOpen, setHistoryOpen] = useState(false);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [optionsOpen, setOptionsOpen] = useState(false);
+  const [inputFocused, setInputFocused] = useState(false);
   const [settingsTab, setSettingsTab] = useState<"model" | "runtime">("model");
   const [viewProvider, setViewProvider] = useState<string>("anthropic");
   const [mentionSelectedIndex, setMentionSelectedIndex] = useState(0);
@@ -737,6 +741,10 @@ export function InputArea({
     [addFiles],
   );
 
+  const modelSelection = describeModelSelection(currentModel, thinkingLevel, currentContextSize, providers);
+  const thinkingLabel = modelSelection.thinking ? (thinkingLevels.find((t) => t.value === modelSelection.thinking)?.label ?? null) : null;
+  const contextLabel = modelSelection.context ? CONTEXT_SIZES[modelSelection.context].label : null;
+
   return (
     <div
       className={`border-t bg-background px-1 pt-2 pb-1 ${dragOver ? "ring-2 ring-primary ring-inset" : ""}`}
@@ -798,7 +806,9 @@ export function InputArea({
               return [];
             })();
             const allowed = new Set(providerEffort.length > 0 ? providerEffort : allowedEffortLevels(parsed.entry));
-            const visibleLevels = thinkingLevels.filter((opt) => allowed.has(opt.value));
+            // "Off" (disable thinking) is offered whenever the model can think; the
+            // effort levels show only when allowed. It is not an --effort value.
+            const visibleLevels = thinkingLevels.filter((opt) => (opt.value === "off" ? allowed.size > 0 : allowed.has(opt.value)));
 
             return (
               <div
@@ -1248,6 +1258,8 @@ export function InputArea({
               onKeyDown={handleKeyDown}
               onInput={handleInput}
               onPaste={handlePaste}
+              onFocus={() => setInputFocused(true)}
+              onBlur={() => setInputFocused(false)}
               placeholder={
                 hasQueuedMessage
                   ? queuePaused
@@ -1271,6 +1283,24 @@ export function InputArea({
             >
               <Paperclip className="h-4 w-4" />
             </button>
+            {!inputFocused && (
+              <button
+                type="button"
+                data-testid="model-pill"
+                title="Model and thinking level — click to change"
+                onClick={() => {
+                  const p = parseCurrentModel(currentModel, currentContextSize);
+                  setViewProvider(p.alias ? "anthropic" : resolveProviderId(currentModel, providers));
+                  setOptionsOpen(true);
+                }}
+                className="absolute bottom-2.5 left-2.5 flex max-w-[60%] items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground transition-colors hover:bg-muted/70 hover:text-foreground"
+              >
+                <Cpu className="h-2.5 w-2.5 shrink-0" />
+                <span className="truncate">{modelSelection.label}</span>
+                {thinkingLabel && <span className="shrink-0 text-muted-foreground/60">· {thinkingLabel}</span>}
+                {contextLabel && <span className="shrink-0 text-muted-foreground/60">· {contextLabel}</span>}
+              </button>
+            )}
           </div>
           <div className="flex flex-col items-center justify-center w-12 shrink-0 overflow-visible">
             {!connected ? (

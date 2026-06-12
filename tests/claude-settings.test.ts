@@ -52,6 +52,21 @@ describe("prepareHookSettings", () => {
     });
   });
 
+  it("writes alwaysThinkingEnabled from thinkingEnabled (false disables, true forces on)", async () => {
+    const read = async (id: string, thinkingEnabled: boolean): Promise<Record<string, unknown>> => {
+      cleanupIds.push(id);
+      const { settingsPath } = await prepareHookSettings({
+        sessionId: id,
+        hookUrl: "http://127.0.0.1:1",
+        hookToken: "tok",
+        thinkingEnabled,
+      });
+      return JSON.parse(readFileSync(settingsPath, "utf-8")) as Record<string, unknown>;
+    };
+    expect((await read("test-think-off", false)).alwaysThinkingEnabled).toBe(false);
+    expect((await read("test-think-on", true)).alwaysThinkingEnabled).toBe(true);
+  });
+
   it("respects allow/deny lists", async () => {
     const sessionId = "test-session-2";
     cleanupIds.push(sessionId);

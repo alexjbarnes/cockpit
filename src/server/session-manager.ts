@@ -1201,6 +1201,7 @@ export class SessionManager {
       : (() => {
           const levels = this.modelEffortLevels(model);
           if (levels.length === 0) return null;
+          if (session.thinkingLevel === "off") return "off";
           if (levels.includes(session.thinkingLevel)) return session.thinkingLevel;
           return levels[levels.length - 1];
         })();
@@ -1223,7 +1224,7 @@ export class SessionManager {
         const effortRequest = {
           type: "control_request",
           request_id: `effort-${Date.now()}`,
-          request: { subtype: "apply_flag_settings", settings: { effort: session.thinkingLevel } },
+          request: { subtype: "apply_flag_settings", settings: this.thinkingFlagSettings(session.thinkingLevel) },
         };
         session.stdin.write(JSON.stringify(effortRequest) + "\n");
       }
@@ -1270,6 +1271,15 @@ export class SessionManager {
     return this.sessions.get(sessionId)?.info.model || "sonnet";
   }
 
+  /**
+   * Settings patch for the CLI's apply_flag_settings / settings file. "off"
+   * disables thinking via alwaysThinkingEnabled (there is no --effort value for
+   * it); any other level sets effort and ensures thinking is enabled.
+   */
+  private thinkingFlagSettings(level: ThinkingLevel): Record<string, unknown> {
+    return level === "off" ? { alwaysThinkingEnabled: false } : { effort: level, alwaysThinkingEnabled: true };
+  }
+
   setThinkingLevel(sessionId: string, level: ThinkingLevel): void {
     const session = this.sessions.get(sessionId);
     if (!session || session.thinkingLevel === level) return;
@@ -1281,7 +1291,7 @@ export class SessionManager {
       const request = {
         type: "control_request",
         request_id: `effort-${Date.now()}`,
-        request: { subtype: "apply_flag_settings", settings: { effort: level } },
+        request: { subtype: "apply_flag_settings", settings: this.thinkingFlagSettings(level) },
       };
       session.stdin.write(JSON.stringify(request) + "\n");
     } else if (!session.stdin) {
@@ -2265,7 +2275,9 @@ Additional Cockpit rules beyond the CLI's defaults:
       args.push("--model", cliModel);
     }
 
-    if (this.modelEffortLevels(session.info.model).length > 0) {
+    // "off" has no --effort value; thinking is disabled via a post-init
+    // apply_flag_settings control request below instead.
+    if (this.modelEffortLevels(session.info.model).length > 0 && session.thinkingLevel !== "off") {
       args.push("--effort", session.thinkingLevel);
     }
 
@@ -2349,6 +2361,17 @@ Additional Cockpit rules beyond the CLI's defaults:
       this.sendPermissionMode(session, sessionId, "plan");
     } else if (session.bypassAllPermissions && !session.cockpitAgent) {
       this.sendPermissionMode(session, sessionId, "bypassPermissions");
+    }
+
+    // Thinking "off": there is no --effort value for it and stream mode has no
+    // --settings file, so disable thinking as a settings patch over stdin.
+    if (session.thinkingLevel === "off" && this.modelEffortLevels(session.info.model).length > 0) {
+      const offRequest = {
+        type: "control_request",
+        request_id: `thinking-off-${Date.now()}`,
+        request: { subtype: "apply_flag_settings", settings: { alwaysThinkingEnabled: false } },
+      };
+      proc.stdin!.write(JSON.stringify(offRequest) + "\n");
     }
 
     if (text) {
@@ -2526,7 +2549,9 @@ Additional Cockpit rules beyond the CLI's defaults:
     const resolvedPty = resolveProviderModel(session.info.model ?? "sonnet");
     const cliModelPty = resolvedPty ? resolvedPty.model.modelId : session.info.model;
     if (cliModelPty) extraArgs.push("--model", cliModelPty);
-    if (this.modelEffortLevels(session.info.model).length > 0) {
+    // "off" is applied via the settings file (alwaysThinkingEnabled:false) passed
+    // to PtyRuntime below, not --effort (which has no "off" value).
+    if (this.modelEffortLevels(session.info.model).length > 0 && session.thinkingLevel !== "off") {
       extraArgs.push("--effort", session.thinkingLevel);
     }
     if (session.planMode) {
@@ -2578,6 +2603,7 @@ Additional Cockpit rules beyond the CLI's defaults:
       claudeBin: getClaudeBin(),
       extraArgs,
       extraEnv,
+      thinkingEnabled: session.thinkingLevel !== "off",
       onEvents: (events) => {
         const types = events.map((e) => e.type).join(", ");
         console.log(`[sm] pty onEvents for ${sessionId.slice(0, 8)}: [${types}]`);

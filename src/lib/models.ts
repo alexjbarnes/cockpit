@@ -13,7 +13,7 @@ export function contextSizeToWindow(size: ContextSize): number {
   return CONTEXT_SIZES[size].window;
 }
 
-export type ModelAlias = "opus" | "sonnet" | "haiku";
+export type ModelAlias = "opus" | "sonnet" | "haiku" | "fable";
 
 export interface ModelEntry {
   alias: ModelAlias;
@@ -78,6 +78,17 @@ export const MODELS: ModelEntry[] = [
     isDefault: true,
     supportsXhigh: true,
   },
+  {
+    alias: "fable",
+    version: "5",
+    modelId: "claude-fable-5",
+    displayName: "Fable 5",
+    description: "Most powerful",
+    contextSizes: ["200k", "1m"],
+    contextWindow: 200_000,
+    isDefault: true,
+    supportsXhigh: true,
+  },
 ];
 
 export function findModelById(modelId: string | undefined | null): ModelEntry | undefined {
@@ -96,7 +107,7 @@ export function defaultForAlias(alias: ModelAlias): ModelEntry | undefined {
 export function resolveModel(model: string | undefined | null): ModelEntry | null {
   if (!model) return null;
   const base = model.replace(/\[.*\]$/, "");
-  if (base === "opus" || base === "sonnet" || base === "haiku") {
+  if (base === "opus" || base === "sonnet" || base === "haiku" || base === "fable") {
     return defaultForAlias(base) ?? null;
   }
   return findModelById(base) ?? null;
@@ -120,6 +131,8 @@ export function recommendedEffort(entry: ModelEntry | null | undefined): Thinkin
 export function coerceEffort(level: ThinkingLevel, entry: ModelEntry | null | undefined): ThinkingLevel | null {
   const allowed = allowedEffortLevels(entry);
   if (allowed.length === 0) return null;
+  // "off" (thinking disabled) is valid for any thinking-capable model — preserve it.
+  if (level === "off") return "off";
   if (allowed.includes(level)) return level;
   return recommendedEffort(entry) ?? allowed[allowed.length - 1] ?? null;
 }
@@ -152,4 +165,43 @@ export function resolveProviderId(currentModel: string, providers: { id: string;
   const stripped = currentModel.replace(/\[.*\]$/, "");
   const provider = providers.find((p) => p.models.some((m) => m.modelId === stripped || `${p.id}:${m.modelId}` === stripped));
   return provider?.id ?? "anthropic";
+}
+
+/**
+ * Resolve a stored model string to a short display label, the effective
+ * thinking level, and the context size to show. thinking=null when the model
+ * does not allow the given level (e.g. haiku, or a custom model without that
+ * effort); context=null when the model offers only one size (nothing to
+ * disambiguate), mirroring the session-settings UI. Powers the input-area pill.
+ */
+export function describeModelSelection(
+  currentModel: string,
+  thinkingLevel: ThinkingLevel,
+  contextSize: ContextSize,
+  providers: { id: string; models: ProviderModel[] }[] | undefined,
+): { label: string; thinking: ThinkingLevel | null; context: ContextSize | null } {
+  const entry = resolveModel(currentModel);
+  if (entry) {
+    const allowed = allowedEffortLevels(entry);
+    return {
+      label: entry.displayName,
+      // "off" shows whenever the model can think (it disables thinking); effort
+      // levels show when allowed. Haiku (no thinking) shows nothing.
+      thinking: allowed.length > 0 && (thinkingLevel === "off" || allowed.includes(thinkingLevel)) ? thinkingLevel : null,
+      context: entry.contextSizes.length >= 2 ? contextSize : null,
+    };
+  }
+  const base = currentModel.replace(/\[.*\]$/, "");
+  for (const p of providers ?? []) {
+    const m = p.models.find((pm) => pm.modelId === base || `${p.id}:${pm.modelId}` === base);
+    if (m) {
+      const lv = m.effortLevels ?? [];
+      return {
+        label: m.displayName || m.modelId,
+        thinking: lv.length > 0 && (thinkingLevel === "off" || lv.includes(thinkingLevel)) ? thinkingLevel : null,
+        context: (m.contextSizes ?? []).length >= 2 ? contextSize : null,
+      };
+    }
+  }
+  return { label: base.replace(/^[^:]+:/, "") || base, thinking: null, context: null };
 }
