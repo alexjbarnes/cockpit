@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useJobs } from "@/hooks/use-jobs";
+import { useScrollRestoration } from "@/hooks/use-scroll-restoration";
 import { type JobDisplayStatus, jobDisplayStatus } from "@/lib/job-display";
 import { describeAllSchedules, getJobSchedules, getNextRunTimeAny } from "@/server/cron-utils";
 import type { ScheduledJob } from "@/types";
@@ -272,6 +273,7 @@ function JobDirGroup({
 
 export default function JobsPage() {
   usePageHeader("Scheduled Jobs", { hideActions: true });
+  const scrollRef = useScrollRestoration<HTMLDivElement>("jobs-scroll");
 
   const { jobs, loading, deleteJob, triggerJob, stopJob, refresh } = useJobs();
   const router = useRouter();
@@ -327,7 +329,7 @@ export default function JobsPage() {
   }
 
   return (
-    <div className="flex-1 min-h-0 overflow-y-auto p-4 pb-24 space-y-4">
+    <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto p-4 pb-24 space-y-4">
       {loading && <p className="text-sm text-muted-foreground">Loading jobs...</p>}
 
       {!loading && jobs.length === 0 && (

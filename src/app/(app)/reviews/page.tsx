@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { usePageHeader } from "@/components/app-shell";
 import { Button } from "@/components/ui/button";
+import { useScrollRestoration } from "@/hooks/use-scroll-restoration";
 import { cn } from "@/lib/utils";
 
 const SELECTED_ORG_KEY = "cockpit_review_org";
@@ -37,6 +38,7 @@ function timeAgo(dateStr: string): string {
 
 export default function ReviewsPage() {
   usePageHeader("Reviews");
+  const scrollRef = useScrollRestoration<HTMLDivElement>("reviews-scroll");
 
   const router = useRouter();
   const [orgs, setOrgs] = useState<string[]>(cachedOrgs || []);
@@ -162,7 +164,7 @@ export default function ReviewsPage() {
   }
 
   return (
-    <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-4">
+    <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto p-4 space-y-4">
       {/* Org selector */}
       <div className="flex gap-2 flex-wrap">
         {orgs.map((org) => (

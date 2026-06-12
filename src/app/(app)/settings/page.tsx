@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { usePageHeader } from "@/components/app-shell";
 import { Button } from "@/components/ui/button";
+import { useScrollRestoration } from "@/hooks/use-scroll-restoration";
 
 interface VersionInfo {
   installed: string;
@@ -222,6 +223,7 @@ export default function SettingsPage() {
   const [ccChangelogExpanded, setCcChangelogExpanded] = useState(false);
   const [ccExpandedVersions, setCcExpandedVersions] = useState<Set<string>>(new Set());
   const router = useRouter();
+  const scrollRef = useScrollRestoration<HTMLDivElement>("settings-scroll");
 
   usePageHeader("Settings", { hideActions: true });
 
@@ -311,7 +313,7 @@ export default function SettingsPage() {
   }, []);
 
   return (
-    <div className="flex-1 min-h-0 overflow-y-auto p-4 sm:p-6">
+    <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto p-4 sm:p-6">
       <div className="space-y-3">
         <div className="min-h-[104px]">
           {(versionLoading || version) && (

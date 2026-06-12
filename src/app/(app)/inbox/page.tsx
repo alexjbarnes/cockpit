@@ -6,6 +6,7 @@ import { useCallback, useEffect, useState } from "react";
 import { usePageHeader } from "@/components/app-shell";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { useScrollRestoration } from "@/hooks/use-scroll-restoration";
 import type { InboxMessage } from "@/types";
 
 function priorityIcon(priority: string) {
@@ -32,6 +33,7 @@ function timeAgo(ts: number): string {
 
 export default function InboxPage() {
   usePageHeader("Inbox", { hideActions: true });
+  const scrollRef = useScrollRestoration<HTMLDivElement>("inbox-scroll");
 
   const router = useRouter();
   const [messages, setMessages] = useState<InboxMessage[]>([]);
@@ -99,7 +101,7 @@ export default function InboxPage() {
   const unreadCount = messages.filter((m) => !m.read).length;
 
   return (
-    <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-4">
+    <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto p-4 space-y-4">
       <div className="flex items-center justify-between">
         <div className="text-sm text-muted-foreground">
           {messages.length > 0 && (
