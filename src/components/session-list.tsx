@@ -61,14 +61,14 @@ function DirectoryGroup({
   const [expanded, setExpanded] = useState(false);
   const [fullSessions, setFullSessions] = useState<SessionInfo[] | null>(null);
   const [loadingAll, setLoadingAll] = useState(false);
+  const showAllRef = useRef(false);
 
   const displaySessions = fullSessions || group.sessions;
   const truncated = displaySessions.length < group.totalSessionCount;
   const latestAt = displaySessions[0]?.lastActiveAt || 0;
   const runningCount = displaySessions.filter((s) => s.status === "running").length;
 
-  const loadAll = async () => {
-    if (loadingAll) return;
+  const loadAll = useCallback(async () => {
     setLoadingAll(true);
     try {
       const res = await fetch(`/api/sessions/group?cwd=${encodeURIComponent(group.cwd)}`);
@@ -79,7 +79,20 @@ function DirectoryGroup({
     } finally {
       setLoadingAll(false);
     }
+  }, [group.cwd]);
+
+  const handleLoadAll = () => {
+    showAllRef.current = true;
+    loadAll();
   };
+
+  // Once the full list is shown, re-pull it whenever the group changes upstream
+  // (a delete triggers a parent refetch, which decrements totalSessionCount), so
+  // a just-deleted session cannot linger in the stale expanded cache.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: intentional re-trigger on group size change; loadAll is stable
+  useEffect(() => {
+    if (showAllRef.current) loadAll();
+  }, [group.totalSessionCount]);
 
   return (
     <div className="rounded-lg border bg-card">
@@ -123,7 +136,7 @@ function DirectoryGroup({
           ))}
           {truncated && (
             <button
-              onClick={loadAll}
+              onClick={handleLoadAll}
               disabled={loadingAll}
               className="w-full text-xs text-muted-foreground hover:text-foreground py-2 rounded hover:bg-accent/50 transition-colors disabled:opacity-50"
             >

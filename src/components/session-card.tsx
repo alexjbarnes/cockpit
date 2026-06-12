@@ -43,7 +43,7 @@ export function SessionCard({ session, onClick, onDelete }: SessionCardProps) {
               e.stopPropagation();
               onDelete(e);
             }}
-            className="p-1 rounded hover:bg-destructive/10 opacity-0 group-hover:opacity-100 transition-opacity"
+            className="p-1 rounded hover:bg-destructive/10 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity"
             title="Delete session"
           >
             <Trash2 className="h-3.5 w-3.5 text-muted-foreground hover:text-destructive" />
