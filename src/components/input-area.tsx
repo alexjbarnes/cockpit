@@ -1272,7 +1272,7 @@ export function InputArea({
                       : "Send a message..."
               }
               rows={2}
-              className={`w-full resize-none rounded-md border bg-background px-3 py-2 pb-7 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 overflow-y-auto scrollbar-none ${
+              className={`block w-full resize-none rounded-md border bg-background px-3 py-2 pb-7 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 overflow-y-auto scrollbar-none ${
                 planMode ? "border-blue-500/50 focus-visible:ring-blue-500/50" : "border-input focus-visible:ring-ring"
               }`}
             />
