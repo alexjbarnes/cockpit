@@ -1,6 +1,7 @@
 "use client";
 
-import { Check, Copy, Folder, Loader2, Search, X } from "lucide-react";
+import { ArrowUpRight, Check, Copy, Folder, Loader2, Search, X } from "lucide-react";
+import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -51,6 +52,15 @@ function GlobalSearchModal({ onClose }: { onClose: () => void }) {
   const [contextResult, setContextResult] = useState<GlobalSearchResult | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const router = useRouter();
+
+  const openSession = useCallback(
+    (result: GlobalSearchResult) => {
+      router.push(`/sessions/${result.sessionId}?cwd=${encodeURIComponent(result.cwd)}&historyView=true`);
+      onClose();
+    },
+    [router, onClose],
+  );
 
   useEffect(() => {
     inputRef.current?.focus();
@@ -178,6 +188,18 @@ function GlobalSearchModal({ onClose }: { onClose: () => void }) {
                 </Badge>
                 <span className="text-xs text-muted-foreground">{new Date(result.timestamp).toLocaleString()}</span>
                 <div className="ml-auto flex items-center gap-1">
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-6 w-6 shrink-0"
+                    title="Open session"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      openSession(result);
+                    }}
+                  >
+                    <ArrowUpRight className="h-3 w-3" />
+                  </Button>
                   <CopyButton text={result.fullContent} />
                 </div>
               </div>
