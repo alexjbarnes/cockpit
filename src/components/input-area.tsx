@@ -785,7 +785,9 @@ export function InputArea({
               ...(providers || []).filter((p) => !p.isBuiltin).map((p) => ({ id: p.id, name: p.name })),
             ];
             const vEntries = parsed.alias ? versionsForAlias(parsed.alias) : [];
-            const showVRow = vEntries.length > 1;
+            // Always show the version row for an Anthropic alias (single-version
+            // models render one pill); custom-provider models have no alias versions.
+            const showVRow = vEntries.length >= 1;
             const matchesProviderModel = (p: Provider, pm: ProviderModel): boolean =>
               currentModel === pm.modelId || currentModel === `${p.id}:${pm.modelId}`;
             const sizes: ContextSize[] = (() => {
@@ -887,7 +889,6 @@ export function InputArea({
                           {viewProvider === "anthropic" ? (
                             <div className="space-y-0.5">
                               {aliases.map((opt) => {
-                                const entry = defaultForAlias(opt.value);
                                 const selected = parsed.alias === opt.value;
                                 return (
                                   <button
@@ -905,7 +906,6 @@ export function InputArea({
                                       )}
                                     </div>
                                     <span className="font-mono font-medium">{opt.label}</span>
-                                    {entry && <span className="text-muted-foreground ml-auto">{entry.modelId}</span>}
                                   </button>
                                 );
                               })}
