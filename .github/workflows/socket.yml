@@ -10,22 +10,78 @@ jobs:
       - uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
         with:
           egress-policy: audit
+
+      # Gate the scan to keep Socket API usage down. Scan a PR's first run
+      # (opened/reopened) and merges to main; on later PR pushes (synchronize)
+      # only when a dependency manifest changed, so we don't re-scan every commit.
+      - name: Decide whether to scan
+        id: gate
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          scan=false
+          if [ "${{ github.event_name }}" = "push" ]; then
+            scan=true
+          elif [ "${{ github.event_name }}" = "pull_request" ]; then
+            case "${{ github.event.action }}" in
+              opened|reopened)
+                scan=true
+                ;;
+              synchronize)
+                if gh api --paginate \
+                     "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" \
+                     --jq '.[].filename' | grep -qE '(^|/)package(-lock)?\.json$'; then
+                  scan=true
+                fi
+                ;;
+            esac
+          fi
+          echo "scan=$scan" >> "$GITHUB_OUTPUT"
+          echo "Socket scan for ${{ github.event_name }}/${{ github.event.action }}: $scan"
+
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        if: steps.gate.outputs.scan == 'true'
+
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        if: steps.gate.outputs.scan == 'true'
         with:
           python-version: "3.14"
+
       - name: Install Socket CLI
+        if: steps.gate.outputs.scan == 'true'
         run: pip install socketsecurity==2.2.83
+
       - name: Run Socket Security Scan
+        if: steps.gate.outputs.scan == 'true'
         env:
           SOCKET_SECURITY_API_TOKEN: ${{ secrets.SOCKET_SECURITY_API_TOKEN }}
           GH_API_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           PR_NUMBER=0
-          if [ "${{ github.event_name }}" == "pull_request" ]; then
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
             PR_NUMBER=${{ github.event.pull_request.number }}
           fi
-          socketcli \
-            --target-path $GITHUB_WORKSPACE \
-            --scm github \
-            --pr-number $PR_NUMBER
+          # Retry only transient Socket API failures (e.g. a 429 rate limit);
+          # fail fast on a real policy violation so a genuine finding still blocks.
+          set +e
+          attempt=1
+          max=3
+          while true; do
+            socketcli --target-path "$GITHUB_WORKSPACE" --scm github --pr-number "$PR_NUMBER" 2>&1 | tee /tmp/socket-out.txt
+            rc=${PIPESTATUS[0]}
+            if [ "$rc" -eq 0 ]; then
+              break
+            fi
+            if grep -qiE 'API Error|rate.?limit|429|50[234]|Retry-After|timeout|timed out|temporarily' /tmp/socket-out.txt; then
+              if [ "$attempt" -ge "$max" ]; then
+                echo "Socket API still failing after $max attempts; giving up."
+                exit 1
+              fi
+              echo "Transient Socket API error (attempt $attempt/$max); retrying in 60s..."
+              attempt=$((attempt + 1))
+              sleep 60
+              continue
+            fi
+            echo "Socket scan failed (non-transient, e.g. a policy violation)."
+            exit "$rc"
+          done
