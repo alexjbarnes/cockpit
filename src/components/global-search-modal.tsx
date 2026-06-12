@@ -146,88 +146,90 @@ function GlobalSearchModal({ onClose }: { onClose: () => void }) {
     return () => window.removeEventListener("keydown", handler, true);
   }, [onClose]);
 
-  if (contextResult) {
-    return (
-      <MessageContextModal
-        timestamp={contextResult.timestamp}
-        sessionId={contextResult.sessionId}
-        cwd={contextResult.cwd}
-        onClose={() => setContextResult(null)}
-      />
-    );
-  }
-
   return (
-    <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" onClick={handleOverlayClick}>
-      <Card className="w-full max-w-2xl flex flex-col" style={{ maxHeight: "calc(100dvh - 2rem)" }}>
-        <div className="flex items-center gap-2 p-4 border-b">
-          <Search className="h-4 w-4 text-muted-foreground shrink-0" />
-          <input
-            ref={inputRef}
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search all session messages..."
-            className="flex-1 bg-transparent outline-none text-sm"
-          />
-          {loading && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground shrink-0" />}
-          <Button variant="ghost" size="icon" className="h-6 w-6 shrink-0" onClick={onClose}>
-            <X className="h-4 w-4" />
-          </Button>
-        </div>
-        <div className="flex-1 min-h-0 overflow-y-auto">
-          {searched && results.length === 0 && <div className="p-8 text-center text-sm text-muted-foreground">No results</div>}
-          {results.map((result, i) => (
-            <button
-              key={`${result.messageId}-${i}`}
-              onClick={() => setContextResult(result)}
-              className="w-full text-left p-4 border-b last:border-b-0 hover:bg-muted/50 transition-colors cursor-pointer"
-            >
-              <div className="flex items-center gap-2 mb-1">
-                <Badge variant={result.role === "user" ? "default" : "secondary"} className="text-[10px] px-1.5 py-0">
-                  {result.role === "user" ? "User" : "Assistant"}
-                </Badge>
-                <span className="text-xs text-muted-foreground">{new Date(result.timestamp).toLocaleString()}</span>
-                <div className="ml-auto flex items-center gap-1">
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-6 w-6 shrink-0"
-                    title="Open session"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      openSession(result);
-                    }}
-                  >
-                    <ArrowUpRight className="h-3 w-3" />
-                  </Button>
-                  <CopyButton text={result.fullContent} />
-                </div>
-              </div>
-              <div className="mb-1.5 text-[11px] text-muted-foreground">
-                <div className="flex items-center gap-1.5">
-                  <Folder className="h-3 w-3 shrink-0" />
-                  <span className="truncate">{result.dirName}</span>
-                </div>
-                <div className="truncate pl-[18px]">{result.sessionName}</div>
-              </div>
-              <HighlightedPreview preview={result.preview} matchStart={result.matchStart} matchLength={result.matchLength} />
-            </button>
-          ))}
-        </div>
-        {stats && searched && results.length > 0 && (
-          <div className="px-4 py-2 border-t text-[11px] text-muted-foreground flex items-center justify-between">
-            <span>
-              {results.length} result{results.length !== 1 ? "s" : ""} across {stats.total} session{stats.total !== 1 ? "s" : ""}
-            </span>
-            {stats.truncated && (
-              <button onClick={loadMore} disabled={loadingMore} className="text-[11px] text-primary hover:underline disabled:opacity-50">
-                {loadingMore ? "Loading..." : "Load more"}
-              </button>
-            )}
+    <>
+      {/* The results list stays mounted while the context modal overlays it, so
+          its scroll position is preserved when you close the modal and continue
+          browsing. */}
+      <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" onClick={handleOverlayClick}>
+        <Card className="w-full max-w-2xl flex flex-col" style={{ maxHeight: "calc(100dvh - 2rem)" }}>
+          <div className="flex items-center gap-2 p-4 border-b">
+            <Search className="h-4 w-4 text-muted-foreground shrink-0" />
+            <input
+              ref={inputRef}
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search all session messages..."
+              className="flex-1 bg-transparent outline-none text-sm"
+            />
+            {loading && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground shrink-0" />}
+            <Button variant="ghost" size="icon" className="h-6 w-6 shrink-0" onClick={onClose}>
+              <X className="h-4 w-4" />
+            </Button>
           </div>
-        )}
-      </Card>
-    </div>
+          <div className="flex-1 min-h-0 overflow-y-auto">
+            {searched && results.length === 0 && <div className="p-8 text-center text-sm text-muted-foreground">No results</div>}
+            {results.map((result, i) => (
+              <button
+                key={`${result.messageId}-${i}`}
+                onClick={() => setContextResult(result)}
+                className="w-full text-left p-4 border-b last:border-b-0 hover:bg-muted/50 transition-colors cursor-pointer"
+              >
+                <div className="flex items-center gap-2 mb-1">
+                  <Badge variant={result.role === "user" ? "default" : "secondary"} className="text-[10px] px-1.5 py-0">
+                    {result.role === "user" ? "User" : "Assistant"}
+                  </Badge>
+                  <span className="text-xs text-muted-foreground">{new Date(result.timestamp).toLocaleString()}</span>
+                  <div className="ml-auto flex items-center gap-1">
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-6 w-6 shrink-0"
+                      title="Open session"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        openSession(result);
+                      }}
+                    >
+                      <ArrowUpRight className="h-3 w-3" />
+                    </Button>
+                    <CopyButton text={result.fullContent} />
+                  </div>
+                </div>
+                <div className="mb-1.5 text-[11px] text-muted-foreground">
+                  <div className="flex items-center gap-1.5">
+                    <Folder className="h-3 w-3 shrink-0" />
+                    <span className="truncate">{result.dirName}</span>
+                  </div>
+                  <div className="truncate pl-[18px]">{result.sessionName}</div>
+                </div>
+                <HighlightedPreview preview={result.preview} matchStart={result.matchStart} matchLength={result.matchLength} />
+              </button>
+            ))}
+          </div>
+          {stats && searched && results.length > 0 && (
+            <div className="px-4 py-2 border-t text-[11px] text-muted-foreground flex items-center justify-between">
+              <span>
+                {results.length} result{results.length !== 1 ? "s" : ""} across {stats.total} session{stats.total !== 1 ? "s" : ""}
+              </span>
+              {stats.truncated && (
+                <button onClick={loadMore} disabled={loadingMore} className="text-[11px] text-primary hover:underline disabled:opacity-50">
+                  {loadingMore ? "Loading..." : "Load more"}
+                </button>
+              )}
+            </div>
+          )}
+        </Card>
+      </div>
+      {contextResult && (
+        <MessageContextModal
+          timestamp={contextResult.timestamp}
+          sessionId={contextResult.sessionId}
+          cwd={contextResult.cwd}
+          onClose={() => setContextResult(null)}
+        />
+      )}
+    </>
   );
 }
 
