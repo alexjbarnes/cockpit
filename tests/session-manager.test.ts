@@ -40,6 +40,7 @@ vi.mock("@/server/session-prefs", () => ({
   getSessionPrefs: vi.fn(() => undefined),
   setSessionPrefs: vi.fn(),
   deleteSessionPrefs: vi.fn(),
+  findChainForCliSession: vi.fn(() => null),
 }));
 
 vi.mock("@/server/defaults", () => ({
@@ -185,6 +186,39 @@ describe("SessionManager", () => {
         const s = (manager as any).sessions.get(ensured.info.id)!;
         expect(ensured.info.contextSize).toBe("1m");
         expect(s.contextWindowSize).toBe(1_000_000);
+      } finally {
+        (prefsMod as { getSessionPrefs: (id: string) => unknown }).getSessionPrefs = orig;
+      }
+    });
+
+    it("pinCliSessionId forces resume of the exact viewed link with its ancestors (history-view continue)", async () => {
+      const prefsMod = await import("@/server/session-prefs");
+      const orig = prefsMod.findChainForCliSession;
+      (prefsMod as { findChainForCliSession: (id: string) => unknown }).findChainForCliSession = () => ({
+        cockpitId: "cockpit-C",
+        truncatedPrevIds: ["link-A"],
+      });
+      try {
+        const session = manager.ensureSession("link-T", "/tmp/proj", { pinCliSessionId: "link-T" });
+        expect(session.cliSessionId).toBe("link-T");
+        expect(session.previousCliSessionIds).toEqual(["link-A"]);
+        expect(session.bufferCliSessionId).toBe("link-T");
+      } finally {
+        (prefsMod as { findChainForCliSession: (id: string) => unknown }).findChainForCliSession = orig;
+      }
+    });
+
+    it("without a pin, resolves cliSessionId from prefs (chain head), not the map id", async () => {
+      const prefsMod = await import("@/server/session-prefs");
+      const orig = prefsMod.getSessionPrefs;
+      (prefsMod as { getSessionPrefs: (id: string) => unknown }).getSessionPrefs = () => ({
+        cliSessionId: "head-L",
+        previousCliSessionIds: ["link-A", "link-T"],
+      });
+      try {
+        const session = manager.ensureSession("cockpit-C", "/tmp/proj");
+        expect(session.cliSessionId).toBe("head-L");
+        expect(session.previousCliSessionIds).toEqual(["link-A", "link-T"]);
       } finally {
         (prefsMod as { getSessionPrefs: (id: string) => unknown }).getSessionPrefs = orig;
       }

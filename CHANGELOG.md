@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.1] - 2026-06-13
+
+### Added
+- **Fable 5, with a model/thinking/context pill.** The chat input gained Fable 5 as a selectable model, an "off" thinking level, and a compact pill showing the session's current model, thinking level, and context window — tap it to switch any of them inline. The model picker also drops the redundant model-id text from each row and always shows the version pills (a single pill for a single-version model).
+- **Open-session buttons in search.** Each global-search result and the message-context view now have a button that jumps straight into that session.
+- **Scroll position persists across navigation.** Every list page (sessions, settings, jobs, reviews, inbox, skills, commands, agents, hooks, MCP servers, plugins) restores its scroll position when you leave and return, instead of snapping back to the top. Search results also keep their scroll when you close the message-context view.
+
+### Fixed
+- **Cockpit wedged after a Claude CLI self-update.** Cockpit resolved the `claude` binary once and cached it for the server's lifetime. When the CLI self-updated and deleted the old versioned binary, every new session then failed to spawn with `claude exited during startup … execvp: No such file or directory` until cockpit was restarted. The cached path is now re-validated and re-resolved when it no longer exists.
+- **Unsaved custom-provider model dropped on Save.** On the provider editor's Models tab, a model you typed but hadn't committed with "+ Add model" (or an in-progress inline edit) was silently lost when you clicked the bottom Save. Both are now folded into the provider on Save.
+- **Session delete after "Load all".** Deleting a session in a folder expanded with "Load all" appeared to do nothing — the session was deleted on disk but the expanded list kept a stale copy until a reload. The list now refreshes after a delete. The per-row delete control is also always visible on mobile instead of only on hover.
+- **Model and thinking level reverting across a restart.** The `/model` slash command and the cockpit assistant's model/thinking selections now persist across a server restart instead of reverting to a stale or default value.
+- **Continuing a cleared or compacted session from history.** Sending from a history view now continues the exact transcript link you are viewing instead of diverging to the conversation's head, so new turns no longer disappear on refresh.
+- **Duplicate thinking strips on Fable turns.** Fable emits several thinking blocks per turn; the transcript rendered each as its own strip. Adjacent thinking blocks are now coalesced into one.
+- **Keyboard access for search and session cards.** Search results and session rows were invalid button-inside-button markup; they are now proper controls that activate with Enter or Space and keep their secondary actions (open, copy, delete) working.
+
 ## [0.4.0] - 2026-06-11
 
 ### Added

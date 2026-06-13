@@ -152,7 +152,7 @@ describe("SessionManager cockpit agent session", () => {
     expect(session.cockpitAgentCleanups.length).toBeGreaterThan(0);
   });
 
-  it("creates a fresh session when the stored id has no transcript", async () => {
+  it("restores the stored cockpit-agent id without recreating when it has no transcript yet (so model/thinking prefs survive)", async () => {
     mockGetSettings.mockReturnValue({ model: "sonnet", thinkingLevel: "high", sessionId: "gone" });
     mockGetPrefs.mockReturnValue({ cockpitAgent: true, cliSessionId: "gone" });
     mockFindCwd.mockResolvedValue(null);
@@ -160,9 +160,12 @@ describe("SessionManager cockpit agent session", () => {
     const createSpy = vi.spyOn(manager, "createSession");
     const id = await manager.getOrCreateCockpitAgentSession();
 
-    expect(id).not.toBe("gone");
-    expect(createSpy).toHaveBeenCalledTimes(1);
-    expect(mockUpdateSettings).toHaveBeenCalledWith({ sessionId: id });
+    // The assistant's cwd is always getCockpitDir(), so a missing transcript must
+    // NOT trigger a fresh recreate from the assistant.json fallback (which would
+    // drop the user's model/thinking). It restores the stored id from prefs.
+    expect(id).toBe("gone");
+    expect(createSpy).not.toHaveBeenCalled();
+    expect((manager as any).sessions.get("gone").cockpitAgent).toBe(true);
   });
 
   it("restores previousCliSessionIds across a /clear round-trip", async () => {

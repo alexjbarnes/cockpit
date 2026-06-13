@@ -283,6 +283,27 @@ function stripAnsi(s: string): string {
   return s.replace(ANSI_RE, "");
 }
 
+// Adaptive-thinking models (Fable especially) can emit several thinking blocks
+// in one turn. The CLI writes each as its own JSONL entry under a single
+// message.id with a distinct signature, so the merge below would otherwise stack
+// them; rendered as omitted-display empty strips they read as duplicates. Collapse
+// adjacent thinking blocks into one, matching the live stream path
+// (use-session.ts assistant:thinking). No-op for models that emit a single
+// thinking block per turn (e.g. Opus), and non-adjacent thinking (interleaved
+// around tool calls) is preserved.
+function pushBlockCoalescingThinking(target: ContentBlock[], block: ContentBlock): void {
+  if (block.type === "thinking") {
+    const last = target[target.length - 1];
+    if (last && last.type === "thinking") {
+      last.text = last.text && block.text ? `${last.text}\n\n${block.text}` : last.text + block.text;
+      if (block.redacted) last.redacted = true;
+      if (block.durationMs) last.durationMs = block.durationMs;
+      return;
+    }
+  }
+  target.push(block);
+}
+
 function parseLines(lines: string[]): { messages: ChatMessage[]; lastUsage: { used: number; total: number } | null } {
   const messages: ChatMessage[] = [];
   const messageById = new Map<string, ChatMessage>();
@@ -494,7 +515,7 @@ function parseLines(lines: string[]): { messages: ChatMessage[]; lastUsage: { us
         if (block.type === "thinking") {
           const redacted = !block.thinking && !!block.signature;
           if (!block.thinking && !redacted) continue;
-          blocks.push({ type: "thinking", text: block.thinking ?? "", durationMs: thinkingDurationMs, redacted });
+          pushBlockCoalescingThinking(blocks, { type: "thinking", text: block.thinking ?? "", durationMs: thinkingDurationMs, redacted });
         } else if (block.type === "text" && block.text) {
           const cleaned = stripCliXml(block.text);
           if (cleaned) {
@@ -529,10 +550,10 @@ function parseLines(lines: string[]): { messages: ChatMessage[]; lastUsage: { us
           }
         }
         for (const b of blocks) {
-          if (b.type === "tool_use") {
-            if (existing.blocks.some((eb) => eb.type === "tool_use" && eb.toolUse.id === b.toolUse.id)) continue;
+          if (b.type === "tool_use" && existing.blocks.some((eb) => eb.type === "tool_use" && eb.toolUse.id === b.toolUse.id)) {
+            continue;
           }
-          existing.blocks.push(b);
+          pushBlockCoalescingThinking(existing.blocks, b);
         }
       } else {
         const msg: ChatMessage = {

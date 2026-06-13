@@ -33,7 +33,3 @@ jobs:
   test:
     needs: [verify-tag, typecheck, lint, secrets]
     uses: ./.github/workflows/test.yml
-  socket:
-    needs: [verify-tag, typecheck, lint, secrets]
-    uses: ./.github/workflows/socket.yml
-    secrets: inherit

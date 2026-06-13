@@ -151,7 +151,7 @@ export interface PermissionSuggestion {
   destination?: string;
 }
 
-export type ThinkingLevel = "low" | "medium" | "high" | "xhigh" | "max";
+export type ThinkingLevel = "off" | "low" | "medium" | "high" | "xhigh" | "max";
 
 export interface UsageLimit {
   /** Percentage 0-100 */
@@ -296,7 +296,15 @@ export interface NotificationSettings {
 // Client -> Server messages
 export type ClientMessage =
   | { type: "session:connect"; sessionId: string; cwd?: string; lastMessageId?: string | null; historyView?: boolean }
-  | { type: "message:send"; sessionId: string; text: string; images?: ImageAttachment[]; documents?: DocumentAttachment[] }
+  | {
+      type: "message:send";
+      sessionId: string;
+      text: string;
+      images?: ImageAttachment[];
+      documents?: DocumentAttachment[];
+      cwd?: string;
+      historyView?: boolean;
+    }
   | { type: "session:interrupt"; sessionId: string }
   | {
       type: "permission:response";

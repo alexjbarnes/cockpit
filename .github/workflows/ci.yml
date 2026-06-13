@@ -25,5 +25,8 @@ jobs:
     uses: ./.github/workflows/test.yml
   socket:
     needs: [typecheck, lint, secrets]
+    # Scan on PRs and on merges to main only (not on next pushes); socket.yml
+    # further limits PR scans to the first run plus dependency-manifest changes.
+    if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     uses: ./.github/workflows/socket.yml
     secrets: inherit

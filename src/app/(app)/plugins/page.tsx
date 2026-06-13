@@ -10,6 +10,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { type AvailablePlugin, type InstalledPlugin, type Marketplace, type PluginScope, usePlugins } from "@/hooks/use-plugins";
+import { useScrollRestoration } from "@/hooks/use-scroll-restoration";
 
 type Tab = "installed" | "browse" | "marketplaces";
 
@@ -20,6 +21,7 @@ const MKT_ALL = "__all__";
 
 export default function PluginsPage() {
   usePageHeader("Plugins", { hideActions: true });
+  const scrollRef = useScrollRestoration<HTMLDivElement>("plugins-scroll");
   const router = useRouter();
   const searchParams = useSearchParams();
   const detailId = searchParams.get("detail");
@@ -118,7 +120,7 @@ export default function PluginsPage() {
   }
 
   return (
-    <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-4">
+    <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto p-4 space-y-4">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-1">
           <TabButton active={tab === "installed"} onClick={() => setTab("installed")} label="Installed" count={installed.length} />

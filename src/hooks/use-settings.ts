@@ -5,7 +5,7 @@ import { splitLegacyModel } from "@/lib/models";
 import type { ModelSlots } from "@/types";
 
 export type DiffStyle = "split" | "unified";
-export type ThinkingLevel = "low" | "medium" | "high" | "xhigh" | "max";
+export type ThinkingLevel = "off" | "low" | "medium" | "high" | "xhigh" | "max";
 export type TerminalTheme =
   | "cockpit"
   | "dark"

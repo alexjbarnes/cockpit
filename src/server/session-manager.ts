@@ -280,12 +280,17 @@ export class SessionManager {
     }
   }
 
-  ensureSession(id: string, cwd: string): Session {
+  ensureSession(id: string, cwd: string, opts?: { pinCliSessionId?: string }): Session {
     let session = this.sessions.get(id);
     if (!session) {
       const prefs = getSessionPrefs(id);
-      const cliId = prefs?.cliSessionId || id;
-      const prevIds = prefs?.previousCliSessionIds || [];
+      // pinCliSessionId forces the session to resume an exact transcript link
+      // (history-view continue), with that link's ancestors as the stitch chain,
+      // overriding the usual "resolve to the chain head" behaviour.
+      const cliId = opts?.pinCliSessionId || prefs?.cliSessionId || id;
+      const prevIds = opts?.pinCliSessionId
+        ? (findChainForCliSession(opts.pinCliSessionId)?.truncatedPrevIds ?? [])
+        : prefs?.previousCliSessionIds || [];
       const short = id.slice(0, 8);
       debugLog(
         `[session:${short}] ensureSession: cliSessionId=${cliId.slice(0, 8)}, prevIds=[${prevIds.map((p) => p.slice(0, 8)).join(",")}], hasPrefs=${!!prefs}`,
@@ -384,15 +389,16 @@ export class SessionManager {
       // pointer to a regular session (e.g. a hand-edited assistant.json) must not
       // be rehydrated here — it would lack the MCP-disable/permission restrictions.
       if (prefs?.cockpitAgent) {
-        const cwd = (await findSessionCwd(prefs.cliSessionId || stored)) ?? (await findSessionCwd(stored));
-        if (cwd) {
-          // ensureSession rebuilds in-memory state and (Step 5) registers the MCP-disable
-          // onInit listener. Model/thinking are restored from session-prefs — which the
-          // in-modal selector and the settings-page write-through both keep current —
-          // so no re-apply is needed here.
-          this.ensureSession(stored, cwd);
-          return stored;
-        }
+        // The assistant's cwd is always getCockpitDir(); fall back to it when no
+        // transcript exists yet (the assistant was changed but never messaged) so
+        // its model/thinking still restore from session-prefs instead of the
+        // session being recreated from the assistant.json fallback (Sonnet/High).
+        const cwd = (await findSessionCwd(prefs.cliSessionId || stored)) ?? (await findSessionCwd(stored)) ?? getCockpitDir();
+        // ensureSession rebuilds in-memory state and (Step 5) registers the MCP-disable
+        // onInit listener. Model/thinking are restored from session-prefs — which the
+        // in-modal selector keeps current — so no re-apply is needed here.
+        this.ensureSession(stored, cwd);
+        return stored;
       }
     }
     // No stored id, or its transcript is gone — create a fresh session seeded from
@@ -1201,6 +1207,7 @@ export class SessionManager {
       : (() => {
           const levels = this.modelEffortLevels(model);
           if (levels.length === 0) return null;
+          if (session.thinkingLevel === "off") return "off";
           if (levels.includes(session.thinkingLevel)) return session.thinkingLevel;
           return levels[levels.length - 1];
         })();
@@ -1223,7 +1230,7 @@ export class SessionManager {
         const effortRequest = {
           type: "control_request",
           request_id: `effort-${Date.now()}`,
-          request: { subtype: "apply_flag_settings", settings: { effort: session.thinkingLevel } },
+          request: { subtype: "apply_flag_settings", settings: this.thinkingFlagSettings(session.thinkingLevel) },
         };
         session.stdin.write(JSON.stringify(effortRequest) + "\n");
       }
@@ -1270,6 +1277,15 @@ export class SessionManager {
     return this.sessions.get(sessionId)?.info.model || "sonnet";
   }
 
+  /**
+   * Settings patch for the CLI's apply_flag_settings / settings file. "off"
+   * disables thinking via alwaysThinkingEnabled (there is no --effort value for
+   * it); any other level sets effort and ensures thinking is enabled.
+   */
+  private thinkingFlagSettings(level: ThinkingLevel): Record<string, unknown> {
+    return level === "off" ? { alwaysThinkingEnabled: false } : { effort: level, alwaysThinkingEnabled: true };
+  }
+
   setThinkingLevel(sessionId: string, level: ThinkingLevel): void {
     const session = this.sessions.get(sessionId);
     if (!session || session.thinkingLevel === level) return;
@@ -1281,7 +1297,7 @@ export class SessionManager {
       const request = {
         type: "control_request",
         request_id: `effort-${Date.now()}`,
-        request: { subtype: "apply_flag_settings", settings: { effort: level } },
+        request: { subtype: "apply_flag_settings", settings: this.thinkingFlagSettings(level) },
       };
       session.stdin.write(JSON.stringify(request) + "\n");
     } else if (!session.stdin) {
@@ -1866,13 +1882,12 @@ export class SessionManager {
           return true;
         }
         this.log(sessionId, `/model command: args="${args}", was=${session.info.model}`);
-        this.killProcess(session);
-        session.info.model = args;
-        session.info.status = "idle";
-        session.emitter.emit("status", sessionId, "idle");
-        setSessionPrefs(sessionId, { model: args });
+        // Route through setModel so model + modelSlots.main + contextSize persist
+        // together (and the process restarts correctly per runtime). Writing only
+        // prefs.model left modelSlots.main stale, and rehydrate prefers modelSlots,
+        // so the switch reverted on restart.
+        this.setModel(sessionId, args);
         this.emitSystem(session, sessionId, `Model switched to ${args}`);
-        this.emitInfoUpdated(session, sessionId);
         return true;
       }
 
@@ -2066,16 +2081,25 @@ Additional Cockpit rules beyond the CLI's defaults:
 </system-reminder>`;
   }
 
-  async recoverSession(id: string): Promise<boolean> {
+  async recoverSession(id: string, opts?: { cwd?: string; pinExact?: boolean }): Promise<boolean> {
     if (this.sessions.has(id)) return true;
     smLog(id, "recovering session: not in memory, searching disk");
     const prefs = getSessionPrefs(id);
-    const cwd = (await findSessionCwd(prefs?.cliSessionId || id)) || (await findSessionCwd(id));
+    const cwd = (await findSessionCwd(prefs?.cliSessionId || id)) || (await findSessionCwd(id)) || opts?.cwd;
     if (!cwd) {
       smLog(id, "recovery failed: no transcript found on disk");
       return false;
     }
-    this.ensureSession(id, cwd);
+    // When recovered from a history-view deep link, `id` is the exact transcript
+    // link being viewed, which may be an older link of a compacted/cleared chain.
+    // Pin it as the cliSessionId so the resume continues that link (--resume
+    // appends to the same file) instead of jumping to the chain head — otherwise
+    // the view and the agent diverge.
+    if (opts?.pinExact && transcriptExists(id, cwd)) {
+      this.ensureSession(id, cwd, { pinCliSessionId: id });
+    } else {
+      this.ensureSession(id, cwd);
+    }
     smLog(id, `recovery succeeded: restored from ${cwd}`);
     return true;
   }
@@ -2265,7 +2289,9 @@ Additional Cockpit rules beyond the CLI's defaults:
       args.push("--model", cliModel);
     }
 
-    if (this.modelEffortLevels(session.info.model).length > 0) {
+    // "off" has no --effort value; thinking is disabled via a post-init
+    // apply_flag_settings control request below instead.
+    if (this.modelEffortLevels(session.info.model).length > 0 && session.thinkingLevel !== "off") {
       args.push("--effort", session.thinkingLevel);
     }
 
@@ -2349,6 +2375,17 @@ Additional Cockpit rules beyond the CLI's defaults:
       this.sendPermissionMode(session, sessionId, "plan");
     } else if (session.bypassAllPermissions && !session.cockpitAgent) {
       this.sendPermissionMode(session, sessionId, "bypassPermissions");
+    }
+
+    // Thinking "off": there is no --effort value for it and stream mode has no
+    // --settings file, so disable thinking as a settings patch over stdin.
+    if (session.thinkingLevel === "off" && this.modelEffortLevels(session.info.model).length > 0) {
+      const offRequest = {
+        type: "control_request",
+        request_id: `thinking-off-${Date.now()}`,
+        request: { subtype: "apply_flag_settings", settings: { alwaysThinkingEnabled: false } },
+      };
+      proc.stdin!.write(JSON.stringify(offRequest) + "\n");
     }
 
     if (text) {
@@ -2526,7 +2563,9 @@ Additional Cockpit rules beyond the CLI's defaults:
     const resolvedPty = resolveProviderModel(session.info.model ?? "sonnet");
     const cliModelPty = resolvedPty ? resolvedPty.model.modelId : session.info.model;
     if (cliModelPty) extraArgs.push("--model", cliModelPty);
-    if (this.modelEffortLevels(session.info.model).length > 0) {
+    // "off" is applied via the settings file (alwaysThinkingEnabled:false) passed
+    // to PtyRuntime below, not --effort (which has no "off" value).
+    if (this.modelEffortLevels(session.info.model).length > 0 && session.thinkingLevel !== "off") {
       extraArgs.push("--effort", session.thinkingLevel);
     }
     if (session.planMode) {
@@ -2578,6 +2617,7 @@ Additional Cockpit rules beyond the CLI's defaults:
       claudeBin: getClaudeBin(),
       extraArgs,
       extraEnv,
+      thinkingEnabled: session.thinkingLevel !== "off",
       onEvents: (events) => {
         const types = events.map((e) => e.type).join(", ");
         console.log(`[sm] pty onEvents for ${sessionId.slice(0, 8)}: [${types}]`);

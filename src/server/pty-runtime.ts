@@ -26,6 +26,8 @@ export interface PtyRuntimeOptions {
   /** Tools to pre-authorize at settings level so PermissionRequest never fires. */
   allowList?: string[];
   denyList?: string[];
+  /** When false, the CLI spawns with thinking disabled (alwaysThinkingEnabled:false in the settings file). */
+  thinkingEnabled?: boolean;
   /** Optional debug callback for raw PTY data chunks. */
   onPtyData?: (chunk: string) => void;
 }
@@ -79,6 +81,7 @@ export class PtyRuntime {
       hookToken: token,
       allowList: this.opts.allowList,
       denyList: this.opts.denyList,
+      thinkingEnabled: this.opts.thinkingEnabled,
     });
     this.settingsPath = settingsPath;
     logDiag(sessionId, "pty:hooks-ready", { elapsedMs: Date.now() - startAt });

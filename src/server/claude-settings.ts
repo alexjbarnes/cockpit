@@ -29,6 +29,11 @@ export interface HookSettingsOptions {
   /** Tools to pre-authorize so PermissionRequest never fires for them. */
   allowList?: string[];
   denyList?: string[];
+  /**
+   * Per-session thinking state. false writes alwaysThinkingEnabled:false (the
+   * CLI's "thinking off"); true forces it on; undefined leaves the user default.
+   */
+  thinkingEnabled?: boolean;
 }
 
 export interface HookSettingsArtifact {
@@ -76,6 +81,9 @@ export async function prepareHookSettings(opts: HookSettingsOptions): Promise<Ho
     // interactive "WARNING: Bypass Permissions mode" dialog has nowhere to go
     // when there's no human at the TUI, so suppress it here.
     skipDangerousModePermissionPrompt: true,
+    // Per-session thinking on/off. cockpit's selector is authoritative, so this
+    // overrides any user-global alwaysThinkingEnabled when explicitly provided.
+    ...(opts.thinkingEnabled !== undefined ? { alwaysThinkingEnabled: opts.thinkingEnabled } : {}),
   };
 
   const dir = await resolveSettingsDir();

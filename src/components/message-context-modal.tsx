@@ -1,6 +1,7 @@
 "use client";
 
-import { Loader2, X } from "lucide-react";
+import { ArrowUpRight, Loader2, X } from "lucide-react";
+import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -18,6 +19,7 @@ interface MessageContextModalProps {
 export function MessageContextModal(props: MessageContextModalProps) {
   const { timestamp, onClose } = props;
   const shell = useShell();
+  const router = useRouter();
   const sessionId = props.sessionId ?? shell.sessionId;
   const cwd = props.cwd ?? shell.cwd;
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -77,9 +79,26 @@ export function MessageContextModal(props: MessageContextModalProps) {
       <Card className="w-full max-w-3xl flex flex-col" style={{ maxHeight: "calc(100dvh - 2rem)" }}>
         <div className="flex items-center justify-between px-4 py-2 border-b shrink-0">
           <span className="text-sm font-medium text-muted-foreground">Message context</span>
-          <Button variant="ghost" size="icon" className="h-6 w-6" onClick={onClose}>
-            <X className="h-4 w-4" />
-          </Button>
+          <div className="flex items-center gap-1">
+            {props.sessionId && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-6 gap-1 px-2 text-xs"
+                title="Open session"
+                onClick={() => {
+                  router.push(`/sessions/${sessionId}?cwd=${encodeURIComponent(cwd ?? "")}&historyView=true`);
+                  onClose();
+                }}
+              >
+                <ArrowUpRight className="h-3 w-3" />
+                Open session
+              </Button>
+            )}
+            <Button variant="ghost" size="icon" className="h-6 w-6" onClick={onClose}>
+              <X className="h-4 w-4" />
+            </Button>
+          </div>
         </div>
         <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-4">
           {loading && (

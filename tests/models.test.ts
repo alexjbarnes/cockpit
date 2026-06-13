@@ -3,6 +3,7 @@ import {
   allowedEffortLevels,
   coerceEffort,
   defaultForAlias,
+  describeModelSelection,
   findModelById,
   MODELS,
   recommendedEffort,
@@ -10,6 +11,7 @@ import {
   resolveProviderId,
   versionsForAlias,
 } from "@/lib/models";
+import type { ProviderModel } from "@/types";
 
 describe("findModelById", () => {
   it("returns undefined for undefined input", () => {
@@ -319,5 +321,112 @@ describe("resolveProviderId", () => {
 
   it("falls back to anthropic when providers is empty array", () => {
     expect(resolveProviderId("custom:some-model", [])).toBe("anthropic");
+  });
+});
+
+describe("describeModelSelection", () => {
+  const customProviders: { id: string; models: ProviderModel[] }[] = [
+    {
+      id: "lmstudio",
+      models: [{ modelId: "gpt-oss-20b", displayName: "GPT-OSS 20B", effortLevels: ["low", "high"], contextSizes: ["200k", "1m"] }],
+    },
+  ];
+
+  it("labels a built-in opus, keeps an allowed thinking level, and reports the context size", () => {
+    expect(describeModelSelection("opus", "max", "200k", undefined)).toEqual({ label: "Opus 4.8", thinking: "max", context: "200k" });
+  });
+
+  it("reports 1M context when selected on a multi-size model", () => {
+    expect(describeModelSelection("opus", "high", "1m", undefined)).toEqual({ label: "Opus 4.8", thinking: "high", context: "1m" });
+  });
+
+  it("drops thinking for a model with none (haiku) and omits context for a single-size model", () => {
+    expect(describeModelSelection("haiku", "high", "200k", undefined)).toEqual({ label: "Haiku 4.5", thinking: null, context: null });
+  });
+
+  it("drops xhigh for a model that does not allow it (sonnet) but keeps context", () => {
+    expect(describeModelSelection("sonnet", "xhigh", "200k", undefined)).toEqual({ label: "Sonnet 4.6", thinking: null, context: "200k" });
+  });
+
+  it("resolves a built-in by exact modelId", () => {
+    expect(describeModelSelection("claude-opus-4-7", "xhigh", "1m", undefined)).toEqual({
+      label: "Opus 4.7",
+      thinking: "xhigh",
+      context: "1m",
+    });
+  });
+
+  it("strips a [context] suffix before resolving", () => {
+    expect(describeModelSelection("sonnet[1m]", "medium", "200k", undefined)).toEqual({
+      label: "Sonnet 4.6",
+      thinking: "medium",
+      context: "200k",
+    });
+  });
+
+  it("labels a custom provider model by displayName and honours its effortLevels and sizes", () => {
+    expect(describeModelSelection("lmstudio:gpt-oss-20b", "high", "1m", customProviders)).toEqual({
+      label: "GPT-OSS 20B",
+      thinking: "high",
+      context: "1m",
+    });
+    expect(describeModelSelection("lmstudio:gpt-oss-20b", "max", "200k", customProviders)).toEqual({
+      label: "GPT-OSS 20B",
+      thinking: null,
+      context: "200k",
+    });
+  });
+
+  it("matches a custom provider model by bare modelId too", () => {
+    expect(describeModelSelection("gpt-oss-20b", "low", "200k", customProviders)).toEqual({
+      label: "GPT-OSS 20B",
+      thinking: "low",
+      context: "200k",
+    });
+  });
+
+  it("omits context for a single-size custom model", () => {
+    const single: { id: string; models: ProviderModel[] }[] = [
+      { id: "lm", models: [{ modelId: "m", displayName: "M", effortLevels: [], contextSizes: ["200k"] }] },
+    ];
+    expect(describeModelSelection("lm:m", "low", "200k", single)).toEqual({ label: "M", thinking: null, context: null });
+  });
+
+  it("strips a provider prefix and shows no thinking or context for an unknown model", () => {
+    expect(describeModelSelection("ghost:some-model", "high", "1m", [])).toEqual({ label: "some-model", thinking: null, context: null });
+  });
+
+  it("shows off for a custom model that declares effort levels", () => {
+    const providers: { id: string; models: ProviderModel[] }[] = [
+      { id: "lm", models: [{ modelId: "m", displayName: "M", effortLevels: ["low", "high"], contextSizes: ["200k"] }] },
+    ];
+    expect(describeModelSelection("lm:m", "off", "200k", providers).thinking).toBe("off");
+  });
+});
+
+describe("Fable 5", () => {
+  it("resolves by alias and by modelId", () => {
+    expect(resolveModel("fable")?.modelId).toBe("claude-fable-5");
+    expect(resolveModel("claude-fable-5")?.alias).toBe("fable");
+    expect(findModelById("claude-fable-5")?.displayName).toBe("Fable 5");
+    expect(defaultForAlias("fable")?.modelId).toBe("claude-fable-5");
+  });
+
+  it("supports the full effort range including xhigh and max", () => {
+    expect(allowedEffortLevels(resolveModel("fable"))).toEqual(["low", "medium", "high", "xhigh", "max"]);
+  });
+});
+
+describe('thinking "off"', () => {
+  it("coerceEffort keeps off for thinking-capable models and drops it for haiku", () => {
+    expect(coerceEffort("off", resolveModel("opus"))).toBe("off");
+    expect(coerceEffort("off", resolveModel("fable"))).toBe("off");
+    expect(coerceEffort("off", resolveModel("haiku"))).toBeNull();
+  });
+
+  it("describeModelSelection shows off for thinking-capable models, nothing for haiku", () => {
+    expect(describeModelSelection("opus", "off", "200k", undefined).thinking).toBe("off");
+    expect(describeModelSelection("fable", "off", "1m", undefined)).toEqual({ label: "Fable 5", thinking: "off", context: "1m" });
+    expect(describeModelSelection("haiku", "off", "200k", undefined).thinking).toBeNull();
   });
 });

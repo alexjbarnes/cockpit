@@ -132,50 +132,59 @@ function SearchModal({ onClose }: { onClose: () => void }) {
     return () => window.removeEventListener("keydown", handler, true);
   }, [onClose]);
 
-  if (contextTimestamp !== null) {
-    return <MessageContextModal timestamp={contextTimestamp} onClose={() => setContextTimestamp(null)} />;
-  }
-
   return (
-    <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" onClick={handleOverlayClick}>
-      <Card className="w-full max-w-2xl flex flex-col" style={{ maxHeight: "calc(100dvh - 2rem)" }}>
-        <div className="flex items-center gap-2 p-4 border-b">
-          <Search className="h-4 w-4 text-muted-foreground shrink-0" />
-          <input
-            ref={inputRef}
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search messages..."
-            className="flex-1 bg-transparent outline-none text-sm"
-          />
-          {loading && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground shrink-0" />}
-          <Button variant="ghost" size="icon" className="h-6 w-6 shrink-0" onClick={onClose}>
-            <X className="h-4 w-4" />
-          </Button>
-        </div>
-        <div className="flex-1 min-h-0 overflow-y-auto">
-          {searched && results.length === 0 && <div className="p-8 text-center text-sm text-muted-foreground">No results</div>}
-          {results.map((result, i) => (
-            <button
-              key={`${result.messageId}-${i}`}
-              onClick={() => handleResultClick(result.timestamp)}
-              className="w-full text-left p-4 border-b last:border-b-0 hover:bg-muted/50 transition-colors cursor-pointer"
-            >
-              <div className="flex items-center gap-2 mb-1">
-                <Badge variant={result.role === "user" ? "default" : "secondary"} className="text-[10px] px-1.5 py-0">
-                  {result.role === "user" ? "User" : "Assistant"}
-                </Badge>
-                <span className="text-xs text-muted-foreground select-text">{new Date(result.timestamp).toLocaleString()}</span>
-                <div className="ml-auto">
-                  <CopyButton text={result.fullContent} />
+    <>
+      {/* The results list stays mounted while the context modal overlays it, so its
+          scroll position is preserved when you close the modal and keep browsing. */}
+      <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" onClick={handleOverlayClick}>
+        <Card className="w-full max-w-2xl flex flex-col" style={{ maxHeight: "calc(100dvh - 2rem)" }}>
+          <div className="flex items-center gap-2 p-4 border-b">
+            <Search className="h-4 w-4 text-muted-foreground shrink-0" />
+            <input
+              ref={inputRef}
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search messages..."
+              className="flex-1 bg-transparent outline-none text-sm"
+            />
+            {loading && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground shrink-0" />}
+            <Button variant="ghost" size="icon" className="h-6 w-6 shrink-0" onClick={onClose}>
+              <X className="h-4 w-4" />
+            </Button>
+          </div>
+          <div className="flex-1 min-h-0 overflow-y-auto">
+            {searched && results.length === 0 && <div className="p-8 text-center text-sm text-muted-foreground">No results</div>}
+            {results.map((result, i) => (
+              <div
+                key={`${result.messageId}-${i}`}
+                role="button"
+                tabIndex={0}
+                onClick={() => handleResultClick(result.timestamp)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    handleResultClick(result.timestamp);
+                  }
+                }}
+                className="w-full text-left p-4 border-b last:border-b-0 hover:bg-muted/50 transition-colors cursor-pointer"
+              >
+                <div className="flex items-center gap-2 mb-1">
+                  <Badge variant={result.role === "user" ? "default" : "secondary"} className="text-[10px] px-1.5 py-0">
+                    {result.role === "user" ? "User" : "Assistant"}
+                  </Badge>
+                  <span className="text-xs text-muted-foreground select-text">{new Date(result.timestamp).toLocaleString()}</span>
+                  <div className="ml-auto">
+                    <CopyButton text={result.fullContent} />
+                  </div>
                 </div>
+                <HighlightedPreview preview={result.preview} matchStart={result.matchStart} matchLength={result.matchLength} />
               </div>
-              <HighlightedPreview preview={result.preview} matchStart={result.matchStart} matchLength={result.matchLength} />
-            </button>
-          ))}
-        </div>
-      </Card>
-    </div>
+            ))}
+          </div>
+        </Card>
+      </div>
+      {contextTimestamp !== null && <MessageContextModal timestamp={contextTimestamp} onClose={() => setContextTimestamp(null)} />}
+    </>
   );
 }
 

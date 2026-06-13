@@ -1551,6 +1551,94 @@ describe("transcript module", () => {
     });
   });
 
+  describe("thinking block coalescing", () => {
+    // Fable emits multiple thinking blocks per turn; the CLI writes each as its own
+    // JSONL entry under one message.id with a distinct signature (measured: 49 such
+    // message-ids in a real Fable transcript, 0 in every Opus transcript). Without
+    // coalescing these stack into multiple empty/redacted strips -> visible "duplicate".
+    it("coalesces adjacent thinking blocks emitted across entries, keeping the full span", async () => {
+      (existsSync as any).mockReturnValue(true);
+      const content = jsonl(
+        { type: "user", message: { role: "user", content: "go" }, timestamp: "2024-01-01T00:00:00Z" },
+        {
+          type: "assistant",
+          message: { id: "f1", model: "claude-fable-5", content: [{ type: "thinking", signature: "CAISvUMKYggOGAIq" }] },
+          timestamp: "2024-01-01T00:00:01Z",
+        },
+        {
+          type: "assistant",
+          message: { id: "f1", model: "claude-fable-5", content: [{ type: "thinking", signature: "CAISkwYKYwgOGAIq" }] },
+          timestamp: "2024-01-01T00:00:03Z",
+        },
+        {
+          type: "assistant",
+          message: { id: "f1", model: "claude-fable-5", content: [{ type: "tool_use", id: "t1", name: "Bash", input: { command: "ls" } }] },
+          timestamp: "2024-01-01T00:00:04Z",
+        },
+      );
+      (readFile as any).mockResolvedValue(content);
+
+      const result = await loadTranscript("session-123", "/tmp");
+
+      const assistant = result.messages.find((m: { role: string }) => m.role === "assistant");
+      expect(assistant).toBeDefined();
+      const thinking = assistant!.blocks.filter((b: { type: string }) => b.type === "thinking");
+      expect(thinking).toHaveLength(1);
+      // duration reflects the later segment (3s from the user turn), not the first (1s)
+      expect(thinking[0]).toMatchObject({ type: "thinking", redacted: true, durationMs: 3000 });
+    });
+
+    it("keeps thinking blocks separated by a tool_use as distinct (interleaved thinking)", async () => {
+      (existsSync as any).mockReturnValue(true);
+      const content = jsonl(
+        {
+          type: "assistant",
+          message: { id: "f2", content: [{ type: "thinking", signature: "sigA" }] },
+          timestamp: "2024-01-01T00:00:00Z",
+        },
+        {
+          type: "assistant",
+          message: { id: "f2", content: [{ type: "tool_use", id: "t1", name: "Bash", input: {} }] },
+          timestamp: "2024-01-01T00:00:01Z",
+        },
+        {
+          type: "assistant",
+          message: { id: "f2", content: [{ type: "thinking", signature: "sigB" }] },
+          timestamp: "2024-01-01T00:00:02Z",
+        },
+      );
+      (readFile as any).mockResolvedValue(content);
+
+      const result = await loadTranscript("session-123", "/tmp");
+
+      expect(result.messages).toHaveLength(1);
+      expect(result.messages[0].blocks.filter((b: { type: string }) => b.type === "thinking")).toHaveLength(2);
+    });
+
+    it("coalesces multiple thinking blocks within one entry, joining visible text", async () => {
+      (existsSync as any).mockReturnValue(true);
+      const content = jsonl({
+        type: "assistant",
+        message: {
+          id: "f3",
+          content: [
+            { type: "thinking", thinking: "first" },
+            { type: "thinking", thinking: "second" },
+            { type: "text", text: "answer" },
+          ],
+        },
+        timestamp: "2024-01-01T00:00:00Z",
+      });
+      (readFile as any).mockResolvedValue(content);
+
+      const result = await loadTranscript("session-123", "/tmp");
+
+      const thinking = result.messages[0].blocks.filter((b: { type: string }) => b.type === "thinking");
+      expect(thinking).toHaveLength(1);
+      expect((thinking[0] as { text: string }).text).toBe("first\n\nsecond");
+    });
+  });
+
   describe("loadTranscript with tailLines option", () => {
     it("reads tail lines from file using file handle", async () => {
       (existsSync as any).mockReturnValue(true);

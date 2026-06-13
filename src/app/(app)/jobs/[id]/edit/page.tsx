@@ -29,6 +29,7 @@ const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", 
 const COMMON_TOOLS = ["Read", "Write", "Edit", "Bash", "Bash git", "Bash npm", "Bash ls", "Grep", "Glob", "Agent", "WebFetch", "WebSearch"];
 
 const THINKING_LABELS: Record<ThinkingLevel, string> = {
+  off: "Off",
   low: "Low",
   medium: "Medium",
   high: "High",
@@ -573,7 +574,7 @@ export default function JobEditPage() {
               <div className="flex items-center justify-between px-2 py-2 text-sm">
                 <span>Model</span>
                 <div className="flex gap-1 flex-wrap justify-end">
-                  {(["haiku", "sonnet", "opus"] as ModelAlias[]).map((alias) => (
+                  {(["haiku", "sonnet", "opus", "fable"] as ModelAlias[]).map((alias) => (
                     <Button
                       key={alias}
                       variant={selectedAlias === alias ? "default" : "outline"}
@@ -645,7 +646,7 @@ export default function JobEditPage() {
               <div className="flex items-center justify-between px-2 py-2 text-sm">
                 <span>Thinking</span>
                 <div className="flex gap-1 flex-wrap justify-end">
-                  {effortLevels.map((level) => (
+                  {(["off", ...effortLevels] as ThinkingLevel[]).map((level) => (
                     <Button
                       key={level}
                       variant={thinkingLevel === level ? "default" : "outline"}
