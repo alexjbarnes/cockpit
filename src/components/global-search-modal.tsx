@@ -170,9 +170,17 @@ function GlobalSearchModal({ onClose }: { onClose: () => void }) {
           <div className="flex-1 min-h-0 overflow-y-auto">
             {searched && results.length === 0 && <div className="p-8 text-center text-sm text-muted-foreground">No results</div>}
             {results.map((result, i) => (
-              <button
+              <div
                 key={`${result.messageId}-${i}`}
+                role="button"
+                tabIndex={0}
                 onClick={() => setContextResult(result)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    setContextResult(result);
+                  }
+                }}
                 className="w-full text-left p-4 border-b last:border-b-0 hover:bg-muted/50 transition-colors cursor-pointer"
               >
                 <div className="flex items-center gap-2 mb-1">
@@ -204,7 +212,7 @@ function GlobalSearchModal({ onClose }: { onClose: () => void }) {
                   <div className="truncate pl-[18px]">{result.sessionName}</div>
                 </div>
                 <HighlightedPreview preview={result.preview} matchStart={result.matchStart} matchLength={result.matchLength} />
-              </button>
+              </div>
             ))}
           </div>
           {stats && searched && results.length > 0 && (

@@ -24,9 +24,17 @@ function timeAgo(ts: number): string {
 
 export function SessionCard({ session, onClick, onDelete }: SessionCardProps) {
   return (
-    <button
+    <div
+      role="button"
+      tabIndex={0}
       onClick={onClick}
-      className="w-full flex items-center gap-3 px-3 py-2 text-left rounded-md hover:bg-accent/50 transition-colors group"
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onClick();
+        }
+      }}
+      className="w-full flex items-center gap-3 px-3 py-2 text-left rounded-md hover:bg-accent/50 transition-colors cursor-pointer group"
     >
       <span className="text-sm truncate flex-1">{session.name}</span>
       <div className="flex items-center gap-2 shrink-0">
@@ -37,8 +45,8 @@ export function SessionCard({ session, onClick, onDelete }: SessionCardProps) {
         )}
         <span className="text-xs text-muted-foreground">{timeAgo(session.lastActiveAt)}</span>
         {onDelete && session.status !== "running" && (
-          <span
-            role="button"
+          <button
+            type="button"
             onClick={(e) => {
               e.stopPropagation();
               onDelete(e);
@@ -47,9 +55,9 @@ export function SessionCard({ session, onClick, onDelete }: SessionCardProps) {
             title="Delete session"
           >
             <Trash2 className="h-3.5 w-3.5 text-muted-foreground hover:text-destructive" />
-          </span>
+          </button>
         )}
       </div>
-    </button>
+    </div>
   );
 }
