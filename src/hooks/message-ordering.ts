@@ -42,6 +42,31 @@ export function buildQueuedUserMessage(
   };
 }
 
+/** Build the optimistic user bubble for a direct (non-queued) send. Content is the
+ *  CLEANED form (extractTextFiles collapses runs of 3+ newlines to 2, strips inline
+ *  file blocks, and trims) so it equals what the transcript parser produces for the
+ *  same turn -> applyTranscript dedups it instead of leaving a duplicate bubble.
+ *  Passed attachments win; file blocks typed inline are recovered as a fallback. */
+export function buildUserMessage(
+  text: string,
+  id: string,
+  timestamp: number,
+  attachments?: { images?: ImageAttachment[]; documents?: DocumentAttachment[]; textFiles?: TextFileAttachment[] },
+): ChatMessage {
+  const { cleaned, textFiles: parsed } = extractTextFiles(text);
+  return {
+    id,
+    role: "user",
+    content: cleaned,
+    toolUses: [],
+    blocks: [],
+    timestamp,
+    images: attachments?.images?.length ? attachments.images : undefined,
+    documents: attachments?.documents?.length ? attachments.documents : undefined,
+    textFiles: attachments?.textFiles?.length ? attachments.textFiles : parsed.length > 0 ? parsed : undefined,
+  };
+}
+
 /**
  * Replace the "streaming" placeholder with a finalized assistant message,
  * keeping it at the same position in the array.
