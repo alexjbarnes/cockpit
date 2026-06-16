@@ -101,11 +101,15 @@ function stripCommandXml(text: string): string {
   if (trimmed.startsWith("<local-command-stdout>")) return "";
   if (trimmed.startsWith("<command-name>") || trimmed.startsWith("<command-message>") || trimmed.startsWith("<command-args>")) {
     const match = trimmed.match(/<command-name>(\/[^<]+)<\/command-name>/);
-    if (match) {
-      if (match[1] === "/compact") return "";
-      return match[1];
-    }
-    return "";
+    if (!match) return "";
+    const name = match[1].trim();
+    if (name === "/compact") return "";
+    // Reconstruct the command as typed (name + args). Dropping the args left the
+    // transcript copy ("/cmd") mismatched against the optimistic bubble ("/cmd args"),
+    // which duplicated the message until reload; it also hid the args from the user.
+    const argsMatch = trimmed.match(/<command-args>([\s\S]*?)<\/command-args>/);
+    const args = argsMatch ? argsMatch[1].trim() : "";
+    return args ? `${name} ${args}` : name;
   }
   return text;
 }

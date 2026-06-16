@@ -36,6 +36,16 @@ describe("buildUserMessage", () => {
     expect(built.role).toBe("user");
   });
 
+  it("regression: a slash command with args dedups against the reconstructed transcript copy", () => {
+    // The parser now reconstructs "/model claude-opus-4-8" (name + args); the
+    // optimistic bubble must equal that so the two collapse to one.
+    const optimistic = buildUserMessage("/model claude-opus-4-8", "user-1", 1);
+    const transcript = msg("srv-1", "user", "/model claude-opus-4-8");
+    const result = applyTranscript([optimistic], [transcript]);
+    expect(result).toHaveLength(1);
+    expect(result[0].id).toBe("srv-1");
+  });
+
   it("regression: a sent message with blank-line gaps does not leave a duplicate bubble", () => {
     // The exact shape that used to duplicate: optimistic bubble built from the
     // typed text, transcript copy cleaned by the parser. They must reconcile to one.

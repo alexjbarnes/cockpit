@@ -1372,6 +1372,26 @@ describe("transcript module", () => {
       expect(result.messages[0].content).toBe("/analyze");
     });
 
+    it("reconstructs a slash command with its args so it matches the optimistic bubble", async () => {
+      (existsSync as any).mockReturnValue(true);
+      const content = jsonl({
+        type: "user",
+        message: {
+          id: "u1",
+          content:
+            "<command-name>/model</command-name>\n<command-message>model</command-message>\n<command-args>claude-opus-4-8</command-args>",
+        },
+        timestamp: "2024-01-01T00:00:00Z",
+        cwd: "/tmp",
+      });
+      (readFile as any).mockResolvedValue(content);
+
+      const result = await loadTranscript("session-123", "/tmp");
+
+      expect(result.messages).toHaveLength(1);
+      expect(result.messages[0].content).toBe("/model claude-opus-4-8");
+    });
+
     it("suppresses /compact command from command-name tag", async () => {
       (existsSync as any).mockReturnValue(true);
       const content = jsonl({
