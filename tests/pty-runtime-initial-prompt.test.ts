@@ -152,3 +152,56 @@ describe("PtyRuntime initial-prompt delivery", () => {
     expect(ptySessionMock.sendText).toHaveBeenCalledTimes(4);
   });
 });
+
+describe("PtyRuntime interactive user send (sendUserText)", () => {
+  beforeEach(() => {
+    ptySessionMock.start.mockClear().mockResolvedValue(undefined);
+    ptySessionMock.sendText.mockClear().mockResolvedValue(undefined);
+    transcriptMock.count = 0;
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  // Start a runtime and confirm its initial prompt so we reach a live REPL, then
+  // clear the spy so assertions see only the interactive send.
+  async function startedRuntime() {
+    const { runtime, getHandler } = makeRuntime();
+    const started = runtime.start("init");
+    await vi.advanceTimersByTimeAsync(0);
+    getHandler()?.onUserPromptSubmit?.({ prompt: "init" });
+    await started;
+    ptySessionMock.sendText.mockClear();
+    return runtime;
+  }
+
+  it("logs 'NO turn' when an interactive send writes no transcript turn (swallowed input)", async () => {
+    vi.useFakeTimers();
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const runtime = await startedRuntime();
+    transcriptMock.count = 5; // baseline at send time
+
+    await runtime.sendUserText("@reviewer take a look");
+    expect(ptySessionMock.sendText).toHaveBeenCalledWith("@reviewer take a look");
+
+    // Transcript never grows in the window -> the send produced no turn.
+    await vi.advanceTimersByTimeAsync(12000);
+    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("produced NO turn"));
+    logSpy.mockRestore();
+  });
+
+  it("stays quiet when the interactive send starts a turn (transcript grows)", async () => {
+    vi.useFakeTimers();
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const runtime = await startedRuntime();
+    transcriptMock.count = 5;
+
+    await runtime.sendUserText("hello");
+    transcriptMock.count = 6; // a user turn was written
+
+    await vi.advanceTimersByTimeAsync(12000);
+    expect(logSpy).not.toHaveBeenCalledWith(expect.stringContaining("produced NO turn"));
+    logSpy.mockRestore();
+  });
+});

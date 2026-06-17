@@ -5,6 +5,7 @@ const ptyMocks = vi.hoisted(() => ({
   isAlive: false,
   start: vi.fn().mockResolvedValue(undefined),
   sendText: vi.fn().mockResolvedValue(undefined),
+  sendUserText: vi.fn().mockResolvedValue(undefined),
   kill: vi.fn().mockResolvedValue(undefined),
   interrupt: vi.fn(),
   notifyPermissionDecision: vi.fn().mockReturnValue(true),
@@ -42,6 +43,9 @@ vi.mock("@/server/pty-runtime", () => ({
     }
     sendText(text: string) {
       return ptyMocks.sendText(text);
+    }
+    sendUserText(text: string) {
+      return ptyMocks.sendUserText(text);
     }
     sendSlash() {}
     sendKey() {}
@@ -135,6 +139,7 @@ describe("SessionManager PTY runtime (unit)", () => {
     ptyMocks.capturedOpts = null;
     ptyMocks.start.mockClear().mockResolvedValue(undefined);
     ptyMocks.sendText.mockClear().mockResolvedValue(undefined);
+    ptyMocks.sendUserText.mockClear().mockResolvedValue(undefined);
     ptyMocks.kill.mockClear().mockResolvedValue(undefined);
     ptyMocks.interrupt.mockClear();
     ptyMocks.notifyPermissionDecision.mockClear().mockReturnValue(true);
@@ -178,14 +183,14 @@ describe("SessionManager PTY runtime (unit)", () => {
       expect(statuses).toContain("running");
     });
 
-    it("sends text via ptyRuntime.sendText when alive and session is idle", () => {
+    it("sends text via ptyRuntime.sendUserText when alive and session is idle", () => {
       const session = manager.createSession("/tmp", undefined, { runtime: "pty" });
       manager.sendMessage(session.id, "first");
       // Simulate the PTY turn completing: status → idle, ptyRuntime stays alive
       emitMessageDone();
 
       manager.sendMessage(session.id, "second");
-      expect(ptyMocks.sendText).toHaveBeenCalledWith("second");
+      expect(ptyMocks.sendUserText).toHaveBeenCalledWith("second");
     });
 
     it("includes --permission-mode plan when plan mode active", () => {
