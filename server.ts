@@ -3,9 +3,11 @@ import { networkInterfaces } from "node:os";
 import { parse } from "node:url";
 import next from "next";
 import { deletePasswordFile, needsSetup } from "./src/server/auth";
+import { startHealthProbe } from "./src/server/health-probe";
 import { HookRouter } from "./src/server/hook-router";
 import { JobScheduler } from "./src/server/job-scheduler";
 import { CockpitMcpServer } from "./src/server/mcp/cockpit-config-server";
+import { getCockpitDir } from "./src/server/paths";
 import { SessionManager } from "./src/server/session-manager";
 import { setCockpitMcp, setHookRouter, setJobScheduler, setSessionManager, setTerminalManager } from "./src/server/singleton";
 import { TerminalManager } from "./src/server/terminal-manager";
@@ -91,6 +93,15 @@ async function main() {
   const jobScheduler = new JobScheduler(sessionManager);
   setJobScheduler(jobScheduler);
   jobScheduler.start();
+
+  // Opt-in stall watchdog: COCKPIT_HEALTH=1 (independent of COCKPIT_DEBUG) logs
+  // only when the process stalls, classifying it as event-loop-blocked vs
+  // fs/disk contention. Run it with COCKPIT_DEBUG OFF to see whether slow
+  // session switching survives without the debug-log flood, and what it is.
+  if (process.env.COCKPIT_HEALTH === "1") {
+    startHealthProbe(getCockpitDir());
+    console.log("[health] stall watchdog enabled (event-loop lag + fs read probe)");
+  }
 
   const server = createServer((req, res) => {
     const parsedUrl = parse(req.url || "", true);
