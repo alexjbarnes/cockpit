@@ -97,7 +97,16 @@ export function applyMessageDone(prev: ChatMessage[], finalMessage: ChatMessage)
  * then slots local-only messages (system, optimistic user) into their
  * approximate positions relative to surrounding transcript messages.
  */
-export function applyTranscript(prev: ChatMessage[], transcriptMsgs: ChatMessage[]): ChatMessage[] {
+export function applyTranscript(prev: ChatMessage[], transcriptMsgsRaw: ChatMessage[]): ChatMessage[] {
+  // Defensive: collapse duplicate transcript entries by id (keep the first). A
+  // compacted transcript can re-log a turn under the same id; the parser already
+  // dedups, but rendering the transcript as source of truth must not double either.
+  const seenTranscriptIds = new Set<string>();
+  const transcriptMsgs = transcriptMsgsRaw.filter((m) => {
+    if (seenTranscriptIds.has(m.id)) return false;
+    seenTranscriptIds.add(m.id);
+    return true;
+  });
   const transcriptUserContent = new Set(transcriptMsgs.filter((m) => m.role === "user").map((m) => userKey(m.content)));
   const transcriptSystemContent = new Set(transcriptMsgs.filter((m) => m.role === "system").map((m) => m.content));
 

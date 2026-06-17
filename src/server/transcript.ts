@@ -312,6 +312,10 @@ function parseLines(lines: string[]): { messages: ChatMessage[]; lastUsage: { us
   const messages: ChatMessage[] = [];
   const messageById = new Map<string, ChatMessage>();
   const toolUseMap = new Map<string, ToolUse>();
+  // Ids of user messages already emitted. A compacted transcript re-logs earlier
+  // turns under the SAME entry uuid; without this they would render as duplicate
+  // bubbles (the id falls back to entry.uuid, so the re-log collides and is skipped).
+  const seenUserIds = new Set<string>();
   let lastUserOrToolResultTs = 0;
   let lastUsage: { used: number; total: number } | null = null;
   let contextWindowSize = 200_000;
@@ -433,15 +437,19 @@ function parseLines(lines: string[]): { messages: ChatMessage[]; lastUsage: { us
         if (stripped) {
           const { cleaned, textFiles } = extractTextFiles(stripped);
           if (cleaned || textFiles.length > 0) {
-            messages.push({
-              id: entry.message.id || uuidv4(),
-              role: "user",
-              content: cleaned,
-              toolUses: [],
-              blocks: [],
-              timestamp: entry.timestamp ? new Date(entry.timestamp).getTime() : Date.now(),
-              textFiles: textFiles.length > 0 ? textFiles : undefined,
-            });
+            const id = entry.message.id || entry.uuid || uuidv4();
+            if (!seenUserIds.has(id)) {
+              seenUserIds.add(id);
+              messages.push({
+                id,
+                role: "user",
+                content: cleaned,
+                toolUses: [],
+                blocks: [],
+                timestamp: entry.timestamp ? new Date(entry.timestamp).getTime() : Date.now(),
+                textFiles: textFiles.length > 0 ? textFiles : undefined,
+              });
+            }
           }
         }
         continue;
@@ -482,17 +490,21 @@ function parseLines(lines: string[]): { messages: ChatMessage[]; lastUsage: { us
           const stripped = userText ? stripCommandXml(userText) : "";
           const { cleaned, textFiles } = extractTextFiles(stripped);
           if (images.length > 0 || documents.length > 0 || cleaned || textFiles.length > 0) {
-            messages.push({
-              id: entry.message.id || uuidv4(),
-              role: "user",
-              content: cleaned,
-              toolUses: [],
-              blocks: [],
-              timestamp: entry.timestamp ? new Date(entry.timestamp).getTime() : Date.now(),
-              images: images.length > 0 ? images : undefined,
-              documents: documents.length > 0 ? documents : undefined,
-              textFiles: textFiles.length > 0 ? textFiles : undefined,
-            });
+            const id = entry.message.id || entry.uuid || uuidv4();
+            if (!seenUserIds.has(id)) {
+              seenUserIds.add(id);
+              messages.push({
+                id,
+                role: "user",
+                content: cleaned,
+                toolUses: [],
+                blocks: [],
+                timestamp: entry.timestamp ? new Date(entry.timestamp).getTime() : Date.now(),
+                images: images.length > 0 ? images : undefined,
+                documents: documents.length > 0 ? documents : undefined,
+                textFiles: textFiles.length > 0 ? textFiles : undefined,
+              });
+            }
           }
         }
       }

@@ -1407,6 +1407,26 @@ describe("transcript module", () => {
       expect(result.messages).toHaveLength(0);
     });
 
+    it("dedups a user turn re-logged under the same entry uuid (post-compaction)", async () => {
+      (existsSync as any).mockReturnValue(true);
+      const entry = {
+        type: "user",
+        uuid: "shared-uuid-1",
+        message: { content: "hello from the user" }, // note: no message.id, like a real user turn
+        timestamp: "2024-01-01T00:00:00Z",
+        cwd: "/tmp",
+      };
+      // Compaction re-logs earlier turns under the SAME entry uuid. Before the fix
+      // the parser minted a fresh random id each time, yielding two identical bubbles.
+      (readFile as any).mockResolvedValue(jsonl(entry, { ...entry, timestamp: "2024-01-01T00:05:00Z" }));
+
+      const result = await loadTranscript("session-123", "/tmp");
+
+      const userMsgs = result.messages.filter((m) => m.role === "user");
+      expect(userMsgs).toHaveLength(1);
+      expect(userMsgs[0].content).toBe("hello from the user");
+    });
+
     it("strips local-command-stdout content from user messages", async () => {
       (existsSync as any).mockReturnValue(true);
       const content = jsonl({
