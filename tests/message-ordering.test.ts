@@ -46,6 +46,17 @@ describe("buildUserMessage", () => {
     expect(result[0].id).toBe("srv-1");
   });
 
+  it("regression: extra whitespace between a command and its args still dedups", () => {
+    // The reported case: the optimistic bubble keeps the user's double space, the
+    // parser rebuilds the command with a single space. Whitespace-only differences
+    // must still reconcile to one bubble.
+    const optimistic = buildUserMessage("/iph-ai-toolkit:review  https://example.com/pull/1", "user-1", 1);
+    const transcript = msg("srv-1", "user", "/iph-ai-toolkit:review https://example.com/pull/1");
+    const result = applyTranscript([optimistic], [transcript]);
+    expect(result).toHaveLength(1);
+    expect(result[0].id).toBe("srv-1");
+  });
+
   it("regression: a sent message with blank-line gaps does not leave a duplicate bubble", () => {
     // The exact shape that used to duplicate: optimistic bubble built from the
     // typed text, transcript copy cleaned by the parser. They must reconcile to one.

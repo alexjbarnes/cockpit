@@ -3,6 +3,14 @@ import type { ChatMessage, DocumentAttachment, ImageAttachment, TextFileAttachme
 
 const stripAttachments = (s: string) => s.replace(/^\[Attached [^\]]+\]\n*/gm, "").trim();
 
+// Dedup key for matching an optimistic user bubble to its transcript copy. On top
+// of stripping attachment markers it collapses every whitespace run to a single
+// space, so differences that are ONLY whitespace still reconcile to one bubble:
+// the transcript parser collapses blank-line gaps and rebuilds a slash command as
+// "name arg" (single space), while the optimistic bubble keeps whatever the user
+// typed (extra spaces, blank lines). Matching on the raw string duplicated those.
+const userKey = (s: string) => stripAttachments(s).replace(/\s+/g, " ").trim();
+
 export type QueuedText = {
   text: string;
   apiText: string;
@@ -90,7 +98,7 @@ export function applyMessageDone(prev: ChatMessage[], finalMessage: ChatMessage)
  * approximate positions relative to surrounding transcript messages.
  */
 export function applyTranscript(prev: ChatMessage[], transcriptMsgs: ChatMessage[]): ChatMessage[] {
-  const transcriptUserContent = new Set(transcriptMsgs.filter((m) => m.role === "user").map((m) => stripAttachments(m.content)));
+  const transcriptUserContent = new Set(transcriptMsgs.filter((m) => m.role === "user").map((m) => userKey(m.content)));
   const transcriptSystemContent = new Set(transcriptMsgs.filter((m) => m.role === "system").map((m) => m.content));
 
   // Build enriched versions of transcript messages, preserving any
@@ -101,10 +109,8 @@ export function applyTranscript(prev: ChatMessage[], transcriptMsgs: ChatMessage
       enrichedById.set(m.id, m);
       continue;
     }
-    const stripped = stripAttachments(m.content);
-    const match = prev.find(
-      (p) => p.role === "user" && (p.images?.length || p.documents?.length) && stripAttachments(p.content) === stripped,
-    );
+    const stripped = userKey(m.content);
+    const match = prev.find((p) => p.role === "user" && (p.images?.length || p.documents?.length) && userKey(p.content) === stripped);
     enrichedById.set(
       m.id,
       match ? { ...m, content: match.content, images: match.images, documents: match.documents, textFiles: match.textFiles } : m,
@@ -119,11 +125,9 @@ export function applyTranscript(prev: ChatMessage[], transcriptMsgs: ChatMessage
   for (const p of prev) {
     if (!p.id.startsWith("user-")) continue;
     if (transcriptIds.has(p.id)) continue;
-    const stripped = stripAttachments(p.content);
+    const stripped = userKey(p.content);
     if (!transcriptUserContent.has(stripped)) continue;
-    const match = transcriptMsgs.find(
-      (m) => m.role === "user" && stripAttachments(m.content) === stripped && !optimisticToTranscript.has(m.id),
-    );
+    const match = transcriptMsgs.find((m) => m.role === "user" && userKey(m.content) === stripped && !optimisticToTranscript.has(m.id));
     if (match) optimisticToTranscript.set(p.id, match.id);
   }
 
@@ -135,7 +139,7 @@ export function applyTranscript(prev: ChatMessage[], transcriptMsgs: ChatMessage
     if (transcriptIds.has(m.id)) continue;
     if (optimisticToTranscript.has(m.id)) continue;
     const isLocalSystem = m.role === "system" && !transcriptSystemContent.has(m.content);
-    const isLocalUser = m.id.startsWith("user-") && !transcriptUserContent.has(stripAttachments(m.content));
+    const isLocalUser = m.id.startsWith("user-") && !transcriptUserContent.has(userKey(m.content));
     if (isLocalSystem || isLocalUser) {
       localMessages.push({ msg: m, prevIdx: i });
     }
