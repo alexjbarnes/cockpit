@@ -24,6 +24,29 @@ function formatDate(ts: number): string {
   return new Date(ts).toLocaleString();
 }
 
+// Clipboard copy that works in a NON-secure context (plain HTTP on a LAN IP),
+// where navigator.clipboard is undefined. Uses the legacy execCommand path,
+// which is not gated to HTTPS. Must run inside the click gesture.
+function legacyCopy(text: string): boolean {
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.setAttribute("readonly", "");
+    ta.style.position = "fixed";
+    ta.style.top = "0";
+    ta.style.left = "0";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    const ok = document.execCommand("copy");
+    document.body.removeChild(ta);
+    return ok;
+  } catch {
+    return false;
+  }
+}
+
 export default function InboxMessagePage() {
   usePageHeader("Inbox", { hideActions: true });
   const { id } = useParams<{ id: string }>();
@@ -31,7 +54,7 @@ export default function InboxMessagePage() {
   const [message, setMessage] = useState<InboxMessage | null>(null);
   const [loading, setLoading] = useState(true);
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const [copied, setCopied] = useState(false);
+  const [shareFeedback, setShareFeedback] = useState<null | "copied" | "failed">(null);
 
   const fetchMessage = useCallback(async () => {
     const res = await fetch("/api/inbox");
@@ -67,23 +90,35 @@ export default function InboxMessagePage() {
   const handleShare = async () => {
     if (!message) return;
     const text = `${message.title}\n\n${message.body}`;
-    // Prefer the native share sheet (mobile/PWA). Fall back to copying the
-    // content to the clipboard where Web Share isn't available (desktop).
-    if (typeof navigator !== "undefined" && navigator.share) {
+
+    // Native share sheet — only exists in a SECURE context (HTTPS or localhost).
+    // Over plain HTTP on a LAN IP it's undefined, so this is skipped there.
+    if (navigator.share) {
       try {
         await navigator.share({ title: message.title, text });
-      } catch {
-        // user dismissed the share sheet, or share failed — nothing to do
+        return;
+      } catch (e) {
+        if ((e as Error)?.name === "AbortError") return; // user dismissed the sheet
+        // any other failure: fall through to copy
       }
-      return;
     }
-    try {
-      await navigator.clipboard?.writeText(text);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    } catch {
-      // clipboard blocked — nothing to do
+
+    // Copy fallback. navigator.clipboard is ALSO secure-context-only; over HTTP
+    // it's undefined, so go straight to legacyCopy (execCommand) which works
+    // without HTTPS. Run legacyCopy synchronously (no await before it) so the
+    // click's user activation is still live.
+    let ok = false;
+    if (navigator.clipboard?.writeText) {
+      try {
+        await navigator.clipboard.writeText(text);
+        ok = true;
+      } catch {
+        ok = false;
+      }
     }
+    if (!ok) ok = legacyCopy(text);
+    setShareFeedback(ok ? "copied" : "failed");
+    setTimeout(() => setShareFeedback(null), 1800);
   };
 
   if (loading) {
@@ -115,8 +150,10 @@ export default function InboxMessagePage() {
         </Button>
         <div className="flex items-center gap-1">
           <Button variant="ghost" size="sm" onClick={handleShare}>
-            {copied ? <Check className="h-4 w-4 sm:mr-1" /> : <Share2 className="h-4 w-4 sm:mr-1" />}
-            <span className="hidden sm:inline">{copied ? "Copied" : "Share"}</span>
+            {shareFeedback === "copied" ? <Check className="h-4 w-4 sm:mr-1" /> : <Share2 className="h-4 w-4 sm:mr-1" />}
+            <span className="hidden sm:inline">
+              {shareFeedback === "copied" ? "Copied" : shareFeedback === "failed" ? "Copy failed" : "Share"}
+            </span>
           </Button>
           <Button variant="ghost" size="sm" onClick={handleMarkUnread}>
             <Mail className="h-4 w-4 sm:mr-1" />
