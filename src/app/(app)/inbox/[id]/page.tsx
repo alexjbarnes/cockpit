@@ -1,6 +1,6 @@
 "use client";
 
-import { AlertCircle, AlertTriangle, ArrowLeft, Info, Loader2, Mail, Trash2 } from "lucide-react";
+import { AlertCircle, AlertTriangle, ArrowLeft, Check, Info, Loader2, Mail, Share2, Trash2 } from "lucide-react";
 import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { usePageHeader } from "@/components/app-shell";
@@ -31,6 +31,7 @@ export default function InboxMessagePage() {
   const [message, setMessage] = useState<InboxMessage | null>(null);
   const [loading, setLoading] = useState(true);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [copied, setCopied] = useState(false);
 
   const fetchMessage = useCallback(async () => {
     const res = await fetch("/api/inbox");
@@ -63,6 +64,28 @@ export default function InboxMessagePage() {
     router.push("/inbox");
   };
 
+  const handleShare = async () => {
+    if (!message) return;
+    const text = `${message.title}\n\n${message.body}`;
+    // Prefer the native share sheet (mobile/PWA). Fall back to copying the
+    // content to the clipboard where Web Share isn't available (desktop).
+    if (typeof navigator !== "undefined" && navigator.share) {
+      try {
+        await navigator.share({ title: message.title, text });
+      } catch {
+        // user dismissed the share sheet, or share failed — nothing to do
+      }
+      return;
+    }
+    try {
+      await navigator.clipboard?.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // clipboard blocked — nothing to do
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center py-12">
@@ -91,13 +114,17 @@ export default function InboxMessagePage() {
           Back
         </Button>
         <div className="flex items-center gap-1">
+          <Button variant="ghost" size="sm" onClick={handleShare}>
+            {copied ? <Check className="h-4 w-4 sm:mr-1" /> : <Share2 className="h-4 w-4 sm:mr-1" />}
+            <span className="hidden sm:inline">{copied ? "Copied" : "Share"}</span>
+          </Button>
           <Button variant="ghost" size="sm" onClick={handleMarkUnread}>
-            <Mail className="h-4 w-4 mr-1" />
-            Mark unread
+            <Mail className="h-4 w-4 sm:mr-1" />
+            <span className="hidden sm:inline">Mark unread</span>
           </Button>
           <Button variant="ghost" size="sm" className="text-destructive hover:text-destructive" onClick={() => setConfirmDelete(true)}>
-            <Trash2 className="h-4 w-4 mr-1" />
-            Delete
+            <Trash2 className="h-4 w-4 sm:mr-1" />
+            <span className="hidden sm:inline">Delete</span>
           </Button>
         </div>
       </div>
