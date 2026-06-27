@@ -58,3 +58,32 @@ describe("REPRO: message with a paste attachment duplicating", () => {
     expect(result).toHaveLength(1);
   });
 });
+
+describe("REPRO: PTY 'clear line' NAK prefix duplicating a plain-text bubble", () => {
+  // Real production data (verba session efe3bccf, 2026-06-27): 8 of 768 user turns
+  // (~1%) were logged with a leading \x15 (Ctrl-U/NAK). pty-session.ts sendText writes
+  // \x15 to clear the REPL line, then the text; sent in one read the CLI's paste
+  // detection sometimes inserts the \x15 literally, so the TRANSCRIPT copy carries it
+  // while the optimistic bubble (built from typed text) does not. Before the userKey
+  // control-char strip, the keys differed and the message rendered as two identical
+  // bubbles — exactly the screenshot the user reported on latest `next`.
+  const prose = "Ok a couple spelled out, grapheme, vocab, re-download. I guess we can keep adding these as we go.";
+
+  it("idle send: clean optimistic bubble dedups against a \\x15-prefixed transcript copy", () => {
+    const transcript = userMsg("srv-1", `\x15${prose}`);
+    const optimistic = buildUserMessage(prose, "user-1", 1);
+    const result = applyTranscript([optimistic], [transcript]);
+    expect(result).toHaveLength(1);
+  });
+
+  it("a leading NAK on its own (no optimistic) still renders one bubble on reload", () => {
+    const result = applyTranscript([], [userMsg("srv-1", `\x15${prose}`)]);
+    expect(result).toHaveLength(1);
+  });
+
+  it("other C0 controls in the transcript copy also reconcile (defensive)", () => {
+    const transcript = userMsg("srv-1", `\x01\x15${prose}`);
+    const optimistic = buildUserMessage(prose, "user-1", 1);
+    expect(applyTranscript([optimistic], [transcript])).toHaveLength(1);
+  });
+});

@@ -4,12 +4,19 @@ import type { ChatMessage, DocumentAttachment, ImageAttachment, TextFileAttachme
 const stripAttachments = (s: string) => s.replace(/^\[Attached [^\]]+\]\n*/gm, "").trim();
 
 // Dedup key for matching an optimistic user bubble to its transcript copy. On top
-// of stripping attachment markers it collapses every whitespace run to a single
-// space, so differences that are ONLY whitespace still reconcile to one bubble:
-// the transcript parser collapses blank-line gaps and rebuilds a slash command as
-// "name arg" (single space), while the optimistic bubble keeps whatever the user
-// typed (extra spaces, blank lines). Matching on the raw string duplicated those.
-const userKey = (s: string) => stripAttachments(s).replace(/\s+/g, " ").trim();
+// of stripping attachment markers it collapses every run of whitespace OR C0 control
+// characters to a single space, so differences that are ONLY whitespace/controls
+// still reconcile to one bubble: the transcript parser collapses blank-line gaps and
+// rebuilds a slash command as "name arg" (single space), while the optimistic bubble
+// keeps whatever the user typed (extra spaces, blank lines). The control-char half
+// matters in PTY mode: the "clear line" write (pty-session.ts sendText) occasionally
+// lands a literal \x15 (Ctrl-U/NAK) ahead of the text, which the CLI logs into the
+// transcript; the optimistic bubble has no such byte, so without stripping it the
+// keys differ and the bubble duplicates (~1% of PTY sends). Matching the raw string
+// duplicated all of these.
+// biome-ignore lint/suspicious/noControlCharactersInRegex: collapse C0 controls so a stray NAK can't defeat dedup
+const CONTROL_OR_WHITESPACE = /[\x00-\x1f\s]+/g;
+const userKey = (s: string) => stripAttachments(s).replace(CONTROL_OR_WHITESPACE, " ").trim();
 
 export type QueuedText = {
   text: string;
