@@ -103,3 +103,23 @@ test("the exact reported shape (plugin agent with colon + URL) submits", async (
     rmSync(workDir, { recursive: true, force: true });
   }
 });
+
+// Regression for the confirmed hang: when the @-mention is the LAST token (no trailing
+// space/text) AND it matches something so the CLI autocomplete menu opens, the submit
+// Enter was swallowed selecting a completion and the turn never reached the API (session
+// stuck "running", bubble gone on reload). The fix (input-area handleSend) re-adds the
+// trailing space that trim() had stripped, so the menu closes and the literal text
+// submits. Without the fix this fails (marker never lands); with it, it passes.
+test("a message ENDING in a matching @ mention still submits (open-menu hang)", async ({ page, harness }) => {
+  const workDir = mkdtempSync(path.join(tmpdir(), "cockpit-at-"));
+  mkdirSync(path.join(workDir, ".git"), { recursive: true });
+  // A real file so the dangling "@notes" matches and the CLI opens its @ menu.
+  writeFileSync(path.join(workDir, "notes.md"), "# Notes\nsome content here\n");
+  try {
+    // Mention is the final token; the marker precedes it so it travels with the prompt.
+    const landed = await userPromptReachedApi(page, harness, workDir, "summarize ZZMARKERE @notes", "ZZMARKERE");
+    expect(landed).toBe(true);
+  } finally {
+    rmSync(workDir, { recursive: true, force: true });
+  }
+});
