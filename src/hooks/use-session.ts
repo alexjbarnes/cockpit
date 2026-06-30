@@ -17,7 +17,7 @@ import type {
   TodoItem,
   ToolUse,
 } from "@/types";
-import { applyMessageDone, applyTranscript, buildQueuedUserMessage, type QueuedText } from "./message-ordering";
+import { applyMessageDone, applyTranscript, buildQueuedUserMessage, buildUserMessage, type QueuedText } from "./message-ordering";
 import { useWebSocket } from "./use-websocket";
 
 export interface PendingPermission {
@@ -1151,17 +1151,11 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
         setHasQueuedMessage(false);
       }
 
-      const userMsg: ChatMessage = {
-        id: "user-" + Date.now(),
-        role: "user",
-        content: text,
-        toolUses: [],
-        blocks: [],
-        timestamp: Date.now(),
-        images: images?.length ? images : undefined,
-        documents: documents?.length ? documents : undefined,
-        textFiles: textFiles?.length ? textFiles : undefined,
-      };
+      // Content must be the cleaned form (newlines collapsed, inline file blocks
+      // stripped) so it matches the transcript parser's copy and applyTranscript
+      // dedups it. Raw text here duplicated the bubble for any message with 3+
+      // consecutive newlines (the transcript collapses them, so the keys differed).
+      const userMsg = buildUserMessage(text, "user-" + Date.now(), Date.now(), { images, documents, textFiles });
       setMessages((prev) => [...prev, userMsg]);
       setSuggestions([]);
 

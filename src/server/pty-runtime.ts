@@ -215,6 +215,49 @@ export class PtyRuntime {
     await this.pty.sendText(text);
   }
 
+  /**
+   * Deliver an interactive (live) user message, then confirm a turn actually
+   * started. Unlike the initial prompt, interactive sends were fire-and-forget:
+   * sendMessage flips the session to "running" and types the keystrokes, but if
+   * the REPL swallows them (no turn written) the session hangs "running" with the
+   * bubble vanishing on reload and no diagnostic. This logs the outcome: a turn
+   * started (transcript grew), or NO turn after the window — in which case it
+   * captures the REPL screen so the stuck case is explainable from the logs.
+   * Diagnostic only; it does not resend or change status.
+   */
+  async sendUserText(text: string): Promise<void> {
+    if (!this.pty) throw new Error("PtyRuntime not started");
+    const { sessionId, cliSessionId, cwd } = this.opts;
+    const baselineMsgs = countTranscriptMessages(cliSessionId, cwd);
+    logDiag(sessionId, "pty:user-send", { textLen: text.length, head: text.slice(0, 80), baselineMsgs, screenBefore: this.recentScreen() });
+    await this.pty.sendText(text);
+
+    const CONFIRM_MS = 12000;
+    setTimeout(() => {
+      if (this.exited) return;
+      const nowMsgs = countTranscriptMessages(cliSessionId, cwd);
+      if (nowMsgs > baselineMsgs) {
+        logDiag(sessionId, "pty:user-send-confirmed", { waitedMs: CONFIRM_MS, baselineMsgs, nowMsgs });
+        return;
+      }
+      // A submitted prompt writes a user turn to the JSONL at submit time, so no
+      // growth in this window means the keystrokes never produced a turn — the
+      // "sent but stuck, nothing happens, gone on reload" report. Surface it
+      // unconditionally (matches the other [pty-runtime] logs the user watches),
+      // and dump the REPL screen via the debug gate to show what swallowed it.
+      console.log(
+        `[pty-runtime] user message produced NO turn after ${CONFIRM_MS}ms for ${sessionId.slice(0, 8)} (textLen=${text.length}); input may have been swallowed by the REPL. Set COCKPIT_DEBUG=1 for the screen.`,
+      );
+      logDiag(sessionId, "pty:user-send-no-turn", {
+        waitedMs: CONFIRM_MS,
+        baselineMsgs,
+        nowMsgs,
+        head: text.slice(0, 80),
+        screenAfter: this.recentScreen(),
+      });
+    }, CONFIRM_MS);
+  }
+
   sendSlash(command: string): void {
     if (!this.pty) throw new Error("PtyRuntime not started");
     this.pty.sendSlash(command);

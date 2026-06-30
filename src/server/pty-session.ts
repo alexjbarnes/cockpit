@@ -2,6 +2,13 @@ import { existsSync, realpathSync, statSync } from "node:fs";
 import { type IPty, spawn } from "node-pty";
 
 const TEXT_TO_ENTER_DELAY_MS = 300;
+// Pause between the "clear line" write and typing the text. Sent back-to-back they
+// reach the CLI in one read and the REPL's paste detection occasionally inserts the
+// \x15 (Ctrl-U/kill-line) literally instead of acting on it, leaving a leading NAK in
+// the submitted prompt (logged to the transcript, ~1% of sends) that also defeats
+// optimistic-bubble dedup and renders a duplicate user message. The pause makes the
+// \x15 land as its own keystroke, processed as kill-line before any text arrives.
+const CLEAR_TO_TEXT_DELAY_MS = 30;
 const TRUST_DIALOG_WINDOW_MS = 5000;
 const REPL_READY_MIN_BYTES = 100;
 const REPL_READY_TIMEOUT_MS = 60_000;
@@ -107,6 +114,7 @@ export class PtySession {
   async sendText(text: string): Promise<void> {
     const pty = this.requirePty();
     pty.write("\x15");
+    await sleep(CLEAR_TO_TEXT_DELAY_MS);
     pty.write(text);
     await sleep(TEXT_TO_ENTER_DELAY_MS);
     pty.write("\r");

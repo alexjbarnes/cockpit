@@ -4,7 +4,7 @@ import { WebSocket, WebSocketServer } from "ws";
 import type { ClientMessage, ServerMessage } from "@/types";
 import { extractTokenFromQuery, validateSession } from "./auth";
 // loadLastUsage no longer needed - usage is returned by loadTranscript
-import { debugLog, logClientMessage, logParsedEvent, logServerMessage, logStatus } from "./debug-logger";
+import { debugLog, logClientMessage, logDiag, logParsedEvent, logServerMessage, logStatus } from "./debug-logger";
 import type { ParsedEvent } from "./event-parser";
 import { watchCwd } from "./fs-watcher";
 import { findLatestPlanFile, readPlanFile } from "./plans";
@@ -48,12 +48,18 @@ function setupTerminalWebSocket(terminalWss: WebSocketServer, terminalManager: T
     const terminal = terminalManager.getTerminal(terminalId);
     if (!terminal) {
       console.log(`[terminal-ws] terminal not found: ${terminalId.slice(0, 8)}`);
+      // Decisive for the disappearing-terminal bug: the client tried to reconnect
+      // to a pty the server no longer has -> 1008 -> client shows "Terminal
+      // disconnected". Pair with terminal:pty-exit / terminal:destroy / terminal:reaped
+      // to see why the pty was gone.
+      logDiag(terminalId, "ws-terminal:reject", { reason: "not-found" });
       ws.close(1008, "Terminal not found");
       return;
     }
 
     const wantsReplay = url.searchParams.get("replay") !== "0";
     console.log(`[terminal-ws] connected: ${terminalId.slice(0, 8)} replay=${wantsReplay}`);
+    logDiag(terminalId, "ws-terminal:connect", { replay: wantsReplay });
 
     const sendFn = (data: string) => {
       if (ws.readyState === WebSocket.OPEN) {
@@ -95,6 +101,7 @@ function setupTerminalWebSocket(terminalWss: WebSocketServer, terminalManager: T
 
     ws.on("close", () => {
       console.log(`[terminal-ws] disconnected: ${terminalId.slice(0, 8)}`);
+      logDiag(terminalId, "ws-terminal:disconnect", {});
       terminalManager.detachClient(terminalId, sendFn);
     });
   });

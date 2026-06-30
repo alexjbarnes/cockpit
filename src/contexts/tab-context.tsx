@@ -77,6 +77,12 @@ function terminalTabId(terminalId: string): string {
   return "terminal::" + terminalId;
 }
 
+// Identity of the open-tab set (order included). Used to tell a structural change
+// (a tab opened or closed -> persist immediately) from active-tab churn (debounce).
+function tabSig(tabs: Tab[]): string {
+  return tabs.map((t) => t.id).join("|");
+}
+
 const stateCache = new Map<string, TabState>();
 
 const DEFAULT_STATE: TabState = {
@@ -128,11 +134,14 @@ export function TabProvider({ sessionId, children }: { sessionId: string; childr
   const [state, setState] = useState<TabState>(() => stateCache.get(sessionId) || DEFAULT_STATE);
   const loadedForRef = useRef<string | null>(stateCache.has(sessionId) ? sessionId : null);
   const saveTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const lastTabSigRef = useRef<string>(tabSig((stateCache.get(sessionId) ?? DEFAULT_STATE).tabs));
 
   useEffect(() => {
     if (loadedForRef.current === sessionId) return;
     if (stateCache.has(sessionId)) {
-      setState(stateCache.get(sessionId)!);
+      const cached = stateCache.get(sessionId)!;
+      setState(cached);
+      lastTabSigRef.current = tabSig(cached.tabs);
       loadedForRef.current = sessionId;
       return;
     }
@@ -147,6 +156,7 @@ export function TabProvider({ sessionId, children }: { sessionId: string; childr
           const loaded: TabState = { tabs, activeTabId, splitTabId: null, rightPaneTabIds: [] };
           setState(loaded);
           stateCache.set(sessionId, loaded);
+          lastTabSigRef.current = tabSig(loaded.tabs);
         }
         loadedForRef.current = sessionId;
       })
@@ -162,15 +172,32 @@ export function TabProvider({ sessionId, children }: { sessionId: string; childr
   useEffect(() => {
     if (loadedForRef.current !== sessionId) return;
     stateCache.set(sessionId, state);
-    clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(() => {
+
+    const sig = tabSig(state.tabs);
+    const structural = sig !== lastTabSigRef.current;
+    lastTabSigRef.current = sig;
+
+    const persist = () => {
       const openTabs = serializeTabs(state.tabs);
       fetch(`/api/sessions/${sessionId}/tabs`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ openTabs, activeTabId: state.activeTabId }),
+        // Survive a teardown right after the write is issued (reload, or a
+        // trackpad swipe-back the instant a terminal opens).
+        keepalive: true,
       }).catch(() => {});
-    }, 300);
+    };
+
+    clearTimeout(saveTimer.current);
+    // A tab opened or closed -> persist now so a navigation inside the 300ms
+    // debounce window can't drop a just-opened terminal tab. Active-tab-only
+    // churn stays debounced.
+    if (structural) {
+      persist();
+    } else {
+      saveTimer.current = setTimeout(persist, 300);
+    }
     return () => clearTimeout(saveTimer.current);
   }, [sessionId, state.tabs, state.activeTabId]);
 

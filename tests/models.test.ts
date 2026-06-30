@@ -58,8 +58,9 @@ describe("versionsForAlias", () => {
 
   it("returns sonnet versions", () => {
     const versions = versionsForAlias("sonnet");
-    expect(versions).toHaveLength(1);
+    expect(versions).toHaveLength(2);
     expect(versions[0].version).toBe("4.6");
+    expect(versions[1].version).toBe("5");
   });
 
   it("returns multiple opus versions", () => {
@@ -344,8 +345,12 @@ describe("describeModelSelection", () => {
     expect(describeModelSelection("haiku", "high", "200k", undefined)).toEqual({ label: "Haiku 4.5", thinking: null, context: null });
   });
 
-  it("drops xhigh for a model that does not allow it (sonnet) but keeps context", () => {
-    expect(describeModelSelection("sonnet", "xhigh", "200k", undefined)).toEqual({ label: "Sonnet 4.6", thinking: null, context: "200k" });
+  it("drops xhigh for a model that does not allow it (sonnet 4.6) but keeps context", () => {
+    expect(describeModelSelection("claude-sonnet-4-6", "xhigh", "200k", undefined)).toEqual({
+      label: "Sonnet 4.6",
+      thinking: null,
+      context: "200k",
+    });
   });
 
   it("resolves a built-in by exact modelId", () => {
@@ -358,7 +363,7 @@ describe("describeModelSelection", () => {
 
   it("strips a [context] suffix before resolving", () => {
     expect(describeModelSelection("sonnet[1m]", "medium", "200k", undefined)).toEqual({
-      label: "Sonnet 4.6",
+      label: "Sonnet 5",
       thinking: "medium",
       context: "200k",
     });
@@ -414,6 +419,22 @@ describe("Fable 5", () => {
 
   it("supports the full effort range including xhigh and max", () => {
     expect(allowedEffortLevels(resolveModel("fable"))).toEqual(["low", "medium", "high", "xhigh", "max"]);
+  });
+});
+
+describe("Sonnet 5", () => {
+  it("is the default sonnet, resolvable by alias and modelId", () => {
+    expect(resolveModel("sonnet")?.modelId).toBe("claude-sonnet-5");
+    expect(resolveModel("claude-sonnet-5")?.alias).toBe("sonnet");
+    expect(findModelById("claude-sonnet-5")?.displayName).toBe("Sonnet 5");
+    expect(defaultForAlias("sonnet")?.modelId).toBe("claude-sonnet-5");
+  });
+
+  it("supports xhigh and max effort, unlike Sonnet 4.6", () => {
+    expect(allowedEffortLevels(resolveModel("claude-sonnet-5"))).toEqual(["low", "medium", "high", "xhigh", "max"]);
+    expect(recommendedEffort(resolveModel("claude-sonnet-5"))).toBe("xhigh");
+    // Sonnet 4.6 stays available and still lacks xhigh.
+    expect(allowedEffortLevels(resolveModel("claude-sonnet-4-6"))).toEqual(["low", "medium", "high", "max"]);
   });
 });
 

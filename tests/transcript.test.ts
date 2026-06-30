@@ -1372,6 +1372,26 @@ describe("transcript module", () => {
       expect(result.messages[0].content).toBe("/analyze");
     });
 
+    it("reconstructs a slash command with its args so it matches the optimistic bubble", async () => {
+      (existsSync as any).mockReturnValue(true);
+      const content = jsonl({
+        type: "user",
+        message: {
+          id: "u1",
+          content:
+            "<command-name>/model</command-name>\n<command-message>model</command-message>\n<command-args>claude-opus-4-8</command-args>",
+        },
+        timestamp: "2024-01-01T00:00:00Z",
+        cwd: "/tmp",
+      });
+      (readFile as any).mockResolvedValue(content);
+
+      const result = await loadTranscript("session-123", "/tmp");
+
+      expect(result.messages).toHaveLength(1);
+      expect(result.messages[0].content).toBe("/model claude-opus-4-8");
+    });
+
     it("suppresses /compact command from command-name tag", async () => {
       (existsSync as any).mockReturnValue(true);
       const content = jsonl({
@@ -1385,6 +1405,26 @@ describe("transcript module", () => {
       const result = await loadTranscript("session-123", "/tmp");
 
       expect(result.messages).toHaveLength(0);
+    });
+
+    it("dedups a user turn re-logged under the same entry uuid (post-compaction)", async () => {
+      (existsSync as any).mockReturnValue(true);
+      const entry = {
+        type: "user",
+        uuid: "shared-uuid-1",
+        message: { content: "hello from the user" }, // note: no message.id, like a real user turn
+        timestamp: "2024-01-01T00:00:00Z",
+        cwd: "/tmp",
+      };
+      // Compaction re-logs earlier turns under the SAME entry uuid. Before the fix
+      // the parser minted a fresh random id each time, yielding two identical bubbles.
+      (readFile as any).mockResolvedValue(jsonl(entry, { ...entry, timestamp: "2024-01-01T00:05:00Z" }));
+
+      const result = await loadTranscript("session-123", "/tmp");
+
+      const userMsgs = result.messages.filter((m) => m.role === "user");
+      expect(userMsgs).toHaveLength(1);
+      expect(userMsgs[0].content).toBe("hello from the user");
     });
 
     it("strips local-command-stdout content from user messages", async () => {

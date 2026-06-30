@@ -414,8 +414,18 @@ export function InputArea({
       return;
     }
 
+    // A message ending in an @-mention (no trailing space) leaves the CLI REPL's
+    // autocomplete menu open in PTY mode, so the submit Enter is consumed selecting a
+    // completion instead of sending — the turn never starts and the session hangs
+    // "running" with the bubble vanishing on reload. The @-menu selection appends a
+    // trailing space for exactly this reason, but trim() above strips it, so re-add a
+    // single space when the message ends in a dangling @-token. The CLI then closes
+    // the menu and submits the literal text (verified against the real CLI 2.1.x: it
+    // submits "@name" literally, accepting/rewriting nothing).
+    const toSend = /@\S+$/.test(trimmed) ? `${trimmed} ` : trimmed;
+
     onSend(
-      trimmed,
+      toSend,
       pendingImages.length > 0 ? pendingImages : undefined,
       pendingDocs.length > 0 ? pendingDocs : undefined,
       pendingTextFiles.length > 0 ? pendingTextFiles : undefined,

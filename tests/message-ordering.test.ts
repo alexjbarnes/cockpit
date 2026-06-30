@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { applyMessageDone, applyTranscript } from "@/hooks/message-ordering";
+import { applyMessageDone, applyTranscript, buildUserMessage } from "@/hooks/message-ordering";
+import { extractTextFiles } from "@/lib/paste-detect";
 import type { ChatMessage } from "@/types";
 
 function msg(id: string, role: "user" | "assistant" | "system", content: string): ChatMessage {
@@ -16,6 +17,57 @@ function msgWithFiles(
 ): ChatMessage {
   return { id, role, content, toolUses: [], blocks: [], timestamp: Date.now(), textFiles, images, documents };
 }
+
+describe("buildUserMessage", () => {
+  it("collapses 3+ newline runs so the optimistic content matches the transcript copy", () => {
+    const typed = "First paragraph.\n\n\nSecond paragraph.";
+    const built = buildUserMessage(typed, "user-1", 1);
+    // Must equal what the transcript parser produces for the same turn.
+    expect(built.content).toBe(extractTextFiles(typed).cleaned);
+    expect(built.content).toBe("First paragraph.\n\nSecond paragraph.");
+  });
+
+  it("keeps passed attachments and recovers inline file blocks", () => {
+    const built = buildUserMessage("hi\n\n\nthere", "user-2", 2, {
+      textFiles: [{ name: "a.txt", content: "x" }],
+    });
+    expect(built.content).toBe("hi\n\nthere");
+    expect(built.textFiles).toEqual([{ name: "a.txt", content: "x" }]);
+    expect(built.role).toBe("user");
+  });
+
+  it("regression: a slash command with args dedups against the reconstructed transcript copy", () => {
+    // The parser now reconstructs "/model claude-opus-4-8" (name + args); the
+    // optimistic bubble must equal that so the two collapse to one.
+    const optimistic = buildUserMessage("/model claude-opus-4-8", "user-1", 1);
+    const transcript = msg("srv-1", "user", "/model claude-opus-4-8");
+    const result = applyTranscript([optimistic], [transcript]);
+    expect(result).toHaveLength(1);
+    expect(result[0].id).toBe("srv-1");
+  });
+
+  it("regression: extra whitespace between a command and its args still dedups", () => {
+    // The reported case: the optimistic bubble keeps the user's double space, the
+    // parser rebuilds the command with a single space. Whitespace-only differences
+    // must still reconcile to one bubble.
+    const optimistic = buildUserMessage("/iph-ai-toolkit:review  https://example.com/pull/1", "user-1", 1);
+    const transcript = msg("srv-1", "user", "/iph-ai-toolkit:review https://example.com/pull/1");
+    const result = applyTranscript([optimistic], [transcript]);
+    expect(result).toHaveLength(1);
+    expect(result[0].id).toBe("srv-1");
+  });
+
+  it("regression: a sent message with blank-line gaps does not leave a duplicate bubble", () => {
+    // The exact shape that used to duplicate: optimistic bubble built from the
+    // typed text, transcript copy cleaned by the parser. They must reconcile to one.
+    const typed = "Question:\n\n\nWhy does this happen?";
+    const optimistic = buildUserMessage(typed, "user-1", 1);
+    const transcript = msg("srv-1", "user", extractTextFiles(typed).cleaned);
+    const result = applyTranscript([optimistic], [transcript]);
+    expect(result).toHaveLength(1);
+    expect(result[0].id).toBe("srv-1");
+  });
+});
 
 describe("applyMessageDone", () => {
   it("replaces streaming with finalized message at the same position", () => {

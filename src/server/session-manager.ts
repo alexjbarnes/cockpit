@@ -2195,7 +2195,7 @@ Additional Cockpit rules beyond the CLI's defaults:
       const attachments = this.writeAttachments(images, documents);
       session.attachmentPaths.push(...attachments);
       const ptyText = this.buildPtyText(text, attachments);
-      session.ptyRuntime.sendText(ptyText).catch((err) => {
+      session.ptyRuntime.sendUserText(ptyText).catch((err) => {
         this.log(sessionId, `pty sendText failed: ${err instanceof Error ? err.message : String(err)}`);
       });
       return true;

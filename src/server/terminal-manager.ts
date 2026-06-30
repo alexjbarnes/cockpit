@@ -3,6 +3,7 @@ import os from "node:os";
 import { type IPty, spawn } from "node-pty";
 import { v4 as uuidv4 } from "uuid";
 
+import { logDiag } from "./debug-logger";
 import { appendToBuffer } from "./terminal-buffer";
 
 function getLoginShell(): string {
@@ -46,6 +47,7 @@ export class TerminalManager {
         try {
           process.kill(term.pty.pid, 0);
         } catch {
+          logDiag(id, "terminal:reaped", { reason: "pid-gone" });
           this.terminals.delete(id);
         }
       }
@@ -65,6 +67,7 @@ export class TerminalManager {
 
     const instance: TerminalInstance = { id, pty, cwd, cols, rows, buffer: "", detachOffset: 0, client: null };
     this.terminals.set(id, instance);
+    logDiag(id, "terminal:create", { cwd });
 
     pty.onData((data: string) => {
       appendToBuffer(instance, data);
@@ -74,6 +77,7 @@ export class TerminalManager {
     });
 
     pty.onExit(() => {
+      logDiag(id, "terminal:pty-exit", {});
       instance.client = null;
       this.terminals.delete(id);
     });
@@ -83,10 +87,14 @@ export class TerminalManager {
 
   attachClient(id: string, sendFn: (data: string) => void): boolean {
     const term = this.terminals.get(id);
-    if (!term) return false;
+    if (!term) {
+      logDiag(id, "terminal:attach", { found: false });
+      return false;
+    }
     console.log(
       `[terminal] attachClient ${id.slice(0, 8)} buffer=${term.buffer.length}b detachOffset=${term.detachOffset} cols=${term.cols} rows=${term.rows}`,
     );
+    logDiag(id, "terminal:attach", { found: true, bufferLen: term.buffer.length, detachOffset: term.detachOffset });
     term.client = sendFn;
     return true;
   }
@@ -105,7 +113,11 @@ export class TerminalManager {
   detachClient(id: string, sendFn?: (data: string) => void): void {
     const term = this.terminals.get(id);
     if (!term) return;
-    if (sendFn && term.client !== sendFn) return; // a newer client already attached; ignore this stale close
+    if (sendFn && term.client !== sendFn) {
+      logDiag(id, "terminal:detach", { stale: true }); // a newer client already attached; ignore this stale close
+      return;
+    }
+    logDiag(id, "terminal:detach", { stale: false });
     term.detachOffset = term.buffer.length;
     term.client = null;
   }
@@ -144,7 +156,14 @@ export class TerminalManager {
 
   destroyTerminal(id: string): boolean {
     const term = this.terminals.get(id);
-    if (!term) return false;
+    if (!term) {
+      logDiag(id, "terminal:destroy", { found: false });
+      return false;
+    }
+    // Only fires when the client explicitly closed the tab (closeTab -> DELETE
+    // /api/terminal/:id). A terminal vanishing WITHOUT this means the client
+    // dropped the tab in React state/render, not a server-side kill.
+    logDiag(id, "terminal:destroy", { found: true });
     term.client = null;
     try {
       term.pty.kill();

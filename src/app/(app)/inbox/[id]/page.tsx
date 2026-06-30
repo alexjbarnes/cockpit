@@ -1,6 +1,6 @@
 "use client";
 
-import { AlertCircle, AlertTriangle, ArrowLeft, Info, Loader2, Mail, Trash2 } from "lucide-react";
+import { AlertCircle, AlertTriangle, ArrowLeft, Check, Info, Loader2, Mail, Share2, Trash2 } from "lucide-react";
 import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { usePageHeader } from "@/components/app-shell";
@@ -24,6 +24,29 @@ function formatDate(ts: number): string {
   return new Date(ts).toLocaleString();
 }
 
+// Clipboard copy that works in a NON-secure context (plain HTTP on a LAN IP),
+// where navigator.clipboard is undefined. Uses the legacy execCommand path,
+// which is not gated to HTTPS. Must run inside the click gesture.
+function legacyCopy(text: string): boolean {
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.setAttribute("readonly", "");
+    ta.style.position = "fixed";
+    ta.style.top = "0";
+    ta.style.left = "0";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    const ok = document.execCommand("copy");
+    document.body.removeChild(ta);
+    return ok;
+  } catch {
+    return false;
+  }
+}
+
 export default function InboxMessagePage() {
   usePageHeader("Inbox", { hideActions: true });
   const { id } = useParams<{ id: string }>();
@@ -31,6 +54,7 @@ export default function InboxMessagePage() {
   const [message, setMessage] = useState<InboxMessage | null>(null);
   const [loading, setLoading] = useState(true);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [shareFeedback, setShareFeedback] = useState<null | "copied" | "failed">(null);
 
   const fetchMessage = useCallback(async () => {
     const res = await fetch("/api/inbox");
@@ -63,6 +87,40 @@ export default function InboxMessagePage() {
     router.push("/inbox");
   };
 
+  const handleShare = async () => {
+    if (!message) return;
+    const text = `${message.title}\n\n${message.body}`;
+
+    // Native share sheet — only exists in a SECURE context (HTTPS or localhost).
+    // Over plain HTTP on a LAN IP it's undefined, so this is skipped there.
+    if (navigator.share) {
+      try {
+        await navigator.share({ title: message.title, text });
+        return;
+      } catch (e) {
+        if ((e as Error)?.name === "AbortError") return; // user dismissed the sheet
+        // any other failure: fall through to copy
+      }
+    }
+
+    // Copy fallback. navigator.clipboard is ALSO secure-context-only; over HTTP
+    // it's undefined, so go straight to legacyCopy (execCommand) which works
+    // without HTTPS. Run legacyCopy synchronously (no await before it) so the
+    // click's user activation is still live.
+    let ok = false;
+    if (navigator.clipboard?.writeText) {
+      try {
+        await navigator.clipboard.writeText(text);
+        ok = true;
+      } catch {
+        ok = false;
+      }
+    }
+    if (!ok) ok = legacyCopy(text);
+    setShareFeedback(ok ? "copied" : "failed");
+    setTimeout(() => setShareFeedback(null), 1800);
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center py-12">
@@ -91,13 +149,19 @@ export default function InboxMessagePage() {
           Back
         </Button>
         <div className="flex items-center gap-1">
+          <Button variant="ghost" size="sm" onClick={handleShare}>
+            {shareFeedback === "copied" ? <Check className="h-4 w-4 sm:mr-1" /> : <Share2 className="h-4 w-4 sm:mr-1" />}
+            <span className="hidden sm:inline">
+              {shareFeedback === "copied" ? "Copied" : shareFeedback === "failed" ? "Copy failed" : "Share"}
+            </span>
+          </Button>
           <Button variant="ghost" size="sm" onClick={handleMarkUnread}>
-            <Mail className="h-4 w-4 mr-1" />
-            Mark unread
+            <Mail className="h-4 w-4 sm:mr-1" />
+            <span className="hidden sm:inline">Mark unread</span>
           </Button>
           <Button variant="ghost" size="sm" className="text-destructive hover:text-destructive" onClick={() => setConfirmDelete(true)}>
-            <Trash2 className="h-4 w-4 mr-1" />
-            Delete
+            <Trash2 className="h-4 w-4 sm:mr-1" />
+            <span className="hidden sm:inline">Delete</span>
           </Button>
         </div>
       </div>
