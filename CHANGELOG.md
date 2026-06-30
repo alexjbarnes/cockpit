@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.2] - 2026-06-30
+
+### Added
+- **Claude Sonnet 5.** Added as a selectable model and now the default for the "sonnet" alias. Supports effort levels up to `xhigh` and `max`, unlike Sonnet 4.6 (still available alongside it).
+- **Share button on inbox entries.** An open inbox message has a Share button. It opens the native share sheet when cockpit is reached over HTTPS or localhost, and falls back to copying the title and body to the clipboard when reached over plain HTTP, where browsers disable the native share and clipboard APIs.
+
+### Fixed
+- **Duplicated messages after sending.** A sent message could render as two identical bubbles. Several distinct causes are fixed: messages with blank-line gaps, slash commands (which also lost their arguments in the duplicate), differences in whitespace only, a turn re-logged under the same id after compaction, and — intermittently in PTY mode — a stray control character left at the start of the message by the terminal's line-clear.
+- **`@`-mention messages hanging when the mention is the last word.** In PTY mode, ending a message on an `@file` or `@agent` mention left the CLI's autocomplete menu open, so the Enter that should submit the message instead selected from the menu. The session stayed stuck "running" and the message vanished on reload.
+- **Terminal panels disappearing after fast navigation.** Closing and reopening a tab in quick succession could drop a terminal's record before it was persisted.
+
+### Internal
+- **Diagnostics for two hard-to-reproduce bugs.** Server-side debug logging (behind `COCKPIT_DEBUG`) across the terminal lifecycle and the PTY message-send path, plus an opt-in `COCKPIT_HEALTH` stall watchdog that classifies a slow session switch as event-loop contention vs. filesystem/disk contention.
+
 ## [0.4.1] - 2026-06-13
 
 ### Added
