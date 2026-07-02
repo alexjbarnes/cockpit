@@ -171,10 +171,10 @@ describe("SessionManager MCP token lifecycle", () => {
     const info = manager.createSession("/tmp", undefined, { cockpitAgent: true, runtime: "pty" });
     const mgr = manager as unknown as {
       sessions: Map<string, unknown>;
-      spawnPtyProcess: (s: unknown, id: string) => void;
+      spawnProcess: (s: unknown, id: string) => void;
     };
     const s = mgr.sessions.get(info.id);
-    mgr.spawnPtyProcess(s, info.id);
+    mgr.spawnProcess(s, info.id);
 
     expect(ptyInstances.length).toBeGreaterThan(0);
     const last = ptyInstances[ptyInstances.length - 1];
