@@ -5,7 +5,7 @@ describe("formatConfigChange", () => {
   it("formats job+create with block-flagged prompt", () => {
     const result = formatConfigChange("job", "create", {
       name: "nightly-build",
-      schedule: { cron: "0 2 * * *" },
+      schedules: [{ cron: "0 2 * * *" }],
       prompt:
         "Run the nightly build script. This is a very long prompt that exceeds eighty characters so it should be rendered as a block value in the config proposal card.",
       cwd: "/home/dev/project",
@@ -26,8 +26,8 @@ describe("formatConfigChange", () => {
     expect(result.rows.find((r) => r.label === "Prompt")?.block).toBe(true);
     expect(result.rows.find((r) => r.label === "Enabled")?.value).toBe("Yes");
     expect(result.rows.find((r) => r.label === "Model")?.value).toBe("sonnet");
-    expect(result.rows.find((r) => r.label === "Schedule")?.value).toBe("Cron: 0 2 * * *");
-    expect(result.rows.find((r) => r.label === "Schedule")?.block).toBe(true);
+    expect(result.rows.find((r) => r.label === "Schedules")?.value).toBe("Cron: 0 2 * * *");
+    expect(result.rows.find((r) => r.label === "Schedules")?.block).toBe(true);
   });
 
   it("formats job+delete with id only", () => {
@@ -93,6 +93,34 @@ describe("formatConfigChange", () => {
     expect(argsRow!.value).toContain("/tmp");
   });
 
+  it("formats job+update schedules (array of objects) without falling back to [object Object]", () => {
+    const result = formatConfigChange("job", "update", {
+      id: "job-1",
+      schedules: [{ type: "simple", frequency: "daily", time: "05:00" }],
+    });
+
+    const row = result.rows.find((r) => r.label === "Schedules");
+    expect(row).toBeDefined();
+    expect(row!.value).not.toContain("[object Object]");
+    expect(row!.value).toContain("Time: 05:00");
+    expect(row!.block).toBe(true);
+  });
+
+  it("numbers each entry when a schedules array has more than one schedule", () => {
+    const result = formatConfigChange("job", "update", {
+      id: "job-1",
+      schedules: [
+        { type: "simple", frequency: "daily", time: "05:00" },
+        { type: "cron", expression: "0 9 * * 1" },
+      ],
+    });
+
+    const row = result.rows.find((r) => r.label === "Schedules");
+    expect(row!.value).toContain("1. ");
+    expect(row!.value).toContain("2. ");
+    expect(row!.value).not.toContain("[object Object]");
+  });
+
   it("formats mcp_server+delete with name only", () => {
     const result = formatConfigChange("mcp_server", "delete", { name: "old-server" });
 
@@ -139,7 +167,7 @@ describe("formatConfigChange", () => {
   it("formats job+update skips id row", () => {
     const result = formatConfigChange("job", "update", {
       id: "job-uuid-123",
-      schedule: { cron: "0 3 * * *" },
+      schedules: [{ cron: "0 3 * * *" }],
       enabled: false,
     });
 

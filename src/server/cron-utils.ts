@@ -148,8 +148,8 @@ export function findMissedRun(cronExpr: string, lastFiredAt: Date, now: Date): b
   return false;
 }
 
-export function getJobSchedules(job: { schedule: JobSchedule; schedules?: JobSchedule[] }): JobSchedule[] {
-  return job.schedules?.length ? job.schedules : [job.schedule];
+export function getJobSchedules(job: { schedules: JobSchedule[] }): JobSchedule[] {
+  return job.schedules;
 }
 
 export function describeAllSchedules(schedules: JobSchedule[]): string {

@@ -192,8 +192,7 @@ export type JobSchedule = SimpleSchedule | CronSchedule;
 export interface ScheduledJob {
   id: string;
   name: string;
-  schedule: JobSchedule;
-  schedules?: JobSchedule[];
+  schedules: JobSchedule[];
   prompt: string;
   cwd: string;
   enabled: boolean;

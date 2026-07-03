@@ -40,11 +40,10 @@ const TOOL_DEFINITIONS = [
       type: "object",
       properties: {
         name: { type: "string" },
-        schedule: { type: "object", properties: { type: { type: "string", enum: ["simple", "cron"] } }, required: ["type"] },
         schedules: {
           type: "array",
           items: { type: "object" },
-          description: "Multiple schedules (use instead of schedule for multi-schedule jobs)",
+          description: "One or more schedules for this job. A single job can hold more than one schedule.",
         },
         prompt: { type: "string" },
         cwd: { type: "string" },
@@ -63,7 +62,7 @@ const TOOL_DEFINITIONS = [
         mcpToolFilters: { type: "object", description: 'Per-MCP-server tool filter: { serverName: ["tool1", "tool2"] }' },
         notifyProviders: { type: "array", items: { type: "string" }, description: "Notification provider IDs to alert on job completion" },
       },
-      required: ["name", "schedule", "prompt", "cwd"],
+      required: ["name", "schedules", "prompt", "cwd"],
     },
   },
   {
@@ -74,8 +73,11 @@ const TOOL_DEFINITIONS = [
       properties: {
         id: { type: "string" },
         name: { type: "string" },
-        schedule: { type: "object", properties: { type: { type: "string", enum: ["simple", "cron"] } }, required: ["type"] },
-        schedules: { type: "array", items: { type: "object" } },
+        schedules: {
+          type: "array",
+          items: { type: "object" },
+          description: "Replaces all of the job's schedules with this list.",
+        },
         prompt: { type: "string" },
         cwd: { type: "string" },
         enabled: { type: "boolean" },
@@ -297,7 +299,7 @@ function handleToolCall(
         const job: ScheduledJob = {
           id: randomUUID(),
           name: args.name as string,
-          schedule: args.schedule as ScheduledJob["schedule"],
+          schedules: args.schedules as ScheduledJob["schedules"],
           prompt: args.prompt as string,
           cwd: args.cwd as string,
           enabled: (args.enabled as boolean) ?? true,

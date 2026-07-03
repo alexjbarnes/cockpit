@@ -41,7 +41,6 @@ export async function POST(req: NextRequest) {
   const job: ScheduledJob = {
     id: uuidv4(),
     name: body.name,
-    schedule: schedules[0],
     schedules,
     prompt: body.prompt,
     cwd: body.cwd || "",

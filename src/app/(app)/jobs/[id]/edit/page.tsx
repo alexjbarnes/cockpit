@@ -412,7 +412,6 @@ export default function JobEditPage() {
       cwd,
       prompt,
       enabled,
-      schedule: schedules[0],
       schedules,
       model: modelStr,
       contextSize,

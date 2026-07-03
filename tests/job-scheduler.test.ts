@@ -43,7 +43,7 @@ function makeJob(overrides: Partial<ScheduledJob> = {}): ScheduledJob {
   return {
     id: "job-1",
     name: "Test Job",
-    schedule: { type: "simple", frequency: "daily", time: "09:00" },
+    schedules: [{ type: "simple", frequency: "daily", time: "09:00" }],
     prompt: "Do something",
     cwd: "/tmp/test",
     enabled: true,
@@ -411,7 +411,7 @@ describe("JobScheduler", () => {
       const hour = now.getHours();
 
       const job = makeJob({
-        schedule: { type: "cron", expression: `${minute} ${hour} * * *` },
+        schedules: [{ type: "cron", expression: `${minute} ${hour} * * *` }],
       });
       vi.mocked(loadJobs).mockReturnValue([job]);
 
@@ -425,7 +425,7 @@ describe("JobScheduler", () => {
       now.setSeconds(0, 0);
       const job = makeJob({
         enabled: false,
-        schedule: { type: "cron", expression: `${now.getMinutes()} ${now.getHours()} * * *` },
+        schedules: [{ type: "cron", expression: `${now.getMinutes()} ${now.getHours()} * * *` }],
       });
       vi.mocked(loadJobs).mockReturnValue([job]);
 
@@ -438,7 +438,7 @@ describe("JobScheduler", () => {
       const now = new Date();
       now.setSeconds(0, 0);
       const job = makeJob({
-        schedule: { type: "cron", expression: `${now.getMinutes()} ${now.getHours()} * * *` },
+        schedules: [{ type: "cron", expression: `${now.getMinutes()} ${now.getHours()} * * *` }],
       });
       vi.mocked(loadJobs).mockReturnValue([job]);
 
@@ -1067,7 +1067,7 @@ describe("tick: missed run handling", () => {
 
     const job = makeJob({
       skipIfMissed: true,
-      schedule: { type: "cron", expression: `${cronMinute} ${cronHour} * * *` },
+      schedules: [{ type: "cron", expression: `${cronMinute} ${cronHour} * * *` }],
     });
     vi.mocked(loadJobs).mockReturnValue([job]);
 
