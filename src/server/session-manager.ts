@@ -1678,6 +1678,17 @@ export class SessionManager {
         session.info.status = "idle";
         session.emitter.emit("status", sessionId, "idle");
       }
+      // A permission or AskUserQuestion ask blocks the turn from completing
+      // until it's resolved one way or another, so any pendingRequests entry
+      // still here once the turn produces a message_done is provably stale:
+      // either the user answered (which already clears it via
+      // respondToPermission) or the CLI's own internal fallback resolved it
+      // without ever telling cockpit. This is the only place that catches
+      // the second case, otherwise it orphans the sidebar's pending indicator.
+      if (session.pendingRequests.size > 0) {
+        session.pendingRequests.clear();
+        this.notifyPendingChanged(session, sessionId);
+      }
     }
 
     if (result.statusChange === "idle") {

@@ -3498,6 +3498,51 @@ describe("SessionManager", () => {
       expect(s.harnessProcess).toBeNull();
     });
 
+    it("clears a stale pending question once message_done arrives, so the sidebar dot doesn't stick when the CLI's own AskUserQuestion timeout resolves it without telling cockpit", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      s.pendingRequests.set("req-q1", { type: "question", requestId: "req-q1", toolName: "AskUserQuestion", toolInput: "" });
+      s.info.pendingRequestCount = 1;
+      const pendingCounts: number[] = [];
+      s.emitter.on("pending", (_id: string, count: number) => pendingCounts.push(count));
+
+      const result = {
+        intermediateMessages: [],
+        emit: [{ type: "message_done", message: { id: "m1", toolUses: [] } }],
+        systemMessages: [],
+        errors: [],
+
+        permissionActions: [],
+        statusChange: null,
+        compactDone: false,
+        snapshot: null,
+      };
+      (manager as any).applyProcessedResult(s, session.id, result);
+      expect(s.pendingRequests.size).toBe(0);
+      expect(pendingCounts).toContain(0);
+    });
+
+    it("does not touch pendingRequests when there's nothing pending on message_done", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      const pendingCounts: number[] = [];
+      s.emitter.on("pending", (_id: string, count: number) => pendingCounts.push(count));
+
+      const result = {
+        intermediateMessages: [],
+        emit: [{ type: "message_done", message: { id: "m1", toolUses: [] } }],
+        systemMessages: [],
+        errors: [],
+
+        permissionActions: [],
+        statusChange: null,
+        compactDone: false,
+        snapshot: null,
+      };
+      (manager as any).applyProcessedResult(s, session.id, result);
+      expect(pendingCounts).toHaveLength(0);
+    });
+
     it("no-ops permission mode set to plan when already in plan mode", () => {
       const session = manager.createSession("/tmp");
       const s = (manager as any).sessions.get(session.id)!;
