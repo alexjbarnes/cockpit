@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ContextSize } from "@/lib/models";
 import { splitLegacyModel } from "@/lib/models";
@@ -43,7 +43,20 @@ function load(): Record<string, SessionPrefs> {
   try {
     cache = JSON.parse(readFileSync(prefsFile(), "utf-8"));
     return cache!;
-  } catch {
+  } catch (err) {
+    // ENOENT (no prefs file yet) is normal on first run. Anything else means
+    // the file exists but didn't parse — every session's model/thinking/
+    // context would otherwise silently reset to defaults, so this is loud,
+    // and the unreadable file is preserved for recovery instead of getting
+    // overwritten by the next save() with a freshly emptied cache.
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+      console.error(`[session-prefs] ${prefsFile()} failed to parse, starting empty and preserving the file for recovery:`, err);
+      try {
+        renameSync(prefsFile(), `${prefsFile()}.corrupted-${Date.now()}`);
+      } catch {
+        // best effort
+      }
+    }
     cache = {};
     return cache;
   }
@@ -53,7 +66,14 @@ function save(): void {
   if (!cache) return;
   try {
     mkdirSync(prefsDir(), { recursive: true });
-    writeFileSync(prefsFile(), JSON.stringify(cache, null, 2) + "\n");
+    const file = prefsFile();
+    // Write-then-rename instead of writing the real path directly: a rename
+    // within the same directory is atomic, so a process killed mid-write
+    // (e.g. a Mac force-quit/lid-close) can never leave prefsFile() holding
+    // truncated JSON that wipes every session's settings on the next load().
+    const tmp = `${file}.tmp-${process.pid}`;
+    writeFileSync(tmp, JSON.stringify(cache, null, 2) + "\n");
+    renameSync(tmp, file);
   } catch {
     // best effort
   }
