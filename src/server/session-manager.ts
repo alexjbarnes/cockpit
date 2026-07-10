@@ -1996,6 +1996,20 @@ Additional Cockpit rules beyond the CLI's defaults:
       return true;
     }
 
+    // A /compact already in flight can leave status idle with no alive
+    // harness process for a while (queued behind the prior turn, then the
+    // process exits before PostCompact's hook_done actually arrives) — the
+    // gap above only catches status "running", not this. Respawning here to
+    // deliver this message races the fresh process against /compact's own
+    // delivery into it. Queue instead; flushQueuedMessage runs from every
+    // path that clears session.compacting (hook_done, harness exit while
+    // compacting, or the transcript's own "__compacted__" marker).
+    if (session.compacting) {
+      session.queuedMessages.push({ id: `q-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, text, images, documents });
+      session.emitter.emit("queued", sessionId, session.queuedMessages.length);
+      return true;
+    }
+
     logDiag(sessionId, "running:send", {
       hasHarnessProcess: !!session.harnessProcess,
       runtime: session.runtime,

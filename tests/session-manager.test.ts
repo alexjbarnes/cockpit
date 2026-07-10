@@ -319,6 +319,54 @@ describe("SessionManager", () => {
       expect(queued[0]).toBe(1);
     });
 
+    it("queues a message sent while compacting instead of respawning into a race with /compact's own delivery", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      // Simulates the real gap: /compact already in flight (session.compacting
+      // set when it was sent) but the harness process has since exited and
+      // status is back to idle, well before PostCompact's hook_done arrives.
+      s.compacting = true;
+      s.info.status = "idle";
+      s.harnessProcess = null;
+
+      const queued: number[] = [];
+      manager.onQueued(session.id, (count) => queued.push(count));
+      manager.sendMessage(session.id, "develop an agent to review beans");
+
+      expect(queued).toEqual([1]);
+      expect(s.queuedMessages).toHaveLength(1);
+      expect(s.queuedMessages[0].text).toBe("develop an agent to review beans");
+      // Must not have spawned a process to deliver it immediately.
+      expect(s.info.status).toBe("idle");
+    });
+
+    it("flushes a message queued during compacting once __compact::hook_done clears the flag", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      s.compacting = true;
+      s.info.status = "idle";
+      s.harnessProcess = null;
+      manager.sendMessage(session.id, "develop an agent to review beans");
+      expect(s.queuedMessages).toHaveLength(1);
+
+      const result = {
+        intermediateMessages: [],
+        emit: [],
+        systemMessages: ["__compact::hook_done"],
+        errors: [],
+        permissionActions: [],
+        statusChange: null,
+        compactDone: false,
+        snapshot: null,
+      };
+      (manager as any).applyProcessedResult(s, session.id, result);
+
+      expect(s.compacting).toBe(false);
+      // flushQueuedMessage shifted the queued message back through
+      // sendMessage, which (compacting now false) proceeds to spawn.
+      expect(s.queuedMessages).toHaveLength(0);
+    });
+
     it("handles slash commands", () => {
       const session = manager.createSession("/tmp", "Test Session");
       const result = manager.sendMessage(session.id, "/help");
@@ -3031,14 +3079,18 @@ describe("SessionManager", () => {
       expect(s.compacting).toBe(true);
     });
 
-    it("does not pre-compact when already compacting", () => {
+    it("does not pre-compact when already compacting, but still queues the message rather than sending it live", () => {
       const session = manager.createSession("/tmp");
       const s = (manager as any).sessions.get(session.id)!;
       s.contextUsage = { used: 180000, total: 200000 };
       s.compacting = true;
 
       manager.sendMessage(session.id, "msg");
-      expect(s.queuedMessages).toHaveLength(0);
+      // shouldPreCompact's own guard (session.compacting) stops this from
+      // triggering a second /compact — it still ends up queued, but via the
+      // general "don't respawn while compacting" path, not pre-compact's.
+      expect(s.queuedMessages).toHaveLength(1);
+      expect(s.queuedMessages[0].text).toBe("msg");
     });
 
     it("does not pre-compact for /compact command", () => {
