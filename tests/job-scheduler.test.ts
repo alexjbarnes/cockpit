@@ -117,6 +117,10 @@ describe("JobScheduler", () => {
       const promise = scheduler.executeJob(job);
 
       await vi.waitFor(() => expect(sm.sendMessage).toHaveBeenCalled());
+      // A real completed turn always ends with an assistant message; a success
+      // with no answer at all is the mid-turn-teardown signature, asserted
+      // separately below.
+      sm.emitEvent({ type: "message_done", message: { content: "Done." } });
       sm.emitStatus("idle");
 
       const run = await promise;
@@ -284,6 +288,76 @@ describe("JobScheduler", () => {
       expect(sm.mcpToggle).not.toHaveBeenCalledWith("session-1", "allowed-server", false);
     });
 
+    // Regression: three consecutive Tech-roundup runs were recorded "success"
+    // having produced nothing. The CLI auto-compacted mid-turn, cockpit read
+    // PostCompact as a turn ending, and the run was torn down (destroySession)
+    // 1ms later. run.messageCount was 0 and lastAssistantText was "" in every
+    // case, so an idle with no answer at all is the honest failure signal.
+    it("marks a run that goes idle without ever producing an assistant message as a failure", async () => {
+      const job = makeJob();
+      const promise = scheduler.executeJob(job);
+      await vi.waitFor(() => expect(sm.sendMessage).toHaveBeenCalled());
+
+      // Tools ran, but the turn never reached a final message.
+      sm.emitEvent({ type: "tool_use_start", toolId: "t1", toolName: "Edit", toolInput: "{}" });
+      sm.emitEvent({ type: "tool_result", toolId: "t1", toolOutput: "ok" });
+      sm.emitStatus("idle");
+
+      const run = await promise;
+      expect(run.status).toBe("failure");
+      expect(run.error).toMatch(/assistant message/i);
+      expect(vi.mocked(addInboxMessage)).toHaveBeenCalledWith(expect.objectContaining({ priority: "error", jobId: "job-1" }));
+    });
+
+    it("does not fail a run that answered but produced no inbox block", async () => {
+      // The Tech-roundup prompt's legitimate 'nothing new to process' exit
+      // deliberately emits no cockpit-inbox block. That must stay a success.
+      const job = makeJob({ inboxOutput: true });
+      vi.mocked(parseInboxBlock).mockReturnValueOnce(null);
+      const promise = scheduler.executeJob(job);
+      await vi.waitFor(() => expect(sm.sendMessage).toHaveBeenCalled());
+
+      sm.emitEvent({ type: "message_done", message: { content: "No new newsletters to process." } });
+      sm.emitStatus("idle");
+
+      const run = await promise;
+      expect(run.status).toBe("success");
+      expect(run.error).toBeUndefined();
+    });
+
+    it("marks a run that goes idle with background subagents still pending as a failure", async () => {
+      // The 14th's signature: the model launched 13 async Agents, said
+      // "Waiting for article fetches to complete." and ended its turn. The run
+      // was recorded a success at 3.7min and the PTY killed while the task
+      // notifications were still being enqueued.
+      const job = makeJob();
+      const promise = scheduler.executeJob(job);
+      await vi.waitFor(() => expect(sm.sendMessage).toHaveBeenCalled());
+
+      sm.emitEvent({ type: "task_update", taskInfo: { taskId: "a1", status: "running", title: "Agent" } });
+      sm.emitEvent({ type: "task_update", taskInfo: { taskId: "a2", status: "running", title: "Agent" } });
+      sm.emitEvent({ type: "message_done", message: { content: "Waiting for article fetches to complete." } });
+      sm.emitStatus("idle");
+
+      const run = await promise;
+      expect(run.status).toBe("failure");
+      expect(run.error).toMatch(/background/i);
+    });
+
+    it("succeeds when every background subagent completed before the turn ended", async () => {
+      const job = makeJob();
+      const promise = scheduler.executeJob(job);
+      await vi.waitFor(() => expect(sm.sendMessage).toHaveBeenCalled());
+
+      sm.emitEvent({ type: "task_update", taskInfo: { taskId: "a1", status: "running", title: "Agent" } });
+      sm.emitEvent({ type: "task_update", taskInfo: { taskId: "a1", status: "completed", title: "Agent" } });
+      sm.emitEvent({ type: "message_done", message: { content: "All done." } });
+      sm.emitStatus("idle");
+
+      const run = await promise;
+      expect(run.status).toBe("success");
+    });
+
     it("sends inbox error message on failure", async () => {
       const job = makeJob({ name: "Failing Job" });
       const promise = scheduler.executeJob(job);
@@ -311,6 +385,7 @@ describe("JobScheduler", () => {
       vi.mocked(loadJobs).mockReturnValueOnce([job]);
       const promise = scheduler.triggerJob("job-1");
       await vi.waitFor(() => expect(sm.sendMessage).toHaveBeenCalled());
+      sm.emitEvent({ type: "message_done", message: { content: "Done." } });
       sm.emitStatus("idle");
       const run = await promise;
       expect(run.status).toBe("success");
@@ -640,6 +715,19 @@ describe("job prompt construction", () => {
 
     const prompt = sm.sendMessage.mock.calls[0][1] as string;
     expect(prompt).toContain("All tools and MCP servers are available");
+  });
+
+  it("tells the job not to launch background subagents", async () => {
+    // A backgrounded Agent ends the turn to wait for a notification that no
+    // operator is there to trigger, which strands the run.
+    const job = makeJob();
+    const promise = scheduler.executeJob(job);
+    await vi.waitFor(() => expect(sm.sendMessage).toHaveBeenCalled());
+    sm.emitStatus("idle");
+    await promise;
+
+    const prompt = sm.sendMessage.mock.calls[0][1] as string;
+    expect(prompt).toContain("run_in_background: false");
   });
 
   it("includes no-tools message when allowedTools and mcpServers are empty", async () => {

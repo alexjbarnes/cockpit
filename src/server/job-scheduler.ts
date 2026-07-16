@@ -20,6 +20,10 @@ const JOB_PROMPT_HEADER = [
   "Do not ask clarifying questions. Do not wait for user input. Make reasonable assumptions and proceed.",
   "Complete the task fully, then stop.",
   "",
+  "Subagents: if you use the Agent tool you MUST pass run_in_background: false and wait for the result.",
+  "A backgrounded agent ends your turn to wait for a task notification, and with no operator here to",
+  "resume you the run is torn down and its work is lost. Never end a turn intending to be woken up.",
+  "",
   "Error reporting: If you cannot complete the task due to permission errors, tool failures, missing data, or any other reason,",
   "your final message MUST include a cockpit-error block explaining the failure.",
   "Format it as a fenced code block tagged cockpit-error containing a JSON object:",
@@ -364,6 +368,10 @@ export class JobScheduler {
     const toolTracker = new Map<string, JobRunToolUse>();
     let lastAssistantText = "";
     const enabledServers = new Set(job.mcpServers || []);
+    // Background subagents outlive the turn that launched them. If the turn
+    // ends with any still running, the model was waiting for a notification
+    // that nothing here will deliver, and cleanup is about to kill the PTY.
+    const pendingTasks = new Set<string>();
 
     const unsubEvent = this.sessionManager.subscribe(sessionId, (event) => {
       if (event.type === "tool_use_start" && event.toolId) {
@@ -400,6 +408,11 @@ export class JobScheduler {
           }
         }
         jlog("message-done", { count: run.messageCount, textLen });
+      } else if (event.type === "task_update" && event.taskInfo?.taskId) {
+        const { taskId, status } = event.taskInfo;
+        if (status === "running") pendingTasks.add(taskId);
+        else pendingTasks.delete(taskId);
+        jlog("task-update", { taskId, status, pending: pendingTasks.size });
       } else if (event.type === "permission_request" && event.requestId) {
         if (job.bypassPermissions) {
           jlog("permission", { toolName: event.toolName ?? "unknown", requestId: event.requestId, bypass: true, allowed: true });
@@ -538,6 +551,23 @@ export class JobScheduler {
             run.error = errorBlock.details ? `${errorBlock.error}: ${errorBlock.details}` : errorBlock.error;
             jlog("error-block-detected", { error: run.error });
           }
+        }
+
+        // A completed turn always ends with an assistant message. Reaching idle
+        // without one means the turn was cut short rather than finished — the
+        // signature of a run torn down mid-compaction, which reported "success"
+        // for three days while producing nothing. Fail loudly instead: the
+        // failure branch below raises an inbox alert.
+        if (finalStatus === "success" && !lastAssistantText) {
+          finalStatus = "failure";
+          run.error = "Job went idle without producing any assistant message, so the turn never completed";
+          jlog("no-assistant-message", { toolCount: run.toolsUsed.length });
+        }
+
+        if (finalStatus === "success" && pendingTasks.size > 0) {
+          finalStatus = "failure";
+          run.error = `Job ended its turn with ${pendingTasks.size} background subagent(s) still running, so their work was never collected`;
+          jlog("pending-background-tasks", { pending: pendingTasks.size });
         }
 
         run.status = finalStatus;
