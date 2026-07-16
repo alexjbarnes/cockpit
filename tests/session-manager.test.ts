@@ -367,6 +367,91 @@ describe("SessionManager", () => {
       expect(s.queuedMessages).toHaveLength(0);
     });
 
+    // An auto-compact fires mid-turn when the context fills (verified: it fires
+    // 40-52ms after a tool_result, and the CLI resumes the same turn ~4s after
+    // PostCompact). Reporting idle here made the job scheduler mark the run a
+    // success and destroySession the PTY 1ms after PostCompact — 9ms before the
+    // CLI had even flushed the compacted transcript to disk, so the compaction
+    // and the rest of the turn were both lost.
+    function postCompactResult(text: string) {
+      return {
+        intermediateMessages: [],
+        emit: [],
+        systemMessages: [text],
+        errors: [],
+        permissionActions: [],
+        statusChange: null,
+        compactDone: false,
+        snapshot: null,
+      };
+    }
+
+    it("does not report idle after an auto-compact, because the CLI resumes the same turn", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      s.compacting = true;
+      s.info.status = "running";
+
+      const statuses: string[] = [];
+      manager.onStatus(session.id, (st) => statuses.push(st));
+
+      (manager as any).applyProcessedResult(s, session.id, postCompactResult("__compact::hook_done::auto"));
+
+      expect(s.compacting).toBe(false);
+      expect(s.info.status).toBe("running");
+      expect(statuses).not.toContain("idle");
+    });
+
+    it("reports idle after a manual /compact, which has no turn to resume", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      s.compacting = true;
+      s.info.status = "running";
+
+      const statuses: string[] = [];
+      manager.onStatus(session.id, (st) => statuses.push(st));
+
+      (manager as any).applyProcessedResult(s, session.id, postCompactResult("__compact::hook_done::manual"));
+
+      expect(s.compacting).toBe(false);
+      expect(s.info.status).toBe("idle");
+      expect(statuses).toContain("idle");
+    });
+
+    it("still resets context usage and clears the compacting flag on an auto-compact", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      s.compacting = true;
+      s.info.status = "running";
+      s.contextUsage = { used: 168_000, total: 200_000 };
+
+      const usages: Array<{ used: number; total: number }> = [];
+      manager.onUsage(session.id, (u) => usages.push(u));
+
+      (manager as any).applyProcessedResult(s, session.id, postCompactResult("__compact::hook_done::auto"));
+
+      expect(s.compacting).toBe(false);
+      expect(s.contextUsage.used).toBeLessThan(168_000);
+      expect(usages).toHaveLength(1);
+    });
+
+    it("holds a message queued during an auto-compact until the turn actually ends", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      s.compacting = true;
+      s.info.status = "running";
+      s.harnessProcess = null;
+      manager.sendMessage(session.id, "queued mid auto-compact");
+      expect(s.queuedMessages).toHaveLength(1);
+
+      (manager as any).applyProcessedResult(s, session.id, postCompactResult("__compact::hook_done::auto"));
+
+      // Flushing here would inject the message into the turn the CLI is about
+      // to resume. It stays queued; message_done flushes it at the real end.
+      expect(s.queuedMessages).toHaveLength(1);
+      expect(s.info.status).toBe("running");
+    });
+
     it("handles slash commands", () => {
       const session = manager.createSession("/tmp", "Test Session");
       const result = manager.sendMessage(session.id, "/help");

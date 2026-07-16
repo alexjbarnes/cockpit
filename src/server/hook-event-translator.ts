@@ -178,8 +178,19 @@ function translatePreCompact(_payload: Record<string, unknown>): ParsedEvent[] {
   return [{ type: "system_message", text: "__compact::hook_start" }];
 }
 
-function translatePostCompact(_payload: Record<string, unknown>): ParsedEvent[] {
-  return [{ type: "system_message", text: "__compact::hook_done" }];
+/**
+ * The CLI sends `trigger: "auto" | "manual"` on both compact hooks, and the
+ * distinction decides whether the turn is over. An auto-compact fires mid-turn
+ * once the context fills and the CLI resumes the same turn by itself a few
+ * seconds later; only a manual /compact leaves nothing to resume. Carry the
+ * trigger through so the session manager can tell them apart.
+ *
+ * An older CLI that omits the field falls back to the manual path, which is
+ * what cockpit did unconditionally before.
+ */
+function translatePostCompact(payload: Record<string, unknown>): ParsedEvent[] {
+  const auto = stringOr(payload.trigger, "") === "auto";
+  return [{ type: "system_message", text: `__compact::hook_done::${auto ? "auto" : "manual"}` }];
 }
 
 function translateNotification(payload: Record<string, unknown>): ParsedEvent[] {

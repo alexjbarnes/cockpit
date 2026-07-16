@@ -1519,9 +1519,19 @@ export class SessionManager {
         }
         continue;
       }
-      if (sysMsg === "__compact::hook_done") {
+      if (sysMsg.startsWith("__compact::hook_done")) {
         if (session.compacting) {
-          logDiag(sessionId, "compact:hook-done");
+          // A compaction is not a turn ending. The CLI auto-compacts mid-turn
+          // when the context fills (it fires ~40-50ms after a tool_result) and
+          // then resumes the same turn on its own roughly 4s after PostCompact.
+          // Reporting idle for that made the job scheduler mark the run a
+          // success and destroySession the PTY 1ms after PostCompact — 9ms
+          // before the CLI had even flushed the compacted transcript — so both
+          // the compaction and the rest of the turn were lost. Only a manual
+          // /compact has no turn to resume; the real end of an auto-compacted
+          // turn still arrives later as a Stop hook, i.e. message_done.
+          const auto = sysMsg === "__compact::hook_done::auto";
+          logDiag(sessionId, "compact:hook-done", { auto });
           session.compacting = false;
           this.emitSystem(session, sessionId, "__compact::done");
           const postCompactEstimate: ContextUsage = {
@@ -1530,9 +1540,14 @@ export class SessionManager {
           };
           session.contextUsage = postCompactEstimate;
           session.emitter.emit("usage", sessionId, postCompactEstimate);
-          session.info.status = "idle";
-          session.emitter.emit("status", sessionId, "idle");
-          this.flushQueuedMessage(session, sessionId);
+          if (!auto) {
+            session.info.status = "idle";
+            session.emitter.emit("status", sessionId, "idle");
+            // Flushing after an auto-compact would inject the queued message
+            // into the turn the CLI is about to resume. message_done flushes it
+            // at the real end of the turn instead.
+            this.flushQueuedMessage(session, sessionId);
+          }
         }
         continue;
       }

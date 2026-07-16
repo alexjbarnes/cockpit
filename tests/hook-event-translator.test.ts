@@ -228,6 +228,39 @@ describe("translateHookEvent", () => {
       expect(events).toEqual([]);
     });
   });
+
+  describe("PreCompact", () => {
+    it("maps to __compact::hook_start regardless of trigger", () => {
+      expect(translateHookEvent("PreCompact", { trigger: "auto" })).toEqual([{ type: "system_message", text: "__compact::hook_start" }]);
+      expect(translateHookEvent("PreCompact", { trigger: "manual" })).toEqual([{ type: "system_message", text: "__compact::hook_start" }]);
+    });
+  });
+
+  describe("PostCompact", () => {
+    // The trigger decides whether the turn is over. An auto-compact fires
+    // mid-turn on a tool-result boundary and the CLI resumes the same turn a
+    // few seconds later, so it must not be reported as a turn ending; a manual
+    // /compact is a standalone action with nothing to resume.
+    it("carries trigger=auto through so the session manager can keep the turn running", () => {
+      const events = translateHookEvent("PostCompact", { trigger: "auto", compact_summary: "..." });
+      expect(events).toEqual([{ type: "system_message", text: "__compact::hook_done::auto" }]);
+    });
+
+    it("carries trigger=manual through as a real turn ending", () => {
+      const events = translateHookEvent("PostCompact", { trigger: "manual", compact_summary: "..." });
+      expect(events).toEqual([{ type: "system_message", text: "__compact::hook_done::manual" }]);
+    });
+
+    it("treats a missing or unrecognised trigger as manual, preserving pre-trigger CLI behaviour", () => {
+      expect(translateHookEvent("PostCompact", {})).toEqual([{ type: "system_message", text: "__compact::hook_done::manual" }]);
+      expect(translateHookEvent("PostCompact", { trigger: "" })).toEqual([
+        { type: "system_message", text: "__compact::hook_done::manual" },
+      ]);
+      expect(translateHookEvent("PostCompact", { trigger: 42 })).toEqual([
+        { type: "system_message", text: "__compact::hook_done::manual" },
+      ]);
+    });
+  });
 });
 
 describe("newPermissionRequestId", () => {
