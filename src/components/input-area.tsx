@@ -44,6 +44,7 @@ import {
   findModelById,
   type ModelAlias,
   type ModelEntry,
+  modelOneMRequiresCredits,
   resolveProviderId,
   versionsForAlias,
 } from "@/lib/models";
@@ -753,7 +754,9 @@ export function InputArea({
     [addFiles],
   );
 
-  const modelSelection = describeModelSelection(currentModel, thinkingLevel, currentContextSize, providers);
+  const effectiveContextSize: ContextSize =
+    currentContextSize === "1m" && modelOneMRequiresCredits(currentModel) && !allowSonnet1m ? "200k" : currentContextSize;
+  const modelSelection = describeModelSelection(currentModel, thinkingLevel, effectiveContextSize, providers);
   const thinkingLabel = modelSelection.thinking ? (thinkingLevels.find((t) => t.value === modelSelection.thinking)?.label ?? null) : null;
   const contextLabel = modelSelection.context ? CONTEXT_SIZES[modelSelection.context].label : null;
 
