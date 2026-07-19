@@ -5,6 +5,7 @@ import { dirname } from "node:path";
 import { Server as McpServer } from "@modelcontextprotocol/sdk/server/index.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+import { CONTEXT_SIZES } from "@/lib/models";
 import { getDefaults, setDefaults } from "@/server/defaults";
 import { deleteJob, getJob, loadJobs, saveJob } from "@/server/job-storage";
 import { getNotificationSettings, setNotificationSettings, updateNotificationSettings } from "@/server/notification-settings";
@@ -49,7 +50,7 @@ const TOOL_DEFINITIONS = [
         cwd: { type: "string" },
         enabled: { type: "boolean" },
         model: { type: "string" },
-        contextSize: { type: "string" },
+        contextSize: { type: "string", enum: Object.keys(CONTEXT_SIZES), description: "Context window size" },
         thinkingLevel: { type: "string" },
         bypassPermissions: { type: "boolean" },
         maxDurationMinutes: { type: "number" },
@@ -82,7 +83,7 @@ const TOOL_DEFINITIONS = [
         cwd: { type: "string" },
         enabled: { type: "boolean" },
         model: { type: "string" },
-        contextSize: { type: "string" },
+        contextSize: { type: "string", enum: Object.keys(CONTEXT_SIZES), description: "Context window size" },
         thinkingLevel: { type: "string" },
         bypassPermissions: { type: "boolean" },
         maxDurationMinutes: { type: "number" },
@@ -130,8 +131,8 @@ const TOOL_DEFINITIONS = [
         modelSlots: {
           type: "object",
           properties: {
-            main: { type: "string", description: "Model ID (e.g. claude-sonnet-4-5, claude-opus-4-5, claude-haiku-4-5)" },
-            mainContext: { type: "string", enum: ["50k", "100k", "200k"], description: "Context window size" },
+            main: { type: "string", description: "Model ID (e.g. claude-opus-4-8, claude-sonnet-4-6, claude-haiku-4-5)" },
+            mainContext: { type: "string", enum: Object.keys(CONTEXT_SIZES), description: "Context window size" },
           },
         },
       },
