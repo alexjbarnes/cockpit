@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
   allowedEffortLevels,
+  cliModelWithContext,
   coerceEffort,
   defaultForAlias,
   describeModelSelection,
   findModelById,
   MODELS,
+  modelOneMRequiresCredits,
   recommendedEffort,
   resolveModel,
   resolveProviderId,
@@ -435,6 +437,45 @@ describe("Sonnet 5", () => {
     expect(recommendedEffort(resolveModel("claude-sonnet-5"))).toBe("xhigh");
     // Sonnet 4.6 stays available and still lacks xhigh.
     expect(allowedEffortLevels(resolveModel("claude-sonnet-4-6"))).toEqual(["low", "medium", "high", "max"]);
+  });
+});
+
+describe("modelOneMRequiresCredits", () => {
+  it("is true only for Sonnet 4.6 (its 1M is credit-gated)", () => {
+    expect(modelOneMRequiresCredits("claude-sonnet-4-6")).toBe(true);
+    expect(modelOneMRequiresCredits("claude-opus-4-8")).toBe(false);
+    expect(modelOneMRequiresCredits("claude-sonnet-5")).toBe(false);
+    expect(modelOneMRequiresCredits("claude-fable-5")).toBe(false);
+    expect(modelOneMRequiresCredits("haiku")).toBe(false);
+  });
+
+  it("is false for unknown/custom models and nullish input", () => {
+    expect(modelOneMRequiresCredits("custom:foo")).toBe(false);
+    expect(modelOneMRequiresCredits(undefined)).toBe(false);
+    expect(modelOneMRequiresCredits(null)).toBe(false);
+  });
+});
+
+describe("cliModelWithContext", () => {
+  it("appends [1m] only for a credit-gated model at 1M with opt-in", () => {
+    expect(cliModelWithContext("claude-sonnet-4-6", "1m", true)).toBe("claude-sonnet-4-6[1m]");
+  });
+
+  it("leaves the id bare when the opt-in is off", () => {
+    expect(cliModelWithContext("claude-sonnet-4-6", "1m", false)).toBe("claude-sonnet-4-6");
+  });
+
+  it("leaves the id bare at 200k regardless of opt-in", () => {
+    expect(cliModelWithContext("claude-sonnet-4-6", "200k", true)).toBe("claude-sonnet-4-6");
+  });
+
+  it("never appends [1m] for models whose 1M is free (Opus 4.8, Sonnet 5)", () => {
+    expect(cliModelWithContext("claude-opus-4-8", "1m", true)).toBe("claude-opus-4-8");
+    expect(cliModelWithContext("claude-sonnet-5", "1m", true)).toBe("claude-sonnet-5");
+  });
+
+  it("leaves custom-provider ids untouched", () => {
+    expect(cliModelWithContext("prov:some-model", "1m", true)).toBe("prov:some-model");
   });
 });
 

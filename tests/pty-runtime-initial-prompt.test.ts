@@ -45,6 +45,7 @@ vi.mock("@/server/transcript", () => ({
   countTranscriptMessages: () => transcriptMock.count,
 }));
 
+import { ONE_M_CREDITS_REQUIRED } from "@/server/event-parser";
 import { PtyRuntime } from "@/server/pty-runtime";
 
 function makeRuntime(): { runtime: PtyRuntime; getHandler: () => SessionHookHandler | null } {
@@ -203,5 +204,58 @@ describe("PtyRuntime interactive user send (sendUserText)", () => {
     await vi.advanceTimersByTimeAsync(12000);
     expect(logSpy).not.toHaveBeenCalledWith(expect.stringContaining("produced NO turn"));
     logSpy.mockRestore();
+  });
+});
+
+describe("PtyRuntime API error scanning", () => {
+  function runtimeWithSpies() {
+    const onError = vi.fn();
+    const onEvents = vi.fn();
+    const router = {
+      register: vi.fn(() => "tok"),
+      unregister: vi.fn(),
+      getUrl: vi.fn(() => "http://localhost:9999/hook"),
+    } as unknown as HookRouter;
+    const runtime = new PtyRuntime({
+      sessionId: "sess-err",
+      cwd: "/tmp",
+      cliSessionId: "sess-err",
+      hookRouter: router,
+      onEvents,
+      onError,
+      onExit: () => {},
+    });
+    return { runtime, onError, onEvents };
+  }
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("surfaces the 1M-credits sentinel immediately and forces the turn idle", () => {
+    const { runtime, onError, onEvents } = runtimeWithSpies();
+    (runtime as any).scanForErrors(
+      "❯ API Error: Usage credits required for 1M context · turn on usage credits at claude.ai/settings/usage",
+    );
+    expect(onError).toHaveBeenCalledWith(ONE_M_CREDITS_REQUIRED);
+    expect(onEvents).toHaveBeenCalledTimes(1);
+    expect(onEvents.mock.calls[0][0][0].type).toBe("message_done");
+  });
+
+  it("fires the 1M-credits sentinel only once per spawn", () => {
+    const { runtime, onError } = runtimeWithSpies();
+    (runtime as any).scanForErrors("API Error: Usage credits required for 1M context");
+    (runtime as any).scanForErrors("API Error: Usage credits required for 1M context again");
+    expect(onError.mock.calls.filter((c) => c[0] === ONE_M_CREDITS_REQUIRED)).toHaveLength(1);
+  });
+
+  it("still debounces coded API errors and does not confuse them with the credits case", () => {
+    vi.useFakeTimers();
+    const { runtime, onError } = runtimeWithSpies();
+    (runtime as any).scanForErrors("API Error: 529 overloaded");
+    expect(onError).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(10_000);
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(onError.mock.calls[0][0]).toContain("529");
   });
 });

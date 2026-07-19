@@ -92,8 +92,10 @@ vi.mock("@/server/transcript-watcher", () => {
   return { TranscriptWatcher: MockTranscriptWatcher };
 });
 
+import { ONE_M_CREDITS_REQUIRED } from "@/server/event-parser";
 import { buildContent } from "@/server/harness/claude-stream-adapter";
 import { SessionManager } from "@/server/session-manager";
+import { createStreamState } from "@/server/stream-processor";
 
 describe("SessionManager", () => {
   let manager: SessionManager;
@@ -3095,6 +3097,50 @@ describe("SessionManager", () => {
       expect(writeControlRequest).toHaveBeenCalled();
       const [payload] = writeControlRequest.mock.calls[0];
       expect((payload as any).request.subtype).toBe("set_model");
+    });
+  });
+
+  describe("1M credits handling", () => {
+    it("reverts a 1M session to 200K and warns when Sonnet 1M needs credits", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      s.info.contextSize = "1m";
+      s.contextWindowSize = 1_000_000;
+      const systems: string[] = [];
+      s.emitter.on("system", (_id: string, text: string) => systems.push(text));
+
+      (manager as any).handle1mCreditsUnavailable(s, session.id);
+
+      expect(s.info.contextSize).toBe("200k");
+      expect(s.contextWindowSize).toBe(200_000);
+      expect(systems.some((t) => /usage credits/i.test(t))).toBe(true);
+    });
+
+    it("routes the credits sentinel from onError to the revert path", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      s.info.contextSize = "1m";
+      s.contextWindowSize = 1_000_000;
+      const { callbacks } = (manager as any).buildHarnessCallbacks(s, session.id, createStreamState());
+
+      callbacks.onError(ONE_M_CREDITS_REQUIRED);
+
+      expect(s.info.contextSize).toBe("200k");
+    });
+
+    it("passes ordinary errors through as error events without reverting context", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      s.info.contextSize = "1m";
+      s.contextWindowSize = 1_000_000;
+      const errors: string[] = [];
+      s.emitter.on("error", (_id: string, msg: string) => errors.push(msg));
+      const { callbacks } = (manager as any).buildHarnessCallbacks(s, session.id, createStreamState());
+
+      callbacks.onError("Overloaded (HTTP 529)");
+
+      expect(errors).toContain("Overloaded (HTTP 529)");
+      expect(s.info.contextSize).toBe("1m"); // ordinary error must not revert
     });
   });
 

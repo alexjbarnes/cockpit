@@ -236,6 +236,7 @@ interface InputAreaProps {
   currentModel: string;
   currentContextSize: ContextSize;
   onSetModel: (model: string, contextSize?: ContextSize) => void;
+  allowSonnet1m?: boolean;
   contextUsage: ContextUsage | null;
   dismissKeyboard: boolean;
   cwd?: string;
@@ -291,6 +292,7 @@ export function InputArea({
   currentModel,
   currentContextSize,
   onSetModel,
+  allowSonnet1m,
   contextUsage,
   dismissKeyboard,
   cwd,
@@ -801,7 +803,13 @@ export function InputArea({
             const matchesProviderModel = (p: Provider, pm: ProviderModel): boolean =>
               currentModel === pm.modelId || currentModel === `${p.id}:${pm.modelId}`;
             const sizes: ContextSize[] = (() => {
-              if (parsed.entry) return parsed.entry.contextSizes;
+              if (parsed.entry) {
+                // Sonnet 4.6's 1M needs usage credits — only offer it once opted in.
+                if (parsed.entry.oneMRequiresCredits && !allowSonnet1m) {
+                  return parsed.entry.contextSizes.filter((s) => s !== "1m");
+                }
+                return parsed.entry.contextSizes;
+              }
               if (!providers || !currentModel) return [];
               for (const p of providers) {
                 const m = p.models.find((pm) => matchesProviderModel(p, pm));

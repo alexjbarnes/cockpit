@@ -562,6 +562,7 @@ export function ChatView({
           currentModel={currentModel}
           currentContextSize={currentContextSize}
           onSetModel={setModel}
+          allowSonnet1m={settings.allowSonnet1m}
           contextUsage={contextUsage}
           dismissKeyboard={settings.dismissKeyboardOnSend}
           cwd={cwd}

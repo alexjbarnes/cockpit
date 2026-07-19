@@ -2,7 +2,7 @@ import { v4 as uuidv4 } from "uuid";
 import { cleanupHookSettings, prepareHookSettings } from "./claude-settings";
 import { fetchCliInitData } from "./cli-init-fetch";
 import { logDiag } from "./debug-logger";
-import type { ParsedEvent } from "./event-parser";
+import { ONE_M_CREDITS_REQUIRED, type ParsedEvent } from "./event-parser";
 import { newPermissionRequestId, translateHookEvent } from "./hook-event-translator";
 import type { HookRouter, PermissionDecision, SessionHookHandler } from "./hook-router";
 import { PtySession } from "./pty-session";
@@ -56,6 +56,8 @@ export class PtyRuntime {
   private promptAccepted: (() => void) | null = null;
   private ptyOutputBuffer = "";
   private errorDebounce: ReturnType<typeof setTimeout> | null = null;
+  /** Fire the 1M-credits error at most once per spawn. */
+  private oneMCreditsHandled = false;
 
   constructor(opts: PtyRuntimeOptions) {
     this.opts = opts;
@@ -472,42 +474,55 @@ export class PtyRuntime {
     if (this.ptyOutputBuffer.length > 8 * 1024) {
       this.ptyOutputBuffer = this.ptyOutputBuffer.slice(-4 * 1024);
     }
-    if (this.errorDebounce) return;
-
     // biome-ignore lint/suspicious/noControlCharactersInRegex: strip terminal control chars
     const clean = this.ptyOutputBuffer.replace(ANSI_RE, "").replace(/[\x00-\x1f]/g, "");
+
+    // A 1M-context request on an account without usage credits (Sonnet 4.6):
+    // the CLI prints this and the turn fails. It carries no HTTP code, so the
+    // coded match below misses it, and it is genuinely fatal, so fire it
+    // directly rather than through the hook-cancellable debounce — a trailing
+    // Stop hook must not swallow it. Once per spawn.
+    if (!this.oneMCreditsHandled && /Usage credits required for 1M context/i.test(clean)) {
+      this.oneMCreditsHandled = true;
+      this.emitApiError(ONE_M_CREDITS_REQUIRED);
+      return;
+    }
+
+    if (this.errorDebounce) return;
     const match = clean.match(/API\s*Error:\s*(\d+)\s*([^✓✗❯]*)/) || clean.match(/APIError:\s*(\d+)\s*(.*)/);
     if (!match) return;
 
     const httpCode = match[1];
     const detail = match[2].trim().slice(0, 200);
     const errMsg = detail ? `${detail} (HTTP ${httpCode})` : `API Error (HTTP ${httpCode})`;
+    this.errorDebounce = setTimeout(() => this.emitApiError(errMsg), 10_000);
+  }
 
-    this.errorDebounce = setTimeout(() => {
-      this.errorDebounce = null;
-      this.ptyOutputBuffer = "";
+  /** Force the turn idle and surface `errMsg`. Shared by the coded-error debounce and the 1M-credits path. */
+  private emitApiError(errMsg: string): void {
+    this.errorDebounce = null;
+    this.ptyOutputBuffer = "";
 
-      console.log(`[pty-runtime] API error detected for session ${this.opts.sessionId.slice(0, 8)}: ${errMsg}`);
+    console.log(`[pty-runtime] API error detected for session ${this.opts.sessionId.slice(0, 8)}: ${errMsg}`);
 
-      const doneEvent: ParsedEvent = {
-        type: "message_done",
-        message: {
-          id: uuidv4(),
-          role: "assistant",
-          content: "",
-          toolUses: [],
-          blocks: [],
-          timestamp: Date.now(),
-        },
-      };
+    const doneEvent: ParsedEvent = {
+      type: "message_done",
+      message: {
+        id: uuidv4(),
+        role: "assistant",
+        content: "",
+        toolUses: [],
+        blocks: [],
+        timestamp: Date.now(),
+      },
+    };
 
-      try {
-        this.opts.onEvents([doneEvent]);
-      } catch {
-        // best-effort
-      }
-      this.opts.onError(errMsg);
-    }, 10_000);
+    try {
+      this.opts.onEvents([doneEvent]);
+    } catch {
+      // best-effort
+    }
+    this.opts.onError(errMsg);
   }
 
   private async cleanup(): Promise<void> {

@@ -17,6 +17,13 @@ export interface AppDefaults {
   modelSlots: ModelSlots;
   messageStitching: boolean;
   reviewsEnabled: boolean;
+  /**
+   * Opt in to Sonnet 4.6's 1M context window. Off by default because it needs
+   * usage credits (claude.ai/settings/usage) and silently runs at 200K without
+   * them. When on, cockpit requests 1M for Sonnet 4.6 and surfaces the credits
+   * error if it's not actually enabled. Other models' 1M is unaffected.
+   */
+  allowSonnet1m: boolean;
 }
 
 function prefsDir(): string {
@@ -38,6 +45,7 @@ const fallback: AppDefaults = {
   modelSlots: { main: "sonnet" },
   messageStitching: true,
   reviewsEnabled: true,
+  allowSonnet1m: false,
 };
 
 export function getDefaults(): AppDefaults {

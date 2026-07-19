@@ -1,6 +1,15 @@
 import { v4 as uuidv4 } from "uuid";
 import type { ChatMessage, InitData, ToolUse } from "@/types";
 
+/**
+ * Sentinel passed through a runtime's onError when a 1M-context request fails
+ * for lack of usage credits (Sonnet 4.6). The session manager recognises it and
+ * drops the session back to 200K rather than surfacing a raw API error. Lives
+ * here so both pty-runtime (emitter) and session-manager (handler) can share it
+ * without a runtime dependency between them.
+ */
+export const ONE_M_CREDITS_REQUIRED = "__1m_credits_required__";
+
 export interface ParsedEvent {
   type:
     | "text_delta"

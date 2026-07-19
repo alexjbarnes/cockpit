@@ -8,6 +8,7 @@ import { classifyCliCommand } from "@/lib/cli-commands";
 import {
   allowedEffortLevels,
   type ContextSize,
+  cliModelWithContext,
   coerceEffort,
   contextSizeToWindow,
   DEFAULT_CONTEXT_SIZE,
@@ -32,7 +33,7 @@ import type {
 } from "@/types";
 import { debugLog, isDebugEnabled, logDiag, logRawLine } from "./debug-logger";
 import { getDefaults } from "./defaults";
-import { type ParsedEvent } from "./event-parser";
+import { ONE_M_CREDITS_REQUIRED, type ParsedEvent } from "./event-parser";
 import { getHarnessAdapter } from "./harness/registry";
 import type { HarnessProcess, HarnessProcessCallbacks, HarnessSpawnConfig } from "./harness/types";
 import { getJob } from "./job-storage";
@@ -1483,6 +1484,32 @@ export class SessionManager {
     session.emitter.emit("system", sessionId, text);
   }
 
+  /**
+   * Sonnet 4.6 was asked for 1M but the account has no usage credits. Drop the
+   * session to 200K so it stops erroring on every turn, and tell the user why.
+   */
+  private handle1mCreditsUnavailable(session: Session, sessionId: string): void {
+    logDiag(sessionId, "1m:credits-required", { model: session.info.model });
+    if (session.info.contextSize !== "200k") {
+      session.info.contextSize = "200k";
+      session.contextWindowSize = contextSizeToWindow("200k");
+      session.modelSlots = { ...session.modelSlots, mainContext: "200k" };
+      setSessionPrefs(sessionId, { contextSize: "200k", modelSlots: session.modelSlots });
+      this.emitInfoUpdated(session, sessionId);
+      const cur = session.contextUsage;
+      if (cur) {
+        const usage: ContextUsage = { used: cur.used, total: session.contextWindowSize };
+        session.contextUsage = usage;
+        session.emitter.emit("usage", sessionId, usage);
+      }
+    }
+    this.emitSystem(
+      session,
+      sessionId,
+      "Sonnet 4.6's 1M context needs usage credits (claude.ai/settings/usage), which aren't enabled, so this session dropped to 200K. Enable credits and reselect 1M, or turn off \"1M for Sonnet\" in settings.",
+    );
+  }
+
   private notifyPendingChanged(session: Session, sessionId: string): void {
     const count = session.pendingRequests.size;
     if (session.info.pendingRequestCount === count) return;
@@ -2084,7 +2111,14 @@ Additional Cockpit rules beyond the CLI's defaults:
     this.log(sessionId, `spawning CLI process (resume=${willResume}, model=${session.info.model || "sonnet"}, runtime=${session.runtime})`);
 
     const resolved = resolveProviderModel(session.info.model ?? "sonnet");
-    const cliModel = resolved ? resolved.model.modelId : session.info.model;
+    const baseCliModel = resolved ? resolved.model.modelId : session.info.model;
+    // A credit-gated model (Sonnet 4.6) at 1M only requests its 1M window when
+    // the id carries a [1m] suffix, and only if the user opted in. Everything
+    // else stays bare (Opus/Sonnet 5/Fable 5 reach 1M from the bare id).
+    const cliModel =
+      baseCliModel && session.info.contextSize
+        ? cliModelWithContext(baseCliModel, session.info.contextSize, getDefaults().allowSonnet1m)
+        : baseCliModel;
     this.log(
       sessionId,
       `spawn: info.model=${session.info.model}, resolved=${resolved ? `${resolved.provider.id}:${resolved.model.modelId}` : "null"}, cliModel=${cliModel}`,
@@ -2221,6 +2255,10 @@ Additional Cockpit rules beyond the CLI's defaults:
         this.applyProcessedResult(session, sessionId, result);
       },
       onError: (message) => {
+        if (message === ONE_M_CREDITS_REQUIRED) {
+          this.handle1mCreditsUnavailable(session, sessionId);
+          return;
+        }
         this.log(sessionId, `CLI error: ${message}`);
         session.emitter.emit("error", sessionId, message);
       },

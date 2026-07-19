@@ -13,6 +13,28 @@ export function contextSizeToWindow(size: ContextSize): number {
   return CONTEXT_SIZES[size].window;
 }
 
+/**
+ * Whether `model`'s 1M window is gated behind usage credits (see
+ * ModelEntry.oneMRequiresCredits). Custom-provider models are never gated here.
+ */
+export function modelOneMRequiresCredits(model: string | undefined | null): boolean {
+  return resolveModel(model)?.oneMRequiresCredits === true;
+}
+
+/**
+ * The `--model` string the CLI should be spawned with. For a credit-gated model
+ * (Sonnet 4.6) at 1M, the CLI only actually requests its 1M window when the id
+ * carries a `[1m]` suffix, and only if the user has opted in (`allowCreditGated1m`),
+ * since it needs usage credits. Every other model reaches 1M from the bare id,
+ * so it is returned unchanged.
+ */
+export function cliModelWithContext(modelId: string, contextSize: ContextSize, allowCreditGated1m: boolean): string {
+  if (contextSize === "1m" && allowCreditGated1m && modelOneMRequiresCredits(modelId)) {
+    return `${modelId}[1m]`;
+  }
+  return modelId;
+}
+
 export type ModelAlias = "opus" | "sonnet" | "haiku" | "fable";
 
 export interface ModelEntry {
@@ -25,6 +47,14 @@ export interface ModelEntry {
   contextWindow?: number;
   isDefault?: boolean;
   supportsXhigh?: boolean;
+  /**
+   * The model's 1M window is not free on a subscription: the CLI only requests
+   * it when the model string carries a `[1m]` suffix, and the request then
+   * fails with "Usage credits required for 1M context" unless usage credits are
+   * enabled. Verified 2026-07: true for Sonnet 4.6, false for Opus 4.8 / Sonnet
+   * 5 / Fable 5 (their 1M is included and works from the bare model id).
+   */
+  oneMRequiresCredits?: boolean;
 }
 
 export const MODELS: ModelEntry[] = [
@@ -46,6 +76,7 @@ export const MODELS: ModelEntry[] = [
     description: "Previous generation",
     contextSizes: ["200k", "1m"],
     contextWindow: 200_000,
+    oneMRequiresCredits: true,
   },
   {
     alias: "sonnet",
