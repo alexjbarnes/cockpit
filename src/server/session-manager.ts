@@ -12,6 +12,7 @@ import {
   coerceEffort,
   contextSizeToWindow,
   DEFAULT_CONTEXT_SIZE,
+  modelOneMRequiresCredits,
   recommendedEffort,
   resolveModel,
 } from "@/lib/models";
@@ -2115,10 +2116,19 @@ Additional Cockpit rules beyond the CLI's defaults:
     // A credit-gated model (Sonnet 4.6) at 1M only requests its 1M window when
     // the id carries a [1m] suffix, and only if the user opted in. Everything
     // else stays bare (Opus/Sonnet 5/Fable 5 reach 1M from the bare id).
+    const allowSonnet1m = getDefaults().allowSonnet1m;
     const cliModel =
       baseCliModel && session.info.contextSize
-        ? cliModelWithContext(baseCliModel, session.info.contextSize, getDefaults().allowSonnet1m)
+        ? cliModelWithContext(baseCliModel, session.info.contextSize, allowSonnet1m)
         : baseCliModel;
+    // When the credit-gated opt-in is off, force the effective context to 200k
+    // so the adapter sets CLAUDE_CODE_DISABLE_1M_CONTEXT=1. Without this, a
+    // stored contextSize of "1m" would leave the env var unset and the CLI
+    // would still run at 1M even without the [1m] suffix.
+    const effectiveContextSize: ContextSize =
+      session.info.contextSize === "1m" && !allowSonnet1m && modelOneMRequiresCredits(baseCliModel)
+        ? "200k"
+        : (session.info.contextSize ?? DEFAULT_CONTEXT_SIZE);
     this.log(
       sessionId,
       `spawn: info.model=${session.info.model}, resolved=${resolved ? `${resolved.provider.id}:${resolved.model.modelId}` : "null"}, cliModel=${cliModel}`,
@@ -2175,7 +2185,7 @@ Additional Cockpit rules beyond the CLI's defaults:
       model: cliModel ?? undefined,
       providerEnvVars: resolved?.provider.envVars,
       subagentModel,
-      contextSize: session.info.contextSize ?? DEFAULT_CONTEXT_SIZE,
+      contextSize: effectiveContextSize,
       thinkingLevel: session.thinkingLevel,
       supportsEffort: this.modelEffortLevels(session.info.model).length > 0,
       planMode: session.planMode,
