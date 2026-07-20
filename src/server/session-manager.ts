@@ -940,14 +940,7 @@ export class SessionManager {
   removePendingRequest(sessionId: string, requestId: string): void {
     const session = this.sessions.get(sessionId);
     if (session) {
-      const had = session.pendingRequests.has(requestId);
-      const wasQuestion = session.pendingRequests.get(requestId)?.type === "question";
       session.pendingRequests.delete(requestId);
-      if (wasQuestion) {
-        console.log(
-          `[question-debug] removePendingRequest: session=${sessionId.slice(0, 8)}, requestId=${requestId}, existed=${had}, remaining=${session.pendingRequests.size}`,
-        );
-      }
       this.notifyPendingChanged(session, sessionId);
     }
   }
@@ -1666,11 +1659,6 @@ export class SessionManager {
       } else {
         const planPath = pa.toolName === "ExitPlanMode" ? findLatestPlanFile() : undefined;
         const reqType = pa.toolName === "AskUserQuestion" ? "question" : "permission";
-        if (reqType === "question") {
-          console.log(
-            `[question-debug] adding pending question: session=${sessionId.slice(0, 8)}, requestId=${pa.requestId}, total=${session.pendingRequests.size + 1}`,
-          );
-        }
         session.pendingRequests.set(pa.requestId, {
           type: reqType,
           requestId: pa.requestId,

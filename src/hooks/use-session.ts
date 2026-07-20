@@ -189,14 +189,7 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
     if (connected) {
       // Clear stale client-side state before server re-sends current state
       setPendingPermissions([]);
-      setPendingQuestions((prev) => {
-        if (prev.length > 0)
-          console.log(
-            `[question-debug] connect: clearing ${prev.length} pendingQuestions`,
-            prev.map((q) => q.requestId),
-          );
-        return [];
-      });
+      setPendingQuestions([]);
       const isReconnect = loadedSessionRef.current === sessionId;
       console.log(`[session] sending session:connect for ${sessionId.slice(0, 8)}`);
       (window as unknown as Record<string, unknown>).__sessionConnectTime = performance.now();
@@ -281,14 +274,7 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
               streamingRef.current = null;
               agentStackRef.current = [];
               setMessages((prev) => prev.filter((m) => m.id !== "streaming"));
-              setPendingQuestions((prev) => {
-                if (prev.length > 0)
-                  console.log(
-                    `[question-debug] history:idle clearing ${prev.length} pendingQuestions`,
-                    prev.map((q) => q.requestId),
-                  );
-                return [];
-              });
+              setPendingQuestions([]);
               setRateLimitStatus(null);
               setBackgroundTasks((prev) => {
                 if (prev.some((t) => t.status === "running")) {
@@ -746,14 +732,7 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
             agentStackRef.current = [];
             // Remove stale streaming message that may have survived a WS drop
             setMessages((prev) => prev.filter((m) => m.id !== "streaming"));
-            setPendingQuestions((prev) => {
-              if (prev.length > 0)
-                console.log(
-                  `[question-debug] status:idle clearing ${prev.length} pendingQuestions`,
-                  prev.map((q) => q.requestId),
-                );
-              return [];
-            });
+            setPendingQuestions([]);
             setRateLimitStatus(null);
             // Clear any background tasks still running - the process has exited
             setBackgroundTasks((prev) => {
@@ -968,15 +947,7 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
         }
 
         case "question:request": {
-          console.log(`[question-debug] question:request received`, msg.requestId);
-          console.trace("[question-debug] question:request stack");
-          setPendingQuestions((prev) => {
-            console.log(`[question-debug] question:request adding to ${prev.length} existing`, [
-              ...prev.map((q) => q.requestId),
-              msg.requestId,
-            ]);
-            return [...prev, { requestId: msg.requestId, questions: msg.questions }];
-          });
+          setPendingQuestions((prev) => [...prev, { requestId: msg.requestId, questions: msg.questions }]);
           break;
         }
       }
@@ -1197,15 +1168,8 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
 
   const respondToQuestion = useCallback(
     (requestId: string, answers: Record<string, string>) => {
-      console.log(`[question-debug] respondToQuestion`, requestId);
       send({ type: "question:response", sessionId, requestId, answers });
-      setPendingQuestions((prev) => {
-        console.log(
-          `[question-debug] marking answered, current pending:`,
-          prev.map((q) => ({ id: q.requestId, answered: q.answered })),
-        );
-        return prev.map((q) => (q.requestId === requestId ? { ...q, answered: true } : q));
-      });
+      setPendingQuestions((prev) => prev.map((q) => (q.requestId === requestId ? { ...q, answered: true } : q)));
     },
     [send, sessionId],
   );

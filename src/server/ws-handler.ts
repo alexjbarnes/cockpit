@@ -717,15 +717,8 @@ export function createWebSocketHandler(
         }
 
         case "question:response": {
-          console.log(
-            `[question-debug] question:response for session ${msg.sessionId.slice(0, 8)}, requestId=${msg.requestId}, hadPending=${!!sessionManager.getPendingRequest(msg.sessionId, msg.requestId)}`,
-          );
           const pending = sessionManager.getPendingRequest(msg.sessionId, msg.requestId);
           sessionManager.removePendingRequest(msg.sessionId, msg.requestId);
-          console.log(
-            `[question-debug] after remove, remaining pending:`,
-            sessionManager.getPendingRequests(msg.sessionId).map((r) => r.requestId),
-          );
           const originalQuestions = pending?.rawToolInput?.questions;
           sessionManager.respondToPermission(msg.sessionId, msg.requestId, true, {
             questions: originalQuestions || [],
@@ -1017,7 +1010,6 @@ function handleParsedEvent(ws: WebSocket, sessionId: string, event: ParsedEvent,
       const toolName = event.toolName || "";
 
       if (toolName === "AskUserQuestion") {
-        console.log(`[question-debug] live question:request for session ${sessionId.slice(0, 8)}, requestId=${requestId}`);
         send(ws, {
           type: "question:request",
           sessionId,
