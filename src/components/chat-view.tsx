@@ -410,9 +410,6 @@ export function ChatView({
                 // stale answered one — so a follow-up question never rendered.
                 const pending = pendingQuestions.find((q) => !q.answered);
                 const hasOutput = !!questionBlock.toolUse.output;
-                console.log(
-                  `[question-debug] Place1 render: msgId=${msg.id.slice(0, 8)}, hasOutput=${hasOutput}, pending=${!!pending}, pendingCount=${pendingQuestions.length}`,
-                );
 
                 return (
                   <div key={msg.id} data-message-id={msg.id} className="space-y-4">
