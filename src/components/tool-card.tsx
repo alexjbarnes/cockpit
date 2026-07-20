@@ -549,7 +549,7 @@ function AgentContent({
           {open && messages !== null && messages.length > 0 && (
             <div className="space-y-3 border-l-2 border-border pl-3">
               {messages.map((m) => (
-                <MessageBubble key={m.id} message={m} expandedToolIds={subExpandedToolIds} collapsedByDefault />
+                <MessageBubble key={m.id} message={m} expandedToolIds={subExpandedToolIds} />
               ))}
             </div>
           )}
