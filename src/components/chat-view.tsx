@@ -138,6 +138,30 @@ export function ChatView({
   const visibleMessages = useMemo(() => uniqueMessages.slice(startIndex), [uniqueMessages, startIndex]);
   const hasMoreAbove = startIndex > 0;
 
+  // "Worked for" duration, keyed by the assistant message that ENDS a turn:
+  // the next visible message is a user prompt, or it is the last message and the
+  // session is idle. Duration = that message's time minus the turn's opening
+  // user message. Tool results fold into tool cards (not their own bubbles), so
+  // the previous user-role message is reliably the turn start.
+  const workedByMessageId = useMemo(() => {
+    const map = new Map<string, number>();
+    for (let i = 0; i < visibleMessages.length; i++) {
+      const m = visibleMessages[i];
+      if (m.role !== "assistant") continue;
+      const next = visibleMessages[i + 1];
+      const isTurnEnd = next ? next.role === "user" : !isResponding;
+      if (!isTurnEnd) continue;
+      for (let j = i - 1; j >= 0; j--) {
+        if (visibleMessages[j].role === "user") {
+          const d = m.timestamp - visibleMessages[j].timestamp;
+          if (d > 0) map.set(m.id, d);
+          break;
+        }
+      }
+    }
+    return map;
+  }, [visibleMessages, isResponding]);
+
   // Reset window on session change
   useEffect(() => {
     setRenderWindow(INITIAL_WINDOW);
@@ -425,6 +449,7 @@ export function ChatView({
                         selected={selectedIds.has(msg.id)}
                         onEnterSelection={enterSelection}
                         onToggleSelect={toggleSelect}
+                        workedMs={workedByMessageId.get(msg.id)}
                       />
                     )}
                   </div>
@@ -442,6 +467,7 @@ export function ChatView({
                   selected={selectedIds.has(msg.id)}
                   onEnterSelection={enterSelection}
                   onToggleSelect={toggleSelect}
+                  workedMs={workedByMessageId.get(msg.id)}
                 />
               </div>
             );

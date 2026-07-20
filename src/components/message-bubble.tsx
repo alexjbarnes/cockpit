@@ -1,11 +1,13 @@
 "use client";
 
-import { Brain, ChevronDown, ChevronRight, File, FileText, Loader2 } from "lucide-react";
+import { Brain, Check, ChevronDown, ChevronRight, Copy, File, FileText, Loader2 } from "lucide-react";
 import React, { memo, useCallback, useRef, useState } from "react";
 import { languageFromPath, CodeBlock as SyntaxCodeBlock } from "@/components/code-block";
 import { MarkdownRender } from "@/components/markdown-render";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
+import { copyToClipboard, extractText } from "@/hooks/use-message-selection";
 import { useSettings } from "@/hooks/use-settings";
+import { formatMessageTime, formatWorkedFor } from "@/lib/format-time";
 import { cn } from "@/lib/utils";
 import type { ChatMessage } from "@/types";
 import { ToolCard } from "./tool-card";
@@ -25,6 +27,8 @@ interface MessageBubbleProps {
   selected?: boolean;
   onEnterSelection?: (messageId: string) => void;
   onToggleSelect?: (messageId: string) => void;
+  /** Turn duration in ms, set only on the assistant message that ends a turn. */
+  workedMs?: number;
 }
 
 export const MessageBubble = memo(function MessageBubble({
@@ -35,6 +39,7 @@ export const MessageBubble = memo(function MessageBubble({
   selected = false,
   onEnterSelection,
   onToggleSelect,
+  workedMs,
 }: MessageBubbleProps) {
   const [collapsed, setCollapsed] = useState(collapsedByDefault);
   const [previewSrc, setPreviewSrc] = useState<string | null>(null);
@@ -161,8 +166,8 @@ export const MessageBubble = memo(function MessageBubble({
   return (
     <div
       className={cn(
-        "flex w-full",
-        isUser && !collapsedByDefault ? "justify-end" : "justify-start",
+        "flex w-full flex-col",
+        isUser && !collapsedByDefault ? "items-end" : "items-start",
         selectionMode && "cursor-pointer select-none",
       )}
       onContextMenu={handleContextMenu}
@@ -257,6 +262,7 @@ export const MessageBubble = memo(function MessageBubble({
           </>
         )}
       </div>
+      {!selectionMode && !collapsedByDefault && <MessageActions message={message} isUser={isUser} workedMs={workedMs} />}
       <Dialog open={previewSrc !== null} onOpenChange={() => setPreviewSrc(null)} className="max-w-3xl">
         <DialogContent className="max-h-[80vh] overflow-auto" onClose={() => setPreviewSrc(null)}>
           {previewSrc && <img src={previewSrc} className="w-full rounded object-contain" alt="" />}
@@ -265,6 +271,65 @@ export const MessageBubble = memo(function MessageBubble({
     </div>
   );
 });
+
+function CopyButton({ copied, onCopy }: { copied: boolean; onCopy: (e: React.MouseEvent) => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onCopy}
+      onMouseDown={(e) => e.stopPropagation()}
+      title="Copy message"
+      aria-label="Copy message"
+      className="inline-flex items-center rounded p-0.5 transition-colors hover:text-foreground"
+    >
+      {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+    </button>
+  );
+}
+
+/**
+ * The row under a message bubble: a copy-this-message button plus, for user
+ * messages the send time, and for the assistant turn's final message the
+ * elapsed "Worked for" time. Order flips by role so the copy button sits on the
+ * bubble's outer edge (right for user, left for assistant), matching the column
+ * alignment above it.
+ */
+function MessageActions({ message, isUser, workedMs }: { message: ChatMessage; isUser: boolean; workedMs?: number }) {
+  const [copied, setCopied] = useState(false);
+  const text = extractText(message);
+
+  const handleCopy = useCallback(
+    async (e: React.MouseEvent) => {
+      e.stopPropagation();
+      await copyToClipboard(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    },
+    [text],
+  );
+
+  const meta = isUser ? formatMessageTime(message.timestamp) : workedMs != null ? formatWorkedFor(workedMs) : null;
+  if (!text && !meta) return null;
+
+  const copyBtn = text ? <CopyButton copied={copied} onCopy={handleCopy} /> : null;
+  const metaEl = meta ? <span>{meta}</span> : null;
+
+  return (
+    <div className="mt-1 flex items-center gap-2 px-1 text-xs text-muted-foreground" onClick={(e) => e.stopPropagation()}>
+      {isUser ? (
+        <>
+          {metaEl}
+          {copyBtn}
+        </>
+      ) : (
+        <>
+          {copyBtn}
+          {metaEl}
+        </>
+      )}
+    </div>
+  );
+}
 
 function TextFileBlock({ name, content }: { name: string; content: string }) {
   const [open, setOpen] = useState(false);
