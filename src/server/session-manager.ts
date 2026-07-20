@@ -2118,9 +2118,7 @@ Additional Cockpit rules beyond the CLI's defaults:
     // else stays bare (Opus/Sonnet 5/Fable 5 reach 1M from the bare id).
     const allowSonnet1m = getDefaults().allowSonnet1m;
     const cliModel =
-      baseCliModel && session.info.contextSize
-        ? cliModelWithContext(baseCliModel, session.info.contextSize, allowSonnet1m)
-        : baseCliModel;
+      baseCliModel && session.info.contextSize ? cliModelWithContext(baseCliModel, session.info.contextSize, allowSonnet1m) : baseCliModel;
     // When the credit-gated opt-in is off, force the effective context to 200k
     // so the adapter sets CLAUDE_CODE_DISABLE_1M_CONTEXT=1. Without this, a
     // stored contextSize of "1m" would leave the env var unset and the CLI
