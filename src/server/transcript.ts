@@ -631,6 +631,18 @@ export async function loadTranscript(sessionId: string, cwd: string, options?: {
   return { messages, byteOffset, totalSize, lastUsage };
 }
 
+/**
+ * Load and parse a transcript at an absolute path (not the sessionId/cwd-derived
+ * main path). Used for subagent transcripts under `<session>/subagents/`, which
+ * share the exact JSONL shape the main parser handles. Returns [] if missing.
+ */
+export async function loadTranscriptFileAbs(absPath: string): Promise<ChatMessage[]> {
+  if (!existsSync(absPath)) return [];
+  const raw = await readFile(absPath, "utf-8");
+  const lines = raw.split(/\r?\n/).filter((l) => l.trim());
+  return parseLines(lines).messages;
+}
+
 const COMPACTION_PREFIX = "This session is being continued from a previous conversation";
 const STRIP_ATTACHMENTS_RE = /^\[Attached [^\]]+\]\n*/gm;
 

@@ -5,10 +5,11 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useSettings } from "@/hooks/use-settings";
 import { shortPath } from "@/lib/path";
 import { cn } from "@/lib/utils";
-import type { ToolUse } from "@/types";
+import type { ChatMessage, ToolUse } from "@/types";
 import { useShell } from "./app-shell";
 import { CodeBlock, languageFromPath, prehighlight } from "./code-block";
 import { DiffViewer } from "./diff-viewer";
+import { MessageBubble } from "./message-bubble";
 import { PlanViewModal } from "./plan-view-modal";
 
 function parseInput(input: string): Record<string, unknown> {
@@ -473,6 +474,43 @@ function AgentContent({
 }) {
   const prompt = (input.prompt as string) || "";
   const children = tool.children || [];
+  const { sessionId, cwd } = useShell();
+
+  // On-demand subagent transcript. The CLI writes each Task/Agent subagent to
+  // its own `subagents/agent-<id>.jsonl`; the parent tool_use id (tool.id) maps
+  // to it via the meta sidecar the API route resolves. Fetched only on expand.
+  const [open, setOpen] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [messages, setMessages] = useState<ChatMessage[] | null>(null);
+  const subExpandedToolIds = useRef<Set<string>>(new Set());
+
+  const toggleTranscript = useCallback(() => {
+    setOpen((prev) => {
+      const next = !prev;
+      if (next && messages === null && !loading && sessionId) {
+        setLoading(true);
+        setError(null);
+        const params = new URLSearchParams({ toolUseId: tool.id });
+        if (cwd) params.set("cwd", cwd);
+        fetch(`/api/sessions/${sessionId}/subagents?${params}`)
+          .then((res) => {
+            if (res.status === 404) return { messages: [] as ChatMessage[] };
+            if (!res.ok) throw new Error("Failed to load agent transcript");
+            return res.json();
+          })
+          .then((data: { messages?: ChatMessage[] }) => {
+            setMessages(data.messages ?? []);
+            setLoading(false);
+          })
+          .catch((err: Error) => {
+            setError(err.message);
+            setLoading(false);
+          });
+      }
+      return next;
+    });
+  }, [messages, loading, sessionId, cwd, tool.id]);
 
   return (
     <div className="space-y-2">
@@ -492,6 +530,30 @@ function AgentContent({
         <pre className="overflow-x-auto rounded bg-muted/50 p-2 text-[11px] leading-relaxed max-h-48 overflow-y-auto text-muted-foreground">
           {tool.output}
         </pre>
+      )}
+      {sessionId && (
+        <div className="space-y-1">
+          <button
+            type="button"
+            onClick={toggleTranscript}
+            className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground"
+          >
+            <ChevronRight className={cn("h-3 w-3 transition-transform", open && "rotate-90")} />
+            {open ? "Hide agent transcript" : "Show agent transcript"}
+            {loading && <Loader2 className="h-3 w-3 animate-spin" />}
+          </button>
+          {open && !loading && error && <div className="text-[11px] text-red-500">{error}</div>}
+          {open && !loading && !error && messages !== null && messages.length === 0 && (
+            <div className="text-[11px] italic text-muted-foreground">No transcript recorded for this agent.</div>
+          )}
+          {open && messages !== null && messages.length > 0 && (
+            <div className="space-y-3 border-l-2 border-border pl-3">
+              {messages.map((m) => (
+                <MessageBubble key={m.id} message={m} expandedToolIds={subExpandedToolIds} collapsedByDefault />
+              ))}
+            </div>
+          )}
+        </div>
       )}
     </div>
   );
