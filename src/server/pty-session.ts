@@ -115,7 +115,15 @@ export class PtySession {
     const pty = this.requirePty();
     pty.write("\x15");
     await sleep(CLEAR_TO_TEXT_DELAY_MS);
-    pty.write(text);
+    // Frame multi-line input as an explicit bracketed paste (\e[200~ … \e[201~) so the
+    // REPL keeps every embedded newline as literal content. Written raw, a multi-line
+    // burst races the REPL's heuristic paste detection and gets mis-submitted — most
+    // often as "/compact" — losing the message and firing a compaction (this was the
+    // reported bug). The claude REPL buffers everything between the markers into one
+    // literal pasted key (verified in the 2.1.216 binary), so slash/newline parsing
+    // never runs on it. Single-line text keeps the exact prior path, which the send
+    // tests already prove works.
+    pty.write(text.includes("\n") ? `\x1b[200~${text}\x1b[201~` : text);
     await sleep(TEXT_TO_ENTER_DELAY_MS);
     pty.write("\r");
   }

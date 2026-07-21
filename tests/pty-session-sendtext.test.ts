@@ -34,4 +34,22 @@ describe("PtySession.sendText", () => {
     expect(writes[2]).toBe("\r");
     expect(writes).toHaveLength(3);
   });
+
+  it("frames multi-line text as a bracketed paste so embedded newlines aren't submitted", async () => {
+    const session = new PtySession({
+      cwd: "/tmp",
+      settingsPath: "/tmp/fake-settings.json",
+    });
+    (session as unknown as { pty: typeof mockPty }).pty = mockPty;
+
+    writes.length = 0;
+    // A blank line splitting two paragraphs — the shape that was mis-submitted as
+    // "/compact" when written raw (see pty-session.ts sendText / multiline-send.spec.ts).
+    await session.sendText("first line\n\nsecond line");
+
+    expect(writes[0]).toBe("\x15");
+    expect(writes[1]).toBe("\x1b[200~first line\n\nsecond line\x1b[201~");
+    expect(writes[2]).toBe("\r");
+    expect(writes).toHaveLength(3);
+  });
 });
