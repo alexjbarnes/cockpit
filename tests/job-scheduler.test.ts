@@ -37,7 +37,7 @@ import { addInboxMessage, parseErrorBlock, parseInboxBlock } from "@/server/inbo
 import { acquireJobLock, releaseJobLock } from "@/server/job-lock";
 import { JobScheduler } from "@/server/job-scheduler";
 import { loadJobs, loadRuns, saveRun } from "@/server/job-storage";
-import type { JobRunStatus, ScheduledJob } from "@/types";
+import type { JobRun, JobRunStatus, ScheduledJob } from "@/types";
 
 function makeJob(overrides: Partial<ScheduledJob> = {}): ScheduledJob {
   return {
@@ -1163,5 +1163,100 @@ describe("tick: missed run handling", () => {
     (scheduler as any).tick();
 
     expect(sm.createSession).not.toHaveBeenCalled();
+  });
+
+  describe("retry", () => {
+    function runResult(status: JobRunStatus): JobRun {
+      return {
+        id: "run-x",
+        jobId: "job-1",
+        sessionId: "session-1",
+        status,
+        startedAt: Date.now(),
+        toolsUsed: [],
+        messageCount: 0,
+        prompt: "p",
+        cwd: "/tmp/test",
+      };
+    }
+
+    it("retries a failed run once by default, then stops on success", async () => {
+      vi.useFakeTimers();
+      try {
+        vi.mocked(loadJobs).mockReturnValue([makeJob()]);
+        const spy = vi
+          .spyOn(scheduler, "executeJob")
+          .mockResolvedValueOnce(runResult("failure"))
+          .mockResolvedValueOnce(runResult("success"));
+        const p = scheduler.triggerJob("job-1");
+        await vi.advanceTimersByTimeAsync(6000);
+        const run = await p;
+        expect(spy).toHaveBeenCalledTimes(2);
+        expect(run.status).toBe("success");
+        // The retried attempt suppresses its failure alert; only the final attempt can page.
+        expect(spy.mock.calls[0]?.[1]).toEqual({ suppressFailureAlert: true });
+        expect(spy.mock.calls[1]?.[1]).toEqual({ suppressFailureAlert: false });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("does not retry a timeout", async () => {
+      vi.mocked(loadJobs).mockReturnValue([makeJob()]);
+      const spy = vi.spyOn(scheduler, "executeJob").mockResolvedValue(runResult("timeout"));
+      const run = await scheduler.triggerJob("job-1");
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(run.status).toBe("timeout");
+    });
+
+    it("does not retry a success", async () => {
+      vi.mocked(loadJobs).mockReturnValue([makeJob()]);
+      const spy = vi.spyOn(scheduler, "executeJob").mockResolvedValue(runResult("success"));
+      const run = await scheduler.triggerJob("job-1");
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(run.status).toBe("success");
+    });
+
+    it("retries up to job.maxRetries times, then gives up", async () => {
+      vi.useFakeTimers();
+      try {
+        vi.mocked(loadJobs).mockReturnValue([makeJob({ maxRetries: 2 })]);
+        const spy = vi.spyOn(scheduler, "executeJob").mockResolvedValue(runResult("failure"));
+        const p = scheduler.triggerJob("job-1");
+        await vi.advanceTimersByTimeAsync(12000);
+        const run = await p;
+        expect(spy).toHaveBeenCalledTimes(3); // 1 initial + 2 retries
+        expect(run.status).toBe("failure");
+        expect(spy.mock.calls[2]?.[1]).toEqual({ suppressFailureAlert: false });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("does not retry when maxRetries is 0", async () => {
+      vi.mocked(loadJobs).mockReturnValue([makeJob({ maxRetries: 0 })]);
+      const spy = vi.spyOn(scheduler, "executeJob").mockResolvedValue(runResult("failure"));
+      const run = await scheduler.triggerJob("job-1");
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(run.status).toBe("failure");
+      expect(spy.mock.calls[0]?.[1]).toEqual({ suppressFailureAlert: false });
+    });
+
+    it("suppresses the failure inbox alert on a retried attempt", async () => {
+      const promise = scheduler.executeJob(makeJob(), { suppressFailureAlert: true });
+      await vi.waitFor(() => expect(sm.sendMessage).toHaveBeenCalled());
+      sm.emitError("CLI crashed");
+      const run = await promise;
+      expect(run.status).toBe("failure");
+      expect(vi.mocked(addInboxMessage)).not.toHaveBeenCalled();
+    });
+
+    it("still alerts on timeout even when failure alerts are suppressed", async () => {
+      const promise = scheduler.executeJob(makeJob({ maxDurationMinutes: 0.001 }), { suppressFailureAlert: true });
+      await vi.waitFor(() => expect(sm.sendMessage).toHaveBeenCalled());
+      const run = await promise;
+      expect(run.status).toBe("timeout");
+      expect(vi.mocked(addInboxMessage)).toHaveBeenCalled();
+    });
   });
 });

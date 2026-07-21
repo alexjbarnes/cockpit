@@ -206,6 +206,8 @@ export interface ScheduledJob {
   mcpToolFilters?: Record<string, string[]>;
   bypassPermissions?: boolean;
   maxDurationMinutes?: number;
+  /** Extra attempts after a `failure` run (not `timeout`/`stopped`). Defaults to 1. */
+  maxRetries?: number;
   retentionDays?: number;
   skipIfMissed?: boolean;
   inboxOutput?: boolean;

@@ -55,6 +55,7 @@ export async function POST(req: NextRequest) {
     mcpToolFilters: body.mcpToolFilters,
     bypassPermissions: body.bypassPermissions ?? false,
     maxDurationMinutes: body.maxDurationMinutes ?? 30,
+    maxRetries: body.maxRetries,
     retentionDays: body.retentionDays ?? 90,
     skipIfMissed: body.skipIfMissed ?? false,
     inboxOutput: body.inboxOutput ?? false,

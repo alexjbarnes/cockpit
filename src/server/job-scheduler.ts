@@ -15,6 +15,11 @@ function scratchpadDir(): string {
   return path.join(getCockpitDir(), "jobs");
 }
 
+/** Default extra attempts after a `failure` run when a job doesn't set maxRetries. */
+const DEFAULT_JOB_MAX_RETRIES = 1;
+/** Pause before a retry so a fresh session isn't spawned the instant the last one died. */
+const RETRY_BACKOFF_MS = 5_000;
+
 const JOB_PROMPT_HEADER = [
   "You are running as an autonomous scheduled job. There is no human operator in this session.",
   "Do not ask clarifying questions. Do not wait for user input. Make reasonable assumptions and proceed.",
@@ -186,7 +191,27 @@ export class JobScheduler {
     const jobs = loadJobs();
     const job = jobs.find((j) => j.id === jobId);
     if (!job) throw new Error(`Job not found: ${jobId}`);
-    return this.executeJob(job);
+    return this.executeJobWithRetries(job);
+  }
+
+  /**
+   * Run a job, retrying up to `job.maxRetries` (default 1) more times if the run
+   * ends in `failure` — the "went idle without an assistant message" / transient
+   * class. `timeout` and `stopped` are terminal and never retried. Each attempt is
+   * its own run record and inbox output; the failure alert is suppressed on attempts
+   * that will be retried, so only the final outcome pages the operator.
+   */
+  private async executeJobWithRetries(job: ScheduledJob): Promise<JobRun> {
+    const maxRetries = Math.max(0, job.maxRetries ?? DEFAULT_JOB_MAX_RETRIES);
+    let run: JobRun;
+    for (let attempt = 0; ; attempt++) {
+      const isFinal = attempt >= maxRetries;
+      run = await this.executeJob(job, { suppressFailureAlert: !isFinal });
+      if (run.status !== "failure" || isFinal) break;
+      logDiag(job.id, "job:retry", { attempt: attempt + 1, maxRetries, prevRunId: run.id, error: run.error });
+      await new Promise((r) => setTimeout(r, RETRY_BACKOFF_MS));
+    }
+    return run;
   }
 
   stopJob(jobId: string): JobRun {
@@ -310,14 +335,14 @@ export class JobScheduler {
 
       if (shouldFire) {
         this.lastFiredAt.set(job.id, now);
-        this.executeJob(job).catch((err) => {
+        this.executeJobWithRetries(job).catch((err) => {
           console.error(`[scheduler] failed to execute job ${job.name}:`, err);
         });
       }
     }
   }
 
-  async executeJob(job: ScheduledJob): Promise<JobRun> {
+  async executeJob(job: ScheduledJob, opts?: { suppressFailureAlert?: boolean }): Promise<JobRun> {
     const runId = uuidv4();
     logDiag(job.id, "job:execute-start", {
       runId,
@@ -585,7 +610,10 @@ export class JobScheduler {
             addInboxMessage({ ...inbox, jobId: job.id, jobName: job.name, runId: run.id, notifyProviders: job.notifyProviders });
           }
         }
-        if (finalStatus === "failure" || finalStatus === "timeout") {
+        // A `failure` alert is suppressed on attempts that will be retried (the retry
+        // wrapper passes suppressFailureAlert); the final attempt still alerts. A
+        // `timeout` is terminal and never retried, so it always alerts.
+        if (finalStatus === "timeout" || (finalStatus === "failure" && !opts?.suppressFailureAlert)) {
           addInboxMessage({
             title: `Job failed: ${job.name}`,
             body: `**Status:** ${finalStatus}\n\n${run.error || "Job failed with no error message"}`,
