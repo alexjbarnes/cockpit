@@ -432,7 +432,14 @@ export class JobScheduler {
             textLen = text.length;
           }
         }
-        jlog("message-done", { count: run.messageCount, textLen });
+        // JOB-DEBUG: a message_done carrying tool uses but no text is the turn that
+        // ends after a tool_use without a final answer — the failure signature.
+        jlog("message-done", {
+          count: run.messageCount,
+          textLen,
+          toolUses: event.message?.toolUses?.length ?? 0,
+          updatedLastText: textLen > 0,
+        });
       } else if (event.type === "task_update" && event.taskInfo?.taskId) {
         const { taskId, status } = event.taskInfo;
         if (status === "running") pendingTasks.add(taskId);
@@ -466,6 +473,20 @@ export class JobScheduler {
           run.toolsUsed.push(permEntry);
         }
       }
+    });
+
+    // JOB-DEBUG: the scheduler currently ignores compaction entirely. Track it from
+    // the system-message stream and surface every system message the run receives,
+    // so a teardown can be correlated with a compaction window.
+    let compacting = false;
+    let lastCompactAt = 0;
+    const unsubSystem = this.sessionManager.onSystem(sessionId, (text) => {
+      if (text === "__compact::start") compacting = true;
+      else if (text === "__compact::done") {
+        compacting = false;
+        lastCompactAt = Date.now();
+      }
+      jlog("system-msg", { text: text.slice(0, 140), compacting });
     });
 
     const initCleanup = this.sessionManager.onInit(sessionId, (initData) => {
@@ -518,10 +539,27 @@ export class JobScheduler {
           elapsedMs: Date.now() - sentAt,
           sawRunning,
           processAlive,
+          // JOB-DEBUG: state that determines whether this idle is real or spurious.
+          compacting,
+          msSinceCompact: lastCompactAt ? Date.now() - lastCompactAt : null,
+          lastAssistantTextLen: lastAssistantText.length,
+          pendingTasks: pendingTasks.size,
           messageCount: run.messageCount,
           toolCount: run.toolsUsed.length,
         });
         if (status === "idle") {
+          // JOB-DEBUG: this is the exact decision that ends the run. If the CLI is
+          // still alive, or we just compacted, or there is no assistant text, this
+          // idle is the prime suspect for a premature teardown.
+          jlog("idle-cleanup-decision", {
+            processAlive,
+            compacting,
+            msSinceCompact: lastCompactAt ? Date.now() - lastCompactAt : null,
+            lastAssistantTextLen: lastAssistantText.length,
+            lastAssistantTextHead: lastAssistantText.slice(0, 160),
+            pendingTasks: pendingTasks.size,
+            elapsedMs: Date.now() - sentAt,
+          });
           cleanup("success");
         }
       });
@@ -560,6 +598,7 @@ export class JobScheduler {
         unsubEvent?.();
         unsubStatus?.();
         unsubError?.();
+        unsubSystem?.();
         initCleanup?.();
 
         run.completedAt = Date.now();

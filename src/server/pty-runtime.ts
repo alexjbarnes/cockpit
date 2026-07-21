@@ -323,6 +323,7 @@ export class PtyRuntime {
         const toolName = typeof payload.tool_name === "string" ? payload.tool_name : "unknown";
         const cliSession = typeof payload.session_id === "string" ? payload.session_id.slice(0, 8) : "none";
         const toolUseId = typeof payload.tool_use_id === "string" ? payload.tool_use_id.slice(0, 12) : "none";
+        logDiag(this.opts.sessionId, "hook:PreToolUse", { tool: toolName, toolUseId });
         console.log(`[pty-runtime] PreToolUse: tool=${toolName} cli_session=${cliSession} tool_use_id=${toolUseId}`);
         this.emit(translateHookEvent("PreToolUse", payload));
       },
@@ -332,15 +333,24 @@ export class PtyRuntime {
         const toolName = typeof payload.tool_name === "string" ? payload.tool_name : "unknown";
         const cliSession = typeof payload.session_id === "string" ? payload.session_id.slice(0, 8) : "none";
         const toolUseId = typeof payload.tool_use_id === "string" ? payload.tool_use_id.slice(0, 12) : "none";
+        logDiag(this.opts.sessionId, "hook:PostToolUse", { tool: toolName, toolUseId });
         console.log(`[pty-runtime] PostToolUse: tool=${toolName} cli_session=${cliSession} tool_use_id=${toolUseId}`);
         this.emit(translateHookEvent("PostToolUse", payload));
       },
       onStop: (payload) => {
         this.cancelErrorDebounce();
         this.ptyOutputBuffer = "";
+        const lastMsg = typeof payload.last_assistant_message === "string" ? payload.last_assistant_message : "";
+        // JOB-DEBUG: a Stop with an empty last_assistant_message is the exact
+        // "went idle without an assistant message" failure signature. Capture it.
+        logDiag(this.opts.sessionId, "hook:Stop", {
+          lastMsgLen: lastMsg.length,
+          lastMsgHead: lastMsg.slice(0, 160),
+          stopHookActive: payload.stop_hook_active,
+          payloadKeys: Object.keys(payload),
+        });
         console.log(`[pty-runtime] Stop hook received for session ${this.opts.sessionId.slice(0, 8)}`);
         const events = translateHookEvent("Stop", payload);
-        console.log(`[pty-runtime] Stop translated to ${events.length} events: [${events.map((e) => e.type).join(", ")}]`);
         this.emit(events);
       },
       onStopFailure: (payload) => {
@@ -348,6 +358,7 @@ export class PtyRuntime {
         this.ptyOutputBuffer = "";
         const errorType = typeof payload.error_type === "string" ? payload.error_type : "unknown";
         const errorMessage = typeof payload.error_message === "string" ? payload.error_message : "Unknown error";
+        logDiag(this.opts.sessionId, "hook:StopFailure", { errorType, errorMessage: errorMessage.slice(0, 200) });
         console.log(`[pty-runtime] StopFailure hook for session ${this.opts.sessionId.slice(0, 8)}: ${errorType} - ${errorMessage}`);
         this.emit(translateHookEvent("StopFailure", payload));
         this.opts.onError(`${errorMessage} (${errorType})`);
@@ -392,12 +403,14 @@ export class PtyRuntime {
       onPreCompact: (payload) => {
         this.cancelErrorDebounce();
         this.ptyOutputBuffer = "";
+        logDiag(this.opts.sessionId, "hook:PreCompact", { trigger: payload.trigger, payloadKeys: Object.keys(payload) });
         console.log(`[pty-runtime] PreCompact for session ${this.opts.sessionId.slice(0, 8)}`);
         this.emit(translateHookEvent("PreCompact", payload));
       },
       onPostCompact: (payload) => {
         this.cancelErrorDebounce();
         this.ptyOutputBuffer = "";
+        logDiag(this.opts.sessionId, "hook:PostCompact", { trigger: payload.trigger, payloadKeys: Object.keys(payload) });
         console.log(`[pty-runtime] PostCompact for session ${this.opts.sessionId.slice(0, 8)}`);
         this.emit(translateHookEvent("PostCompact", payload));
       },

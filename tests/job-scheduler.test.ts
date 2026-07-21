@@ -59,6 +59,7 @@ function makeMockSessionManager() {
   let errorCb: ((error: string) => void) | null = null;
   let eventCb: ((event: Record<string, unknown>) => void) | null = null;
   let initCb: ((data: Record<string, unknown>) => void) | null = null;
+  let systemCb: ((text: string) => void) | null = null;
 
   return {
     emitter,
@@ -94,10 +95,17 @@ function makeMockSessionManager() {
         initCb = null;
       };
     }),
+    onSystem: vi.fn((_id: string, cb: (text: string) => void) => {
+      systemCb = cb;
+      return () => {
+        systemCb = null;
+      };
+    }),
     emitStatus: (status: string) => statusCb?.(status),
     emitError: (error: string) => errorCb?.(error),
     emitEvent: (event: Record<string, unknown>) => eventCb?.(event),
     emitInit: (data: Record<string, unknown>) => initCb?.(data),
+    emitSystem: (text: string) => systemCb?.(text),
   };
 }
 

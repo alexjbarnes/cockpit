@@ -1450,6 +1450,13 @@ export class SessionManager {
       if (used > 0) {
         const usage: ContextUsage = { used, total: session.contextWindowSize };
         session.contextUsage = usage;
+        // JOB-DEBUG: context trajectory, to correlate a teardown with the auto-compact threshold.
+        logDiag(sessionId, "sm:usage", {
+          used,
+          total: session.contextWindowSize,
+          pct: Math.round((used / session.contextWindowSize) * 100),
+          compacting: session.compacting,
+        });
         session.emitter.emit("usage", sessionId, usage);
       }
       session.totalTokens.input += u.input_tokens || 0;
@@ -1724,6 +1731,16 @@ export class SessionManager {
 
     if (result.statusChange === "idle") {
       session.info.status = "idle";
+      // JOB-DEBUG: every idle emission with why + state, to catch a spurious idle
+      // tearing down a job run mid-turn (this is what the scheduler ends a run on).
+      const lastEmitEv = result.emit[result.emit.length - 1];
+      logDiag(sessionId, "sm:emit-idle", {
+        compacting: session.compacting,
+        compactDone: !!result.compactDone,
+        emitTypes: result.emit.map((e) => e.type),
+        errors: result.errors,
+        lastMsgLen: lastEmitEv?.type === "message_done" && lastEmitEv.message ? (lastEmitEv.message.content || "").length : undefined,
+      });
       console.log(`[sm] emit status idle for ${sessionId.slice(0, 8)} (runtime=${session.runtime})`);
       session.emitter.emit("status", sessionId, "idle");
       this.flushQueuedMessage(session, sessionId);
