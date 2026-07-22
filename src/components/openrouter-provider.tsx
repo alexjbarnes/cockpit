@@ -16,6 +16,22 @@ export function formatPerM(v: number): string {
   return `$${v % 1 === 0 ? v : v.toFixed(2).replace(/0$/, "")}`;
 }
 
+/** Row display for catalog models: the vendor prefix pushed the distinctive
+ *  part of long ids ("nvidia/nemotron-…") out of view on narrow screens, so
+ *  the name leads and vendor/context/price form a meta line. The ":free"
+ *  suffix is dropped from the name — the FREE badge already says it. */
+export function splitProviderModelId(model: ProviderModel): { name: string; meta: string } {
+  const slash = model.modelId.indexOf("/");
+  const vendor = slash > 0 ? model.modelId.slice(0, slash) : "";
+  const name = (slash > 0 ? model.modelId.slice(slash + 1) : model.modelId).replace(/:free$/, "");
+  const parts: string[] = [];
+  if (vendor) parts.push(vendor);
+  if (model.contextLength) parts.push(formatContext(model.contextLength));
+  if (model.pricing && !model.free) parts.push(`${formatPerM(model.pricing.inPerM)}/${formatPerM(model.pricing.outPerM)}`);
+  if (parts.length === 0 && model.displayName && model.displayName !== model.modelId) parts.push(model.displayName);
+  return { name, meta: parts.join(" · ") };
+}
+
 export function FreeBadge({ model }: { model: ProviderModel }) {
   if (!model.free) return null;
   const until = model.expirationDate ? ` until ${model.expirationDate}` : "";
@@ -233,14 +249,13 @@ export function OpenRouterModelBrowser({ provider, onChanged }: { provider: Prov
               >
                 {isOn && <Check className="h-3 w-3" />}
               </span>
-              <span className="font-mono truncate">{m.modelId}</span>
-              <FreeBadge model={m} />
-              <span className="ml-auto flex items-center gap-3 shrink-0 text-muted-foreground">
-                {m.contextLength ? <span>{formatContext(m.contextLength)}</span> : null}
-                {m.pricing && (
-                  <span className="font-variant-numeric tabular-nums">
-                    {formatPerM(m.pricing.inPerM)}/{formatPerM(m.pricing.outPerM)}
-                  </span>
+              <span className="flex min-w-0 flex-col gap-0.5">
+                <span className="flex min-w-0 items-center gap-2">
+                  <span className="font-mono truncate">{splitProviderModelId(m).name}</span>
+                  <FreeBadge model={m} />
+                </span>
+                {splitProviderModelId(m).meta && (
+                  <span className="max-w-full truncate text-[10px] text-muted-foreground tabular-nums">{splitProviderModelId(m).meta}</span>
                 )}
               </span>
             </button>

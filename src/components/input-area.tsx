@@ -31,7 +31,7 @@ import { CodeBlock, languageFromPath } from "@/components/code-block";
 import { MarkdownRender } from "@/components/markdown-render";
 import { McpStatusModal } from "@/components/mcp-status-modal";
 import { type MentionItem, MentionMenu } from "@/components/mention-menu";
-import { FreeBadge, formatContext, formatPerM } from "@/components/openrouter-provider";
+import { FreeBadge, splitProviderModelId } from "@/components/openrouter-provider";
 import { SlashCommandMenu } from "@/components/slash-command-menu";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
@@ -982,11 +982,15 @@ export function InputArea({
                                             : "Anthropic";
                                         const bare = colon > 0 ? value.slice(colon + 1) : value;
                                         const selected = currentModel === value || currentModel === bare;
+                                        const recentName = bare
+                                          .replace(/\[.*\]$/, "")
+                                          .replace(/^[^/]+\//, "")
+                                          .replace(/:free$/, "");
                                         return modelRow(
                                           `recent-${value}`,
                                           selected,
                                           () => selectModel(value),
-                                          <span className="font-mono font-medium truncate">{bare.replace(/\[.*\]$/, "")}</span>,
+                                          <span className="font-mono font-medium truncate">{recentName}</span>,
                                           <span className="ml-auto text-muted-foreground">{providerName}</span>,
                                         );
                                       })}
@@ -1017,20 +1021,21 @@ export function InputArea({
                                       {models.map((model) => {
                                         const qualified = `${provider.id}:${model.modelId}`;
                                         const selected = currentModel === qualified || currentModel === model.modelId;
+                                        // The vendor prefix ("nvidia/…") ate the whole row on
+                                        // narrow screens, hiding the part that distinguishes
+                                        // models — so the name leads and vendor/context/price
+                                        // drop to a meta line.
+                                        const { name, meta } = splitProviderModelId(model);
                                         return modelRow(
                                           qualified,
                                           selected,
                                           () => selectModel(qualified),
-                                          <span className="flex min-w-0 items-center gap-2">
-                                            <span className="font-mono font-medium truncate">{model.modelId}</span>
-                                            {model.free && <FreeBadge model={model} />}
-                                          </span>,
-                                          <span className="ml-auto shrink-0 text-muted-foreground">
-                                            {model.pricing && !model.free
-                                              ? `${formatPerM(model.pricing.inPerM)}/${formatPerM(model.pricing.outPerM)}`
-                                              : model.contextLength
-                                                ? formatContext(model.contextLength)
-                                                : model.displayName}
+                                          <span className="flex min-w-0 flex-col items-start gap-0.5">
+                                            <span className="flex min-w-0 max-w-full items-center gap-2">
+                                              <span className="font-mono font-medium truncate">{name}</span>
+                                              {model.free && <FreeBadge model={model} />}
+                                            </span>
+                                            {meta && <span className="max-w-full truncate text-[10px] text-muted-foreground">{meta}</span>}
                                           </span>,
                                         );
                                       })}
