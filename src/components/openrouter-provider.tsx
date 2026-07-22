@@ -283,3 +283,69 @@ function formatAgo(ts: number): string {
   if (hours < 24) return `${hours}h ago`;
   return `${Math.floor(hours / 24)}d ago`;
 }
+
+/** Connect card for OpenCode Zen — key-only, models sync on connect, sessions
+ *  run through cockpit's Anthropic-to-OpenAI format proxy. */
+export function ZenCard({ provider, onChanged }: { provider: Provider; onChanged: () => void }) {
+  const [key, setKey] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const connected = !!provider.envVars.OPENCODE_API_KEY;
+
+  const connect = async () => {
+    if (!key.trim()) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/providers/zen/connect", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ key: key.trim() }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || `HTTP ${res.status}`);
+      }
+      setKey("");
+      onChanged();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="rounded-lg border p-3 space-y-2">
+      <div className="flex items-center gap-2">
+        <span className="text-sm font-medium">OpenCode Zen</span>
+        {connected ? (
+          <span className="rounded bg-primary/10 px-1.5 text-[10px] font-semibold text-primary">connected</span>
+        ) : (
+          <span className="rounded bg-muted px-1.5 text-[10px] text-muted-foreground">not connected</span>
+        )}
+        <span className="ml-auto text-xs text-muted-foreground">
+          {connected
+            ? `${provider.models.length} models · ${provider.enabledModels?.length ?? 0} enabled`
+            : "OpenAI wire format · via cockpit proxy"}
+        </span>
+      </div>
+      {!connected && (
+        <div className="flex items-center gap-2">
+          <Input
+            type="password"
+            placeholder="Zen API key…"
+            value={key}
+            onChange={(e) => setKey(e.target.value)}
+            className="h-8 text-xs"
+            data-testid="zen-key-input"
+          />
+          <Button size="sm" className="h-8 text-xs" onClick={connect} disabled={busy || !key.trim()} data-testid="zen-connect">
+            {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Connect"}
+          </Button>
+        </div>
+      )}
+      {error && <p className="text-xs text-destructive">{error}</p>}
+    </div>
+  );
+}

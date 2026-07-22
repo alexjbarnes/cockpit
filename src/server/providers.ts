@@ -2,9 +2,18 @@ import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { v4 as uuidv4 } from "uuid";
 import { toProviderModels } from "@/lib/models";
+import { getActiveFormatProxy } from "@/server/format-proxy";
 import { getCockpitDir } from "@/server/paths";
 import { catalogModels, loadCatalog, OPENROUTER_PROVIDER_ID, openRouterBaseUrl } from "@/server/provider-catalog";
 import type { Provider, ProviderModel } from "@/types";
+
+export const OPENCODE_ZEN_PROVIDER_ID = "zen";
+/** Test escape hatch mirrors COCKPIT_OPENROUTER_BASE_URL. */
+export function zenBaseUrl(): string {
+  return process.env.COCKPIT_ZEN_BASE_URL || "https://opencode.ai/zen/v1";
+}
+
+const BUILTIN_CONFIG_IDS = new Set<string>([OPENROUTER_PROVIDER_ID, OPENCODE_ZEN_PROVIDER_ID]);
 
 function prefsDir(): string {
   return getCockpitDir();
@@ -106,22 +115,27 @@ function loadStored(): Provider[] {
 }
 
 function loadCustom(): Provider[] {
-  return loadStored().filter((p) => p.id !== OPENROUTER_PROVIDER_ID);
+  return loadStored().filter((p) => !BUILTIN_CONFIG_IDS.has(p.id));
 }
 
-function loadOpenRouterStored(): Provider | undefined {
-  return loadStored().find((p) => p.id === OPENROUTER_PROVIDER_ID);
+function loadBuiltinStored(id: string): Provider | undefined {
+  return loadStored().find((p) => p.id === id);
 }
 
-/** Persist openrouter user state (key, enabled set) as an entry in
- *  providers.json alongside the custom providers. */
-function saveOpenRouterStored(partial: Partial<Provider>): Provider {
-  const prev = loadOpenRouterStored();
+const BUILTIN_NAMES: Record<string, string> = {
+  [OPENROUTER_PROVIDER_ID]: "OpenRouter",
+  [OPENCODE_ZEN_PROVIDER_ID]: "OpenCode Zen",
+};
+
+/** Persist a built-in's user state (key, enabled set, and for zen the synced
+ *  model list) as an entry in providers.json alongside the custom providers. */
+function saveBuiltinStored(id: string, partial: Partial<Provider>): Provider {
+  const prev = loadBuiltinStored(id);
   const entry: Provider = {
-    id: OPENROUTER_PROVIDER_ID,
-    name: "OpenRouter",
+    id,
+    name: BUILTIN_NAMES[id] ?? id,
     isBuiltin: true,
-    models: [],
+    models: partial.models ?? prev?.models ?? [],
     envVars: partial.envVars ?? prev?.envVars ?? {},
     enabledModels: partial.enabledModels ?? prev?.enabledModels ?? [],
   };
@@ -129,19 +143,103 @@ function saveOpenRouterStored(partial: Partial<Provider>): Provider {
   return entry;
 }
 
-function saveCustom(providers: Provider[], openRouterEntry?: Provider): void {
+function saveCustom(providers: Provider[], replaceEntry?: Provider): void {
   try {
     mkdirSync(prefsDir(), { recursive: true });
-    const or = openRouterEntry ?? loadOpenRouterStored();
-    const all = or ? [or, ...providers] : providers;
-    writeFileSync(providersFile(), JSON.stringify(all, null, 2) + "\n");
+    const builtins: Provider[] = [];
+    for (const id of BUILTIN_CONFIG_IDS) {
+      if (replaceEntry?.id === id) builtins.push(replaceEntry);
+      else {
+        const existing = loadBuiltinStored(id);
+        if (existing) builtins.push(existing);
+      }
+    }
+    writeFileSync(providersFile(), JSON.stringify([...builtins, ...providers], null, 2) + "\n");
   } catch {
     // best effort
   }
 }
 
+/** OpenCode Zen speaks OpenAI wire format only, so a connected zen session
+ *  points the CLI at cockpit's format proxy, which forwards upstream with the
+ *  stored key. The key is stored as OPENCODE_API_KEY, never sent by the CLI. */
+function buildOpenCodeZenProvider(stored: Provider | undefined): Provider {
+  const key = stored?.envVars?.OPENCODE_API_KEY;
+  const proxy = getActiveFormatProxy();
+  // OPENCODE_API_KEY is always present when connected so the settings UI (which
+  // runs in the Next.js module graph, where the proxy singleton may be absent)
+  // can tell connected from not; the wire vars appear only where the proxy is
+  // live, which is the graph that actually spawns sessions.
+  return {
+    id: OPENCODE_ZEN_PROVIDER_ID,
+    name: "OpenCode Zen",
+    envVars: key
+      ? {
+          OPENCODE_API_KEY: key,
+          ...(proxy?.isRunning
+            ? {
+                ANTHROPIC_BASE_URL: proxy.getUrl(OPENCODE_ZEN_PROVIDER_ID),
+                ANTHROPIC_AUTH_TOKEN: "cockpit-format-proxy",
+                ANTHROPIC_API_KEY: "",
+                CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+              }
+            : {}),
+        }
+      : {},
+    models: stored?.models ?? [],
+    isBuiltin: true,
+    enabledModels: stored?.enabledModels ?? [],
+  };
+}
+
+/** Upstream config for the format proxy. Null when the provider is not
+ *  connected (no key) — the proxy 404s those. */
+export function resolveProxyUpstream(providerId: string): { baseUrl: string; apiKey: string; modelIds: string[] } | null {
+  if (providerId !== OPENCODE_ZEN_PROVIDER_ID) return null;
+  const stored = loadBuiltinStored(OPENCODE_ZEN_PROVIDER_ID);
+  const apiKey = stored?.envVars?.OPENCODE_API_KEY;
+  if (!apiKey) return null;
+  return { baseUrl: zenBaseUrl(), apiKey, modelIds: (stored?.models ?? []).map((m) => m.modelId) };
+}
+
+/** Fetch zen's OpenAI-style model list with the stored (or given) key and
+ *  persist it on the builtin entry. Newly seen models join enabledModels so a
+ *  fresh connect exposes the whole curated zen catalog in pickers. */
+export async function syncZenModels(keyOverride?: string): Promise<{ ok: boolean; modelCount?: number; error?: string }> {
+  const stored = loadBuiltinStored(OPENCODE_ZEN_PROVIDER_ID);
+  const apiKey = keyOverride ?? stored?.envVars?.OPENCODE_API_KEY;
+  if (!apiKey) return { ok: false, error: "OpenCode Zen is not connected" };
+  try {
+    const res = await fetch(`${zenBaseUrl()}/models`, {
+      headers: { Authorization: `Bearer ${apiKey}` },
+      signal: AbortSignal.timeout(30_000),
+    });
+    if (!res.ok) return { ok: false, error: `Zen models fetch failed: HTTP ${res.status}` };
+    const body = (await res.json()) as { data?: Array<{ id?: string }> };
+    const ids = (body.data ?? []).map((m) => m.id).filter((id): id is string => !!id);
+    if (ids.length === 0) return { ok: false, error: "Zen models fetch returned no models" };
+    const models: ProviderModel[] = ids.map((id) => ({ modelId: id, displayName: id, effortLevels: [], contextSizes: [] }));
+    const prevEnabled = new Set(stored?.enabledModels ?? []);
+    const enabledModels = stored ? ids.filter((id) => prevEnabled.size === 0 || prevEnabled.has(id)) : ids;
+    saveBuiltinStored(OPENCODE_ZEN_PROVIDER_ID, {
+      envVars: { ...stored?.envVars, OPENCODE_API_KEY: apiKey },
+      models,
+      enabledModels,
+    });
+    rebuildCache(loadCustom());
+    return { ok: true, modelCount: models.length };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
 function rebuildCache(custom: Provider[]): void {
-  cache = [buildAnthropicProvider(), buildOpenRouterProvider(loadOpenRouterStored()), ...custom];
+  cache = [
+    buildAnthropicProvider(),
+    buildOpenRouterProvider(loadBuiltinStored(OPENROUTER_PROVIDER_ID)),
+    buildOpenCodeZenProvider(loadBuiltinStored(OPENCODE_ZEN_PROVIDER_ID)),
+    ...custom,
+  ];
   cacheMtimeMs = providersMtimeMs();
 }
 
@@ -169,13 +267,13 @@ export function addProvider(provider: Omit<Provider, "id">): Provider {
 
 export function updateProvider(id: string, partial: Partial<Provider>): Provider {
   if (id === "anthropic") throw new Error("Cannot modify built-in provider");
-  // The openrouter built-in accepts only its user state: the key (envVars) and
-  // the curated enabled set. Its models are catalog-synced, never hand-edited,
-  // so the contextSizes validation for manual models does not apply.
-  if (id === OPENROUTER_PROVIDER_ID) {
-    const entry = saveOpenRouterStored({ envVars: partial.envVars, enabledModels: partial.enabledModels });
+  // Catalog-backed built-ins accept only their user state: the key (envVars),
+  // the curated enabled set, and (zen) the synced model list. Their models are
+  // never hand-edited, so the contextSizes validation does not apply.
+  if (BUILTIN_CONFIG_IDS.has(id)) {
+    const entry = saveBuiltinStored(id, { envVars: partial.envVars, enabledModels: partial.enabledModels, models: partial.models });
     rebuildCache(loadCustom());
-    return buildOpenRouterProvider(entry);
+    return id === OPENROUTER_PROVIDER_ID ? buildOpenRouterProvider(entry) : buildOpenCodeZenProvider(entry);
   }
   const custom = getProviders().filter((p) => !p.isBuiltin);
   const idx = custom.findIndex((p) => p.id === id);
@@ -189,7 +287,7 @@ export function updateProvider(id: string, partial: Partial<Provider>): Provider
 }
 
 export function deleteProvider(id: string): void {
-  if (id === "anthropic" || id === OPENROUTER_PROVIDER_ID) throw new Error("Cannot delete built-in provider");
+  if (id === "anthropic" || BUILTIN_CONFIG_IDS.has(id)) throw new Error("Cannot delete built-in provider");
   const custom = getProviders().filter((p) => !p.isBuiltin);
   const remaining = custom.filter((p) => p.id !== id);
   if (remaining.length === custom.length) {

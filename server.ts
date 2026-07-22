@@ -3,12 +3,14 @@ import { networkInterfaces } from "node:os";
 import { parse } from "node:url";
 import next from "next";
 import { deletePasswordFile, needsSetup } from "./src/server/auth";
+import { FormatProxy, setActiveFormatProxy } from "./src/server/format-proxy";
 import { startHealthProbe } from "./src/server/health-probe";
 import { HookRouter } from "./src/server/hook-router";
 import { JobScheduler } from "./src/server/job-scheduler";
 import { CockpitMcpServer } from "./src/server/mcp/cockpit-config-server";
 import { getCockpitDir } from "./src/server/paths";
 import { startCatalogSync } from "./src/server/provider-catalog";
+import { resolveProxyUpstream } from "./src/server/providers";
 import { SessionManager } from "./src/server/session-manager";
 import { setCockpitMcp, setHookRouter, setJobScheduler, setSessionManager, setTerminalManager } from "./src/server/singleton";
 import { TerminalManager } from "./src/server/terminal-manager";
@@ -89,6 +91,18 @@ async function main() {
     console.log(`Cockpit MCP server listening on ${cockpitMcp.getUrl()}`);
   } catch (err) {
     console.error("Failed to start cockpit MCP server:", err);
+  }
+
+  // Anthropic ⇄ OpenAI translation proxy for providers without an
+  // Anthropic-compatible endpoint (OpenCode Zen). Started before anything
+  // that can resolve providers so derived spawn env always sees it.
+  const formatProxy = new FormatProxy(resolveProxyUpstream);
+  try {
+    await formatProxy.start();
+    setActiveFormatProxy(formatProxy);
+    console.log(`Format proxy listening on ${formatProxy.getUrl("<provider>")}`);
+  } catch (err) {
+    console.error("Failed to start format proxy:", err);
   }
 
   const jobScheduler = new JobScheduler(sessionManager);

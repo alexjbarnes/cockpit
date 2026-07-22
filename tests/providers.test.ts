@@ -44,10 +44,11 @@ describe("providers", () => {
     const { getProviders } = await import("@/server/providers");
     const providers = getProviders();
 
-    expect(providers.length).toBe(3);
+    expect(providers.length).toBe(4);
     expect(providers[0].id).toBe("anthropic");
     expect(providers[1].id).toBe("openrouter");
-    expect(providers[2].id).toBe("or-123");
+    expect(providers[2].id).toBe("zen");
+    expect(providers[3].id).toBe("or-123");
   });
 
   it("openrouter built-in accepts key + enabled set, derives env, and rejects deletion", async () => {
@@ -77,6 +78,44 @@ describe("providers", () => {
     expect(written).toContain("vendor/model:free");
 
     expect(() => deleteProvider("openrouter")).toThrow(/built-in/);
+  });
+
+  it("zen built-in stores key + models, exposes proxy upstream, and rejects deletion", async () => {
+    const fs = await import("node:fs");
+    vi.mocked(fs.readFileSync).mockImplementation(() => {
+      throw new Error("ENOENT");
+    });
+
+    const { deleteProvider, getProviders, resolveProxyUpstream, updateProvider } = await import("@/server/providers");
+
+    const before = getProviders().find((p) => p.id === "zen");
+    expect(before?.isBuiltin).toBe(true);
+    expect(before?.envVars).toEqual({});
+    expect(resolveProxyUpstream("zen")).toBeNull();
+    expect(resolveProxyUpstream("other")).toBeNull();
+
+    const zenEntry = [
+      {
+        id: "zen",
+        name: "OpenCode Zen",
+        isBuiltin: true,
+        envVars: { OPENCODE_API_KEY: "zk-1" },
+        models: [{ modelId: "opencode/gpt-5.5", displayName: "opencode/gpt-5.5", effortLevels: [], contextSizes: [] }],
+        enabledModels: ["opencode/gpt-5.5"],
+      },
+    ];
+    vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(zenEntry));
+
+    const upstream = resolveProxyUpstream("zen");
+    expect(upstream).toEqual({ baseUrl: "https://opencode.ai/zen/v1", apiKey: "zk-1", modelIds: ["opencode/gpt-5.5"] });
+
+    const updated = updateProvider("zen", { enabledModels: [] });
+    expect(updated.id).toBe("zen");
+    // without a running proxy in this graph only the connected marker shows
+    expect(updated.envVars.OPENCODE_API_KEY).toBe("zk-1");
+    expect(updated.envVars.ANTHROPIC_BASE_URL).toBeUndefined();
+
+    expect(() => deleteProvider("zen")).toThrow(/built-in/);
   });
 
   it("openRouterModelEnv pins every default-model slot", async () => {

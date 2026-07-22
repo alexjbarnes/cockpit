@@ -19,7 +19,7 @@ import {
 import { getAssistantSettings, updateAssistantSettings } from "@/server/assistant-settings";
 import { getCockpitDir } from "@/server/paths";
 import { ensureCatalogFresh, OPENROUTER_PROVIDER_ID } from "@/server/provider-catalog";
-import { getProvider, openRouterModelEnv, resolveProviderModel } from "@/server/providers";
+import { getProvider, OPENCODE_ZEN_PROVIDER_ID, openRouterModelEnv, resolveProviderModel } from "@/server/providers";
 import type {
   ChatMessage,
   ContentBlock,
@@ -2178,6 +2178,10 @@ Additional Cockpit rules beyond the CLI's defaults:
     if (resolved && resolved.provider.id === OPENROUTER_PROVIDER_ID) {
       providerEnvVars = { ...providerEnvVars, ...openRouterModelEnv(resolved.model.modelId, subagentModel) };
       ensureCatalogFresh();
+    } else if (resolved && resolved.provider.id === OPENCODE_ZEN_PROVIDER_ID) {
+      // Same anti-billing pinning for zen: utility calls stay on the session's
+      // models, translated through the format proxy like everything else.
+      providerEnvVars = { ...providerEnvVars, ...openRouterModelEnv(resolved.model.modelId, subagentModel) };
     }
 
     let appendSystemPrompt: string | undefined;

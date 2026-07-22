@@ -101,6 +101,32 @@ export function createMockApiServer(): Promise<MockApiServer> {
         return;
       }
 
+      // OpenAI door — the upstream side of cockpit's format proxy in zen
+      // integration tests. Fixed streaming text response: translation
+      // correctness is unit-tested (format-proxy.test.ts); this endpoint
+      // exists to prove the CLI → proxy → upstream plumbing, so requests are
+      // recorded for assertions and the reply is constant.
+      if (req.method === "POST" && pathOnly === "/v1/chat/completions") {
+        readBody(req).then((raw) => {
+          requests.push({
+            timestamp: Date.now(),
+            method: req.method!,
+            url: req.url!,
+            body: raw,
+            headers: req.headers as Record<string, string | string[] | undefined>,
+          });
+          res.writeHead(200, { "Content-Type": "text/event-stream" });
+          res.write(
+            'data: {"id":"chatcmpl-mock","model":"mock","choices":[{"delta":{"role":"assistant","content":"Hello from zen upstream"},"finish_reason":null}]}\n\n',
+          );
+          res.write('data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n');
+          res.write('data: {"choices":[],"usage":{"prompt_tokens":5,"completion_tokens":4}}\n\n');
+          res.write("data: [DONE]\n\n");
+          res.end();
+        });
+        return;
+      }
+
       // Token counter stub — claude-code may poke this before/after a turn.
       // Returning a constant keeps things predictable for assertions.
       if (req.method === "POST" && pathOnly === "/v1/messages/count_tokens") {

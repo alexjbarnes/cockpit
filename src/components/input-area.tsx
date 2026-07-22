@@ -918,9 +918,9 @@ export function InputArea({
                               .filter((p) => p.id !== "anthropic")
                               .map((p) => ({
                                 provider: p,
-                                // Catalog-backed providers show the curated
+                                // Catalog-backed built-ins show the curated
                                 // enabled set only; manual providers show all.
-                                models: (p.id === "openrouter"
+                                models: (p.isBuiltin && p.enabledModels
                                   ? p.models.filter((m) => (p.enabledModels ?? []).includes(m.modelId))
                                   : p.models
                                 ).filter((m) => !q || m.modelId.toLowerCase().includes(q) || m.displayName.toLowerCase().includes(q)),
@@ -1010,8 +1010,8 @@ export function InputArea({
                                   {providerGroups.map(({ provider, models }) => (
                                     <div key={provider.id}>
                                       {groupLabel(
-                                        provider.id === "openrouter"
-                                          ? `OpenRouter · ${provider.enabledModels?.length ?? 0} enabled`
+                                        provider.isBuiltin
+                                          ? `${provider.name} · ${provider.enabledModels?.length ?? 0} enabled`
                                           : provider.name,
                                       )}
                                       {models.map((model) => {

@@ -42,6 +42,10 @@ export interface HarnessOptions {
   /** Seed the built-in OpenRouter provider (key + one-model catalog) and point
    *  COCKPIT_OPENROUTER_BASE_URL at the mock API. */
   openRouterViaMock?: boolean;
+  /** Seed the built-in OpenCode Zen provider (key + one model) and point
+   *  COCKPIT_ZEN_BASE_URL at the mock API's OpenAI door, so zen sessions run
+   *  CLI → cockpit format proxy → mock /v1/chat/completions. */
+  zenViaMock?: boolean;
 }
 
 // Process groups (pgids) of cockpit servers still running in this worker.
@@ -93,6 +97,7 @@ export async function startHarness(opts: HarnessOptions = {}): Promise<Harness> 
     mockUrl: `http://127.0.0.1:${mock.port}`,
     thinkingLevel: opts.thinkingLevel,
     openRouterViaMock: opts.openRouterViaMock,
+    zenViaMock: opts.zenViaMock,
   });
 
   const cockpitPort = await getFreePort();
@@ -106,6 +111,7 @@ export async function startHarness(opts: HarnessOptions = {}): Promise<Harness> 
     runtime: opts.runtime ?? "pty",
     claudeBin: opts.claudeBin ?? process.env.CLAUDE_BIN ?? "claude",
     openRouterBaseUrl: opts.openRouterViaMock ? `http://127.0.0.1:${mock.port}` : undefined,
+    zenBaseUrl: opts.zenViaMock ? `http://127.0.0.1:${mock.port}/v1` : undefined,
   });
   if (process.env.COCKPIT_IT_DEBUG === "1") captureCockpitLogs(proc);
 
@@ -145,10 +151,13 @@ interface SeedOpts {
   mockUrl: string;
   thinkingLevel?: ThinkingLevel;
   openRouterViaMock?: boolean;
+  zenViaMock?: boolean;
 }
 
 /** Catalog model id used by the OpenRouter integration seeding. */
 export const OR_TEST_MODEL = "mockvendor/or-test:free";
+/** Model id used by the OpenCode Zen integration seeding. */
+export const ZEN_TEST_MODEL = "opencode/mock-model";
 
 function seedConfig(opts: SeedOpts): void {
   // password.json: validateSession() requires a stored password to compute
@@ -221,6 +230,16 @@ function seedConfig(opts: SeedOpts): void {
   // COCKPIT_OPENROUTER_BASE_URL override (spawnCockpit), sessions on
   // "openrouter:<model>" route their /v1/messages traffic to the mock.
   const providersOut: unknown[] = [provider];
+  if (opts.zenViaMock) {
+    providersOut.unshift({
+      id: "zen",
+      name: "OpenCode Zen",
+      isBuiltin: true,
+      envVars: { OPENCODE_API_KEY: "zen-integration-key" },
+      models: [{ modelId: ZEN_TEST_MODEL, displayName: ZEN_TEST_MODEL, effortLevels: [], contextSizes: [] }],
+      enabledModels: [ZEN_TEST_MODEL],
+    });
+  }
   if (opts.openRouterViaMock) {
     providersOut.unshift({
       id: "openrouter",
@@ -284,6 +303,7 @@ interface SpawnOpts {
   runtime: "pty" | "stream";
   claudeBin: string;
   openRouterBaseUrl?: string;
+  zenBaseUrl?: string;
 }
 
 function spawnCockpit(opts: SpawnOpts): ChildProcess {
@@ -315,6 +335,7 @@ function spawnCockpit(opts: SpawnOpts): ChildProcess {
       // Route the built-in OpenRouter provider (base URL + catalog fetches)
       // to the mock when the OpenRouter seeding is enabled.
       ...(opts.openRouterBaseUrl ? { COCKPIT_OPENROUTER_BASE_URL: opts.openRouterBaseUrl } : {}),
+      ...(opts.zenBaseUrl ? { COCKPIT_ZEN_BASE_URL: opts.zenBaseUrl } : {}),
     },
     stdio: ["ignore", "pipe", "pipe"],
     // Put cockpit in its own process group so we can SIGTERM the WHOLE tree
