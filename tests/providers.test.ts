@@ -127,11 +127,34 @@ describe("providers", () => {
     vi.mocked(fs.mkdirSync).mockImplementation(() => "");
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => ({
-        ok: true,
-        status: 200,
-        json: async () => ({ data: [{ id: "opencode/gpt-5.5" }, { id: "opencode/grok-code" }, { id: "nemotron-3-ultra-free" }] }),
-      })) as unknown as typeof fetch,
+      vi.fn(async (url: string) => {
+        if (String(url).includes("models.dev")) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              opencode: {
+                models: {
+                  "gpt-5.5": {
+                    name: "GPT-5.5",
+                    cost: { input: 5, output: 30 },
+                    limit: { context: 1050000 },
+                    tool_call: true,
+                    reasoning: true,
+                    modalities: { input: ["text", "image"] },
+                  },
+                  "big-pickle": { name: "Big Pickle", cost: { input: 0, output: 0 }, limit: { context: 200000 }, tool_call: true },
+                },
+              },
+            }),
+          };
+        }
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ data: [{ id: "gpt-5.5" }, { id: "big-pickle" }, { id: "nemotron-3-ultra-free" }] }),
+        };
+      }) as unknown as typeof fetch,
     );
 
     const { syncZenModels } = await import("@/server/providers");
@@ -141,14 +164,24 @@ describe("providers", () => {
     const written = JSON.parse(vi.mocked(fs.writeFileSync).mock.calls.at(-1)?.[1] as string);
     const zen = written.find((p: { id: string }) => p.id === "zen");
     expect(zen.envVars.OPENCODE_API_KEY).toBe("zk-9");
-    expect(zen.models.map((m: { modelId: string }) => m.modelId)).toEqual([
-      "opencode/gpt-5.5",
-      "opencode/grok-code",
-      "nemotron-3-ultra-free",
-    ]);
-    expect(zen.enabledModels).toEqual(["opencode/gpt-5.5", "opencode/grok-code", "nemotron-3-ultra-free"]);
-    // zen's only free signal is the "-free" id suffix (verified live)
-    expect(zen.models.map((m: { free?: boolean }) => !!m.free)).toEqual([false, false, true]);
+    expect(zen.enabledModels).toEqual(["gpt-5.5", "big-pickle", "nemotron-3-ultra-free"]);
+
+    const byId = Object.fromEntries(zen.models.map((m: { modelId: string }) => [m.modelId, m]));
+    // enriched from models.dev: pricing per M, raw context, capability flags
+    expect(byId["gpt-5.5"]).toMatchObject({
+      displayName: "GPT-5.5",
+      pricing: { inPerM: 5, outPerM: 30 },
+      contextLength: 1050000,
+      free: false,
+      supportsTools: true,
+      supportsReasoning: true,
+      supportsImageInput: true,
+    });
+    // zero cost marks free even without the "-free" suffix (big-pickle)
+    expect(byId["big-pickle"]).toMatchObject({ free: true, pricing: { inPerM: 0, outPerM: 0 } });
+    // no models.dev entry: the "-free" suffix is the fallback signal
+    expect(byId["nemotron-3-ultra-free"]).toMatchObject({ free: true });
+    expect(byId["nemotron-3-ultra-free"].pricing).toBeUndefined();
     expect(typeof zen.syncedAt).toBe("number");
     vi.unstubAllGlobals();
   });

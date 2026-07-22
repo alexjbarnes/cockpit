@@ -218,9 +218,35 @@ export function resolveProxyUpstream(
   return { baseUrl: zenBaseUrl(), apiKey, modelIds: (stored?.models ?? []).map((m) => m.modelId) };
 }
 
-/** Fetch zen's OpenAI-style model list with the stored (or given) key and
- *  persist it on the builtin entry. Newly seen models join enabledModels so a
- *  fresh connect exposes the whole curated zen catalog in pickers. */
+interface ModelsDevEntry {
+  name?: string;
+  cost?: { input?: number; output?: number };
+  limit?: { context?: number };
+  tool_call?: boolean;
+  reasoning?: boolean;
+  modalities?: { input?: string[] };
+}
+
+/** Pricing/capability metadata for zen models. Zen's own /models list is bare
+ *  OpenAI shape, but models.dev (the OpenCode team's model database, which
+ *  the zen docs pricing table is built from) carries cost per 1M, context
+ *  windows, and capability flags under its "opencode" provider. Best-effort:
+ *  a failed fetch degrades to the bare list. */
+async function fetchZenModelMeta(): Promise<Record<string, ModelsDevEntry>> {
+  try {
+    const res = await fetch("https://models.dev/api.json", { signal: AbortSignal.timeout(30_000) });
+    if (!res.ok) return {};
+    const body = (await res.json()) as { opencode?: { models?: Record<string, ModelsDevEntry> } };
+    return body.opencode?.models ?? {};
+  } catch {
+    return {};
+  }
+}
+
+/** Fetch zen's OpenAI-style model list with the stored (or given) key,
+ *  enrich it from models.dev, and persist it on the builtin entry. Newly seen
+ *  models join enabledModels so a fresh connect exposes the whole curated zen
+ *  catalog in pickers. */
 export async function syncZenModels(keyOverride?: string): Promise<{ ok: boolean; modelCount?: number; error?: string }> {
   const stored = loadBuiltinStored(OPENCODE_ZEN_PROVIDER_ID);
   const apiKey = keyOverride ?? stored?.envVars?.OPENCODE_API_KEY;
@@ -234,15 +260,26 @@ export async function syncZenModels(keyOverride?: string): Promise<{ ok: boolean
     const body = (await res.json()) as { data?: Array<{ id?: string }> };
     const ids = (body.data ?? []).map((m) => m.id).filter((id): id is string => !!id);
     if (ids.length === 0) return { ok: false, error: "Zen models fetch returned no models" };
-    // Zen's OpenAI-style list carries no pricing metadata; free models follow
-    // a "-free" id suffix convention (verified live), which drives the badge.
-    const models: ProviderModel[] = ids.map((id) => ({
-      modelId: id,
-      displayName: id,
-      effortLevels: [],
-      contextSizes: [],
-      free: /-free$/.test(id),
-    }));
+
+    const meta = await fetchZenModelMeta();
+    // Free is zero cost when metadata exists (catches unsuffixed free models
+    // like big-pickle); the "-free" id suffix is the fallback signal.
+    const models: ProviderModel[] = ids.map((id) => {
+      const m = meta[id];
+      const free = m?.cost ? (m.cost.input ?? 0) === 0 && (m.cost.output ?? 0) === 0 : /-free$/.test(id);
+      return {
+        modelId: id,
+        displayName: m?.name || id,
+        effortLevels: [],
+        contextSizes: [],
+        contextLength: m?.limit?.context,
+        pricing: m?.cost ? { inPerM: m.cost.input ?? 0, outPerM: m.cost.output ?? 0 } : undefined,
+        free,
+        supportsTools: m?.tool_call,
+        supportsReasoning: m?.reasoning,
+        supportsImageInput: m?.modalities?.input?.includes("image"),
+      };
+    });
     const prevEnabled = new Set(stored?.enabledModels ?? []);
     const enabledModels = stored ? ids.filter((id) => prevEnabled.size === 0 || prevEnabled.has(id)) : ids;
     saveBuiltinStored(OPENCODE_ZEN_PROVIDER_ID, {
