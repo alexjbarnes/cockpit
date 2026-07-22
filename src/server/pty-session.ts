@@ -58,6 +58,17 @@ export class PtySession {
     // every session to 200k and defeat a 1m pick. The caller sets it per-session
     // via opts.env (200k → "1"; 1m → absent), which is applied on top here.
     delete env.CLAUDE_CODE_DISABLE_1M_CONTEXT;
+    // The interactive CLI interposes a resume picker ("❯ Resume from summary
+    // (recommended)" / "Resume full session as-is") when the transcript is older
+    // than 70 minutes and estimated above 100k tokens. Cockpit types keystrokes
+    // blind, so the trailing Enter of the first send lands on that menu and
+    // confirms the highlighted default, which executes /compact — the message is
+    // swallowed and the session compacts (the "magic /compact" bug). Both
+    // thresholds are env-overridable, so push them out of reach and the picker
+    // never renders; cockpit always resumes the full session and drives
+    // compaction itself.
+    env.CLAUDE_CODE_RESUME_THRESHOLD_MINUTES = "999999999";
+    env.CLAUDE_CODE_RESUME_TOKEN_THRESHOLD = "999999999";
     Object.assign(env, this.opts.env ?? {});
 
     const spawnFile = process.platform === "darwin" ? "/bin/zsh" : bin;
