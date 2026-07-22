@@ -80,6 +80,26 @@ export function createMockApiServer(): Promise<MockApiServer> {
       // Match path-only (ignore query string) so beta flags etc. don't miss.
       const pathOnly = (req.url || "").split("?")[0];
 
+      // Model catalog stub — on a custom base URL the CLI probes GET
+      // /v1/models and treats absent ids as unavailable, which kills turns on
+      // foreign (e.g. OpenRouter-style) model ids. Claim every id is known by
+      // echoing a generous list including the OpenRouter integration model.
+      if (req.method === "GET" && pathOnly === "/v1/models") {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify({
+            data: [
+              { id: "mockvendor/or-test:free", display_name: "Mock OR Model", type: "model" },
+              { id: "claude-sonnet-4-6", display_name: "Mock Sonnet", type: "model" },
+              { id: "claude-opus-4-8", display_name: "Mock Opus", type: "model" },
+              { id: "claude-haiku-4-5-20251001", display_name: "Mock Haiku", type: "model" },
+            ],
+            has_more: false,
+          }),
+        );
+        return;
+      }
+
       // Token counter stub — claude-code may poke this before/after a turn.
       // Returning a constant keeps things predictable for assertions.
       if (req.method === "POST" && pathOnly === "/v1/messages/count_tokens") {

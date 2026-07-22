@@ -44,9 +44,53 @@ describe("providers", () => {
     const { getProviders } = await import("@/server/providers");
     const providers = getProviders();
 
-    expect(providers.length).toBe(2);
+    expect(providers.length).toBe(3);
     expect(providers[0].id).toBe("anthropic");
-    expect(providers[1].id).toBe("or-123");
+    expect(providers[1].id).toBe("openrouter");
+    expect(providers[2].id).toBe("or-123");
+  });
+
+  it("openrouter built-in accepts key + enabled set, derives env, and rejects deletion", async () => {
+    const fs = await import("node:fs");
+    vi.mocked(fs.readFileSync).mockImplementation(() => {
+      throw new Error("ENOENT");
+    });
+
+    const { deleteProvider, getProviders, updateProvider } = await import("@/server/providers");
+
+    const before = getProviders().find((p) => p.id === "openrouter");
+    expect(before?.isBuiltin).toBe(true);
+    expect(before?.envVars).toEqual({});
+
+    const updated = updateProvider("openrouter", {
+      envVars: { ANTHROPIC_AUTH_TOKEN: "sk-or-test" },
+      enabledModels: ["vendor/model:free"],
+    });
+    expect(updated.envVars.ANTHROPIC_BASE_URL).toBe("https://openrouter.ai/api");
+    expect(updated.envVars.ANTHROPIC_AUTH_TOKEN).toBe("sk-or-test");
+    // must be explicitly empty, not unset — the CLI falls back to Anthropic otherwise
+    expect(updated.envVars.ANTHROPIC_API_KEY).toBe("");
+    expect(updated.enabledModels).toEqual(["vendor/model:free"]);
+
+    const written = vi.mocked(fs.writeFileSync).mock.calls.at(-1)?.[1] as string;
+    expect(written).toContain("sk-or-test");
+    expect(written).toContain("vendor/model:free");
+
+    expect(() => deleteProvider("openrouter")).toThrow(/built-in/);
+  });
+
+  it("openRouterModelEnv pins every default-model slot", async () => {
+    const { openRouterModelEnv } = await import("@/server/providers");
+    expect(openRouterModelEnv("vendor/main:free")).toEqual({
+      ANTHROPIC_DEFAULT_OPUS_MODEL: "vendor/main:free",
+      ANTHROPIC_DEFAULT_SONNET_MODEL: "vendor/main:free",
+      ANTHROPIC_DEFAULT_HAIKU_MODEL: "vendor/main:free",
+      CLAUDE_CODE_SUBAGENT_MODEL: "vendor/main:free",
+    });
+    expect(openRouterModelEnv("vendor/main", "vendor/small:free")).toMatchObject({
+      ANTHROPIC_DEFAULT_HAIKU_MODEL: "vendor/small:free",
+      CLAUDE_CODE_SUBAGENT_MODEL: "vendor/small:free",
+    });
   });
 
   it("resolveProviderModel finds Anthropic model", async () => {

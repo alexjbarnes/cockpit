@@ -28,6 +28,10 @@ vi.mock("@/server/inbox", () => ({
   parseErrorBlock: vi.fn(() => null),
 }));
 
+vi.mock("@/server/provider-catalog", () => ({
+  checkJobModel: vi.fn(() => ({ ok: true })),
+}));
+
 vi.mock("node:fs", async () => {
   const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
   return { ...actual, mkdirSync: vi.fn() };
@@ -37,6 +41,7 @@ import { addInboxMessage, parseErrorBlock, parseInboxBlock } from "@/server/inbo
 import { acquireJobLock, releaseJobLock } from "@/server/job-lock";
 import { JobScheduler } from "@/server/job-scheduler";
 import { loadJobs, loadRuns, saveRun } from "@/server/job-storage";
+import { checkJobModel } from "@/server/provider-catalog";
 import type { JobRun, JobRunStatus, ScheduledJob } from "@/types";
 
 function makeJob(overrides: Partial<ScheduledJob> = {}): ScheduledJob {
@@ -1207,6 +1212,27 @@ describe("tick: missed run handling", () => {
       } finally {
         vi.useRealTimers();
       }
+    });
+
+    it("fails a job with a catalog-missing model before spawn: no executeJob, no retry, inbox alert", async () => {
+      vi.mocked(loadJobs).mockReturnValue([makeJob()]);
+      vi.mocked(checkJobModel).mockReturnValueOnce({
+        ok: false,
+        reason:
+          "Model openrouter:vendor/gone is no longer offered by OpenRouter. Pick a new model for this job; it will not run until you do.",
+      });
+      const spy = vi.spyOn(scheduler, "executeJob");
+
+      const run = await scheduler.triggerJob("job-1");
+
+      expect(spy).not.toHaveBeenCalled();
+      expect(run.status).toBe("failure");
+      expect(run.configFailure).toBe(true);
+      expect(run.error).toContain("openrouter:vendor/gone");
+      expect(vi.mocked(saveRun)).toHaveBeenCalledWith(expect.objectContaining({ configFailure: true }));
+      expect(vi.mocked(addInboxMessage)).toHaveBeenCalledWith(
+        expect.objectContaining({ title: "Job failed: Test Job", priority: "error" }),
+      );
     });
 
     it("does not retry a timeout", async () => {

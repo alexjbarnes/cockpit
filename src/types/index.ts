@@ -239,6 +239,9 @@ export interface JobRun {
   messageCount: number;
   prompt: string;
   cwd: string;
+  /** Deterministic configuration failure (e.g. model gone from the provider
+   *  catalog): failed before the CLI spawned and is never retried. */
+  configFailure?: boolean;
 }
 
 // Inbox
@@ -413,6 +416,17 @@ export interface ProviderModel {
   effortLevels: ThinkingLevel[];
   contextSizes: ContextSize[];
   defaultEffort?: ThinkingLevel;
+  /** Raw context window for catalog-synced models. The 200k/1m ContextSize
+   *  enum stays Anthropic-only (it drives CLAUDE_CODE_DISABLE_1M_CONTEXT). */
+  contextLength?: number;
+  /** USD per million tokens, derived from the provider catalog at sync time. */
+  pricing?: { inPerM: number; outPerM: number };
+  free?: boolean;
+  supportsTools?: boolean;
+  supportsReasoning?: boolean;
+  supportsImageInput?: boolean;
+  /** ISO date after which the provider withdraws the model, when declared. */
+  expirationDate?: string;
 }
 
 export interface Provider {
@@ -421,4 +435,7 @@ export interface Provider {
   envVars: Record<string, string>;
   models: ProviderModel[];
   isBuiltin?: boolean;
+  /** Curated opt-in set for catalog-backed providers: only these model ids
+   *  appear in pickers. Absent means nothing enabled yet. */
+  enabledModels?: string[];
 }

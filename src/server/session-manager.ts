@@ -18,7 +18,8 @@ import {
 } from "@/lib/models";
 import { getAssistantSettings, updateAssistantSettings } from "@/server/assistant-settings";
 import { getCockpitDir } from "@/server/paths";
-import { resolveProviderModel } from "@/server/providers";
+import { ensureCatalogFresh, OPENROUTER_PROVIDER_ID } from "@/server/provider-catalog";
+import { openRouterModelEnv, resolveProviderModel } from "@/server/providers";
 import type {
   ChatMessage,
   ContentBlock,
@@ -2143,6 +2144,16 @@ Additional Cockpit rules beyond the CLI's defaults:
       subagentModel = resolvedSub ? resolvedSub.model.modelId : session.modelSlots.subagent;
     }
 
+    // OpenRouter sessions pin every default-model slot to catalog models —
+    // otherwise the CLI's internal opus/sonnet/haiku-class utility calls route
+    // to Claude models billed on OpenRouter credits. Also kick a background
+    // catalog resync when the cache is older than a day.
+    let providerEnvVars = resolved?.provider.envVars;
+    if (resolved && resolved.provider.id === OPENROUTER_PROVIDER_ID) {
+      providerEnvVars = { ...providerEnvVars, ...openRouterModelEnv(resolved.model.modelId, subagentModel) };
+      ensureCatalogFresh();
+    }
+
     let appendSystemPrompt: string | undefined;
     let mcpConfigPath: string | undefined;
     if (session.cockpitAgent) {
@@ -2186,7 +2197,7 @@ Additional Cockpit rules beyond the CLI's defaults:
       cliSessionId: session.cliSessionId,
       willResume,
       model: cliModel ?? undefined,
-      providerEnvVars: resolved?.provider.envVars,
+      providerEnvVars,
       subagentModel,
       contextSize: effectiveContextSize,
       thinkingLevel: session.thinkingLevel,

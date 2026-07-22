@@ -8,6 +8,7 @@ import { logDiag } from "./debug-logger";
 import { addInboxMessage, parseErrorBlock, parseInboxBlock } from "./inbox";
 import { acquireJobLock, clearStaleLocks, forceReleaseJobLock, releaseJobLock } from "./job-lock";
 import { getLatestRun, loadJobs, loadRuns, pruneAllRuns, saveRun } from "./job-storage";
+import { checkJobModel } from "./provider-catalog";
 import type { SessionManager } from "./session-manager";
 import { countTranscriptMessages } from "./transcript";
 
@@ -202,6 +203,41 @@ export class JobScheduler {
    * that will be retried, so only the final outcome pages the operator.
    */
   private async executeJobWithRetries(job: ScheduledJob): Promise<JobRun> {
+    // W6j: a job whose model is gone from the provider catalog fails before
+    // the CLI spawns — no lock, no session, no substitution onto another
+    // model, and no retry (the failure is deterministic). The operator fixes
+    // it by picking a new model on the job.
+    const modelCheck = checkJobModel(job.model);
+    if (!modelCheck.ok) {
+      const run: JobRun = {
+        id: uuidv4(),
+        jobId: job.id,
+        sessionId: "",
+        status: "failure",
+        startedAt: Date.now(),
+        completedAt: Date.now(),
+        durationMs: 0,
+        error: modelCheck.reason,
+        toolsUsed: [],
+        messageCount: 0,
+        prompt: job.prompt,
+        cwd: job.cwd || "",
+        configFailure: true,
+      };
+      saveRun(run);
+      logDiag(job.id, "job:config-failure", { runId: run.id, model: job.model, error: modelCheck.reason });
+      addInboxMessage({
+        title: `Job failed: ${job.name}`,
+        body: `**Status:** failure\n\n${modelCheck.reason}`,
+        priority: "error",
+        jobId: job.id,
+        jobName: job.name,
+        runId: run.id,
+        notifyProviders: job.notifyProviders,
+      });
+      return run;
+    }
+
     const maxRetries = Math.max(0, job.maxRetries ?? DEFAULT_JOB_MAX_RETRIES);
     let run: JobRun;
     for (let attempt = 0; ; attempt++) {

@@ -8,6 +8,7 @@ import { HookRouter } from "./src/server/hook-router";
 import { JobScheduler } from "./src/server/job-scheduler";
 import { CockpitMcpServer } from "./src/server/mcp/cockpit-config-server";
 import { getCockpitDir } from "./src/server/paths";
+import { startCatalogSync } from "./src/server/provider-catalog";
 import { SessionManager } from "./src/server/session-manager";
 import { setCockpitMcp, setHookRouter, setJobScheduler, setSessionManager, setTerminalManager } from "./src/server/singleton";
 import { TerminalManager } from "./src/server/terminal-manager";
@@ -93,6 +94,10 @@ async function main() {
   const jobScheduler = new JobScheduler(sessionManager);
   setJobScheduler(jobScheduler);
   jobScheduler.start();
+
+  // Boot-time OpenRouter catalog sync plus a daily refresh (D8: failures
+  // alert through the inbox once per episode, never via UI degradation).
+  startCatalogSync();
 
   // Opt-in stall watchdog: COCKPIT_HEALTH=1 (independent of COCKPIT_DEBUG) logs
   // only when the process stalls, classifying it as event-loop-blocked vs
