@@ -250,12 +250,14 @@ export function OpenRouterModelBrowser({ provider, onChanged }: { provider: Prov
                 {isOn && <Check className="h-3 w-3" />}
               </span>
               <span className="flex min-w-0 flex-col gap-0.5">
-                <span className="flex min-w-0 items-center gap-2">
-                  <span className="font-mono truncate">{splitProviderModelId(m).name}</span>
-                  <FreeBadge model={m} />
+                <span className="flex min-w-0 items-start gap-2">
+                  <span className="min-w-0 break-all font-mono">{splitProviderModelId(m).name}</span>
+                  <span className="shrink-0">
+                    <FreeBadge model={m} />
+                  </span>
                 </span>
                 {splitProviderModelId(m).meta && (
-                  <span className="max-w-full truncate text-[10px] text-muted-foreground tabular-nums">{splitProviderModelId(m).meta}</span>
+                  <span className="max-w-full text-[10px] text-muted-foreground tabular-nums">{splitProviderModelId(m).meta}</span>
                 )}
               </span>
             </button>

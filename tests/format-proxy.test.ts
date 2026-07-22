@@ -308,6 +308,125 @@ describe("FormatProxy server", () => {
     expect(events.at(-1)?.event).toBe("message_stop");
   });
 
+  it("passthrough mode relays anthropic wire verbatim and forwards client auth", async () => {
+    let seenBody = "";
+    let seenAuth = "";
+    let seenPath = "";
+    const port = await startUpstream((body, res) => {
+      seenBody = body;
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ type: "message", role: "assistant", content: [{ type: "text", text: "direct" }] }));
+    });
+    upstream?.on("request", (req) => {
+      seenAuth = String(req.headers.authorization ?? "");
+      seenPath = String(req.url ?? "");
+    });
+    proxy = new FormatProxy(() => ({ baseUrl: `http://127.0.0.1:${port}`, apiKey: "stored-key", wireFormat: "anthropic", modelIds: [] }));
+    await proxy.start();
+
+    const anthropicBody = JSON.stringify({ model: "vendor/x:free", max_tokens: 5, messages: [{ role: "user", content: "hi" }] });
+    const res = await fetch(`${proxy.getUrl("openrouter")}/v1/messages?beta=true`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: "Bearer client-key" },
+      body: anthropicBody,
+    });
+    const body = await res.json();
+    expect(body.content).toEqual([{ type: "text", text: "direct" }]);
+    // verbatim body, client auth wins, query string preserved
+    expect(seenBody).toBe(anthropicBody);
+    expect(seenAuth).toBe("Bearer client-key");
+    expect(seenPath).toBe("/v1/messages?beta=true");
+  });
+
+  it("passthrough injects the stored key only when the client sent no auth", async () => {
+    let seenAuth = "";
+    const port = await startUpstream((_body, res) => {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end("{}");
+    });
+    upstream?.on("request", (req) => {
+      seenAuth = String(req.headers.authorization ?? "");
+    });
+    proxy = new FormatProxy(() => ({ baseUrl: `http://127.0.0.1:${port}`, apiKey: "stored-key", wireFormat: "anthropic", modelIds: [] }));
+    await proxy.start();
+
+    await fetch(`${proxy.getUrl("openrouter")}/v1/models`);
+    expect(seenAuth).toBe("Bearer stored-key");
+  });
+
+  it("retries saturation-class failures with backoff, then succeeds", async () => {
+    let calls = 0;
+    const port = await startUpstream((_body, res) => {
+      calls += 1;
+      if (calls === 1) {
+        res.writeHead(429, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: { message: "temporarily rate-limited upstream" } }));
+        return;
+      }
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ type: "message", content: [{ type: "text", text: "after retry" }] }));
+    });
+    proxy = new FormatProxy(() => ({ baseUrl: `http://127.0.0.1:${port}`, apiKey: "k", wireFormat: "anthropic", modelIds: [] }), {
+      retryBackoffMs: [10, 10],
+    });
+    await proxy.start();
+
+    const res = await fetch(`${proxy.getUrl("openrouter")}/v1/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "m", max_tokens: 5, messages: [] }),
+    });
+    expect(res.status).toBe(200);
+    expect((await res.json()).content).toEqual([{ type: "text", text: "after retry" }]);
+    expect(calls).toBe(2);
+  });
+
+  it("gives up after the retry budget and relays the final 429", async () => {
+    let calls = 0;
+    const port = await startUpstream((_body, res) => {
+      calls += 1;
+      res.writeHead(429, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: { message: "still saturated" } }));
+    });
+    proxy = new FormatProxy(() => ({ baseUrl: `http://127.0.0.1:${port}`, apiKey: "k", wireFormat: "anthropic", modelIds: [] }), {
+      retryBackoffMs: [10, 10],
+    });
+    await proxy.start();
+
+    const res = await fetch(`${proxy.getUrl("openrouter")}/v1/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "m", max_tokens: 5, messages: [] }),
+    });
+    expect(res.status).toBe(429);
+    expect(calls).toBe(3);
+  });
+
+  it("retries the translated openai upstream call too", async () => {
+    let calls = 0;
+    const port = await startUpstream((_body, res) => {
+      calls += 1;
+      if (calls === 1) {
+        res.writeHead(503, { "Content-Type": "application/json" });
+        res.end("{}");
+        return;
+      }
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ choices: [{ message: { content: "zen after retry" }, finish_reason: "stop" }] }));
+    });
+    proxy = new FormatProxy(() => ({ baseUrl: `http://127.0.0.1:${port}`, apiKey: "k", modelIds: [] }), { retryBackoffMs: [10] });
+    await proxy.start();
+
+    const res = await fetch(`${proxy.getUrl("zen")}/v1/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "m", max_tokens: 5, messages: [{ role: "user", content: "hi" }] }),
+    });
+    expect(res.status).toBe(200);
+    expect((await res.json()).content).toEqual([{ type: "text", text: "zen after retry" }]);
+    expect(calls).toBe(2);
+  });
+
   it("translates upstream errors into anthropic error shape with the same status", async () => {
     const port = await startUpstream((_body, res) => {
       res.writeHead(429, { "Content-Type": "application/json" });

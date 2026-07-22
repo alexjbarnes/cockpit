@@ -938,11 +938,11 @@ export function InputArea({
                               <button
                                 key={key}
                                 onClick={onClick}
-                                className={`flex w-full items-center gap-3 rounded px-3 py-2 text-xs transition-colors ${
+                                className={`flex w-full items-start gap-3 rounded px-3 py-2 text-left text-xs transition-colors ${
                                   selected ? "bg-primary/10 text-primary" : "hover:bg-muted text-foreground"
                                 }`}
                               >
-                                <div className="w-3 shrink-0">
+                                <div className="mt-0.5 w-3 shrink-0">
                                   {selected ? (
                                     <Check className="h-3 w-3" />
                                   ) : (
@@ -953,6 +953,23 @@ export function InputArea({
                                 {right}
                               </button>
                             );
+
+                            const providerModelLabel = (model: ProviderModel) => {
+                              const { name, meta } = splitProviderModelId(model);
+                              return (
+                                <span className="flex min-w-0 flex-col items-start gap-0.5">
+                                  <span className="flex min-w-0 max-w-full items-start gap-2">
+                                    <span className="min-w-0 break-all font-mono font-medium">{name}</span>
+                                    {model.free && (
+                                      <span className="shrink-0">
+                                        <FreeBadge model={model} />
+                                      </span>
+                                    )}
+                                  </span>
+                                  {meta && <span className="max-w-full text-[10px] text-muted-foreground">{meta}</span>}
+                                </span>
+                              );
+                            };
 
                             const groupLabel = (text: string) => (
                               <p className="px-1 pt-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">{text}</p>
@@ -976,23 +993,26 @@ export function InputArea({
                                       {groupLabel("Recent")}
                                       {recentRows.map((value) => {
                                         const colon = value.indexOf(":");
-                                        const providerName =
-                                          colon > 0
-                                            ? (providers?.find((p) => p.id === value.slice(0, colon))?.name ?? value.slice(0, colon))
-                                            : "Anthropic";
-                                        const bare = colon > 0 ? value.slice(colon + 1) : value;
+                                        const recentProvider =
+                                          colon > 0 ? providers?.find((p) => p.id === value.slice(0, colon)) : undefined;
+                                        const bare = (colon > 0 ? value.slice(colon + 1) : value).replace(/\[.*\]$/, "");
+                                        const recentModel = recentProvider?.models.find((m) => m.modelId === bare);
                                         const selected = currentModel === value || currentModel === bare;
-                                        const recentName = bare
-                                          .replace(/\[.*\]$/, "")
-                                          .replace(/^[^/]+\//, "")
-                                          .replace(/:free$/, "");
-                                        return modelRow(
-                                          `recent-${value}`,
-                                          selected,
-                                          () => selectModel(value),
-                                          <span className="font-mono font-medium truncate">{recentName}</span>,
-                                          <span className="ml-auto text-muted-foreground">{providerName}</span>,
+                                        // Same renderer as the provider groups; a recent whose
+                                        // model left the catalog falls back to name + provider.
+                                        const label = recentModel ? (
+                                          providerModelLabel(recentModel)
+                                        ) : (
+                                          <span className="flex min-w-0 flex-col items-start gap-0.5">
+                                            <span className="min-w-0 break-all font-mono font-medium">
+                                              {bare.replace(/^[^/]+\//, "").replace(/:free$/, "")}
+                                            </span>
+                                            <span className="max-w-full text-[10px] text-muted-foreground">
+                                              {recentProvider?.name ?? (colon > 0 ? value.slice(0, colon) : "Anthropic")}
+                                            </span>
+                                          </span>
                                         );
+                                        return modelRow(`recent-${value}`, selected, () => selectModel(value), label);
                                       })}
                                     </>
                                   )}
@@ -1021,23 +1041,7 @@ export function InputArea({
                                       {models.map((model) => {
                                         const qualified = `${provider.id}:${model.modelId}`;
                                         const selected = currentModel === qualified || currentModel === model.modelId;
-                                        // The vendor prefix ("nvidia/…") ate the whole row on
-                                        // narrow screens, hiding the part that distinguishes
-                                        // models — so the name leads and vendor/context/price
-                                        // drop to a meta line.
-                                        const { name, meta } = splitProviderModelId(model);
-                                        return modelRow(
-                                          qualified,
-                                          selected,
-                                          () => selectModel(qualified),
-                                          <span className="flex min-w-0 flex-col items-start gap-0.5">
-                                            <span className="flex min-w-0 max-w-full items-center gap-2">
-                                              <span className="font-mono font-medium truncate">{name}</span>
-                                              {model.free && <FreeBadge model={model} />}
-                                            </span>
-                                            {meta && <span className="max-w-full truncate text-[10px] text-muted-foreground">{meta}</span>}
-                                          </span>,
-                                        );
+                                        return modelRow(qualified, selected, () => selectModel(qualified), providerModelLabel(model));
                                       })}
                                     </div>
                                   ))}

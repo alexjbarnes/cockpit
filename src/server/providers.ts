@@ -2,7 +2,7 @@ import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { v4 as uuidv4 } from "uuid";
 import { toProviderModels } from "@/lib/models";
-import { getActiveFormatProxy } from "@/server/format-proxy";
+import { type FormatProxy, getActiveFormatProxy } from "@/server/format-proxy";
 import { getCockpitDir } from "@/server/paths";
 import { catalogModels, loadCatalog, OPENROUTER_PROVIDER_ID, openRouterBaseUrl } from "@/server/provider-catalog";
 import type { Provider, ProviderModel } from "@/types";
@@ -53,10 +53,16 @@ function buildOpenRouterProvider(stored: Provider | undefined): Provider {
     // otherwise the CLI can fall back to authenticating against Anthropic.
     // Nonessential traffic (bootstrap probes, utility calls) is disabled so
     // background requests never quietly spend OpenRouter credits.
+    // When the format proxy is up, sessions route through it in anthropic
+    // passthrough mode purely for the bounded 429 retry (congested free
+    // models); the CLI still authenticates with the real key, the proxy just
+    // relays. Direct URL is the fallback when the proxy is not running.
     envVars: key
       ? {
           ...stored?.envVars,
-          ANTHROPIC_BASE_URL: openRouterBaseUrl(),
+          ANTHROPIC_BASE_URL: getActiveFormatProxy()?.isRunning
+            ? (getActiveFormatProxy() as FormatProxy).getUrl(OPENROUTER_PROVIDER_ID)
+            : openRouterBaseUrl(),
           ANTHROPIC_AUTH_TOKEN: key,
           ANTHROPIC_API_KEY: "",
           CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
@@ -194,7 +200,15 @@ function buildOpenCodeZenProvider(stored: Provider | undefined): Provider {
 
 /** Upstream config for the format proxy. Null when the provider is not
  *  connected (no key) — the proxy 404s those. */
-export function resolveProxyUpstream(providerId: string): { baseUrl: string; apiKey: string; modelIds: string[] } | null {
+export function resolveProxyUpstream(
+  providerId: string,
+): { baseUrl: string; apiKey: string; modelIds: string[]; wireFormat?: "openai" | "anthropic" } | null {
+  if (providerId === OPENROUTER_PROVIDER_ID) {
+    const stored = loadBuiltinStored(OPENROUTER_PROVIDER_ID);
+    const apiKey = stored?.envVars?.ANTHROPIC_AUTH_TOKEN;
+    if (!apiKey) return null;
+    return { baseUrl: openRouterBaseUrl(), apiKey, modelIds: catalogModels().map((m) => m.modelId), wireFormat: "anthropic" };
+  }
   if (providerId !== OPENCODE_ZEN_PROVIDER_ID) return null;
   const stored = loadBuiltinStored(OPENCODE_ZEN_PROVIDER_ID);
   const apiKey = stored?.envVars?.OPENCODE_API_KEY;

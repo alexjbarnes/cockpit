@@ -12,11 +12,18 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 
 export interface ProxyUpstream {
-  /** OpenAI-compatible base, e.g. https://opencode.ai/zen/v1 */
+  /** OpenAI-compatible base (e.g. https://opencode.ai/zen/v1), or for
+   *  anthropic passthrough the host base the CLI would have used directly
+   *  (e.g. https://openrouter.ai/api). */
   baseUrl: string;
   apiKey: string;
   /** Model ids served on the proxy's /v1/models probe endpoint. */
   modelIds?: string[];
+  /** "openai" (default): translate Anthropic ⇄ OpenAI. "anthropic": the
+   *  upstream already speaks Anthropic wire — relay verbatim, which exists
+   *  purely to add the bounded retry to congested upstreams (free-model
+   *  429s) without surfacing every blip as a turn error. */
+  wireFormat?: "openai" | "anthropic";
 }
 
 export type UpstreamResolver = (providerId: string) => ProxyUpstream | null;
@@ -326,11 +333,46 @@ function jsonError(res: ServerResponse, status: number, message: string): void {
   res.end(JSON.stringify({ type: "error", error: { type: "api_error", message } }));
 }
 
+/** Statuses worth retrying before any response bytes were sent: upstream
+ *  saturation (429, and OpenRouter surfaces provider congestion as 429),
+ *  gateway failures, and Anthropic's 529 overloaded. */
+const RETRYABLE_STATUS = new Set([429, 502, 503, 529]);
+
 export class FormatProxy {
   private server: Server | null = null;
   private port = 0;
+  private retryBackoffMs: number[];
 
-  constructor(private resolveUpstream: UpstreamResolver) {}
+  constructor(
+    private resolveUpstream: UpstreamResolver,
+    opts?: { retryBackoffMs?: number[] },
+  ) {
+    this.retryBackoffMs = opts?.retryBackoffMs ?? [1000, 3000];
+  }
+
+  /** Fetch with bounded retries on saturation-class failures. Safe because it
+   *  only runs before any response bytes reach the client. Honors a small
+   *  Retry-After when the upstream sends one. */
+  private async fetchWithRetry(url: string, init: RequestInit): Promise<Response> {
+    for (let attempt = 0; ; attempt++) {
+      let res: Response | null = null;
+      let networkErr: unknown = null;
+      try {
+        res = await fetch(url, init);
+      } catch (err) {
+        networkErr = err;
+      }
+      const retryable = res ? RETRYABLE_STATUS.has(res.status) : true;
+      if (!retryable || attempt >= this.retryBackoffMs.length) {
+        if (res) return res;
+        throw networkErr;
+      }
+      const retryAfter = Number(res?.headers.get("retry-after") ?? 0);
+      const wait = retryAfter > 0 && retryAfter <= 10 ? retryAfter * 1000 : this.retryBackoffMs[attempt];
+      await res?.body?.cancel();
+      await new Promise((r) => setTimeout(r, wait));
+    }
+  }
 
   getUrl(providerId: string): string {
     return `http://127.0.0.1:${this.port}/${providerId}`;
@@ -359,11 +401,17 @@ export class FormatProxy {
   }
 
   private async handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    const [, providerId, ...rest] = (req.url || "").split("?")[0].split("/");
+    const [pathPart, query] = (req.url || "").split("?");
+    const [, providerId, ...rest] = pathPart.split("/");
     const path = `/${rest.join("/")}`;
     const upstream = providerId ? this.resolveUpstream(providerId) : null;
     if (!upstream) {
       jsonError(res, 404, `Unknown proxied provider: ${providerId}`);
+      return;
+    }
+
+    if (upstream.wireFormat === "anthropic") {
+      await this.passthrough(req, res, upstream, path + (query ? `?${query}` : ""));
       return;
     }
 
@@ -390,6 +438,49 @@ export class FormatProxy {
     jsonError(res, 404, `Unsupported proxy path: ${path}`);
   }
 
+  /** Anthropic-to-Anthropic relay: forward the request verbatim (client auth
+   *  headers included, upstream key injected only when the client sent none),
+   *  retry saturation-class failures, then pipe the response bytes straight
+   *  through. The CLI sees exactly what the upstream would have sent, minus
+   *  the 429s that a retry absorbed. */
+  private async passthrough(req: IncomingMessage, res: ServerResponse, upstream: ProxyUpstream, pathWithQuery: string): Promise<void> {
+    const body = req.method === "GET" || req.method === "HEAD" ? undefined : await readBody(req);
+    const headers: Record<string, string> = {};
+    for (const [key, value] of Object.entries(req.headers)) {
+      if (typeof value !== "string") continue;
+      if (key === "host" || key === "connection" || key === "content-length" || key === "transfer-encoding") continue;
+      headers[key] = value;
+    }
+    if (!headers.authorization && !headers["x-api-key"] && upstream.apiKey) {
+      headers.authorization = `Bearer ${upstream.apiKey}`;
+    }
+
+    let upstreamRes: Response;
+    try {
+      upstreamRes = await this.fetchWithRetry(`${upstream.baseUrl}${pathWithQuery}`, { method: req.method, headers, body });
+    } catch (err) {
+      jsonError(res, 502, `Upstream request failed: ${err instanceof Error ? err.message : String(err)}`);
+      return;
+    }
+
+    res.writeHead(upstreamRes.status, { "Content-Type": upstreamRes.headers.get("content-type") ?? "application/json" });
+    const reader = upstreamRes.body?.getReader();
+    if (!reader) {
+      res.end();
+      return;
+    }
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        res.write(Buffer.from(value));
+      }
+    } catch {
+      // upstream died mid-stream — end what we have
+    }
+    res.end();
+  }
+
   private async proxyMessages(req: IncomingMessage, res: ServerResponse, upstream: ProxyUpstream): Promise<void> {
     let anthropicBody: AnthropicRequest;
     try {
@@ -402,7 +493,7 @@ export class FormatProxy {
     const openaiBody = anthropicToOpenAIRequest(anthropicBody);
     let upstreamRes: Response;
     try {
-      upstreamRes = await fetch(`${upstream.baseUrl}/chat/completions`, {
+      upstreamRes = await this.fetchWithRetry(`${upstream.baseUrl}/chat/completions`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${upstream.apiKey}` },
         body: JSON.stringify(openaiBody),

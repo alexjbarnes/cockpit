@@ -118,6 +118,55 @@ describe("providers", () => {
     expect(() => deleteProvider("zen")).toThrow(/built-in/);
   });
 
+  it("openrouter routes through the format proxy when it is active, direct otherwise", async () => {
+    const fs = await import("node:fs");
+    vi.mocked(fs.readFileSync).mockReturnValue(
+      JSON.stringify([
+        {
+          id: "openrouter",
+          name: "OpenRouter",
+          isBuiltin: true,
+          models: [],
+          envVars: { ANTHROPIC_AUTH_TOKEN: "sk-or-x" },
+          enabledModels: [],
+        },
+      ]),
+    );
+
+    const { getActiveFormatProxy, setActiveFormatProxy } = await import("@/server/format-proxy");
+    const { getProviders, resolveProxyUpstream } = await import("@/server/providers");
+
+    const direct = getProviders().find((p) => p.id === "openrouter");
+    expect(direct?.envVars.ANTHROPIC_BASE_URL).toBe("https://openrouter.ai/api");
+
+    setActiveFormatProxy({ isRunning: true, getUrl: (id: string) => `http://127.0.0.1:9999/${id}` } as unknown as ReturnType<
+      typeof getActiveFormatProxy
+    > & { isRunning: boolean });
+    // cache is mtime-gated; force a rebuild by re-importing fresh state
+    vi.resetModules();
+    vi.mocked(fs.readFileSync).mockReturnValue(
+      JSON.stringify([
+        {
+          id: "openrouter",
+          name: "OpenRouter",
+          isBuiltin: true,
+          models: [],
+          envVars: { ANTHROPIC_AUTH_TOKEN: "sk-or-x" },
+          enabledModels: [],
+        },
+      ]),
+    );
+    const fresh = await import("@/server/providers");
+    const proxied = fresh.getProviders().find((p) => p.id === "openrouter");
+    expect(proxied?.envVars.ANTHROPIC_BASE_URL).toBe("http://127.0.0.1:9999/openrouter");
+    // the CLI keeps authenticating with the real key; the proxy only relays
+    expect(proxied?.envVars.ANTHROPIC_AUTH_TOKEN).toBe("sk-or-x");
+
+    const up = fresh.resolveProxyUpstream("openrouter");
+    expect(up).toMatchObject({ baseUrl: "https://openrouter.ai/api", apiKey: "sk-or-x", wireFormat: "anthropic" });
+    expect(resolveProxyUpstream("openrouter")).toMatchObject({ wireFormat: "anthropic" });
+  });
+
   it("openRouterModelEnv pins every default-model slot", async () => {
     const { openRouterModelEnv } = await import("@/server/providers");
     expect(openRouterModelEnv("vendor/main:free")).toEqual({
