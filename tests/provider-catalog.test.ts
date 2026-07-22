@@ -252,6 +252,79 @@ describe("checkJobModel", () => {
   });
 });
 
+describe("getOpenRouterUsage", () => {
+  it("returns null when no key is connected", async () => {
+    const cat = await loadModule();
+    expect(await cat.getOpenRouterUsage()).toBeNull();
+  });
+
+  it("maps the key response and caches it for a minute", async () => {
+    writeFileSync(
+      join(dir, "providers.json"),
+      JSON.stringify([
+        {
+          id: "openrouter",
+          name: "OpenRouter",
+          isBuiltin: true,
+          models: [],
+          envVars: { ANTHROPIC_AUTH_TOKEN: "sk-or-x" },
+          enabledModels: [],
+        },
+      ]),
+    );
+    const fetchSpy = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        data: {
+          usage: 12.5,
+          usage_daily: 0.4,
+          usage_weekly: 2.1,
+          usage_monthly: 9.9,
+          limit: 20,
+          limit_remaining: 7.5,
+          is_free_tier: false,
+        },
+      }),
+    })) as unknown as typeof fetch;
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const cat = await loadModule();
+    const usage = await cat.getOpenRouterUsage();
+    expect(usage).toEqual({
+      usage: 12.5,
+      usageDaily: 0.4,
+      usageWeekly: 2.1,
+      usageMonthly: 9.9,
+      limit: 20,
+      limitRemaining: 7.5,
+      isFreeTier: false,
+    });
+
+    await cat.getOpenRouterUsage();
+    expect(vi.mocked(fetchSpy)).toHaveBeenCalledTimes(1);
+  });
+
+  it("throws on an upstream error", async () => {
+    writeFileSync(
+      join(dir, "providers.json"),
+      JSON.stringify([
+        {
+          id: "openrouter",
+          name: "OpenRouter",
+          isBuiltin: true,
+          models: [],
+          envVars: { ANTHROPIC_AUTH_TOKEN: "sk-or-x" },
+          enabledModels: [],
+        },
+      ]),
+    );
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: false, status: 401, json: async () => ({}) })) as unknown as typeof fetch);
+    const cat = await loadModule();
+    await expect(cat.getOpenRouterUsage()).rejects.toThrow("HTTP 401");
+  });
+});
+
 describe("ensureCatalogFresh", () => {
   it("skips when the cache is fresh", async () => {
     const cat = await loadModule();

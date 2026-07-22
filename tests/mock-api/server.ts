@@ -84,7 +84,8 @@ export function createMockApiServer(): Promise<MockApiServer> {
       // /v1/models and treats absent ids as unavailable, which kills turns on
       // foreign (e.g. OpenRouter-style) model ids. Claim every id is known by
       // echoing a generous list including the OpenRouter integration model.
-      if (req.method === "GET" && pathOnly === "/v1/models") {
+      const isOrKey = String(req.headers.authorization ?? "").includes("sk-or-");
+      if (req.method === "GET" && pathOnly === "/v1/models" && isOrKey) {
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(
           JSON.stringify({

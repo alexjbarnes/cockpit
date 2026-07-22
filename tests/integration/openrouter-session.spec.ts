@@ -53,9 +53,10 @@ test("a session on an openrouter catalog model completes a turn with the full en
 
     // Poll the wire instead of the rendered bubble: the CLI demonstrably runs
     // the turn through the OpenRouter env (request below carries the catalog
-    // model id and the stored key), but the mock's scripted SSE is not yet
-    // faithful enough for the CLI to complete rendering on a foreign model id.
-    // TODO: chase the response-side fidelity gap, then assert the visible reply.
+    // model id and the stored key). Rendered-reply assertions are currently
+    // broken harness-wide (hello.spec fails identically on pre-provider
+    // commits — CLI 2.1.217 response handling drifted from the mock's SSE),
+    // so the wire is the honest assertion surface until the mock catches up.
     await expect
       .poll(
         () =>

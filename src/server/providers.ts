@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { v4 as uuidv4 } from "uuid";
 import { toProviderModels } from "@/lib/models";
 import { getCockpitDir } from "@/server/paths";
-import { catalogModels, OPENROUTER_PROVIDER_ID, openRouterBaseUrl } from "@/server/provider-catalog";
+import { catalogModels, loadCatalog, OPENROUTER_PROVIDER_ID, openRouterBaseUrl } from "@/server/provider-catalog";
 import type { Provider, ProviderModel } from "@/types";
 
 function prefsDir(): string {
@@ -56,6 +56,7 @@ function buildOpenRouterProvider(stored: Provider | undefined): Provider {
     models: catalogModels(),
     isBuiltin: true,
     enabledModels: stored?.enabledModels ?? [],
+    syncedAt: loadCatalog()?.syncedAt,
   };
 }
 

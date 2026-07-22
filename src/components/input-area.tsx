@@ -15,6 +15,7 @@ import {
   Paperclip,
   Plug,
   RefreshCw,
+  Search,
   Send,
   Settings2,
   ShieldCheck,
@@ -30,6 +31,7 @@ import { CodeBlock, languageFromPath } from "@/components/code-block";
 import { MarkdownRender } from "@/components/markdown-render";
 import { McpStatusModal } from "@/components/mcp-status-modal";
 import { type MentionItem, MentionMenu } from "@/components/mention-menu";
+import { FreeBadge, formatContext, formatPerM } from "@/components/openrouter-provider";
 import { SlashCommandMenu } from "@/components/slash-command-menu";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
@@ -45,7 +47,6 @@ import {
   type ModelAlias,
   type ModelEntry,
   modelOneMRequiresCredits,
-  resolveProviderId,
   versionsForAlias,
 } from "@/lib/models";
 import { detectLanguage, extensionForLabel, shouldCollapsePaste } from "@/lib/paste-detect";
@@ -62,6 +63,8 @@ import type {
 import { ContextIndicator } from "./context-indicator";
 import { PromptHistoryModal } from "./prompt-history-modal";
 import { QueueModal } from "./queue-modal";
+
+const RECENT_MODELS_KEY = "cockpit-recent-models";
 
 const aliases: { value: ModelAlias; label: string }[] = [
   { value: "haiku", label: "Haiku" },
@@ -340,7 +343,31 @@ export function InputArea({
   const [optionsOpen, setOptionsOpen] = useState(false);
   const [inputFocused, setInputFocused] = useState(false);
   const [settingsTab, setSettingsTab] = useState<"model" | "runtime">("model");
-  const [viewProvider, setViewProvider] = useState<string>("anthropic");
+  const [modelSearch, setModelSearch] = useState("");
+  const [recentModels, setRecentModels] = useState<string[]>([]);
+  useEffect(() => {
+    try {
+      const raw = JSON.parse(localStorage.getItem(RECENT_MODELS_KEY) ?? "[]");
+      if (Array.isArray(raw)) setRecentModels(raw.filter((v): v is string => typeof v === "string"));
+    } catch {
+      // corrupt or absent — start empty
+    }
+  }, []);
+  const selectModel = useCallback(
+    (value: string) => {
+      onSetModel(value);
+      setRecentModels((prev) => {
+        const next = [value, ...prev.filter((v) => v !== value)].slice(0, 4);
+        try {
+          localStorage.setItem(RECENT_MODELS_KEY, JSON.stringify(next));
+        } catch {
+          // storage full/unavailable — recents just don't persist
+        }
+        return next;
+      });
+    },
+    [onSetModel],
+  );
   const [mentionSelectedIndex, setMentionSelectedIndex] = useState(0);
   const [cursorPos, setCursorPos] = useState(0);
   const [pendingImages, setPendingImages] = useState<ImageAttachment[]>([]);
@@ -795,10 +822,6 @@ export function InputArea({
         {optionsOpen &&
           (() => {
             const parsed = parseCurrentModel(currentModel, currentContextSize);
-            const allProviders = [
-              { id: "anthropic", name: "Anthropic" },
-              ...(providers || []).filter((p) => !p.isBuiltin).map((p) => ({ id: p.id, name: p.name })),
-            ];
             const vEntries = parsed.alias ? versionsForAlias(parsed.alias) : [];
             // Always show the version row for an Anthropic alias (single-version
             // models render one pill); custom-provider models have no alias versions.
@@ -888,82 +911,139 @@ export function InputArea({
                       {/* Model tab */}
                       {settingsTab === "model" && (
                         <div className="space-y-3">
-                          <div className="flex items-center justify-between">
-                            <div className="flex items-center gap-2">
-                              <Cpu className="h-3.5 w-3.5 text-muted-foreground" />
-                              <span className="text-xs font-medium text-foreground">Provider</span>
-                            </div>
-                            <select
-                              value={viewProvider}
-                              data-testid="provider-select"
-                              onChange={(e) => setViewProvider(e.target.value)}
-                              className="rounded border border-input bg-background px-2 py-1 text-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                            >
-                              {allProviders.map((p) => (
-                                <option key={p.id} value={p.id}>
-                                  {p.name}
-                                </option>
-                              ))}
-                            </select>
-                          </div>
+                          {(() => {
+                            const q = modelSearch.trim().toLowerCase();
+                            const aliasMatches = aliases.filter((a) => !q || a.label.toLowerCase().includes(q) || a.value.includes(q));
+                            const providerGroups = (providers || [])
+                              .filter((p) => p.id !== "anthropic")
+                              .map((p) => ({
+                                provider: p,
+                                // Catalog-backed providers show the curated
+                                // enabled set only; manual providers show all.
+                                models: (p.id === "openrouter"
+                                  ? p.models.filter((m) => (p.enabledModels ?? []).includes(m.modelId))
+                                  : p.models
+                                ).filter((m) => !q || m.modelId.toLowerCase().includes(q) || m.displayName.toLowerCase().includes(q)),
+                              }))
+                              .filter((g) => g.models.length > 0);
+                            const recentRows = recentModels.filter((v) => !q || v.toLowerCase().includes(q));
 
-                          {viewProvider === "anthropic" ? (
-                            <div className="space-y-0.5">
-                              {aliases.map((opt) => {
-                                const selected = parsed.alias === opt.value;
-                                return (
-                                  <button
-                                    key={opt.value}
-                                    onClick={() => onSetModel(valueForAlias(opt.value))}
-                                    className={`flex w-full items-center gap-3 rounded px-3 py-2 text-xs transition-colors ${
-                                      selected ? "bg-primary/10 text-primary" : "hover:bg-muted text-foreground"
-                                    }`}
-                                  >
-                                    <div className="w-3 shrink-0">
-                                      {selected ? (
-                                        <Check className="h-3 w-3" />
-                                      ) : (
-                                        <div className="h-3 w-3 rounded-full border border-muted-foreground/40" />
-                                      )}
-                                    </div>
-                                    <span className="font-mono font-medium">{opt.label}</span>
-                                  </button>
-                                );
-                              })}
-                            </div>
-                          ) : (
-                            (() => {
-                              const provider = providers?.find((p) => p.id === viewProvider);
-                              if (!provider) return null;
-                              return (
-                                <div className="space-y-0.5">
-                                  {provider.models.map((model) => {
-                                    const qualified = `${provider.id}:${model.modelId}`;
-                                    const selected = currentModel === qualified || currentModel === model.modelId;
-                                    return (
-                                      <button
-                                        key={model.modelId}
-                                        onClick={() => onSetModel(qualified)}
-                                        className={`flex w-full items-center gap-3 rounded px-3 py-2 text-xs transition-colors ${
-                                          selected ? "bg-primary/10 text-primary" : "hover:bg-muted text-foreground"
-                                        }`}
-                                      >
-                                        <div className="w-3 shrink-0">
-                                          {selected ? (
-                                            <Check className="h-3 w-3" />
-                                          ) : (
-                                            <div className="h-3 w-3 rounded-full border border-muted-foreground/40" />
-                                          )}
-                                        </div>
-                                        <span className="font-mono font-medium">{model.modelId}</span>
-                                        <span className="text-muted-foreground ml-auto">{model.displayName}</span>
-                                      </button>
-                                    );
-                                  })}
+                            const modelRow = (
+                              key: string,
+                              selected: boolean,
+                              onClick: () => void,
+                              label: React.ReactNode,
+                              right?: React.ReactNode,
+                            ) => (
+                              <button
+                                key={key}
+                                onClick={onClick}
+                                className={`flex w-full items-center gap-3 rounded px-3 py-2 text-xs transition-colors ${
+                                  selected ? "bg-primary/10 text-primary" : "hover:bg-muted text-foreground"
+                                }`}
+                              >
+                                <div className="w-3 shrink-0">
+                                  {selected ? (
+                                    <Check className="h-3 w-3" />
+                                  ) : (
+                                    <div className="h-3 w-3 rounded-full border border-muted-foreground/40" />
+                                  )}
                                 </div>
-                              );
-                            })()
-                          )}
+                                {label}
+                                {right}
+                              </button>
+                            );
+
+                            const groupLabel = (text: string) => (
+                              <p className="px-1 pt-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">{text}</p>
+                            );
+
+                            return (
+                              <>
+                                <div className="relative">
+                                  <Search className="absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+                                  <input
+                                    data-testid="model-search"
+                                    placeholder="Search models…"
+                                    value={modelSearch}
+                                    onChange={(e) => setModelSearch(e.target.value)}
+                                    className="w-full rounded border border-input bg-background py-1.5 pl-7 pr-2 text-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                                  />
+                                </div>
+                                <div className="max-h-72 space-y-1 overflow-y-auto pr-1">
+                                  {recentRows.length > 0 && (
+                                    <>
+                                      {groupLabel("Recent")}
+                                      {recentRows.map((value) => {
+                                        const colon = value.indexOf(":");
+                                        const providerName =
+                                          colon > 0
+                                            ? (providers?.find((p) => p.id === value.slice(0, colon))?.name ?? value.slice(0, colon))
+                                            : "Anthropic";
+                                        const bare = colon > 0 ? value.slice(colon + 1) : value;
+                                        const selected = currentModel === value || currentModel === bare;
+                                        return modelRow(
+                                          `recent-${value}`,
+                                          selected,
+                                          () => selectModel(value),
+                                          <span className="font-mono font-medium truncate">{bare.replace(/\[.*\]$/, "")}</span>,
+                                          <span className="ml-auto text-muted-foreground">{providerName}</span>,
+                                        );
+                                      })}
+                                    </>
+                                  )}
+
+                                  {aliasMatches.length > 0 && (
+                                    <>
+                                      {groupLabel("Anthropic")}
+                                      {aliasMatches.map((opt) =>
+                                        modelRow(
+                                          opt.value,
+                                          parsed.alias === opt.value,
+                                          () => selectModel(valueForAlias(opt.value)),
+                                          <span className="font-mono font-medium">{opt.label}</span>,
+                                        ),
+                                      )}
+                                    </>
+                                  )}
+
+                                  {providerGroups.map(({ provider, models }) => (
+                                    <div key={provider.id}>
+                                      {groupLabel(
+                                        provider.id === "openrouter"
+                                          ? `OpenRouter · ${provider.enabledModels?.length ?? 0} enabled`
+                                          : provider.name,
+                                      )}
+                                      {models.map((model) => {
+                                        const qualified = `${provider.id}:${model.modelId}`;
+                                        const selected = currentModel === qualified || currentModel === model.modelId;
+                                        return modelRow(
+                                          qualified,
+                                          selected,
+                                          () => selectModel(qualified),
+                                          <span className="flex min-w-0 items-center gap-2">
+                                            <span className="font-mono font-medium truncate">{model.modelId}</span>
+                                            {model.free && <FreeBadge model={model} />}
+                                          </span>,
+                                          <span className="ml-auto shrink-0 text-muted-foreground">
+                                            {model.pricing && !model.free
+                                              ? `${formatPerM(model.pricing.inPerM)}/${formatPerM(model.pricing.outPerM)}`
+                                              : model.contextLength
+                                                ? formatContext(model.contextLength)
+                                                : model.displayName}
+                                          </span>,
+                                        );
+                                      })}
+                                    </div>
+                                  ))}
+
+                                  {recentRows.length === 0 && aliasMatches.length === 0 && providerGroups.length === 0 && (
+                                    <p className="px-1 py-3 text-xs text-muted-foreground">No models match.</p>
+                                  )}
+                                </div>
+                              </>
+                            );
+                          })()}
 
                           {showVRow && (
                             <div className="flex items-center gap-2 pt-1">
@@ -1253,19 +1333,7 @@ export function InputArea({
               variant="ghost"
               data-testid="btn-session-settings"
               className={`h-8 w-8 ${bypassActive ? "text-orange-500" : ""}`}
-              onClick={() =>
-                setOptionsOpen((v) => {
-                  if (!v) {
-                    const p = parseCurrentModel(currentModel, currentContextSize);
-                    if (!p.alias) {
-                      setViewProvider(resolveProviderId(currentModel, providers));
-                    } else {
-                      setViewProvider("anthropic");
-                    }
-                  }
-                  return !v;
-                })
-              }
+              onClick={() => setOptionsOpen((v) => !v)}
             >
               <Settings2 className="h-4 w-4" />
             </Button>
@@ -1309,11 +1377,7 @@ export function InputArea({
                 type="button"
                 data-testid="model-pill"
                 title="Model and thinking level — click to change"
-                onClick={() => {
-                  const p = parseCurrentModel(currentModel, currentContextSize);
-                  setViewProvider(p.alias ? "anthropic" : resolveProviderId(currentModel, providers));
-                  setOptionsOpen(true);
-                }}
+                onClick={() => setOptionsOpen(true)}
                 className="absolute bottom-2.5 left-2.5 flex max-w-[60%] items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground transition-colors hover:bg-muted/70 hover:text-foreground"
               >
                 <Cpu className="h-2.5 w-2.5 shrink-0" />

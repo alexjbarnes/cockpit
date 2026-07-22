@@ -19,7 +19,7 @@ import {
 import { getAssistantSettings, updateAssistantSettings } from "@/server/assistant-settings";
 import { getCockpitDir } from "@/server/paths";
 import { ensureCatalogFresh, OPENROUTER_PROVIDER_ID } from "@/server/provider-catalog";
-import { openRouterModelEnv, resolveProviderModel } from "@/server/providers";
+import { getProvider, openRouterModelEnv, resolveProviderModel } from "@/server/providers";
 import type {
   ChatMessage,
   ContentBlock,
@@ -1164,11 +1164,37 @@ export class SessionManager {
     }
   }
 
+  /** Provider id a slot value belongs to. A qualified prefix wins even when
+   *  the model no longer resolves (e.g. delisted from the catalog) so scoping
+   *  never silently reclassifies a foreign id as Anthropic. Unqualified ids
+   *  and aliases resolve, defaulting to Anthropic. */
+  private slotProviderId(modelId: string | undefined): string {
+    if (!modelId) return "anthropic";
+    const colon = modelId.indexOf(":");
+    if (colon > 0 && getProvider(modelId.slice(0, colon))) return modelId.slice(0, colon);
+    const resolved = resolveProviderModel(modelId);
+    return resolved ? resolved.provider.id : "anthropic";
+  }
+
   setModelSlot(sessionId: string, slot: "main" | "subagent" | "fast", modelId: string): void {
     const session = this.sessions.get(sessionId);
     if (!session) return;
 
     const slots = { ...session.modelSlots };
+    // W4: slots are scoped to one provider per session — a CLI process has one
+    // base URL and one auth, and non-main slots are bare model ids sent to the
+    // main provider's endpoint. A cross-provider main change clears the other
+    // slots instead of carrying ids that would 404; a cross-provider non-main
+    // set is refused outright.
+    if (slot === "main") {
+      if (this.slotProviderId(modelId) !== this.slotProviderId(slots.main)) {
+        delete slots.subagent;
+        delete slots.fast;
+      }
+    } else if (this.slotProviderId(modelId) !== this.slotProviderId(slots.main)) {
+      smLog(sessionId, `setModelSlot: refused cross-provider ${slot} slot ${modelId} (main is ${slots.main ?? "default"})`);
+      return;
+    }
     slots[slot] = modelId;
     session.modelSlots = slots;
     setSessionPrefs(sessionId, { modelSlots: slots });

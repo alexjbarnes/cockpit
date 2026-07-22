@@ -4451,6 +4451,42 @@ describe("SessionManager", () => {
       expect(args).not.toContain("--resume");
     });
 
+    it("setModelSlot clears non-main slots when main changes provider", () => {
+      const session = manager.createSession("/tmp", "slot-scope-1", { runtime: "pty" });
+      manager.setModelSlot(session.id, "main", "sonnet");
+      manager.setModelSlot(session.id, "subagent", "haiku");
+      manager.setModelSlot(session.id, "fast", "haiku");
+
+      manager.setModelSlot(session.id, "main", "openrouter:vendor/model:free");
+
+      const s = (manager as any).sessions.get(session.id)!;
+      expect(s.modelSlots.main).toBe("openrouter:vendor/model:free");
+      expect(s.modelSlots.subagent).toBeUndefined();
+      expect(s.modelSlots.fast).toBeUndefined();
+    });
+
+    it("setModelSlot keeps non-main slots on a same-provider main change", () => {
+      const session = manager.createSession("/tmp", "slot-scope-2", { runtime: "pty" });
+      manager.setModelSlot(session.id, "main", "sonnet");
+      manager.setModelSlot(session.id, "subagent", "haiku");
+
+      manager.setModelSlot(session.id, "main", "opus");
+
+      const s = (manager as any).sessions.get(session.id)!;
+      expect(s.modelSlots.main).toBe("opus");
+      expect(s.modelSlots.subagent).toBe("haiku");
+    });
+
+    it("setModelSlot refuses a cross-provider non-main slot", () => {
+      const session = manager.createSession("/tmp", "slot-scope-3", { runtime: "pty" });
+      manager.setModelSlot(session.id, "main", "sonnet");
+
+      manager.setModelSlot(session.id, "subagent", "openrouter:vendor/model:free");
+
+      const s = (manager as any).sessions.get(session.id)!;
+      expect(s.modelSlots.subagent).toBeUndefined();
+    });
+
     it("/model slash command uses --session-id (not --resume) on respawn", async () => {
       const session = manager.createSession("/tmp", "PTY-slash", { runtime: "pty" });
       const s = (manager as any).sessions.get(session.id)!;

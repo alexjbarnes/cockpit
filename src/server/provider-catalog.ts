@@ -174,11 +174,74 @@ export function inUseOpenRouterModels(): Set<string> {
   return inUse;
 }
 
+/** Credit/limit snapshot for the provider-aware usage indicator. Field names
+ *  mirror OpenRouter's GET /v1/key response. */
+export interface OpenRouterUsage {
+  usage: number;
+  usageDaily: number;
+  usageWeekly: number;
+  usageMonthly: number;
+  limit: number | null;
+  limitRemaining: number | null;
+  isFreeTier: boolean;
+}
+
+function storedOpenRouterKey(): string | undefined {
+  try {
+    const providers: Array<{ id?: string; envVars?: Record<string, string> }> = JSON.parse(
+      readFileSync(join(getCockpitDir(), "providers.json"), "utf-8"),
+    );
+    return providers.find((p) => p.id === OPENROUTER_PROVIDER_ID)?.envVars?.ANTHROPIC_AUTH_TOKEN;
+  } catch {
+    return undefined;
+  }
+}
+
+const USAGE_CACHE_MS = 60_000;
+let usageCache: { at: number; data: OpenRouterUsage } | null = null;
+
+/** Live credit usage for the stored OpenRouter key. Returns null when no key
+ *  is connected. Cached for a minute — the indicator polls, the key API is
+ *  rate-limited like everything else. */
+export async function getOpenRouterUsage(): Promise<OpenRouterUsage | null> {
+  const key = storedOpenRouterKey();
+  if (!key) return null;
+  if (usageCache && Date.now() - usageCache.at < USAGE_CACHE_MS) return usageCache.data;
+  const res = await fetch(`${openRouterBaseUrl()}/v1/key`, {
+    headers: { Authorization: `Bearer ${key}` },
+    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+  });
+  if (!res.ok) throw new Error(`key usage fetch failed: HTTP ${res.status}`);
+  const body = (await res.json()) as {
+    data?: {
+      usage?: number;
+      usage_daily?: number;
+      usage_weekly?: number;
+      usage_monthly?: number;
+      limit?: number | null;
+      limit_remaining?: number | null;
+      is_free_tier?: boolean;
+    };
+  };
+  const d = body.data ?? {};
+  const data: OpenRouterUsage = {
+    usage: d.usage ?? 0,
+    usageDaily: d.usage_daily ?? 0,
+    usageWeekly: d.usage_weekly ?? 0,
+    usageMonthly: d.usage_monthly ?? 0,
+    limit: d.limit ?? null,
+    limitRemaining: d.limit_remaining ?? null,
+    isFreeTier: d.is_free_tier ?? false,
+  };
+  usageCache = { at: Date.now(), data };
+  return data;
+}
+
 /** W6j: a job on a catalog-backed model that is missing from the catalog must
  *  fail before the CLI spawns. Only judges openrouter-qualified ids, and only
  *  once a catalog exists — an unsynced install never fails jobs over it. */
 export function checkJobModel(model: string | undefined): { ok: true } | { ok: false; reason: string } {
-  if (!model || !model.startsWith(`${OPENROUTER_PROVIDER_ID}:`)) return { ok: true };
+  if (!model?.startsWith(`${OPENROUTER_PROVIDER_ID}:`)) return { ok: true };
   const catalog = loadCatalog();
   if (!catalog) return { ok: true };
   const bare = model.slice(OPENROUTER_PROVIDER_ID.length + 1).replace(/\[.*\]$/, "");

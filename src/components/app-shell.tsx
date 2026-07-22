@@ -306,7 +306,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                         {cwd && <BackgroundTasksButton tasks={backgroundTasks} />}
                       </>
                     )}
-                    {actions.showUsage && <UsageButton />}
+                    {actions.showUsage && <UsageButton sessionId={sessionId} />}
                   </div>
                 )}
               </header>

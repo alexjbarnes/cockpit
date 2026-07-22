@@ -438,4 +438,6 @@ export interface Provider {
   /** Curated opt-in set for catalog-backed providers: only these model ids
    *  appear in pickers. Absent means nothing enabled yet. */
   enabledModels?: string[];
+  /** Last successful catalog sync, for catalog-backed providers. */
+  syncedAt?: number;
 }
