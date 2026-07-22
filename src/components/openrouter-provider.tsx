@@ -18,12 +18,13 @@ export function formatPerM(v: number): string {
 
 /** Row display for catalog models: the vendor prefix pushed the distinctive
  *  part of long ids ("nvidia/nemotron-…") out of view on narrow screens, so
- *  the name leads and vendor/context/price form a meta line. The ":free"
- *  suffix is dropped from the name — the FREE badge already says it. */
+ *  the name leads and vendor/context/price form a meta line. The free-variant
+ *  suffix (":free" on OpenRouter, "-free" on Zen) is dropped from the name —
+ *  the FREE badge already says it. */
 export function splitProviderModelId(model: ProviderModel): { name: string; meta: string } {
   const slash = model.modelId.indexOf("/");
   const vendor = slash > 0 ? model.modelId.slice(0, slash) : "";
-  const name = (slash > 0 ? model.modelId.slice(slash + 1) : model.modelId).replace(/:free$/, "");
+  const name = (slash > 0 ? model.modelId.slice(slash + 1) : model.modelId).replace(/[-:]free$/, "");
   const parts: string[] = [];
   if (vendor) parts.push(vendor);
   if (model.contextLength) parts.push(formatContext(model.contextLength));

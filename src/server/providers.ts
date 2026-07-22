@@ -234,7 +234,15 @@ export async function syncZenModels(keyOverride?: string): Promise<{ ok: boolean
     const body = (await res.json()) as { data?: Array<{ id?: string }> };
     const ids = (body.data ?? []).map((m) => m.id).filter((id): id is string => !!id);
     if (ids.length === 0) return { ok: false, error: "Zen models fetch returned no models" };
-    const models: ProviderModel[] = ids.map((id) => ({ modelId: id, displayName: id, effortLevels: [], contextSizes: [] }));
+    // Zen's OpenAI-style list carries no pricing metadata; free models follow
+    // a "-free" id suffix convention (verified live), which drives the badge.
+    const models: ProviderModel[] = ids.map((id) => ({
+      modelId: id,
+      displayName: id,
+      effortLevels: [],
+      contextSizes: [],
+      free: /-free$/.test(id),
+    }));
     const prevEnabled = new Set(stored?.enabledModels ?? []);
     const enabledModels = stored ? ids.filter((id) => prevEnabled.size === 0 || prevEnabled.has(id)) : ids;
     saveBuiltinStored(OPENCODE_ZEN_PROVIDER_ID, {
