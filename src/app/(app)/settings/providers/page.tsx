@@ -51,7 +51,7 @@ export default function ProvidersPage() {
         {openrouter && (
           <OpenRouterCard provider={openrouter} onChanged={fetchProviders} onManage={() => router.push("/settings/providers/openrouter")} />
         )}
-        {zen && <ZenCard provider={zen} onChanged={fetchProviders} />}
+        {zen && <ZenCard provider={zen} onChanged={fetchProviders} onManage={() => router.push("/settings/providers/zen")} />}
 
         <p className="pt-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">Custom</p>
         <div className="space-y-1">

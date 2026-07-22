@@ -118,6 +118,35 @@ describe("providers", () => {
     expect(() => deleteProvider("zen")).toThrow(/built-in/);
   });
 
+  it("syncZenModels stores models, enables all on first connect, and stamps syncedAt", async () => {
+    const fs = await import("node:fs");
+    vi.mocked(fs.readFileSync).mockImplementation(() => {
+      throw new Error("ENOENT");
+    });
+    vi.mocked(fs.writeFileSync).mockImplementation(() => {});
+    vi.mocked(fs.mkdirSync).mockImplementation(() => "");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({ data: [{ id: "opencode/gpt-5.5" }, { id: "opencode/grok-code" }] }),
+      })) as unknown as typeof fetch,
+    );
+
+    const { syncZenModels } = await import("@/server/providers");
+    const result = await syncZenModels("zk-9");
+    expect(result).toEqual({ ok: true, modelCount: 2 });
+
+    const written = JSON.parse(vi.mocked(fs.writeFileSync).mock.calls.at(-1)?.[1] as string);
+    const zen = written.find((p: { id: string }) => p.id === "zen");
+    expect(zen.envVars.OPENCODE_API_KEY).toBe("zk-9");
+    expect(zen.models.map((m: { modelId: string }) => m.modelId)).toEqual(["opencode/gpt-5.5", "opencode/grok-code"]);
+    expect(zen.enabledModels).toEqual(["opencode/gpt-5.5", "opencode/grok-code"]);
+    expect(typeof zen.syncedAt).toBe("number");
+    vi.unstubAllGlobals();
+  });
+
   it("openrouter routes through the format proxy when it is active, direct otherwise", async () => {
     const fs = await import("node:fs");
     vi.mocked(fs.readFileSync).mockReturnValue(

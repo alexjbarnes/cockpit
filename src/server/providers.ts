@@ -144,6 +144,7 @@ function saveBuiltinStored(id: string, partial: Partial<Provider>): Provider {
     models: partial.models ?? prev?.models ?? [],
     envVars: partial.envVars ?? prev?.envVars ?? {},
     enabledModels: partial.enabledModels ?? prev?.enabledModels ?? [],
+    syncedAt: partial.syncedAt ?? prev?.syncedAt,
   };
   saveCustom(loadCustom(), entry);
   return entry;
@@ -195,6 +196,7 @@ function buildOpenCodeZenProvider(stored: Provider | undefined): Provider {
     models: stored?.models ?? [],
     isBuiltin: true,
     enabledModels: stored?.enabledModels ?? [],
+    syncedAt: stored?.syncedAt,
   };
 }
 
@@ -239,6 +241,7 @@ export async function syncZenModels(keyOverride?: string): Promise<{ ok: boolean
       envVars: { ...stored?.envVars, OPENCODE_API_KEY: apiKey },
       models,
       enabledModels,
+      syncedAt: Date.now(),
     });
     rebuildCache(loadCustom());
     return { ok: true, modelCount: models.length };

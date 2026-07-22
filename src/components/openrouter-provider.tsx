@@ -122,8 +122,12 @@ export function OpenRouterCard({ provider, onChanged, onManage }: { provider: Pr
 
 type Filter = "all" | "free" | "tools" | "enabled";
 
-/** W2-A model browser for the openrouter provider detail page. */
-export function OpenRouterModelBrowser({ provider, onChanged }: { provider: Provider; onChanged: () => void }) {
+/** W2-A model browser, shared by every catalog-backed built-in provider
+ *  (openrouter, zen). Filters that depend on catalog metadata (free flags,
+ *  tool support) appear only when the provider's models carry it. */
+export function ProviderModelBrowser({ provider, onChanged }: { provider: Provider; onChanged: () => void }) {
+  const hasFreeMeta = provider.models.some((m) => m.free);
+  const hasToolsMeta = provider.models.some((m) => m.supportsTools !== undefined);
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<Filter>("all");
   const [syncing, setSyncing] = useState(false);
@@ -146,7 +150,7 @@ export function OpenRouterModelBrowser({ provider, onChanged }: { provider: Prov
     setSaving(true);
     setError(null);
     try {
-      const res = await fetch("/api/providers/openrouter", {
+      const res = await fetch(`/api/providers/${provider.id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ enabledModels: [...ids] }),
@@ -171,7 +175,7 @@ export function OpenRouterModelBrowser({ provider, onChanged }: { provider: Prov
     setSyncing(true);
     setError(null);
     try {
-      const res = await fetch("/api/providers/openrouter/sync", { method: "POST" });
+      const res = await fetch(`/api/providers/${provider.id}/sync`, { method: "POST" });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         throw new Error(body.error || `HTTP ${res.status}`);
@@ -210,8 +214,8 @@ export function OpenRouterModelBrowser({ provider, onChanged }: { provider: Prov
         {(
           [
             ["all", "All"],
-            ["free", "Free"],
-            ["tools", "Tools"],
+            ...(hasFreeMeta ? [["free", "Free"]] : []),
+            ...(hasToolsMeta ? [["tools", "Tools"]] : []),
             ["enabled", "Enabled"],
           ] as [Filter, string][]
         ).map(([value, label]) => (
@@ -272,19 +276,34 @@ export function OpenRouterModelBrowser({ provider, onChanged }: { provider: Prov
           <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => void persistEnabled(new Set())} disabled={saving}>
             Disable all
           </Button>
+          {hasFreeMeta && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7 text-xs"
+              data-testid="enable-free"
+              onClick={() => {
+                const next = new Set(enabled);
+                for (const m of provider.models) if (m.free) next.add(m.modelId);
+                void persistEnabled(next);
+              }}
+              disabled={saving}
+            >
+              Enable free models
+            </Button>
+          )}
           <Button
             variant="outline"
             size="sm"
             className="h-7 text-xs"
-            data-testid="enable-free"
             onClick={() => {
               const next = new Set(enabled);
-              for (const m of provider.models) if (m.free) next.add(m.modelId);
+              for (const m of provider.models) next.add(m.modelId);
               void persistEnabled(next);
             }}
             disabled={saving}
           >
-            Enable free models
+            Enable all
           </Button>
         </div>
       </div>
@@ -303,7 +322,7 @@ function formatAgo(ts: number): string {
 
 /** Connect card for OpenCode Zen — key-only, models sync on connect, sessions
  *  run through cockpit's Anthropic-to-OpenAI format proxy. */
-export function ZenCard({ provider, onChanged }: { provider: Provider; onChanged: () => void }) {
+export function ZenCard({ provider, onChanged, onManage }: { provider: Provider; onChanged: () => void; onManage: () => void }) {
   const [key, setKey] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -342,11 +361,18 @@ export function ZenCard({ provider, onChanged }: { provider: Provider; onChanged
           <span className="rounded bg-muted px-1.5 text-[10px] text-muted-foreground">not connected</span>
         )}
         <span className="ml-auto text-xs text-muted-foreground">
-          {connected
-            ? `${provider.models.length} models · ${provider.enabledModels?.length ?? 0} enabled`
-            : "OpenAI wire format · via cockpit proxy"}
+          {connected ? `${provider.models.length} models` : "OpenAI wire format · via cockpit proxy"}
         </span>
       </div>
+      {connected && (
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <span>{provider.enabledModels?.length ?? 0} enabled for pickers</span>
+          <Button variant="outline" size="sm" className="ml-auto h-7 text-xs" onClick={onManage}>
+            Manage models
+            <ChevronRight className="h-3 w-3 ml-1" />
+          </Button>
+        </div>
+      )}
       {!connected && (
         <div className="flex items-center gap-2">
           <Input

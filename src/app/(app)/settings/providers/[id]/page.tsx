@@ -4,7 +4,7 @@ import { ArrowLeft, Loader2 } from "lucide-react";
 import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { usePageHeader } from "@/components/app-shell";
-import { OpenRouterModelBrowser } from "@/components/openrouter-provider";
+import { ProviderModelBrowser } from "@/components/openrouter-provider";
 import { ProviderForm } from "@/components/provider-form";
 import { Button } from "@/components/ui/button";
 import type { Provider } from "@/types";
@@ -68,16 +68,16 @@ export default function EditProviderPage() {
     );
   }
 
-  // The openrouter built-in is catalog-synced and curated, never hand-edited —
-  // it gets the model browser instead of the manual provider form.
-  if (provider.id === "openrouter") {
+  // Catalog-backed built-ins are synced and curated, never hand-edited —
+  // they get the shared model browser instead of the manual provider form.
+  if (provider.isBuiltin && provider.id !== "anthropic") {
     return (
       <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-4">
         <Button variant="ghost" size="sm" onClick={() => router.push("/settings/providers")}>
           <ArrowLeft className="h-4 w-4 mr-1" />
           Providers
         </Button>
-        <OpenRouterModelBrowser provider={provider} onChanged={refetch} />
+        <ProviderModelBrowser provider={provider} onChanged={refetch} />
       </div>
     );
   }
