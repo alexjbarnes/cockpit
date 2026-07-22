@@ -192,7 +192,8 @@ describe("StreamTranslator", () => {
       .filter((e) => e.event === "content_block_delta" && (e.data.delta as { type: string }).type === "input_json_delta")
       .map((e) => (e.data.delta as { partial_json: string }).partial_json);
     expect(jsonDeltas.join("")).toBe('{"city":"Leeds"}');
-    expect((events.find((e) => e.event === "message_delta")?.data.delta as { stop_reason: string }).stop_reason).toBe("tool_use");
+    const messageDelta = events.find((e) => e.event === "message_delta")?.data.delta as { stop_reason: string } | undefined;
+    expect(messageDelta?.stop_reason).toBe("tool_use");
     expect(events.filter((e) => e.event === "content_block_stop")).toHaveLength(2);
   });
 

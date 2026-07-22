@@ -117,27 +117,15 @@ function OpenRouterUsagePanel() {
   );
 }
 
-export function UsageButton({ className, sessionId }: { className?: string; sessionId?: string }) {
+export function UsageButton({ className, sessionModel }: { className?: string; sessionModel?: string }) {
   const [open, setOpen] = useState(false);
-  const [sessionModel, setSessionModel] = useState<string | null>(null);
   const { usage, loading, error, refresh } = useUsage();
 
   // The indicator follows the active session's provider: an OpenRouter
   // session shows credit spend, everything else keeps the Anthropic
-  // subscription view. The model is resolved when the modal opens.
-  useEffect(() => {
-    if (!open || !sessionId) {
-      setSessionModel(null);
-      return;
-    }
-    fetch("/api/sessions")
-      .then((res) => res.json())
-      .then((data: Array<{ id: string; model?: string }>) => {
-        if (Array.isArray(data)) setSessionModel(data.find((s) => s.id === sessionId)?.model ?? null);
-      })
-      .catch(() => setSessionModel(null));
-  }, [open, sessionId]);
-
+  // subscription view. The model arrives live from the session view via the
+  // shell context — the sessions list API omits model for scanned sessions,
+  // so it can never be the source of truth here.
   const isOpenRouter = !!sessionModel?.startsWith("openrouter:");
 
   useEffect(() => {

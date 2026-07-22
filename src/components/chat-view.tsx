@@ -11,7 +11,7 @@ import { pathBasename } from "@/lib/path";
 import { splitAtQuestion } from "@/lib/split-question-blocks";
 import { cn } from "@/lib/utils";
 import type { Provider } from "@/types";
-import { useShell } from "./app-shell";
+import { useShell, useShellSessionModel } from "./app-shell";
 import { ConfigProposalCard } from "./chat/config-proposal-card";
 import { InputArea } from "./input-area";
 import { MessageBubble } from "./message-bubble";
@@ -101,6 +101,8 @@ export function ChatView({
   const { settings } = useSettings();
   const router = useRouter();
   const { setHeader, setBackgroundTasks, setTodos, setInitData: setShellInitData, setRuntime: setShellRuntime } = useShell();
+  // Header widgets (the usage indicator) follow this session's provider.
+  useShellSessionModel(historyView ? undefined : currentModel);
   const scrollRef = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);
   const [showScrollDown, setShowScrollDown] = useState(false);
