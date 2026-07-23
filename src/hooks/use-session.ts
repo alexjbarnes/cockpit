@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { deriveAgentTasks } from "@/lib/agent-tasks";
 import { type ContextSize, DEFAULT_CONTEXT_SIZE, resolveModel } from "@/lib/models";
 import type {
   BackgroundTask,
@@ -126,7 +127,7 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
   const [sessionName, setSessionName] = useState<string | null>(null);
   const [initData, setInitData] = useState<InitData | null>(null);
   const [activeModelId, setActiveModelId] = useState<string | null>(null);
-  const [backgroundTasks, setBackgroundTasks] = useState<BackgroundTask[]>([]);
+  const [hookTasks, setHookTasks] = useState<BackgroundTask[]>([]);
   const [todos, setTodos] = useState<TodoItem[]>([]);
   const [btw, setBtw] = useState<BtwState | null>(null);
   const [promptHistory, setPromptHistory] = useState<string[]>([]);
@@ -276,7 +277,7 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
               setMessages((prev) => prev.filter((m) => m.id !== "streaming"));
               setPendingQuestions([]);
               setRateLimitStatus(null);
-              setBackgroundTasks((prev) => {
+              setHookTasks((prev) => {
                 if (prev.some((t) => t.status === "running")) {
                   return prev.filter((t) => t.status !== "running");
                 }
@@ -345,7 +346,7 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
             }
           }
           if (agentDescs.size > 0) {
-            setBackgroundTasks((prev) => {
+            setHookTasks((prev) => {
               let changed = false;
               const next = prev.map((t) => {
                 if (t.title && agentDescs.has(t.title) && (!t.description || t.description === t.title)) {
@@ -678,7 +679,7 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
         }
 
         case "session:task_update": {
-          setBackgroundTasks((prev) => {
+          setHookTasks((prev) => {
             const existing = prev.find((t) => t.taskId === msg.task.taskId);
             if (existing) {
               return prev.map((t) =>
@@ -698,7 +699,7 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
           });
           if (msg.task.status === "completed") {
             setTimeout(() => {
-              setBackgroundTasks((prev) => prev.filter((t) => t.taskId !== msg.task.taskId));
+              setHookTasks((prev) => prev.filter((t) => t.taskId !== msg.task.taskId));
             }, 5000);
           }
           break;
@@ -735,7 +736,7 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
             setPendingQuestions([]);
             setRateLimitStatus(null);
             // Clear any background tasks still running - the process has exited
-            setBackgroundTasks((prev) => {
+            setHookTasks((prev) => {
               const stale = prev.filter((t) => t.status === "running");
               if (stale.length === 0) return prev;
               return prev.filter((t) => t.status !== "running");
@@ -807,7 +808,7 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
           lastServerMsgIdRef.current = null;
           streamingRef.current = null;
           agentStackRef.current = [];
-          setBackgroundTasks([]);
+          setHookTasks([]);
           setTodos([]);
           setHasQueuedMessage(false);
           setQueuedMessages([]);
@@ -1338,6 +1339,11 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
   const restartSession = useCallback(() => {
     send({ type: "session:restart", sessionId });
   }, [send, sessionId]);
+
+  // Agents come from the message stream, not from hooks: the CLI reports a
+  // subagent's completion but never its start, so a hook-only list stayed
+  // empty for exactly as long as an agent was actually running.
+  const backgroundTasks = useMemo(() => deriveAgentTasks(messages, hookTasks, isResponding), [messages, hookTasks, isResponding]);
 
   return {
     messages,
