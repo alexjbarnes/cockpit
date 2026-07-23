@@ -9,25 +9,28 @@
 
 ## Why
 
-Claude Code is great. It's also a terminal app. One window, one machine, foreground only. Cockpit takes the same engine and runs it as a server you reach from any browser.
+Claude Code is great. It's also a terminal app. One window, one machine, foreground only. Cockpit runs the same engine as a server: sessions live on the server, the browser is just a viewer, and closing your laptop kills nothing.
 
-Three things follow:
+The shape is simple: **browser ↔ Cockpit server ↔ the real Claude Code CLI**. Not a reimplementation of the agent loop, the actual CLI, driven headless or through a pseudo-terminal.
 
-1. **Claude Code on your phone.** Reply to your assistant from a train, a kitchen, anywhere a browser opens.
-2. **Many Claude Code sessions running at once.** Switch between projects without juggling tmux panes. Sessions live on the server, so closing the browser does not kill them. The chat view stitches across `/clear` so long threads keep their full visual history.
-3. **Cron-driven Claude Code.** Schedule a prompt, walk away. Each run produces a transcript that renders the same as a live session.
+Four things follow:
 
-Inside a session: a tabbed, split-pane layout holding the chat, a diff viewer for code changes (split or inline), a file viewer with syntax highlighting, and an embedded terminal. Plus global search across all sessions (Ctrl+Shift+F), searchable prompt history on the up arrow, and plan-mode approvals when Claude proposes a plan. The sidebar shows collapsible sections for sessions, reviews, file changes, and file trees, with status beacons so you can tell at a glance which sessions are working, waiting, or idle.
+1. **Claude Code on your phone.** Reply from a train, a kitchen, anywhere a browser opens. The session you started at your desk is right there, still working.
+2. **Many sessions running at once.** Switch between projects without juggling tmux panes. Status beacons show which sessions are working, waiting, or idle, and the chat view stitches across `/clear` so long threads keep their full visual history.
+3. **Any model through the full agentic loop.** Tool use, file edits, and permission prompts work the same whether the model is Claude, something free off OpenRouter's catalog, or DeepSeek. Providers that only speak the OpenAI wire format run through a built-in translation proxy, thinking traces included.
+4. **Unattended agents on a schedule.** Not a cron wrapper: each job is a sandboxed run with its own model, its own tool and MCP allowlists, and a time budget, reporting back through an inbox or straight to your phone.
 
-**Any model, not just Claude.** One-key connect to OpenRouter, OpenCode Zen, and DeepSeek, or point Cockpit at any Anthropic-compatible endpoint of your own, each with its own credentials. Connect OpenRouter and its whole catalog is a click away, free models included, with live pricing and a FREE badge shown right in the picker. Curate the list down to the handful you actually use. Providers that speak only the OpenAI wire format work through a built-in translation proxy, so their reasoning models render their thinking in the same chat as Claude. Pick the model per session and per scheduled job, choose 200K or 1M context, and set the thinking level. Each provider tracks its own spend or balance in the usage panel.
+Inside a session: a tabbed, split-pane layout holding the chat, a diff viewer for code changes (split or inline), a file viewer with syntax highlighting, and an embedded terminal. Messages sent while Claude is working queue server-side and deliver when the turn ends, and `/btw` answers a quick side question in a separate tool-less Claude without disturbing the run. Plus global search across all sessions (Ctrl+Shift+F), searchable prompt history on the up arrow, and plan-mode approvals when Claude proposes a plan. The sidebar keeps sessions, active reviews, file changes, and file trees in collapsible sections.
 
-Each session runs in **Stream** mode (headless, the default) or **PTY** mode, which drives the real Claude Code CLI inside a pseudo-terminal. Switch per session.
+**Bring every provider under one roof.** One-key connect to OpenRouter, OpenCode Zen, and DeepSeek, or point Cockpit at any Anthropic-compatible endpoint of your own, each with its own credentials. Connect OpenRouter and its whole catalog is a click away, free models included, with live pricing and a FREE badge shown right in the picker. Curate the list down to the handful you actually use, then pick the model per session and per scheduled job, with 200K or 1M context and a thinking level. Each provider tracks its own spend or balance in the usage panel.
 
-It also takes care of things you usually hand-edit: agents, skills, hooks, MCP servers, CLAUDE.md memory. All editable from the UI.
+Each session runs in **Stream** mode (headless JSON, the default) or **PTY** mode, which drives the interactive CLI inside a pseudo-terminal. PTY exists for a reason: subscription plans bill programmatic and interactive usage differently, and PTY keeps Cockpit sessions on the interactive side. Switch per session.
 
-PR reviews are a first-class flow. Pick an org, pick a repo, pick a PR. Cockpit reads the diff via the GitHub CLI and starts a Claude session scoped to it. Diff on one side, chat on the other. Active reviews pin to the sidebar alongside your sessions.
+It also takes care of things you usually hand-edit: agents, skills, hooks, MCP servers, plugins, CLAUDE.md memory. All editable from the UI, or conversationally: the built-in Cockpit Assistant is a Claude session wired to Cockpit's own MCP server, so "create a nightly job that..." becomes a config change you approve or reject.
 
-**Scheduled jobs** turn Claude Code into a cron worker. Give one a prompt and a schedule (a cron expression or a simple interval) and scope it tightly: its own model and thinking level, the exact tools and MCP servers it is allowed to touch, a run-time budget, how long to keep transcripts. It runs unattended, and each run renders as a normal session transcript you can open later. Results land in an inbox, with optional push to Telegram or ntfy.sh, so a nightly dependency bump or a morning PR-triage pass reaches your phone while you are away from the machine.
+PR reviews are a first-class flow. Pick an org, pick a repo, pick a PR. Cockpit reads the diff via the GitHub CLI and starts a Claude session scoped to it. Diff on one side, chat on the other. Active reviews pin to the sidebar alongside your sessions. Day-to-day git lives here too: review the working tree, generate a commit message, commit and push without leaving the browser.
+
+**Scheduled jobs** are where the server earns its keep. Give one a prompt and a schedule (a cron expression or a simple interval) and scope it tightly: its own model and thinking level, the exact tools and MCP servers it is allowed to touch, a run-time budget, how long to keep transcripts. It runs unattended, and each run renders as a normal session transcript you can open later. Results land in an inbox, with optional push to Telegram or ntfy.sh, so a nightly dependency bump or a morning PR-triage pass reaches your phone while you are away from the machine.
 
 Run it on your laptop the way you'd run the TUI. Or run it on a home server and reach it from your phone. Same UI either way.
 
@@ -113,6 +116,8 @@ To restrict Cockpit to the host machine only, set `HOST=127.0.0.1`.
 npm install
 npm run dev
 ```
+
+Unit tests run with `npx vitest run`. The [integration suite](docs/integration-tests.md) drives the real Claude Code CLI against a mock Anthropic API through Playwright, so runtime behaviour is proven rather than assumed. Issues and PRs welcome.
 
 ## License
 
