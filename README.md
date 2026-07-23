@@ -19,7 +19,9 @@ Three things follow:
 
 Inside a session: a tabbed, split-pane layout holding the chat, a diff viewer for code changes (split or inline), a file viewer with syntax highlighting, and an embedded terminal. Plus global search across all sessions (Ctrl+Shift+F), searchable prompt history on the up arrow, and plan-mode approvals when Claude proposes a plan. The sidebar shows collapsible sections for sessions, reviews, file changes, and file trees, with status beacons so you can tell at a glance which sessions are working, waiting, or idle.
 
-**Bring your own models.** Built-in Haiku, Sonnet, and Opus, or point Cockpit at any Anthropic-compatible endpoint, a proxy, a gateway, or your own deployment, each with its own credentials and model list. Choose the model per session and per scheduled job, with a 200K or 1M context selector. Each session runs in Stream mode (headless) or PTY mode, which drives the real Claude Code CLI through a pseudo-terminal.
+**Any model, not just Claude.** One-key connect to OpenRouter, OpenCode Zen, and DeepSeek, or point Cockpit at any Anthropic-compatible endpoint of your own, each with its own credentials. Connect OpenRouter and its whole catalog is a click away, free models included, with live pricing and a FREE badge shown right in the picker. Curate the list down to the handful you actually use. Providers that speak only the OpenAI wire format work through a built-in translation proxy, so their reasoning models render their thinking in the same chat as Claude. Pick the model per session and per scheduled job, choose 200K or 1M context, and set the thinking level. Each provider tracks its own spend or balance in the usage panel.
+
+Each session runs in **Stream** mode (headless, the default) or **PTY** mode, which drives the real Claude Code CLI inside a pseudo-terminal. Switch per session.
 
 It also takes care of things you usually hand-edit: agents, skills, hooks, MCP servers, CLAUDE.md memory. All editable from the UI.
 
@@ -99,7 +101,7 @@ To restrict Cockpit to the host machine only, set `HOST=127.0.0.1`.
 ## Documentation
 
 - [Sessions](docs/sessions.md): chat, runtime modes, tabbed layout, sidebar, attachments, plan mode, diffs, file view, prompt history, todos, search, session linking
-- [Model providers](docs/providers.md): built-in and custom Anthropic-compatible providers, context sizes, model slots
+- [Model providers](docs/providers.md): built-in OpenRouter, OpenCode Zen, and DeepSeek gateways, custom Anthropic-compatible providers, the OpenAI translation proxy, context sizes, model slots, and per-provider usage
 - [Embedded terminal](docs/terminal.md): in-browser shell with themes and mobile support
 - [PR reviews](docs/pr-reviews.md): GitHub PR browsing and review sessions
 - [Scheduled jobs](docs/scheduled-jobs.md): cron-driven Claude Code runs

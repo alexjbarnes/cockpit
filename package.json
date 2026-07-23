@@ -1,7 +1,7 @@
 {
   "name": "@alexjbarnes/cockpit",
   "version": "0.4.2",
-  "description": "Web UI for Claude Code",
+  "description": "Web UI for Claude Code: parallel sessions on any device, scheduled jobs, PR reviews, and any model provider",
   "license": "Apache-2.0",
   "author": "Alex Barnes (https://github.com/alexjbarnes)",
   "homepage": "https://github.com/alexjbarnes/cockpit#readme",
@@ -15,8 +15,15 @@
   "keywords": [
     "claude",
     "claude-code",
+    "anthropic",
     "ai",
-    "web-ui"
+    "ai-agents",
+    "web-ui",
+    "self-hosted",
+    "openrouter",
+    "scheduled-jobs",
+    "pr-review",
+    "mcp"
   ],
   "bin": {
     "cockpit": "./bin/cockpit.js"
