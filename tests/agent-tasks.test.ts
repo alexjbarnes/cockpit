@@ -3,7 +3,7 @@
 // successfully ... agentId: ac6a880af087a5341" while the agent keeps running,
 // and the CLI only reports it again on SubagentStop.
 import { describe, expect, it } from "vitest";
-import { deriveAgentTasks } from "@/lib/agent-tasks";
+import { agentIdFromOutput, deriveAgentTasks, isAsyncLaunchOutput } from "@/lib/agent-tasks";
 import type { BackgroundTask, ChatMessage, ToolUse } from "@/types";
 
 const ASYNC_OUTPUT =
@@ -16,6 +16,20 @@ function tool(partial: Partial<ToolUse> & { id: string }): ToolUse {
 function msg(tools: ToolUse[]): ChatMessage {
   return { id: `m-${tools.map((t) => t.id).join("-")}`, role: "assistant", content: "", toolUses: tools, blocks: [], timestamp: 0 };
 }
+
+describe("launch output helpers", () => {
+  it("recognises a background launch and pulls the agent id out of it", () => {
+    expect(isAsyncLaunchOutput(ASYNC_OUTPUT)).toBe(true);
+    expect(agentIdFromOutput(ASYNC_OUTPUT)).toBe("ac6a880af087a5341");
+  });
+
+  it("treats a real agent result as ordinary output", () => {
+    const result = "The file contains the text 'hello world'.";
+    expect(isAsyncLaunchOutput(result)).toBe(false);
+    expect(agentIdFromOutput(result)).toBeUndefined();
+    expect(isAsyncLaunchOutput(undefined)).toBe(false);
+  });
+});
 
 describe("deriveAgentTasks", () => {
   it("reports a launched async agent as running even though its tool use is done", () => {

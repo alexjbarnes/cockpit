@@ -12,6 +12,18 @@ import type { BackgroundTask, ChatMessage, ToolUse } from "@/types";
 const ASYNC_LAUNCH_RE = /async agent launched/i;
 const AGENT_ID_RE = /agentId:\s*([A-Za-z0-9_-]+)/;
 
+/** The launch result is addressed to the model, not to a person: the CLI
+ *  labels it "internal metadata" and tells the model never to quote it. It
+ *  carries the agent id, a SendMessage recipe, the JSONL path and a warning
+ *  not to read that path. None of it belongs on screen. */
+export function isAsyncLaunchOutput(output: string | undefined): boolean {
+  return ASYNC_LAUNCH_RE.test(output ?? "");
+}
+
+export function agentIdFromOutput(output: string | undefined): string | undefined {
+  return output?.match(AGENT_ID_RE)?.[1];
+}
+
 function parseInput(raw: string): Record<string, unknown> {
   try {
     const parsed = JSON.parse(raw || "{}");

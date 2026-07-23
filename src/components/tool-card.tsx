@@ -3,6 +3,7 @@
 import { ChevronRight, ClipboardList, ExternalLink, Loader2 } from "lucide-react";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSettings } from "@/hooks/use-settings";
+import { agentIdFromOutput, isAsyncLaunchOutput } from "@/lib/agent-tasks";
 import { shortPath } from "@/lib/path";
 import { cn } from "@/lib/utils";
 import type { ChatMessage, ToolUse } from "@/types";
@@ -474,7 +475,12 @@ function AgentContent({
 }) {
   const prompt = (input.prompt as string) || "";
   const children = tool.children || [];
-  const { sessionId, cwd } = useShell();
+  const { sessionId, cwd, backgroundTasks } = useShell();
+  // A background launch reports "done" the moment it returns, so its own tool
+  // status says nothing about the agent. The task list is what knows.
+  const launchedAsync = isAsyncLaunchOutput(tool.output);
+  const agentId = agentIdFromOutput(tool.output);
+  const stillRunning = backgroundTasks.some((t) => t.toolUseId === (agentId ?? tool.id) && t.status === "running");
 
   // On-demand subagent transcript. The CLI writes each Task/Agent subagent to
   // its own `subagents/agent-<id>.jsonl`; the parent tool_use id (tool.id) maps
@@ -484,6 +490,16 @@ function AgentContent({
   const [error, setError] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[] | null>(null);
   const subExpandedToolIds = useRef<Set<string>>(new Set());
+
+  // The agent's transcript opens with the prompt it was handed, which is the
+  // block already rendered above this. Showing it twice pushed the agent's
+  // actual work off the screen, so the echo is dropped.
+  const transcript = useMemo(() => {
+    if (!messages) return [];
+    const first = messages[0];
+    const echoesPrompt = first?.role === "user" && prompt && first.content.trim().startsWith(prompt.trim().slice(0, 200));
+    return echoesPrompt ? messages.slice(1) : messages;
+  }, [messages, prompt]);
 
   const toggleTranscript = useCallback(() => {
     setOpen((prev) => {
@@ -515,7 +531,7 @@ function AgentContent({
   return (
     <div className="space-y-2">
       {prompt && (
-        <pre className="overflow-x-auto rounded bg-muted/50 p-2 text-[11px] leading-relaxed max-h-32 overflow-y-auto text-muted-foreground">
+        <pre className="whitespace-pre-wrap break-words rounded bg-muted/50 p-2 text-[11px] leading-relaxed max-h-32 overflow-y-auto text-muted-foreground">
           {prompt}
         </pre>
       )}
@@ -526,11 +542,17 @@ function AgentContent({
           ))}
         </div>
       )}
-      {tool.output && (
-        <pre className="overflow-x-auto rounded bg-muted/50 p-2 text-[11px] leading-relaxed max-h-48 overflow-y-auto text-muted-foreground">
-          {tool.output}
-        </pre>
-      )}
+      {tool.output &&
+        (launchedAsync ? (
+          <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+            <Loader2 className={cn("h-3 w-3", stillRunning ? "animate-spin" : "hidden")} />
+            <span>{stillRunning ? "Working in the background" : "Ran in the background"}</span>
+          </div>
+        ) : (
+          <pre className="whitespace-pre-wrap break-words rounded bg-muted/50 p-2 text-[11px] leading-relaxed max-h-48 overflow-y-auto text-muted-foreground">
+            {tool.output}
+          </pre>
+        ))}
       {sessionId && (
         <div className="space-y-1">
           <button
@@ -546,12 +568,15 @@ function AgentContent({
           {open && !loading && !error && messages !== null && messages.length === 0 && (
             <div className="text-[11px] italic text-muted-foreground">No transcript recorded for this agent.</div>
           )}
-          {open && messages !== null && messages.length > 0 && (
+          {open && messages !== null && transcript.length > 0 && (
             <div className="space-y-3 border-l-2 border-border pl-3">
-              {messages.map((m) => (
+              {transcript.map((m) => (
                 <MessageBubble key={m.id} message={m} expandedToolIds={subExpandedToolIds} />
               ))}
             </div>
+          )}
+          {open && messages !== null && messages.length > 0 && transcript.length === 0 && (
+            <div className="text-[11px] italic text-muted-foreground">Agent has not replied yet.</div>
           )}
         </div>
       )}
