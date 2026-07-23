@@ -103,6 +103,10 @@ function spawnCliInitFetch(opts: { cwd: string; bin?: string }): Promise<InitDat
     });
 
     proc.on("close", (code) => {
+      // A successful fetch kills the process itself, so this fires on every
+      // run: logging it reported a self-inflicted exit as though it were a
+      // failure, and the late write outlived the caller.
+      if (resolved) return;
       console.log(`[cli-init-fetch] process exited code=${code}${stderrBuf ? ` stderr=${stderrBuf.slice(0, 200)}` : ""}`);
       done(null);
     });
