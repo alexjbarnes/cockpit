@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { validateSession } from "@/server/auth";
-import { DEEPSEEK_PROVIDER_ID, getDeepSeekBalance, getProvider, OPENCODE_ZEN_PROVIDER_ID } from "@/server/providers";
+import { DEEPSEEK_PROVIDER_ID, type DeepSeekBalance, getDeepSeekBalance, getProvider, OPENCODE_ZEN_PROVIDER_ID } from "@/server/providers";
 import { UsageMeter } from "@/server/usage-meter";
 
 function checkAuth(req: NextRequest): boolean {
@@ -28,7 +28,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
   const pricing = new Map(provider.models.map((m) => [m.modelId, m.pricing]));
   const spend = new UsageMeter().summarize(id, pricing);
 
-  let balance: { currency: string; totalBalance: number } | null = null;
+  let balance: DeepSeekBalance | null = null;
   let balanceError: string | undefined;
   if (id === DEEPSEEK_PROVIDER_ID) {
     try {

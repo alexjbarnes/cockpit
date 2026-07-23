@@ -373,6 +373,44 @@ describe("providers", () => {
     expect(zenUpstream?.effortByModel).toEqual({ "gpt-5.5": ["low", "medium", "high"] });
   });
 
+  it("getDeepSeekBalance parses balance_infos, caches, and is null without a key", async () => {
+    const fs = await import("node:fs");
+    vi.mocked(fs.readFileSync).mockImplementation(() => {
+      throw new Error("ENOENT");
+    });
+    const providers = await import("@/server/providers");
+    expect(await providers.getDeepSeekBalance()).toBeNull();
+
+    vi.mocked(fs.readFileSync).mockReturnValue(
+      JSON.stringify([{ id: "deepseek", isBuiltin: true, envVars: { DEEPSEEK_API_KEY: "dsk" }, models: [] }]),
+    );
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      expect(String(url)).toBe("https://api.deepseek.com/user/balance");
+      const headers = init?.headers as Record<string, string> | undefined;
+      expect(headers?.Authorization).toBe("Bearer dsk");
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          is_available: true,
+          balance_infos: [{ currency: "USD", total_balance: "1.65", granted_balance: "0.50", topped_up_balance: "1.15" }],
+        }),
+      };
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    expect(await providers.getDeepSeekBalance()).toEqual({
+      currency: "USD",
+      totalBalance: 1.65,
+      grantedBalance: 0.5,
+      toppedUpBalance: 1.15,
+    });
+    // 60s cache: the second read serves the snapshot without refetching
+    expect(await providers.getDeepSeekBalance()).toEqual(expect.objectContaining({ totalBalance: 1.65 }));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    vi.unstubAllGlobals();
+  });
+
   it("openrouter routes through the format proxy when it is active, direct otherwise", async () => {
     const fs = await import("node:fs");
     vi.mocked(fs.readFileSync).mockReturnValue(

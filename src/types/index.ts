@@ -159,11 +159,27 @@ export interface UsageLimit {
   resets_at: string;
 }
 
+/** One entry of the oauth/usage `limits` array — the current shape of the
+ *  Anthropic usage API. `weekly_scoped` entries carry the model the limit is
+ *  scoped to (e.g. Fable) in scope.model.display_name. */
+export interface ScopedUsageLimit {
+  kind: string;
+  group?: string;
+  percent: number;
+  severity?: string;
+  resets_at: string;
+  scope?: { model?: { display_name?: string | null } | null; surface?: string | null } | null;
+  is_active?: boolean;
+}
+
 export interface UsageLimits {
   five_hour: UsageLimit | null;
   seven_day: UsageLimit | null;
   seven_day_sonnet: UsageLimit | null;
   seven_day_opus: UsageLimit | null;
+  /** Preferred source when present: covers session, weekly-all, and
+   *  model-scoped weekly limits the legacy fields no longer carry. */
+  limits?: ScopedUsageLimit[] | null;
   extra_usage: {
     enabled: boolean;
     remaining_credits: number;

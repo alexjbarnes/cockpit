@@ -4,7 +4,7 @@ import { BarChart3, Loader2, RefreshCw, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { useUsage } from "@/hooks/use-usage";
-import type { UsageLimit } from "@/types";
+import type { ScopedUsageLimit, UsageLimit } from "@/types";
 
 function formatResetTime(iso: string): string {
   const diff = new Date(iso).getTime() - Date.now();
@@ -27,6 +27,16 @@ function iconColorClass(pct: number): string {
   if (pct > 80) return "text-red-500";
   if (pct > 50) return "text-orange-500";
   return "text-green-500";
+}
+
+/** Bar label for one `limits` entry: the session window, the all-models
+ *  weekly cap, or a model-scoped weekly cap named by the API (e.g. Fable). */
+function scopedLimitLabel(l: ScopedUsageLimit): string {
+  if (l.kind === "session") return "5-hour limit";
+  if (l.kind === "weekly_all") return "7-day · all models";
+  const scopeName = l.scope?.model?.display_name ?? l.scope?.surface;
+  if (scopeName) return `7-day · ${scopeName}`;
+  return l.kind.replace(/_/g, " ");
 }
 
 function LimitBar({ label, limit }: { label: string; limit: UsageLimit }) {
@@ -126,7 +136,7 @@ interface MeteredWindow {
 
 interface BuiltinUsageData {
   spend: { today: MeteredWindow; week: MeteredWindow; month: MeteredWindow };
-  balance: { currency: string; totalBalance: number } | null;
+  balance: { currency: string; totalBalance: number; grantedBalance?: number; toppedUpBalance?: number } | null;
   balanceError?: string;
 }
 
@@ -164,7 +174,14 @@ function BuiltinUsagePanel({ providerId }: { providerId: string }) {
 
   return (
     <>
-      {data.balance && <CreditRow label="Account balance" value={`${formatUSD(data.balance.totalBalance)} ${data.balance.currency}`} />}
+      {data.balance && (
+        <>
+          <CreditRow label="Account balance" value={`${formatUSD(data.balance.totalBalance)} ${data.balance.currency}`} />
+          {(data.balance.grantedBalance ?? 0) > 0 && (
+            <CreditRow label="of which granted" value={`${formatUSD(data.balance.grantedBalance ?? 0)} ${data.balance.currency}`} />
+          )}
+        </>
+      )}
       {data.balanceError && <p className="text-xs text-destructive mb-2">Balance unavailable: {data.balanceError}</p>}
       {providerId === "zen" && (
         <>
@@ -212,8 +229,17 @@ export function UsageButton({ className, sessionModel }: { className?: string; s
     return () => window.removeEventListener("keydown", h);
   }, [open]);
 
+  // The oauth/usage `limits` array is the current API shape and the only
+  // carrier of model-scoped weekly limits (e.g. Fable); the legacy fields
+  // remain as fallback for older response shapes.
+  const scopedLimits = usage?.limits ?? [];
   const sevenDayMaxed = usage?.seven_day && usage.seven_day.utilization >= 100;
-  const worst = sevenDayMaxed ? 100 : (usage?.five_hour?.utilization ?? 0);
+  const worst =
+    scopedLimits.length > 0
+      ? Math.max(0, ...scopedLimits.map((l) => l.percent))
+      : sevenDayMaxed
+        ? 100
+        : (usage?.five_hour?.utilization ?? 0);
 
   return (
     <>
@@ -255,10 +281,22 @@ export function UsageButton({ className, sessionModel }: { className?: string; s
 
             {!providerId && usage && (
               <>
-                {usage.five_hour && <LimitBar label="5-hour limit" limit={usage.five_hour} />}
-                {usage.seven_day && <LimitBar label="7-day limit" limit={usage.seven_day} />}
-                {usage.seven_day_sonnet && <LimitBar label="7-day Sonnet" limit={usage.seven_day_sonnet} />}
-                {usage.seven_day_opus && <LimitBar label="7-day Opus" limit={usage.seven_day_opus} />}
+                {scopedLimits.length > 0 ? (
+                  scopedLimits.map((l) => (
+                    <LimitBar
+                      key={`${l.kind}-${l.scope?.model?.display_name ?? l.scope?.surface ?? ""}`}
+                      label={scopedLimitLabel(l)}
+                      limit={{ utilization: l.percent, resets_at: l.resets_at }}
+                    />
+                  ))
+                ) : (
+                  <>
+                    {usage.five_hour && <LimitBar label="5-hour limit" limit={usage.five_hour} />}
+                    {usage.seven_day && <LimitBar label="7-day limit" limit={usage.seven_day} />}
+                    {usage.seven_day_sonnet && <LimitBar label="7-day Sonnet" limit={usage.seven_day_sonnet} />}
+                    {usage.seven_day_opus && <LimitBar label="7-day Opus" limit={usage.seven_day_opus} />}
+                  </>
+                )}
 
                 {usage.extra_usage?.enabled && (
                   <div className="mt-4 pt-3 border-t text-sm">

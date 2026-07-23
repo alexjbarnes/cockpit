@@ -457,6 +457,8 @@ export function startBuiltinModelSync(): void {
 export interface DeepSeekBalance {
   currency: string;
   totalBalance: number;
+  grantedBalance: number;
+  toppedUpBalance: number;
 }
 
 const BALANCE_CACHE_MS = 60_000;
@@ -474,9 +476,16 @@ export async function getDeepSeekBalance(): Promise<DeepSeekBalance | null> {
     signal: AbortSignal.timeout(30_000),
   });
   if (!res.ok) throw new Error(`balance fetch failed: HTTP ${res.status}`);
-  const body = (await res.json()) as { balance_infos?: Array<{ currency?: string; total_balance?: string }> };
+  const body = (await res.json()) as {
+    balance_infos?: Array<{ currency?: string; total_balance?: string; granted_balance?: string; topped_up_balance?: string }>;
+  };
   const info = body.balance_infos?.[0];
-  const data: DeepSeekBalance = { currency: info?.currency ?? "USD", totalBalance: Number(info?.total_balance ?? 0) };
+  const data: DeepSeekBalance = {
+    currency: info?.currency ?? "USD",
+    totalBalance: Number(info?.total_balance ?? 0),
+    grantedBalance: Number(info?.granted_balance ?? 0),
+    toppedUpBalance: Number(info?.topped_up_balance ?? 0),
+  };
   balanceCache = { at: Date.now(), data };
   return data;
 }
