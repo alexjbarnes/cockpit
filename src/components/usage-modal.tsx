@@ -233,13 +233,16 @@ export function UsageButton({ className, sessionModel }: { className?: string; s
   // carrier of model-scoped weekly limits (e.g. Fable); the legacy fields
   // remain as fallback for older response shapes.
   const scopedLimits = usage?.limits ?? [];
-  const sevenDayMaxed = usage?.seven_day && usage.seven_day.utilization >= 100;
-  const worst =
-    scopedLimits.length > 0
-      ? Math.max(0, ...scopedLimits.map((l) => l.percent))
-      : sevenDayMaxed
-        ? 100
-        : (usage?.five_hour?.utilization ?? 0);
+  // The icon tracks the 5-hour window alone. Colouring it from the worst of
+  // every limit meant a model-scoped weekly cap (Fable at 85%) painted the
+  // icon red while the session window sat at 4% and nothing was actually
+  // constrained — those caps are visible in the modal, which is where they
+  // belong. A fully spent weekly cap is the one exception: at 100% no model
+  // runs at all, so it still shows red rather than a reassuring green.
+  const sessionPct = scopedLimits.find((l) => l.kind === "session")?.percent ?? usage?.five_hour?.utilization ?? 0;
+  const weeklyExhausted =
+    scopedLimits.some((l) => l.kind === "weekly_all" && l.percent >= 100) || (usage?.seven_day?.utilization ?? 0) >= 100;
+  const worst = weeklyExhausted ? 100 : sessionPct;
 
   // The icon reflects the ACTIVE session's provider. Anthropic subscription
   // pressure says nothing about an OpenRouter or zen session, so a foreign
