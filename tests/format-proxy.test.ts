@@ -468,6 +468,119 @@ describe("FormatProxy server", () => {
     expect(calls).toBe(2);
   });
 
+  it("retries a 200 that wraps an SSE error (free-model saturation), then streams the retry", async () => {
+    // OpenRouter's free tier signals upstream saturation as HTTP 200 with an
+    // `event: error` body instead of a 429 (verified live), which the CLI then
+    // reports as a malformed proxy response.
+    let calls = 0;
+    const port = await startUpstream((_body, res) => {
+      calls += 1;
+      if (calls === 1) {
+        res.writeHead(200, { "Content-Type": "text/event-stream" });
+        res.end(
+          'event: error\ndata: {"type":"error","error":{"type":"api_error","message":"Upstream error from Nvidia: ResourceExhausted","error_type":"provider_unavailable"}}\n\n',
+        );
+        return;
+      }
+      res.writeHead(200, { "Content-Type": "text/event-stream" });
+      res.end('event: message_start\ndata: {"type":"message_start"}\n\nevent: message_stop\ndata: {"type":"message_stop"}\n\n');
+    });
+    proxy = new FormatProxy(() => ({ baseUrl: `http://127.0.0.1:${port}`, apiKey: "k", wireFormat: "anthropic", modelIds: [] }), {
+      retryBackoffMs: [10, 10],
+    });
+    await proxy.start();
+
+    const res = await fetch(`${proxy.getUrl("openrouter")}/v1/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "m", max_tokens: 5, stream: true, messages: [] }),
+    });
+    expect(res.status).toBe(200);
+    const text = await res.text();
+    // The good retry streamed through intact, first chunk included, and the
+    // error body from attempt 1 is gone.
+    expect(text).toContain("message_start");
+    expect(text).toContain("message_stop");
+    expect(text).not.toContain("ResourceExhausted");
+    expect(calls).toBe(2);
+  });
+
+  it("retries an empty 200 then serves the retry", async () => {
+    let calls = 0;
+    const port = await startUpstream((_body, res) => {
+      calls += 1;
+      if (calls === 1) {
+        res.writeHead(200, { "Content-Type": "text/event-stream" });
+        res.end();
+        return;
+      }
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ type: "message", content: [{ type: "text", text: "recovered" }] }));
+    });
+    proxy = new FormatProxy(() => ({ baseUrl: `http://127.0.0.1:${port}`, apiKey: "k", wireFormat: "anthropic", modelIds: [] }), {
+      retryBackoffMs: [10],
+    });
+    await proxy.start();
+
+    const res = await fetch(`${proxy.getUrl("openrouter")}/v1/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "m", max_tokens: 5, messages: [] }),
+    });
+    expect(res.status).toBe(200);
+    expect((await res.json()).content).toEqual([{ type: "text", text: "recovered" }]);
+    expect(calls).toBe(2);
+  });
+
+  it("surfaces an exhausted 200-wrapped saturation as an overloaded error, not the raw body", async () => {
+    let calls = 0;
+    const port = await startUpstream((_body, res) => {
+      calls += 1;
+      res.writeHead(200, { "Content-Type": "text/event-stream" });
+      res.end(
+        'event: error\ndata: {"error":{"message":"Worker local total request limit reached","error_type":"provider_unavailable"}}\n\n',
+      );
+    });
+    proxy = new FormatProxy(() => ({ baseUrl: `http://127.0.0.1:${port}`, apiKey: "k", wireFormat: "anthropic", modelIds: [] }), {
+      retryBackoffMs: [10, 10],
+    });
+    await proxy.start();
+
+    const res = await fetch(`${proxy.getUrl("openrouter")}/v1/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "m", max_tokens: 5, messages: [] }),
+    });
+    expect(res.status).toBe(529);
+    const body = await res.json();
+    expect(body.type).toBe("error");
+    expect(body.error.message).toBe("Worker local total request limit reached");
+    expect(calls).toBe(3);
+  });
+
+  it("passes a normal streaming 200 straight through without delay or a dropped chunk", async () => {
+    let calls = 0;
+    const port = await startUpstream((_body, res) => {
+      calls += 1;
+      res.writeHead(200, { "Content-Type": "text/event-stream" });
+      res.end('event: message_start\ndata: {"type":"message_start"}\n\nevent: message_stop\ndata: {"type":"message_stop"}\n\n');
+    });
+    proxy = new FormatProxy(() => ({ baseUrl: `http://127.0.0.1:${port}`, apiKey: "k", wireFormat: "anthropic", modelIds: [] }), {
+      retryBackoffMs: [10, 10],
+    });
+    await proxy.start();
+
+    const res = await fetch(`${proxy.getUrl("openrouter")}/v1/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "m", max_tokens: 5, stream: true, messages: [] }),
+    });
+    const text = await res.text();
+    expect(calls).toBe(1);
+    // The peeked first chunk is written exactly once, not dropped or doubled.
+    expect(text).toBe('event: message_start\ndata: {"type":"message_start"}\n\nevent: message_stop\ndata: {"type":"message_stop"}\n\n');
+  });
+
   it("gives up after the retry budget and relays the final 429", async () => {
     let calls = 0;
     const port = await startUpstream((_body, res) => {

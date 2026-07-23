@@ -461,6 +461,27 @@ export function estimateInputTokens(rawBody: string): number {
  *  gateway failures, and Anthropic's 529 overloaded. */
 const RETRYABLE_STATUS = new Set([429, 502, 503, 529]);
 
+/** Some gateways (OpenRouter's free tier especially) signal upstream
+ *  saturation as HTTP 200 wrapping an error, not a 429: a streamed
+ *  `event: error`, a JSON error object, or an empty body. The CLI then can't
+ *  parse a message and throws a misleading "malformed response, check for a
+ *  proxy" that points at us. Detect those so passthrough can retry them like
+ *  a 429 before relaying. Peek is the decoded start of the first body chunk. */
+function is200Saturation(peek: string, emptyBody: boolean): boolean {
+  if (emptyBody) return true;
+  const t = peek.trimStart();
+  if (t.startsWith("event: error")) return true;
+  if (t.startsWith("{") && t.slice(0, 200).includes('"type":"error"')) return true;
+  return false;
+}
+
+/** Best-effort extraction of the upstream error message from a peeked error
+ *  body (SSE `data:` line or a JSON error object), for a clearer surfaced
+ *  error than the CLI's generic one. */
+function saturationMessage(peek: string): string {
+  return peek.match(/"message"\s*:\s*"([^"]+)"/)?.[1] ?? "Upstream provider is temporarily saturated";
+}
+
 export class FormatProxy {
   private server: Server | null = null;
   private port = 0;
@@ -597,21 +618,59 @@ export class FormatProxy {
       headers.authorization = `Bearer ${upstream.apiKey}`;
     }
 
+    // Fetch, then peek the first chunk of a 200 to catch saturation the
+    // upstream wrapped in a success status. Retries stay before any byte
+    // reaches the client, so the invariant that we never retry mid-response
+    // holds. reader/firstChunk carry the committed response out of the loop.
     let upstreamRes: Response;
-    try {
-      upstreamRes = await this.fetchWithRetry(`${upstream.baseUrl}${pathWithQuery}`, { method: req.method, headers, body });
-    } catch (err) {
-      jsonError(res, 502, `Upstream request failed: ${err instanceof Error ? err.message : String(err)}`);
+    let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
+    let firstChunk: Uint8Array | null = null;
+    let saturatedPeek: string | null = null;
+    for (let attempt = 0; ; attempt++) {
+      try {
+        upstreamRes = await this.fetchWithRetry(`${upstream.baseUrl}${pathWithQuery}`, { method: req.method, headers, body });
+      } catch (err) {
+        jsonError(res, 502, `Upstream request failed: ${err instanceof Error ? err.message : String(err)}`);
+        return;
+      }
+
+      reader = upstreamRes.body?.getReader() ?? null;
+      // Only 200s need the peek: a real error status is relayed as-is below.
+      if (!reader || upstreamRes.status !== 200) {
+        firstChunk = null;
+        saturatedPeek = null;
+        break;
+      }
+
+      const { done, value } = await reader.read();
+      firstChunk = value ?? null;
+      const peek = firstChunk ? new TextDecoder().decode(firstChunk).slice(0, 256) : "";
+      if (is200Saturation(peek, done && !value)) {
+        if (attempt < this.retryBackoffMs.length) {
+          await reader.cancel().catch(() => {});
+          await new Promise((r) => setTimeout(r, this.retryBackoffMs[attempt]));
+          continue;
+        }
+        // Out of retries: surface an honest overloaded error instead of
+        // relaying a body the CLI reports as a malformed proxy response.
+        await reader.cancel().catch(() => {});
+        saturatedPeek = peek;
+      }
+      break;
+    }
+
+    if (saturatedPeek !== null) {
+      jsonError(res, 529, saturationMessage(saturatedPeek));
       return;
     }
 
     res.writeHead(upstreamRes.status, { "Content-Type": upstreamRes.headers.get("content-type") ?? "application/json" });
-    const reader = upstreamRes.body?.getReader();
     if (!reader) {
       res.end();
       return;
     }
     try {
+      if (firstChunk) res.write(Buffer.from(firstChunk));
       for (;;) {
         const { done, value } = await reader.read();
         if (done) break;
