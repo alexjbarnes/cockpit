@@ -957,8 +957,14 @@ export function InputArea({
                               </button>
                             );
 
-                            const providerModelLabel = (model: ProviderModel) => {
+                            // providerName is passed for rows that sit outside a
+                            // provider group. The same model can be served by
+                            // several providers (Anthropic direct, OpenRouter,
+                            // Zen), so a bare name in Recent gives no clue which
+                            // one a pick would actually use.
+                            const providerModelLabel = (model: ProviderModel, providerName?: string) => {
                               const { name, meta } = splitProviderModelId(model);
+                              const metaLine = [providerName, meta].filter(Boolean).join(" · ");
                               return (
                                 <span className="flex min-w-0 flex-col items-start gap-0.5">
                                   <span className="flex min-w-0 max-w-full items-start gap-2">
@@ -969,7 +975,7 @@ export function InputArea({
                                       </span>
                                     )}
                                   </span>
-                                  {meta && <span className="max-w-full text-[10px] text-muted-foreground">{meta}</span>}
+                                  {metaLine && <span className="max-w-full text-[10px] text-muted-foreground">{metaLine}</span>}
                                 </span>
                               );
                             };
@@ -1004,7 +1010,7 @@ export function InputArea({
                                         // Same renderer as the provider groups; a recent whose
                                         // model left the catalog falls back to name + provider.
                                         const label = recentModel ? (
-                                          providerModelLabel(recentModel)
+                                          providerModelLabel(recentModel, recentProvider?.name)
                                         ) : (
                                           <span className="flex min-w-0 flex-col items-start gap-0.5">
                                             <span className="min-w-0 break-all font-mono font-medium">
