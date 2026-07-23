@@ -419,6 +419,43 @@ function jsonError(res: ServerResponse, status: number, message: string): void {
   res.end(JSON.stringify({ type: "error", error: { type: "api_error", message } }));
 }
 
+/** Anthropic /v1/models entry shape, which the CLI's probes expect. */
+function modelEntry(id: string): Record<string, unknown> {
+  return { type: "model", id, display_name: id };
+}
+
+/** Rough input-token count for the count_tokens stub: no upstream we proxy
+ *  implements the endpoint, and answering a flat 0 would tell the CLI the
+ *  context is permanently empty, suppressing auto-compact until a turn dies on
+ *  a hard context error. Four characters per token is the usual approximation;
+ *  the number only drives the CLI's own budgeting, never billing. */
+export function estimateInputTokens(rawBody: string): number {
+  let chars = 0;
+  const walk = (v: unknown): void => {
+    if (typeof v === "string") {
+      chars += v.length;
+      return;
+    }
+    if (Array.isArray(v)) {
+      for (const item of v) walk(item);
+      return;
+    }
+    if (v && typeof v === "object") {
+      for (const [key, value] of Object.entries(v)) {
+        // Skip identifiers and enums that carry no prompt weight.
+        if (key === "model" || key === "type" || key === "role") continue;
+        walk(value);
+      }
+    }
+  };
+  try {
+    walk(JSON.parse(rawBody));
+  } catch {
+    chars = rawBody.length;
+  }
+  return Math.ceil(chars / 4);
+}
+
 /** Statuses worth retrying before any response bytes were sent: upstream
  *  saturation (429, and OpenRouter surfaces provider congestion as 429),
  *  gateway failures, and Anthropic's 529 overloaded. */
@@ -498,23 +535,40 @@ export class FormatProxy {
       return;
     }
 
-    if (upstream.wireFormat === "anthropic") {
-      await this.passthrough(req, res, upstream, path + (query ? `?${query}` : ""));
+    // Model-metadata endpoints are answered from the catalog for BOTH modes,
+    // never relayed. The CLI probes these on any custom base URL, and reports
+    // ANY 404 from them as "There's an issue with the selected model (X). It
+    // may not exist or you may not have access to it" — even when the model is
+    // perfectly valid. OpenRouter's Anthropic door implements /v1/messages but
+    // NOT /v1/messages/count_tokens or /v1/models/<id> (both 404, verified
+    // live), so relaying those turns a working model into a phantom error.
+    if (req.method === "GET" && path === "/v1/models") {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ data: (upstream.modelIds ?? []).map(modelEntry), has_more: false }));
       return;
     }
 
-    // The CLI probes the models list on custom base URLs; absent ids read as
-    // unavailable models and dead turns, so answer with the provider catalog.
-    if (req.method === "GET" && path === "/v1/models") {
+    if (req.method === "GET" && path.startsWith("/v1/models/")) {
+      const wanted = decodeURIComponent(path.slice("/v1/models/".length));
+      const known = (upstream.modelIds ?? []).find((id) => id === wanted);
+      if (!known) {
+        jsonError(res, 404, `Model ${wanted} is not in the ${providerId} catalog`);
+        return;
+      }
       res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ data: (upstream.modelIds ?? []).map((id) => ({ id, type: "model" })), has_more: false }));
+      res.end(JSON.stringify(modelEntry(known)));
       return;
     }
 
     if (req.method === "POST" && path === "/v1/messages/count_tokens") {
-      await readBody(req);
+      const raw = await readBody(req);
       res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ input_tokens: 0 }));
+      res.end(JSON.stringify({ input_tokens: estimateInputTokens(raw) }));
+      return;
+    }
+
+    if (upstream.wireFormat === "anthropic") {
+      await this.passthrough(req, res, upstream, path + (query ? `?${query}` : ""));
       return;
     }
 

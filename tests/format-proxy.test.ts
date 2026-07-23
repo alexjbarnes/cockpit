@@ -3,7 +3,13 @@
 // tool_calls response and the Anthropic door's equivalents.
 import { createServer, type Server } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
-import { anthropicToOpenAIRequest, FormatProxy, openAIToAnthropicResponse, StreamTranslator } from "@/server/format-proxy";
+import {
+  anthropicToOpenAIRequest,
+  estimateInputTokens,
+  FormatProxy,
+  openAIToAnthropicResponse,
+  StreamTranslator,
+} from "@/server/format-proxy";
 
 describe("anthropicToOpenAIRequest", () => {
   it("maps system, text turns, tools, and stream options", () => {
@@ -267,9 +273,56 @@ describe("FormatProxy server", () => {
     proxy = new FormatProxy(() => ({ baseUrl: "http://127.0.0.1:1", apiKey: "k", modelIds: ["opencode/gpt-5.5"] }));
     await proxy.start();
     const models = await (await fetch(`${proxy.getUrl("zen")}/v1/models`)).json();
-    expect(models.data).toEqual([{ id: "opencode/gpt-5.5", type: "model" }]);
+    expect(models.data).toEqual([{ id: "opencode/gpt-5.5", type: "model", display_name: "opencode/gpt-5.5" }]);
     const count = await (await fetch(`${proxy.getUrl("zen")}/v1/messages/count_tokens`, { method: "POST", body: "{}" })).json();
     expect(count).toEqual({ input_tokens: 0 });
+  });
+
+  it("answers the model-metadata probes locally in passthrough mode instead of relaying them", async () => {
+    // OpenRouter's Anthropic door 404s count_tokens and single-model lookups
+    // (verified live). The CLI reports ANY 404 as "the selected model may not
+    // exist", so relaying them turns a valid model into a phantom error.
+    let upstreamHits = 0;
+    const port = await startUpstream((_body, res) => {
+      upstreamHits += 1;
+      res.writeHead(404, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: { message: "Not Found", code: 404 } }));
+    });
+    const modelId = "nvidia/nemotron-3-ultra-550b-a55b:free";
+    proxy = new FormatProxy(() => ({
+      baseUrl: `http://127.0.0.1:${port}`,
+      apiKey: "k",
+      wireFormat: "anthropic",
+      modelIds: [modelId],
+    }));
+    await proxy.start();
+
+    // A slash- and colon-bearing id survives the path round trip.
+    const single = await fetch(`${proxy.getUrl("openrouter")}/v1/models/${modelId}`);
+    expect(single.status).toBe(200);
+    expect(await single.json()).toEqual({ type: "model", id: modelId, display_name: modelId });
+
+    const count = await fetch(`${proxy.getUrl("openrouter")}/v1/messages/count_tokens`, {
+      method: "POST",
+      body: JSON.stringify({ model: modelId, messages: [{ role: "user", content: "12345678" }] }),
+    });
+    expect(count.status).toBe(200);
+    // 8 chars of prompt ≈ 2 tokens; the model id is excluded from the count.
+    expect(await count.json()).toEqual({ input_tokens: 2 });
+
+    const list = await fetch(`${proxy.getUrl("openrouter")}/v1/models`);
+    expect((await list.json()).data).toEqual([{ type: "model", id: modelId, display_name: modelId }]);
+
+    // None of it reached the upstream that would have 404'd.
+    expect(upstreamHits).toBe(0);
+  });
+
+  it("404s a single-model lookup only when the id really is absent", async () => {
+    proxy = new FormatProxy(() => ({ baseUrl: "http://127.0.0.1:1", apiKey: "k", wireFormat: "anthropic", modelIds: ["vendor/real"] }));
+    await proxy.start();
+    const res = await fetch(`${proxy.getUrl("openrouter")}/v1/models/vendor%2Fghost`);
+    expect(res.status).toBe(404);
+    expect((await res.json()).error.message).toContain("vendor/ghost");
   });
 
   it("404s unknown providers with an anthropic-shaped error", async () => {
@@ -383,7 +436,8 @@ describe("FormatProxy server", () => {
     proxy = new FormatProxy(() => ({ baseUrl: `http://127.0.0.1:${port}`, apiKey: "stored-key", wireFormat: "anthropic", modelIds: [] }));
     await proxy.start();
 
-    await fetch(`${proxy.getUrl("openrouter")}/v1/models`);
+    // A relayed path (the model-metadata probes are answered locally now).
+    await fetch(`${proxy.getUrl("openrouter")}/v1/messages`, { method: "POST", body: "{}" });
     expect(seenAuth).toBe("Bearer stored-key");
   });
 
@@ -607,6 +661,26 @@ describe("FormatProxy server", () => {
     });
     await res.text();
     expect(events).toEqual([{ providerId: "zen", modelId: "m1", inputTokens: 40, outputTokens: 9 }]);
+  });
+});
+
+describe("estimateInputTokens", () => {
+  it("counts prompt text across nested blocks and ignores structural fields", () => {
+    const body = JSON.stringify({
+      model: "some/very-long-model-id-that-should-not-count:free",
+      system: [{ type: "text", text: "abcd" }],
+      messages: [
+        { role: "user", content: [{ type: "text", text: "efgh" }] },
+        { role: "assistant", content: "ijkl" },
+      ],
+    });
+    // 12 prompt chars ≈ 3 tokens; model/type/role contribute nothing.
+    expect(estimateInputTokens(body)).toBe(3);
+  });
+
+  it("returns 0 for an empty request and falls back to raw length on broken JSON", () => {
+    expect(estimateInputTokens("{}")).toBe(0);
+    expect(estimateInputTokens("not json at all")).toBe(Math.ceil("not json at all".length / 4));
   });
 });
 

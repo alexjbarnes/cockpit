@@ -241,10 +241,23 @@ export function UsageButton({ className, sessionModel }: { className?: string; s
         ? 100
         : (usage?.five_hour?.utilization ?? 0);
 
+  // The icon reflects the ACTIVE session's provider. Anthropic subscription
+  // pressure says nothing about an OpenRouter or zen session, so a foreign
+  // session gets the neutral icon rather than a red one inherited from a
+  // limit it does not consume. Their spend is a credit balance, not a quota
+  // with a percentage, so there is no honest colour to show.
+  const iconClass = providerId ? "" : usage ? iconColorClass(worst) : "";
+
   return (
     <>
-      <Button variant="ghost" size="icon" onClick={() => setOpen(true)} title="Account usage" className={className}>
-        <BarChart3 className={`h-4 w-4 ${usage ? iconColorClass(worst) : ""}`} />
+      <Button
+        variant="ghost"
+        size="icon"
+        onClick={() => setOpen(true)}
+        title={providerId ? `${PROVIDER_TITLES[providerId]} (Anthropic limits do not apply)` : "Account usage"}
+        className={className}
+      >
+        <BarChart3 className={`h-4 w-4 ${iconClass}`} />
       </Button>
       {open && (
         <div
