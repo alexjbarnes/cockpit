@@ -61,6 +61,8 @@ function logStartupBanner(): void {
   }
 
   console.log("");
+  console.log("Enjoying Cockpit? Star it: https://github.com/alexjbarnes/cockpit");
+  console.log("");
 }
 
 async function main() {

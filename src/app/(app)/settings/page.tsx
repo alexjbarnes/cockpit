@@ -1,8 +1,8 @@
 "use client";
 
-import { ChevronDown, ChevronRight, Download, ExternalLink, RefreshCw } from "lucide-react";
+import { Bug, ChevronDown, ChevronRight, Download, ExternalLink, RefreshCw, Star } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useState } from "react";
 import { usePageHeader } from "@/components/app-shell";
 import { Button } from "@/components/ui/button";
 import { useScrollRestoration } from "@/hooks/use-scroll-restoration";
@@ -206,6 +206,25 @@ function NavRow({ label, onClick }: { label: string; onClick: () => void }) {
   );
 }
 
+const COCKPIT_REPO_URL = "https://github.com/alexjbarnes/cockpit";
+
+function ExternalRow({ href, icon, label }: { href: string; icon: ReactNode; label: string }) {
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noreferrer"
+      className="flex w-full items-center justify-between rounded-lg px-3 py-3 text-sm hover:bg-muted/50 transition-colors"
+    >
+      <span className="flex items-center gap-2">
+        {icon}
+        {label}
+      </span>
+      <ExternalLink className="h-4 w-4 text-muted-foreground" />
+    </a>
+  );
+}
+
 export default function SettingsPage() {
   const [version, setVersion] = useState<VersionInfo | null>(null);
   const [versionLoading, setVersionLoading] = useState(true);
@@ -386,6 +405,15 @@ export default function SettingsPage() {
           <NavRow label="Commands" onClick={() => router.push("/commands")} />
           <NavRow label="Hooks" onClick={() => router.push("/hooks")} />
           <NavRow label="CLAUDE.md" onClick={() => router.push("/claude-md")} />
+        </div>
+
+        <div className="border-t border-border pt-4 mt-4 space-y-0.5">
+          <ExternalRow href={COCKPIT_REPO_URL} icon={<Star className="h-4 w-4 text-muted-foreground" />} label="Star Cockpit on GitHub" />
+          <ExternalRow
+            href={`${COCKPIT_REPO_URL}/issues`}
+            icon={<Bug className="h-4 w-4 text-muted-foreground" />}
+            label="Report an issue"
+          />
         </div>
       </div>
     </div>
