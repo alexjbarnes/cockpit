@@ -75,6 +75,8 @@ Click a run to open the transcript in the same chat view used for live sessions.
 
 Failed runs (Claude errored, hit a permission denial, ran out of context) are flagged in the run list. Open the transcript to see what happened and adjust the prompt or schedule.
 
+A job whose model has been delisted from its provider's catalog fails before the CLI even spawns, with an inbox alert naming the model. Cockpit never substitutes a different model on its own, because an unattended run silently switching to a paid model is worse than a failed run. Pick a new model on the job to get it running again.
+
 ## Notifications
 
 Job completions are sent to the inbox and, if configured, to external notification providers (Telegram, ntfy.sh). See [Settings](settings.md#notifications) for provider setup.

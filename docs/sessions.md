@@ -57,7 +57,7 @@ A session view is a set of tabs. Alongside the chat you can open file, diff, and
 
 Each session has its own settings, separate from the defaults you set globally. Tap the settings icon next to the message box to change:
 
-- Model. Built-in Haiku, Sonnet, and Opus with a version switcher, plus any models from your custom providers (see [Model providers](providers.md)).
+- Model. Built-in Haiku, Sonnet, and Opus with a version switcher, plus any models from connected gateways or custom providers (see [Model providers](providers.md)).
 - Context size. 200K or 1M, shown as pills for models that support both.
 - Thinking level. Low, Medium, High, XHigh, Max. Only the levels the model supports are shown.
 - Runtime. Switch this session between Stream and PTY (see [Runtime mode](#runtime-mode)).
@@ -70,7 +70,7 @@ Changes apply on the next turn. A context-size change restarts the underlying CL
 Cockpit can drive Claude Code two ways, chosen per session:
 
 - **Stream (headless).** The default. Cockpit runs the CLI in streaming-JSON mode and renders the structured event stream directly.
-- **PTY (interactive).** Cockpit runs the real CLI inside a pseudo-terminal, the same engine you get in a normal terminal. Message content is read from the CLI's JSONL transcript, so the live view matches a reload. Hook events drive status, permissions, compaction progress, and background tasks.
+- **PTY (interactive).** Cockpit runs the real CLI inside a pseudo-terminal, the same engine you get in a normal terminal. Message content is read from the CLI's JSONL transcript, so the live view matches a reload. Hook events drive status, permissions, compaction progress, and background tasks. This mode also matters for billing: subscription plans bill programmatic and interactive usage differently, and PTY keeps sessions on the interactive side.
 
 Pick the runtime when you create a session (the new-session dialog has a two-step backend picker) or switch it later from the session settings. The choice is saved and survives a server restart.
 
