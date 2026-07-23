@@ -13,6 +13,10 @@ import { DiffViewer } from "./diff-viewer";
 import { MessageBubble } from "./message-bubble";
 import { PlanViewModal } from "./plan-view-modal";
 
+/** How often an open transcript re-reads a still-working agent. Each poll is
+ *  one read of that agent's JSONL, and only while its card is expanded. */
+const TRANSCRIPT_POLL_MS = 3000;
+
 function parseInput(input: string): Record<string, unknown> {
   if (!input) return {};
   try {
@@ -488,7 +492,8 @@ function AgentContent({
 
   // On-demand subagent transcript. The CLI writes each Task/Agent subagent to
   // its own `subagents/agent-<id>.jsonl`; the parent tool_use id (tool.id) maps
-  // to it via the meta sidecar the API route resolves. Fetched only on expand.
+  // to it via the meta sidecar the API route resolves. Fetched on expand, then
+  // polled while the agent is still working.
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -505,32 +510,52 @@ function AgentContent({
     return echoesPrompt ? messages.slice(1) : messages;
   }, [messages, prompt]);
 
+  const fetchTranscript = useCallback(async () => {
+    if (!sessionId) return;
+    const params = new URLSearchParams({ toolUseId: tool.id });
+    if (cwd) params.set("cwd", cwd);
+    try {
+      const res = await fetch(`/api/sessions/${sessionId}/subagents?${params}`);
+      const data: { messages?: ChatMessage[] } = res.status === 404 ? { messages: [] } : await res.json();
+      if (res.status !== 404 && !res.ok) throw new Error("Failed to load agent transcript");
+      const next = data.messages ?? [];
+      // Replace only on a real change, so a poll that finds nothing new does
+      // not re-render the transcript under someone who is reading it.
+      setMessages((prev) => (prev && prev.length === next.length && prev.at(-1)?.id === next.at(-1)?.id ? prev : next));
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }, [sessionId, cwd, tool.id]);
+
   const toggleTranscript = useCallback(() => {
     setOpen((prev) => {
       const next = !prev;
       if (next && messages === null && !loading && sessionId) {
         setLoading(true);
         setError(null);
-        const params = new URLSearchParams({ toolUseId: tool.id });
-        if (cwd) params.set("cwd", cwd);
-        fetch(`/api/sessions/${sessionId}/subagents?${params}`)
-          .then((res) => {
-            if (res.status === 404) return { messages: [] as ChatMessage[] };
-            if (!res.ok) throw new Error("Failed to load agent transcript");
-            return res.json();
-          })
-          .then((data: { messages?: ChatMessage[] }) => {
-            setMessages(data.messages ?? []);
-            setLoading(false);
-          })
-          .catch((err: Error) => {
-            setError(err.message);
-            setLoading(false);
-          });
+        void fetchTranscript().finally(() => setLoading(false));
       }
       return next;
     });
-  }, [messages, loading, sessionId, cwd, tool.id]);
+  }, [messages, loading, sessionId, fetchTranscript]);
+
+  // A working agent appends to its transcript the whole time. Fetching once on
+  // expand froze it at whatever it held the moment it was opened, which is the
+  // least useful instant to freeze it.
+  useEffect(() => {
+    if (!open || !stillRunning || !sessionId) return;
+    const id = setInterval(() => void fetchTranscript(), TRANSCRIPT_POLL_MS);
+    return () => clearInterval(id);
+  }, [open, stillRunning, sessionId, fetchTranscript]);
+
+  // One last read when the agent stops, to pick up whatever it wrote between
+  // the final poll and finishing.
+  const wasRunning = useRef(stillRunning);
+  useEffect(() => {
+    if (wasRunning.current && !stillRunning && open) void fetchTranscript();
+    wasRunning.current = stillRunning;
+  }, [stillRunning, open, fetchTranscript]);
 
   return (
     <div className="space-y-2">
