@@ -122,6 +122,17 @@ describe("deriveAgentTasks", () => {
     expect(deriveAgentTasks(messages, [], true).every((t) => t.status === "running")).toBe(true);
   });
 
+  it("keeps an agent the CLI still reports as running after the turn ended", () => {
+    // The real sequence: Stop fires while the launched agent works on, and its
+    // payload says so. An idle session must not override that.
+    const messages = [msg([tool({ id: "t1", output: ASYNC_OUTPUT, input: JSON.stringify({ description: "d" }) })])];
+    const hooks: BackgroundTask[] = [
+      { taskId: "ac6a880af087a5341", toolUseId: "ac6a880af087a5341", status: "running", description: "read note" },
+    ];
+
+    expect(deriveAgentTasks(messages, hooks, false)[0].status).toBe("running");
+  });
+
   it("truncates a long description so the panel stays readable", () => {
     const long = "x".repeat(500);
     const [task] = deriveAgentTasks([msg([tool({ id: "t1", status: "running", input: JSON.stringify({ prompt: long }) })])], []);

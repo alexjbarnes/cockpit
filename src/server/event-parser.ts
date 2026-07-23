@@ -26,6 +26,7 @@ export interface ParsedEvent {
     | "rate_limit"
     | "prompt_suggestion"
     | "task_update"
+    | "task_sync"
     | "init";
   text?: string;
   toolName?: string;
@@ -52,6 +53,15 @@ export interface ParsedEvent {
     description: string;
     summary?: string;
   };
+  /** Full replacement list for task_sync: the CLI's own view of what is
+   *  running, including after the turn that launched it has ended. */
+  tasks?: Array<{
+    taskId: string;
+    toolUseId: string;
+    status: "running" | "completed";
+    title?: string;
+    description: string;
+  }>;
   initData?: InitData;
   isMainThread?: boolean;
   tokens?: number;

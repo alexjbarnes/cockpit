@@ -59,11 +59,12 @@ export function deriveAgentTasks(messages: ChatMessage[], hookTasks: BackgroundT
     claimed.add(key);
 
     const hook = hookById.get(key);
-    // A synchronous agent is finished when its tool use is. An async one
-    // completes its tool use at launch, so it counts as running until the CLI
-    // reports otherwise — or until the session stops working, since nothing
-    // can still be in flight once the turn is over.
-    const finished = hook?.status === "completed" || (asyncLaunch ? !sessionActive : tool.status === "done");
+    // The CLI's own report wins outright when there is one: it is the only
+    // source that knows an agent is still working after the turn that
+    // launched it ended. Without it, a synchronous agent is finished when its
+    // tool use is, while an async one completes its tool use at launch and so
+    // is judged by whether the session is still working.
+    const finished = hook ? hook.status === "completed" : asyncLaunch ? !sessionActive : tool.status === "done";
 
     const description = str(input.description) ?? str(input.prompt) ?? hook?.description ?? "Agent";
     derived.push({

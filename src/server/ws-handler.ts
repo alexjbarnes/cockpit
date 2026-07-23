@@ -1000,6 +1000,12 @@ function handleParsedEvent(ws: WebSocket, sessionId: string, event: ParsedEvent,
       }
       break;
 
+    case "task_sync":
+      if (event.tasks) {
+        send(ws, { type: "session:task_sync", sessionId, tasks: event.tasks });
+      }
+      break;
+
     case "permission_request": {
       const requestId = event.requestId || "";
       // auto_approve / auto_deny / cockpit-denied requests are resolved

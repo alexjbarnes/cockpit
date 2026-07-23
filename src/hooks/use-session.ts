@@ -705,6 +705,18 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
           break;
         }
 
+        case "session:task_sync": {
+          // The CLI's own view of what is in flight, so it replaces the list
+          // rather than merging: an id it omits is genuinely finished. Recent
+          // completions are kept so a result does not vanish mid-read.
+          setHookTasks((prev) => {
+            const synced = new Set(msg.tasks.map((t) => t.taskId));
+            const keptCompletions = prev.filter((t) => t.status === "completed" && !synced.has(t.taskId));
+            return [...msg.tasks, ...keptCompletions];
+          });
+          break;
+        }
+
         case "assistant:tool_children": {
           setMessages((prev) =>
             prev.map((m) => {
@@ -735,12 +747,12 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
             setMessages((prev) => prev.filter((m) => m.id !== "streaming"));
             setPendingQuestions([]);
             setRateLimitStatus(null);
-            // Clear any background tasks still running - the process has exited
-            setHookTasks((prev) => {
-              const stale = prev.filter((t) => t.status === "running");
-              if (stale.length === 0) return prev;
-              return prev.filter((t) => t.status !== "running");
-            });
+            // Running tasks are NOT cleared here. A launched agent does its
+            // work after the turn that launched it ends, so the turn ending
+            // says nothing about the agent — clearing on idle was what emptied
+            // the panel the moment an agent got going. The CLI reports the
+            // real list on Stop (session:task_sync), which arrives alongside
+            // this status change and is authoritative.
             // Queued messages are injected when the server confirms
             // delivery via session:queued sentText, not here.
           }

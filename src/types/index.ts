@@ -385,6 +385,7 @@ export type ServerMessage =
   | { type: "session:rate_limit"; sessionId: string; status: string; retryAfterMs?: number }
   | { type: "session:suggestions"; sessionId: string; suggestions: string[] }
   | { type: "session:task_update"; sessionId: string; task: BackgroundTask }
+  | { type: "session:task_sync"; sessionId: string; tasks: BackgroundTask[] }
   | { type: "session:todos"; sessionId: string; todos: TodoItem[] }
   | { type: "session:init"; sessionId: string; data: InitData }
   | {

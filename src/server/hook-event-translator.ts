@@ -99,7 +99,10 @@ function translateStop(payload: Record<string, unknown>): ParsedEvent[] {
     blocks: [],
     timestamp: Date.now(),
   };
-  return [{ type: "message_done", message }];
+  // Stop fires when the turn ends, which for a launched agent is while it is
+  // still working — and its payload says so. Syncing here is what keeps a
+  // running agent on screen instead of being cleared with the turn.
+  return [{ type: "message_done", message }, ...translateBackgroundTasks(payload)];
 }
 
 function translateStopFailure(payload: Record<string, unknown>): ParsedEvent[] {
@@ -134,16 +137,52 @@ function translatePermissionRequest(payload: Record<string, unknown>): ParsedEve
   ];
 }
 
+/** The CLI's own list of in-flight background work, attached to Stop and
+ *  SubagentStop payloads. This is authoritative: it is the only thing that
+ *  says an agent is still running after the turn that launched it has ended,
+ *  which is precisely when a launched agent does its work. */
+interface CliBackgroundTask {
+  id?: string;
+  type?: string;
+  status?: string;
+  description?: string;
+  agent_type?: string;
+}
+
+function translateBackgroundTasks(payload: Record<string, unknown>): ParsedEvent[] {
+  const raw = payload.background_tasks;
+  if (!Array.isArray(raw)) return [];
+  const tasks = (raw as CliBackgroundTask[])
+    .filter((t) => stringOr(t.id, ""))
+    .map((t) => {
+      const id = stringOr(t.id, "");
+      const agentType = stringOr(t.agent_type, "");
+      return {
+        taskId: id,
+        toolUseId: id,
+        status: t.status === "running" ? ("running" as const) : ("completed" as const),
+        title: agentType || "Agent",
+        description: stringOr(t.description, "") || agentType || "Agent",
+      };
+    });
+  // An empty array is meaningful — it says nothing is running — so the sync is
+  // emitted either way and replaces whatever the client was holding.
+  return [{ type: "task_sync", tasks }];
+}
+
 function translateSubagentStart(payload: Record<string, unknown>): ParsedEvent[] {
-  const sessionId = stringOr(payload.session_id, uuidv4());
-  const agentId = stringOr(payload.agent_id, "");
+  // Keyed by agent id, not session id: the session id is the PARENT's, so
+  // every agent in a session used to collide onto one entry and the first
+  // completion cleared them all. SubagentStart carries no description, so the
+  // agent type stands in until the tool use supplies one.
+  const agentId = stringOr(payload.agent_id, "") || uuidv4();
   const agentType = stringOr(payload.agent_type, "");
   const description = stringOr(payload.description, "");
   return [
     {
       type: "task_update",
       taskInfo: {
-        taskId: sessionId,
+        taskId: agentId,
         toolUseId: agentId,
         status: "running",
         title: agentType || "Agent",
@@ -154,8 +193,7 @@ function translateSubagentStart(payload: Record<string, unknown>): ParsedEvent[]
 }
 
 function translateSubagentStop(payload: Record<string, unknown>): ParsedEvent[] {
-  const sessionId = stringOr(payload.session_id, "");
-  const agentId = stringOr(payload.agent_id, "");
+  const agentId = stringOr(payload.agent_id, "") || uuidv4();
   const agentType = stringOr(payload.agent_type, "");
   const lastMessage = stringOr(payload.last_assistant_message, "");
   const description = stringOr(payload.description, "");
@@ -163,7 +201,7 @@ function translateSubagentStop(payload: Record<string, unknown>): ParsedEvent[] 
     {
       type: "task_update",
       taskInfo: {
-        taskId: sessionId,
+        taskId: agentId,
         toolUseId: agentId,
         status: "completed",
         title: agentType || "Agent",
@@ -171,6 +209,9 @@ function translateSubagentStop(payload: Record<string, unknown>): ParsedEvent[] 
         summary: lastMessage.slice(0, 500) || undefined,
       },
     },
+    // The payload also carries the post-stop task list; sync it so siblings
+    // that are still working stay visible.
+    ...translateBackgroundTasks(payload),
   ];
 }
 
