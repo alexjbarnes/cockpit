@@ -19,7 +19,7 @@ import {
 import { getAssistantSettings, updateAssistantSettings } from "@/server/assistant-settings";
 import { getCockpitDir } from "@/server/paths";
 import { ensureCatalogFresh, OPENROUTER_PROVIDER_ID } from "@/server/provider-catalog";
-import { getProvider, OPENCODE_ZEN_PROVIDER_ID, openRouterModelEnv, resolveProviderModel } from "@/server/providers";
+import { getProvider, isBuiltinCatalogProvider, openRouterModelEnv, resolveProviderModel } from "@/server/providers";
 import type {
   ChatMessage,
   ContentBlock,
@@ -222,7 +222,7 @@ export class SessionManager {
       thinkingLevel: defaults.thinkingLevel,
       streamState: null,
       contextUsage: null,
-      contextWindowSize: contextSizeToWindow(info.contextSize ?? DEFAULT_CONTEXT_SIZE),
+      contextWindowSize: this.resolveContextWindow(info.model, info.contextSize ?? DEFAULT_CONTEXT_SIZE),
       todoItems: [],
       pendingRequests: new Map(),
       streamingSnapshot: null,
@@ -320,7 +320,7 @@ export class SessionManager {
           defaults.thinkingLevel,
         streamState: null,
         contextUsage: null,
-        contextWindowSize: contextSizeToWindow(restoredContextSize),
+        contextWindowSize: this.resolveContextWindow((prefs?.model || defaults.modelSlots.main) ?? undefined, restoredContextSize),
         todoItems: [],
         pendingRequests: new Map(),
         initData: prefs?.initData,
@@ -1142,6 +1142,15 @@ export class SessionManager {
           request_id: `effort-${Date.now()}`,
           request: { subtype: "apply_flag_settings", settings: this.thinkingFlagSettings(session.thinkingLevel) },
         });
+      } else if (isBuiltinCatalogProvider(this.slotProviderId(model))) {
+        // A foreign session spawned with CLAUDE_CODE_ALWAYS_ENABLE_EFFORT
+        // keeps its last effort setting across a live switch to a
+        // non-reasoning model; shut thinking off explicitly.
+        session.harnessProcess.writeControlRequest({
+          type: "control_request",
+          request_id: `effort-${Date.now()}`,
+          request: { subtype: "apply_flag_settings", settings: this.thinkingFlagSettings("off") },
+        });
       }
     } else {
       this.log(
@@ -1155,13 +1164,19 @@ export class SessionManager {
       session.emitter.emit("status", sessionId, "idle");
     }
     this.emitInfoUpdated(session, sessionId);
-    if (contextChanged) {
-      session.contextWindowSize = contextSizeToWindow(resolvedSize);
-    }
+    session.contextWindowSize = this.resolveContextWindow(model, resolvedSize);
     const cur = session.contextUsage;
     if (cur) {
       session.emitter.emit("usage", sessionId, { used: cur.used, total: session.contextWindowSize });
     }
+  }
+
+  /** Context gauge total: foreign catalog models carry a raw contextLength;
+   *  Anthropic models use the 200k/1m enum. */
+  private resolveContextWindow(model: string | undefined, size: ContextSize): number {
+    const resolved = model ? resolveProviderModel(model) : null;
+    if (resolved?.model.contextLength && resolved.model.contextLength > 0) return resolved.model.contextLength;
+    return contextSizeToWindow(size);
   }
 
   /** Provider id a slot value belongs to. A qualified prefix wins even when
@@ -2170,18 +2185,26 @@ Additional Cockpit rules beyond the CLI's defaults:
       subagentModel = resolvedSub ? resolvedSub.model.modelId : session.modelSlots.subagent;
     }
 
-    // OpenRouter sessions pin every default-model slot to catalog models —
-    // otherwise the CLI's internal opus/sonnet/haiku-class utility calls route
-    // to Claude models billed on OpenRouter credits. Also kick a background
-    // catalog resync when the cache is older than a day.
+    // Catalog-backed builtin sessions (openrouter, zen, deepseek) pin every
+    // default-model slot to the session's models — otherwise the CLI's
+    // internal opus/sonnet/haiku-class utility calls route to Claude models
+    // billed on the provider's credits behind the user's back.
     let providerEnvVars = resolved?.provider.envVars;
-    if (resolved && resolved.provider.id === OPENROUTER_PROVIDER_ID) {
+    if (resolved && isBuiltinCatalogProvider(resolved.provider.id)) {
       providerEnvVars = { ...providerEnvVars, ...openRouterModelEnv(resolved.model.modelId, subagentModel) };
-      ensureCatalogFresh();
-    } else if (resolved && resolved.provider.id === OPENCODE_ZEN_PROVIDER_ID) {
-      // Same anti-billing pinning for zen: utility calls stay on the session's
-      // models, translated through the format proxy like everything else.
-      providerEnvVars = { ...providerEnvVars, ...openRouterModelEnv(resolved.model.modelId, subagentModel) };
+      // The CLI defaults foreign model ids to a 200k context window; this
+      // override (ignored for claude-* ids) aligns its context tracking and
+      // auto-compact with the model's real window.
+      if (resolved.model.contextLength && resolved.model.contextLength > 0) {
+        providerEnvVars.CLAUDE_CODE_MAX_CONTEXT_TOKENS = String(resolved.model.contextLength);
+      }
+      // The CLI's effort gate rejects unknown (non-Anthropic) model ids, so
+      // --effort would be dropped for foreign reasoning models without this.
+      if (resolved.model.effortLevels.length > 0) {
+        providerEnvVars.CLAUDE_CODE_ALWAYS_ENABLE_EFFORT = "1";
+      }
+      // Kick a background catalog resync when the cache is older than a day.
+      if (resolved.provider.id === OPENROUTER_PROVIDER_ID) ensureCatalogFresh();
     }
 
     let appendSystemPrompt: string | undefined;

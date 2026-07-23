@@ -24,9 +24,22 @@ export interface ProxyUpstream {
    *  purely to add the bounded retry to congested upstreams (free-model
    *  429s) without surfacing every blip as a turn error. */
   wireFormat?: "openai" | "anthropic";
+  /** Effort levels each model supports (models.dev reasoning_options), used to
+   *  map the CLI's thinking budget onto reasoning_effort for translated
+   *  requests. Models absent here never get a reasoning_effort field. */
+  effortByModel?: Record<string, string[]>;
 }
 
 export type UpstreamResolver = (providerId: string) => ProxyUpstream | null;
+
+/** Token usage observed on a translated request, reported to the meter so
+ *  providers without a spend API (zen) still get a local usage view. */
+export interface ProxyUsageEvent {
+  providerId: string;
+  modelId: string;
+  inputTokens: number;
+  outputTokens: number;
+}
 
 // ── Request translation (Anthropic → OpenAI) ────────────────────────────
 
@@ -52,6 +65,31 @@ interface AnthropicRequest {
   top_p?: number;
   stop_sequences?: string[];
   stream?: boolean;
+  thinking?: { type?: string; budget_tokens?: number };
+  output_config?: { effort?: string };
+}
+
+const EFFORT_RANK = ["low", "medium", "high", "xhigh", "max"];
+
+/** Anthropic thinking budgets → reasoning_effort tiers. The CLI's effort
+ *  levels reach foreign models as budget_tokens (pre-4.6 style thinking);
+ *  output_config.effort, when a newer CLI sends it, passes through directly. */
+function budgetToEffort(budget: number): string {
+  if (budget <= 8_192) return "low";
+  if (budget <= 16_384) return "medium";
+  if (budget <= 32_768) return "high";
+  if (budget <= 65_536) return "xhigh";
+  return "max";
+}
+
+/** Clamp a requested effort to what the model supports: the nearest supported
+ *  level at or above the request, else the highest supported below it. */
+function clampEffort(level: string, supported: string[]): string | null {
+  const ranked = supported.filter((s) => EFFORT_RANK.includes(s)).sort((a, b) => EFFORT_RANK.indexOf(a) - EFFORT_RANK.indexOf(b));
+  if (ranked.length === 0) return null;
+  const want = EFFORT_RANK.indexOf(level);
+  for (const s of ranked) if (EFFORT_RANK.indexOf(s) >= want) return s;
+  return ranked[ranked.length - 1];
 }
 
 function blockText(content: string | AnthropicContentBlock[] | undefined): string {
@@ -63,7 +101,7 @@ function blockText(content: string | AnthropicContentBlock[] | undefined): strin
     .join("\n");
 }
 
-export function anthropicToOpenAIRequest(body: AnthropicRequest): Record<string, unknown> {
+export function anthropicToOpenAIRequest(body: AnthropicRequest, opts?: { effortLevels?: string[] }): Record<string, unknown> {
   const messages: Array<Record<string, unknown>> = [];
 
   const system = blockText(body.system);
@@ -126,6 +164,20 @@ export function anthropicToOpenAIRequest(body: AnthropicRequest): Record<string,
   if (body.tool_choice) {
     const t = body.tool_choice.type;
     out.tool_choice = t === "any" ? "required" : t === "tool" ? { type: "function", function: { name: body.tool_choice.name } } : "auto";
+  }
+  // Reasoning depth: only models with declared effort levels get a
+  // reasoning_effort field — everything else leaves the upstream default, so
+  // toggle-only or non-reasoning models never see a parameter they may reject.
+  const requested =
+    body.output_config?.effort ??
+    (body.thinking?.type === "enabled" && body.thinking.budget_tokens
+      ? budgetToEffort(body.thinking.budget_tokens)
+      : body.thinking?.type === "adaptive"
+        ? "high"
+        : undefined);
+  if (requested) {
+    const effort = clampEffort(requested, opts?.effortLevels ?? []);
+    if (effort) out.reasoning_effort = effort;
   }
   return out;
 }
@@ -330,6 +382,12 @@ export class StreamTranslator {
     return out;
   }
 
+  /** Usage from the final OpenAI chunk (stream_options.include_usage), for
+   *  metering after the stream closes. */
+  getUsage(): { prompt_tokens?: number; completion_tokens?: number } | null {
+    return this.usage;
+  }
+
   /** Close everything out; safe to call once at stream end. */
   finish(): string {
     if (!this.started) return "";
@@ -370,12 +428,14 @@ export class FormatProxy {
   private server: Server | null = null;
   private port = 0;
   private retryBackoffMs: number[];
+  private onUsage?: (u: ProxyUsageEvent) => void;
 
   constructor(
     private resolveUpstream: UpstreamResolver,
-    opts?: { retryBackoffMs?: number[] },
+    opts?: { retryBackoffMs?: number[]; onUsage?: (u: ProxyUsageEvent) => void },
   ) {
     this.retryBackoffMs = opts?.retryBackoffMs ?? [1000, 3000];
+    this.onUsage = opts?.onUsage;
   }
 
   /** Fetch with bounded retries on saturation-class failures. Safe because it
@@ -459,7 +519,7 @@ export class FormatProxy {
     }
 
     if (req.method === "POST" && path === "/v1/messages") {
-      await this.proxyMessages(req, res, upstream);
+      await this.proxyMessages(req, res, upstream, providerId);
       return;
     }
 
@@ -509,7 +569,7 @@ export class FormatProxy {
     res.end();
   }
 
-  private async proxyMessages(req: IncomingMessage, res: ServerResponse, upstream: ProxyUpstream): Promise<void> {
+  private async proxyMessages(req: IncomingMessage, res: ServerResponse, upstream: ProxyUpstream, providerId: string): Promise<void> {
     let anthropicBody: AnthropicRequest;
     try {
       anthropicBody = JSON.parse(await readBody(req));
@@ -518,7 +578,7 @@ export class FormatProxy {
       return;
     }
 
-    const openaiBody = anthropicToOpenAIRequest(anthropicBody);
+    const openaiBody = anthropicToOpenAIRequest(anthropicBody, { effortLevels: upstream.effortByModel?.[anthropicBody.model] });
     const init: RequestInit = {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${upstream.apiKey}` },
@@ -572,6 +632,14 @@ export class FormatProxy {
       const body = (await upstreamRes.json()) as OpenAIResponse;
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify(openAIToAnthropicResponse(body)));
+      if (body.usage) {
+        this.onUsage?.({
+          providerId,
+          modelId: anthropicBody.model,
+          inputTokens: body.usage.prompt_tokens ?? 0,
+          outputTokens: body.usage.completion_tokens ?? 0,
+        });
+      }
       return;
     }
 
@@ -593,8 +661,17 @@ export class FormatProxy {
     } catch {
       // upstream died mid-stream — close out what we have
     }
+    const usage = translator.getUsage();
     res.write(translator.finish());
     res.end();
+    if (usage) {
+      this.onUsage?.({
+        providerId,
+        modelId: anthropicBody.model,
+        inputTokens: usage.prompt_tokens ?? 0,
+        outputTokens: usage.completion_tokens ?? 0,
+      });
+    }
   }
 }
 

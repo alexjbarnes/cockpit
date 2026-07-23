@@ -66,13 +66,17 @@ test("a session on a zen model reaches the OpenAI door through the format proxy"
       .getRequests()
       .filter((r) => r.url.split("?")[0] === "/v1/chat/completions" && String(r.body).includes("hi via zen proxy"));
     const req = requests[requests.length - 1];
-    const body = JSON.parse(req.body) as { model: string; messages: Array<{ role: string }>; stream?: boolean };
+    const body = JSON.parse(req.body) as { model: string; messages: Array<{ role: string }>; stream?: boolean; reasoning_effort?: string };
     // Translated OpenAI shape with the bare zen model id.
     expect(body.model).toBe(ZEN_TEST_MODEL);
     expect(Array.isArray(body.messages)).toBe(true);
     expect(body.messages.some((m) => m.role === "user")).toBe(true);
     // The proxy injected the stored zen key upstream; the CLI never saw it.
     expect(String(req.headers.authorization ?? "")).toBe("Bearer zen-integration-key");
+    // The seeded model declares effortLevels ["high","max"]: the CLI (spawned
+    // with --effort high + CLAUDE_CODE_ALWAYS_ENABLE_EFFORT) sends thinking
+    // config, and the proxy maps it onto reasoning_effort for the upstream.
+    expect(body.reasoning_effort).toBe("high");
   } finally {
     rmSync(workDir, { recursive: true, force: true });
   }

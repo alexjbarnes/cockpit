@@ -4,7 +4,7 @@ import { getDefaults } from "@/server/defaults";
 import { addInboxMessage } from "@/server/inbox";
 import { loadJobs } from "@/server/job-storage";
 import { getCockpitDir } from "@/server/paths";
-import type { ProviderModel } from "@/types";
+import type { ProviderModel, ThinkingLevel } from "@/types";
 
 export const OPENROUTER_PROVIDER_ID = "openrouter";
 // Test escape hatch: the integration harness points this at the mock API.
@@ -110,10 +110,14 @@ export function mapOpenRouterModel(raw: OpenRouterRawModel): ProviderModel | nul
   const zeroPriced = prompt === 0 && completion === 0 && !otherPricing && textOnlyOutput;
   const free = raw.id.endsWith(":free") || (zeroPriced && !raw.id.startsWith("openrouter/"));
   const params = raw.supported_parameters ?? [];
+  // Models accepting the reasoning parameter take Anthropic thinking budgets
+  // through the Skin, which the CLI derives from its effort level — expose the
+  // effort vocabulary OpenRouter maps onto (low/medium/high).
+  const effortLevels: ThinkingLevel[] = params.includes("reasoning") ? ["low", "medium", "high"] : [];
   return {
     modelId: raw.id,
     displayName: raw.name || raw.id,
-    effortLevels: [],
+    effortLevels,
     contextSizes: [],
     contextLength: raw.context_length,
     pricing: { inPerM: prompt * PER_TOKEN_TO_PER_M, outPerM: completion * PER_TOKEN_TO_PER_M },
@@ -237,11 +241,34 @@ export async function getOpenRouterUsage(): Promise<OpenRouterUsage | null> {
   return data;
 }
 
+// Built-ins whose synced model list lives on their providers.json entry
+// (ids inlined — providers.ts imports this module, so no import back).
+const ENTRY_BACKED_BUILTINS: Record<string, string> = { zen: "OpenCode Zen", deepseek: "DeepSeek" };
+
 /** W6j: a job on a catalog-backed model that is missing from the catalog must
- *  fail before the CLI spawns. Only judges openrouter-qualified ids, and only
- *  once a catalog exists — an unsynced install never fails jobs over it. */
+ *  fail before the CLI spawns. Judges openrouter-qualified ids against the
+ *  synced catalog and zen/deepseek ids against their stored model lists —
+ *  and only once a list exists, so an unsynced install never fails jobs. */
 export function checkJobModel(model: string | undefined): { ok: true } | { ok: false; reason: string } {
-  if (!model?.startsWith(`${OPENROUTER_PROVIDER_ID}:`)) return { ok: true };
+  if (!model) return { ok: true };
+  for (const [pid, name] of Object.entries(ENTRY_BACKED_BUILTINS)) {
+    if (!model.startsWith(`${pid}:`)) continue;
+    const bare = model.slice(pid.length + 1).replace(/\[.*\]$/, "");
+    try {
+      const providers: Array<{ id?: string; models?: Array<{ modelId?: string }> }> = JSON.parse(
+        readFileSync(join(getCockpitDir(), "providers.json"), "utf-8"),
+      );
+      const models = providers.find((p) => p.id === pid)?.models ?? [];
+      if (models.length === 0 || models.some((m) => m.modelId === bare)) return { ok: true };
+      return {
+        ok: false,
+        reason: `Model ${model} is not in the ${name} model list. Pick a new model for this job; it will not run until you do.`,
+      };
+    } catch {
+      return { ok: true };
+    }
+  }
+  if (!model.startsWith(`${OPENROUTER_PROVIDER_ID}:`)) return { ok: true };
   const catalog = loadCatalog();
   if (!catalog) return { ok: true };
   const bare = model.slice(OPENROUTER_PROVIDER_ID.length + 1).replace(/\[.*\]$/, "");

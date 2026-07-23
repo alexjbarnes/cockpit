@@ -557,4 +557,101 @@ describe("FormatProxy server", () => {
     expect(body.type).toBe("error");
     expect(body.error.message).toBe("rate limited upstream");
   });
+
+  it("reports non-stream usage to onUsage with provider and model ids", async () => {
+    const events: Array<{ providerId: string; modelId: string; inputTokens: number; outputTokens: number }> = [];
+    const port = await startUpstream((_body, res) => {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify({
+          choices: [{ message: { content: "ok" }, finish_reason: "stop" }],
+          usage: { prompt_tokens: 12, completion_tokens: 7 },
+        }),
+      );
+    });
+    proxy = new FormatProxy(() => ({ baseUrl: `http://127.0.0.1:${port}`, apiKey: "k", modelIds: [] }), {
+      onUsage: (u) => events.push(u),
+    });
+    await proxy.start();
+
+    await fetch(`${proxy.getUrl("zen")}/v1/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "opencode/gpt-5.5", max_tokens: 5, messages: [{ role: "user", content: "hi" }] }),
+    });
+    expect(events).toEqual([{ providerId: "zen", modelId: "opencode/gpt-5.5", inputTokens: 12, outputTokens: 7 }]);
+  });
+
+  it("reports stream usage from the final include_usage chunk", async () => {
+    const events: Array<{ providerId: string; modelId: string; inputTokens: number; outputTokens: number }> = [];
+    const port = await startUpstream((_body, res) => {
+      res.writeHead(200, { "Content-Type": "text/event-stream" });
+      res.end(
+        sse([
+          '{"id":"c1","choices":[{"delta":{"content":"hey"},"finish_reason":null}]}',
+          '{"id":"c1","choices":[{"delta":{},"finish_reason":"stop"}]}',
+          '{"id":"c1","choices":[],"usage":{"prompt_tokens":40,"completion_tokens":9}}',
+          "[DONE]",
+        ]),
+      );
+    });
+    proxy = new FormatProxy(() => ({ baseUrl: `http://127.0.0.1:${port}`, apiKey: "k", modelIds: [] }), {
+      onUsage: (u) => events.push(u),
+    });
+    await proxy.start();
+
+    const res = await fetch(`${proxy.getUrl("zen")}/v1/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "m1", max_tokens: 5, stream: true, messages: [{ role: "user", content: "hi" }] }),
+    });
+    await res.text();
+    expect(events).toEqual([{ providerId: "zen", modelId: "m1", inputTokens: 40, outputTokens: 9 }]);
+  });
+});
+
+describe("reasoning effort mapping", () => {
+  const base = { model: "m", max_tokens: 10, messages: [{ role: "user", content: "hi" }] };
+
+  it("maps thinking budgets onto the model's supported effort ladder", () => {
+    const levels = { effortLevels: ["low", "medium", "high"] };
+    expect(anthropicToOpenAIRequest({ ...base, thinking: { type: "enabled", budget_tokens: 4000 } }, levels).reasoning_effort).toBe("low");
+    expect(anthropicToOpenAIRequest({ ...base, thinking: { type: "enabled", budget_tokens: 12000 } }, levels).reasoning_effort).toBe(
+      "medium",
+    );
+    expect(anthropicToOpenAIRequest({ ...base, thinking: { type: "enabled", budget_tokens: 31999 } }, levels).reasoning_effort).toBe(
+      "high",
+    );
+    // Above the ladder clamps down to the strongest supported level.
+    expect(anthropicToOpenAIRequest({ ...base, thinking: { type: "enabled", budget_tokens: 500_000 } }, levels).reasoning_effort).toBe(
+      "high",
+    );
+  });
+
+  it("clamps up to the nearest supported level (deepseek-style high/max)", () => {
+    const levels = { effortLevels: ["high", "max"] };
+    expect(anthropicToOpenAIRequest({ ...base, thinking: { type: "enabled", budget_tokens: 4000 } }, levels).reasoning_effort).toBe("high");
+    expect(anthropicToOpenAIRequest({ ...base, thinking: { type: "enabled", budget_tokens: 100_000 } }, levels).reasoning_effort).toBe(
+      "max",
+    );
+  });
+
+  it("passes output_config.effort through and maps adaptive thinking to high", () => {
+    expect(
+      anthropicToOpenAIRequest({ ...base, output_config: { effort: "max" } }, { effortLevels: ["high", "max"] }).reasoning_effort,
+    ).toBe("max");
+    expect(
+      anthropicToOpenAIRequest({ ...base, thinking: { type: "adaptive" } }, { effortLevels: ["low", "medium", "high"] }).reasoning_effort,
+    ).toBe("high");
+  });
+
+  it("omits reasoning_effort without declared levels or without a thinking request", () => {
+    expect(anthropicToOpenAIRequest({ ...base, thinking: { type: "enabled", budget_tokens: 4000 } })).not.toHaveProperty(
+      "reasoning_effort",
+    );
+    expect(
+      anthropicToOpenAIRequest({ ...base, thinking: { type: "enabled", budget_tokens: 4000 } }, { effortLevels: ["bogus"] }),
+    ).not.toHaveProperty("reasoning_effort");
+    expect(anthropicToOpenAIRequest(base, { effortLevels: ["high"] })).not.toHaveProperty("reasoning_effort");
+  });
 });

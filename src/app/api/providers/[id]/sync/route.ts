@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { validateSession } from "@/server/auth";
 import { OPENROUTER_PROVIDER_ID, syncOpenRouterCatalog } from "@/server/provider-catalog";
-import { OPENCODE_ZEN_PROVIDER_ID, syncZenModels } from "@/server/providers";
+import { DEEPSEEK_PROVIDER_ID, OPENCODE_ZEN_PROVIDER_ID, syncDeepSeekModels, syncZenModels } from "@/server/providers";
 
 function checkAuth(req: NextRequest): boolean {
   const token = req.cookies.get("cockpit_session")?.value;
@@ -18,6 +18,11 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   }
   if (id === OPENCODE_ZEN_PROVIDER_ID) {
     const result = await syncZenModels();
+    if (!result.ok) return NextResponse.json({ error: result.error }, { status: 502 });
+    return NextResponse.json({ ok: true, modelCount: result.modelCount });
+  }
+  if (id === DEEPSEEK_PROVIDER_ID) {
+    const result = await syncDeepSeekModels();
     if (!result.ok) return NextResponse.json({ error: result.error }, { status: 502 });
     return NextResponse.json({ ok: true, modelCount: result.modelCount });
   }

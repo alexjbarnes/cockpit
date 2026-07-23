@@ -72,8 +72,9 @@ describe("catalog mapping", () => {
 
     expect(byId.get("poolside/laguna-m.1:free")?.expirationDate).toBe("2026-07-28");
     expect(byId.get("nvidia/nemotron-nano-12b-v2-vl:free")?.supportsImageInput).toBe(true);
-    // catalog models carry no Anthropic-style enums
-    expect(nemotron?.effortLevels).toEqual([]);
+    // reasoning-capable catalog models expose the effort ladder; the
+    // Anthropic-style context enum stays empty (raw contextLength instead)
+    expect(nemotron?.effortLevels).toEqual(["low", "medium", "high"]);
     expect(nemotron?.contextSizes).toEqual([]);
   });
 
@@ -98,6 +99,24 @@ describe("catalog mapping", () => {
       architecture: { output_modalities: ["audio"] },
     });
     expect(mapped).toBeNull();
+  });
+
+  it("exposes effort levels only for reasoning-capable models", async () => {
+    const cat = await loadModule();
+    const reasoning = cat.mapOpenRouterModel({
+      id: "vendor/thinker",
+      pricing: { prompt: "0.000001", completion: "0.000002" },
+      supported_parameters: ["tools", "reasoning"],
+      architecture: { output_modalities: ["text"] },
+    });
+    expect(reasoning?.effortLevels).toEqual(["low", "medium", "high"]);
+    const plain = cat.mapOpenRouterModel({
+      id: "vendor/plain",
+      pricing: { prompt: "0.000001", completion: "0.000002" },
+      supported_parameters: ["tools"],
+      architecture: { output_modalities: ["text"] },
+    });
+    expect(plain?.effortLevels).toEqual([]);
   });
 });
 
@@ -249,6 +268,34 @@ describe("checkJobModel", () => {
     const gone = cat.checkJobModel("openrouter:poolside/laguna-s-2.1");
     expect(gone.ok).toBe(false);
     if (!gone.ok) expect(gone.reason).toContain("no longer offered");
+  });
+
+  it("judges zen and deepseek ids against their stored model lists", async () => {
+    writeFileSync(
+      join(dir, "providers.json"),
+      JSON.stringify([
+        { id: "zen", isBuiltin: true, envVars: {}, models: [{ modelId: "big-pickle" }] },
+        { id: "deepseek", isBuiltin: true, envVars: {}, models: [{ modelId: "deepseek-v4-flash" }] },
+      ]),
+    );
+    const cat = await loadModule();
+    expect(cat.checkJobModel("zen:big-pickle").ok).toBe(true);
+    expect(cat.checkJobModel("deepseek:deepseek-v4-flash").ok).toBe(true);
+    const missing = cat.checkJobModel("zen:gone-model");
+    expect(missing.ok).toBe(false);
+    if (!missing.ok) expect(missing.reason).toContain("OpenCode Zen");
+    const ds = cat.checkJobModel("deepseek:deepseek-chat");
+    expect(ds.ok).toBe(false);
+    if (!ds.ok) expect(ds.reason).toContain("DeepSeek");
+  });
+
+  it("passes zen/deepseek ids before a first sync or without providers.json", async () => {
+    const cat = await loadModule();
+    // no providers.json at all
+    expect(cat.checkJobModel("zen:anything").ok).toBe(true);
+    // entry exists but has never synced a model list
+    writeFileSync(join(dir, "providers.json"), JSON.stringify([{ id: "deepseek", isBuiltin: true, envVars: {}, models: [] }]));
+    expect(cat.checkJobModel("deepseek:deepseek-v4-flash").ok).toBe(true);
   });
 });
 

@@ -5,15 +5,37 @@ import { toProviderModels } from "@/lib/models";
 import { type FormatProxy, getActiveFormatProxy } from "@/server/format-proxy";
 import { getCockpitDir } from "@/server/paths";
 import { catalogModels, loadCatalog, OPENROUTER_PROVIDER_ID, openRouterBaseUrl } from "@/server/provider-catalog";
-import type { Provider, ProviderModel } from "@/types";
+import type { Provider, ProviderModel, ThinkingLevel } from "@/types";
 
 export const OPENCODE_ZEN_PROVIDER_ID = "zen";
-/** Test escape hatch mirrors COCKPIT_OPENROUTER_BASE_URL. */
+export const DEEPSEEK_PROVIDER_ID = "deepseek";
+/** Test escape hatches mirror COCKPIT_OPENROUTER_BASE_URL. */
 export function zenBaseUrl(): string {
   return process.env.COCKPIT_ZEN_BASE_URL || "https://opencode.ai/zen/v1";
 }
+export function deepseekBaseUrl(): string {
+  return process.env.COCKPIT_DEEPSEEK_BASE_URL || "https://api.deepseek.com/anthropic";
+}
+/** DeepSeek's OpenAI-side endpoints (key validation via /v1/models, and
+ *  /user/balance) live on the API root, not under the Anthropic door. */
+function deepseekApiRoot(): string {
+  return deepseekBaseUrl().replace(/\/anthropic\/?$/, "");
+}
 
-const BUILTIN_CONFIG_IDS = new Set<string>([OPENROUTER_PROVIDER_ID, OPENCODE_ZEN_PROVIDER_ID]);
+const BUILTIN_CONFIG_IDS = new Set<string>([OPENROUTER_PROVIDER_ID, OPENCODE_ZEN_PROVIDER_ID, DEEPSEEK_PROVIDER_ID]);
+
+/** Catalog-backed built-ins (openrouter, zen, deepseek). Sessions on their
+ *  models get the pinned default-model env and derived wiring at spawn. */
+export function isBuiltinCatalogProvider(id: string): boolean {
+  return BUILTIN_CONFIG_IDS.has(id);
+}
+
+/** Built-ins that speak OpenAI wire format through the cockpit proxy (DeepSeek
+ *  is NOT one — it ships an Anthropic-native endpoint and runs passthrough):
+ *  the env var holding the stored key and the upstream base. */
+const OPENAI_WIRE_BUILTINS: Record<string, { name: string; keyEnvVar: string; baseUrl: () => string }> = {
+  [OPENCODE_ZEN_PROVIDER_ID]: { name: "OpenCode Zen", keyEnvVar: "OPENCODE_API_KEY", baseUrl: zenBaseUrl },
+};
 
 function prefsDir(): string {
   return getCockpitDir();
@@ -131,6 +153,7 @@ function loadBuiltinStored(id: string): Provider | undefined {
 const BUILTIN_NAMES: Record<string, string> = {
   [OPENROUTER_PROVIDER_ID]: "OpenRouter",
   [OPENCODE_ZEN_PROVIDER_ID]: "OpenCode Zen",
+  [DEEPSEEK_PROVIDER_ID]: "DeepSeek",
 };
 
 /** Persist a built-in's user state (key, enabled set, and for zen the synced
@@ -167,25 +190,27 @@ function saveCustom(providers: Provider[], replaceEntry?: Provider): void {
   }
 }
 
-/** OpenCode Zen speaks OpenAI wire format only, so a connected zen session
+/** Zen and DeepSeek speak OpenAI wire format only, so a connected session
  *  points the CLI at cockpit's format proxy, which forwards upstream with the
- *  stored key. The key is stored as OPENCODE_API_KEY, never sent by the CLI. */
-function buildOpenCodeZenProvider(stored: Provider | undefined): Provider {
-  const key = stored?.envVars?.OPENCODE_API_KEY;
+ *  stored key. The key is stored under the provider's own env var name and
+ *  never sent by the CLI. */
+function buildOpenAIWireProvider(id: string, stored: Provider | undefined): Provider {
+  const cfg = OPENAI_WIRE_BUILTINS[id];
+  const key = stored?.envVars?.[cfg.keyEnvVar];
   const proxy = getActiveFormatProxy();
-  // OPENCODE_API_KEY is always present when connected so the settings UI (which
+  // The key var is always present when connected so the settings UI (which
   // runs in the Next.js module graph, where the proxy singleton may be absent)
   // can tell connected from not; the wire vars appear only where the proxy is
   // live, which is the graph that actually spawns sessions.
   return {
-    id: OPENCODE_ZEN_PROVIDER_ID,
-    name: "OpenCode Zen",
+    id,
+    name: cfg.name,
     envVars: key
       ? {
-          OPENCODE_API_KEY: key,
+          [cfg.keyEnvVar]: key,
           ...(proxy?.isRunning
             ? {
-                ANTHROPIC_BASE_URL: proxy.getUrl(OPENCODE_ZEN_PROVIDER_ID),
+                ANTHROPIC_BASE_URL: proxy.getUrl(id),
                 ANTHROPIC_AUTH_TOKEN: "cockpit-format-proxy",
                 ANTHROPIC_API_KEY: "",
                 CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
@@ -200,22 +225,64 @@ function buildOpenCodeZenProvider(stored: Provider | undefined): Provider {
   };
 }
 
+/** DeepSeek ships an Anthropic-native endpoint (api.deepseek.com/anthropic),
+ *  so sessions speak to it without translation — through the proxy in
+ *  anthropic passthrough mode when it is up (bounded retry on saturation),
+ *  direct otherwise. The stored DEEPSEEK_API_KEY doubles as the wire
+ *  ANTHROPIC_AUTH_TOKEN, so the CLI authenticates itself either way. */
+function buildDeepSeekProvider(stored: Provider | undefined): Provider {
+  const key = stored?.envVars?.DEEPSEEK_API_KEY;
+  return {
+    id: DEEPSEEK_PROVIDER_ID,
+    name: "DeepSeek",
+    envVars: key
+      ? {
+          DEEPSEEK_API_KEY: key,
+          ANTHROPIC_BASE_URL: getActiveFormatProxy()?.isRunning
+            ? (getActiveFormatProxy() as FormatProxy).getUrl(DEEPSEEK_PROVIDER_ID)
+            : deepseekBaseUrl(),
+          ANTHROPIC_AUTH_TOKEN: key,
+          ANTHROPIC_API_KEY: "",
+          CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+        }
+      : {},
+    models: stored?.models ?? [],
+    isBuiltin: true,
+    enabledModels: stored?.enabledModels ?? [],
+    syncedAt: stored?.syncedAt,
+  };
+}
+
 /** Upstream config for the format proxy. Null when the provider is not
  *  connected (no key) — the proxy 404s those. */
-export function resolveProxyUpstream(
-  providerId: string,
-): { baseUrl: string; apiKey: string; modelIds: string[]; wireFormat?: "openai" | "anthropic" } | null {
+export function resolveProxyUpstream(providerId: string): {
+  baseUrl: string;
+  apiKey: string;
+  modelIds: string[];
+  wireFormat?: "openai" | "anthropic";
+  effortByModel?: Record<string, string[]>;
+} | null {
   if (providerId === OPENROUTER_PROVIDER_ID) {
     const stored = loadBuiltinStored(OPENROUTER_PROVIDER_ID);
     const apiKey = stored?.envVars?.ANTHROPIC_AUTH_TOKEN;
     if (!apiKey) return null;
     return { baseUrl: openRouterBaseUrl(), apiKey, modelIds: catalogModels().map((m) => m.modelId), wireFormat: "anthropic" };
   }
-  if (providerId !== OPENCODE_ZEN_PROVIDER_ID) return null;
-  const stored = loadBuiltinStored(OPENCODE_ZEN_PROVIDER_ID);
-  const apiKey = stored?.envVars?.OPENCODE_API_KEY;
+  if (providerId === DEEPSEEK_PROVIDER_ID) {
+    const stored = loadBuiltinStored(DEEPSEEK_PROVIDER_ID);
+    const apiKey = stored?.envVars?.DEEPSEEK_API_KEY;
+    if (!apiKey) return null;
+    return { baseUrl: deepseekBaseUrl(), apiKey, modelIds: (stored?.models ?? []).map((m) => m.modelId), wireFormat: "anthropic" };
+  }
+  const cfg = OPENAI_WIRE_BUILTINS[providerId];
+  if (!cfg) return null;
+  const stored = loadBuiltinStored(providerId);
+  const apiKey = stored?.envVars?.[cfg.keyEnvVar];
   if (!apiKey) return null;
-  return { baseUrl: zenBaseUrl(), apiKey, modelIds: (stored?.models ?? []).map((m) => m.modelId) };
+  const models = stored?.models ?? [];
+  const effortByModel: Record<string, string[]> = {};
+  for (const m of models) if ((m.effortLevels ?? []).length > 0) effortByModel[m.modelId] = m.effortLevels;
+  return { baseUrl: cfg.baseUrl(), apiKey, modelIds: models.map((m) => m.modelId), effortByModel };
 }
 
 interface ModelsDevEntry {
@@ -224,36 +291,96 @@ interface ModelsDevEntry {
   limit?: { context?: number };
   tool_call?: boolean;
   reasoning?: boolean;
+  reasoning_options?: Array<{ type?: string; values?: string[] }>;
   modalities?: { input?: string[] };
 }
 
-/** Pricing/capability metadata for zen models. Zen's own /models list is bare
- *  OpenAI shape, but models.dev (the OpenCode team's model database, which
- *  the zen docs pricing table is built from) carries cost per 1M, context
- *  windows, and capability flags under its "opencode" provider. Best-effort:
- *  a failed fetch degrades to the bare list. */
-async function fetchZenModelMeta(): Promise<Record<string, ModelsDevEntry>> {
+const MODELS_DEV_CACHE_MS = 60 * 60 * 1000;
+const modelsDevCache = new Map<string, { at: number; models: Record<string, ModelsDevEntry> }>();
+
+/** Pricing/capability metadata from models.dev — the OpenCode team's model
+ *  database (the zen docs pricing table is built from it): cost per 1M,
+ *  context windows, capability flags, and reasoning effort values, keyed by
+ *  models.dev provider id ("opencode" for zen, "deepseek"). One fetch fills
+ *  the cache for every provider. Best-effort: a failed fetch returns {} and
+ *  callers degrade to bare model lists. */
+async function fetchModelsDevModels(providerKey: string): Promise<Record<string, ModelsDevEntry>> {
+  const hit = modelsDevCache.get(providerKey);
+  if (hit && Date.now() - hit.at < MODELS_DEV_CACHE_MS) return hit.models;
   try {
     const res = await fetch("https://models.dev/api.json", { signal: AbortSignal.timeout(30_000) });
     if (!res.ok) return {};
-    const body = (await res.json()) as { opencode?: { models?: Record<string, ModelsDevEntry> } };
-    return body.opencode?.models ?? {};
+    const body = (await res.json()) as Record<string, { models?: Record<string, ModelsDevEntry> } | undefined>;
+    const now = Date.now();
+    for (const [key, entry] of Object.entries(body)) {
+      if (entry?.models) modelsDevCache.set(key, { at: now, models: entry.models });
+    }
+    return modelsDevCache.get(providerKey)?.models ?? {};
   } catch {
     return {};
   }
 }
 
-/** Fetch zen's OpenAI-style model list with the stored (or given) key,
- *  enrich it from models.dev, and persist it on the builtin entry. Newly seen
- *  models join enabledModels so a fresh connect exposes the whole curated zen
- *  catalog in pickers. */
+const EFFORT_ORDER: ThinkingLevel[] = ["low", "medium", "high", "xhigh", "max"];
+
+/** Effort levels a synced model supports, from models.dev reasoning_options
+ *  (e.g. deepseek v4: [{type:"toggle"}, {type:"effort", values:["high","max"]}]).
+ *  Only values in cockpit's ThinkingLevel vocabulary survive. */
+function metaEffortLevels(m: ModelsDevEntry | undefined): ThinkingLevel[] {
+  const values = (m?.reasoning_options ?? []).filter((o) => o.type === "effort").flatMap((o) => o.values ?? []);
+  return EFFORT_ORDER.filter((l) => values.includes(l));
+}
+
+function modelFromMeta(id: string, m: ModelsDevEntry | undefined): ProviderModel {
+  // Free is zero cost when metadata exists (catches unsuffixed free models
+  // like big-pickle); the "-free" id suffix is the fallback signal.
+  const free = m?.cost ? (m.cost.input ?? 0) === 0 && (m.cost.output ?? 0) === 0 : /-free$/.test(id);
+  return {
+    modelId: id,
+    displayName: m?.name || id,
+    effortLevels: metaEffortLevels(m),
+    contextSizes: [],
+    contextLength: m?.limit?.context,
+    pricing: m?.cost ? { inPerM: m.cost.input ?? 0, outPerM: m.cost.output ?? 0 } : undefined,
+    free,
+    supportsTools: m?.tool_call,
+    supportsReasoning: m?.reasoning,
+    supportsImageInput: m?.modalities?.input?.includes("image"),
+  };
+}
+
+/** Persist a sync result on a builtin entry. Curation rules: a connected
+ *  provider keeps its enabled set, with a fresh connect starting fully
+ *  enabled; an unconnected one never gains enabled models from a background
+ *  sync — pickers only offer connected providers. */
+function saveSyncedBuiltin(
+  id: string,
+  keyEnvVar: string,
+  stored: Provider | undefined,
+  apiKey: string | undefined,
+  models: ProviderModel[],
+): void {
+  const ids = models.map((m) => m.modelId);
+  const prevEnabled = new Set(stored?.enabledModels ?? []);
+  const enabledModels = apiKey ? ids.filter((mid) => prevEnabled.size === 0 || prevEnabled.has(mid)) : (stored?.enabledModels ?? []);
+  saveBuiltinStored(id, {
+    envVars: apiKey ? { ...stored?.envVars, [keyEnvVar]: apiKey } : { ...stored?.envVars },
+    models,
+    enabledModels,
+    syncedAt: Date.now(),
+  });
+  rebuildCache(loadCustom());
+}
+
+/** Fetch zen's OpenAI-style model list (the endpoint is public — the key is
+ *  optional) and enrich it from models.dev. A keyless sync only refreshes the
+ *  browsable list; connect (keyOverride) also stores the key. */
 export async function syncZenModels(keyOverride?: string): Promise<{ ok: boolean; modelCount?: number; error?: string }> {
   const stored = loadBuiltinStored(OPENCODE_ZEN_PROVIDER_ID);
   const apiKey = keyOverride ?? stored?.envVars?.OPENCODE_API_KEY;
-  if (!apiKey) return { ok: false, error: "OpenCode Zen is not connected" };
   try {
     const res = await fetch(`${zenBaseUrl()}/models`, {
-      headers: { Authorization: `Bearer ${apiKey}` },
+      headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : {},
       signal: AbortSignal.timeout(30_000),
     });
     if (!res.ok) return { ok: false, error: `Zen models fetch failed: HTTP ${res.status}` };
@@ -261,45 +388,105 @@ export async function syncZenModels(keyOverride?: string): Promise<{ ok: boolean
     const ids = (body.data ?? []).map((m) => m.id).filter((id): id is string => !!id);
     if (ids.length === 0) return { ok: false, error: "Zen models fetch returned no models" };
 
-    const meta = await fetchZenModelMeta();
-    // Free is zero cost when metadata exists (catches unsuffixed free models
-    // like big-pickle); the "-free" id suffix is the fallback signal.
-    const models: ProviderModel[] = ids.map((id) => {
-      const m = meta[id];
-      const free = m?.cost ? (m.cost.input ?? 0) === 0 && (m.cost.output ?? 0) === 0 : /-free$/.test(id);
-      return {
-        modelId: id,
-        displayName: m?.name || id,
-        effortLevels: [],
-        contextSizes: [],
-        contextLength: m?.limit?.context,
-        pricing: m?.cost ? { inPerM: m.cost.input ?? 0, outPerM: m.cost.output ?? 0 } : undefined,
-        free,
-        supportsTools: m?.tool_call,
-        supportsReasoning: m?.reasoning,
-        supportsImageInput: m?.modalities?.input?.includes("image"),
-      };
-    });
-    const prevEnabled = new Set(stored?.enabledModels ?? []);
-    const enabledModels = stored ? ids.filter((id) => prevEnabled.size === 0 || prevEnabled.has(id)) : ids;
-    saveBuiltinStored(OPENCODE_ZEN_PROVIDER_ID, {
-      envVars: { ...stored?.envVars, OPENCODE_API_KEY: apiKey },
-      models,
-      enabledModels,
-      syncedAt: Date.now(),
-    });
-    rebuildCache(loadCustom());
+    const meta = await fetchModelsDevModels("opencode");
+    const models = ids.map((id) => modelFromMeta(id, meta[id]));
+    saveSyncedBuiltin(OPENCODE_ZEN_PROVIDER_ID, "OPENCODE_API_KEY", stored, apiKey, models);
     return { ok: true, modelCount: models.length };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }
 }
 
+/** DeepSeek's catalog comes from models.dev (public, keyless); when a key is
+ *  present the authenticated /v1/models list — DeepSeek 401s bad keys, unlike
+ *  zen's open endpoint, so connect validation is real — becomes the id source
+ *  of truth for what the key can actually run. */
+export async function syncDeepSeekModels(keyOverride?: string): Promise<{ ok: boolean; modelCount?: number; error?: string }> {
+  const stored = loadBuiltinStored(DEEPSEEK_PROVIDER_ID);
+  const apiKey = keyOverride ?? stored?.envVars?.DEEPSEEK_API_KEY;
+  try {
+    const meta = await fetchModelsDevModels("deepseek");
+    let ids = Object.keys(meta);
+    if (apiKey) {
+      const res = await fetch(`${deepseekApiRoot()}/v1/models`, {
+        headers: { Authorization: `Bearer ${apiKey}` },
+        signal: AbortSignal.timeout(30_000),
+      });
+      if (res.status === 401 || res.status === 403) return { ok: false, error: "DeepSeek rejected the API key" };
+      if (res.ok) {
+        const body = (await res.json()) as { data?: Array<{ id?: string }> };
+        const live = (body.data ?? []).map((m) => m.id).filter((id): id is string => !!id);
+        if (live.length > 0) ids = live;
+      }
+    }
+    if (ids.length === 0) return { ok: false, error: "DeepSeek model list is empty" };
+    const models = ids.map((id) => modelFromMeta(id, meta[id]));
+    saveSyncedBuiltin(DEEPSEEK_PROVIDER_ID, "DEEPSEEK_API_KEY", stored, apiKey, models);
+    return { ok: true, modelCount: models.length };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+const BUILTIN_SYNC_INTERVAL_MS = 24 * 60 * 60 * 1000;
+let builtinSyncTimer: ReturnType<typeof setInterval> | null = null;
+
+/** Boot-time plus daily refresh of the proxied built-ins' model lists. Both
+ *  sources are public (zen /models, models.dev), so this runs whether or not
+ *  a key is connected — the providers page shows model and free counts before
+ *  connect, and connected installs stay fresh without manual syncs. Failures
+ *  stay silent (best-effort; the next tick retries). */
+export function startBuiltinModelSync(): void {
+  if (builtinSyncTimer) return;
+  const run = () => {
+    const syncs: Array<[string, () => Promise<unknown>]> = [
+      [OPENCODE_ZEN_PROVIDER_ID, () => syncZenModels()],
+      [DEEPSEEK_PROVIDER_ID, () => syncDeepSeekModels()],
+    ];
+    for (const [id, sync] of syncs) {
+      const syncedAt = loadBuiltinStored(id)?.syncedAt ?? 0;
+      if (Date.now() - syncedAt < BUILTIN_SYNC_INTERVAL_MS) continue;
+      void sync();
+    }
+  };
+  run();
+  builtinSyncTimer = setInterval(run, BUILTIN_SYNC_INTERVAL_MS);
+  builtinSyncTimer.unref?.();
+}
+
+export interface DeepSeekBalance {
+  currency: string;
+  totalBalance: number;
+}
+
+const BALANCE_CACHE_MS = 60_000;
+let balanceCache: { at: number; data: DeepSeekBalance } | null = null;
+
+/** Account balance for the stored DeepSeek key (GET /user/balance on the API
+ *  root). Null when not connected; cached a minute like the OpenRouter usage
+ *  snapshot. */
+export async function getDeepSeekBalance(): Promise<DeepSeekBalance | null> {
+  const key = loadBuiltinStored(DEEPSEEK_PROVIDER_ID)?.envVars?.DEEPSEEK_API_KEY;
+  if (!key) return null;
+  if (balanceCache && Date.now() - balanceCache.at < BALANCE_CACHE_MS) return balanceCache.data;
+  const res = await fetch(`${deepseekApiRoot()}/user/balance`, {
+    headers: { Authorization: `Bearer ${key}` },
+    signal: AbortSignal.timeout(30_000),
+  });
+  if (!res.ok) throw new Error(`balance fetch failed: HTTP ${res.status}`);
+  const body = (await res.json()) as { balance_infos?: Array<{ currency?: string; total_balance?: string }> };
+  const info = body.balance_infos?.[0];
+  const data: DeepSeekBalance = { currency: info?.currency ?? "USD", totalBalance: Number(info?.total_balance ?? 0) };
+  balanceCache = { at: Date.now(), data };
+  return data;
+}
+
 function rebuildCache(custom: Provider[]): void {
   cache = [
     buildAnthropicProvider(),
     buildOpenRouterProvider(loadBuiltinStored(OPENROUTER_PROVIDER_ID)),
-    buildOpenCodeZenProvider(loadBuiltinStored(OPENCODE_ZEN_PROVIDER_ID)),
+    buildOpenAIWireProvider(OPENCODE_ZEN_PROVIDER_ID, loadBuiltinStored(OPENCODE_ZEN_PROVIDER_ID)),
+    buildDeepSeekProvider(loadBuiltinStored(DEEPSEEK_PROVIDER_ID)),
     ...custom,
   ];
   cacheMtimeMs = providersMtimeMs();
@@ -335,7 +522,9 @@ export function updateProvider(id: string, partial: Partial<Provider>): Provider
   if (BUILTIN_CONFIG_IDS.has(id)) {
     const entry = saveBuiltinStored(id, { envVars: partial.envVars, enabledModels: partial.enabledModels, models: partial.models });
     rebuildCache(loadCustom());
-    return id === OPENROUTER_PROVIDER_ID ? buildOpenRouterProvider(entry) : buildOpenCodeZenProvider(entry);
+    if (id === OPENROUTER_PROVIDER_ID) return buildOpenRouterProvider(entry);
+    if (id === DEEPSEEK_PROVIDER_ID) return buildDeepSeekProvider(entry);
+    return buildOpenAIWireProvider(id, entry);
   }
   const custom = getProviders().filter((p) => !p.isBuiltin);
   const idx = custom.findIndex((p) => p.id === id);

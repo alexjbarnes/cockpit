@@ -44,11 +44,12 @@ describe("providers", () => {
     const { getProviders } = await import("@/server/providers");
     const providers = getProviders();
 
-    expect(providers.length).toBe(4);
+    expect(providers.length).toBe(5);
     expect(providers[0].id).toBe("anthropic");
     expect(providers[1].id).toBe("openrouter");
     expect(providers[2].id).toBe("zen");
-    expect(providers[3].id).toBe("or-123");
+    expect(providers[3].id).toBe("deepseek");
+    expect(providers[4].id).toBe("or-123");
   });
 
   it("openrouter built-in accepts key + enabled set, derives env, and rejects deletion", async () => {
@@ -107,7 +108,7 @@ describe("providers", () => {
     vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(zenEntry));
 
     const upstream = resolveProxyUpstream("zen");
-    expect(upstream).toEqual({ baseUrl: "https://opencode.ai/zen/v1", apiKey: "zk-1", modelIds: ["opencode/gpt-5.5"] });
+    expect(upstream).toEqual({ baseUrl: "https://opencode.ai/zen/v1", apiKey: "zk-1", modelIds: ["opencode/gpt-5.5"], effortByModel: {} });
 
     const updated = updateProvider("zen", { enabledModels: [] });
     expect(updated.id).toBe("zen");
@@ -184,6 +185,191 @@ describe("providers", () => {
     expect(byId["nemotron-3-ultra-free"].pricing).toBeUndefined();
     expect(typeof zen.syncedAt).toBe("number");
     vi.unstubAllGlobals();
+  });
+
+  it("syncZenModels keyless refreshes the list without enabling models or storing a key", async () => {
+    const fs = await import("node:fs");
+    vi.mocked(fs.readFileSync).mockImplementation(() => {
+      throw new Error("ENOENT");
+    });
+    vi.mocked(fs.writeFileSync).mockImplementation(() => {});
+    vi.mocked(fs.mkdirSync).mockImplementation(() => "");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (String(url).includes("models.dev")) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              opencode: {
+                models: {
+                  "deepseek-v4-flash-free": {
+                    name: "DeepSeek V4 Flash Free",
+                    cost: { input: 0, output: 0 },
+                    reasoning: true,
+                    reasoning_options: [{ type: "toggle" }, { type: "effort", values: ["high", "max", "bogus"] }],
+                  },
+                },
+              },
+            }),
+          };
+        }
+        // the public zen list gets no Authorization header without a key
+        expect((init?.headers as Record<string, string> | undefined)?.Authorization).toBeUndefined();
+        return { ok: true, status: 200, json: async () => ({ data: [{ id: "deepseek-v4-flash-free" }] }) };
+      }) as unknown as typeof fetch,
+    );
+
+    const { syncZenModels } = await import("@/server/providers");
+    const result = await syncZenModels();
+    expect(result).toEqual({ ok: true, modelCount: 1 });
+
+    const written = JSON.parse(vi.mocked(fs.writeFileSync).mock.calls.at(-1)?.[1] as string);
+    const zen = written.find((p: { id: string }) => p.id === "zen");
+    expect(zen.envVars.OPENCODE_API_KEY).toBeUndefined();
+    expect(zen.enabledModels).toEqual([]);
+    // models.dev reasoning_options land as effortLevels, unknown values dropped
+    expect(zen.models[0].effortLevels).toEqual(["high", "max"]);
+    vi.unstubAllGlobals();
+  });
+
+  it("syncDeepSeekModels validates the key against the live list and enriches from models.dev", async () => {
+    const fs = await import("node:fs");
+    vi.mocked(fs.readFileSync).mockImplementation(() => {
+      throw new Error("ENOENT");
+    });
+    vi.mocked(fs.writeFileSync).mockImplementation(() => {});
+    vi.mocked(fs.mkdirSync).mockImplementation(() => "");
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (String(url).includes("models.dev")) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            deepseek: {
+              models: {
+                "deepseek-v4-flash": {
+                  name: "DeepSeek V4 Flash",
+                  cost: { input: 0.14, output: 0.28 },
+                  limit: { context: 1000000 },
+                  tool_call: true,
+                  reasoning: true,
+                  reasoning_options: [{ type: "toggle" }, { type: "effort", values: ["high", "max"] }],
+                },
+                "deepseek-chat": { name: "DeepSeek Chat", cost: { input: 0.14, output: 0.28 } },
+              },
+            },
+          }),
+        };
+      }
+      expect(String(url)).toBe("https://api.deepseek.com/v1/models");
+      expect((init?.headers as Record<string, string>).Authorization).toBe("Bearer dsk-1");
+      // The live authed list is the source of truth: only what the key can run.
+      return { ok: true, status: 200, json: async () => ({ data: [{ id: "deepseek-v4-flash" }, { id: "deepseek-v4-pro" }] }) };
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    const { syncDeepSeekModels } = await import("@/server/providers");
+    const result = await syncDeepSeekModels("dsk-1");
+    expect(result).toEqual({ ok: true, modelCount: 2 });
+
+    const written = JSON.parse(vi.mocked(fs.writeFileSync).mock.calls.at(-1)?.[1] as string);
+    const ds = written.find((p: { id: string }) => p.id === "deepseek");
+    expect(ds.envVars.DEEPSEEK_API_KEY).toBe("dsk-1");
+    expect(ds.enabledModels).toEqual(["deepseek-v4-flash", "deepseek-v4-pro"]);
+    const byId = Object.fromEntries(ds.models.map((m: { modelId: string }) => [m.modelId, m]));
+    expect(byId["deepseek-v4-flash"]).toMatchObject({
+      displayName: "DeepSeek V4 Flash",
+      pricing: { inPerM: 0.14, outPerM: 0.28 },
+      contextLength: 1000000,
+      effortLevels: ["high", "max"],
+      supportsReasoning: true,
+    });
+    // live-only id with no models.dev entry stays bare
+    expect(byId["deepseek-v4-pro"].pricing).toBeUndefined();
+    vi.unstubAllGlobals();
+  });
+
+  it("syncDeepSeekModels rejects a bad key and falls back to models.dev keyless", async () => {
+    const fs = await import("node:fs");
+    vi.mocked(fs.readFileSync).mockImplementation(() => {
+      throw new Error("ENOENT");
+    });
+    vi.mocked(fs.writeFileSync).mockImplementation(() => {});
+    vi.mocked(fs.mkdirSync).mockImplementation(() => "");
+    const meta = {
+      ok: true,
+      status: 200,
+      json: async () => ({ deepseek: { models: { "deepseek-v4-flash": { name: "DeepSeek V4 Flash" } } } }),
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) =>
+        String(url).includes("models.dev") ? meta : { ok: false, status: 401, json: async () => ({}) },
+      ) as unknown as typeof fetch,
+    );
+
+    const { syncDeepSeekModels } = await import("@/server/providers");
+    expect(await syncDeepSeekModels("bad-key")).toEqual({ ok: false, error: "DeepSeek rejected the API key" });
+
+    // Keyless: no live-list call is made, the models.dev catalog is the list,
+    // and nothing gets enabled.
+    const keyless = await syncDeepSeekModels();
+    expect(keyless).toEqual({ ok: true, modelCount: 1 });
+    const written = JSON.parse(vi.mocked(fs.writeFileSync).mock.calls.at(-1)?.[1] as string);
+    const ds = written.find((p: { id: string }) => p.id === "deepseek");
+    expect(ds.enabledModels).toEqual([]);
+    expect(ds.envVars.DEEPSEEK_API_KEY).toBeUndefined();
+    vi.unstubAllGlobals();
+  });
+
+  it("deepseek built-in derives passthrough env and an anthropic-wire proxy upstream", async () => {
+    const fs = await import("node:fs");
+    const storedEntries = JSON.stringify([
+      {
+        id: "deepseek",
+        name: "DeepSeek",
+        isBuiltin: true,
+        envVars: { DEEPSEEK_API_KEY: "dsk-9" },
+        models: [{ modelId: "deepseek-v4-flash", displayName: "Flash", effortLevels: ["high", "max"], contextSizes: [] }],
+        enabledModels: ["deepseek-v4-flash"],
+      },
+      {
+        id: "zen",
+        name: "OpenCode Zen",
+        isBuiltin: true,
+        envVars: { OPENCODE_API_KEY: "zk-1" },
+        models: [
+          { modelId: "gpt-5.5", displayName: "GPT-5.5", effortLevels: ["low", "medium", "high"], contextSizes: [] },
+          { modelId: "big-pickle", displayName: "Big Pickle", effortLevels: [], contextSizes: [] },
+        ],
+        enabledModels: [],
+      },
+    ]);
+    vi.mocked(fs.readFileSync).mockReturnValue(storedEntries);
+
+    const { getProvider, resolveProxyUpstream } = await import("@/server/providers");
+    const ds = getProvider("deepseek");
+    // No proxy is active in this graph: direct Anthropic-door fallback, with
+    // the stored key doubling as the CLI's own auth token.
+    expect(ds?.envVars.ANTHROPIC_BASE_URL).toBe("https://api.deepseek.com/anthropic");
+    expect(ds?.envVars.ANTHROPIC_AUTH_TOKEN).toBe("dsk-9");
+    expect(ds?.envVars.ANTHROPIC_API_KEY).toBe("");
+    expect(ds?.envVars.DEEPSEEK_API_KEY).toBe("dsk-9");
+
+    const upstream = resolveProxyUpstream("deepseek");
+    expect(upstream).toMatchObject({
+      baseUrl: "https://api.deepseek.com/anthropic",
+      apiKey: "dsk-9",
+      wireFormat: "anthropic",
+      modelIds: ["deepseek-v4-flash"],
+    });
+
+    // Zen (openai wire) carries per-model effort levels for the proxy's
+    // reasoning_effort mapping; effort-less models are omitted.
+    const zenUpstream = resolveProxyUpstream("zen");
+    expect(zenUpstream?.effortByModel).toEqual({ "gpt-5.5": ["low", "medium", "high"] });
   });
 
   it("openrouter routes through the format proxy when it is active, direct otherwise", async () => {

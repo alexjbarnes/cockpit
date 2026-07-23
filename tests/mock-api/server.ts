@@ -83,14 +83,18 @@ export function createMockApiServer(): Promise<MockApiServer> {
       // Model catalog stub — on a custom base URL the CLI probes GET
       // /v1/models and treats absent ids as unavailable, which kills turns on
       // foreign (e.g. OpenRouter-style) model ids. Claim every id is known by
-      // echoing a generous list including the OpenRouter integration model.
-      const isOrKey = String(req.headers.authorization ?? "").includes("sk-or-");
-      if (req.method === "GET" && pathOnly === "/v1/models" && isOrKey) {
+      // echoing a generous list including the foreign integration models.
+      // Scoped to the provider-integration keys so the plain custom-provider
+      // specs keep their unstubbed (404) behavior.
+      const auth = String(req.headers.authorization ?? "");
+      const isForeignProviderKey = auth.includes("sk-or-") || auth.includes("deepseek-integration-key");
+      if (req.method === "GET" && pathOnly === "/v1/models" && isForeignProviderKey) {
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(
           JSON.stringify({
             data: [
               { id: "mockvendor/or-test:free", display_name: "Mock OR Model", type: "model" },
+              { id: "deepseek-v4-flash", display_name: "Mock DeepSeek Flash", type: "model" },
               { id: "claude-sonnet-4-6", display_name: "Mock Sonnet", type: "model" },
               { id: "claude-opus-4-8", display_name: "Mock Opus", type: "model" },
               { id: "claude-haiku-4-5-20251001", display_name: "Mock Haiku", type: "model" },

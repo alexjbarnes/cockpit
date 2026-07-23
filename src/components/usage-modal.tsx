@@ -117,16 +117,91 @@ function OpenRouterUsagePanel() {
   );
 }
 
+interface MeteredWindow {
+  inputTokens: number;
+  outputTokens: number;
+  requests: number;
+  costUSD: number;
+}
+
+interface BuiltinUsageData {
+  spend: { today: MeteredWindow; week: MeteredWindow; month: MeteredWindow };
+  balance: { currency: string; totalBalance: number } | null;
+  balanceError?: string;
+}
+
+function formatUSD(v: number): string {
+  if (v > 0 && v < 0.01) return `$${v.toFixed(4)}`;
+  return `$${v.toFixed(2)}`;
+}
+
+/** Zen has no spend API, so cockpit meters proxied traffic locally; DeepSeek
+ *  shows the account balance from their API. */
+function BuiltinUsagePanel({ providerId }: { providerId: string }) {
+  const [data, setData] = useState<BuiltinUsageData | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetch(`/api/providers/${providerId}/usage`)
+      .then(async (res) => {
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          throw new Error(body.error || `HTTP ${res.status}`);
+        }
+        setData(await res.json());
+      })
+      .catch((err) => setError(err instanceof Error ? err.message : String(err)));
+  }, [providerId]);
+
+  if (error) return <p className="text-sm text-muted-foreground py-4 text-center">{error}</p>;
+  if (!data) {
+    return (
+      <div className="flex items-center justify-center py-8">
+        <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
+
+  return (
+    <>
+      {data.balance && <CreditRow label="Account balance" value={`${formatUSD(data.balance.totalBalance)} ${data.balance.currency}`} />}
+      {data.balanceError && <p className="text-xs text-destructive mb-2">Balance unavailable: {data.balanceError}</p>}
+      {providerId === "zen" && (
+        <>
+          <CreditRow label="Spend today (est.)" value={formatUSD(data.spend.today.costUSD)} />
+          <CreditRow label="Spend this week (est.)" value={formatUSD(data.spend.week.costUSD)} />
+          <CreditRow label="Spend this month (est.)" value={formatUSD(data.spend.month.costUSD)} />
+          <CreditRow label="Requests this week" value={String(data.spend.week.requests)} />
+          <p className="mt-3 text-xs text-muted-foreground">
+            Metered by cockpit from proxied sessions at current model prices. Billing lives in your opencode.ai workspace console.
+          </p>
+        </>
+      )}
+      {providerId === "deepseek" && (
+        <p className="mt-3 text-xs text-muted-foreground">Sessions bill your DeepSeek account directly; top up at platform.deepseek.com.</p>
+      )}
+    </>
+  );
+}
+
 export function UsageButton({ className, sessionModel }: { className?: string; sessionModel?: string }) {
   const [open, setOpen] = useState(false);
   const { usage, loading, error, refresh } = useUsage();
 
-  // The indicator follows the active session's provider: an OpenRouter
-  // session shows credit spend, everything else keeps the Anthropic
-  // subscription view. The model arrives live from the session view via the
-  // shell context — the sessions list API omits model for scanned sessions,
-  // so it can never be the source of truth here.
-  const isOpenRouter = !!sessionModel?.startsWith("openrouter:");
+  // The indicator follows the active session's provider: OpenRouter sessions
+  // show credit spend, zen shows cockpit-metered spend, deepseek shows the
+  // account balance, everything else keeps the Anthropic subscription view.
+  // The model arrives live from the session view via the shell context — the
+  // sessions list API omits model for scanned sessions, so it can never be
+  // the source of truth here.
+  const prefix = sessionModel?.split(":")[0];
+  const PROVIDER_TITLES: Record<string, string> = {
+    openrouter: "OpenRouter Usage",
+    zen: "OpenCode Zen Usage",
+    deepseek: "DeepSeek Usage",
+  };
+  const providerId = prefix && PROVIDER_TITLES[prefix] ? prefix : null;
+  const isOpenRouter = providerId === "openrouter";
 
   useEffect(() => {
     if (!open) return;
@@ -154,9 +229,9 @@ export function UsageButton({ className, sessionModel }: { className?: string; s
         >
           <div className="w-full max-w-md mx-4 rounded-lg border bg-background p-5 shadow-lg">
             <div className="flex items-center justify-between mb-4">
-              <h2 className="text-base font-semibold">{isOpenRouter ? "OpenRouter Usage" : "Account Usage"}</h2>
+              <h2 className="text-base font-semibold">{providerId ? PROVIDER_TITLES[providerId] : "Account Usage"}</h2>
               <div className="flex gap-1">
-                {!isOpenRouter && (
+                {!providerId && (
                   <Button variant="ghost" size="icon" onClick={() => refresh(true)} disabled={loading} title="Refresh usage">
                     <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
                   </Button>
@@ -168,16 +243,17 @@ export function UsageButton({ className, sessionModel }: { className?: string; s
             </div>
 
             {isOpenRouter && <OpenRouterUsagePanel />}
+            {providerId && !isOpenRouter && <BuiltinUsagePanel providerId={providerId} />}
 
-            {!isOpenRouter && loading && !usage && (
+            {!providerId && loading && !usage && (
               <div className="flex items-center justify-center py-8">
                 <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
               </div>
             )}
 
-            {!isOpenRouter && error && !usage && <p className="text-sm text-muted-foreground py-4 text-center">{error}</p>}
+            {!providerId && error && !usage && <p className="text-sm text-muted-foreground py-4 text-center">{error}</p>}
 
-            {!isOpenRouter && usage && (
+            {!providerId && usage && (
               <>
                 {usage.five_hour && <LimitBar label="5-hour limit" limit={usage.five_hour} />}
                 {usage.seven_day && <LimitBar label="7-day limit" limit={usage.seven_day} />}

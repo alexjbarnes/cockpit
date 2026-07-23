@@ -915,7 +915,10 @@ export function InputArea({
                             const q = modelSearch.trim().toLowerCase();
                             const aliasMatches = aliases.filter((a) => !q || a.label.toLowerCase().includes(q) || a.value.includes(q));
                             const providerGroups = (providers || [])
-                              .filter((p) => p.id !== "anthropic")
+                              // Built-ins list only when connected: their model
+                              // lists sync keylessly for the settings preview,
+                              // but a picker entry must be runnable.
+                              .filter((p) => p.id !== "anthropic" && (!p.isBuiltin || Object.keys(p.envVars).length > 0))
                               .map((p) => ({
                                 provider: p,
                                 // Catalog-backed built-ins show the curated

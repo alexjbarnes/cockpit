@@ -10,10 +10,11 @@ import { JobScheduler } from "./src/server/job-scheduler";
 import { CockpitMcpServer } from "./src/server/mcp/cockpit-config-server";
 import { getCockpitDir } from "./src/server/paths";
 import { startCatalogSync } from "./src/server/provider-catalog";
-import { resolveProxyUpstream } from "./src/server/providers";
+import { resolveProxyUpstream, startBuiltinModelSync } from "./src/server/providers";
 import { SessionManager } from "./src/server/session-manager";
 import { setCockpitMcp, setHookRouter, setJobScheduler, setSessionManager, setTerminalManager } from "./src/server/singleton";
 import { TerminalManager } from "./src/server/terminal-manager";
+import { UsageMeter } from "./src/server/usage-meter";
 import { createWebSocketHandler } from "./src/server/ws-handler";
 
 const dev = process.env.NODE_ENV !== "production";
@@ -96,7 +97,10 @@ async function main() {
   // Anthropic ⇄ OpenAI translation proxy for providers without an
   // Anthropic-compatible endpoint (OpenCode Zen). Started before anything
   // that can resolve providers so derived spawn env always sees it.
-  const formatProxy = new FormatProxy(resolveProxyUpstream);
+  // Translated requests report token usage into the local meter — the spend
+  // view for providers that expose no usage API of their own.
+  const usageMeter = new UsageMeter();
+  const formatProxy = new FormatProxy(resolveProxyUpstream, { onUsage: (u) => usageMeter.record({ ts: Date.now(), ...u }) });
   try {
     await formatProxy.start();
     setActiveFormatProxy(formatProxy);
@@ -112,6 +116,9 @@ async function main() {
   // Boot-time OpenRouter catalog sync plus a daily refresh (D8: failures
   // alert through the inbox once per episode, never via UI degradation).
   startCatalogSync();
+  // Same cadence for the other built-ins' model lists (zen /models and
+  // models.dev are public, so counts show before any key is connected).
+  startBuiltinModelSync();
 
   // Opt-in stall watchdog: COCKPIT_HEALTH=1 (independent of COCKPIT_DEBUG) logs
   // only when the process stalls, classifying it as event-loop-blocked vs

@@ -46,6 +46,10 @@ export interface HarnessOptions {
    *  COCKPIT_ZEN_BASE_URL at the mock API's OpenAI door, so zen sessions run
    *  CLI → cockpit format proxy → mock /v1/chat/completions. */
   zenViaMock?: boolean;
+  /** Seed the built-in DeepSeek provider (key + one model) and point
+   *  COCKPIT_DEEPSEEK_BASE_URL at the mock API, so deepseek sessions run
+   *  CLI → cockpit proxy (anthropic passthrough) → mock /v1/messages. */
+  deepseekViaMock?: boolean;
 }
 
 // Process groups (pgids) of cockpit servers still running in this worker.
@@ -98,6 +102,7 @@ export async function startHarness(opts: HarnessOptions = {}): Promise<Harness> 
     thinkingLevel: opts.thinkingLevel,
     openRouterViaMock: opts.openRouterViaMock,
     zenViaMock: opts.zenViaMock,
+    deepseekViaMock: opts.deepseekViaMock,
   });
 
   const cockpitPort = await getFreePort();
@@ -112,6 +117,7 @@ export async function startHarness(opts: HarnessOptions = {}): Promise<Harness> 
     claudeBin: opts.claudeBin ?? process.env.CLAUDE_BIN ?? "claude",
     openRouterBaseUrl: opts.openRouterViaMock ? `http://127.0.0.1:${mock.port}` : undefined,
     zenBaseUrl: opts.zenViaMock ? `http://127.0.0.1:${mock.port}/v1` : undefined,
+    deepseekBaseUrl: opts.deepseekViaMock ? `http://127.0.0.1:${mock.port}` : undefined,
   });
   if (process.env.COCKPIT_IT_DEBUG === "1") captureCockpitLogs(proc);
 
@@ -152,12 +158,15 @@ interface SeedOpts {
   thinkingLevel?: ThinkingLevel;
   openRouterViaMock?: boolean;
   zenViaMock?: boolean;
+  deepseekViaMock?: boolean;
 }
 
 /** Catalog model id used by the OpenRouter integration seeding. */
 export const OR_TEST_MODEL = "mockvendor/or-test:free";
 /** Model id used by the OpenCode Zen integration seeding. */
 export const ZEN_TEST_MODEL = "opencode/mock-model";
+/** Model id used by the DeepSeek integration seeding. */
+export const DEEPSEEK_TEST_MODEL = "deepseek-v4-flash";
 
 function seedConfig(opts: SeedOpts): void {
   // password.json: validateSession() requires a stored password to compute
@@ -236,8 +245,29 @@ function seedConfig(opts: SeedOpts): void {
       name: "OpenCode Zen",
       isBuiltin: true,
       envVars: { OPENCODE_API_KEY: "zen-integration-key" },
-      models: [{ modelId: ZEN_TEST_MODEL, displayName: ZEN_TEST_MODEL, effortLevels: [], contextSizes: [] }],
+      // effortLevels mirror a models.dev reasoning model: the spawn gains
+      // --effort + CLAUDE_CODE_ALWAYS_ENABLE_EFFORT, and the proxy is expected
+      // to map the CLI's thinking config onto reasoning_effort upstream.
+      models: [{ modelId: ZEN_TEST_MODEL, displayName: ZEN_TEST_MODEL, effortLevels: ["high", "max"], contextSizes: [] }],
       enabledModels: [ZEN_TEST_MODEL],
+    });
+  }
+  if (opts.deepseekViaMock) {
+    providersOut.unshift({
+      id: "deepseek",
+      name: "DeepSeek",
+      isBuiltin: true,
+      envVars: { DEEPSEEK_API_KEY: "deepseek-integration-key" },
+      models: [
+        {
+          modelId: DEEPSEEK_TEST_MODEL,
+          displayName: "DeepSeek V4 Flash",
+          effortLevels: ["high", "max"],
+          contextSizes: [],
+          contextLength: 1000000,
+        },
+      ],
+      enabledModels: [DEEPSEEK_TEST_MODEL],
     });
   }
   if (opts.openRouterViaMock) {
@@ -304,6 +334,7 @@ interface SpawnOpts {
   claudeBin: string;
   openRouterBaseUrl?: string;
   zenBaseUrl?: string;
+  deepseekBaseUrl?: string;
 }
 
 function spawnCockpit(opts: SpawnOpts): ChildProcess {
@@ -336,6 +367,7 @@ function spawnCockpit(opts: SpawnOpts): ChildProcess {
       // to the mock when the OpenRouter seeding is enabled.
       ...(opts.openRouterBaseUrl ? { COCKPIT_OPENROUTER_BASE_URL: opts.openRouterBaseUrl } : {}),
       ...(opts.zenBaseUrl ? { COCKPIT_ZEN_BASE_URL: opts.zenBaseUrl } : {}),
+      ...(opts.deepseekBaseUrl ? { COCKPIT_DEEPSEEK_BASE_URL: opts.deepseekBaseUrl } : {}),
     },
     stdio: ["ignore", "pipe", "pipe"],
     // Put cockpit in its own process group so we can SIGTERM the WHOLE tree

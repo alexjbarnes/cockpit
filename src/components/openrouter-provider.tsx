@@ -321,13 +321,28 @@ function formatAgo(ts: number): string {
   return `${Math.floor(hours / 24)}d ago`;
 }
 
-/** Connect card for OpenCode Zen — key-only, models sync on connect, sessions
- *  run through cockpit's Anthropic-to-OpenAI format proxy. */
-export function ZenCard({ provider, onChanged, onManage }: { provider: Provider; onChanged: () => void; onManage: () => void }) {
+/** Connect card shared by the key-only built-ins (zen, deepseek). Their model
+ *  lists sync keylessly (zen /models is public; deepseek's catalog comes from
+ *  models.dev), so model and free counts show before a key is connected. */
+export function BuiltinKeyCard({
+  provider,
+  keyEnvVar,
+  tagline,
+  keyPlaceholder,
+  onChanged,
+  onManage,
+}: {
+  provider: Provider;
+  keyEnvVar: string;
+  tagline: string;
+  keyPlaceholder: string;
+  onChanged: () => void;
+  onManage: () => void;
+}) {
   const [key, setKey] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const connected = !!provider.envVars.OPENCODE_API_KEY;
+  const connected = !!provider.envVars[keyEnvVar];
   const freeCount = provider.models.filter((m) => m.free).length;
 
   const connect = async () => {
@@ -335,7 +350,7 @@ export function ZenCard({ provider, onChanged, onManage }: { provider: Provider;
     setBusy(true);
     setError(null);
     try {
-      const res = await fetch("/api/providers/zen/connect", {
+      const res = await fetch(`/api/providers/${provider.id}/connect`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ key: key.trim() }),
@@ -356,42 +371,40 @@ export function ZenCard({ provider, onChanged, onManage }: { provider: Provider;
   return (
     <div className="rounded-lg border p-3 space-y-2">
       <div className="flex items-center gap-2">
-        <span className="text-sm font-medium">OpenCode Zen</span>
+        <span className="text-sm font-medium">{provider.name}</span>
         {connected ? (
           <span className="rounded bg-primary/10 px-1.5 text-[10px] font-semibold text-primary">connected</span>
         ) : (
           <span className="rounded bg-muted px-1.5 text-[10px] text-muted-foreground">not connected</span>
         )}
         <span className="ml-auto text-xs text-muted-foreground">
-          {connected ? `${provider.models.length} models` : "OpenAI wire format · via cockpit proxy"}
+          {provider.models.length > 0 ? `${provider.models.length} models` : tagline}
         </span>
       </div>
-      {connected && (
+      {(connected || freeCount > 0) && (
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
-          {freeCount > 0 && (
-            <>
-              <span className="text-green-600 dark:text-green-400 font-medium">{freeCount} free</span>
-              <span>·</span>
-            </>
+          {freeCount > 0 && <span className="text-green-600 dark:text-green-400 font-medium">{freeCount} free</span>}
+          {connected && freeCount > 0 && <span>·</span>}
+          {connected && <span>{provider.enabledModels?.length ?? 0} enabled for pickers</span>}
+          {connected && (
+            <Button variant="outline" size="sm" className="ml-auto h-7 text-xs" onClick={onManage}>
+              Manage models
+              <ChevronRight className="h-3 w-3 ml-1" />
+            </Button>
           )}
-          <span>{provider.enabledModels?.length ?? 0} enabled for pickers</span>
-          <Button variant="outline" size="sm" className="ml-auto h-7 text-xs" onClick={onManage}>
-            Manage models
-            <ChevronRight className="h-3 w-3 ml-1" />
-          </Button>
         </div>
       )}
       {!connected && (
         <div className="flex items-center gap-2">
           <Input
             type="password"
-            placeholder="Zen API key…"
+            placeholder={keyPlaceholder}
             value={key}
             onChange={(e) => setKey(e.target.value)}
             className="h-8 text-xs"
-            data-testid="zen-key-input"
+            data-testid={`${provider.id}-key-input`}
           />
-          <Button size="sm" className="h-8 text-xs" onClick={connect} disabled={busy || !key.trim()} data-testid="zen-connect">
+          <Button size="sm" className="h-8 text-xs" onClick={connect} disabled={busy || !key.trim()} data-testid={`${provider.id}-connect`}>
             {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Connect"}
           </Button>
         </div>
@@ -399,4 +412,22 @@ export function ZenCard({ provider, onChanged, onManage }: { provider: Provider;
       {error && <p className="text-xs text-destructive">{error}</p>}
     </div>
   );
+}
+
+/** OpenCode Zen — sessions run through cockpit's Anthropic-to-OpenAI proxy. */
+export function ZenCard(props: { provider: Provider; onChanged: () => void; onManage: () => void }) {
+  return (
+    <BuiltinKeyCard
+      {...props}
+      keyEnvVar="OPENCODE_API_KEY"
+      tagline="OpenAI wire format · via cockpit proxy"
+      keyPlaceholder="Zen API key…"
+    />
+  );
+}
+
+/** DeepSeek — Anthropic-native endpoint, relayed for retries when the proxy
+ *  is up, direct otherwise. */
+export function DeepSeekCard(props: { provider: Provider; onChanged: () => void; onManage: () => void }) {
+  return <BuiltinKeyCard {...props} keyEnvVar="DEEPSEEK_API_KEY" tagline="Anthropic-native API" keyPlaceholder="sk-…" />;
 }

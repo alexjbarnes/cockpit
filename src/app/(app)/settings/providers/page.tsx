@@ -4,7 +4,7 @@ import { ArrowLeft, ChevronRight, Plus } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { usePageHeader } from "@/components/app-shell";
-import { OpenRouterCard, ZenCard } from "@/components/openrouter-provider";
+import { DeepSeekCard, OpenRouterCard, ZenCard } from "@/components/openrouter-provider";
 import { Button } from "@/components/ui/button";
 import type { Provider } from "@/types";
 
@@ -29,6 +29,7 @@ export default function ProvidersPage() {
   const anthropic = providers.find((p) => p.id === "anthropic");
   const openrouter = providers.find((p) => p.id === "openrouter");
   const zen = providers.find((p) => p.id === "zen");
+  const deepseek = providers.find((p) => p.id === "deepseek");
   const custom = providers.filter((p) => !p.isBuiltin);
 
   return (
@@ -52,6 +53,9 @@ export default function ProvidersPage() {
           <OpenRouterCard provider={openrouter} onChanged={fetchProviders} onManage={() => router.push("/settings/providers/openrouter")} />
         )}
         {zen && <ZenCard provider={zen} onChanged={fetchProviders} onManage={() => router.push("/settings/providers/zen")} />}
+        {deepseek && (
+          <DeepSeekCard provider={deepseek} onChanged={fetchProviders} onManage={() => router.push("/settings/providers/deepseek")} />
+        )}
 
         <p className="pt-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">Custom</p>
         <div className="space-y-1">
