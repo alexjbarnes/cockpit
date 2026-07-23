@@ -152,7 +152,12 @@ interface OpenAIResponse {
   id?: string;
   model?: string;
   choices?: Array<{
-    message?: { content?: string | null; tool_calls?: Array<{ id?: string; function?: { name?: string; arguments?: string } }> };
+    message?: {
+      content?: string | null;
+      reasoning_content?: string | null;
+      reasoning?: string | null;
+      tool_calls?: Array<{ id?: string; function?: { name?: string; arguments?: string } }>;
+    };
     finish_reason?: string;
   }>;
   usage?: { prompt_tokens?: number; completion_tokens?: number };
@@ -162,6 +167,11 @@ interface OpenAIResponse {
 export function openAIToAnthropicResponse(body: OpenAIResponse): Record<string, unknown> {
   const choice = body.choices?.[0];
   const content: Array<Record<string, unknown>> = [];
+  // Reasoning models (deepseek's reasoning_content, the normalized reasoning
+  // field) put chain-of-thought outside content — surface it as a thinking
+  // block so it renders instead of silently vanishing.
+  const reasoning = choice?.message?.reasoning_content ?? choice?.message?.reasoning;
+  if (reasoning) content.push({ type: "thinking", thinking: reasoning, signature: "" });
   if (choice?.message?.content) content.push({ type: "text", text: choice.message.content });
   for (const tc of choice?.message?.tool_calls ?? []) {
     content.push({ type: "tool_use", id: tc.id ?? "", name: tc.function?.name ?? "", input: parseArgs(tc.function?.arguments) });
@@ -189,6 +199,8 @@ interface OpenAIChunk {
   choices?: Array<{
     delta?: {
       content?: string | null;
+      reasoning_content?: string | null;
+      reasoning?: string | null;
       tool_calls?: Array<{ index?: number; id?: string; function?: { name?: string; arguments?: string } }>;
     };
     finish_reason?: string | null;
@@ -202,7 +214,7 @@ interface OpenAIChunk {
 export class StreamTranslator {
   private started = false;
   private blockIndex = -1;
-  private openBlock: "none" | "text" | "tool" = "none";
+  private openBlock: "none" | "text" | "tool" | "thinking" = "none";
   private openToolIndex = -1;
   private finishReason: string | null = null;
   private usage: { prompt_tokens?: number; completion_tokens?: number } | null = null;
@@ -270,6 +282,22 @@ export class StreamTranslator {
     if (choice.finish_reason) this.finishReason = choice.finish_reason;
 
     const delta = choice.delta ?? {};
+    // Reasoning deltas stream before (and separately from) the answer text.
+    // Without this mapping a reasoning model looks hung: the chain-of-thought
+    // streamed into a field the translator dropped.
+    const reasoning = delta.reasoning_content ?? delta.reasoning;
+    if (reasoning) {
+      if (this.openBlock !== "thinking") {
+        out += this.closeBlock();
+        this.blockIndex += 1;
+        this.openBlock = "thinking";
+        out += this.event("content_block_start", {
+          index: this.blockIndex,
+          content_block: { type: "thinking", thinking: "", signature: "" },
+        });
+      }
+      out += this.event("content_block_delta", { index: this.blockIndex, delta: { type: "thinking_delta", thinking: reasoning } });
+    }
     if (delta.content) {
       if (this.openBlock !== "text") {
         out += this.closeBlock();
@@ -491,13 +519,28 @@ export class FormatProxy {
     }
 
     const openaiBody = anthropicToOpenAIRequest(anthropicBody);
+    const init: RequestInit = {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${upstream.apiKey}` },
+      body: JSON.stringify(openaiBody),
+    };
     let upstreamRes: Response;
     try {
-      upstreamRes = await this.fetchWithRetry(`${upstream.baseUrl}/chat/completions`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${upstream.apiKey}` },
-        body: JSON.stringify(openaiBody),
-      });
+      upstreamRes = await this.fetchWithRetry(`${upstream.baseUrl}/chat/completions`, init);
+      // Zen wraps non-auth failures in 401 ("Model X is not supported",
+      // "No provider available" when its routing finds no upstream), which the
+      // CLI reads as an auth failure and answers with a "run /login" prompt.
+      // Genuine auth errors are AuthError-typed. Routing failures are
+      // saturation-class, so retry them like a 429 before giving up.
+      for (let attempt = 0; upstreamRes.status === 401 && attempt < this.retryBackoffMs.length; attempt++) {
+        const probe = (await upstreamRes
+          .clone()
+          .json()
+          .catch(() => null)) as { error?: { type?: string; message?: string } } | null;
+        if (!/no provider available/i.test(probe?.error?.message ?? "")) break;
+        await new Promise((r) => setTimeout(r, this.retryBackoffMs[attempt]));
+        upstreamRes = await fetch(`${upstream.baseUrl}/chat/completions`, init);
+      }
     } catch (err) {
       jsonError(res, 502, `Upstream request failed: ${err instanceof Error ? err.message : String(err)}`);
       return;
@@ -506,12 +549,22 @@ export class FormatProxy {
     if (!upstreamRes.ok) {
       const text = await upstreamRes.text().catch(() => "");
       let message = text.slice(0, 500);
+      let errType = "";
       try {
-        message = (JSON.parse(text) as { error?: { message?: string } }).error?.message ?? message;
+        const parsed = JSON.parse(text) as { error?: { type?: string; message?: string } };
+        message = parsed.error?.message ?? message;
+        errType = parsed.error?.type ?? "";
       } catch {
         // keep raw text
       }
-      jsonError(res, upstreamRes.status, message || `Upstream HTTP ${upstreamRes.status}`);
+      // Remap zen's non-auth 401s so the CLI reports an API error instead of
+      // demanding /login: routing failures read as overloaded (503), unknown
+      // models as not found (404). Real AuthError 401s pass through.
+      let status = upstreamRes.status;
+      if (status === 401 && errType !== "AuthError" && !/api key|unauthorized/i.test(message)) {
+        status = /no provider available/i.test(message) ? 503 : 404;
+      }
+      jsonError(res, status, message || `Upstream HTTP ${status}`);
       return;
     }
 

@@ -197,6 +197,27 @@ describe("StreamTranslator", () => {
     expect(events.filter((e) => e.event === "content_block_stop")).toHaveLength(2);
   });
 
+  it("maps reasoning deltas to a thinking block before the answer text", () => {
+    const t = new StreamTranslator();
+    const out = t.feed(
+      sse([
+        '{"id":"c1","model":"m","choices":[{"delta":{"reasoning_content":"pondering"},"finish_reason":null}]}',
+        '{"choices":[{"delta":{"reasoning_content":" deeply"},"finish_reason":null}]}',
+        '{"choices":[{"delta":{"content":"answer"},"finish_reason":"stop"}]}',
+        "[DONE]",
+      ]),
+    );
+    const events = parseAnthropicSSE(out);
+    const starts = events.filter((e) => e.event === "content_block_start");
+    expect((starts[0].data.content_block as { type: string }).type).toBe("thinking");
+    expect((starts[1].data.content_block as { type: string }).type).toBe("text");
+    const thinkingDeltas = events
+      .filter((e) => e.event === "content_block_delta" && (e.data.delta as { type: string }).type === "thinking_delta")
+      .map((e) => (e.data.delta as { thinking: string }).thinking);
+    expect(thinkingDeltas.join("")).toBe("pondering deeply");
+    expect(events.filter((e) => e.event === "content_block_stop")).toHaveLength(2);
+  });
+
   it("buffers lines split across feeds", () => {
     const t = new StreamTranslator();
     const full = sse(['{"id":"c1","choices":[{"delta":{"content":"AB"},"finish_reason":null}]}', "[DONE]"]);
@@ -204,6 +225,17 @@ describe("StreamTranslator", () => {
     for (const ch of full) out += t.feed(ch);
     const deltas = parseAnthropicSSE(out).filter((e) => e.event === "content_block_delta");
     expect(deltas).toHaveLength(1);
+  });
+});
+
+describe("openAIToAnthropicResponse reasoning", () => {
+  it("surfaces reasoning_content as a thinking block ahead of the text", () => {
+    const out = openAIToAnthropicResponse({
+      choices: [{ message: { content: "ok", reasoning_content: "chain of thought" }, finish_reason: "stop" }],
+    });
+    const content = out.content as Array<Record<string, unknown>>;
+    expect(content[0]).toMatchObject({ type: "thinking", thinking: "chain of thought" });
+    expect(content[1]).toEqual({ type: "text", text: "ok" });
   });
 });
 
@@ -425,6 +457,85 @@ describe("FormatProxy server", () => {
     });
     expect(res.status).toBe(200);
     expect((await res.json()).content).toEqual([{ type: "text", text: "zen after retry" }]);
+    expect(calls).toBe(2);
+  });
+
+  it("remaps zen's non-auth 401s so the CLI never demands /login", async () => {
+    const port = await startUpstream((_body, res) => {
+      res.writeHead(401, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ type: "error", error: { type: "ModelError", message: "Model x is not supported" } }));
+    });
+    proxy = new FormatProxy(() => ({ baseUrl: `http://127.0.0.1:${port}`, apiKey: "k", modelIds: [] }), { retryBackoffMs: [10] });
+    await proxy.start();
+
+    const res = await fetch(`${proxy.getUrl("zen")}/v1/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "x", max_tokens: 5, messages: [] }),
+    });
+    expect(res.status).toBe(404);
+    expect((await res.json()).error.message).toBe("Model x is not supported");
+  });
+
+  it("passes genuine AuthError 401s through untouched", async () => {
+    const port = await startUpstream((_body, res) => {
+      res.writeHead(401, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ type: "error", error: { type: "AuthError", message: "Invalid API key." } }));
+    });
+    proxy = new FormatProxy(() => ({ baseUrl: `http://127.0.0.1:${port}`, apiKey: "k", modelIds: [] }), { retryBackoffMs: [10] });
+    await proxy.start();
+
+    const res = await fetch(`${proxy.getUrl("zen")}/v1/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "x", max_tokens: 5, messages: [] }),
+    });
+    expect(res.status).toBe(401);
+    expect((await res.json()).error.message).toBe("Invalid API key.");
+  });
+
+  it("retries 401 no-provider-available responses, then succeeds", async () => {
+    let calls = 0;
+    const port = await startUpstream((_body, res) => {
+      calls += 1;
+      if (calls === 1) {
+        res.writeHead(401, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ type: "error", error: { type: "ProviderError", message: "No provider available" } }));
+        return;
+      }
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ choices: [{ message: { content: "routed" }, finish_reason: "stop" }] }));
+    });
+    proxy = new FormatProxy(() => ({ baseUrl: `http://127.0.0.1:${port}`, apiKey: "k", modelIds: [] }), { retryBackoffMs: [10] });
+    await proxy.start();
+
+    const res = await fetch(`${proxy.getUrl("zen")}/v1/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "x", max_tokens: 5, messages: [] }),
+    });
+    expect(res.status).toBe(200);
+    expect((await res.json()).content).toEqual([{ type: "text", text: "routed" }]);
+    expect(calls).toBe(2);
+  });
+
+  it("surfaces exhausted no-provider retries as 503, not 401", async () => {
+    let calls = 0;
+    const port = await startUpstream((_body, res) => {
+      calls += 1;
+      res.writeHead(401, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ type: "error", error: { type: "ProviderError", message: "No provider available" } }));
+    });
+    proxy = new FormatProxy(() => ({ baseUrl: `http://127.0.0.1:${port}`, apiKey: "k", modelIds: [] }), { retryBackoffMs: [10] });
+    await proxy.start();
+
+    const res = await fetch(`${proxy.getUrl("zen")}/v1/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "x", max_tokens: 5, messages: [] }),
+    });
+    expect(res.status).toBe(503);
+    expect((await res.json()).error.message).toBe("No provider available");
     expect(calls).toBe(2);
   });
 

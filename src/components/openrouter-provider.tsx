@@ -328,6 +328,7 @@ export function ZenCard({ provider, onChanged, onManage }: { provider: Provider;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const connected = !!provider.envVars.OPENCODE_API_KEY;
+  const freeCount = provider.models.filter((m) => m.free).length;
 
   const connect = async () => {
     if (!key.trim()) return;
@@ -367,6 +368,12 @@ export function ZenCard({ provider, onChanged, onManage }: { provider: Provider;
       </div>
       {connected && (
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          {freeCount > 0 && (
+            <>
+              <span className="text-green-600 dark:text-green-400 font-medium">{freeCount} free</span>
+              <span>·</span>
+            </>
+          )}
           <span>{provider.enabledModels?.length ?? 0} enabled for pickers</span>
           <Button variant="outline" size="sm" className="ml-auto h-7 text-xs" onClick={onManage}>
             Manage models
