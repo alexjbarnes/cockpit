@@ -233,7 +233,11 @@ function AgentHeader({
   const model = input.model as string | undefined;
   const agentType = input.subagent_type as string | undefined;
   const tags = [agentType, model].filter(Boolean);
-  const spinning = tool.status === "running" || backgroundTasks.some((t) => t.toolUseId === tool.id && t.status === "running");
+  // A background agent is tracked under the id its launch handed back, not the
+  // tool use id, so matching on tool.id alone left every collapsed card
+  // spinner-less while the agent was working.
+  const taskKey = agentIdFromOutput(tool.output) ?? tool.id;
+  const spinning = tool.status === "running" || backgroundTasks.some((t) => t.toolUseId === taskKey && t.status === "running");
 
   return (
     <div className="flex flex-col gap-0.5 min-w-0 flex-1">
@@ -544,9 +548,10 @@ function AgentContent({
       )}
       {tool.output &&
         (launchedAsync ? (
-          <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-            <Loader2 className={cn("h-3 w-3", stillRunning ? "animate-spin" : "hidden")} />
-            <span>{stillRunning ? "Working in the background" : "Ran in the background"}</span>
+          <div className="text-[11px] text-muted-foreground">
+            {/* The spinner for this lives on the card header, so it reads as
+                running without having to expand the card. */}
+            {stillRunning ? "Working in the background" : "Ran in the background"}
           </div>
         ) : (
           <pre className="whitespace-pre-wrap break-words rounded bg-muted/50 p-2 text-[11px] leading-relaxed max-h-48 overflow-y-auto text-muted-foreground">
