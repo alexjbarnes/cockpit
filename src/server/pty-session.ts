@@ -12,7 +12,16 @@ const CLEAR_TO_TEXT_DELAY_MS = 30;
 const TRUST_DIALOG_WINDOW_MS = 5000;
 const REPL_READY_MIN_BYTES = 100;
 const REPL_READY_TIMEOUT_MS = 60_000;
-const REPL_SETTLE_MS = 2000;
+// The REPL paints its UI in bursts: terminal setup escapes land first (~45
+// bytes), the input box and footer follow a few hundred ms later, then output
+// stops. Silence after that first burst is the positive signal that the paint
+// finished, so readiness waits for a quiet gap instead of sleeping a flat two
+// seconds. Measured on this box: ready at ~2.2s rather than ~3.5s, and a slow
+// machine simply keeps waiting (up to the cap) instead of being declared ready
+// mid-paint, which is what the flat sleep risked.
+const REPL_QUIET_MS = 300;
+const REPL_SETTLE_MAX_MS = 2000;
+const REPL_POLL_MS = 50;
 
 export interface PtySessionOptions {
   cwd: string;
@@ -33,6 +42,7 @@ export class PtySession {
   private rows: number;
   private exited = false;
   private exitCode: number | null = null;
+  private lastDataAt = 0;
   private readonly opts: PtySessionOptions;
 
   constructor(opts: PtySessionOptions) {
@@ -107,6 +117,7 @@ export class PtySession {
 
     this.pty.onData((data) => {
       this.buffer += data;
+      this.lastDataAt = Date.now();
       if (this.buffer.length > 64 * 1024) this.buffer = this.buffer.slice(-32 * 1024);
       this.opts.onData?.(data);
     });
@@ -198,23 +209,35 @@ export class PtySession {
 
   private async waitForReplReady(): Promise<void> {
     const deadline = Date.now() + REPL_READY_TIMEOUT_MS;
-    while (Date.now() < deadline) {
+    const failIfExited = () => {
       if (this.exited) {
         throw new Error(`claude exited during startup (code=${this.exitCode}, output=${this.cleanOutput().slice(0, 200)})`);
       }
+    };
+    while (Date.now() < deadline) {
+      failIfExited();
       if (this.cleanOutput().length >= REPL_READY_MIN_BYTES) {
-        await sleep(REPL_SETTLE_MS);
-        if (this.exited) {
-          throw new Error(`claude exited during startup (code=${this.exitCode}, output=${this.cleanOutput().slice(0, 200)})`);
-        }
+        await this.waitForPaintToSettle();
+        failIfExited();
         return;
       }
-      await sleep(200);
+      await sleep(REPL_POLL_MS);
     }
     const clean = this.cleanOutput();
     throw new Error(
       `Timed out after ${REPL_READY_TIMEOUT_MS}ms waiting for claude REPL (got ${clean.length} bytes: ${clean.slice(0, 200)})`,
     );
+  }
+
+  /** Wait for the REPL to stop emitting, capped so a chatty startup can never
+   *  stall a spawn longer than the flat settle this replaced. */
+  private async waitForPaintToSettle(): Promise<void> {
+    const cap = Date.now() + REPL_SETTLE_MAX_MS;
+    while (Date.now() < cap) {
+      if (this.exited) return;
+      if (Date.now() - this.lastDataAt >= REPL_QUIET_MS) return;
+      await sleep(REPL_POLL_MS);
+    }
   }
 }
 

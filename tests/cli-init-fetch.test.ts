@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mockStdout = {
   on: vi.fn(),
@@ -13,9 +13,16 @@ vi.mock("node:child_process", () => ({
 }));
 
 import { spawn } from "node:child_process";
-import { fetchCliInitData } from "@/server/cli-init-fetch";
+import { clearCliInitCache, fetchCliInitData } from "@/server/cli-init-fetch";
 
 describe("fetchCliInitData", () => {
+  // Results are cached per cwd, and these cases share one — each needs a
+  // genuine spawn to assert against.
+  beforeEach(() => {
+    clearCliInitCache();
+    vi.clearAllMocks();
+  });
+
   it("spawns claude with -p --output-format stream-json", async () => {
     mockStdout.on.mockImplementation((event: string, cb: (chunk: Buffer) => void) => {
       if (event !== "data") return;
@@ -99,5 +106,80 @@ describe("fetchCliInitData", () => {
 
     await fetchCliInitData({ cwd: "/tmp", bin: "/usr/local/bin/claude" });
     expect(spawn).toHaveBeenCalledWith("/usr/local/bin/claude", expect.any(Array), expect.any(Object));
+  });
+
+  describe("caching", () => {
+    function respondWithInit(commands: string[]): void {
+      mockStdout.on.mockImplementation((event: string, cb: (chunk: Buffer) => void) => {
+        if (event !== "data") return;
+        const initEvent = JSON.stringify({
+          type: "system",
+          subtype: "init",
+          slash_commands: commands,
+          skills: [],
+          agents: [],
+          claude_code_version: "2.0.0",
+          model: "sonnet",
+          mcp_servers: [],
+        });
+        cb(Buffer.from(`${initEvent}\n`));
+      });
+      mockProc.on.mockImplementation((event: string, cb: () => void) => {
+        if (event === "close") setTimeout(cb, 10);
+      });
+    }
+
+    it("spawns once per cwd and serves later calls from cache", async () => {
+      respondWithInit(["clear"]);
+
+      const first = await fetchCliInitData({ cwd: "/repo-a" });
+      const second = await fetchCliInitData({ cwd: "/repo-a" });
+
+      expect(second).toEqual(first);
+      expect(spawn).toHaveBeenCalledTimes(1);
+    });
+
+    it("keeps separate entries per cwd", async () => {
+      respondWithInit(["clear"]);
+      await fetchCliInitData({ cwd: "/repo-a" });
+      respondWithInit(["review"]);
+      const other = await fetchCliInitData({ cwd: "/repo-b" });
+
+      expect(other?.slashCommands).toEqual(["review"]);
+      expect(spawn).toHaveBeenCalledTimes(2);
+    });
+
+    it("shares one probe between concurrent callers in the same cwd", async () => {
+      respondWithInit(["clear"]);
+
+      const [a, b] = await Promise.all([fetchCliInitData({ cwd: "/repo-a" }), fetchCliInitData({ cwd: "/repo-a" })]);
+
+      expect(a).toEqual(b);
+      expect(spawn).toHaveBeenCalledTimes(1);
+    });
+
+    it("re-probes on force and after the cache is cleared", async () => {
+      respondWithInit(["clear"]);
+      await fetchCliInitData({ cwd: "/repo-a" });
+
+      await fetchCliInitData({ cwd: "/repo-a", force: true });
+      expect(spawn).toHaveBeenCalledTimes(2);
+
+      clearCliInitCache("/repo-a");
+      await fetchCliInitData({ cwd: "/repo-a" });
+      expect(spawn).toHaveBeenCalledTimes(3);
+    });
+
+    it("does not cache a failed probe", async () => {
+      mockStdout.on.mockImplementation(() => {});
+      mockProc.on.mockImplementation((event: string, cb: () => void) => {
+        if (event === "close") setTimeout(cb, 10);
+      });
+
+      expect(await fetchCliInitData({ cwd: "/repo-c" })).toBeNull();
+      respondWithInit(["clear"]);
+      expect((await fetchCliInitData({ cwd: "/repo-c" }))?.slashCommands).toEqual(["clear"]);
+      expect(spawn).toHaveBeenCalledTimes(2);
+    });
   });
 });
