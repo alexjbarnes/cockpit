@@ -264,7 +264,8 @@ describe("providers", () => {
         };
       }
       expect(String(url)).toBe("https://api.deepseek.com/v1/models");
-      expect((init?.headers as Record<string, string>).Authorization).toBe("Bearer dsk-1");
+      const headers = init?.headers as Record<string, string> | undefined;
+      expect(headers?.Authorization).toBe("Bearer dsk-1");
       // The live authed list is the source of truth: only what the key can run.
       return { ok: true, status: 200, json: async () => ({ data: [{ id: "deepseek-v4-flash" }, { id: "deepseek-v4-pro" }] }) };
     });
