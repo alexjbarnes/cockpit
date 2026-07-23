@@ -186,6 +186,37 @@ describe("fs-watcher WebSocket integration", () => {
     expect(fsChangedIn(bag)).toEqual([]);
   });
 
+  it("drops the previous cwd watcher when the client switches session", async () => {
+    const first = mkdtempSync(join(tmpdir(), "fsw-ws-first-"));
+    try {
+      const ws = await connectWs();
+      const bag = collectMessages(ws);
+
+      ws.send(JSON.stringify({ type: "watch:cwd", cwd: first }));
+      await syncWithServer(ws, bag);
+      await armWatcher(
+        () => writeFileSync(join(first, "a.txt"), `x ${Date.now()}`),
+        () => fsChangedIn(bag).length > 0,
+      );
+
+      // Switching session points the socket at a different directory.
+      ws.send(JSON.stringify({ type: "watch:cwd", cwd: sandbox }));
+      await syncWithServer(ws, bag);
+      await armFor(bag, "b.txt");
+
+      // The old directory must no longer report: a socket that has visited
+      // several sessions should not keep firing for all of them.
+      bag.messages = [];
+      writeFileSync(join(first, "after-switch.txt"), "stale");
+      await wait(SETTLE_MS);
+
+      expect(fsChangedIn(bag)).toEqual([]);
+      ws.close();
+    } finally {
+      rmSync(first, { recursive: true, force: true });
+    }
+  });
+
   it("deduplicates watchers for sessions sharing the same cwd", async () => {
     const s1 = manager.createSession(sandbox);
     const s2 = manager.createSession(sandbox);

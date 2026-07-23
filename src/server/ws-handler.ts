@@ -814,11 +814,17 @@ export function createWebSocketHandler(
         }
 
         case "watch:cwd": {
-          cwdWatchCleanups.push(
+          // One watched cwd per socket. Every session switch sends this, and
+          // without dropping the previous watcher they accumulated for the
+          // life of the connection — so a socket that had visited five
+          // sessions kept reporting changes from all five, and each stale
+          // watcher drove a refetch in views that do not filter on cwd.
+          for (const fn of cwdWatchCleanups) fn();
+          cwdWatchCleanups = [
             watchCwd(msg.cwd, () => {
               send(ws, { type: "session:fs_changed", cwd: msg.cwd });
             }),
-          );
+          ];
           break;
         }
       }
