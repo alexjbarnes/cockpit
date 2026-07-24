@@ -51,8 +51,8 @@ export interface ModelEntry {
    * The model's 1M window is not free on a subscription: the CLI only requests
    * it when the model string carries a `[1m]` suffix, and the request then
    * fails with "Usage credits required for 1M context" unless usage credits are
-   * enabled. Verified 2026-07: true for Sonnet 4.6, false for Opus 4.8 / Sonnet
-   * 5 / Fable 5 (their 1M is included and works from the bare model id).
+   * enabled. Verified 2026-07: true for Sonnet 4.6, false for Opus 4.8 / Opus 5
+   * / Sonnet 5 / Fable 5 (their 1M is included and works from the bare model id).
    */
   oneMRequiresCredits?: boolean;
 }
@@ -113,6 +113,16 @@ export const MODELS: ModelEntry[] = [
     version: "4.8",
     modelId: "claude-opus-4-8",
     displayName: "Opus 4.8",
+    description: "Previous generation",
+    contextSizes: ["200k", "1m"],
+    contextWindow: 200_000,
+    supportsXhigh: true,
+  },
+  {
+    alias: "opus",
+    version: "5",
+    modelId: "claude-opus-5",
+    displayName: "Opus 5",
     description: "Most capable",
     contextSizes: ["200k", "1m"],
     contextWindow: 200_000,

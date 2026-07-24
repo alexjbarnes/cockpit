@@ -67,10 +67,11 @@ describe("versionsForAlias", () => {
 
   it("returns multiple opus versions", () => {
     const versions = versionsForAlias("opus");
-    expect(versions).toHaveLength(3);
+    expect(versions).toHaveLength(4);
     expect(versions[0].version).toBe("4.6");
     expect(versions[1].version).toBe("4.7");
     expect(versions[2].version).toBe("4.8");
+    expect(versions[3].version).toBe("5");
   });
 
   it("returns empty array for non-existent alias", () => {
@@ -98,17 +99,17 @@ describe("defaultForAlias", () => {
     expect(model?.isDefault).toBe(true);
   });
 
-  it("returns default opus model (4.8)", () => {
+  it("returns default opus model (5)", () => {
     const model = defaultForAlias("opus");
     expect(model).toBeDefined();
-    expect(model?.version).toBe("4.8");
+    expect(model?.version).toBe("5");
     expect(model?.isDefault).toBe(true);
   });
 
   it("returns the default-flagged entry even if not first in array", () => {
     const result = defaultForAlias("opus");
     expect(result?.isDefault).toBe(true);
-    expect(result?.modelId).toBe("claude-opus-4-8");
+    expect(result?.modelId).toBe("claude-opus-5");
   });
 });
 
@@ -139,7 +140,7 @@ describe("resolveModel", () => {
   it("resolves 'opus' alias to default opus", () => {
     const model = resolveModel("opus");
     expect(model?.alias).toBe("opus");
-    expect(model?.version).toBe("4.8");
+    expect(model?.version).toBe("5");
   });
 
   it("strips [bracket] suffix from alias", () => {
@@ -336,11 +337,11 @@ describe("describeModelSelection", () => {
   ];
 
   it("labels a built-in opus, keeps an allowed thinking level, and reports the context size", () => {
-    expect(describeModelSelection("opus", "max", "200k", undefined)).toEqual({ label: "Opus 4.8", thinking: "max", context: "200k" });
+    expect(describeModelSelection("opus", "max", "200k", undefined)).toEqual({ label: "Opus 5", thinking: "max", context: "200k" });
   });
 
   it("reports 1M context when selected on a multi-size model", () => {
-    expect(describeModelSelection("opus", "high", "1m", undefined)).toEqual({ label: "Opus 4.8", thinking: "high", context: "1m" });
+    expect(describeModelSelection("opus", "high", "1m", undefined)).toEqual({ label: "Opus 5", thinking: "high", context: "1m" });
   });
 
   it("drops thinking for a model with none (haiku) and omits context for a single-size model", () => {
@@ -437,6 +438,31 @@ describe("Sonnet 5", () => {
     expect(recommendedEffort(resolveModel("claude-sonnet-5"))).toBe("xhigh");
     // Sonnet 4.6 stays available and still lacks xhigh.
     expect(allowedEffortLevels(resolveModel("claude-sonnet-4-6"))).toEqual(["low", "medium", "high", "max"]);
+  });
+});
+
+describe("Opus 5", () => {
+  it("is the default opus, resolvable by alias and modelId", () => {
+    expect(resolveModel("opus")?.modelId).toBe("claude-opus-5");
+    expect(resolveModel("claude-opus-5")?.alias).toBe("opus");
+    expect(findModelById("claude-opus-5")?.displayName).toBe("Opus 5");
+    expect(defaultForAlias("opus")?.modelId).toBe("claude-opus-5");
+  });
+
+  it("supports the full effort range including xhigh and max", () => {
+    expect(allowedEffortLevels(resolveModel("claude-opus-5"))).toEqual(["low", "medium", "high", "xhigh", "max"]);
+    expect(recommendedEffort(resolveModel("claude-opus-5"))).toBe("xhigh");
+  });
+
+  it("has an included 1M window, so the id stays bare at 1M", () => {
+    expect(modelOneMRequiresCredits("claude-opus-5")).toBe(false);
+    expect(cliModelWithContext("claude-opus-5", "1m", true)).toBe("claude-opus-5");
+    expect(findModelById("claude-opus-5")?.contextSizes).toEqual(["200k", "1m"]);
+  });
+
+  it("leaves Opus 4.8 available as a non-default previous generation", () => {
+    expect(findModelById("claude-opus-4-8")?.displayName).toBe("Opus 4.8");
+    expect(findModelById("claude-opus-4-8")?.isDefault).toBeUndefined();
   });
 });
 
