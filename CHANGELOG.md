@@ -5,6 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-07-24
+
+### Added
+- **Model providers beyond Anthropic, connected with one key.** Three gateways ship built in — OpenRouter, OpenCode Zen, and DeepSeek — each connected by pasting an API key on the new Model Providers cards. OpenRouter syncs its full catalog (roughly 340 models); every gateway's model list refreshes at startup and daily, so model and free-model counts show before you connect. A shared model browser (search, All/Free/Tools/Enabled filters, per-model toggles) curates which models reach the pickers. Free models carry a FREE badge and paid models show per-million pricing, both derived from the latest sync so one resync corrects every surface. Pick a provider model per session and per scheduled job.
+- **OpenAI-format providers through a built-in translation proxy.** Providers that speak only the OpenAI wire format (OpenCode Zen) run through a cockpit-hosted proxy that translates requests and responses, streaming included, and renders a reasoning model's thinking in the same chat as Claude. The Anthropic-native gateways (OpenRouter, DeepSeek) relay through the same proxy to gain bounded retries on upstream saturation.
+- **Per-provider usage and spend.** The account usage indicator follows the active session's provider: OpenRouter shows credit spend and key limits, DeepSeek shows the account balance, OpenCode Zen shows a cockpit-metered estimate (it has no spend API), and Anthropic keeps the subscription view, now including model-scoped weekly limits such as Fable.
+- **On-demand subagent transcripts.** An Agent tool card expands to show that subagent's full transcript, rendered as normal chat bubbles. A running agent's transcript refreshes live while it works, and active background agents appear in the header task list with a spinner.
+- **Per-message actions.** Each message has a copy button and a timestamp, and assistant turns show their duration.
+- **1M context for Sonnet 4.6, opt-in.** Sonnet 4.6's 1M window requires usage credits; cockpit detects whether they are enabled and, when they are not, falls back to 200K with a visible explanation instead of silently failing.
+- **Scheduled jobs retry once by default.** A failed run retries a single time (bounded, failure-only, with backoff) before it is recorded as failed.
+- **Repository links in the app.** Settings gained "Star Cockpit on GitHub" and "Report an issue" links, and the startup banner points at the repository.
+
+### Changed
+- **Model-picker recents name their provider.** The same model id can be served by several providers (a Claude model exists on Anthropic, OpenRouter, and Zen), so recent rows now show which provider a pick would use. Rows lead with the model name and drop the vendor and price to a muted meta line, so long ids stay readable on narrow screens.
+- **The usage indicator colours from the 5-hour window only.** A model-scoped weekly cap (Fable at 85%) no longer paints the icon red while the session window is quiet. A fully spent all-models weekly cap still forces red.
+- **Foreign models carry their real context window and thinking levels.** A gateway model's actual context length drives the CLI's context tracking and auto-compact instead of a default 200K, and reasoning-capable gateway models expose their effort ladder in the thinking selector.
+
+### Fixed
+- **Sessions no longer trigger a spurious `/compact`.** In PTY mode, a resumed session could open the CLI's resume picker and let a blind keystroke fire `/compact`, and a multi-line message could be misread as a slash command. Both are fixed (resume-picker suppression, bracketed-paste framing), along with messages sent during an in-flight compaction and an auto-compaction being mistaken for the end of a turn.
+- **Free-model saturation surfaced as a proxy error.** OpenRouter's free tier signals upstream saturation as an HTTP 200 wrapping an error, which the CLI reported as "an empty or malformed response … check for a proxy". The proxy now retries those before relaying and, on exhaustion, returns an honest overloaded error.
+- **Model-metadata probes no longer fail a valid model.** OpenRouter 404s two endpoints the CLI probes; cockpit answers them from the catalog so a valid model is not reported as missing.
+- **OpenCode Zen error handling.** Zen's non-auth 401s (a saturated free pool, an unknown model) no longer trigger a misleading "run /login" prompt, and reasoning output renders as thinking instead of a silent wait.
+- **Faster session open and switching.** PTY startup detects when the REPL is ready instead of sleeping a fixed two seconds, and caches per-directory init data instead of spawning a second CLI process each time. Prompt history is read incrementally rather than re-parsing the whole transcript, and a stale filesystem watcher is dropped on session switch instead of accumulating.
+- **Scheduled-job status accuracy.** A run torn down mid-turn is recorded as a failure instead of a success, and a job on a delisted gateway model fails before spawning rather than silently switching model.
+- **Session preferences survive a crash.** Preference writes are atomic and a corrupt file is preserved for recovery instead of overwritten, and stale pending permission requests clear once a turn completes.
+
+### Internal
+- **Claude CLI spawning extracted behind a harness adapter**, separating the agent-CLI/protocol layer from the provider/model layer.
+- **Filesystem-watcher tests no longer race** the OS's asynchronous recursive-watch arming, removing a full-suite flake.
+- Dependency updates, and the removal of the legacy singular schedule field.
+
 ## [0.4.2] - 2026-06-30
 
 ### Added
