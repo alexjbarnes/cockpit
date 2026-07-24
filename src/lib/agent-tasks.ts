@@ -68,9 +68,17 @@ export function deriveAgentTasks(messages: ChatMessage[], hookTasks: BackgroundT
     const agentId = tool.output?.match(AGENT_ID_RE)?.[1];
     const key = agentId ?? tool.id;
     if (claimed.has(key)) continue;
+    // Claim both ids: a completion can arrive under either (see below), and
+    // both must be excluded from the hook-only pass so neither duplicates.
     claimed.add(key);
+    claimed.add(tool.id);
 
-    const hook = hookById.get(key);
+    // A completion is reported under a different id per runtime: the PTY
+    // SubagentStop uses the runtime agent id (matching `key`), while the
+    // stream task_notification uses the launching tool_use id (matching
+    // tool.id). Match either, or an async agent hangs on the sessionActive
+    // fallback until the whole turn ends even though it finished long ago.
+    const hook = hookById.get(key) ?? hookById.get(tool.id);
     // The CLI's own report wins outright when there is one: it is the only
     // source that knows an agent is still working after the turn that
     // launched it ended. Without it, a synchronous agent is finished when its

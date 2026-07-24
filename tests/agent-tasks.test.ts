@@ -68,6 +68,29 @@ describe("deriveAgentTasks", () => {
     expect(task.summary).toBe("found it");
   });
 
+  it("marks an async agent completed from a stream task_notification keyed by the tool_use id", () => {
+    // Stream mode (no hooks): the CLI's task_notification is keyed by the
+    // launching tool_use id, not the runtime agent id the launch output
+    // reports. The completion must still match, even mid-turn, or the agent
+    // spins on the sessionActive fallback until the whole turn ends.
+    const messages = [msg([tool({ id: "toolu_1", output: ASYNC_OUTPUT, input: JSON.stringify({ description: "d" }) })])];
+    const streamCompletion: BackgroundTask[] = [
+      { taskId: "toolu_1", toolUseId: "toolu_1", status: "completed", description: "Explore", summary: "done" },
+    ];
+
+    // sessionActive true: the parent turn is still working, exactly the case
+    // in the report.
+    const tasks = deriveAgentTasks(messages, streamCompletion, true);
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]).toMatchObject({ taskId: "ac6a880af087a5341", status: "completed" });
+  });
+
+  it("does not double-list an agent whose completion is keyed by the tool_use id", () => {
+    const messages = [msg([tool({ id: "toolu_1", output: ASYNC_OUTPUT, input: JSON.stringify({ description: "d" }) })])];
+    const hooks: BackgroundTask[] = [{ taskId: "toolu_1", toolUseId: "toolu_1", status: "completed", description: "Explore" }];
+    expect(deriveAgentTasks(messages, hooks, true)).toHaveLength(1);
+  });
+
   it("tracks a synchronous agent through its own tool status", () => {
     const running = deriveAgentTasks([msg([tool({ id: "t1", status: "running", input: JSON.stringify({ description: "d" }) })])], []);
     expect(running[0]).toMatchObject({ taskId: "t1", status: "running" });
