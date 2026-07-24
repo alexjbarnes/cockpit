@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.5.0] - 2026-07-24
+## [0.5.0] - 2026-07-25
 
 ### Added
 - **Model providers beyond Anthropic, connected with one key.** Three gateways ship built in — OpenRouter, OpenCode Zen, and DeepSeek — each connected by pasting an API key on the new Model Providers cards. OpenRouter syncs its full catalog (roughly 340 models); every gateway's model list refreshes at startup and daily, so model and free-model counts show before you connect. A shared model browser (search, All/Free/Tools/Enabled filters, per-model toggles) curates which models reach the pickers. Free models carry a FREE badge and paid models show per-million pricing, both derived from the latest sync so one resync corrects every surface. Pick a provider model per session and per scheduled job.
@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Per-provider usage and spend.** The account usage indicator follows the active session's provider: OpenRouter shows credit spend and key limits, DeepSeek shows the account balance, OpenCode Zen shows a cockpit-metered estimate (it has no spend API), and Anthropic keeps the subscription view, now including model-scoped weekly limits such as Fable.
 - **On-demand subagent transcripts.** An Agent tool card expands to show that subagent's full transcript, rendered as normal chat bubbles. A running agent's transcript refreshes live while it works, and active background agents appear in the header task list with a spinner.
 - **Per-message actions.** Each message has a copy button and a timestamp, and assistant turns show their duration.
+- **Claude Opus 5.** Added as a selectable model and now the default for the "opus" alias. It supports effort levels up to `xhigh` and `max`, and its 1M context window is included rather than credit-gated, so it needs no opt-in. Opus 4.8 stays available alongside it.
 - **1M context for Sonnet 4.6, opt-in.** Sonnet 4.6's 1M window requires usage credits; cockpit detects whether they are enabled and, when they are not, falls back to 200K with a visible explanation instead of silently failing.
 - **Scheduled jobs retry once by default.** A failed run retries a single time (bounded, failure-only, with backoff) before it is recorded as failed.
 - **Repository links in the app.** Settings gained "Star Cockpit on GitHub" and "Report an issue" links, and the startup banner points at the repository.
@@ -28,6 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Model-metadata probes no longer fail a valid model.** OpenRouter 404s two endpoints the CLI probes; cockpit answers them from the catalog so a valid model is not reported as missing.
 - **OpenCode Zen error handling.** Zen's non-auth 401s (a saturated free pool, an unknown model) no longer trigger a misleading "run /login" prompt, and reasoning output renders as thinking instead of a silent wait.
 - **Faster session open and switching.** PTY startup detects when the REPL is ready instead of sleeping a fixed two seconds, and caches per-directory init data instead of spawning a second CLI process each time. Prompt history is read incrementally rather than re-parsing the whole transcript, and a stale filesystem watcher is dropped on session switch instead of accumulating.
+- **Session Changes stuck on the previously selected session.** The sidebar's Session Changes panel could keep showing the branch and modified files of the session you had switched away from. The sidebar watches every pinned session, so a filesystem event for another session leaves several git-status requests in flight across a switch, and a late reply for the old directory overwrote the new one. Replies for a directory the panel has already moved on from are now discarded.
 - **Scheduled-job status accuracy.** A run torn down mid-turn is recorded as a failure instead of a success, and a job on a delisted gateway model fails before spawning rather than silently switching model.
 - **Session preferences survive a crash.** Preference writes are atomic and a corrupt file is preserved for recovery instead of overwritten, and stale pending permission requests clear once a turn completes.
 

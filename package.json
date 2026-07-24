@@ -1,6 +1,6 @@
 {
   "name": "@alexjbarnes/cockpit",
-  "version": "0.4.2",
+  "version": "0.5.0",
   "description": "Web UI for Claude Code: parallel sessions on any device, scheduled jobs, PR reviews, and any model provider",
   "license": "Apache-2.0",
   "author": "Alex Barnes (https://github.com/alexjbarnes)",
