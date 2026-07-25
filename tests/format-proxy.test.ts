@@ -2,7 +2,20 @@
 // from the OpenRouter spike (docs/internal/or-fixtures): the OpenAI door's
 // tool_calls response and the Anthropic door's equivalents.
 import { createServer, type Server } from "node:http";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+// The proxy's only diagnostics are debug-log entries, and the real logger is
+// gated on COCKPIT_DEBUG at module load. Capture the calls instead, so the
+// instrumentation is proven to fire rather than merely to compile.
+const { proxyLogs } = vi.hoisted(() => ({
+  proxyLogs: [] as { providerId: string; label: string; data: Record<string, unknown> }[],
+}));
+vi.mock("@/server/debug-logger", () => ({
+  logProxy: (providerId: string, label: string, data?: Record<string, unknown>) => {
+    proxyLogs.push({ providerId, label, data: data ?? {} });
+  },
+}));
+
 import {
   anthropicToOpenAIRequest,
   estimateInputTokens,
@@ -774,6 +787,126 @@ describe("FormatProxy server", () => {
     });
     await res.text();
     expect(events).toEqual([{ providerId: "zen", modelId: "m1", inputTokens: 40, outputTokens: 9 }]);
+  });
+});
+
+describe("FormatProxy debug logging", () => {
+  let proxy: FormatProxy | null = null;
+  let upstream: Server | null = null;
+
+  // Earlier describes in this file drive the proxy too, so reset before each
+  // test rather than after: otherwise the first test here sees their entries.
+  beforeEach(() => {
+    proxyLogs.length = 0;
+  });
+
+  afterEach(async () => {
+    await proxy?.stop();
+    proxy = null;
+    await new Promise<void>((r) => (upstream ? upstream.close(() => r()) : r()));
+    upstream = null;
+  });
+
+  async function startUpstream(handler: (body: string, res: import("node:http").ServerResponse) => void): Promise<number> {
+    upstream = createServer((req, res) => {
+      let data = "";
+      req.on("data", (c) => {
+        data += c;
+      });
+      req.on("end", () => handler(data, res));
+    });
+    await new Promise<void>((r) => upstream?.listen(0, "127.0.0.1", () => r()));
+    const addr = upstream?.address();
+    return typeof addr === "object" && addr ? addr.port : 0;
+  }
+
+  const labels = () => proxyLogs.map((l) => l.label);
+  const entry = (label: string) => proxyLogs.find((l) => l.label === label);
+
+  it("records the whole 200-wrapped saturation loop, peek included", async () => {
+    const port = await startUpstream((_body, res) => {
+      res.writeHead(200, { "Content-Type": "text/event-stream" });
+      res.end('event: error\ndata: {"error":{"message":"Worker local total request limit reached"}}\n\n');
+    });
+    proxy = new FormatProxy(() => ({ baseUrl: `http://127.0.0.1:${port}`, apiKey: "k", wireFormat: "anthropic", modelIds: [] }), {
+      retryBackoffMs: [10, 10],
+    });
+    await proxy.start();
+    await fetch(`${proxy.getUrl("openrouter")}/v1/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "m", max_tokens: 5, messages: [] }),
+    });
+
+    expect(labels()).toContain("listening");
+    expect(labels()).toContain("request");
+    // One per attempt: the initial call plus both retries.
+    expect(labels().filter((l) => l === "saturation-200")).toHaveLength(3);
+    expect(labels()).toContain("saturation-exhausted");
+
+    expect(entry("request")?.providerId).toBe("openrouter");
+    expect(entry("request")?.data.wireFormat).toBe("anthropic");
+    // The peek is the evidence for the retry decision, so it is logged verbatim.
+    expect(String(entry("saturation-exhausted")?.data.peek)).toContain("Worker local total request limit reached");
+    expect(entry("saturation-exhausted")?.data.status).toBe(529);
+  });
+
+  it("records an upstream error with both the real and the remapped status", async () => {
+    const port = await startUpstream((_body, res) => {
+      res.writeHead(401, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: { message: "No provider available", type: "ProviderError" } }));
+    });
+    proxy = new FormatProxy(() => ({ baseUrl: `http://127.0.0.1:${port}`, apiKey: "k", modelIds: [] }), { retryBackoffMs: [] });
+    await proxy.start();
+    await fetch(`${proxy.getUrl("zen")}/v1/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "opencode/gpt-5.5", max_tokens: 5, messages: [], stream: false }),
+    });
+
+    expect(entry("translate")?.data.model).toBe("opencode/gpt-5.5");
+    expect(entry("translate")?.data.stream).toBe(false);
+
+    const err = entry("upstream-error");
+    expect(err?.data.upstreamStatus).toBe(401);
+    // Zen's non-auth 401 is remapped so the CLI stops demanding /login. Both
+    // numbers are logged, since the remap is exactly what hides the original.
+    expect(err?.data.sentStatus).toBe(503);
+    expect(err?.data.remapped).toBe(true);
+    expect(err?.data.message).toBe("No provider available");
+  });
+
+  it("records a completed translated turn with its token counts", async () => {
+    const port = await startUpstream((_body, res) => {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify({
+          choices: [{ message: { content: "hi" }, finish_reason: "stop" }],
+          usage: { prompt_tokens: 11, completion_tokens: 7 },
+        }),
+      );
+    });
+    proxy = new FormatProxy(() => ({ baseUrl: `http://127.0.0.1:${port}`, apiKey: "k", modelIds: [] }));
+    await proxy.start();
+    await fetch(`${proxy.getUrl("zen")}/v1/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "m", max_tokens: 5, messages: [], stream: false }),
+    });
+
+    const done = entry("complete");
+    expect(done?.data.inputTokens).toBe(11);
+    expect(done?.data.outputTokens).toBe(7);
+    expect(done?.data.finishReason).toBe("stop");
+  });
+
+  it("records an unknown provider rather than failing silently", async () => {
+    proxy = new FormatProxy(() => null);
+    await proxy.start();
+    const res = await fetch(`${proxy.getUrl("nope")}/v1/messages`, { method: "POST", body: "{}" });
+    expect(res.status).toBe(404);
+    expect(entry("unknown-provider")?.providerId).toBe("nope");
+    expect(entry("request")?.data.resolved).toBe(false);
   });
 });
 

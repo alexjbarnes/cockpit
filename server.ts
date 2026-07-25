@@ -3,6 +3,7 @@ import { networkInterfaces } from "node:os";
 import { parse } from "node:url";
 import next from "next";
 import { deletePasswordFile, needsSetup } from "./src/server/auth";
+import { logProxy } from "./src/server/debug-logger";
 import { FormatProxy, setActiveFormatProxy } from "./src/server/format-proxy";
 import { startHealthProbe } from "./src/server/health-probe";
 import { HookRouter } from "./src/server/hook-router";
@@ -106,8 +107,11 @@ async function main() {
   try {
     await formatProxy.start();
     setActiveFormatProxy(formatProxy);
-    console.log(`Format proxy listening on ${formatProxy.getUrl("<provider>")}`);
   } catch (err) {
+    // The proxy start line moved to the debug log, but a start FAILURE stays on
+    // stderr: it silently breaks every OpenAI-format provider, and debug
+    // logging is off by default, so hiding it would make it undiagnosable.
+    logProxy("-", "start-failed", { error: err instanceof Error ? err.message : String(err) });
     console.error("Failed to start format proxy:", err);
   }
 
