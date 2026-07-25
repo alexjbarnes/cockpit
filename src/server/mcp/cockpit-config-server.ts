@@ -23,6 +23,44 @@ interface McpServerEntry {
   url?: string;
 }
 
+/**
+ * The only fields update_job may write, mirroring update_job's inputSchema and
+ * create_job's explicit construction. The handler used to spread the caller's
+ * args wholesale, so any field the model invented (a stringified singular
+ * `schedule`, a stray `cron`) was persisted onto the job. Such a field only
+ * ever disappeared if normalizeJob happened to know how to strip it, so
+ * anything unrecognised stayed in scheduled-jobs.json indefinitely.
+ */
+const JOB_UPDATE_FIELDS = [
+  "name",
+  "schedules",
+  "prompt",
+  "cwd",
+  "enabled",
+  "model",
+  "contextSize",
+  "thinkingLevel",
+  "allowedTools",
+  "mcpServers",
+  "mcpToolFilters",
+  "bypassPermissions",
+  "maxDurationMinutes",
+  "maxRetries",
+  "retentionDays",
+  "skipIfMissed",
+  "inboxOutput",
+  "notifyProviders",
+  "runtime",
+] as const satisfies readonly (keyof ScheduledJob)[];
+
+function pickJobUpdate(source: Record<string, unknown>): Partial<ScheduledJob> {
+  const update: Record<string, unknown> = {};
+  for (const key of JOB_UPDATE_FIELDS) {
+    if (source[key] !== undefined) update[key] = source[key];
+  }
+  return update as Partial<ScheduledJob>;
+}
+
 const TOOL_DEFINITIONS = [
   {
     name: "list_jobs",
@@ -319,9 +357,7 @@ function handleToolCall(
             const existing = getJob(id);
             if (!existing) return { id, error: `Job not found: ${id}` };
             const before = { ...existing };
-            const update = { ...entry };
-            delete (update as Record<string, unknown>).id;
-            const updated: ScheduledJob = { ...existing, ...update, updatedAt: Date.now() };
+            const updated: ScheduledJob = { ...existing, ...pickJobUpdate(entry), updatedAt: Date.now() };
             saveJob(updated);
             return { id, before, after: updated };
           });
@@ -333,9 +369,7 @@ function handleToolCall(
         const existing = getJob(args.id as string);
         if (!existing) return { content: [{ type: "text", text: JSON.stringify({ error: `Job not found: ${args.id}` }) }], isError: true };
         const before = { ...existing };
-        const update = { ...args };
-        delete (update as Record<string, unknown>).id;
-        const updated: ScheduledJob = { ...existing, ...update, updatedAt: Date.now() };
+        const updated: ScheduledJob = { ...existing, ...pickJobUpdate(args), updatedAt: Date.now() };
         saveJob(updated);
         return { content: [{ type: "text", text: JSON.stringify({ before, after: updated }, null, 2) }] };
       }

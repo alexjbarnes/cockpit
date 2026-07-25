@@ -215,6 +215,31 @@ describe("cockpit-config MCP server (in-process HTTP)", () => {
       expect(JSON.parse(text).error).toContain("not found");
     });
 
+    it("update_job discards fields outside its schema", async () => {
+      const jobs = (await callToolParsed("list_jobs")) as { id: string; name: string }[];
+      const job = jobs.find((j) => j.name === "updated-job")!;
+      const result = (await callToolParsed("update_job", {
+        id: job.id,
+        prompt: "kept",
+        // Both have been seen invented by the agent alongside the real fields.
+        // A wholesale spread of args wrote them onto the job.
+        schedule: JSON.stringify({ type: "simple", frequency: "weekly" }),
+        cron: "0 7 * * 5",
+      })) as { after: Record<string, unknown> };
+      expect(result.after.prompt).toBe("kept");
+      expect(result.after).not.toHaveProperty("schedule");
+      expect(result.after).not.toHaveProperty("cron");
+      expect(result.after.id).toBe(job.id);
+
+      // normalizeJob strips a legacy singular `schedule` on read, so `schedule`
+      // alone cannot tell a dropped write from a masked one. `cron` is not a
+      // field it knows about, so its absence after a reload proves the write
+      // path discarded it.
+      const reloaded = (await callToolParsed("get_job", { id: job.id })) as Record<string, unknown>;
+      expect(reloaded).not.toHaveProperty("cron");
+      expect(reloaded.prompt).toBe("kept");
+    });
+
     it("delete_job removes the job", async () => {
       const jobs = (await callToolParsed("list_jobs")) as { id: string; name: string }[];
       const job = jobs.find((j) => j.name === "updated-job")!;
@@ -481,6 +506,26 @@ describe("cockpit-config MCP server (in-process HTTP)", () => {
       expect((result.results[0].after as { enabled: boolean }).enabled).toBe(false);
       expect(result.results[1].error).toContain("not found");
       expect((result.results[2].after as { name: string }).name).toBe("renamed-b");
+    });
+
+    it("update_job batch discards fields outside its schema", async () => {
+      const a = (await callToolParsed("create_job", {
+        name: "batch-strip-a",
+        schedules: [{ type: "simple", frequency: "hourly" }],
+        prompt: "echo a",
+        cwd: "/tmp",
+      })) as { created: { id: string } };
+
+      const result = (await callToolParsed("update_job", {
+        updates: [{ id: a.created.id, name: "batch-strip-renamed", cron: "0 7 * * 5", schedule: "{}" }],
+      })) as { results: { after?: Record<string, unknown> }[] };
+      const after = result.results[0].after as Record<string, unknown>;
+      expect(after.name).toBe("batch-strip-renamed");
+      expect(after).not.toHaveProperty("cron");
+      expect(after).not.toHaveProperty("schedule");
+
+      const reloaded = (await callToolParsed("get_job", { id: a.created.id })) as Record<string, unknown>;
+      expect(reloaded).not.toHaveProperty("cron");
     });
   });
 
