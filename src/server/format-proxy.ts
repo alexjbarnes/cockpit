@@ -9,6 +9,7 @@
 // Anthropic SSE. This is the same job OpenRouter's "Anthropic Skin" does on
 // their servers, done locally for providers that don't offer one.
 
+import { randomBytes } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { logProxy } from "@/server/debug-logger";
 
@@ -488,6 +489,19 @@ export class FormatProxy {
   private port = 0;
   private retryBackoffMs: number[];
   private onUsage?: (u: ProxyUsageEvent) => void;
+  /**
+   * Gate for inbound requests, carried as the first path segment of the base
+   * URL rather than a header. Without it any local process could POST to the
+   * loopback port and spend the stored provider credits, since the proxy
+   * attaches the upstream key itself.
+   *
+   * It cannot ride on ANTHROPIC_AUTH_TOKEN: for the passthrough providers
+   * (OpenRouter, DeepSeek) that variable holds the real upstream key, which
+   * the CLI sends and passthrough() forwards verbatim. Overwriting it would
+   * send this token upstream instead of the credential. The path needs no
+   * cooperation from the CLI at all, since cockpit sets the whole base URL.
+   */
+  private readonly token = randomBytes(24).toString("hex");
 
   constructor(
     private resolveUpstream: UpstreamResolver,
@@ -537,7 +551,7 @@ export class FormatProxy {
   }
 
   getUrl(providerId: string): string {
-    return `http://127.0.0.1:${this.port}/${providerId}`;
+    return `http://127.0.0.1:${this.port}/${this.token}/${providerId}`;
   }
 
   get isRunning(): boolean {
@@ -565,8 +579,15 @@ export class FormatProxy {
 
   private async handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const [pathPart, query] = (req.url || "").split("?");
-    const [, providerId, ...rest] = pathPart.split("/");
+    const [, token, providerId, ...rest] = pathPart.split("/");
     const path = `/${rest.join("/")}`;
+    if (token !== this.token) {
+      // Deliberately says nothing about which part was wrong, and never echoes
+      // the offered token.
+      logProxy(providerId || "-", "unauthorized", { method: req.method, path, status: 401 });
+      jsonError(res, 401, "Unauthorized");
+      return;
+    }
     const upstream = providerId ? this.resolveUpstream(providerId) : null;
     logProxy(providerId || "-", "request", {
       method: req.method,

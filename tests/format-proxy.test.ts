@@ -790,6 +790,87 @@ describe("FormatProxy server", () => {
   });
 });
 
+describe("FormatProxy inbound auth", () => {
+  let proxy: FormatProxy | null = null;
+  let upstream: Server | null = null;
+
+  beforeEach(() => {
+    proxyLogs.length = 0;
+  });
+
+  afterEach(async () => {
+    await proxy?.stop();
+    proxy = null;
+    await new Promise<void>((r) => (upstream ? upstream.close(() => r()) : r()));
+    upstream = null;
+  });
+
+  it("embeds a per-instance token in the base URL", async () => {
+    const a = new FormatProxy(() => null);
+    const b = new FormatProxy(() => null);
+    await a.start();
+    await b.start();
+    try {
+      const tokenOf = (p: FormatProxy) => new URL(p.getUrl("zen")).pathname.split("/")[1];
+      expect(tokenOf(a)).toMatch(/^[0-9a-f]{48}$/);
+      expect(tokenOf(a)).not.toBe(tokenOf(b));
+      expect(new URL(a.getUrl("zen")).pathname).toBe(`/${tokenOf(a)}/zen`);
+    } finally {
+      await a.stop();
+      await b.stop();
+    }
+  });
+
+  it("rejects a request that omits the token, without reaching the upstream", async () => {
+    let upstreamHits = 0;
+    upstream = createServer((_req, res) => {
+      upstreamHits += 1;
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end("{}");
+    });
+    await new Promise<void>((r) => upstream?.listen(0, "127.0.0.1", () => r()));
+    const addr = upstream?.address();
+    const port = typeof addr === "object" && addr ? addr.port : 0;
+
+    proxy = new FormatProxy(() => ({ baseUrl: `http://127.0.0.1:${port}`, apiKey: "secret-key", modelIds: [] }));
+    await proxy.start();
+
+    // The pre-auth URL shape: no token segment at all.
+    const base = new URL(proxy.getUrl("zen"));
+    const res = await fetch(`${base.origin}/zen/v1/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "m", max_tokens: 5, messages: [] }),
+    });
+
+    expect(res.status).toBe(401);
+    // The point of the gate: no upstream call, so no credits spent.
+    expect(upstreamHits).toBe(0);
+    const body = await res.json();
+    expect(body.error.message).toBe("Unauthorized");
+  });
+
+  it("rejects a wrong token and never echoes the offered one", async () => {
+    proxy = new FormatProxy(() => ({ baseUrl: "http://127.0.0.1:1", apiKey: "k", modelIds: [] }));
+    await proxy.start();
+    const base = new URL(proxy.getUrl("zen"));
+    const res = await fetch(`${base.origin}/${"f".repeat(48)}/zen/v1/models`);
+
+    expect(res.status).toBe(401);
+    const logged = proxyLogs.find((l) => l.label === "unauthorized");
+    expect(logged).toBeDefined();
+    expect(JSON.stringify(proxyLogs)).not.toContain("f".repeat(48));
+  });
+
+  it("still serves every route once the token is right", async () => {
+    proxy = new FormatProxy(() => ({ baseUrl: "http://127.0.0.1:1", apiKey: "k", modelIds: ["opencode/gpt-5.5"] }));
+    await proxy.start();
+    const models = await fetch(`${proxy.getUrl("zen")}/v1/models`);
+    expect(models.status).toBe(200);
+    expect((await models.json()).data).toHaveLength(1);
+  });
+});
+
 describe("FormatProxy debug logging", () => {
   let proxy: FormatProxy | null = null;
   let upstream: Server | null = null;
