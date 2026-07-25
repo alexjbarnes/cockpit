@@ -1,7 +1,7 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { join, resolve, sep } from "node:path";
 import { splitLegacyModel } from "@/lib/models";
-import { getCockpitDir } from "@/server/paths";
+import { getCockpitDir, getJobsScratchpadRoot } from "@/server/paths";
 import type { JobRun, JobSchedule, ScheduledJob } from "@/types";
 
 function prefsDir(): string {
@@ -66,6 +66,25 @@ export function saveJob(job: ScheduledJob): void {
   writeFileSync(jobsFile(), JSON.stringify({ jobs }, null, 2) + "\n");
 }
 
+/**
+ * Remove a job's scratchpad, the directory it persisted state between runs in.
+ * Deleting a job used to leave it behind, so `~/.cockpit/jobs` accumulated
+ * orphan directories with no job left to explain them.
+ *
+ * `id` has already been matched against a stored job by the time this runs, so
+ * it is one cockpit generated. The containment check is belt and braces so a
+ * crafted id could never resolve outside the scratchpad root and take an
+ * unrelated directory with it.
+ */
+function deleteJobScratchpad(id: string): void {
+  const root = resolve(getJobsScratchpadRoot());
+  const dir = resolve(root, id);
+  if (dir === root || !dir.startsWith(root + sep)) return;
+  try {
+    rmSync(dir, { recursive: true, force: true });
+  } catch {}
+}
+
 export function deleteJob(id: string): boolean {
   const jobs = loadJobs();
   const filtered = jobs.filter((j) => j.id !== id);
@@ -80,6 +99,8 @@ export function deleteJob(id: string): boolean {
       unlinkSync(rf);
     }
   } catch {}
+
+  deleteJobScratchpad(id);
 
   return true;
 }

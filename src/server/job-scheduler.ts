@@ -1,7 +1,6 @@
 import { mkdirSync } from "node:fs";
-import path from "node:path";
 import { v4 as uuidv4 } from "uuid";
-import { getCockpitDir } from "@/server/paths";
+import { getJobScratchpadDir } from "@/server/paths";
 import type { JobRun, JobRunToolUse, ScheduledJob } from "@/types";
 import { findMissedRun, getJobSchedules, matchesCron, scheduleToCron } from "./cron-utils";
 import { logDiag } from "./debug-logger";
@@ -11,10 +10,6 @@ import { getLatestRun, loadJobs, loadRuns, pruneAllRuns, saveRun } from "./job-s
 import { checkJobModel } from "./provider-catalog";
 import type { SessionManager } from "./session-manager";
 import { countTranscriptMessages } from "./transcript";
-
-function scratchpadDir(): string {
-  return path.join(getCockpitDir(), "jobs");
-}
 
 /** Default extra attempts after a `failure` run when a job doesn't set maxRetries. */
 const DEFAULT_JOB_MAX_RETRIES = 1;
@@ -54,7 +49,7 @@ function buildJobPrompt(job: ScheduledJob): string {
   }
 
   if (job.cwd) {
-    const storageDir = path.join(scratchpadDir(), job.id);
+    const storageDir = getJobScratchpadDir(job.id);
     parts.push("");
     parts.push(`Storage: If you need to persist any files between runs (state, cache, data), save them in ${storageDir}`);
     parts.push("Do not store persistent files in the working directory as it is a git repository.");
@@ -401,8 +396,8 @@ export class JobScheduler {
     }
     logDiag(job.id, "job:lock-acquired", { runId });
 
-    const jobCwd = job.cwd || path.join(scratchpadDir(), job.id);
-    mkdirSync(path.join(scratchpadDir(), job.id), { recursive: true });
+    const jobCwd = job.cwd || getJobScratchpadDir(job.id);
+    mkdirSync(getJobScratchpadDir(job.id), { recursive: true });
     const sessionInfo = this.sessionManager.createSession(jobCwd, `[job] ${job.name}`, {
       bypassPermissions: !!job.bypassPermissions,
       runtime: job.runtime,

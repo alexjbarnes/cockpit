@@ -3,7 +3,7 @@
 // the env var per call, so no fs mocking is needed). The legacy [1m] model
 // migration on read is covered separately in job-storage-context.test.ts.
 
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -212,6 +212,51 @@ describe("job CRUD", () => {
     expect(loadRuns("a")).toHaveLength(1);
     deleteJob("a");
     expect(loadRuns("a")).toEqual([]);
+  });
+
+  it("deleteJob removes the job's scratchpad, state files and all", () => {
+    const pad = path.join(dir, "jobs", "a");
+    mkdirSync(path.join(pad, "nested"), { recursive: true });
+    writeFileSync(path.join(pad, "state.json"), '{"suggested":[]}');
+    writeFileSync(path.join(pad, "nested", "cache.txt"), "x");
+    saveJob(makeJob("a"));
+
+    deleteJob("a");
+    expect(existsSync(pad)).toBe(false);
+  });
+
+  it("deleteJob leaves other jobs' scratchpads alone", () => {
+    const keep = path.join(dir, "jobs", "b");
+    mkdirSync(keep, { recursive: true });
+    writeFileSync(path.join(keep, "state.json"), "{}");
+    saveJob(makeJob("a"));
+    saveJob(makeJob("b"));
+
+    deleteJob("a");
+    expect(existsSync(keep)).toBe(true);
+  });
+
+  it("deleteJob copes with a job that never wrote a scratchpad", () => {
+    saveJob(makeJob("a"));
+    expect(existsSync(path.join(dir, "jobs", "a"))).toBe(false);
+    expect(deleteJob("a")).toBe(true);
+  });
+
+  it("deleteJob does not touch the scratchpad when the job is unknown", () => {
+    const pad = path.join(dir, "jobs", "ghost");
+    mkdirSync(pad, { recursive: true });
+    expect(deleteJob("ghost")).toBe(false);
+    expect(existsSync(pad)).toBe(true);
+  });
+
+  it("deleteJob cannot escape the scratchpad root via a traversing id", () => {
+    // The id would resolve to <config>/jobs/../.. and take the tmpdir with it.
+    const traversingId = "../..";
+    const sibling = path.join(dir, "scheduled-jobs.json");
+    saveJob({ ...makeJob("a"), id: traversingId });
+    expect(deleteJob(traversingId)).toBe(true);
+    expect(existsSync(dir)).toBe(true);
+    expect(existsSync(sibling)).toBe(true);
   });
 });
 
