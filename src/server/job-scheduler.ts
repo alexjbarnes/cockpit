@@ -8,6 +8,7 @@ import { logDiag } from "./debug-logger";
 import { addInboxMessage, parseErrorBlock, parseInboxBlock } from "./inbox";
 import { acquireJobLock, clearStaleLocks, forceReleaseJobLock, releaseJobLock } from "./job-lock";
 import { getLatestRun, loadJobs, loadRuns, pruneAllRuns, saveRun } from "./job-storage";
+import { checkJobModel } from "./provider-catalog";
 import type { SessionManager } from "./session-manager";
 import { countTranscriptMessages } from "./transcript";
 
@@ -15,10 +16,19 @@ function scratchpadDir(): string {
   return path.join(getCockpitDir(), "jobs");
 }
 
+/** Default extra attempts after a `failure` run when a job doesn't set maxRetries. */
+const DEFAULT_JOB_MAX_RETRIES = 1;
+/** Pause before a retry so a fresh session isn't spawned the instant the last one died. */
+const RETRY_BACKOFF_MS = 5_000;
+
 const JOB_PROMPT_HEADER = [
   "You are running as an autonomous scheduled job. There is no human operator in this session.",
   "Do not ask clarifying questions. Do not wait for user input. Make reasonable assumptions and proceed.",
   "Complete the task fully, then stop.",
+  "",
+  "Subagents: if you use the Agent tool you MUST pass run_in_background: false and wait for the result.",
+  "A backgrounded agent ends your turn to wait for a task notification, and with no operator here to",
+  "resume you the run is torn down and its work is lost. Never end a turn intending to be woken up.",
   "",
   "Error reporting: If you cannot complete the task due to permission errors, tool failures, missing data, or any other reason,",
   "your final message MUST include a cockpit-error block explaining the failure.",
@@ -182,7 +192,62 @@ export class JobScheduler {
     const jobs = loadJobs();
     const job = jobs.find((j) => j.id === jobId);
     if (!job) throw new Error(`Job not found: ${jobId}`);
-    return this.executeJob(job);
+    return this.executeJobWithRetries(job);
+  }
+
+  /**
+   * Run a job, retrying up to `job.maxRetries` (default 1) more times if the run
+   * ends in `failure` — the "went idle without an assistant message" / transient
+   * class. `timeout` and `stopped` are terminal and never retried. Each attempt is
+   * its own run record and inbox output; the failure alert is suppressed on attempts
+   * that will be retried, so only the final outcome pages the operator.
+   */
+  private async executeJobWithRetries(job: ScheduledJob): Promise<JobRun> {
+    // W6j: a job whose model is gone from the provider catalog fails before
+    // the CLI spawns — no lock, no session, no substitution onto another
+    // model, and no retry (the failure is deterministic). The operator fixes
+    // it by picking a new model on the job.
+    const modelCheck = checkJobModel(job.model);
+    if (!modelCheck.ok) {
+      const run: JobRun = {
+        id: uuidv4(),
+        jobId: job.id,
+        sessionId: "",
+        status: "failure",
+        startedAt: Date.now(),
+        completedAt: Date.now(),
+        durationMs: 0,
+        error: modelCheck.reason,
+        toolsUsed: [],
+        messageCount: 0,
+        prompt: job.prompt,
+        cwd: job.cwd || "",
+        configFailure: true,
+      };
+      saveRun(run);
+      logDiag(job.id, "job:config-failure", { runId: run.id, model: job.model, error: modelCheck.reason });
+      addInboxMessage({
+        title: `Job failed: ${job.name}`,
+        body: `**Status:** failure\n\n${modelCheck.reason}`,
+        priority: "error",
+        jobId: job.id,
+        jobName: job.name,
+        runId: run.id,
+        notifyProviders: job.notifyProviders,
+      });
+      return run;
+    }
+
+    const maxRetries = Math.max(0, job.maxRetries ?? DEFAULT_JOB_MAX_RETRIES);
+    let run: JobRun;
+    for (let attempt = 0; ; attempt++) {
+      const isFinal = attempt >= maxRetries;
+      run = await this.executeJob(job, { suppressFailureAlert: !isFinal });
+      if (run.status !== "failure" || isFinal) break;
+      logDiag(job.id, "job:retry", { attempt: attempt + 1, maxRetries, prevRunId: run.id, error: run.error });
+      await new Promise((r) => setTimeout(r, RETRY_BACKOFF_MS));
+    }
+    return run;
   }
 
   stopJob(jobId: string): JobRun {
@@ -306,14 +371,14 @@ export class JobScheduler {
 
       if (shouldFire) {
         this.lastFiredAt.set(job.id, now);
-        this.executeJob(job).catch((err) => {
+        this.executeJobWithRetries(job).catch((err) => {
           console.error(`[scheduler] failed to execute job ${job.name}:`, err);
         });
       }
     }
   }
 
-  async executeJob(job: ScheduledJob): Promise<JobRun> {
+  async executeJob(job: ScheduledJob, opts?: { suppressFailureAlert?: boolean }): Promise<JobRun> {
     const runId = uuidv4();
     logDiag(job.id, "job:execute-start", {
       runId,
@@ -364,6 +429,10 @@ export class JobScheduler {
     const toolTracker = new Map<string, JobRunToolUse>();
     let lastAssistantText = "";
     const enabledServers = new Set(job.mcpServers || []);
+    // Background subagents outlive the turn that launched them. If the turn
+    // ends with any still running, the model was waiting for a notification
+    // that nothing here will deliver, and cleanup is about to kill the PTY.
+    const pendingTasks = new Set<string>();
 
     const unsubEvent = this.sessionManager.subscribe(sessionId, (event) => {
       if (event.type === "tool_use_start" && event.toolId) {
@@ -399,7 +468,19 @@ export class JobScheduler {
             textLen = text.length;
           }
         }
-        jlog("message-done", { count: run.messageCount, textLen });
+        // JOB-DEBUG: a message_done carrying tool uses but no text is the turn that
+        // ends after a tool_use without a final answer — the failure signature.
+        jlog("message-done", {
+          count: run.messageCount,
+          textLen,
+          toolUses: event.message?.toolUses?.length ?? 0,
+          updatedLastText: textLen > 0,
+        });
+      } else if (event.type === "task_update" && event.taskInfo?.taskId) {
+        const { taskId, status } = event.taskInfo;
+        if (status === "running") pendingTasks.add(taskId);
+        else pendingTasks.delete(taskId);
+        jlog("task-update", { taskId, status, pending: pendingTasks.size });
       } else if (event.type === "permission_request" && event.requestId) {
         if (job.bypassPermissions) {
           jlog("permission", { toolName: event.toolName ?? "unknown", requestId: event.requestId, bypass: true, allowed: true });
@@ -428,6 +509,20 @@ export class JobScheduler {
           run.toolsUsed.push(permEntry);
         }
       }
+    });
+
+    // JOB-DEBUG: the scheduler currently ignores compaction entirely. Track it from
+    // the system-message stream and surface every system message the run receives,
+    // so a teardown can be correlated with a compaction window.
+    let compacting = false;
+    let lastCompactAt = 0;
+    const unsubSystem = this.sessionManager.onSystem(sessionId, (text) => {
+      if (text === "__compact::start") compacting = true;
+      else if (text === "__compact::done") {
+        compacting = false;
+        lastCompactAt = Date.now();
+      }
+      jlog("system-msg", { text: text.slice(0, 140), compacting });
     });
 
     const initCleanup = this.sessionManager.onInit(sessionId, (initData) => {
@@ -480,10 +575,27 @@ export class JobScheduler {
           elapsedMs: Date.now() - sentAt,
           sawRunning,
           processAlive,
+          // JOB-DEBUG: state that determines whether this idle is real or spurious.
+          compacting,
+          msSinceCompact: lastCompactAt ? Date.now() - lastCompactAt : null,
+          lastAssistantTextLen: lastAssistantText.length,
+          pendingTasks: pendingTasks.size,
           messageCount: run.messageCount,
           toolCount: run.toolsUsed.length,
         });
         if (status === "idle") {
+          // JOB-DEBUG: this is the exact decision that ends the run. If the CLI is
+          // still alive, or we just compacted, or there is no assistant text, this
+          // idle is the prime suspect for a premature teardown.
+          jlog("idle-cleanup-decision", {
+            processAlive,
+            compacting,
+            msSinceCompact: lastCompactAt ? Date.now() - lastCompactAt : null,
+            lastAssistantTextLen: lastAssistantText.length,
+            lastAssistantTextHead: lastAssistantText.slice(0, 160),
+            pendingTasks: pendingTasks.size,
+            elapsedMs: Date.now() - sentAt,
+          });
           cleanup("success");
         }
       });
@@ -522,6 +634,7 @@ export class JobScheduler {
         unsubEvent?.();
         unsubStatus?.();
         unsubError?.();
+        unsubSystem?.();
         initCleanup?.();
 
         run.completedAt = Date.now();
@@ -540,6 +653,23 @@ export class JobScheduler {
           }
         }
 
+        // A completed turn always ends with an assistant message. Reaching idle
+        // without one means the turn was cut short rather than finished — the
+        // signature of a run torn down mid-compaction, which reported "success"
+        // for three days while producing nothing. Fail loudly instead: the
+        // failure branch below raises an inbox alert.
+        if (finalStatus === "success" && !lastAssistantText) {
+          finalStatus = "failure";
+          run.error = "Job went idle without producing any assistant message, so the turn never completed";
+          jlog("no-assistant-message", { toolCount: run.toolsUsed.length });
+        }
+
+        if (finalStatus === "success" && pendingTasks.size > 0) {
+          finalStatus = "failure";
+          run.error = `Job ended its turn with ${pendingTasks.size} background subagent(s) still running, so their work was never collected`;
+          jlog("pending-background-tasks", { pending: pendingTasks.size });
+        }
+
         run.status = finalStatus;
 
         const transcriptCount = countTranscriptMessages(sessionId, jobCwd);
@@ -555,7 +685,10 @@ export class JobScheduler {
             addInboxMessage({ ...inbox, jobId: job.id, jobName: job.name, runId: run.id, notifyProviders: job.notifyProviders });
           }
         }
-        if (finalStatus === "failure" || finalStatus === "timeout") {
+        // A `failure` alert is suppressed on attempts that will be retried (the retry
+        // wrapper passes suppressFailureAlert); the final attempt still alerts. A
+        // `timeout` is terminal and never retried, so it always alerts.
+        if (finalStatus === "timeout" || (finalStatus === "failure" && !opts?.suppressFailureAlert)) {
           addInboxMessage({
             title: `Job failed: ${job.name}`,
             body: `**Status:** ${finalStatus}\n\n${run.error || "Job failed with no error message"}`,

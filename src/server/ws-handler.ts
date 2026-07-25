@@ -717,15 +717,8 @@ export function createWebSocketHandler(
         }
 
         case "question:response": {
-          console.log(
-            `[question-debug] question:response for session ${msg.sessionId.slice(0, 8)}, requestId=${msg.requestId}, hadPending=${!!sessionManager.getPendingRequest(msg.sessionId, msg.requestId)}`,
-          );
           const pending = sessionManager.getPendingRequest(msg.sessionId, msg.requestId);
           sessionManager.removePendingRequest(msg.sessionId, msg.requestId);
-          console.log(
-            `[question-debug] after remove, remaining pending:`,
-            sessionManager.getPendingRequests(msg.sessionId).map((r) => r.requestId),
-          );
           const originalQuestions = pending?.rawToolInput?.questions;
           sessionManager.respondToPermission(msg.sessionId, msg.requestId, true, {
             questions: originalQuestions || [],
@@ -821,11 +814,17 @@ export function createWebSocketHandler(
         }
 
         case "watch:cwd": {
-          cwdWatchCleanups.push(
+          // One watched cwd per socket. Every session switch sends this, and
+          // without dropping the previous watcher they accumulated for the
+          // life of the connection — so a socket that had visited five
+          // sessions kept reporting changes from all five, and each stale
+          // watcher drove a refetch in views that do not filter on cwd.
+          for (const fn of cwdWatchCleanups) fn();
+          cwdWatchCleanups = [
             watchCwd(msg.cwd, () => {
               send(ws, { type: "session:fs_changed", cwd: msg.cwd });
             }),
-          );
+          ];
           break;
         }
       }
@@ -1007,6 +1006,12 @@ function handleParsedEvent(ws: WebSocket, sessionId: string, event: ParsedEvent,
       }
       break;
 
+    case "task_sync":
+      if (event.tasks) {
+        send(ws, { type: "session:task_sync", sessionId, tasks: event.tasks });
+      }
+      break;
+
     case "permission_request": {
       const requestId = event.requestId || "";
       // auto_approve / auto_deny / cockpit-denied requests are resolved
@@ -1017,7 +1022,6 @@ function handleParsedEvent(ws: WebSocket, sessionId: string, event: ParsedEvent,
       const toolName = event.toolName || "";
 
       if (toolName === "AskUserQuestion") {
-        console.log(`[question-debug] live question:request for session ${sessionId.slice(0, 8)}, requestId=${requestId}`);
         send(ws, {
           type: "question:request",
           sessionId,

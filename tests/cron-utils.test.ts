@@ -236,23 +236,15 @@ describe("findMissedRun", () => {
 });
 
 describe("getJobSchedules", () => {
-  it("returns schedules array when present and non-empty", () => {
+  it("returns the job's schedules array", () => {
     const s1: JobSchedule = { type: "simple", frequency: "daily", time: "09:00" };
     const s2: JobSchedule = { type: "cron", expression: "0 18 * * *" };
-    const result = getJobSchedules({ schedule: s1, schedules: [s1, s2] });
-    expect(result).toHaveLength(2);
+    const result = getJobSchedules({ schedules: [s1, s2] });
+    expect(result).toEqual([s1, s2]);
   });
 
-  it("falls back to single schedule when schedules is empty", () => {
-    const s: JobSchedule = { type: "simple", frequency: "daily", time: "09:00" };
-    const result = getJobSchedules({ schedule: s, schedules: [] });
-    expect(result).toEqual([s]);
-  });
-
-  it("falls back to single schedule when schedules is undefined", () => {
-    const s: JobSchedule = { type: "simple", frequency: "daily", time: "09:00" };
-    const result = getJobSchedules({ schedule: s });
-    expect(result).toEqual([s]);
+  it("returns an empty array for a job with no schedules", () => {
+    expect(getJobSchedules({ schedules: [] })).toEqual([]);
   });
 });
 

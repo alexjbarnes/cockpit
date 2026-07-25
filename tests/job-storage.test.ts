@@ -3,7 +3,7 @@
 // the env var per call, so no fs mocking is needed). The legacy [1m] model
 // migration on read is covered separately in job-storage-context.test.ts.
 
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -41,7 +41,7 @@ function makeJob(id: string, overrides: Partial<ScheduledJob> = {}): ScheduledJo
   return {
     id,
     name: `job ${id}`,
-    schedule: { type: "simple", frequency: "daily" },
+    schedules: [{ type: "simple", frequency: "daily" }],
     prompt: "do the thing",
     cwd: "/tmp/work",
     enabled: true,
@@ -95,6 +95,71 @@ describe("getJobSessionIds", () => {
     writeFileSync(path.join(dirRuns, "notes.txt"), "ignore me");
     writeFileSync(path.join(dirRuns, "broken.json"), "{not valid json");
     expect([...getJobSessionIds()]).toEqual(["sess-x"]);
+  });
+});
+
+describe("legacy `schedule` migration on read", () => {
+  function writeRawJobsFile(jobs: unknown[]): void {
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(path.join(dir, "scheduled-jobs.json"), JSON.stringify({ jobs }));
+  }
+
+  it("fills schedules from a pre-migration job that only has the old singular schedule field", () => {
+    writeRawJobsFile([
+      {
+        id: "legacy-1",
+        name: "legacy job",
+        schedule: { type: "simple", frequency: "daily", time: "02:00" },
+        prompt: "do the thing",
+        cwd: "/tmp/work",
+        enabled: true,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ]);
+
+    const job = getJob("legacy-1")!;
+    expect(job.schedules).toEqual([{ type: "simple", frequency: "daily", time: "02:00" }]);
+    expect(job).not.toHaveProperty("schedule");
+  });
+
+  it("prefers the already-migrated schedules array when both fields are present on disk", () => {
+    writeRawJobsFile([
+      {
+        id: "legacy-2",
+        name: "legacy job",
+        schedule: { type: "simple", frequency: "daily", time: "02:00" },
+        schedules: [{ type: "simple", frequency: "daily", time: "05:00" }],
+        prompt: "do the thing",
+        cwd: "/tmp/work",
+        enabled: true,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ]);
+
+    const job = getJob("legacy-2")!;
+    expect(job.schedules).toEqual([{ type: "simple", frequency: "daily", time: "05:00" }]);
+  });
+
+  it("saving a migrated job persists the new shape, so migration self-heals the file over time", () => {
+    writeRawJobsFile([
+      {
+        id: "legacy-3",
+        name: "legacy job",
+        schedule: { type: "simple", frequency: "daily", time: "02:00" },
+        prompt: "do the thing",
+        cwd: "/tmp/work",
+        enabled: true,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ]);
+
+    saveJob(getJob("legacy-3")!);
+    const onDisk = JSON.parse(readFileSync(path.join(dir, "scheduled-jobs.json"), "utf-8"));
+    expect(onDisk.jobs[0].schedules).toEqual([{ type: "simple", frequency: "daily", time: "02:00" }]);
+    expect(onDisk.jobs[0]).not.toHaveProperty("schedule");
   });
 });
 

@@ -39,6 +39,17 @@ export interface HarnessOptions {
   runtime?: "pty" | "stream";
   /** Override the default thinking level. Defaults to "high". */
   thinkingLevel?: ThinkingLevel;
+  /** Seed the built-in OpenRouter provider (key + one-model catalog) and point
+   *  COCKPIT_OPENROUTER_BASE_URL at the mock API. */
+  openRouterViaMock?: boolean;
+  /** Seed the built-in OpenCode Zen provider (key + one model) and point
+   *  COCKPIT_ZEN_BASE_URL at the mock API's OpenAI door, so zen sessions run
+   *  CLI → cockpit format proxy → mock /v1/chat/completions. */
+  zenViaMock?: boolean;
+  /** Seed the built-in DeepSeek provider (key + one model) and point
+   *  COCKPIT_DEEPSEEK_BASE_URL at the mock API, so deepseek sessions run
+   *  CLI → cockpit proxy (anthropic passthrough) → mock /v1/messages. */
+  deepseekViaMock?: boolean;
 }
 
 // Process groups (pgids) of cockpit servers still running in this worker.
@@ -89,6 +100,9 @@ export async function startHarness(opts: HarnessOptions = {}): Promise<Harness> 
     configDir,
     mockUrl: `http://127.0.0.1:${mock.port}`,
     thinkingLevel: opts.thinkingLevel,
+    openRouterViaMock: opts.openRouterViaMock,
+    zenViaMock: opts.zenViaMock,
+    deepseekViaMock: opts.deepseekViaMock,
   });
 
   const cockpitPort = await getFreePort();
@@ -101,6 +115,9 @@ export async function startHarness(opts: HarnessOptions = {}): Promise<Harness> 
     claudeDir,
     runtime: opts.runtime ?? "pty",
     claudeBin: opts.claudeBin ?? process.env.CLAUDE_BIN ?? "claude",
+    openRouterBaseUrl: opts.openRouterViaMock ? `http://127.0.0.1:${mock.port}` : undefined,
+    zenBaseUrl: opts.zenViaMock ? `http://127.0.0.1:${mock.port}/v1` : undefined,
+    deepseekBaseUrl: opts.deepseekViaMock ? `http://127.0.0.1:${mock.port}` : undefined,
   });
   if (process.env.COCKPIT_IT_DEBUG === "1") captureCockpitLogs(proc);
 
@@ -139,7 +156,17 @@ interface SeedOpts {
   configDir: string;
   mockUrl: string;
   thinkingLevel?: ThinkingLevel;
+  openRouterViaMock?: boolean;
+  zenViaMock?: boolean;
+  deepseekViaMock?: boolean;
 }
+
+/** Catalog model id used by the OpenRouter integration seeding. */
+export const OR_TEST_MODEL = "mockvendor/or-test:free";
+/** Model id used by the OpenCode Zen integration seeding. */
+export const ZEN_TEST_MODEL = "opencode/mock-model";
+/** Model id used by the DeepSeek integration seeding. */
+export const DEEPSEEK_TEST_MODEL = "deepseek-v4-flash";
 
 function seedConfig(opts: SeedOpts): void {
   // password.json: validateSession() requires a stored password to compute
@@ -207,7 +234,73 @@ function seedConfig(opts: SeedOpts): void {
       },
     ],
   };
-  writeFileSync(path.join(opts.configDir, "providers.json"), JSON.stringify([provider], null, 2) + "\n");
+  // Optionally seed the built-in OpenRouter provider: a stored key entry plus
+  // a synced catalog containing one model. Combined with the
+  // COCKPIT_OPENROUTER_BASE_URL override (spawnCockpit), sessions on
+  // "openrouter:<model>" route their /v1/messages traffic to the mock.
+  const providersOut: unknown[] = [provider];
+  if (opts.zenViaMock) {
+    providersOut.unshift({
+      id: "zen",
+      name: "OpenCode Zen",
+      isBuiltin: true,
+      envVars: { OPENCODE_API_KEY: "zen-integration-key" },
+      // effortLevels mirror a models.dev reasoning model: the spawn gains
+      // --effort + CLAUDE_CODE_ALWAYS_ENABLE_EFFORT, and the proxy is expected
+      // to map the CLI's thinking config onto reasoning_effort upstream.
+      models: [{ modelId: ZEN_TEST_MODEL, displayName: ZEN_TEST_MODEL, effortLevels: ["high", "max"], contextSizes: [] }],
+      enabledModels: [ZEN_TEST_MODEL],
+    });
+  }
+  if (opts.deepseekViaMock) {
+    providersOut.unshift({
+      id: "deepseek",
+      name: "DeepSeek",
+      isBuiltin: true,
+      envVars: { DEEPSEEK_API_KEY: "deepseek-integration-key" },
+      models: [
+        {
+          modelId: DEEPSEEK_TEST_MODEL,
+          displayName: "DeepSeek V4 Flash",
+          effortLevels: ["high", "max"],
+          contextSizes: [],
+          contextLength: 1000000,
+        },
+      ],
+      enabledModels: [DEEPSEEK_TEST_MODEL],
+    });
+  }
+  if (opts.openRouterViaMock) {
+    providersOut.unshift({
+      id: "openrouter",
+      name: "OpenRouter",
+      isBuiltin: true,
+      models: [],
+      envVars: { ANTHROPIC_AUTH_TOKEN: "sk-or-integration-test" },
+      enabledModels: [OR_TEST_MODEL],
+    });
+    writeFileSync(
+      path.join(opts.configDir, "provider-catalog.json"),
+      JSON.stringify({
+        syncedAt: Date.now(),
+        consecutiveFailures: 0,
+        delisted: [],
+        models: [
+          {
+            modelId: OR_TEST_MODEL,
+            displayName: "Mock OR Model",
+            effortLevels: [],
+            contextSizes: [],
+            contextLength: 128000,
+            pricing: { inPerM: 0, outPerM: 0 },
+            free: true,
+            supportsTools: true,
+          },
+        ],
+      }) + "\n",
+    );
+  }
+  writeFileSync(path.join(opts.configDir, "providers.json"), JSON.stringify(providersOut, null, 2) + "\n");
 
   // defaults.json: pick the mock model so new sessions use it by default.
   // The qualified form provider:modelId is what resolveProviderModel expects.
@@ -239,6 +332,9 @@ interface SpawnOpts {
   claudeDir: string;
   runtime: "pty" | "stream";
   claudeBin: string;
+  openRouterBaseUrl?: string;
+  zenBaseUrl?: string;
+  deepseekBaseUrl?: string;
 }
 
 function spawnCockpit(opts: SpawnOpts): ChildProcess {
@@ -267,6 +363,11 @@ function spawnCockpit(opts: SpawnOpts): ChildProcess {
       COCKPIT_DEBUG: "1",
       // Avoid colour codes in captured stdout.
       FORCE_COLOR: "0",
+      // Route the built-in OpenRouter provider (base URL + catalog fetches)
+      // to the mock when the OpenRouter seeding is enabled.
+      ...(opts.openRouterBaseUrl ? { COCKPIT_OPENROUTER_BASE_URL: opts.openRouterBaseUrl } : {}),
+      ...(opts.zenBaseUrl ? { COCKPIT_ZEN_BASE_URL: opts.zenBaseUrl } : {}),
+      ...(opts.deepseekBaseUrl ? { COCKPIT_DEEPSEEK_BASE_URL: opts.deepseekBaseUrl } : {}),
     },
     stdio: ["ignore", "pipe", "pipe"],
     // Put cockpit in its own process group so we can SIGTERM the WHOLE tree

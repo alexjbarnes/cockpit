@@ -12,7 +12,16 @@ const CLEAR_TO_TEXT_DELAY_MS = 30;
 const TRUST_DIALOG_WINDOW_MS = 5000;
 const REPL_READY_MIN_BYTES = 100;
 const REPL_READY_TIMEOUT_MS = 60_000;
-const REPL_SETTLE_MS = 2000;
+// The REPL paints its UI in bursts: terminal setup escapes land first (~45
+// bytes), the input box and footer follow a few hundred ms later, then output
+// stops. Silence after that first burst is the positive signal that the paint
+// finished, so readiness waits for a quiet gap instead of sleeping a flat two
+// seconds. Measured on this box: ready at ~2.2s rather than ~3.5s, and a slow
+// machine simply keeps waiting (up to the cap) instead of being declared ready
+// mid-paint, which is what the flat sleep risked.
+const REPL_QUIET_MS = 300;
+const REPL_SETTLE_MAX_MS = 2000;
+const REPL_POLL_MS = 50;
 
 export interface PtySessionOptions {
   cwd: string;
@@ -33,6 +42,7 @@ export class PtySession {
   private rows: number;
   private exited = false;
   private exitCode: number | null = null;
+  private lastDataAt = 0;
   private readonly opts: PtySessionOptions;
 
   constructor(opts: PtySessionOptions) {
@@ -58,6 +68,17 @@ export class PtySession {
     // every session to 200k and defeat a 1m pick. The caller sets it per-session
     // via opts.env (200k → "1"; 1m → absent), which is applied on top here.
     delete env.CLAUDE_CODE_DISABLE_1M_CONTEXT;
+    // The interactive CLI interposes a resume picker ("❯ Resume from summary
+    // (recommended)" / "Resume full session as-is") when the transcript is older
+    // than 70 minutes and estimated above 100k tokens. Cockpit types keystrokes
+    // blind, so the trailing Enter of the first send lands on that menu and
+    // confirms the highlighted default, which executes /compact — the message is
+    // swallowed and the session compacts (the "magic /compact" bug). Both
+    // thresholds are env-overridable, so push them out of reach and the picker
+    // never renders; cockpit always resumes the full session and drives
+    // compaction itself.
+    env.CLAUDE_CODE_RESUME_THRESHOLD_MINUTES = "999999999";
+    env.CLAUDE_CODE_RESUME_TOKEN_THRESHOLD = "999999999";
     Object.assign(env, this.opts.env ?? {});
 
     const spawnFile = process.platform === "darwin" ? "/bin/zsh" : bin;
@@ -96,6 +117,7 @@ export class PtySession {
 
     this.pty.onData((data) => {
       this.buffer += data;
+      this.lastDataAt = Date.now();
       if (this.buffer.length > 64 * 1024) this.buffer = this.buffer.slice(-32 * 1024);
       this.opts.onData?.(data);
     });
@@ -115,7 +137,15 @@ export class PtySession {
     const pty = this.requirePty();
     pty.write("\x15");
     await sleep(CLEAR_TO_TEXT_DELAY_MS);
-    pty.write(text);
+    // Frame multi-line input as an explicit bracketed paste (\e[200~ … \e[201~) so the
+    // REPL keeps every embedded newline as literal content. Written raw, a multi-line
+    // burst races the REPL's heuristic paste detection and gets mis-submitted — most
+    // often as "/compact" — losing the message and firing a compaction (this was the
+    // reported bug). The claude REPL buffers everything between the markers into one
+    // literal pasted key (verified in the 2.1.216 binary), so slash/newline parsing
+    // never runs on it. Single-line text keeps the exact prior path, which the send
+    // tests already prove works.
+    pty.write(text.includes("\n") ? `\x1b[200~${text}\x1b[201~` : text);
     await sleep(TEXT_TO_ENTER_DELAY_MS);
     pty.write("\r");
   }
@@ -179,23 +209,35 @@ export class PtySession {
 
   private async waitForReplReady(): Promise<void> {
     const deadline = Date.now() + REPL_READY_TIMEOUT_MS;
-    while (Date.now() < deadline) {
+    const failIfExited = () => {
       if (this.exited) {
         throw new Error(`claude exited during startup (code=${this.exitCode}, output=${this.cleanOutput().slice(0, 200)})`);
       }
+    };
+    while (Date.now() < deadline) {
+      failIfExited();
       if (this.cleanOutput().length >= REPL_READY_MIN_BYTES) {
-        await sleep(REPL_SETTLE_MS);
-        if (this.exited) {
-          throw new Error(`claude exited during startup (code=${this.exitCode}, output=${this.cleanOutput().slice(0, 200)})`);
-        }
+        await this.waitForPaintToSettle();
+        failIfExited();
         return;
       }
-      await sleep(200);
+      await sleep(REPL_POLL_MS);
     }
     const clean = this.cleanOutput();
     throw new Error(
       `Timed out after ${REPL_READY_TIMEOUT_MS}ms waiting for claude REPL (got ${clean.length} bytes: ${clean.slice(0, 200)})`,
     );
+  }
+
+  /** Wait for the REPL to stop emitting, capped so a chatty startup can never
+   *  stall a spawn longer than the flat settle this replaced. */
+  private async waitForPaintToSettle(): Promise<void> {
+    const cap = Date.now() + REPL_SETTLE_MAX_MS;
+    while (Date.now() < cap) {
+      if (this.exited) return;
+      if (Date.now() - this.lastDataAt >= REPL_QUIET_MS) return;
+      await sleep(REPL_POLL_MS);
+    }
   }
 }
 

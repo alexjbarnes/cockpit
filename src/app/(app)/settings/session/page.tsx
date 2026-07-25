@@ -82,6 +82,11 @@ export default function SessionSettingsPage() {
   const visibleThinking = thinkingOptions.filter((opt) =>
     opt.value === "off" ? effortLevels.length > 0 : effortLevels.includes(opt.value as ThinkingLevel),
   );
+  // Sonnet 4.6's 1M needs usage credits, so only offer it as a default when the
+  // user has opted in. Other models' sizes are unchanged.
+  const availableContextSizes = (entry?.contextSizes ?? []).filter(
+    (s) => s !== "1m" || !entry?.oneMRequiresCredits || settings.allowSonnet1m,
+  );
 
   function selectAlias(alias: ModelAlias) {
     const def = defaultForAlias(alias);
@@ -141,11 +146,11 @@ export default function SessionSettingsPage() {
             />
           </SettingRow>
         )}
-        {entry && entry.contextSizes.length >= 2 && (
+        {entry && availableContextSizes.length >= 2 && (
           <SettingRow label="Context">
             <ButtonGroup
-              options={entry.contextSizes.map((s) => ({ value: s, label: CONTEXT_SIZES[s].label }))}
-              value={mainContext}
+              options={availableContextSizes.map((s) => ({ value: s, label: CONTEXT_SIZES[s].label }))}
+              value={availableContextSizes.includes(mainContext) ? mainContext : "200k"}
               onChange={(v) =>
                 updateSetting("modelSlots", {
                   ...settings.modelSlots,
@@ -167,6 +172,9 @@ export default function SessionSettingsPage() {
             color="bg-orange-500"
             onToggle={() => updateSetting("bypassAllPermissions", !settings.bypassAllPermissions)}
           />
+        </SettingRow>
+        <SettingRow label="Sonnet 4.6 1M context (needs usage credits)">
+          <Toggle enabled={settings.allowSonnet1m} onToggle={() => updateSetting("allowSonnet1m", !settings.allowSonnet1m)} />
         </SettingRow>
       </div>
     </div>

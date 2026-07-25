@@ -5,12 +5,13 @@
 // can navigate directly to authenticated routes.
 
 import { test as base } from "@playwright/test";
-import { type Harness, startHarness } from "./harness";
+import { type Harness, type HarnessOptions, startHarness } from "./harness";
 
-export const test = base.extend<{ harness: Harness }>({
-  // biome-ignore lint/correctness/noEmptyPattern: Playwright fixture syntax
-  harness: async ({}, use) => {
-    const harness = await startHarness();
+export const test = base.extend<{ harness: Harness; harnessOptions: HarnessOptions }>({
+  // Per-spec harness configuration: override with test.use({ harnessOptions }).
+  harnessOptions: [{}, { option: true }],
+  harness: async ({ harnessOptions }, use) => {
+    const harness = await startHarness(harnessOptions);
 
     // Set the auth cookie on every context so navigation hits authenticated
     // routes without going through the login UI. COCKPIT_TOKEN bypass

@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { deriveAgentTasks } from "@/lib/agent-tasks";
 import { type ContextSize, DEFAULT_CONTEXT_SIZE, resolveModel } from "@/lib/models";
 import type {
   BackgroundTask,
@@ -126,7 +127,7 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
   const [sessionName, setSessionName] = useState<string | null>(null);
   const [initData, setInitData] = useState<InitData | null>(null);
   const [activeModelId, setActiveModelId] = useState<string | null>(null);
-  const [backgroundTasks, setBackgroundTasks] = useState<BackgroundTask[]>([]);
+  const [hookTasks, setHookTasks] = useState<BackgroundTask[]>([]);
   const [todos, setTodos] = useState<TodoItem[]>([]);
   const [btw, setBtw] = useState<BtwState | null>(null);
   const [promptHistory, setPromptHistory] = useState<string[]>([]);
@@ -189,14 +190,7 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
     if (connected) {
       // Clear stale client-side state before server re-sends current state
       setPendingPermissions([]);
-      setPendingQuestions((prev) => {
-        if (prev.length > 0)
-          console.log(
-            `[question-debug] connect: clearing ${prev.length} pendingQuestions`,
-            prev.map((q) => q.requestId),
-          );
-        return [];
-      });
+      setPendingQuestions([]);
       const isReconnect = loadedSessionRef.current === sessionId;
       console.log(`[session] sending session:connect for ${sessionId.slice(0, 8)}`);
       (window as unknown as Record<string, unknown>).__sessionConnectTime = performance.now();
@@ -281,16 +275,9 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
               streamingRef.current = null;
               agentStackRef.current = [];
               setMessages((prev) => prev.filter((m) => m.id !== "streaming"));
-              setPendingQuestions((prev) => {
-                if (prev.length > 0)
-                  console.log(
-                    `[question-debug] history:idle clearing ${prev.length} pendingQuestions`,
-                    prev.map((q) => q.requestId),
-                  );
-                return [];
-              });
+              setPendingQuestions([]);
               setRateLimitStatus(null);
-              setBackgroundTasks((prev) => {
+              setHookTasks((prev) => {
                 if (prev.some((t) => t.status === "running")) {
                   return prev.filter((t) => t.status !== "running");
                 }
@@ -359,7 +346,7 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
             }
           }
           if (agentDescs.size > 0) {
-            setBackgroundTasks((prev) => {
+            setHookTasks((prev) => {
               let changed = false;
               const next = prev.map((t) => {
                 if (t.title && agentDescs.has(t.title) && (!t.description || t.description === t.title)) {
@@ -692,7 +679,7 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
         }
 
         case "session:task_update": {
-          setBackgroundTasks((prev) => {
+          setHookTasks((prev) => {
             const existing = prev.find((t) => t.taskId === msg.task.taskId);
             if (existing) {
               return prev.map((t) =>
@@ -712,9 +699,21 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
           });
           if (msg.task.status === "completed") {
             setTimeout(() => {
-              setBackgroundTasks((prev) => prev.filter((t) => t.taskId !== msg.task.taskId));
+              setHookTasks((prev) => prev.filter((t) => t.taskId !== msg.task.taskId));
             }, 5000);
           }
+          break;
+        }
+
+        case "session:task_sync": {
+          // The CLI's own view of what is in flight, so it replaces the list
+          // rather than merging: an id it omits is genuinely finished. Recent
+          // completions are kept so a result does not vanish mid-read.
+          setHookTasks((prev) => {
+            const synced = new Set(msg.tasks.map((t) => t.taskId));
+            const keptCompletions = prev.filter((t) => t.status === "completed" && !synced.has(t.taskId));
+            return [...msg.tasks, ...keptCompletions];
+          });
           break;
         }
 
@@ -746,21 +745,14 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
             agentStackRef.current = [];
             // Remove stale streaming message that may have survived a WS drop
             setMessages((prev) => prev.filter((m) => m.id !== "streaming"));
-            setPendingQuestions((prev) => {
-              if (prev.length > 0)
-                console.log(
-                  `[question-debug] status:idle clearing ${prev.length} pendingQuestions`,
-                  prev.map((q) => q.requestId),
-                );
-              return [];
-            });
+            setPendingQuestions([]);
             setRateLimitStatus(null);
-            // Clear any background tasks still running - the process has exited
-            setBackgroundTasks((prev) => {
-              const stale = prev.filter((t) => t.status === "running");
-              if (stale.length === 0) return prev;
-              return prev.filter((t) => t.status !== "running");
-            });
+            // Running tasks are NOT cleared here. A launched agent does its
+            // work after the turn that launched it ends, so the turn ending
+            // says nothing about the agent — clearing on idle was what emptied
+            // the panel the moment an agent got going. The CLI reports the
+            // real list on Stop (session:task_sync), which arrives alongside
+            // this status change and is authoritative.
             // Queued messages are injected when the server confirms
             // delivery via session:queued sentText, not here.
           }
@@ -828,7 +820,7 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
           lastServerMsgIdRef.current = null;
           streamingRef.current = null;
           agentStackRef.current = [];
-          setBackgroundTasks([]);
+          setHookTasks([]);
           setTodos([]);
           setHasQueuedMessage(false);
           setQueuedMessages([]);
@@ -968,15 +960,7 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
         }
 
         case "question:request": {
-          console.log(`[question-debug] question:request received`, msg.requestId);
-          console.trace("[question-debug] question:request stack");
-          setPendingQuestions((prev) => {
-            console.log(`[question-debug] question:request adding to ${prev.length} existing`, [
-              ...prev.map((q) => q.requestId),
-              msg.requestId,
-            ]);
-            return [...prev, { requestId: msg.requestId, questions: msg.questions }];
-          });
+          setPendingQuestions((prev) => [...prev, { requestId: msg.requestId, questions: msg.questions }]);
           break;
         }
       }
@@ -1197,15 +1181,8 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
 
   const respondToQuestion = useCallback(
     (requestId: string, answers: Record<string, string>) => {
-      console.log(`[question-debug] respondToQuestion`, requestId);
       send({ type: "question:response", sessionId, requestId, answers });
-      setPendingQuestions((prev) => {
-        console.log(
-          `[question-debug] marking answered, current pending:`,
-          prev.map((q) => ({ id: q.requestId, answered: q.answered })),
-        );
-        return prev.map((q) => (q.requestId === requestId ? { ...q, answered: true } : q));
-      });
+      setPendingQuestions((prev) => prev.map((q) => (q.requestId === requestId ? { ...q, answered: true } : q)));
     },
     [send, sessionId],
   );
@@ -1374,6 +1351,11 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
   const restartSession = useCallback(() => {
     send({ type: "session:restart", sessionId });
   }, [send, sessionId]);
+
+  // Agents come from the message stream, not from hooks: the CLI reports a
+  // subagent's completion but never its start, so a hook-only list stayed
+  // empty for exactly as long as an agent was actually running.
+  const backgroundTasks = useMemo(() => deriveAgentTasks(messages, hookTasks, isResponding), [messages, hookTasks, isResponding]);
 
   return {
     messages,

@@ -228,6 +228,131 @@ describe("translateHookEvent", () => {
       expect(events).toEqual([]);
     });
   });
+
+  describe("PreCompact", () => {
+    it("maps to __compact::hook_start regardless of trigger", () => {
+      expect(translateHookEvent("PreCompact", { trigger: "auto" })).toEqual([{ type: "system_message", text: "__compact::hook_start" }]);
+      expect(translateHookEvent("PreCompact", { trigger: "manual" })).toEqual([{ type: "system_message", text: "__compact::hook_start" }]);
+    });
+  });
+
+  describe("PostCompact", () => {
+    // The trigger decides whether the turn is over. An auto-compact fires
+    // mid-turn on a tool-result boundary and the CLI resumes the same turn a
+    // few seconds later, so it must not be reported as a turn ending; a manual
+    // /compact is a standalone action with nothing to resume.
+    it("carries trigger=auto through so the session manager can keep the turn running", () => {
+      const events = translateHookEvent("PostCompact", { trigger: "auto", compact_summary: "..." });
+      expect(events).toEqual([{ type: "system_message", text: "__compact::hook_done::auto" }]);
+    });
+
+    it("carries trigger=manual through as a real turn ending", () => {
+      const events = translateHookEvent("PostCompact", { trigger: "manual", compact_summary: "..." });
+      expect(events).toEqual([{ type: "system_message", text: "__compact::hook_done::manual" }]);
+    });
+
+    it("treats a missing or unrecognised trigger as manual, preserving pre-trigger CLI behaviour", () => {
+      expect(translateHookEvent("PostCompact", {})).toEqual([{ type: "system_message", text: "__compact::hook_done::manual" }]);
+      expect(translateHookEvent("PostCompact", { trigger: "" })).toEqual([
+        { type: "system_message", text: "__compact::hook_done::manual" },
+      ]);
+      expect(translateHookEvent("PostCompact", { trigger: 42 })).toEqual([
+        { type: "system_message", text: "__compact::hook_done::manual" },
+      ]);
+    });
+  });
+});
+
+// Payloads below are copied from a real capture: every hook registered against
+// a live CLI run that launched an async Explore agent. The order that run
+// produced was PreToolUse(Agent), PostToolUse(Agent), SubagentStart, Stop
+// (carrying background_tasks with the agent still running), the agent's own
+// tools, then SubagentStop.
+describe("subagent and background task hooks", () => {
+  const AGENT_ID = "a924e4cda5649f1a6";
+
+  it("keys a started subagent by agent id, not the parent session id", () => {
+    const events = translateHookEvent("SubagentStart", {
+      session_id: "463365f9-b0f8-413b-b2ab-3b73fbc14724",
+      agent_id: AGENT_ID,
+      agent_type: "Explore",
+      hook_event_name: "SubagentStart",
+    });
+
+    expect(events).toEqual([
+      {
+        type: "task_update",
+        taskInfo: { taskId: AGENT_ID, toolUseId: AGENT_ID, status: "running", title: "Explore", description: "Explore" },
+      },
+    ]);
+  });
+
+  it("gives concurrent agents distinct task ids", () => {
+    const first = translateHookEvent("SubagentStart", { session_id: "sess", agent_id: "aaa", agent_type: "Explore" });
+    const second = translateHookEvent("SubagentStart", { session_id: "sess", agent_id: "bbb", agent_type: "Explore" });
+
+    expect(first[0].taskInfo?.taskId).toBe("aaa");
+    expect(second[0].taskInfo?.taskId).toBe("bbb");
+  });
+
+  it("syncs the CLI's task list off Stop, which fires while the agent is still working", () => {
+    const events = translateHookEvent("Stop", {
+      session_id: "sess",
+      last_assistant_message: "launched it",
+      background_tasks: [{ id: AGENT_ID, type: "subagent", status: "running", description: "read note", agent_type: "Explore" }],
+    });
+
+    expect(events[0].type).toBe("message_done");
+    expect(events[1]).toEqual({
+      type: "task_sync",
+      tasks: [{ taskId: AGENT_ID, toolUseId: AGENT_ID, status: "running", title: "Explore", description: "read note" }],
+    });
+  });
+
+  it("syncs an empty list so a finished agent is dropped", () => {
+    const events = translateHookEvent("Stop", { session_id: "sess", last_assistant_message: "done", background_tasks: [] });
+    expect(events[1]).toEqual({ type: "task_sync", tasks: [] });
+  });
+
+  it("emits no sync when the payload carries no task list", () => {
+    const events = translateHookEvent("Stop", { session_id: "sess", last_assistant_message: "done" });
+    expect(events.some((e) => e.type === "task_sync")).toBe(false);
+  });
+
+  it("completes a stopped subagent by agent id and carries its final message", () => {
+    const events = translateHookEvent("SubagentStop", {
+      session_id: "463365f9-b0f8-413b-b2ab-3b73fbc14724",
+      agent_id: AGENT_ID,
+      agent_type: "Explore",
+      last_assistant_message: "The full contents of note.txt are: hello world",
+      background_tasks: [],
+    });
+
+    expect(events[0]).toEqual({
+      type: "task_update",
+      taskInfo: {
+        taskId: AGENT_ID,
+        toolUseId: AGENT_ID,
+        status: "completed",
+        title: "Explore",
+        description: "Explore",
+        summary: "The full contents of note.txt are: hello world",
+      },
+    });
+    expect(events[1]).toEqual({ type: "task_sync", tasks: [] });
+  });
+
+  it("skips task entries with no id", () => {
+    const events = translateHookEvent("Stop", {
+      session_id: "sess",
+      last_assistant_message: "x",
+      background_tasks: [
+        { status: "running", description: "no id" },
+        { id: "ok", status: "running", description: "kept" },
+      ],
+    });
+    expect(events[1].tasks).toEqual([{ taskId: "ok", toolUseId: "ok", status: "running", title: "Agent", description: "kept" }]);
+  });
 });
 
 describe("newPermissionRequestId", () => {

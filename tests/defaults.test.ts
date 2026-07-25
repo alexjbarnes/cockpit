@@ -34,6 +34,7 @@ describe("defaults", () => {
       modelSlots: { main: "sonnet" },
       messageStitching: true,
       reviewsEnabled: true,
+      allowSonnet1m: false,
     });
   });
 
@@ -61,6 +62,7 @@ describe("defaults", () => {
       modelSlots: { main: "opus" },
       messageStitching: true,
       reviewsEnabled: true,
+      allowSonnet1m: false,
     });
   });
 

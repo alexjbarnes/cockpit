@@ -155,7 +155,7 @@ describe("cockpit-config MCP server (in-process HTTP)", () => {
     it("create_job writes via job-storage", async () => {
       const result = (await callToolParsed("create_job", {
         name: "test-job",
-        schedule: { type: "simple", frequency: "hourly" },
+        schedules: [{ type: "simple", frequency: "hourly" }],
         prompt: "run tests",
         cwd: "/tmp",
       })) as { created: { name: string; id: string } };
@@ -192,6 +192,16 @@ describe("cockpit-config MCP server (in-process HTTP)", () => {
       const job = jobs.find((j) => j.name === "test-job")!;
       const result = (await callToolParsed("update_job", { id: job.id, name: "updated-job" })) as { after: { name: string } };
       expect(result.after.name).toBe("updated-job");
+    });
+
+    it("update_job replaces schedules", async () => {
+      const jobs = (await callToolParsed("list_jobs")) as { id: string; name: string }[];
+      const job = jobs.find((j) => j.name === "updated-job")!;
+      const result = (await callToolParsed("update_job", {
+        id: job.id,
+        schedules: [{ type: "simple", frequency: "daily", time: "05:00" }],
+      })) as { after: { schedules: { time?: string }[] } };
+      expect(result.after.schedules?.[0]?.time).toBe("05:00");
     });
 
     it("update_job returns error for unknown id", async () => {
@@ -240,7 +250,7 @@ describe("cockpit-config MCP server (in-process HTTP)", () => {
 
       const created = (await callToolParsed("create_job", {
         name: "run-test-job",
-        schedule: { type: "simple", frequency: "hourly" },
+        schedules: [{ type: "simple", frequency: "hourly" }],
         prompt: "echo hello",
         cwd: "/tmp",
       })) as { created: { id: string; name: string } };
@@ -270,7 +280,7 @@ describe("cockpit-config MCP server (in-process HTTP)", () => {
 
       const created = (await callToolParsed("create_job", {
         name: "already-running-test",
-        schedule: { type: "simple", frequency: "hourly" },
+        schedules: [{ type: "simple", frequency: "hourly" }],
         prompt: "echo hello",
         cwd: "/tmp",
       })) as { created: { id: string; name: string } };
@@ -296,13 +306,13 @@ describe("cockpit-config MCP server (in-process HTTP)", () => {
 
       const a = (await callToolParsed("create_job", {
         name: "batch-run-a",
-        schedule: { type: "simple", frequency: "hourly" },
+        schedules: [{ type: "simple", frequency: "hourly" }],
         prompt: "echo a",
         cwd: "/tmp",
       })) as { created: { id: string } };
       const b = (await callToolParsed("create_job", {
         name: "batch-run-b",
-        schedule: { type: "simple", frequency: "hourly" },
+        schedules: [{ type: "simple", frequency: "hourly" }],
         prompt: "echo b",
         cwd: "/tmp",
       })) as { created: { id: string } };
@@ -425,13 +435,13 @@ describe("cockpit-config MCP server (in-process HTTP)", () => {
     it("delete_job batch", async () => {
       const a = (await callToolParsed("create_job", {
         name: "batch-del-a",
-        schedule: { type: "simple", frequency: "hourly" },
+        schedules: [{ type: "simple", frequency: "hourly" }],
         prompt: "echo a",
         cwd: "/tmp",
       })) as { created: { id: string } };
       const b = (await callToolParsed("create_job", {
         name: "batch-del-b",
-        schedule: { type: "simple", frequency: "hourly" },
+        schedules: [{ type: "simple", frequency: "hourly" }],
         prompt: "echo b",
         cwd: "/tmp",
       })) as { created: { id: string } };
@@ -448,13 +458,13 @@ describe("cockpit-config MCP server (in-process HTTP)", () => {
     it("update_job batch", async () => {
       const a = (await callToolParsed("create_job", {
         name: "batch-upd-a",
-        schedule: { type: "simple", frequency: "hourly" },
+        schedules: [{ type: "simple", frequency: "hourly" }],
         prompt: "echo a",
         cwd: "/tmp",
       })) as { created: { id: string } };
       const b = (await callToolParsed("create_job", {
         name: "batch-upd-b",
-        schedule: { type: "simple", frequency: "hourly" },
+        schedules: [{ type: "simple", frequency: "hourly" }],
         prompt: "echo b",
         cwd: "/tmp",
       })) as { created: { id: string } };

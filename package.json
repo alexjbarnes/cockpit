@@ -1,7 +1,7 @@
 {
   "name": "@alexjbarnes/cockpit",
-  "version": "0.4.2",
-  "description": "Web UI for Claude Code",
+  "version": "0.5.0",
+  "description": "Web UI for Claude Code: parallel sessions on any device, scheduled jobs, PR reviews, and any model provider",
   "license": "Apache-2.0",
   "author": "Alex Barnes (https://github.com/alexjbarnes)",
   "homepage": "https://github.com/alexjbarnes/cockpit#readme",
@@ -15,8 +15,15 @@
   "keywords": [
     "claude",
     "claude-code",
+    "anthropic",
     "ai",
-    "web-ui"
+    "ai-agents",
+    "web-ui",
+    "self-hosted",
+    "openrouter",
+    "scheduled-jobs",
+    "pr-review",
+    "mcp"
   ],
   "bin": {
     "cockpit": "./bin/cockpit.js"
@@ -55,7 +62,7 @@
     "@dnd-kit/core": "^6.3.1",
     "@dnd-kit/sortable": "^10.0.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "@pierre/diffs": "1.2.11",
+    "@pierre/diffs": "1.2.12",
     "@radix-ui/react-slot": "^1.2.4",
     "@tailwindcss/postcss": "^4",
     "@xterm/addon-fit": "^0.11.0",
@@ -94,7 +101,7 @@
     "@vitest/coverage-v8": "^4.1.5",
     "tsc-alias": "^1.8.10",
     "tsx": "^4.19.2",
-    "typescript": "6.0.3",
+    "typescript": "7.0.2",
     "vitest": "^4.1.6"
   }
 }

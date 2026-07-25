@@ -173,6 +173,7 @@ export default function JobEditPage() {
   const [runtime, setRuntime] = useState<"stream" | "pty">("stream");
 
   const [maxDuration, setMaxDuration] = useState<number | "">(30);
+  const [maxRetries, setMaxRetries] = useState<number | "">(1);
   const [bypassPermissions, setBypassPermissions] = useState(false);
   const [allowedTools, setAllowedTools] = useState<string[]>([]);
   const [toolInput, setToolInput] = useState("");
@@ -335,6 +336,7 @@ export default function JobEditPage() {
     const builtinEntry = resolveModel(withoutExt);
     setThinkingLevel(job.thinkingLevel || recommendedEffort(builtinEntry) || "");
     setMaxDuration(job.maxDurationMinutes ?? 30);
+    setMaxRetries(job.maxRetries ?? 1);
     setBypassPermissions(job.bypassPermissions ?? false);
     setAllowedTools(job.allowedTools || []);
     setMcpServers(job.mcpServers || []);
@@ -412,12 +414,12 @@ export default function JobEditPage() {
       cwd,
       prompt,
       enabled,
-      schedule: schedules[0],
       schedules,
       model: modelStr,
       contextSize,
       thinkingLevel: thinkingLevel || undefined,
       maxDurationMinutes: maxDuration,
+      maxRetries: maxRetries === "" ? undefined : maxRetries,
       bypassPermissions,
       allowedTools,
       mcpServers,
@@ -930,6 +932,14 @@ export default function JobEditPage() {
                 className={cn(fieldErrors.maxDuration && "border-destructive")}
               />
               {fieldErrors.maxDuration && <p className="text-xs text-destructive">{fieldErrors.maxDuration}</p>}
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium">Retries on failure</label>
+              <Input type="number" min={0} value={maxRetries} onChange={(e) => setMaxRetries(parseNumberField(e.target.value))} />
+              <p className="text-xs text-muted-foreground">
+                Extra attempts after a failed run. 0 disables. Timeouts and stops are never retried.
+              </p>
             </div>
 
             <div className="flex items-center justify-between">

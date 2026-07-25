@@ -11,7 +11,7 @@ import { pathBasename } from "@/lib/path";
 import { splitAtQuestion } from "@/lib/split-question-blocks";
 import { cn } from "@/lib/utils";
 import type { Provider } from "@/types";
-import { useShell } from "./app-shell";
+import { useShell, useShellSessionModel } from "./app-shell";
 import { ConfigProposalCard } from "./chat/config-proposal-card";
 import { InputArea } from "./input-area";
 import { MessageBubble } from "./message-bubble";
@@ -101,6 +101,8 @@ export function ChatView({
   const { settings } = useSettings();
   const router = useRouter();
   const { setHeader, setBackgroundTasks, setTodos, setInitData: setShellInitData, setRuntime: setShellRuntime } = useShell();
+  // Header widgets (the usage indicator) follow this session's provider.
+  useShellSessionModel(historyView ? undefined : currentModel);
   const scrollRef = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);
   const [showScrollDown, setShowScrollDown] = useState(false);
@@ -137,6 +139,30 @@ export function ChatView({
   const startIndex = Math.max(0, totalMessages - renderWindow);
   const visibleMessages = useMemo(() => uniqueMessages.slice(startIndex), [uniqueMessages, startIndex]);
   const hasMoreAbove = startIndex > 0;
+
+  // "Worked for" duration, keyed by the assistant message that ENDS a turn:
+  // the next visible message is a user prompt, or it is the last message and the
+  // session is idle. Duration = that message's time minus the turn's opening
+  // user message. Tool results fold into tool cards (not their own bubbles), so
+  // the previous user-role message is reliably the turn start.
+  const workedByMessageId = useMemo(() => {
+    const map = new Map<string, number>();
+    for (let i = 0; i < visibleMessages.length; i++) {
+      const m = visibleMessages[i];
+      if (m.role !== "assistant") continue;
+      const next = visibleMessages[i + 1];
+      const isTurnEnd = next ? next.role === "user" : !isResponding;
+      if (!isTurnEnd) continue;
+      for (let j = i - 1; j >= 0; j--) {
+        if (visibleMessages[j].role === "user") {
+          const d = m.timestamp - visibleMessages[j].timestamp;
+          if (d > 0) map.set(m.id, d);
+          break;
+        }
+      }
+    }
+    return map;
+  }, [visibleMessages, isResponding]);
 
   // Reset window on session change
   useEffect(() => {
@@ -386,9 +412,6 @@ export function ChatView({
                 // stale answered one — so a follow-up question never rendered.
                 const pending = pendingQuestions.find((q) => !q.answered);
                 const hasOutput = !!questionBlock.toolUse.output;
-                console.log(
-                  `[question-debug] Place1 render: msgId=${msg.id.slice(0, 8)}, hasOutput=${hasOutput}, pending=${!!pending}, pendingCount=${pendingQuestions.length}`,
-                );
 
                 return (
                   <div key={msg.id} data-message-id={msg.id} className="space-y-4">
@@ -425,6 +448,7 @@ export function ChatView({
                         selected={selectedIds.has(msg.id)}
                         onEnterSelection={enterSelection}
                         onToggleSelect={toggleSelect}
+                        workedMs={workedByMessageId.get(msg.id)}
                       />
                     )}
                   </div>
@@ -442,6 +466,7 @@ export function ChatView({
                   selected={selectedIds.has(msg.id)}
                   onEnterSelection={enterSelection}
                   onToggleSelect={toggleSelect}
+                  workedMs={workedByMessageId.get(msg.id)}
                 />
               </div>
             );
@@ -562,6 +587,7 @@ export function ChatView({
           currentModel={currentModel}
           currentContextSize={currentContextSize}
           onSetModel={setModel}
+          allowSonnet1m={settings.allowSonnet1m}
           contextUsage={contextUsage}
           dismissKeyboard={settings.dismissKeyboardOnSend}
           cwd={cwd}

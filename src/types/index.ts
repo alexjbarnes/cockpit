@@ -159,11 +159,27 @@ export interface UsageLimit {
   resets_at: string;
 }
 
+/** One entry of the oauth/usage `limits` array — the current shape of the
+ *  Anthropic usage API. `weekly_scoped` entries carry the model the limit is
+ *  scoped to (e.g. Fable) in scope.model.display_name. */
+export interface ScopedUsageLimit {
+  kind: string;
+  group?: string;
+  percent: number;
+  severity?: string;
+  resets_at: string;
+  scope?: { model?: { display_name?: string | null } | null; surface?: string | null } | null;
+  is_active?: boolean;
+}
+
 export interface UsageLimits {
   five_hour: UsageLimit | null;
   seven_day: UsageLimit | null;
   seven_day_sonnet: UsageLimit | null;
   seven_day_opus: UsageLimit | null;
+  /** Preferred source when present: covers session, weekly-all, and
+   *  model-scoped weekly limits the legacy fields no longer carry. */
+  limits?: ScopedUsageLimit[] | null;
   extra_usage: {
     enabled: boolean;
     remaining_credits: number;
@@ -192,8 +208,7 @@ export type JobSchedule = SimpleSchedule | CronSchedule;
 export interface ScheduledJob {
   id: string;
   name: string;
-  schedule: JobSchedule;
-  schedules?: JobSchedule[];
+  schedules: JobSchedule[];
   prompt: string;
   cwd: string;
   enabled: boolean;
@@ -207,6 +222,8 @@ export interface ScheduledJob {
   mcpToolFilters?: Record<string, string[]>;
   bypassPermissions?: boolean;
   maxDurationMinutes?: number;
+  /** Extra attempts after a `failure` run (not `timeout`/`stopped`). Defaults to 1. */
+  maxRetries?: number;
   retentionDays?: number;
   skipIfMissed?: boolean;
   inboxOutput?: boolean;
@@ -238,6 +255,9 @@ export interface JobRun {
   messageCount: number;
   prompt: string;
   cwd: string;
+  /** Deterministic configuration failure (e.g. model gone from the provider
+   *  catalog): failed before the CLI spawned and is never retried. */
+  configFailure?: boolean;
 }
 
 // Inbox
@@ -365,6 +385,7 @@ export type ServerMessage =
   | { type: "session:rate_limit"; sessionId: string; status: string; retryAfterMs?: number }
   | { type: "session:suggestions"; sessionId: string; suggestions: string[] }
   | { type: "session:task_update"; sessionId: string; task: BackgroundTask }
+  | { type: "session:task_sync"; sessionId: string; tasks: BackgroundTask[] }
   | { type: "session:todos"; sessionId: string; todos: TodoItem[] }
   | { type: "session:init"; sessionId: string; data: InitData }
   | {
@@ -412,6 +433,17 @@ export interface ProviderModel {
   effortLevels: ThinkingLevel[];
   contextSizes: ContextSize[];
   defaultEffort?: ThinkingLevel;
+  /** Raw context window for catalog-synced models. The 200k/1m ContextSize
+   *  enum stays Anthropic-only (it drives CLAUDE_CODE_DISABLE_1M_CONTEXT). */
+  contextLength?: number;
+  /** USD per million tokens, derived from the provider catalog at sync time. */
+  pricing?: { inPerM: number; outPerM: number };
+  free?: boolean;
+  supportsTools?: boolean;
+  supportsReasoning?: boolean;
+  supportsImageInput?: boolean;
+  /** ISO date after which the provider withdraws the model, when declared. */
+  expirationDate?: string;
 }
 
 export interface Provider {
@@ -420,4 +452,9 @@ export interface Provider {
   envVars: Record<string, string>;
   models: ProviderModel[];
   isBuiltin?: boolean;
+  /** Curated opt-in set for catalog-backed providers: only these model ids
+   *  appear in pickers. Absent means nothing enabled yet. */
+  enabledModels?: string[];
+  /** Last successful catalog sync, for catalog-backed providers. */
+  syncedAt?: number;
 }

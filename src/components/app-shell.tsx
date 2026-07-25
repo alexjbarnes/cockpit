@@ -43,6 +43,8 @@ interface ShellContextValue {
   setCwd: (cwd: string | undefined) => void;
   sessionId: string | undefined;
   setSessionId: (id: string | undefined) => void;
+  sessionModel: string | undefined;
+  setSessionModel: (model: string | undefined) => void;
   runtime: "pty" | "stream";
   setRuntime: (runtime: "pty" | "stream") => void;
   backgroundTasks: BackgroundTask[];
@@ -65,6 +67,8 @@ const ShellContext = createContext<ShellContextValue>({
   setCwd: () => {},
   sessionId: undefined,
   setSessionId: () => {},
+  sessionModel: undefined,
+  setSessionModel: () => {},
   runtime: "stream",
   setRuntime: () => {},
   backgroundTasks: [],
@@ -106,6 +110,16 @@ export function useShellSessionId(id: string | undefined) {
   useEffect(() => {
     if (id) setSessionId(id);
   }, [id, setSessionId]);
+}
+
+/** Published by the active session view so header widgets (the usage
+ *  indicator) can follow the session's provider without refetching. */
+export function useShellSessionModel(model: string | undefined) {
+  const { setSessionModel } = useShell();
+  useEffect(() => {
+    setSessionModel(model);
+    return () => setSessionModel(undefined);
+  }, [model, setSessionModel]);
 }
 
 function EditableTitle({ title, onRename }: { title: string; onRename?: (name: string) => void }) {
@@ -194,6 +208,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   const [header, setHeaderState] = useState<HeaderConfig>({ title: "Cockpit" });
   const [cwd, setCwdState] = useState<string | undefined>(undefined);
   const [sessionId, setSessionIdState] = useState<string | undefined>(undefined);
+  const [sessionModel, setSessionModelState] = useState<string | undefined>(undefined);
   const [backgroundTasks, setBackgroundTasks] = useState<BackgroundTask[]>([]);
   const [todos, setTodos] = useState<TodoItem[]>([]);
   const [initData, setInitData] = useState<InitData | null>(null);
@@ -228,6 +243,10 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   const setSessionId = useCallback((val: string | undefined) => {
     setSessionIdState(val);
+  }, []);
+
+  const setSessionModel = useCallback((val: string | undefined) => {
+    setSessionModelState(val);
   }, []);
 
   const toggleSidebar = useCallback(() => {
@@ -269,6 +288,8 @@ export function AppShell({ children }: { children: ReactNode }) {
             setCwd,
             sessionId,
             setSessionId,
+            sessionModel,
+            setSessionModel,
             runtime,
             setRuntime,
             backgroundTasks,
@@ -306,7 +327,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                         {cwd && <BackgroundTasksButton tasks={backgroundTasks} />}
                       </>
                     )}
-                    {actions.showUsage && <UsageButton />}
+                    {actions.showUsage && <UsageButton sessionModel={sessionModel} />}
                   </div>
                 )}
               </header>

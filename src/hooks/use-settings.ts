@@ -30,6 +30,7 @@ export interface Settings {
   modelSlots: ModelSlots;
   messageStitching: boolean;
   reviewsEnabled: boolean;
+  allowSonnet1m: boolean;
   terminalFontSize: number;
   terminalTheme: TerminalTheme;
   terminalScrollback: number;
@@ -47,6 +48,7 @@ const defaultSettings: Settings = {
   modelSlots: { main: "sonnet" },
   messageStitching: true,
   reviewsEnabled: true,
+  allowSonnet1m: false,
   terminalFontSize: 14,
   terminalTheme: "dark" as TerminalTheme,
   terminalScrollback: 1000,

@@ -44,9 +44,434 @@ describe("providers", () => {
     const { getProviders } = await import("@/server/providers");
     const providers = getProviders();
 
-    expect(providers.length).toBe(2);
+    expect(providers.length).toBe(5);
     expect(providers[0].id).toBe("anthropic");
-    expect(providers[1].id).toBe("or-123");
+    expect(providers[1].id).toBe("openrouter");
+    expect(providers[2].id).toBe("zen");
+    expect(providers[3].id).toBe("deepseek");
+    expect(providers[4].id).toBe("or-123");
+  });
+
+  it("openrouter built-in accepts key + enabled set, derives env, and rejects deletion", async () => {
+    const fs = await import("node:fs");
+    vi.mocked(fs.readFileSync).mockImplementation(() => {
+      throw new Error("ENOENT");
+    });
+
+    const { deleteProvider, getProviders, updateProvider } = await import("@/server/providers");
+
+    const before = getProviders().find((p) => p.id === "openrouter");
+    expect(before?.isBuiltin).toBe(true);
+    expect(before?.envVars).toEqual({});
+
+    const updated = updateProvider("openrouter", {
+      envVars: { ANTHROPIC_AUTH_TOKEN: "sk-or-test" },
+      enabledModels: ["vendor/model:free"],
+    });
+    expect(updated.envVars.ANTHROPIC_BASE_URL).toBe("https://openrouter.ai/api");
+    expect(updated.envVars.ANTHROPIC_AUTH_TOKEN).toBe("sk-or-test");
+    // must be explicitly empty, not unset — the CLI falls back to Anthropic otherwise
+    expect(updated.envVars.ANTHROPIC_API_KEY).toBe("");
+    expect(updated.enabledModels).toEqual(["vendor/model:free"]);
+
+    const written = vi.mocked(fs.writeFileSync).mock.calls.at(-1)?.[1] as string;
+    expect(written).toContain("sk-or-test");
+    expect(written).toContain("vendor/model:free");
+
+    expect(() => deleteProvider("openrouter")).toThrow(/built-in/);
+  });
+
+  it("zen built-in stores key + models, exposes proxy upstream, and rejects deletion", async () => {
+    const fs = await import("node:fs");
+    vi.mocked(fs.readFileSync).mockImplementation(() => {
+      throw new Error("ENOENT");
+    });
+
+    const { deleteProvider, getProviders, resolveProxyUpstream, updateProvider } = await import("@/server/providers");
+
+    const before = getProviders().find((p) => p.id === "zen");
+    expect(before?.isBuiltin).toBe(true);
+    expect(before?.envVars).toEqual({});
+    expect(resolveProxyUpstream("zen")).toBeNull();
+    expect(resolveProxyUpstream("other")).toBeNull();
+
+    const zenEntry = [
+      {
+        id: "zen",
+        name: "OpenCode Zen",
+        isBuiltin: true,
+        envVars: { OPENCODE_API_KEY: "zk-1" },
+        models: [{ modelId: "opencode/gpt-5.5", displayName: "opencode/gpt-5.5", effortLevels: [], contextSizes: [] }],
+        enabledModels: ["opencode/gpt-5.5"],
+      },
+    ];
+    vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(zenEntry));
+
+    const upstream = resolveProxyUpstream("zen");
+    expect(upstream).toEqual({ baseUrl: "https://opencode.ai/zen/v1", apiKey: "zk-1", modelIds: ["opencode/gpt-5.5"], effortByModel: {} });
+
+    const updated = updateProvider("zen", { enabledModels: [] });
+    expect(updated.id).toBe("zen");
+    // without a running proxy in this graph only the connected marker shows
+    expect(updated.envVars.OPENCODE_API_KEY).toBe("zk-1");
+    expect(updated.envVars.ANTHROPIC_BASE_URL).toBeUndefined();
+
+    expect(() => deleteProvider("zen")).toThrow(/built-in/);
+  });
+
+  it("syncZenModels stores models, enables all on first connect, and stamps syncedAt", async () => {
+    const fs = await import("node:fs");
+    vi.mocked(fs.readFileSync).mockImplementation(() => {
+      throw new Error("ENOENT");
+    });
+    vi.mocked(fs.writeFileSync).mockImplementation(() => {});
+    vi.mocked(fs.mkdirSync).mockImplementation(() => "");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (String(url).includes("models.dev")) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              opencode: {
+                models: {
+                  "gpt-5.5": {
+                    name: "GPT-5.5",
+                    cost: { input: 5, output: 30 },
+                    limit: { context: 1050000 },
+                    tool_call: true,
+                    reasoning: true,
+                    modalities: { input: ["text", "image"] },
+                  },
+                  "big-pickle": { name: "Big Pickle", cost: { input: 0, output: 0 }, limit: { context: 200000 }, tool_call: true },
+                },
+              },
+            }),
+          };
+        }
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ data: [{ id: "gpt-5.5" }, { id: "big-pickle" }, { id: "nemotron-3-ultra-free" }] }),
+        };
+      }) as unknown as typeof fetch,
+    );
+
+    const { syncZenModels } = await import("@/server/providers");
+    const result = await syncZenModels("zk-9");
+    expect(result).toEqual({ ok: true, modelCount: 3 });
+
+    const written = JSON.parse(vi.mocked(fs.writeFileSync).mock.calls.at(-1)?.[1] as string);
+    const zen = written.find((p: { id: string }) => p.id === "zen");
+    expect(zen.envVars.OPENCODE_API_KEY).toBe("zk-9");
+    expect(zen.enabledModels).toEqual(["gpt-5.5", "big-pickle", "nemotron-3-ultra-free"]);
+
+    const byId = Object.fromEntries(zen.models.map((m: { modelId: string }) => [m.modelId, m]));
+    // enriched from models.dev: pricing per M, raw context, capability flags
+    expect(byId["gpt-5.5"]).toMatchObject({
+      displayName: "GPT-5.5",
+      pricing: { inPerM: 5, outPerM: 30 },
+      contextLength: 1050000,
+      free: false,
+      supportsTools: true,
+      supportsReasoning: true,
+      supportsImageInput: true,
+    });
+    // zero cost marks free even without the "-free" suffix (big-pickle)
+    expect(byId["big-pickle"]).toMatchObject({ free: true, pricing: { inPerM: 0, outPerM: 0 } });
+    // no models.dev entry: the "-free" suffix is the fallback signal
+    expect(byId["nemotron-3-ultra-free"]).toMatchObject({ free: true });
+    expect(byId["nemotron-3-ultra-free"].pricing).toBeUndefined();
+    expect(typeof zen.syncedAt).toBe("number");
+    vi.unstubAllGlobals();
+  });
+
+  it("syncZenModels keyless refreshes the list without enabling models or storing a key", async () => {
+    const fs = await import("node:fs");
+    vi.mocked(fs.readFileSync).mockImplementation(() => {
+      throw new Error("ENOENT");
+    });
+    vi.mocked(fs.writeFileSync).mockImplementation(() => {});
+    vi.mocked(fs.mkdirSync).mockImplementation(() => "");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (String(url).includes("models.dev")) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              opencode: {
+                models: {
+                  "deepseek-v4-flash-free": {
+                    name: "DeepSeek V4 Flash Free",
+                    cost: { input: 0, output: 0 },
+                    reasoning: true,
+                    reasoning_options: [{ type: "toggle" }, { type: "effort", values: ["high", "max", "bogus"] }],
+                  },
+                },
+              },
+            }),
+          };
+        }
+        // the public zen list gets no Authorization header without a key
+        expect((init?.headers as Record<string, string> | undefined)?.Authorization).toBeUndefined();
+        return { ok: true, status: 200, json: async () => ({ data: [{ id: "deepseek-v4-flash-free" }] }) };
+      }) as unknown as typeof fetch,
+    );
+
+    const { syncZenModels } = await import("@/server/providers");
+    const result = await syncZenModels();
+    expect(result).toEqual({ ok: true, modelCount: 1 });
+
+    const written = JSON.parse(vi.mocked(fs.writeFileSync).mock.calls.at(-1)?.[1] as string);
+    const zen = written.find((p: { id: string }) => p.id === "zen");
+    expect(zen.envVars.OPENCODE_API_KEY).toBeUndefined();
+    expect(zen.enabledModels).toEqual([]);
+    // models.dev reasoning_options land as effortLevels, unknown values dropped
+    expect(zen.models[0].effortLevels).toEqual(["high", "max"]);
+    vi.unstubAllGlobals();
+  });
+
+  it("syncDeepSeekModels validates the key against the live list and enriches from models.dev", async () => {
+    const fs = await import("node:fs");
+    vi.mocked(fs.readFileSync).mockImplementation(() => {
+      throw new Error("ENOENT");
+    });
+    vi.mocked(fs.writeFileSync).mockImplementation(() => {});
+    vi.mocked(fs.mkdirSync).mockImplementation(() => "");
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (String(url).includes("models.dev")) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            deepseek: {
+              models: {
+                "deepseek-v4-flash": {
+                  name: "DeepSeek V4 Flash",
+                  cost: { input: 0.14, output: 0.28 },
+                  limit: { context: 1000000 },
+                  tool_call: true,
+                  reasoning: true,
+                  reasoning_options: [{ type: "toggle" }, { type: "effort", values: ["high", "max"] }],
+                },
+                "deepseek-chat": { name: "DeepSeek Chat", cost: { input: 0.14, output: 0.28 } },
+              },
+            },
+          }),
+        };
+      }
+      expect(String(url)).toBe("https://api.deepseek.com/v1/models");
+      const headers = init?.headers as Record<string, string> | undefined;
+      expect(headers?.Authorization).toBe("Bearer dsk-1");
+      // The live authed list is the source of truth: only what the key can run.
+      return { ok: true, status: 200, json: async () => ({ data: [{ id: "deepseek-v4-flash" }, { id: "deepseek-v4-pro" }] }) };
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    const { syncDeepSeekModels } = await import("@/server/providers");
+    const result = await syncDeepSeekModels("dsk-1");
+    expect(result).toEqual({ ok: true, modelCount: 2 });
+
+    const written = JSON.parse(vi.mocked(fs.writeFileSync).mock.calls.at(-1)?.[1] as string);
+    const ds = written.find((p: { id: string }) => p.id === "deepseek");
+    expect(ds.envVars.DEEPSEEK_API_KEY).toBe("dsk-1");
+    expect(ds.enabledModels).toEqual(["deepseek-v4-flash", "deepseek-v4-pro"]);
+    const byId = Object.fromEntries(ds.models.map((m: { modelId: string }) => [m.modelId, m]));
+    expect(byId["deepseek-v4-flash"]).toMatchObject({
+      displayName: "DeepSeek V4 Flash",
+      pricing: { inPerM: 0.14, outPerM: 0.28 },
+      contextLength: 1000000,
+      effortLevels: ["high", "max"],
+      supportsReasoning: true,
+    });
+    // live-only id with no models.dev entry stays bare
+    expect(byId["deepseek-v4-pro"].pricing).toBeUndefined();
+    vi.unstubAllGlobals();
+  });
+
+  it("syncDeepSeekModels rejects a bad key and falls back to models.dev keyless", async () => {
+    const fs = await import("node:fs");
+    vi.mocked(fs.readFileSync).mockImplementation(() => {
+      throw new Error("ENOENT");
+    });
+    vi.mocked(fs.writeFileSync).mockImplementation(() => {});
+    vi.mocked(fs.mkdirSync).mockImplementation(() => "");
+    const meta = {
+      ok: true,
+      status: 200,
+      json: async () => ({ deepseek: { models: { "deepseek-v4-flash": { name: "DeepSeek V4 Flash" } } } }),
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) =>
+        String(url).includes("models.dev") ? meta : { ok: false, status: 401, json: async () => ({}) },
+      ) as unknown as typeof fetch,
+    );
+
+    const { syncDeepSeekModels } = await import("@/server/providers");
+    expect(await syncDeepSeekModels("bad-key")).toEqual({ ok: false, error: "DeepSeek rejected the API key" });
+
+    // Keyless: no live-list call is made, the models.dev catalog is the list,
+    // and nothing gets enabled.
+    const keyless = await syncDeepSeekModels();
+    expect(keyless).toEqual({ ok: true, modelCount: 1 });
+    const written = JSON.parse(vi.mocked(fs.writeFileSync).mock.calls.at(-1)?.[1] as string);
+    const ds = written.find((p: { id: string }) => p.id === "deepseek");
+    expect(ds.enabledModels).toEqual([]);
+    expect(ds.envVars.DEEPSEEK_API_KEY).toBeUndefined();
+    vi.unstubAllGlobals();
+  });
+
+  it("deepseek built-in derives passthrough env and an anthropic-wire proxy upstream", async () => {
+    const fs = await import("node:fs");
+    const storedEntries = JSON.stringify([
+      {
+        id: "deepseek",
+        name: "DeepSeek",
+        isBuiltin: true,
+        envVars: { DEEPSEEK_API_KEY: "dsk-9" },
+        models: [{ modelId: "deepseek-v4-flash", displayName: "Flash", effortLevels: ["high", "max"], contextSizes: [] }],
+        enabledModels: ["deepseek-v4-flash"],
+      },
+      {
+        id: "zen",
+        name: "OpenCode Zen",
+        isBuiltin: true,
+        envVars: { OPENCODE_API_KEY: "zk-1" },
+        models: [
+          { modelId: "gpt-5.5", displayName: "GPT-5.5", effortLevels: ["low", "medium", "high"], contextSizes: [] },
+          { modelId: "big-pickle", displayName: "Big Pickle", effortLevels: [], contextSizes: [] },
+        ],
+        enabledModels: [],
+      },
+    ]);
+    vi.mocked(fs.readFileSync).mockReturnValue(storedEntries);
+
+    const { getProvider, resolveProxyUpstream } = await import("@/server/providers");
+    const ds = getProvider("deepseek");
+    // No proxy is active in this graph: direct Anthropic-door fallback, with
+    // the stored key doubling as the CLI's own auth token.
+    expect(ds?.envVars.ANTHROPIC_BASE_URL).toBe("https://api.deepseek.com/anthropic");
+    expect(ds?.envVars.ANTHROPIC_AUTH_TOKEN).toBe("dsk-9");
+    expect(ds?.envVars.ANTHROPIC_API_KEY).toBe("");
+    expect(ds?.envVars.DEEPSEEK_API_KEY).toBe("dsk-9");
+
+    const upstream = resolveProxyUpstream("deepseek");
+    expect(upstream).toMatchObject({
+      baseUrl: "https://api.deepseek.com/anthropic",
+      apiKey: "dsk-9",
+      wireFormat: "anthropic",
+      modelIds: ["deepseek-v4-flash"],
+    });
+
+    // Zen (openai wire) carries per-model effort levels for the proxy's
+    // reasoning_effort mapping; effort-less models are omitted.
+    const zenUpstream = resolveProxyUpstream("zen");
+    expect(zenUpstream?.effortByModel).toEqual({ "gpt-5.5": ["low", "medium", "high"] });
+  });
+
+  it("getDeepSeekBalance parses balance_infos, caches, and is null without a key", async () => {
+    const fs = await import("node:fs");
+    vi.mocked(fs.readFileSync).mockImplementation(() => {
+      throw new Error("ENOENT");
+    });
+    const providers = await import("@/server/providers");
+    expect(await providers.getDeepSeekBalance()).toBeNull();
+
+    vi.mocked(fs.readFileSync).mockReturnValue(
+      JSON.stringify([{ id: "deepseek", isBuiltin: true, envVars: { DEEPSEEK_API_KEY: "dsk" }, models: [] }]),
+    );
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      expect(String(url)).toBe("https://api.deepseek.com/user/balance");
+      const headers = init?.headers as Record<string, string> | undefined;
+      expect(headers?.Authorization).toBe("Bearer dsk");
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          is_available: true,
+          balance_infos: [{ currency: "USD", total_balance: "1.65", granted_balance: "0.50", topped_up_balance: "1.15" }],
+        }),
+      };
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    expect(await providers.getDeepSeekBalance()).toEqual({
+      currency: "USD",
+      totalBalance: 1.65,
+      grantedBalance: 0.5,
+      toppedUpBalance: 1.15,
+    });
+    // 60s cache: the second read serves the snapshot without refetching
+    expect(await providers.getDeepSeekBalance()).toEqual(expect.objectContaining({ totalBalance: 1.65 }));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    vi.unstubAllGlobals();
+  });
+
+  it("openrouter routes through the format proxy when it is active, direct otherwise", async () => {
+    const fs = await import("node:fs");
+    vi.mocked(fs.readFileSync).mockReturnValue(
+      JSON.stringify([
+        {
+          id: "openrouter",
+          name: "OpenRouter",
+          isBuiltin: true,
+          models: [],
+          envVars: { ANTHROPIC_AUTH_TOKEN: "sk-or-x" },
+          enabledModels: [],
+        },
+      ]),
+    );
+
+    const { getActiveFormatProxy, setActiveFormatProxy } = await import("@/server/format-proxy");
+    const { getProviders, resolveProxyUpstream } = await import("@/server/providers");
+
+    const direct = getProviders().find((p) => p.id === "openrouter");
+    expect(direct?.envVars.ANTHROPIC_BASE_URL).toBe("https://openrouter.ai/api");
+
+    setActiveFormatProxy({ isRunning: true, getUrl: (id: string) => `http://127.0.0.1:9999/${id}` } as unknown as ReturnType<
+      typeof getActiveFormatProxy
+    > & { isRunning: boolean });
+    // cache is mtime-gated; force a rebuild by re-importing fresh state
+    vi.resetModules();
+    vi.mocked(fs.readFileSync).mockReturnValue(
+      JSON.stringify([
+        {
+          id: "openrouter",
+          name: "OpenRouter",
+          isBuiltin: true,
+          models: [],
+          envVars: { ANTHROPIC_AUTH_TOKEN: "sk-or-x" },
+          enabledModels: [],
+        },
+      ]),
+    );
+    const fresh = await import("@/server/providers");
+    const proxied = fresh.getProviders().find((p) => p.id === "openrouter");
+    expect(proxied?.envVars.ANTHROPIC_BASE_URL).toBe("http://127.0.0.1:9999/openrouter");
+    // the CLI keeps authenticating with the real key; the proxy only relays
+    expect(proxied?.envVars.ANTHROPIC_AUTH_TOKEN).toBe("sk-or-x");
+
+    const up = fresh.resolveProxyUpstream("openrouter");
+    expect(up).toMatchObject({ baseUrl: "https://openrouter.ai/api", apiKey: "sk-or-x", wireFormat: "anthropic" });
+    expect(resolveProxyUpstream("openrouter")).toMatchObject({ wireFormat: "anthropic" });
+  });
+
+  it("openRouterModelEnv pins every default-model slot", async () => {
+    const { openRouterModelEnv } = await import("@/server/providers");
+    expect(openRouterModelEnv("vendor/main:free")).toEqual({
+      ANTHROPIC_DEFAULT_OPUS_MODEL: "vendor/main:free",
+      ANTHROPIC_DEFAULT_SONNET_MODEL: "vendor/main:free",
+      ANTHROPIC_DEFAULT_HAIKU_MODEL: "vendor/main:free",
+      CLAUDE_CODE_SUBAGENT_MODEL: "vendor/main:free",
+    });
+    expect(openRouterModelEnv("vendor/main", "vendor/small:free")).toMatchObject({
+      ANTHROPIC_DEFAULT_HAIKU_MODEL: "vendor/small:free",
+      CLAUDE_CODE_SUBAGENT_MODEL: "vendor/small:free",
+    });
   });
 
   it("resolveProviderModel finds Anthropic model", async () => {

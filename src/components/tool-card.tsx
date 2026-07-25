@@ -3,13 +3,19 @@
 import { ChevronRight, ClipboardList, ExternalLink, Loader2 } from "lucide-react";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSettings } from "@/hooks/use-settings";
+import { agentIdFromOutput, isAsyncLaunchOutput } from "@/lib/agent-tasks";
 import { shortPath } from "@/lib/path";
 import { cn } from "@/lib/utils";
-import type { ToolUse } from "@/types";
+import type { ChatMessage, ToolUse } from "@/types";
 import { useShell } from "./app-shell";
 import { CodeBlock, languageFromPath, prehighlight } from "./code-block";
 import { DiffViewer } from "./diff-viewer";
+import { MessageBubble } from "./message-bubble";
 import { PlanViewModal } from "./plan-view-modal";
+
+/** How often an open transcript re-reads a still-working agent. Each poll is
+ *  one read of that agent's JSONL, and only while its card is expanded. */
+const TRANSCRIPT_POLL_MS = 3000;
 
 function parseInput(input: string): Record<string, unknown> {
   if (!input) return {};
@@ -231,7 +237,11 @@ function AgentHeader({
   const model = input.model as string | undefined;
   const agentType = input.subagent_type as string | undefined;
   const tags = [agentType, model].filter(Boolean);
-  const spinning = tool.status === "running" || backgroundTasks.some((t) => t.toolUseId === tool.id && t.status === "running");
+  // A background agent is tracked under the id its launch handed back, not the
+  // tool use id, so matching on tool.id alone left every collapsed card
+  // spinner-less while the agent was working.
+  const taskKey = agentIdFromOutput(tool.output) ?? tool.id;
+  const spinning = tool.status === "running" || backgroundTasks.some((t) => t.toolUseId === taskKey && t.status === "running");
 
   return (
     <div className="flex flex-col gap-0.5 min-w-0 flex-1">
@@ -473,11 +483,84 @@ function AgentContent({
 }) {
   const prompt = (input.prompt as string) || "";
   const children = tool.children || [];
+  const { sessionId, cwd, backgroundTasks } = useShell();
+  // A background launch reports "done" the moment it returns, so its own tool
+  // status says nothing about the agent. The task list is what knows.
+  const launchedAsync = isAsyncLaunchOutput(tool.output);
+  const agentId = agentIdFromOutput(tool.output);
+  const stillRunning = backgroundTasks.some((t) => t.toolUseId === (agentId ?? tool.id) && t.status === "running");
+
+  // On-demand subagent transcript. The CLI writes each Task/Agent subagent to
+  // its own `subagents/agent-<id>.jsonl`; the parent tool_use id (tool.id) maps
+  // to it via the meta sidecar the API route resolves. Fetched on expand, then
+  // polled while the agent is still working.
+  const [open, setOpen] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [messages, setMessages] = useState<ChatMessage[] | null>(null);
+  const subExpandedToolIds = useRef<Set<string>>(new Set());
+
+  // The agent's transcript opens with the prompt it was handed, which is the
+  // block already rendered above this. Showing it twice pushed the agent's
+  // actual work off the screen, so the echo is dropped.
+  const transcript = useMemo(() => {
+    if (!messages) return [];
+    const first = messages[0];
+    const echoesPrompt = first?.role === "user" && prompt && first.content.trim().startsWith(prompt.trim().slice(0, 200));
+    return echoesPrompt ? messages.slice(1) : messages;
+  }, [messages, prompt]);
+
+  const fetchTranscript = useCallback(async () => {
+    if (!sessionId) return;
+    const params = new URLSearchParams({ toolUseId: tool.id });
+    if (cwd) params.set("cwd", cwd);
+    try {
+      const res = await fetch(`/api/sessions/${sessionId}/subagents?${params}`);
+      const data: { messages?: ChatMessage[] } = res.status === 404 ? { messages: [] } : await res.json();
+      if (res.status !== 404 && !res.ok) throw new Error("Failed to load agent transcript");
+      const next = data.messages ?? [];
+      // Replace only on a real change, so a poll that finds nothing new does
+      // not re-render the transcript under someone who is reading it.
+      setMessages((prev) => (prev && prev.length === next.length && prev.at(-1)?.id === next.at(-1)?.id ? prev : next));
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }, [sessionId, cwd, tool.id]);
+
+  const toggleTranscript = useCallback(() => {
+    setOpen((prev) => {
+      const next = !prev;
+      if (next && messages === null && !loading && sessionId) {
+        setLoading(true);
+        setError(null);
+        void fetchTranscript().finally(() => setLoading(false));
+      }
+      return next;
+    });
+  }, [messages, loading, sessionId, fetchTranscript]);
+
+  // A working agent appends to its transcript the whole time. Fetching once on
+  // expand froze it at whatever it held the moment it was opened, which is the
+  // least useful instant to freeze it.
+  useEffect(() => {
+    if (!open || !stillRunning || !sessionId) return;
+    const id = setInterval(() => void fetchTranscript(), TRANSCRIPT_POLL_MS);
+    return () => clearInterval(id);
+  }, [open, stillRunning, sessionId, fetchTranscript]);
+
+  // One last read when the agent stops, to pick up whatever it wrote between
+  // the final poll and finishing.
+  const wasRunning = useRef(stillRunning);
+  useEffect(() => {
+    if (wasRunning.current && !stillRunning && open) void fetchTranscript();
+    wasRunning.current = stillRunning;
+  }, [stillRunning, open, fetchTranscript]);
 
   return (
     <div className="space-y-2">
       {prompt && (
-        <pre className="overflow-x-auto rounded bg-muted/50 p-2 text-[11px] leading-relaxed max-h-32 overflow-y-auto text-muted-foreground">
+        <pre className="whitespace-pre-wrap break-words rounded bg-muted/50 p-2 text-[11px] leading-relaxed max-h-32 overflow-y-auto text-muted-foreground">
           {prompt}
         </pre>
       )}
@@ -488,10 +571,44 @@ function AgentContent({
           ))}
         </div>
       )}
-      {tool.output && (
-        <pre className="overflow-x-auto rounded bg-muted/50 p-2 text-[11px] leading-relaxed max-h-48 overflow-y-auto text-muted-foreground">
-          {tool.output}
-        </pre>
+      {tool.output &&
+        (launchedAsync ? (
+          <div className="text-[11px] text-muted-foreground">
+            {/* The spinner for this lives on the card header, so it reads as
+                running without having to expand the card. */}
+            {stillRunning ? "Working in the background" : "Ran in the background"}
+          </div>
+        ) : (
+          <pre className="whitespace-pre-wrap break-words rounded bg-muted/50 p-2 text-[11px] leading-relaxed max-h-48 overflow-y-auto text-muted-foreground">
+            {tool.output}
+          </pre>
+        ))}
+      {sessionId && (
+        <div className="space-y-1">
+          <button
+            type="button"
+            onClick={toggleTranscript}
+            className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground"
+          >
+            <ChevronRight className={cn("h-3 w-3 transition-transform", open && "rotate-90")} />
+            {open ? "Hide agent transcript" : "Show agent transcript"}
+            {loading && <Loader2 className="h-3 w-3 animate-spin" />}
+          </button>
+          {open && !loading && error && <div className="text-[11px] text-red-500">{error}</div>}
+          {open && !loading && !error && messages !== null && messages.length === 0 && (
+            <div className="text-[11px] italic text-muted-foreground">No transcript recorded for this agent.</div>
+          )}
+          {open && messages !== null && transcript.length > 0 && (
+            <div className="space-y-3 border-l-2 border-border pl-3">
+              {transcript.map((m) => (
+                <MessageBubble key={m.id} message={m} expandedToolIds={subExpandedToolIds} />
+              ))}
+            </div>
+          )}
+          {open && messages !== null && messages.length > 0 && transcript.length === 0 && (
+            <div className="text-[11px] italic text-muted-foreground">Agent has not replied yet.</div>
+          )}
+        </div>
       )}
     </div>
   );

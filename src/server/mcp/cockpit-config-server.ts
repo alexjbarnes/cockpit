@@ -5,6 +5,7 @@ import { dirname } from "node:path";
 import { Server as McpServer } from "@modelcontextprotocol/sdk/server/index.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+import { CONTEXT_SIZES } from "@/lib/models";
 import { getDefaults, setDefaults } from "@/server/defaults";
 import { deleteJob, getJob, loadJobs, saveJob } from "@/server/job-storage";
 import { getNotificationSettings, setNotificationSettings, updateNotificationSettings } from "@/server/notification-settings";
@@ -40,20 +41,20 @@ const TOOL_DEFINITIONS = [
       type: "object",
       properties: {
         name: { type: "string" },
-        schedule: { type: "object", properties: { type: { type: "string", enum: ["simple", "cron"] } }, required: ["type"] },
         schedules: {
           type: "array",
           items: { type: "object" },
-          description: "Multiple schedules (use instead of schedule for multi-schedule jobs)",
+          description: "One or more schedules for this job. A single job can hold more than one schedule.",
         },
         prompt: { type: "string" },
         cwd: { type: "string" },
         enabled: { type: "boolean" },
         model: { type: "string" },
-        contextSize: { type: "string" },
+        contextSize: { type: "string", enum: Object.keys(CONTEXT_SIZES), description: "Context window size" },
         thinkingLevel: { type: "string" },
         bypassPermissions: { type: "boolean" },
         maxDurationMinutes: { type: "number" },
+        maxRetries: { type: "number", description: "Extra attempts after a failure run (not timeout/stopped). Defaults to 1." },
         retentionDays: { type: "number" },
         skipIfMissed: { type: "boolean" },
         inboxOutput: { type: "boolean" },
@@ -63,7 +64,7 @@ const TOOL_DEFINITIONS = [
         mcpToolFilters: { type: "object", description: 'Per-MCP-server tool filter: { serverName: ["tool1", "tool2"] }' },
         notifyProviders: { type: "array", items: { type: "string" }, description: "Notification provider IDs to alert on job completion" },
       },
-      required: ["name", "schedule", "prompt", "cwd"],
+      required: ["name", "schedules", "prompt", "cwd"],
     },
   },
   {
@@ -74,16 +75,20 @@ const TOOL_DEFINITIONS = [
       properties: {
         id: { type: "string" },
         name: { type: "string" },
-        schedule: { type: "object", properties: { type: { type: "string", enum: ["simple", "cron"] } }, required: ["type"] },
-        schedules: { type: "array", items: { type: "object" } },
+        schedules: {
+          type: "array",
+          items: { type: "object" },
+          description: "Replaces all of the job's schedules with this list.",
+        },
         prompt: { type: "string" },
         cwd: { type: "string" },
         enabled: { type: "boolean" },
         model: { type: "string" },
-        contextSize: { type: "string" },
+        contextSize: { type: "string", enum: Object.keys(CONTEXT_SIZES), description: "Context window size" },
         thinkingLevel: { type: "string" },
         bypassPermissions: { type: "boolean" },
         maxDurationMinutes: { type: "number" },
+        maxRetries: { type: "number", description: "Extra attempts after a failure run (not timeout/stopped). Defaults to 1." },
         retentionDays: { type: "number" },
         skipIfMissed: { type: "boolean" },
         inboxOutput: { type: "boolean" },
@@ -128,8 +133,8 @@ const TOOL_DEFINITIONS = [
         modelSlots: {
           type: "object",
           properties: {
-            main: { type: "string", description: "Model ID (e.g. claude-sonnet-4-5, claude-opus-4-5, claude-haiku-4-5)" },
-            mainContext: { type: "string", enum: ["50k", "100k", "200k"], description: "Context window size" },
+            main: { type: "string", description: "Model ID (e.g. claude-opus-4-8, claude-sonnet-4-6, claude-haiku-4-5)" },
+            mainContext: { type: "string", enum: Object.keys(CONTEXT_SIZES), description: "Context window size" },
           },
         },
       },
@@ -297,7 +302,7 @@ function handleToolCall(
         const job: ScheduledJob = {
           id: randomUUID(),
           name: args.name as string,
-          schedule: args.schedule as ScheduledJob["schedule"],
+          schedules: args.schedules as ScheduledJob["schedules"],
           prompt: args.prompt as string,
           cwd: args.cwd as string,
           enabled: (args.enabled as boolean) ?? true,

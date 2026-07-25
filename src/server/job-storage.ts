@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 
 import { join } from "node:path";
 import { splitLegacyModel } from "@/lib/models";
 import { getCockpitDir } from "@/server/paths";
-import type { JobRun, ScheduledJob } from "@/types";
+import type { JobRun, JobSchedule, ScheduledJob } from "@/types";
 
 function prefsDir(): string {
   return getCockpitDir();
@@ -22,12 +22,22 @@ function runsFile(jobId: string): string {
   return join(runsDir(), `${jobId}.json`);
 }
 
-function normalizeJob(raw: ScheduledJob): ScheduledJob {
-  if (raw.model?.includes("[")) {
-    const split = splitLegacyModel(raw.model);
-    return { ...raw, model: split.model, contextSize: raw.contextSize ?? split.contextSize };
+// Pre-deprecation on-disk shape: some jobs may still carry the old singular
+// `schedule` field instead of (or in addition to, if written by code from
+// before the two were fully unified) `schedules`.
+type LegacyJobShape = ScheduledJob & { schedule?: JobSchedule };
+
+function normalizeJob(raw: LegacyJobShape): ScheduledJob {
+  let job: LegacyJobShape = raw;
+  if (job.model?.includes("[")) {
+    const split = splitLegacyModel(job.model);
+    job = { ...job, model: split.model, contextSize: job.contextSize ?? split.contextSize };
   }
-  return raw;
+  if (!job.schedules?.length && job.schedule) {
+    job = { ...job, schedules: [job.schedule] };
+  }
+  const { schedule: _legacySchedule, ...normalized } = job;
+  return normalized;
 }
 
 export function loadJobs(): ScheduledJob[] {

@@ -2,7 +2,7 @@ import { v4 as uuidv4 } from "uuid";
 import { cleanupHookSettings, prepareHookSettings } from "./claude-settings";
 import { fetchCliInitData } from "./cli-init-fetch";
 import { logDiag } from "./debug-logger";
-import type { ParsedEvent } from "./event-parser";
+import { ONE_M_CREDITS_REQUIRED, type ParsedEvent } from "./event-parser";
 import { newPermissionRequestId, translateHookEvent } from "./hook-event-translator";
 import type { HookRouter, PermissionDecision, SessionHookHandler } from "./hook-router";
 import { PtySession } from "./pty-session";
@@ -56,6 +56,8 @@ export class PtyRuntime {
   private promptAccepted: (() => void) | null = null;
   private ptyOutputBuffer = "";
   private errorDebounce: ReturnType<typeof setTimeout> | null = null;
+  /** Fire the 1M-credits error at most once per spawn. */
+  private oneMCreditsHandled = false;
 
   constructor(opts: PtyRuntimeOptions) {
     this.opts = opts;
@@ -321,6 +323,7 @@ export class PtyRuntime {
         const toolName = typeof payload.tool_name === "string" ? payload.tool_name : "unknown";
         const cliSession = typeof payload.session_id === "string" ? payload.session_id.slice(0, 8) : "none";
         const toolUseId = typeof payload.tool_use_id === "string" ? payload.tool_use_id.slice(0, 12) : "none";
+        logDiag(this.opts.sessionId, "hook:PreToolUse", { tool: toolName, toolUseId });
         console.log(`[pty-runtime] PreToolUse: tool=${toolName} cli_session=${cliSession} tool_use_id=${toolUseId}`);
         this.emit(translateHookEvent("PreToolUse", payload));
       },
@@ -330,15 +333,24 @@ export class PtyRuntime {
         const toolName = typeof payload.tool_name === "string" ? payload.tool_name : "unknown";
         const cliSession = typeof payload.session_id === "string" ? payload.session_id.slice(0, 8) : "none";
         const toolUseId = typeof payload.tool_use_id === "string" ? payload.tool_use_id.slice(0, 12) : "none";
+        logDiag(this.opts.sessionId, "hook:PostToolUse", { tool: toolName, toolUseId });
         console.log(`[pty-runtime] PostToolUse: tool=${toolName} cli_session=${cliSession} tool_use_id=${toolUseId}`);
         this.emit(translateHookEvent("PostToolUse", payload));
       },
       onStop: (payload) => {
         this.cancelErrorDebounce();
         this.ptyOutputBuffer = "";
+        const lastMsg = typeof payload.last_assistant_message === "string" ? payload.last_assistant_message : "";
+        // JOB-DEBUG: a Stop with an empty last_assistant_message is the exact
+        // "went idle without an assistant message" failure signature. Capture it.
+        logDiag(this.opts.sessionId, "hook:Stop", {
+          lastMsgLen: lastMsg.length,
+          lastMsgHead: lastMsg.slice(0, 160),
+          stopHookActive: payload.stop_hook_active,
+          payloadKeys: Object.keys(payload),
+        });
         console.log(`[pty-runtime] Stop hook received for session ${this.opts.sessionId.slice(0, 8)}`);
         const events = translateHookEvent("Stop", payload);
-        console.log(`[pty-runtime] Stop translated to ${events.length} events: [${events.map((e) => e.type).join(", ")}]`);
         this.emit(events);
       },
       onStopFailure: (payload) => {
@@ -346,6 +358,7 @@ export class PtyRuntime {
         this.ptyOutputBuffer = "";
         const errorType = typeof payload.error_type === "string" ? payload.error_type : "unknown";
         const errorMessage = typeof payload.error_message === "string" ? payload.error_message : "Unknown error";
+        logDiag(this.opts.sessionId, "hook:StopFailure", { errorType, errorMessage: errorMessage.slice(0, 200) });
         console.log(`[pty-runtime] StopFailure hook for session ${this.opts.sessionId.slice(0, 8)}: ${errorType} - ${errorMessage}`);
         this.emit(translateHookEvent("StopFailure", payload));
         this.opts.onError(`${errorMessage} (${errorType})`);
@@ -390,12 +403,14 @@ export class PtyRuntime {
       onPreCompact: (payload) => {
         this.cancelErrorDebounce();
         this.ptyOutputBuffer = "";
+        logDiag(this.opts.sessionId, "hook:PreCompact", { trigger: payload.trigger, payloadKeys: Object.keys(payload) });
         console.log(`[pty-runtime] PreCompact for session ${this.opts.sessionId.slice(0, 8)}`);
         this.emit(translateHookEvent("PreCompact", payload));
       },
       onPostCompact: (payload) => {
         this.cancelErrorDebounce();
         this.ptyOutputBuffer = "";
+        logDiag(this.opts.sessionId, "hook:PostCompact", { trigger: payload.trigger, payloadKeys: Object.keys(payload) });
         console.log(`[pty-runtime] PostCompact for session ${this.opts.sessionId.slice(0, 8)}`);
         this.emit(translateHookEvent("PostCompact", payload));
       },
@@ -472,42 +487,55 @@ export class PtyRuntime {
     if (this.ptyOutputBuffer.length > 8 * 1024) {
       this.ptyOutputBuffer = this.ptyOutputBuffer.slice(-4 * 1024);
     }
-    if (this.errorDebounce) return;
-
     // biome-ignore lint/suspicious/noControlCharactersInRegex: strip terminal control chars
     const clean = this.ptyOutputBuffer.replace(ANSI_RE, "").replace(/[\x00-\x1f]/g, "");
+
+    // A 1M-context request on an account without usage credits (Sonnet 4.6):
+    // the CLI prints this and the turn fails. It carries no HTTP code, so the
+    // coded match below misses it, and it is genuinely fatal, so fire it
+    // directly rather than through the hook-cancellable debounce — a trailing
+    // Stop hook must not swallow it. Once per spawn.
+    if (!this.oneMCreditsHandled && /Usage credits required for 1M context/i.test(clean)) {
+      this.oneMCreditsHandled = true;
+      this.emitApiError(ONE_M_CREDITS_REQUIRED);
+      return;
+    }
+
+    if (this.errorDebounce) return;
     const match = clean.match(/API\s*Error:\s*(\d+)\s*([^✓✗❯]*)/) || clean.match(/APIError:\s*(\d+)\s*(.*)/);
     if (!match) return;
 
     const httpCode = match[1];
     const detail = match[2].trim().slice(0, 200);
     const errMsg = detail ? `${detail} (HTTP ${httpCode})` : `API Error (HTTP ${httpCode})`;
+    this.errorDebounce = setTimeout(() => this.emitApiError(errMsg), 10_000);
+  }
 
-    this.errorDebounce = setTimeout(() => {
-      this.errorDebounce = null;
-      this.ptyOutputBuffer = "";
+  /** Force the turn idle and surface `errMsg`. Shared by the coded-error debounce and the 1M-credits path. */
+  private emitApiError(errMsg: string): void {
+    this.errorDebounce = null;
+    this.ptyOutputBuffer = "";
 
-      console.log(`[pty-runtime] API error detected for session ${this.opts.sessionId.slice(0, 8)}: ${errMsg}`);
+    console.log(`[pty-runtime] API error detected for session ${this.opts.sessionId.slice(0, 8)}: ${errMsg}`);
 
-      const doneEvent: ParsedEvent = {
-        type: "message_done",
-        message: {
-          id: uuidv4(),
-          role: "assistant",
-          content: "",
-          toolUses: [],
-          blocks: [],
-          timestamp: Date.now(),
-        },
-      };
+    const doneEvent: ParsedEvent = {
+      type: "message_done",
+      message: {
+        id: uuidv4(),
+        role: "assistant",
+        content: "",
+        toolUses: [],
+        blocks: [],
+        timestamp: Date.now(),
+      },
+    };
 
-      try {
-        this.opts.onEvents([doneEvent]);
-      } catch {
-        // best-effort
-      }
-      this.opts.onError(errMsg);
-    }, 10_000);
+    try {
+      this.opts.onEvents([doneEvent]);
+    } catch {
+      // best-effort
+    }
+    this.opts.onError(errMsg);
   }
 
   private async cleanup(): Promise<void> {

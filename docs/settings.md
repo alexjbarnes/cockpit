@@ -12,7 +12,7 @@ To reset the password: set `COCKPIT_RESET_PASSWORD=true` and restart.
 
 The Settings page picks the defaults for new sessions:
 
-- Model. Built-in Haiku, Sonnet, or Opus with a version switcher, or any model from a custom provider (see [Providers](#providers)). Models can be set per slot: main, subagent, and fast.
+- Model. Built-in Haiku, Sonnet, or Opus with a version switcher, or any model from a connected gateway or custom provider (see [Providers](#providers)). Models can be set per slot: main, subagent, and fast.
 - Context size. 200K (default) or 1M, for models that support both.
 - Thinking level. Low, Medium, High, XHigh, Max. Trades latency for depth of reasoning. Only the levels the model supports are offered.
 - Default runtime is Stream; choose Stream or PTY per session (see [Sessions: runtime mode](sessions.md#runtime-mode)).
@@ -22,7 +22,7 @@ Existing sessions keep their own settings. Defaults only apply to new sessions.
 
 ## Providers
 
-Beyond the built-in Anthropic models, you can configure custom Anthropic-compatible providers (proxies, gateways, alternate endpoints) from the Providers page, each with its own environment variables and model list. See [Model providers](providers.md) for the full walkthrough.
+Beyond the built-in Anthropic models, the Providers page connects three built-in gateways with a single API key each (OpenRouter, OpenCode Zen, DeepSeek) and lets you add custom Anthropic-compatible providers (proxies, alternate endpoints) with their own environment variables and model list. Providers that speak only the OpenAI wire format run through a built-in translation proxy, and each provider shows its own spend or balance in the usage indicator. See [Model providers](providers.md) for the full walkthrough.
 
 ## UI preferences
 

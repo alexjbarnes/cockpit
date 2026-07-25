@@ -28,6 +28,10 @@ vi.mock("@/server/inbox", () => ({
   parseErrorBlock: vi.fn(() => null),
 }));
 
+vi.mock("@/server/provider-catalog", () => ({
+  checkJobModel: vi.fn(() => ({ ok: true })),
+}));
+
 vi.mock("node:fs", async () => {
   const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
   return { ...actual, mkdirSync: vi.fn() };
@@ -37,13 +41,14 @@ import { addInboxMessage, parseErrorBlock, parseInboxBlock } from "@/server/inbo
 import { acquireJobLock, releaseJobLock } from "@/server/job-lock";
 import { JobScheduler } from "@/server/job-scheduler";
 import { loadJobs, loadRuns, saveRun } from "@/server/job-storage";
-import type { JobRunStatus, ScheduledJob } from "@/types";
+import { checkJobModel } from "@/server/provider-catalog";
+import type { JobRun, JobRunStatus, ScheduledJob } from "@/types";
 
 function makeJob(overrides: Partial<ScheduledJob> = {}): ScheduledJob {
   return {
     id: "job-1",
     name: "Test Job",
-    schedule: { type: "simple", frequency: "daily", time: "09:00" },
+    schedules: [{ type: "simple", frequency: "daily", time: "09:00" }],
     prompt: "Do something",
     cwd: "/tmp/test",
     enabled: true,
@@ -59,6 +64,7 @@ function makeMockSessionManager() {
   let errorCb: ((error: string) => void) | null = null;
   let eventCb: ((event: Record<string, unknown>) => void) | null = null;
   let initCb: ((data: Record<string, unknown>) => void) | null = null;
+  let systemCb: ((text: string) => void) | null = null;
 
   return {
     emitter,
@@ -94,10 +100,17 @@ function makeMockSessionManager() {
         initCb = null;
       };
     }),
+    onSystem: vi.fn((_id: string, cb: (text: string) => void) => {
+      systemCb = cb;
+      return () => {
+        systemCb = null;
+      };
+    }),
     emitStatus: (status: string) => statusCb?.(status),
     emitError: (error: string) => errorCb?.(error),
     emitEvent: (event: Record<string, unknown>) => eventCb?.(event),
     emitInit: (data: Record<string, unknown>) => initCb?.(data),
+    emitSystem: (text: string) => systemCb?.(text),
   };
 }
 
@@ -117,6 +130,10 @@ describe("JobScheduler", () => {
       const promise = scheduler.executeJob(job);
 
       await vi.waitFor(() => expect(sm.sendMessage).toHaveBeenCalled());
+      // A real completed turn always ends with an assistant message; a success
+      // with no answer at all is the mid-turn-teardown signature, asserted
+      // separately below.
+      sm.emitEvent({ type: "message_done", message: { content: "Done." } });
       sm.emitStatus("idle");
 
       const run = await promise;
@@ -284,6 +301,76 @@ describe("JobScheduler", () => {
       expect(sm.mcpToggle).not.toHaveBeenCalledWith("session-1", "allowed-server", false);
     });
 
+    // Regression: three consecutive Tech-roundup runs were recorded "success"
+    // having produced nothing. The CLI auto-compacted mid-turn, cockpit read
+    // PostCompact as a turn ending, and the run was torn down (destroySession)
+    // 1ms later. run.messageCount was 0 and lastAssistantText was "" in every
+    // case, so an idle with no answer at all is the honest failure signal.
+    it("marks a run that goes idle without ever producing an assistant message as a failure", async () => {
+      const job = makeJob();
+      const promise = scheduler.executeJob(job);
+      await vi.waitFor(() => expect(sm.sendMessage).toHaveBeenCalled());
+
+      // Tools ran, but the turn never reached a final message.
+      sm.emitEvent({ type: "tool_use_start", toolId: "t1", toolName: "Edit", toolInput: "{}" });
+      sm.emitEvent({ type: "tool_result", toolId: "t1", toolOutput: "ok" });
+      sm.emitStatus("idle");
+
+      const run = await promise;
+      expect(run.status).toBe("failure");
+      expect(run.error).toMatch(/assistant message/i);
+      expect(vi.mocked(addInboxMessage)).toHaveBeenCalledWith(expect.objectContaining({ priority: "error", jobId: "job-1" }));
+    });
+
+    it("does not fail a run that answered but produced no inbox block", async () => {
+      // The Tech-roundup prompt's legitimate 'nothing new to process' exit
+      // deliberately emits no cockpit-inbox block. That must stay a success.
+      const job = makeJob({ inboxOutput: true });
+      vi.mocked(parseInboxBlock).mockReturnValueOnce(null);
+      const promise = scheduler.executeJob(job);
+      await vi.waitFor(() => expect(sm.sendMessage).toHaveBeenCalled());
+
+      sm.emitEvent({ type: "message_done", message: { content: "No new newsletters to process." } });
+      sm.emitStatus("idle");
+
+      const run = await promise;
+      expect(run.status).toBe("success");
+      expect(run.error).toBeUndefined();
+    });
+
+    it("marks a run that goes idle with background subagents still pending as a failure", async () => {
+      // The 14th's signature: the model launched 13 async Agents, said
+      // "Waiting for article fetches to complete." and ended its turn. The run
+      // was recorded a success at 3.7min and the PTY killed while the task
+      // notifications were still being enqueued.
+      const job = makeJob();
+      const promise = scheduler.executeJob(job);
+      await vi.waitFor(() => expect(sm.sendMessage).toHaveBeenCalled());
+
+      sm.emitEvent({ type: "task_update", taskInfo: { taskId: "a1", status: "running", title: "Agent" } });
+      sm.emitEvent({ type: "task_update", taskInfo: { taskId: "a2", status: "running", title: "Agent" } });
+      sm.emitEvent({ type: "message_done", message: { content: "Waiting for article fetches to complete." } });
+      sm.emitStatus("idle");
+
+      const run = await promise;
+      expect(run.status).toBe("failure");
+      expect(run.error).toMatch(/background/i);
+    });
+
+    it("succeeds when every background subagent completed before the turn ended", async () => {
+      const job = makeJob();
+      const promise = scheduler.executeJob(job);
+      await vi.waitFor(() => expect(sm.sendMessage).toHaveBeenCalled());
+
+      sm.emitEvent({ type: "task_update", taskInfo: { taskId: "a1", status: "running", title: "Agent" } });
+      sm.emitEvent({ type: "task_update", taskInfo: { taskId: "a1", status: "completed", title: "Agent" } });
+      sm.emitEvent({ type: "message_done", message: { content: "All done." } });
+      sm.emitStatus("idle");
+
+      const run = await promise;
+      expect(run.status).toBe("success");
+    });
+
     it("sends inbox error message on failure", async () => {
       const job = makeJob({ name: "Failing Job" });
       const promise = scheduler.executeJob(job);
@@ -311,6 +398,7 @@ describe("JobScheduler", () => {
       vi.mocked(loadJobs).mockReturnValueOnce([job]);
       const promise = scheduler.triggerJob("job-1");
       await vi.waitFor(() => expect(sm.sendMessage).toHaveBeenCalled());
+      sm.emitEvent({ type: "message_done", message: { content: "Done." } });
       sm.emitStatus("idle");
       const run = await promise;
       expect(run.status).toBe("success");
@@ -411,7 +499,7 @@ describe("JobScheduler", () => {
       const hour = now.getHours();
 
       const job = makeJob({
-        schedule: { type: "cron", expression: `${minute} ${hour} * * *` },
+        schedules: [{ type: "cron", expression: `${minute} ${hour} * * *` }],
       });
       vi.mocked(loadJobs).mockReturnValue([job]);
 
@@ -425,7 +513,7 @@ describe("JobScheduler", () => {
       now.setSeconds(0, 0);
       const job = makeJob({
         enabled: false,
-        schedule: { type: "cron", expression: `${now.getMinutes()} ${now.getHours()} * * *` },
+        schedules: [{ type: "cron", expression: `${now.getMinutes()} ${now.getHours()} * * *` }],
       });
       vi.mocked(loadJobs).mockReturnValue([job]);
 
@@ -438,7 +526,7 @@ describe("JobScheduler", () => {
       const now = new Date();
       now.setSeconds(0, 0);
       const job = makeJob({
-        schedule: { type: "cron", expression: `${now.getMinutes()} ${now.getHours()} * * *` },
+        schedules: [{ type: "cron", expression: `${now.getMinutes()} ${now.getHours()} * * *` }],
       });
       vi.mocked(loadJobs).mockReturnValue([job]);
 
@@ -640,6 +728,19 @@ describe("job prompt construction", () => {
 
     const prompt = sm.sendMessage.mock.calls[0][1] as string;
     expect(prompt).toContain("All tools and MCP servers are available");
+  });
+
+  it("tells the job not to launch background subagents", async () => {
+    // A backgrounded Agent ends the turn to wait for a notification that no
+    // operator is there to trigger, which strands the run.
+    const job = makeJob();
+    const promise = scheduler.executeJob(job);
+    await vi.waitFor(() => expect(sm.sendMessage).toHaveBeenCalled());
+    sm.emitStatus("idle");
+    await promise;
+
+    const prompt = sm.sendMessage.mock.calls[0][1] as string;
+    expect(prompt).toContain("run_in_background: false");
   });
 
   it("includes no-tools message when allowedTools and mcpServers are empty", async () => {
@@ -1067,7 +1168,7 @@ describe("tick: missed run handling", () => {
 
     const job = makeJob({
       skipIfMissed: true,
-      schedule: { type: "cron", expression: `${cronMinute} ${cronHour} * * *` },
+      schedules: [{ type: "cron", expression: `${cronMinute} ${cronHour} * * *` }],
     });
     vi.mocked(loadJobs).mockReturnValue([job]);
 
@@ -1075,5 +1176,121 @@ describe("tick: missed run handling", () => {
     (scheduler as any).tick();
 
     expect(sm.createSession).not.toHaveBeenCalled();
+  });
+
+  describe("retry", () => {
+    function runResult(status: JobRunStatus): JobRun {
+      return {
+        id: "run-x",
+        jobId: "job-1",
+        sessionId: "session-1",
+        status,
+        startedAt: Date.now(),
+        toolsUsed: [],
+        messageCount: 0,
+        prompt: "p",
+        cwd: "/tmp/test",
+      };
+    }
+
+    it("retries a failed run once by default, then stops on success", async () => {
+      vi.useFakeTimers();
+      try {
+        vi.mocked(loadJobs).mockReturnValue([makeJob()]);
+        const spy = vi
+          .spyOn(scheduler, "executeJob")
+          .mockResolvedValueOnce(runResult("failure"))
+          .mockResolvedValueOnce(runResult("success"));
+        const p = scheduler.triggerJob("job-1");
+        await vi.advanceTimersByTimeAsync(6000);
+        const run = await p;
+        expect(spy).toHaveBeenCalledTimes(2);
+        expect(run.status).toBe("success");
+        // The retried attempt suppresses its failure alert; only the final attempt can page.
+        expect(spy.mock.calls[0]?.[1]).toEqual({ suppressFailureAlert: true });
+        expect(spy.mock.calls[1]?.[1]).toEqual({ suppressFailureAlert: false });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("fails a job with a catalog-missing model before spawn: no executeJob, no retry, inbox alert", async () => {
+      vi.mocked(loadJobs).mockReturnValue([makeJob()]);
+      vi.mocked(checkJobModel).mockReturnValueOnce({
+        ok: false,
+        reason:
+          "Model openrouter:vendor/gone is no longer offered by OpenRouter. Pick a new model for this job; it will not run until you do.",
+      });
+      const spy = vi.spyOn(scheduler, "executeJob");
+
+      const run = await scheduler.triggerJob("job-1");
+
+      expect(spy).not.toHaveBeenCalled();
+      expect(run.status).toBe("failure");
+      expect(run.configFailure).toBe(true);
+      expect(run.error).toContain("openrouter:vendor/gone");
+      expect(vi.mocked(saveRun)).toHaveBeenCalledWith(expect.objectContaining({ configFailure: true }));
+      expect(vi.mocked(addInboxMessage)).toHaveBeenCalledWith(
+        expect.objectContaining({ title: "Job failed: Test Job", priority: "error" }),
+      );
+    });
+
+    it("does not retry a timeout", async () => {
+      vi.mocked(loadJobs).mockReturnValue([makeJob()]);
+      const spy = vi.spyOn(scheduler, "executeJob").mockResolvedValue(runResult("timeout"));
+      const run = await scheduler.triggerJob("job-1");
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(run.status).toBe("timeout");
+    });
+
+    it("does not retry a success", async () => {
+      vi.mocked(loadJobs).mockReturnValue([makeJob()]);
+      const spy = vi.spyOn(scheduler, "executeJob").mockResolvedValue(runResult("success"));
+      const run = await scheduler.triggerJob("job-1");
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(run.status).toBe("success");
+    });
+
+    it("retries up to job.maxRetries times, then gives up", async () => {
+      vi.useFakeTimers();
+      try {
+        vi.mocked(loadJobs).mockReturnValue([makeJob({ maxRetries: 2 })]);
+        const spy = vi.spyOn(scheduler, "executeJob").mockResolvedValue(runResult("failure"));
+        const p = scheduler.triggerJob("job-1");
+        await vi.advanceTimersByTimeAsync(12000);
+        const run = await p;
+        expect(spy).toHaveBeenCalledTimes(3); // 1 initial + 2 retries
+        expect(run.status).toBe("failure");
+        expect(spy.mock.calls[2]?.[1]).toEqual({ suppressFailureAlert: false });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("does not retry when maxRetries is 0", async () => {
+      vi.mocked(loadJobs).mockReturnValue([makeJob({ maxRetries: 0 })]);
+      const spy = vi.spyOn(scheduler, "executeJob").mockResolvedValue(runResult("failure"));
+      const run = await scheduler.triggerJob("job-1");
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(run.status).toBe("failure");
+      expect(spy.mock.calls[0]?.[1]).toEqual({ suppressFailureAlert: false });
+    });
+
+    it("suppresses the failure inbox alert on a retried attempt", async () => {
+      const promise = scheduler.executeJob(makeJob(), { suppressFailureAlert: true });
+      await vi.waitFor(() => expect(sm.sendMessage).toHaveBeenCalled());
+      sm.emitError("CLI crashed");
+      const run = await promise;
+      expect(run.status).toBe("failure");
+      expect(vi.mocked(addInboxMessage)).not.toHaveBeenCalled();
+    });
+
+    it("still alerts on timeout even when failure alerts are suppressed", async () => {
+      const promise = scheduler.executeJob(makeJob({ maxDurationMinutes: 0.001 }), { suppressFailureAlert: true });
+      await vi.waitFor(() => expect(sm.sendMessage).toHaveBeenCalled());
+      const run = await promise;
+      expect(run.status).toBe("timeout");
+      expect(vi.mocked(addInboxMessage)).toHaveBeenCalled();
+    });
   });
 });

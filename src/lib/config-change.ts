@@ -1,7 +1,6 @@
 const DOMAIN_LABELS: Record<string, Record<string, string>> = {
   job: {
     name: "Name",
-    schedule: "Schedule",
     schedules: "Schedules",
     prompt: "Prompt",
     cwd: "Working directory",
@@ -79,7 +78,24 @@ function formatValue(value: unknown): { value: string; block: boolean } {
   }
   if (typeof value === "boolean") return { value: value ? "Yes" : "No", block: false };
   if (typeof value === "number") return { value: String(value), block: false };
-  if (Array.isArray(value)) return { value: value.join(", "), block: false };
+  if (Array.isArray(value)) {
+    if (value.length === 0) return { value: "", block: false };
+    if (value.every((v) => v === null || typeof v !== "object")) {
+      return { value: value.join(", "), block: false };
+    }
+    // Array of objects (e.g. a job's `schedules`): format each entry the same
+    // way a plain object is formatted below, instead of falling through to
+    // Array.prototype.join, which stringifies objects as "[object Object]".
+    const lines = value.map((v, i) => {
+      const prefix = value.length > 1 ? `${i + 1}. ` : "";
+      if (v === null || typeof v !== "object") return `${prefix}${String(v)}`;
+      const inner = Object.entries(v as Record<string, unknown>)
+        .map(([k, vv]) => `${humaniseKey(k)}: ${typeof vv === "object" && vv !== null ? JSON.stringify(vv) : String(vv)}`)
+        .join(", ");
+      return `${prefix}${inner}`;
+    });
+    return { value: lines.join("\n"), block: true };
+  }
   if (typeof value === "object") {
     const lines = Object.entries(value as Record<string, unknown>).map(([k, v]) => {
       const label = humaniseKey(k);

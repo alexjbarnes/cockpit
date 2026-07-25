@@ -631,53 +631,126 @@ export async function loadTranscript(sessionId: string, cwd: string, options?: {
   return { messages, byteOffset, totalSize, lastUsage };
 }
 
+/**
+ * Load and parse a transcript at an absolute path (not the sessionId/cwd-derived
+ * main path). Used for subagent transcripts under `<session>/subagents/`, which
+ * share the exact JSONL shape the main parser handles. Returns [] if missing.
+ */
+export async function loadTranscriptFileAbs(absPath: string): Promise<ChatMessage[]> {
+  if (!existsSync(absPath)) return [];
+  const raw = await readFile(absPath, "utf-8");
+  const lines = raw.split(/\r?\n/).filter((l) => l.trim());
+  return parseLines(lines).messages;
+}
+
 const COMPACTION_PREFIX = "This session is being continued from a previous conversation";
 const STRIP_ATTACHMENTS_RE = /^\[Attached [^\]]+\]\n*/gm;
 
-export async function loadPromptHistory(sessionId: string, cwd: string): Promise<string[]> {
-  const fp = getTranscriptPath(sessionId, cwd);
-  if (!existsSync(fp)) return [];
+/** Prompts returned to the client. Recall (up-arrow, history modal) needs
+ *  depth, not the whole archive: a long-lived transcript holds hundreds of
+ *  prompts and pasted prompts run to tens of KB each, so an uncapped list was
+ *  megabytes of JSON pushed over the socket on every session connect. */
+const PROMPT_HISTORY_LIMIT = 200;
 
-  const seen = new Set<string>();
-  const prompts: string[] = [];
+/** Prompts longer than this are left out of recall entirely. Measured on a
+ *  real long session: the median prompt is ~100 characters, but two pasted
+ *  blobs (556KB and 469KB of log output) made up 1MB of a 1.33MB payload.
+ *  Those are pastes, not prompts anyone re-runs from a history list, and
+ *  truncating them instead would hand back a corrupted prompt on recall. */
+const MAX_PROMPT_CHARS = 20_000;
 
-  const rl = createInterface({ input: createReadStream(fp, "utf-8"), crlfDelay: Infinity });
-  for await (const line of rl) {
-    let entry: { type?: string; message?: { content?: unknown } };
-    try {
-      entry = JSON.parse(line);
-    } catch {
-      continue;
-    }
-    if (entry.type !== "user" || !entry.message) continue;
-    const content = entry.message.content;
+interface PromptCacheEntry {
+  /** Bytes consumed as whole lines — the exact resume point for the next read. */
+  consumedBytes: number;
+  /** Chronological, earlier duplicates already removed. */
+  prompts: string[];
+}
 
-    let text = "";
-    if (typeof content === "string") {
-      text = stripCommandXml(content);
-    } else if (Array.isArray(content)) {
-      const hasToolResults = content.some((b) => b.type === "tool_result");
-      if (hasToolResults) continue;
-      text = content
-        .filter((b) => b.type === "text" && b.text)
-        .map((b) => b.text)
-        .join("\n");
-      if (text) text = stripCommandXml(text);
-    }
+// Transcripts are append-only, so a re-read only needs the bytes added since
+// last time. Without this, every connect re-parsed the entire file (83MB /
+// 25k lines measured on a real long-running session ≈ 350ms warm, far worse
+// cold), which is what made switching between sessions drag.
+const promptCache = new Map<string, PromptCacheEntry>();
 
-    text = text.replace(STRIP_ATTACHMENTS_RE, "").trim();
-    if (!text || text.startsWith("/")) continue;
-    if (text.startsWith(COMPACTION_PREFIX)) continue;
-    if (text.startsWith("<") && text.includes("system-reminder")) continue;
-    if (seen.has(text)) {
-      prompts.splice(prompts.indexOf(text), 1);
-    }
-    seen.add(text);
-    prompts.push(text);
+/** Extract the user-visible prompt from one transcript line, or null when the
+ *  line is not a recallable prompt (tool results, slash commands, compaction
+ *  headers, system reminders). */
+function promptFromLine(line: string): string | null {
+  let entry: { type?: string; message?: { content?: unknown } };
+  try {
+    entry = JSON.parse(line);
+  } catch {
+    return null;
+  }
+  if (entry.type !== "user" || !entry.message) return null;
+  const content = entry.message.content;
+
+  let text = "";
+  if (typeof content === "string") {
+    text = stripCommandXml(content);
+  } else if (Array.isArray(content)) {
+    if (content.some((b) => b.type === "tool_result")) return null;
+    text = content
+      .filter((b) => b.type === "text" && b.text)
+      .map((b) => b.text)
+      .join("\n");
+    if (text) text = stripCommandXml(text);
   }
 
-  prompts.reverse();
-  return prompts;
+  text = text.replace(STRIP_ATTACHMENTS_RE, "").trim();
+  if (!text || text.startsWith("/")) return null;
+  if (text.length > MAX_PROMPT_CHARS) return null;
+  if (text.startsWith(COMPACTION_PREFIX)) return null;
+  if (text.startsWith("<") && text.includes("system-reminder")) return null;
+  return text;
+}
+
+export async function loadPromptHistory(sessionId: string, cwd: string, limit = PROMPT_HISTORY_LIMIT): Promise<string[]> {
+  const fp = getTranscriptPath(sessionId, cwd);
+  let size: number;
+  try {
+    size = (await stat(fp)).size;
+  } catch {
+    return [];
+  }
+
+  const cached = promptCache.get(fp);
+  // A file smaller than what we consumed was rotated or rewritten: start over.
+  const resumeFrom = cached && cached.consumedBytes <= size ? cached.consumedBytes : 0;
+  if (cached && resumeFrom === size) return cached.prompts.slice(-limit).reverse();
+
+  const prompts = resumeFrom > 0 ? cached!.prompts : [];
+  let consumed = resumeFrom;
+
+  const rl = createInterface({
+    input: createReadStream(fp, { encoding: "utf-8", start: resumeFrom }),
+    crlfDelay: Infinity,
+  });
+  let lastLineCost = 0;
+  for await (const line of rl) {
+    // Byte accounting drives the next resume point, so it counts every line —
+    // including unparseable ones — plus its newline.
+    lastLineCost = Buffer.byteLength(line) + 1;
+    consumed += lastLineCost;
+    const text = promptFromLine(line);
+    if (!text) continue;
+    const dupe = prompts.indexOf(text);
+    if (dupe !== -1) prompts.splice(dupe, 1);
+    prompts.push(text);
+  }
+  // Overshooting the file size means the last line carried no newline: the
+  // writer was mid-append. It is not consumed, so the next read picks it up
+  // whole rather than resuming inside it and losing that prompt for good.
+  if (consumed > size) consumed -= lastLineCost;
+  consumed = Math.min(consumed, size);
+
+  // Keep the cache bounded — anything past twice the served depth can never
+  // reach a caller, and dropping it only means a re-appearing old prompt
+  // counts as new, which is what recall order should say anyway.
+  if (prompts.length > limit * 2) prompts.splice(0, prompts.length - limit * 2);
+  promptCache.set(fp, { consumedBytes: consumed, prompts });
+
+  return prompts.slice(-limit).reverse();
 }
 
 export async function loadLastAssistantMessage(cliSessionId: string, cwd: string): Promise<ChatMessage | null> {

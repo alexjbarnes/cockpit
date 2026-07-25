@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { watchCwd } from "@/server/fs-watcher";
+import { armWatcher } from "./support/fs-watch";
 
 function createSandbox() {
   return mkdtempSync(join(tmpdir(), "fsw-test-"));
@@ -27,8 +28,10 @@ describe("fs-watcher", () => {
     const listener = vi.fn();
     const unsub = watchCwd(sandbox, listener);
 
-    writeFileSync(join(sandbox, "test.txt"), "hello");
-    await wait(800);
+    await armWatcher(
+      () => writeFileSync(join(sandbox, "test.txt"), `hello ${Date.now()}`),
+      () => listener.mock.calls.length > 0,
+    );
 
     expect(listener).toHaveBeenCalled();
     unsub();
@@ -36,13 +39,14 @@ describe("fs-watcher", () => {
 
   it("fires listener when a file is modified", async () => {
     writeFileSync(join(sandbox, "existing.txt"), "v1");
-    await wait(100);
 
     const listener = vi.fn();
     const unsub = watchCwd(sandbox, listener);
 
-    writeFileSync(join(sandbox, "existing.txt"), "v2");
-    await wait(800);
+    await armWatcher(
+      () => writeFileSync(join(sandbox, "existing.txt"), `v${Date.now()}`),
+      () => listener.mock.calls.length > 0,
+    );
 
     expect(listener).toHaveBeenCalled();
     unsub();
@@ -55,8 +59,10 @@ describe("fs-watcher", () => {
     const listener = vi.fn();
     const unsub = watchCwd(sandbox, listener);
 
-    writeFileSync(join(sub, "deep.txt"), "deep");
-    await wait(800);
+    await armWatcher(
+      () => writeFileSync(join(sub, "deep.txt"), `deep ${Date.now()}`),
+      () => listener.mock.calls.length > 0,
+    );
 
     expect(listener).toHaveBeenCalled();
     unsub();
@@ -65,6 +71,13 @@ describe("fs-watcher", () => {
   it("debounces rapid changes into a single callback", async () => {
     const listener = vi.fn();
     const unsub = watchCwd(sandbox, listener);
+
+    // Arm on a throwaway file, then judge the debounce from a clean slate.
+    await armWatcher(
+      () => writeFileSync(join(sandbox, "arm.txt"), `${Date.now()}`),
+      () => listener.mock.calls.length > 0,
+    );
+    listener.mockClear();
 
     writeFileSync(join(sandbox, "a.txt"), "1");
     writeFileSync(join(sandbox, "b.txt"), "2");
@@ -82,6 +95,15 @@ describe("fs-watcher", () => {
     const listener = vi.fn();
     const unsub = watchCwd(sandbox, listener);
 
+    // Without arming first, a watcher that never started would make this pass
+    // for the wrong reason — silence proves nothing until the watch is known
+    // to be live.
+    await armWatcher(
+      () => writeFileSync(join(sandbox, "arm.txt"), `${Date.now()}`),
+      () => listener.mock.calls.length > 0,
+    );
+    listener.mockClear();
+
     writeFileSync(join(gitDir, "abc123"), "object data");
     await wait(800);
 
@@ -96,8 +118,10 @@ describe("fs-watcher", () => {
     const listener = vi.fn();
     const unsub = watchCwd(sandbox, listener);
 
-    writeFileSync(join(gitDir, "HEAD"), "ref: refs/heads/main");
-    await wait(800);
+    await armWatcher(
+      () => writeFileSync(join(gitDir, "HEAD"), `ref: refs/heads/main ${Date.now()}`),
+      () => listener.mock.calls.length > 0,
+    );
 
     expect(listener).toHaveBeenCalled();
     unsub();
@@ -109,8 +133,10 @@ describe("fs-watcher", () => {
     const unsub1 = watchCwd(sandbox, listener1);
     const unsub2 = watchCwd(sandbox, listener2);
 
-    writeFileSync(join(sandbox, "shared.txt"), "data");
-    await wait(800);
+    await armWatcher(
+      () => writeFileSync(join(sandbox, "shared.txt"), `data ${Date.now()}`),
+      () => listener1.mock.calls.length > 0,
+    );
 
     expect(listener1).toHaveBeenCalled();
     expect(listener2).toHaveBeenCalled();
@@ -122,7 +148,15 @@ describe("fs-watcher", () => {
   it("stops watching after last listener unsubscribes", async () => {
     const listener = vi.fn();
     const unsub = watchCwd(sandbox, listener);
+
+    // Prove the watch was live before unsubscribing, so the silence below is
+    // evidence the unsubscribe worked rather than that it never started.
+    await armWatcher(
+      () => writeFileSync(join(sandbox, "arm.txt"), `${Date.now()}`),
+      () => listener.mock.calls.length > 0,
+    );
     unsub();
+    listener.mockClear();
 
     writeFileSync(join(sandbox, "after.txt"), "data");
     await wait(800);
@@ -136,10 +170,18 @@ describe("fs-watcher", () => {
     const unsub1 = watchCwd(sandbox, listener1);
     const unsub2 = watchCwd(sandbox, listener2);
 
+    await armWatcher(
+      () => writeFileSync(join(sandbox, "arm.txt"), `${Date.now()}`),
+      () => listener2.mock.calls.length > 0,
+    );
     unsub1();
+    listener1.mockClear();
+    listener2.mockClear();
 
-    writeFileSync(join(sandbox, "still.txt"), "watching");
-    await wait(800);
+    await armWatcher(
+      () => writeFileSync(join(sandbox, "still.txt"), `watching ${Date.now()}`),
+      () => listener2.mock.calls.length > 0,
+    );
 
     expect(listener1).not.toHaveBeenCalled();
     expect(listener2).toHaveBeenCalled();

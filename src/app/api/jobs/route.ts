@@ -41,7 +41,6 @@ export async function POST(req: NextRequest) {
   const job: ScheduledJob = {
     id: uuidv4(),
     name: body.name,
-    schedule: schedules[0],
     schedules,
     prompt: body.prompt,
     cwd: body.cwd || "",
@@ -56,6 +55,7 @@ export async function POST(req: NextRequest) {
     mcpToolFilters: body.mcpToolFilters,
     bypassPermissions: body.bypassPermissions ?? false,
     maxDurationMinutes: body.maxDurationMinutes ?? 30,
+    maxRetries: body.maxRetries,
     retentionDays: body.retentionDays ?? 90,
     skipIfMissed: body.skipIfMissed ?? false,
     inboxOutput: body.inboxOutput ?? false,

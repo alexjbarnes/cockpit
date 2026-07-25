@@ -85,8 +85,11 @@ test("provider dropdown defaults to the current custom provider", async ({ page,
     await page.getByTestId("btn-session-settings").click();
     await expect(page.getByRole("heading", { name: "Session settings" })).toBeVisible();
 
-    // The provider dropdown should show "mock" (the custom provider), not "anthropic".
-    await expect(page.locator('[data-testid="provider-select"]')).toHaveValue("mock");
+    // The grouped picker should list the custom provider's group with the
+    // session's current model row marked selected.
+    await expect(page.getByTestId("model-search")).toBeVisible();
+    await expect(page.getByText("Mock API", { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: /claude-sonnet-4-6/ }).first()).toBeVisible();
   } finally {
     rmSync(workDir, { recursive: true, force: true });
   }

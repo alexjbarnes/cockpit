@@ -1,26 +1,25 @@
-import { type ChildProcess, spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { type Writable } from "node:stream";
 import { v4 as uuidv4 } from "uuid";
 import { classifyCliCommand } from "@/lib/cli-commands";
 import {
   allowedEffortLevels,
-  CONTEXT_SIZES,
   type ContextSize,
+  cliModelWithContext,
   coerceEffort,
   contextSizeToWindow,
   DEFAULT_CONTEXT_SIZE,
+  modelOneMRequiresCredits,
   recommendedEffort,
   resolveModel,
 } from "@/lib/models";
 import { getAssistantSettings, updateAssistantSettings } from "@/server/assistant-settings";
-import { getClaudeBin } from "@/server/claude-bin";
-import { getCockpitCacheDir, getCockpitDir } from "@/server/paths";
-import { resolveProviderModel } from "@/server/providers";
+import { getCockpitDir } from "@/server/paths";
+import { ensureCatalogFresh, OPENROUTER_PROVIDER_ID } from "@/server/provider-catalog";
+import { getProvider, isBuiltinCatalogProvider, openRouterModelEnv, resolveProviderModel } from "@/server/providers";
 import type {
   ChatMessage,
   ContentBlock,
@@ -36,18 +35,18 @@ import type {
 } from "@/types";
 import { debugLog, isDebugEnabled, logDiag, logRawLine } from "./debug-logger";
 import { getDefaults } from "./defaults";
-import { EventParser, type ParsedEvent } from "./event-parser";
+import { ONE_M_CREDITS_REQUIRED, type ParsedEvent } from "./event-parser";
+import { getHarnessAdapter } from "./harness/registry";
+import type { HarnessProcess, HarnessProcessCallbacks, HarnessSpawnConfig } from "./harness/types";
 import { getJob } from "./job-storage";
 import { COCKPIT_AGENT_SYSTEM_PROMPT } from "./mcp/cockpit-agent-prompt";
 import { clearToken, type RunContext, registerAuthToken, registerRunContext } from "./mcp/run-context";
 import { findLatestPlanFile, readPlanFile } from "./plans";
-import { PtyRuntime } from "./pty-runtime";
 import { findChainForCliSession, getSessionPrefs, type SessionRuntime, setSessionPrefs } from "./session-prefs";
-import { getCockpitMcp, getHookRouter } from "./singleton";
+import { getCockpitMcp } from "./singleton";
 import { createStreamState, processEvents, type StreamState } from "./stream-processor";
 import { TodoWatcher } from "./todo-watcher";
 import { findSessionCwd, loadMoreMessages, loadPromptHistory, loadTranscript, transcriptExists } from "./transcript";
-import { TranscriptWatcher } from "./transcript-watcher";
 
 export type { SessionRuntime };
 
@@ -97,8 +96,7 @@ interface QueuedMessage {
 
 interface Session {
   info: SessionInfo;
-  process: ChildProcess | null;
-  stdin: Writable | null;
+  harnessProcess: HarnessProcess | null;
   emitter: EventEmitter;
   cliSessionId: string;
   previousCliSessionIds: string[];
@@ -114,7 +112,6 @@ interface Session {
   todoItems: TodoItem[];
   initData?: InitData;
   pendingRequests: Map<string, PendingRequest>;
-  controlCallbacks: Map<string, (response: Record<string, unknown>) => void>;
   streamingSnapshot: StreamingSnapshot | null;
   queuedMessages: QueuedMessage[];
   queuePaused: boolean;
@@ -130,21 +127,20 @@ interface Session {
    *  claude through node-pty + hooks. Selectable per session via env at
    *  creation time; future revisions may expose this on SessionInfo. */
   runtime: SessionRuntime;
-  ptyRuntime: PtyRuntime | null;
   cockpitAgent: boolean;
   cockpitAgentCleanups: (() => void)[];
   mcpToken?: string;
   runContext?: RunContext;
-  /** True while a PTY spawn is in flight: set immediately before the async
-   *  PtyRuntime.start() and cleared when it resolves, rejects, or the PTY exits.
-   *  Gates ensureProcess so a reconnect or startup race cannot spawn a duplicate
-   *  PTY during the start() window (the runtime is assigned but its isAlive is
-   *  still false). Also read by the stale-check log to tell "process died" from
-   *  "still spawning". */
+  /** True while a spawn's async startup is in flight: set immediately before
+   *  calling the harness adapter's spawn() and cleared when its `ready`
+   *  promise resolves, rejects, or the process exits. Gates ensureProcess so a
+   *  reconnect or startup race cannot spawn a duplicate CLI for the same
+   *  session (the handle is assigned before harnessProcess.isAlive is
+   *  necessarily true — true synchronously for the stream transport, but not
+   *  until PTY's async start() resolves). Also read by the stale-check log to
+   *  tell "process died" from "still spawning". */
   spawning?: boolean;
-  transcriptWatcher: TranscriptWatcher | null;
   todoWatcher: TodoWatcher | null;
-  attachmentPaths: string[];
   /** Cumulative token counts for the current session (used by /cost). */
   totalTokens: { input: number; output: number; cacheCreate: number; cacheRead: number };
 }
@@ -173,13 +169,13 @@ export class SessionManager {
     // Periodically check for sessions stuck in "running" with a dead process
     setInterval(() => {
       for (const [id, session] of this.sessions) {
-        if (session.info.status === "running" && !session.process && !session.ptyRuntime?.isAlive) {
+        if (session.info.status === "running" && !session.harnessProcess?.isAlive) {
           const short = id.slice(0, 8);
           debugLog(`[session:${short}] stale check: status=running but no live process, correcting to idle`);
           logDiag(id, "idle:stale-check", {
             runtime: session.runtime,
             spawning: session.spawning ?? false,
-            hasPtyRuntime: !!session.ptyRuntime,
+            hasHarnessProcess: !!session.harnessProcess,
           });
           session.info.status = "idle";
           session.emitter.emit("status", id, "idle");
@@ -215,8 +211,7 @@ export class SessionManager {
 
     this.sessions.set(id, {
       info,
-      process: null,
-      stdin: null,
+      harnessProcess: null,
       emitter: new EventEmitter(),
       cliSessionId: id,
       previousCliSessionIds: [],
@@ -227,10 +222,9 @@ export class SessionManager {
       thinkingLevel: defaults.thinkingLevel,
       streamState: null,
       contextUsage: null,
-      contextWindowSize: contextSizeToWindow(info.contextSize ?? DEFAULT_CONTEXT_SIZE),
+      contextWindowSize: this.resolveContextWindow(info.model, info.contextSize ?? DEFAULT_CONTEXT_SIZE),
       todoItems: [],
       pendingRequests: new Map(),
-      controlCallbacks: new Map(),
       streamingSnapshot: null,
       queuedMessages: [],
       queuePaused: false,
@@ -241,10 +235,7 @@ export class SessionManager {
       bufferCliSessionId: id,
       paginationPrevIds: [],
       runtime: rt,
-      ptyRuntime: null,
-      transcriptWatcher: null,
       todoWatcher: null,
-      attachmentPaths: [],
       totalTokens: { input: 0, output: 0, cacheCreate: 0, cacheRead: 0 },
       cockpitAgent: isCockpitAgent,
       cockpitAgentCleanups: [],
@@ -314,8 +305,7 @@ export class SessionManager {
           runtime: restoredRuntime,
           pendingRequestCount: 0,
         },
-        process: null,
-        stdin: null,
+        harnessProcess: null,
         emitter: new EventEmitter(),
         cliSessionId: cliId,
         previousCliSessionIds: prevIds,
@@ -330,10 +320,9 @@ export class SessionManager {
           defaults.thinkingLevel,
         streamState: null,
         contextUsage: null,
-        contextWindowSize: contextSizeToWindow(restoredContextSize),
+        contextWindowSize: this.resolveContextWindow((prefs?.model || defaults.modelSlots.main) ?? undefined, restoredContextSize),
         todoItems: [],
         pendingRequests: new Map(),
-        controlCallbacks: new Map(),
         initData: prefs?.initData,
         streamingSnapshot: null,
         queuedMessages: [],
@@ -345,10 +334,7 @@ export class SessionManager {
         bufferCliSessionId: cliId,
         paginationPrevIds: [],
         runtime: restoredRuntime,
-        ptyRuntime: null,
-        transcriptWatcher: null,
         todoWatcher: null,
-        attachmentPaths: [],
         totalTokens: { input: 0, output: 0, cacheCreate: 0, cacheRead: 0 },
         cockpitAgent: prefs?.cockpitAgent ?? false,
         cockpitAgentCleanups: [],
@@ -747,7 +733,7 @@ export class SessionManager {
 
   listActiveSessions(): SessionInfo[] {
     return Array.from(this.sessions.values())
-      .filter((s) => s.process !== null || !!s.ptyRuntime?.isAlive)
+      .filter((s) => !!s.harnessProcess?.isAlive)
       .map((s) => s.info);
   }
 
@@ -772,17 +758,17 @@ export class SessionManager {
 
   isProcessAlive(id: string): boolean {
     const session = this.sessions.get(id);
-    return !!session?.process || !!session?.ptyRuntime?.isAlive;
+    return !!session?.harnessProcess?.isAlive;
   }
 
   hasRunningProcess(id: string): boolean {
     const session = this.sessions.get(id);
-    return !!session?.process || !!session?.ptyRuntime?.isAlive;
+    return !!session?.harnessProcess?.isAlive;
   }
 
   fixStaleStatus(id: string): void {
     const session = this.sessions.get(id);
-    if (session && session.info.status === "running" && !session.process && !session.ptyRuntime?.isAlive) {
+    if (session && session.info.status === "running" && !session.harnessProcess?.isAlive) {
       session.info.status = "idle";
       session.pendingRequests.clear();
       this.notifyPendingChanged(session, id);
@@ -812,23 +798,15 @@ export class SessionManager {
   destroySession(id: string): boolean {
     const session = this.sessions.get(id);
     if (!session) return false;
-    if (session.process) {
-      this.endProcess(session, "session_destroyed");
-    }
-    if (session.ptyRuntime) {
-      const runtime = session.ptyRuntime;
-      session.ptyRuntime = null;
-      runtime.kill().catch(() => {});
-    }
-    if (session.transcriptWatcher) {
-      session.transcriptWatcher.stop();
-      session.transcriptWatcher = null;
+    if (session.harnessProcess) {
+      const handle = session.harnessProcess;
+      session.harnessProcess = null;
+      handle.kill("session_destroyed");
     }
     if (session.todoWatcher) {
       session.todoWatcher.stop();
       session.todoWatcher = null;
     }
-    this.cleanupAttachments(session);
     for (const cleanup of session.cockpitAgentCleanups) {
       try {
         cleanup();
@@ -922,59 +900,31 @@ export class SessionManager {
       session.queuePaused = true;
     }
 
-    if (session.runtime === "pty") {
-      if (!session.ptyRuntime?.isAlive) {
-        logDiag(id, "interrupt:no-pty");
-        return false;
-      }
-      logDiag(id, "interrupt:pty-esc");
-      session.ptyRuntime.interrupt();
-      // Esc cancels the claude TUI turn but may not produce a Stop hook if it
-      // arrived before any response. Force-idle so the UI unsticks; the PTY
-      // process stays alive at its REPL prompt and accepts the next message.
-      if (session.info.status === "running") {
-        session.info.status = "idle";
-        session.streamingSnapshot = null;
-        if (session.streamState) {
-          session.streamState.pendingBlocks.length = 0;
-          session.streamState.pendingToolUses.length = 0;
-          session.streamState.agentStack.length = 0;
-          session.streamState.currentAssistantMsgId = null;
-          session.streamState.flushedOnMessageDone = false;
-        }
-        session.emitter.emit("status", id, "idle");
-      }
-      session.pendingRequests.clear();
-      this.notifyPendingChanged(session, id);
-      return true;
-    }
-
-    if (!session.process) {
+    if (!session.harnessProcess?.isAlive) {
       logDiag(id, "interrupt:no-process", { hasSession: true });
       return false;
     }
 
-    // Send a control_request interrupt via stdin instead of SIGINT.
-    // SIGINT kills the process, forcing a full respawn + transcript reload
-    // on the next message. The control_request interrupt aborts the current
-    // turn but keeps the process alive so the next message can be sent
-    // directly to stdin with no respawn overhead.
-    if (session.stdin) {
-      const request = {
-        type: "control_request",
-        request_id: `interrupt-${Date.now()}`,
-        request: { subtype: "interrupt" },
-      };
-      logDiag(id, "interrupt:stdin", { requestId: request.request_id });
-      session.stdin.write(JSON.stringify(request) + "\n");
-      session.pendingRequests.clear();
-      this.notifyPendingChanged(session, id);
-      return true;
-    }
+    logDiag(id, "interrupt:send");
+    session.harnessProcess.interrupt();
 
-    // Fallback: if stdin is gone, kill the process group
-    logDiag(id, "interrupt:kill-fallback");
-    this.killProcessGroup(session.process);
+    // PTY's Esc cancels the claude TUI turn but may not produce a Stop hook if
+    // it arrived before any response. Force-idle so the UI unsticks; the PTY
+    // process stays alive at its REPL prompt and accepts the next message.
+    // Stream's control_request interrupt keeps the process alive too, so this
+    // early idle-reset is harmless there — its own Stop event still lands.
+    if (session.runtime === "pty" && session.info.status === "running") {
+      session.info.status = "idle";
+      session.streamingSnapshot = null;
+      if (session.streamState) {
+        session.streamState.pendingBlocks.length = 0;
+        session.streamState.pendingToolUses.length = 0;
+        session.streamState.agentStack.length = 0;
+        session.streamState.currentAssistantMsgId = null;
+        session.streamState.flushedOnMessageDone = false;
+      }
+      session.emitter.emit("status", id, "idle");
+    }
     session.pendingRequests.clear();
     this.notifyPendingChanged(session, id);
     return true;
@@ -991,14 +941,7 @@ export class SessionManager {
   removePendingRequest(sessionId: string, requestId: string): void {
     const session = this.sessions.get(sessionId);
     if (session) {
-      const had = session.pendingRequests.has(requestId);
-      const wasQuestion = session.pendingRequests.get(requestId)?.type === "question";
       session.pendingRequests.delete(requestId);
-      if (wasQuestion) {
-        console.log(
-          `[question-debug] removePendingRequest: session=${sessionId.slice(0, 8)}, requestId=${requestId}, existed=${had}, remaining=${session.pendingRequests.size}`,
-        );
-      }
       this.notifyPendingChanged(session, sessionId);
     }
   }
@@ -1022,53 +965,21 @@ export class SessionManager {
     denyReason?: string,
   ): boolean {
     const session = this.sessions.get(sessionId);
-    if (!session) return false;
-
-    if (session.runtime === "pty") {
-      if (!session.ptyRuntime?.isAlive) return false;
-      session.pendingRequests.delete(requestId);
-      this.notifyPendingChanged(session, sessionId);
-      return session.ptyRuntime.notifyPermissionDecision(
-        requestId,
-        allowed
-          ? { behavior: "allow", ...(toolInput ? { updatedInput: toolInput } : {}) }
-          : { behavior: "deny", message: denyReason ?? "User denied" },
-      );
-    }
-
-    if (!session.stdin) return false;
+    if (!session?.harnessProcess?.isAlive) return false;
 
     session.pendingRequests.delete(requestId);
     this.notifyPendingChanged(session, sessionId);
-
-    const response = {
-      type: "control_response",
-      response: {
-        subtype: "success",
-        request_id: requestId,
-        response: allowed
-          ? {
-              behavior: "allow" as const,
-              updatedInput: toolInput ?? {},
-              ...(permissionSuggestions?.length ? { updatedPermissions: permissionSuggestions } : {}),
-            }
-          : { behavior: "deny" as const, message: denyReason ?? "User denied" },
-      },
-    };
-
-    session.stdin.write(JSON.stringify(response) + "\n");
-    return true;
+    return session.harnessProcess.respondToPermission(requestId, allowed, toolInput, permissionSuggestions, denyReason);
   }
 
   private sendPermissionMode(session: Session, sessionId: string, mode: string): void {
-    if (!session.stdin) return;
-    const request = {
+    if (!session.harnessProcess?.writeControlRequest) return;
+    this.log(sessionId, `sending set_permission_mode: ${mode}`);
+    session.harnessProcess.writeControlRequest({
       type: "control_request",
       request_id: `perm-${Date.now()}`,
       request: { subtype: "set_permission_mode", mode },
-    };
-    this.log(sessionId, `sending set_permission_mode: ${mode}`);
-    session.stdin.write(JSON.stringify(request) + "\n");
+    });
   }
 
   setBypassAllPermissions(sessionId: string): void {
@@ -1101,7 +1012,7 @@ export class SessionManager {
   // session state, guaranteeing the next message runs in the right mode.
   // If a message is in flight, defer until message_done so we don't orphan it.
   private scheduleRespawnForPermissions(session: Session): void {
-    if (!session.process && !session.ptyRuntime?.isAlive) return;
+    if (!session.harnessProcess?.isAlive) return;
     if (session.info.status === "idle") {
       this.killProcess(session);
     } else {
@@ -1133,7 +1044,7 @@ export class SessionManager {
     setSessionPrefs(sessionId, { planMode: true });
     // Kill process so it restarts without --allow-dangerously-skip-permissions,
     // which lets the CLI natively enforce plan mode tool restrictions.
-    if (session.process || session.ptyRuntime?.isAlive) {
+    if (session.harnessProcess?.isAlive) {
       this.killProcess(session);
       session.info.status = "idle";
       session.emitter.emit("status", sessionId, "idle");
@@ -1151,7 +1062,7 @@ export class SessionManager {
     setSessionPrefs(sessionId, { planMode: false });
     // Kill process so it restarts with --allow-dangerously-skip-permissions,
     // restoring bypass capability for build mode.
-    if (session.process || session.ptyRuntime?.isAlive) {
+    if (session.harnessProcess?.isAlive) {
       this.killProcess(session);
       session.info.status = "idle";
       session.emitter.emit("status", sessionId, "idle");
@@ -1176,7 +1087,7 @@ export class SessionManager {
     const session = this.sessions.get(sessionId);
     this.log(
       sessionId,
-      `setModel: requested=${model} size=${contextSize ?? "(unspecified)"}, current=${session?.info.model} currentSize=${session?.info.contextSize ?? "(unset)"}, hasStdin=${!!session?.stdin}, hasPty=${!!session?.ptyRuntime}`,
+      `setModel: requested=${model} size=${contextSize ?? "(unspecified)"}, current=${session?.info.model} currentSize=${session?.info.contextSize ?? "(unset)"}, hasHarnessProcess=${!!session?.harnessProcess}`,
     );
     if (!session) return;
 
@@ -1218,24 +1129,34 @@ export class SessionManager {
       this.emitSystem(session, sessionId, `__thinking_level::${coerced}`);
     }
 
-    if (session.stdin && !contextChanged) {
+    if (session.harnessProcess?.writeControlRequest && !contextChanged) {
       this.log(sessionId, `setModel: sending control_request set_model=${model}`);
-      const request = {
+      session.harnessProcess.writeControlRequest({
         type: "control_request",
         request_id: `model-${Date.now()}`,
         request: { subtype: "set_model", model },
-      };
-      session.stdin.write(JSON.stringify(request) + "\n");
+      });
       if (this.modelEffortLevels(model).length > 0) {
-        const effortRequest = {
+        session.harnessProcess.writeControlRequest({
           type: "control_request",
           request_id: `effort-${Date.now()}`,
           request: { subtype: "apply_flag_settings", settings: this.thinkingFlagSettings(session.thinkingLevel) },
-        };
-        session.stdin.write(JSON.stringify(effortRequest) + "\n");
+        });
+      } else if (isBuiltinCatalogProvider(this.slotProviderId(model))) {
+        // A foreign session spawned with CLAUDE_CODE_ALWAYS_ENABLE_EFFORT
+        // keeps its last effort setting across a live switch to a
+        // non-reasoning model; shut thinking off explicitly.
+        session.harnessProcess.writeControlRequest({
+          type: "control_request",
+          request_id: `effort-${Date.now()}`,
+          request: { subtype: "apply_flag_settings", settings: this.thinkingFlagSettings("off") },
+        });
       }
     } else {
-      this.log(sessionId, `setModel: killing process (hasStdin=${!!session.stdin}, contextChanged=${contextChanged})`);
+      this.log(
+        sessionId,
+        `setModel: killing process (hasLiveControl=${!!session.harnessProcess?.writeControlRequest}, contextChanged=${contextChanged})`,
+      );
       this.killProcess(session);
       session.queuedMessages.length = 0;
       session.queuePaused = false;
@@ -1243,13 +1164,31 @@ export class SessionManager {
       session.emitter.emit("status", sessionId, "idle");
     }
     this.emitInfoUpdated(session, sessionId);
-    if (contextChanged) {
-      session.contextWindowSize = contextSizeToWindow(resolvedSize);
-    }
+    session.contextWindowSize = this.resolveContextWindow(model, resolvedSize);
     const cur = session.contextUsage;
     if (cur) {
       session.emitter.emit("usage", sessionId, { used: cur.used, total: session.contextWindowSize });
     }
+  }
+
+  /** Context gauge total: foreign catalog models carry a raw contextLength;
+   *  Anthropic models use the 200k/1m enum. */
+  private resolveContextWindow(model: string | undefined, size: ContextSize): number {
+    const resolved = model ? resolveProviderModel(model) : null;
+    if (resolved?.model.contextLength && resolved.model.contextLength > 0) return resolved.model.contextLength;
+    return contextSizeToWindow(size);
+  }
+
+  /** Provider id a slot value belongs to. A qualified prefix wins even when
+   *  the model no longer resolves (e.g. delisted from the catalog) so scoping
+   *  never silently reclassifies a foreign id as Anthropic. Unqualified ids
+   *  and aliases resolve, defaulting to Anthropic. */
+  private slotProviderId(modelId: string | undefined): string {
+    if (!modelId) return "anthropic";
+    const colon = modelId.indexOf(":");
+    if (colon > 0 && getProvider(modelId.slice(0, colon))) return modelId.slice(0, colon);
+    const resolved = resolveProviderModel(modelId);
+    return resolved ? resolved.provider.id : "anthropic";
   }
 
   setModelSlot(sessionId: string, slot: "main" | "subagent" | "fast", modelId: string): void {
@@ -1257,6 +1196,20 @@ export class SessionManager {
     if (!session) return;
 
     const slots = { ...session.modelSlots };
+    // W4: slots are scoped to one provider per session — a CLI process has one
+    // base URL and one auth, and non-main slots are bare model ids sent to the
+    // main provider's endpoint. A cross-provider main change clears the other
+    // slots instead of carrying ids that would 404; a cross-provider non-main
+    // set is refused outright.
+    if (slot === "main") {
+      if (this.slotProviderId(modelId) !== this.slotProviderId(slots.main)) {
+        delete slots.subagent;
+        delete slots.fast;
+      }
+    } else if (this.slotProviderId(modelId) !== this.slotProviderId(slots.main)) {
+      smLog(sessionId, `setModelSlot: refused cross-provider ${slot} slot ${modelId} (main is ${slots.main ?? "default"})`);
+      return;
+    }
     slots[slot] = modelId;
     session.modelSlots = slots;
     setSessionPrefs(sessionId, { modelSlots: slots });
@@ -1293,14 +1246,13 @@ export class SessionManager {
     setSessionPrefs(sessionId, { thinkingLevel: level });
 
     const supportsEffort = this.modelEffortLevels(session.info.model).length > 0;
-    if (session.stdin && supportsEffort) {
-      const request = {
+    if (session.harnessProcess?.writeControlRequest && supportsEffort) {
+      session.harnessProcess.writeControlRequest({
         type: "control_request",
         request_id: `effort-${Date.now()}`,
         request: { subtype: "apply_flag_settings", settings: this.thinkingFlagSettings(level) },
-      };
-      session.stdin.write(JSON.stringify(request) + "\n");
-    } else if (!session.stdin) {
+      });
+    } else if (!session.harnessProcess?.writeControlRequest) {
       this.killProcess(session);
       session.queuedMessages.length = 0;
       session.queuePaused = false;
@@ -1316,7 +1268,8 @@ export class SessionManager {
 
   sendControlRequest(sessionId: string, request: Record<string, unknown>, timeoutMs = 10_000): Promise<Record<string, unknown>> {
     const session = this.sessions.get(sessionId);
-    if (!session?.stdin) return Promise.reject(new Error("Session not connected"));
+    const harnessProcess = session?.harnessProcess;
+    if (!harnessProcess?.writeControlRequest) return Promise.reject(new Error("Session not connected"));
 
     const requestId = `ctrl-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const msg = {
@@ -1327,17 +1280,14 @@ export class SessionManager {
 
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
-        session.controlCallbacks.delete(requestId);
+        harnessProcess.cancelControlRequest?.(requestId);
         reject(new Error("Control request timed out"));
       }, timeoutMs);
 
-      session.controlCallbacks.set(requestId, (response) => {
+      harnessProcess.writeControlRequest!(msg, (response) => {
         clearTimeout(timer);
-        session.controlCallbacks.delete(requestId);
         resolve(response);
       });
-
-      session.stdin!.write(JSON.stringify(msg) + "\n");
     });
   }
 
@@ -1542,6 +1492,13 @@ export class SessionManager {
       if (used > 0) {
         const usage: ContextUsage = { used, total: session.contextWindowSize };
         session.contextUsage = usage;
+        // JOB-DEBUG: context trajectory, to correlate a teardown with the auto-compact threshold.
+        logDiag(sessionId, "sm:usage", {
+          used,
+          total: session.contextWindowSize,
+          pct: Math.round((used / session.contextWindowSize) * 100),
+          compacting: session.compacting,
+        });
         session.emitter.emit("usage", sessionId, usage);
       }
       session.totalTokens.input += u.input_tokens || 0;
@@ -1553,53 +1510,11 @@ export class SessionManager {
     }
   }
 
-  private killProcessGroup(proc: ChildProcess): void {
-    if (!proc.pid) return;
-    try {
-      if (process.platform === "win32") {
-        spawn("taskkill", ["/PID", String(proc.pid), "/T", "/F"], { stdio: "ignore" });
-      } else {
-        process.kill(-proc.pid, "SIGTERM");
-      }
-    } catch {}
-  }
-
-  // Graceful shutdown: send end_session control request via stdin.
-  // The CLI aborts any in-flight API call, cleans up, acks, then exits.
-  // Falls back to SIGTERM if the process doesn't exit within the timeout.
-  private endProcess(session: Session, reason?: string): void {
-    if (!session.process) return;
-    const proc = session.process;
-
-    if (session.stdin) {
-      const request = {
-        type: "control_request",
-        request_id: `end-session-${Date.now()}`,
-        request: { subtype: "end_session", reason },
-      };
-      session.stdin.write(JSON.stringify(request) + "\n");
-
-      // Fallback: SIGTERM if the CLI doesn't exit within 3 seconds
-      const fallback = setTimeout(() => {
-        this.killProcessGroup(proc);
-      }, 3000);
-      proc.once("close", () => clearTimeout(fallback));
-    } else {
-      this.killProcessGroup(proc);
-    }
-  }
-
   private killProcess(session: Session): void {
-    if (session.process) {
-      session.process.on("close", () => {});
-      this.endProcess(session, "session_reset");
-      session.process = null;
-      session.stdin = null;
-    }
-    if (session.ptyRuntime) {
-      const runtime = session.ptyRuntime;
-      session.ptyRuntime = null;
-      runtime.kill().catch(() => {});
+    if (session.harnessProcess) {
+      const handle = session.harnessProcess;
+      session.harnessProcess = null;
+      handle.kill("session_reset");
     }
     // A kill ends any in-flight spawn, so clear the ensureProcess guard now. A
     // deliberate kill-then-respawn (settings change, /clear, restart) must not
@@ -1610,6 +1525,32 @@ export class SessionManager {
 
   private emitSystem(session: Session, sessionId: string, text: string): void {
     session.emitter.emit("system", sessionId, text);
+  }
+
+  /**
+   * Sonnet 4.6 was asked for 1M but the account has no usage credits. Drop the
+   * session to 200K so it stops erroring on every turn, and tell the user why.
+   */
+  private handle1mCreditsUnavailable(session: Session, sessionId: string): void {
+    logDiag(sessionId, "1m:credits-required", { model: session.info.model });
+    if (session.info.contextSize !== "200k") {
+      session.info.contextSize = "200k";
+      session.contextWindowSize = contextSizeToWindow("200k");
+      session.modelSlots = { ...session.modelSlots, mainContext: "200k" };
+      setSessionPrefs(sessionId, { contextSize: "200k", modelSlots: session.modelSlots });
+      this.emitInfoUpdated(session, sessionId);
+      const cur = session.contextUsage;
+      if (cur) {
+        const usage: ContextUsage = { used: cur.used, total: session.contextWindowSize };
+        session.contextUsage = usage;
+        session.emitter.emit("usage", sessionId, usage);
+      }
+    }
+    this.emitSystem(
+      session,
+      sessionId,
+      "Sonnet 4.6's 1M context needs usage credits (claude.ai/settings/usage), which aren't enabled, so this session dropped to 200K. Enable credits and reselect 1M, or turn off \"1M for Sonnet\" in settings.",
+    );
   }
 
   private notifyPendingChanged(session: Session, sessionId: string): void {
@@ -1648,9 +1589,19 @@ export class SessionManager {
         }
         continue;
       }
-      if (sysMsg === "__compact::hook_done") {
+      if (sysMsg.startsWith("__compact::hook_done")) {
         if (session.compacting) {
-          logDiag(sessionId, "compact:hook-done");
+          // A compaction is not a turn ending. The CLI auto-compacts mid-turn
+          // when the context fills (it fires ~40-50ms after a tool_result) and
+          // then resumes the same turn on its own roughly 4s after PostCompact.
+          // Reporting idle for that made the job scheduler mark the run a
+          // success and destroySession the PTY 1ms after PostCompact — 9ms
+          // before the CLI had even flushed the compacted transcript — so both
+          // the compaction and the rest of the turn were lost. Only a manual
+          // /compact has no turn to resume; the real end of an auto-compacted
+          // turn still arrives later as a Stop hook, i.e. message_done.
+          const auto = sysMsg === "__compact::hook_done::auto";
+          logDiag(sessionId, "compact:hook-done", { auto });
           session.compacting = false;
           this.emitSystem(session, sessionId, "__compact::done");
           const postCompactEstimate: ContextUsage = {
@@ -1659,9 +1610,14 @@ export class SessionManager {
           };
           session.contextUsage = postCompactEstimate;
           session.emitter.emit("usage", sessionId, postCompactEstimate);
-          session.info.status = "idle";
-          session.emitter.emit("status", sessionId, "idle");
-          this.flushQueuedMessage(session, sessionId);
+          if (!auto) {
+            session.info.status = "idle";
+            session.emitter.emit("status", sessionId, "idle");
+            // Flushing after an auto-compact would inject the queued message
+            // into the turn the CLI is about to resume. message_done flushes it
+            // at the real end of the turn instead.
+            this.flushQueuedMessage(session, sessionId);
+          }
         }
         continue;
       }
@@ -1752,11 +1708,6 @@ export class SessionManager {
       } else {
         const planPath = pa.toolName === "ExitPlanMode" ? findLatestPlanFile() : undefined;
         const reqType = pa.toolName === "AskUserQuestion" ? "question" : "permission";
-        if (reqType === "question") {
-          console.log(
-            `[question-debug] adding pending question: session=${sessionId.slice(0, 8)}, requestId=${pa.requestId}, total=${session.pendingRequests.size + 1}`,
-          );
-        }
         session.pendingRequests.set(pa.requestId, {
           type: reqType,
           requestId: pa.requestId,
@@ -1807,10 +1758,31 @@ export class SessionManager {
         session.info.status = "idle";
         session.emitter.emit("status", sessionId, "idle");
       }
+      // A permission or AskUserQuestion ask blocks the turn from completing
+      // until it's resolved one way or another, so any pendingRequests entry
+      // still here once the turn produces a message_done is provably stale:
+      // either the user answered (which already clears it via
+      // respondToPermission) or the CLI's own internal fallback resolved it
+      // without ever telling cockpit. This is the only place that catches
+      // the second case, otherwise it orphans the sidebar's pending indicator.
+      if (session.pendingRequests.size > 0) {
+        session.pendingRequests.clear();
+        this.notifyPendingChanged(session, sessionId);
+      }
     }
 
     if (result.statusChange === "idle") {
       session.info.status = "idle";
+      // JOB-DEBUG: every idle emission with why + state, to catch a spurious idle
+      // tearing down a job run mid-turn (this is what the scheduler ends a run on).
+      const lastEmitEv = result.emit[result.emit.length - 1];
+      logDiag(sessionId, "sm:emit-idle", {
+        compacting: session.compacting,
+        compactDone: !!result.compactDone,
+        emitTypes: result.emit.map((e) => e.type),
+        errors: result.errors,
+        lastMsgLen: lastEmitEv?.type === "message_done" && lastEmitEv.message ? (lastEmitEv.message.content || "").length : undefined,
+      });
       console.log(`[sm] emit status idle for ${sessionId.slice(0, 8)} (runtime=${session.runtime})`);
       session.emitter.emit("status", sessionId, "idle");
       this.flushQueuedMessage(session, sessionId);
@@ -1943,10 +1915,10 @@ export class SessionManager {
         // Output arrives as a local_command transcript entry (ANSI-stripped). When a
         // turn is already running we don't interfere — fall back to the local readout.
         if (session.runtime === "pty" && session.info.status !== "running") {
-          if (session.ptyRuntime?.isAlive) {
-            session.ptyRuntime.sendText("/context").catch(() => {});
+          if (session.harnessProcess?.isAlive) {
+            session.harnessProcess.sendRawCommand?.("/context");
           } else {
-            this.spawnPtyProcess(session, sessionId, "/context");
+            this.spawnProcess(session, sessionId, "/context");
           }
           return true;
         }
@@ -1980,7 +1952,7 @@ export class SessionManager {
     // both. Classification (incl. aliases) is generated from the CLI binary; see
     // src/lib/cli-commands.ts. Unknown commands (custom/project/plugin) are
     // prompt-style and pass through.
-    if (session.ptyRuntime?.isAlive) {
+    if (session.runtime === "pty" && session.harnessProcess?.isAlive) {
       const kind = classifyCliCommand(cmd);
       // /compact is CLI-local but cockpit drives compaction through it (PostCompact
       // clears the running state), so it must reach the CLI -- let it pass through.
@@ -2000,74 +1972,6 @@ export class SessionManager {
   // because their lifecycle is handled (e.g. /compact fires PostCompact, which
   // clears the running state the same way a Stop hook would).
   private static readonly PTY_FORWARD_LOCAL = new Set(["compact"]);
-
-  private static readonly MEDIA_EXT: Record<string, string> = {
-    "image/png": ".png",
-    "image/jpeg": ".jpg",
-    "image/gif": ".gif",
-    "image/webp": ".webp",
-    "application/pdf": ".pdf",
-  };
-
-  private writeAttachments(images?: ImageAttachment[], documents?: DocumentAttachment[]): string[] {
-    if (!images?.length && !documents?.length) return [];
-    const dir = path.join(getCockpitCacheDir(), "attachments");
-    mkdirSync(dir, { recursive: true });
-    const paths: string[] = [];
-    for (const img of images ?? []) {
-      const ext = SessionManager.MEDIA_EXT[img.mediaType] || ".png";
-      const p = path.join(dir, `${uuidv4()}${ext}`);
-      writeFileSync(p, Buffer.from(img.data, "base64"));
-      paths.push(p);
-    }
-    for (const doc of documents ?? []) {
-      const ext = SessionManager.MEDIA_EXT[doc.mediaType] || ".pdf";
-      const p = path.join(dir, `${uuidv4()}${ext}`);
-      writeFileSync(p, Buffer.from(doc.data, "base64"));
-      paths.push(p);
-    }
-    return paths;
-  }
-
-  private cleanupAttachments(session: Session): void {
-    for (const p of session.attachmentPaths) {
-      try {
-        unlinkSync(p);
-      } catch {
-        // file already cleaned up
-      }
-    }
-    session.attachmentPaths = [];
-  }
-
-  private buildPtyText(text: string, attachmentPaths: string[]): string {
-    if (attachmentPaths.length === 0) return text;
-    const refs = attachmentPaths.map((p) => `[Attached image: ${p}]`).join("\n");
-    return `${refs}\n${text}`;
-  }
-
-  private buildContent(
-    session: Session,
-    text: string,
-    images?: ImageAttachment[],
-    documents?: DocumentAttachment[],
-  ): string | Record<string, unknown>[] {
-    const reminder = session.pendingPlanReminder ? this.planModeReminderText() : null;
-    if (session.pendingPlanReminder) session.pendingPlanReminder = false;
-
-    if (!images?.length && !documents?.length && !reminder) return text;
-
-    const blocks: Record<string, unknown>[] = [];
-    if (reminder) blocks.push({ type: "text", text: reminder });
-    for (const img of images ?? []) {
-      blocks.push({ type: "image", source: { type: "base64", media_type: img.mediaType, data: img.data } });
-    }
-    for (const doc of documents ?? []) {
-      blocks.push({ type: "document", source: { type: "base64", media_type: doc.mediaType, data: doc.data } });
-    }
-    if (text) blocks.push({ type: "text", text });
-    return blocks;
-  }
 
   private planModeReminderText(): string {
     return `<system-reminder>
@@ -2151,18 +2055,21 @@ Additional Cockpit rules beyond the CLI's defaults:
       this.emitSystem(session, sessionId, "__compact::start");
       session.info.status = "running";
       session.emitter.emit("status", sessionId, "running");
-      if (session.ptyRuntime?.isAlive) {
-        session.ptyRuntime.sendText("/compact").catch(() => {});
-      } else if (session.process && session.stdin) {
-        const compactInput = { type: "user", message: { role: "user", content: "/compact" } };
-        session.stdin.write(JSON.stringify(compactInput) + "\n");
+      if (session.harnessProcess?.isAlive) {
+        if (!session.harnessProcess.sendRawCommand?.("/compact")) {
+          session.harnessProcess.sendUserMessage("/compact");
+        }
       } else {
         this.spawnProcess(session, sessionId, "/compact");
       }
       return true;
     }
 
-    const content = this.buildContent(session, text, images, documents);
+    // Matches the original buildContent call's unconditional side effect: the
+    // plan-mode reminder is consumed here regardless of whether this message
+    // ends up queued, sent live, or triggering a fresh spawn.
+    const reminder = session.pendingPlanReminder ? this.planModeReminderText() : undefined;
+    if (session.pendingPlanReminder) session.pendingPlanReminder = false;
 
     // If queue was paused (user interrupted then sent a new message),
     // discard the paused messages and reset the flag.
@@ -2179,32 +2086,32 @@ Additional Cockpit rules beyond the CLI's defaults:
       return true;
     }
 
+    // A /compact already in flight can leave status idle with no alive
+    // harness process for a while (queued behind the prior turn, then the
+    // process exits before PostCompact's hook_done actually arrives) — the
+    // gap above only catches status "running", not this. Respawning here to
+    // deliver this message races the fresh process against /compact's own
+    // delivery into it. Queue instead; flushQueuedMessage runs from every
+    // path that clears session.compacting (hook_done, harness exit while
+    // compacting, or the transcript's own "__compacted__" marker).
+    if (session.compacting) {
+      session.queuedMessages.push({ id: `q-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, text, images, documents });
+      session.emitter.emit("queued", sessionId, session.queuedMessages.length);
+      return true;
+    }
+
     logDiag(sessionId, "running:send", {
-      hasProcess: !!session.process,
-      hasStdin: !!session.stdin,
+      hasHarnessProcess: !!session.harnessProcess,
       runtime: session.runtime,
-      ptyAlive: !!session.ptyRuntime?.isAlive,
+      alive: !!session.harnessProcess?.isAlive,
     });
     session.info.status = "running";
     console.log(`[sm] emit status running for ${sessionId.slice(0, 8)} (runtime=${session.runtime})`);
     session.emitter.emit("status", sessionId, "running");
 
-    if (session.runtime === "pty" && session.ptyRuntime?.isAlive) {
+    if (session.harnessProcess?.isAlive) {
       if (session.streamState) session.streamState.thinkingStartedAt = Date.now();
-      this.cleanupAttachments(session);
-      const attachments = this.writeAttachments(images, documents);
-      session.attachmentPaths.push(...attachments);
-      const ptyText = this.buildPtyText(text, attachments);
-      session.ptyRuntime.sendUserText(ptyText).catch((err) => {
-        this.log(sessionId, `pty sendText failed: ${err instanceof Error ? err.message : String(err)}`);
-      });
-      return true;
-    }
-
-    if (session.process && session.stdin) {
-      if (session.streamState) session.streamState.thinkingStartedAt = Date.now();
-      const userInput = { type: "user", message: { role: "user", content } };
-      session.stdin.write(JSON.stringify(userInput) + "\n");
+      session.harnessProcess.sendUserMessage(text, images, documents, reminder);
       return true;
     }
 
@@ -2221,13 +2128,13 @@ Additional Cockpit rules beyond the CLI's defaults:
 
   ensureProcess(sessionId: string): void {
     const session = this.sessions.get(sessionId);
-    // `spawning` guards the PTY startup window: the runtime is assigned before
-    // its async start() resolves, and during that window ptyRuntime.isAlive is
-    // false, so a second ensureProcess (a WS reconnect, or a startup race)
-    // would otherwise spawn a duplicate CLI for the same session — two
-    // processes racing on the same --session-id. (Stream sets session.process
-    // synchronously, so it is already covered by that check.)
-    if (!session || session.process || session.ptyRuntime?.isAlive || session.spawning) return;
+    // `spawning` guards the async-startup window: the handle is assigned
+    // before its `ready` promise settles, and during that window isAlive can
+    // still be false (always true immediately for stream; only after PTY's
+    // async start() resolves for pty), so a second ensureProcess (a WS
+    // reconnect, or a startup race) would otherwise spawn a duplicate CLI for
+    // the same session — two processes racing on the same --session-id.
+    if (!session || session.harnessProcess?.isAlive || session.spawning) return;
     this.spawnProcess(session, sessionId);
   }
 
@@ -2248,80 +2155,62 @@ Additional Cockpit rules beyond the CLI's defaults:
     images?: ImageAttachment[],
     documents?: DocumentAttachment[],
   ): void {
-    if (session.runtime === "pty") {
-      this.spawnPtyProcess(session, sessionId, text, images, documents);
-      return;
-    }
-
     const willResume = transcriptExists(session.cliSessionId, session.info.cwd);
-    this.log(sessionId, `spawning CLI process (resume=${willResume}, model=${session.info.model || "sonnet"})`);
-    const args = ["-p", "--verbose", "--output-format", "stream-json", "--input-format", "stream-json"];
-
-    // In plan mode, omit --allow-dangerously-skip-permissions so the CLI
-    // natively enforces tool restrictions and sends permission_requests for
-    // write tools (which the server auto-denies).
-    // Outside plan mode, enable bypass so it can be toggled mid-session.
-    if (!session.planMode && !session.cockpitAgent) {
-      args.push("--allow-dangerously-skip-permissions");
-    }
-    args.push("--permission-prompt-tool", "stdio");
-
-    if (session.planMode) {
-      args.push("--permission-mode", "plan");
-    } else if (session.bypassAllPermissions && !session.cockpitAgent) {
-      args.push("--permission-mode", "bypassPermissions");
-    }
-
-    if (willResume) {
-      args.push("--resume", session.cliSessionId);
-    } else {
-      args.push("--session-id", session.cliSessionId);
-    }
+    this.log(sessionId, `spawning CLI process (resume=${willResume}, model=${session.info.model || "sonnet"}, runtime=${session.runtime})`);
 
     const resolved = resolveProviderModel(session.info.model ?? "sonnet");
-    const cliModel = resolved ? resolved.model.modelId : session.info.model;
+    const baseCliModel = resolved ? resolved.model.modelId : session.info.model;
+    // A credit-gated model (Sonnet 4.6) at 1M only requests its 1M window when
+    // the id carries a [1m] suffix, and only if the user opted in. Everything
+    // else stays bare (Opus/Sonnet 5/Fable 5 reach 1M from the bare id).
+    const allowSonnet1m = getDefaults().allowSonnet1m;
+    const cliModel =
+      baseCliModel && session.info.contextSize ? cliModelWithContext(baseCliModel, session.info.contextSize, allowSonnet1m) : baseCliModel;
+    // When the credit-gated opt-in is off, force the effective context to 200k
+    // so the adapter sets CLAUDE_CODE_DISABLE_1M_CONTEXT=1. Without this, a
+    // stored contextSize of "1m" would leave the env var unset and the CLI
+    // would still run at 1M even without the [1m] suffix.
+    const effectiveContextSize: ContextSize =
+      session.info.contextSize === "1m" && !allowSonnet1m && modelOneMRequiresCredits(baseCliModel)
+        ? "200k"
+        : (session.info.contextSize ?? DEFAULT_CONTEXT_SIZE);
     this.log(
       sessionId,
       `spawn: info.model=${session.info.model}, resolved=${resolved ? `${resolved.provider.id}:${resolved.model.modelId}` : "null"}, cliModel=${cliModel}`,
     );
 
-    if (cliModel) {
-      args.push("--model", cliModel);
-    }
-
-    // "off" has no --effort value; thinking is disabled via a post-init
-    // apply_flag_settings control request below instead.
-    if (this.modelEffortLevels(session.info.model).length > 0 && session.thinkingLevel !== "off") {
-      args.push("--effort", session.thinkingLevel);
-    }
-
-    const env = { ...process.env };
-    delete env.CLAUDECODE;
-    delete env.CLAUDE_CODE_ENTRYPOINT;
-
-    if (resolved) {
-      Object.assign(env, resolved.provider.envVars);
-    }
-
-    // CLAUDE_CODE_DISABLE_1M_CONTEXT is the only switch that forces a model
-    // back to 200K regardless of its capability. Set it when the user picked
-    // 200K for this session.
-    const sizeKey = session.info.contextSize ?? DEFAULT_CONTEXT_SIZE;
-    if (CONTEXT_SIZES[sizeKey].disableEnv) {
-      env.CLAUDE_CODE_DISABLE_1M_CONTEXT = "1";
-    } else {
-      // 1m: drop any inherited override so cockpit's pick stays authoritative and
-      // a CLAUDE_CODE_DISABLE_1M_CONTEXT in cockpit's own env can't force 200k.
-      delete env.CLAUDE_CODE_DISABLE_1M_CONTEXT;
-    }
-
+    let subagentModel: string | undefined;
     if (session.modelSlots.subagent && session.modelSlots.subagent !== session.modelSlots.main) {
       const resolvedSub = resolveProviderModel(session.modelSlots.subagent);
-      env.ANTHROPIC_SMALL_FAST_MODEL = resolvedSub ? resolvedSub.model.modelId : session.modelSlots.subagent;
+      subagentModel = resolvedSub ? resolvedSub.model.modelId : session.modelSlots.subagent;
     }
 
+    // Catalog-backed builtin sessions (openrouter, zen, deepseek) pin every
+    // default-model slot to the session's models — otherwise the CLI's
+    // internal opus/sonnet/haiku-class utility calls route to Claude models
+    // billed on the provider's credits behind the user's back.
+    let providerEnvVars = resolved?.provider.envVars;
+    if (resolved && isBuiltinCatalogProvider(resolved.provider.id)) {
+      providerEnvVars = { ...providerEnvVars, ...openRouterModelEnv(resolved.model.modelId, subagentModel) };
+      // The CLI defaults foreign model ids to a 200k context window; this
+      // override (ignored for claude-* ids) aligns its context tracking and
+      // auto-compact with the model's real window.
+      if (resolved.model.contextLength && resolved.model.contextLength > 0) {
+        providerEnvVars.CLAUDE_CODE_MAX_CONTEXT_TOKENS = String(resolved.model.contextLength);
+      }
+      // The CLI's effort gate rejects unknown (non-Anthropic) model ids, so
+      // --effort would be dropped for foreign reasoning models without this.
+      if (resolved.model.effortLevels.length > 0) {
+        providerEnvVars.CLAUDE_CODE_ALWAYS_ENABLE_EFFORT = "1";
+      }
+      // Kick a background catalog resync when the cache is older than a day.
+      if (resolved.provider.id === OPENROUTER_PROVIDER_ID) ensureCatalogFresh();
+    }
+
+    let appendSystemPrompt: string | undefined;
+    let mcpConfigPath: string | undefined;
     if (session.cockpitAgent) {
-      args.push("--append-system-prompt", COCKPIT_AGENT_SYSTEM_PROMPT);
+      appendSystemPrompt = COCKPIT_AGENT_SYSTEM_PROMPT;
       const cockpitMcp = getCockpitMcp();
       if (cockpitMcp) {
         if (session.mcpToken) {
@@ -2339,316 +2228,132 @@ Additional Cockpit rules beyond the CLI's defaults:
           registerAuthToken(token);
         }
         session.mcpToken = token;
-        const configFile = buildMcpConfigArg(cockpitMcp.getUrl(), token);
-        args.push("--mcp-config", configFile.path);
+        mcpConfigPath = buildMcpConfigArg(cockpitMcp.getUrl(), token).path;
       }
     }
 
-    mkdirSync(session.info.cwd, { recursive: true });
+    // Matches the original buildContent/buildPtyText call's unconditional side
+    // effect: the plan-mode reminder is consumed on every spawn attempt,
+    // regardless of whether this specific spawn ends up carrying initial text.
+    const reminder = session.pendingPlanReminder ? this.planModeReminderText() : undefined;
+    if (session.pendingPlanReminder) session.pendingPlanReminder = false;
 
-    const isWin = process.platform === "win32";
-    const proc = spawn(getClaudeBin(), args, {
-      cwd: session.info.cwd,
-      env,
-      stdio: ["pipe", "pipe", "pipe"],
-      ...(isWin ? { shell: true } : { detached: true }),
-    });
-
-    session.process = proc;
-    session.stdin = proc.stdin!;
-    this.log(sessionId, `CLI process spawned (pid=${proc.pid})`);
-
-    this.startTodoWatcher(session, sessionId);
-
-    // Send initialize control request before the first user message to get
-    // model capabilities, account info, and command metadata from the CLI.
-    const initRequest = {
-      type: "control_request",
-      request_id: `init-${Date.now()}`,
-      request: { subtype: "initialize" },
-    };
-    proc.stdin!.write(JSON.stringify(initRequest) + "\n");
-
-    // Sync permission mode after init so the CLI matches session state,
-    // even if --permission-mode was ignored on resume.
-    if (session.planMode) {
-      this.sendPermissionMode(session, sessionId, "plan");
-    } else if (session.bypassAllPermissions && !session.cockpitAgent) {
-      this.sendPermissionMode(session, sessionId, "bypassPermissions");
-    }
-
-    // Thinking "off": there is no --effort value for it and stream mode has no
-    // --settings file, so disable thinking as a settings patch over stdin.
-    if (session.thinkingLevel === "off" && this.modelEffortLevels(session.info.model).length > 0) {
-      const offRequest = {
-        type: "control_request",
-        request_id: `thinking-off-${Date.now()}`,
-        request: { subtype: "apply_flag_settings", settings: { alwaysThinkingEnabled: false } },
-      };
-      proc.stdin!.write(JSON.stringify(offRequest) + "\n");
-    }
-
-    if (text) {
-      const content = this.buildContent(session, text, images, documents);
-      const userInput = { type: "user", message: { role: "user", content } };
-      proc.stdin!.write(JSON.stringify(userInput) + "\n");
-    }
-
-    // Handle pipe errors to prevent unhandled exceptions
-    proc.stdin!.on("error", (err) => {
-      this.log(sessionId, `stdin pipe error: ${err.message}`);
-    });
-    proc.stdout!.on("error", (err) => {
-      this.log(sessionId, `stdout pipe error: ${err.message}`);
-    });
-    proc.stderr!.on("error", (err) => {
-      this.log(sessionId, `stderr pipe error: ${err.message}`);
-    });
-
-    const parser = new EventParser();
-    let stderrBuffer = "";
     const streamState = createStreamState();
     session.streamState = streamState;
     streamState.thinkingStartedAt = Date.now();
 
-    let lineBuffer = "";
-    proc.stdout!.on("data", (chunk: Buffer) => {
-      lineBuffer += chunk.toString();
-      const lines = lineBuffer.split(/\r?\n/);
-      lineBuffer = lines.pop() || "";
+    const { callbacks, handleRef } = this.buildHarnessCallbacks(session, sessionId, streamState);
 
-      if (lineBuffer.trimStart().startsWith("{") && lineBuffer.trimEnd().endsWith("}")) {
-        try {
-          JSON.parse(lineBuffer);
-          lines.push(lineBuffer);
-          lineBuffer = "";
-        } catch {
-          // incomplete JSON, keep buffering
-        }
-      }
+    const config: HarnessSpawnConfig = {
+      sessionId,
+      cwd: session.info.cwd,
+      cliSessionId: session.cliSessionId,
+      willResume,
+      model: cliModel ?? undefined,
+      providerEnvVars,
+      subagentModel,
+      contextSize: effectiveContextSize,
+      thinkingLevel: session.thinkingLevel,
+      supportsEffort: this.modelEffortLevels(session.info.model).length > 0,
+      planMode: session.planMode,
+      bypassAllPermissions: session.bypassAllPermissions && !session.cockpitAgent,
+      cockpitAgent: session.cockpitAgent,
+      modelSlots: session.modelSlots,
+      appendSystemPrompt,
+      mcpConfigPath,
+      text,
+      images,
+      documents,
+      reminderText: reminder,
+      callbacks,
+    };
 
-      for (const line of lines) {
-        logRawLine(sessionId, line);
+    const adapter = getHarnessAdapter("claude", session.runtime);
 
-        if (session.controlCallbacks.size > 0 && line.includes('"control_response"')) {
-          try {
-            const parsed = JSON.parse(line);
-            if (parsed.type === "control_response" && parsed.request_id) {
-              const cb = session.controlCallbacks.get(parsed.request_id);
-              if (cb) {
-                cb(parsed.response || parsed);
-                continue;
-              }
-            }
-          } catch {
-            // not valid JSON, fall through to normal processing
-          }
-        }
-
-        if (streamState.agentStack.length === 0) {
-          this.extractUsage(session, sessionId, line);
-        }
-        const events = parser.parseLine(line);
-        const result = processEvents(events, streamState, { planMode: session.planMode, compacting: session.compacting });
-        this.applyProcessedResult(session, sessionId, result);
-      }
-    });
-
-    proc.stderr!.on("data", (chunk: Buffer) => {
-      stderrBuffer += chunk.toString();
-    });
-
-    proc.on("close", (code, signal) => {
-      this.log(sessionId, `CLI process exited (code=${code}, signal=${signal}, pid=${proc.pid})`);
-
-      if (session.process !== null && session.process !== proc) {
-        this.log(sessionId, `skipping close cleanup: newer process already running (pid=${session.process.pid})`);
-        return;
-      }
-
-      if (lineBuffer.trim()) {
-        const events = parser.parseLine(lineBuffer);
-        const result = processEvents(events, streamState, { planMode: session.planMode, compacting: session.compacting });
-        this.applyProcessedResult(session, sessionId, result);
-      }
-
-      session.process = null;
-      session.stdin = null;
-      session.streamingSnapshot = null;
-      logDiag(sessionId, "idle:process-close", { code, flushedOnMessageDone: streamState.flushedOnMessageDone });
-      session.info.status = "idle";
-      session.emitter.emit("status", sessionId, "idle");
-
-      if (session.compacting) {
-        logDiag(sessionId, "compact:done-on-close");
-        session.compacting = false;
-        this.emitSystem(session, sessionId, "__compact::done");
-        const postCompactEstimate: ContextUsage = {
-          used: Math.round(session.contextWindowSize * 0.1),
-          total: session.contextWindowSize,
-        };
-        session.contextUsage = postCompactEstimate;
-        session.emitter.emit("usage", sessionId, postCompactEstimate);
-      }
-
-      if (session.todoItems.length > 0 && session.todoItems.every((t) => t.status === "completed")) {
-        session.todoItems = [];
-        session.emitter.emit("todos", sessionId, []);
-      }
-
-      if (code !== 0 && stderrBuffer.trim()) {
-        session.emitter.emit("error", sessionId, stderrBuffer.trim());
-      }
-
-      if (!streamState.flushedOnMessageDone) {
-        this.flushQueuedMessage(session, sessionId);
-      }
-    });
-
-    proc.on("error", (err) => {
-      this.log(sessionId, `CLI process error: ${err.message}`);
-      logDiag(sessionId, "idle:process-error", { error: err.message });
-      session.process = null;
-      session.stdin = null;
-      session.info.status = "idle";
-      session.emitter.emit("status", sessionId, "idle");
-      session.emitter.emit("error", sessionId, err.message);
-      this.flushQueuedMessage(session, sessionId);
-    });
-  }
-
-  private spawnPtyProcess(
-    session: Session,
-    sessionId: string,
-    text?: string,
-    images?: ImageAttachment[],
-    documents?: DocumentAttachment[],
-  ): void {
-    if (session.ptyRuntime?.isAlive) {
-      const existing = session.ptyRuntime;
-      session.ptyRuntime = null;
-      existing.kill().catch(() => {});
-    }
-
-    const hookRouter = getHookRouter();
-    if (!hookRouter) {
-      const msg = "PTY runtime requires the hook router; server boot did not register one";
-      this.log(sessionId, msg);
+    let handle: HarnessProcess;
+    session.spawning = true;
+    try {
+      handle = adapter.spawn(config);
+    } catch (err) {
+      session.spawning = false;
+      const msg = err instanceof Error ? err.message : String(err);
+      this.log(sessionId, `spawn failed: ${msg}`);
       session.info.status = "idle";
       session.emitter.emit("status", sessionId, "idle");
       session.emitter.emit("error", sessionId, msg);
       return;
     }
 
-    const willResume = transcriptExists(session.cliSessionId, session.info.cwd);
-    this.log(sessionId, `spawning PTY claude (resume=${willResume}, model=${session.info.model || "sonnet"})`);
-    const spawnBeginAt = Date.now();
-    logDiag(sessionId, "pty:spawn-begin", {
-      model: session.info.model,
-      hasText: !!text,
-      status: session.info.status,
-    });
-    mkdirSync(session.info.cwd, { recursive: true });
+    session.harnessProcess = handle;
+    handleRef.current = handle;
+    this.log(sessionId, `CLI process spawned`);
+    this.startTodoWatcher(session, sessionId);
 
-    const streamState = createStreamState();
-    session.streamState = streamState;
-    streamState.thinkingStartedAt = Date.now();
+    handle.ready
+      .then(() => {
+        session.spawning = false;
+        this.log(sessionId, "CLI ready");
+      })
+      .catch((err: unknown) => {
+        session.spawning = false;
+        const msg = err instanceof Error ? err.message : String(err);
+        this.log(sessionId, `runtime start failed: ${msg}`);
+        if (session.harnessProcess === handle) session.harnessProcess = null;
+        // Emit error BEFORE idle: a job's onStatus("idle") maps to success, so an
+        // idle-first order would mark a failed spawn as a successful empty run.
+        session.emitter.emit("error", sessionId, msg);
+        session.info.status = "idle";
+        session.emitter.emit("status", sessionId, "idle");
+        // Reap the half-started process so a failed delivery can't leak one.
+        handle.kill();
+      });
+  }
 
-    const extraArgs: string[] = [];
-    if (transcriptExists(session.cliSessionId, session.info.cwd)) {
-      extraArgs.push("--resume", session.cliSessionId);
-    } else {
-      extraArgs.push("--session-id", session.cliSessionId);
-    }
-    const resolvedPty = resolveProviderModel(session.info.model ?? "sonnet");
-    const cliModelPty = resolvedPty ? resolvedPty.model.modelId : session.info.model;
-    if (cliModelPty) extraArgs.push("--model", cliModelPty);
-    // "off" is applied via the settings file (alwaysThinkingEnabled:false) passed
-    // to PtyRuntime below, not --effort (which has no "off" value).
-    if (this.modelEffortLevels(session.info.model).length > 0 && session.thinkingLevel !== "off") {
-      extraArgs.push("--effort", session.thinkingLevel);
-    }
-    if (session.planMode) {
-      extraArgs.push("--permission-mode", "plan");
-    } else if (session.bypassAllPermissions && !session.cockpitAgent) {
-      extraArgs.push("--permission-mode", "bypassPermissions");
-    }
-
-    const extraEnv: Record<string, string> = {};
-    if (resolvedPty) Object.assign(extraEnv, resolvedPty.provider.envVars);
-    const sizeKeyPty = session.info.contextSize ?? DEFAULT_CONTEXT_SIZE;
-    if (CONTEXT_SIZES[sizeKeyPty].disableEnv) {
-      extraEnv.CLAUDE_CODE_DISABLE_1M_CONTEXT = "1";
-    }
-    if (session.modelSlots.subagent && session.modelSlots.subagent !== session.modelSlots.main) {
-      const resolvedSub = resolveProviderModel(session.modelSlots.subagent);
-      extraEnv.ANTHROPIC_SMALL_FAST_MODEL = resolvedSub ? resolvedSub.model.modelId : session.modelSlots.subagent;
-    }
-
-    if (session.cockpitAgent) {
-      extraArgs.push("--append-system-prompt", COCKPIT_AGENT_SYSTEM_PROMPT);
-      const cockpitMcp = getCockpitMcp();
-      if (cockpitMcp) {
-        if (session.mcpToken) {
-          clearToken(session.mcpToken);
-          try {
-            unlinkSync(path.join(tmpdir(), "cockpit-mcp-config", `${session.mcpToken.slice(0, 16)}.json`));
-          } catch {
-            /* best effort */
-          }
+  /** Shared between both Claude transports (and any future harness): builds
+   *  the callback set a HarnessAdapter drives. onRawLine only ever fires from
+   *  the stream adapter (usage-extraction side channel); onTranscriptUpdate
+   *  only ever fires from the PTY adapter (its transcript-tailing side
+   *  channel) — each is a no-op for the other transport by construction. */
+  private buildHarnessCallbacks(
+    session: Session,
+    sessionId: string,
+    streamState: StreamState,
+  ): { callbacks: HarnessProcessCallbacks; handleRef: { current: HarnessProcess | null } } {
+    const handleRef: { current: HarnessProcess | null } = { current: null };
+    const callbacks: HarnessProcessCallbacks = {
+      onRawLine: (line) => {
+        logRawLine(sessionId, line);
+        if (streamState.agentStack.length === 0) {
+          this.extractUsage(session, sessionId, line);
         }
-        const token = randomBytes(24).toString("hex");
-        if (session.runContext) {
-          registerRunContext(token, session.runContext);
-        } else {
-          registerAuthToken(token);
-        }
-        session.mcpToken = token;
-        const configFile = buildMcpConfigArg(cockpitMcp.getUrl(), token);
-        extraArgs.push("--mcp-config", configFile.path);
-      }
-    }
-
-    const runtime = new PtyRuntime({
-      sessionId,
-      cwd: session.info.cwd,
-      cliSessionId: session.cliSessionId,
-      hookRouter,
-      claudeBin: getClaudeBin(),
-      extraArgs,
-      extraEnv,
-      thinkingEnabled: session.thinkingLevel !== "off",
-      onEvents: (events) => {
-        const types = events.map((e) => e.type).join(", ");
-        console.log(`[sm] pty onEvents for ${sessionId.slice(0, 8)}: [${types}]`);
+      },
+      onParsedEvents: (events) => {
         const result = processEvents(events, streamState, { planMode: session.planMode, compacting: session.compacting });
         this.applyProcessedResult(session, sessionId, result);
       },
-      onError: (err) => {
-        this.log(sessionId, `pty runtime error: ${err}`);
-        session.emitter.emit("error", sessionId, err);
+      onError: (message) => {
+        if (message === ONE_M_CREDITS_REQUIRED) {
+          this.handle1mCreditsUnavailable(session, sessionId);
+          return;
+        }
+        this.log(sessionId, `CLI error: ${message}`);
+        session.emitter.emit("error", sessionId, message);
       },
-      onExit: ({ exitCode, signal }) => {
-        this.log(sessionId, `PTY claude exited (code=${exitCode}, signal=${signal ?? "none"})`);
-        if (session.ptyRuntime !== runtime) return;
-        session.ptyRuntime = null;
+      onExit: ({ code, signal }) => {
+        this.log(sessionId, `CLI process exited (code=${code}, signal=${signal ?? "none"})`);
+        if (session.harnessProcess !== handleRef.current) {
+          this.log(sessionId, "skipping exit cleanup: newer process already running");
+          return;
+        }
+        session.harnessProcess = null;
         session.spawning = false;
         session.streamingSnapshot = null;
-        logDiag(sessionId, "idle:pty-exit", {
-          exitCode,
-          signal: signal ?? null,
-          flushedOnMessageDone: streamState.flushedOnMessageDone,
-          sinceSpawnMs: Date.now() - spawnBeginAt,
-        });
-        if (session.transcriptWatcher) {
-          session.transcriptWatcher.stop();
-          session.transcriptWatcher = null;
-        }
+        logDiag(sessionId, "idle:harness-exit", { code, signal: signal ?? null, flushedOnMessageDone: streamState.flushedOnMessageDone });
         session.info.status = "idle";
         session.emitter.emit("status", sessionId, "idle");
 
         if (session.compacting) {
-          logDiag(sessionId, "compact:done-on-pty-exit");
+          logDiag(sessionId, "compact:done-on-exit");
           session.compacting = false;
           this.emitSystem(session, sessionId, "__compact::done");
           const postCompactEstimate: ContextUsage = {
@@ -2668,75 +2373,33 @@ Additional Cockpit rules beyond the CLI's defaults:
           this.flushQueuedMessage(session, sessionId);
         }
       },
-    });
-
-    session.ptyRuntime = runtime;
-    logDiag(sessionId, "pty:runtime-assigned", { elapsedMs: Date.now() - spawnBeginAt });
-
-    this.cleanupAttachments(session);
-    const attachments = this.writeAttachments(images, documents);
-    session.attachmentPaths.push(...attachments);
-    const ptyText = text ? this.buildPtyText(text, attachments) : text;
-
-    const watcher = new TranscriptWatcher(session.cliSessionId, session.info.cwd, (messages, lastUsage) => {
-      session.emitter.emit("transcript", sessionId, messages);
-      if (lastUsage) {
-        const usage: ContextUsage = { used: lastUsage.used, total: session.contextWindowSize };
-        session.contextUsage = usage;
-        session.emitter.emit("usage", sessionId, usage);
-      }
-      if (session.compacting && messages.some((m) => m.content === "__compacted__")) {
-        logDiag(sessionId, "compact:done-on-transcript");
-        session.compacting = false;
-        this.emitSystem(session, sessionId, "__compact::done");
-        const postCompactEstimate: ContextUsage = {
-          used: Math.round(session.contextWindowSize * 0.1),
-          total: session.contextWindowSize,
-        };
-        session.contextUsage = postCompactEstimate;
-        session.emitter.emit("usage", sessionId, postCompactEstimate);
-        session.info.status = "idle";
-        session.emitter.emit("status", sessionId, "idle");
-        this.flushQueuedMessage(session, sessionId);
-      }
-    });
-    session.transcriptWatcher = watcher;
-
-    this.startTodoWatcher(session, sessionId);
-
-    // Set the in-flight guard immediately before start(). Everything above is
-    // synchronous (no re-entrancy is possible until start() yields to the event
-    // loop), so a synchronous throw in the setup above can never strand
-    // spawning=true and permanently block ensureProcess for this session.
-    session.spawning = true;
-    runtime
-      .start(ptyText)
-      .then(() => {
-        session.spawning = false;
-        this.log(sessionId, `PTY claude ready (pid=${runtime.pid})`);
-        logDiag(sessionId, "pty:start-resolved", {
-          pid: runtime.pid,
-          elapsedMs: Date.now() - spawnBeginAt,
-          isAlive: runtime.isAlive,
-          status: session.info.status,
-        });
-        watcher.start();
-      })
-      .catch((err: unknown) => {
-        session.spawning = false;
-        const msg = err instanceof Error ? err.message : String(err);
-        this.log(sessionId, `pty runtime start failed: ${msg}`);
-        logDiag(sessionId, "pty:start-rejected", { error: msg, elapsedMs: Date.now() - spawnBeginAt });
-        const dead = session.ptyRuntime;
-        session.ptyRuntime = null;
-        // Emit error BEFORE idle: a job's onStatus("idle") maps to success, so an
-        // idle-first order would mark a failed spawn as a successful empty run.
-        session.emitter.emit("error", sessionId, msg);
-        session.info.status = "idle";
-        session.emitter.emit("status", sessionId, "idle");
-        // Reap the half-started PTY so a failed delivery can't leak an idle CLI.
-        dead?.kill().catch(() => {});
-      });
+      onTranscriptUpdate: (messages, lastUsage) => {
+        session.emitter.emit("transcript", sessionId, messages);
+        if (lastUsage) {
+          const usage: ContextUsage = { used: lastUsage.used, total: session.contextWindowSize };
+          session.contextUsage = usage;
+          session.emitter.emit("usage", sessionId, usage);
+        }
+        if (session.compacting && messages.some((m) => m.content === "__compacted__")) {
+          logDiag(sessionId, "compact:done-on-transcript");
+          session.compacting = false;
+          this.emitSystem(session, sessionId, "__compact::done");
+          const postCompactEstimate: ContextUsage = {
+            used: Math.round(session.contextWindowSize * 0.1),
+            total: session.contextWindowSize,
+          };
+          session.contextUsage = postCompactEstimate;
+          session.emitter.emit("usage", sessionId, postCompactEstimate);
+          session.info.status = "idle";
+          session.emitter.emit("status", sessionId, "idle");
+          this.flushQueuedMessage(session, sessionId);
+        }
+      },
+    };
+    // handleRef.current is set by the caller once adapter.spawn() returns —
+    // callback invocations only ever happen asynchronously afterward, never
+    // during adapter.spawn() itself, so it's populated before it's ever read.
+    return { callbacks, handleRef };
   }
 
   private async loadAgentChildren(session: Session, sessionId: string, messageId: string, cwd: string): Promise<void> {

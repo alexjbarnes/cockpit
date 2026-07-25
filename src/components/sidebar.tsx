@@ -921,17 +921,24 @@ function SidebarChanges({ cwd }: { cwd: string; sessionId?: string }) {
   cwdRef.current = cwd;
 
   const fetchStatus = useCallback(() => {
-    fetch(`/api/git/status?cwd=${encodeURIComponent(cwdRef.current)}`)
+    // Capture the cwd this request is for. fs_changed fires for every
+    // subscribed session, so several status fetches can be in flight across a
+    // session switch. Without this guard a late response for the previous cwd
+    // overwrites the current one and the panel sticks on the old session.
+    const target = cwdRef.current;
+    fetch(`/api/git/status?cwd=${encodeURIComponent(target)}`)
       .then((r) => {
         if (!r.ok) throw new Error("Not a git repository");
         return r.json();
       })
       .then((data) => {
+        if (cwdRef.current !== target) return;
         setFiles(data.files || []);
         setBranch(data.branch || "");
         setError(null);
       })
       .catch((err) => {
+        if (cwdRef.current !== target) return;
         setFiles([]);
         setBranch("");
         setError(err instanceof Error ? err.message : "Failed to load");
