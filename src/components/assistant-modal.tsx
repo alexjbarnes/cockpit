@@ -80,7 +80,9 @@ export function AssistantModal({ open, onOpenChange }: AssistantModalProps) {
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="sm:max-w-3xl h-[80vh] flex flex-col p-0 gap-0 overflow-hidden">
+      {/* dvh, not vh: every other modal in the app uses the dynamic unit so the
+          dialog tracks the viewport the on-screen keyboard leaves behind. */}
+      <DialogContent className="sm:max-w-3xl h-[80dvh] flex flex-col p-0 gap-0 overflow-hidden">
         <div className="flex items-center gap-2 px-4 py-3 border-b shrink-0">
           <Bot className="h-4 w-4 text-muted-foreground" />
           <span className="text-sm font-medium">Cockpit Assistant</span>

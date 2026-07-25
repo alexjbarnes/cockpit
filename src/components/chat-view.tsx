@@ -378,7 +378,10 @@ export function ChatView({
   }, [cwd, currentRuntime, thinkingCheck?.targetModel, cancelThinkingCheck, router]);
 
   return (
-    <div className={cn("flex flex-col flex-1 min-h-0", className)}>
+    // data-input-bounds: the height the input row must live within. InputArea
+    // measures it to cap how tall the textarea may grow, which matters in the
+    // assistant modal where this column is only a fraction of the viewport.
+    <div data-input-bounds className={cn("flex flex-col flex-1 min-h-0", className)}>
       <div
         ref={scrollRef}
         data-chat-scroll
