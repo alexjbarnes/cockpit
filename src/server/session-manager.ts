@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { v4 as uuidv4 } from "uuid";
 import { classifyCliCommand } from "@/lib/cli-commands";
+import { describeJobTargets } from "@/lib/job-target-label";
 import {
   allowedEffortLevels,
   type ContextSize,
@@ -1676,13 +1677,9 @@ export class SessionManager {
           const parts = suffix.split("_");
           const action = parts[0];
           const domain = parts.slice(1).join("_");
-          let displayName: string | undefined;
-          if (domain === "job" && (action === "update" || action === "delete")) {
-            const jobId = (pa.rawToolInput as Record<string, unknown>)?.id;
-            if (typeof jobId === "string") {
-              displayName = getJob(jobId)?.name;
-            }
-          }
+          // Every job tool, not just update/delete: run_job and stop_job used to
+          // render as a bare uuid on the approval card.
+          const displayName = domain === "job" ? describeJobTargets(pa.rawToolInput, (id) => getJob(id)?.name) : undefined;
           session.pendingRequests.set(pa.requestId, {
             type: "permission",
             requestId: pa.requestId,

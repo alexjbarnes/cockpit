@@ -36,6 +36,13 @@ vi.mock("@/server/transcript", () => ({
   loadPromptHistory: () => Promise.resolve([]),
 }));
 
+// session-manager pulls only getJob from job-storage, to label config proposals.
+// Mocked so the test never touches the real ~/.cockpit/scheduled-jobs.json.
+const { mockJobs } = vi.hoisted(() => ({ mockJobs: {} as Record<string, { name: string }> }));
+vi.mock("@/server/job-storage", () => ({
+  getJob: (id: string) => mockJobs[id],
+}));
+
 vi.mock("@/server/session-prefs", () => ({
   getSessionPrefs: vi.fn(() => undefined),
   setSessionPrefs: vi.fn(),
@@ -4790,6 +4797,62 @@ describe("SessionManager", () => {
       expect(pending.configProposal).toBeDefined();
       expect(pending.configProposal.action).toBe("run");
       expect(pending.configProposal.domain).toBe("job");
+    });
+
+    it("labels a run_job proposal with the job name, not its uuid", () => {
+      mockJobs["7c9e-4f21-uuid"] = { name: "Weekend Things Todo" };
+      const session = manager.createSession("/tmp", undefined, { cockpitAgent: true });
+      const s = (manager as any).sessions.get(session.id);
+
+      (manager as any).applyProcessedResult(s, session.id, {
+        permissionActions: [
+          {
+            type: "store" as const,
+            toolName: "mcp__cockpit-config__run_job",
+            requestId: "req-run-named",
+            toolInput: JSON.stringify({ id: "7c9e-4f21-uuid" }),
+            rawToolInput: { id: "7c9e-4f21-uuid" },
+          },
+        ],
+        errors: [],
+        compactDone: false,
+        emit: [],
+        statusChange: undefined,
+        snapshot: null,
+        intermediateMessages: [],
+        systemMessages: [],
+      });
+
+      expect(s.pendingRequests.get("req-run-named").configProposal.displayName).toBe("Weekend Things Todo");
+    });
+
+    it("labels a stop_job proposal, which previously showed a bare uuid", () => {
+      mockJobs["stop-me-uuid"] = { name: "Tech roundup" };
+      const session = manager.createSession("/tmp", undefined, { cockpitAgent: true });
+      const s = (manager as any).sessions.get(session.id);
+
+      (manager as any).applyProcessedResult(s, session.id, {
+        permissionActions: [
+          {
+            type: "store" as const,
+            toolName: "mcp__cockpit-config__stop_job",
+            requestId: "req-stop-named",
+            toolInput: JSON.stringify({ id: "stop-me-uuid" }),
+            rawToolInput: { id: "stop-me-uuid" },
+          },
+        ],
+        errors: [],
+        compactDone: false,
+        emit: [],
+        statusChange: undefined,
+        snapshot: null,
+        intermediateMessages: [],
+        systemMessages: [],
+      });
+
+      const proposal = s.pendingRequests.get("req-stop-named").configProposal;
+      expect(proposal.action).toBe("stop");
+      expect(proposal.displayName).toBe("Tech roundup");
     });
   });
 });
