@@ -1,4 +1,4 @@
-import { mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -8,6 +8,7 @@ process.env.CLAUDE_CONFIG_DIR = mkdtempSync(join(tmpdir(), "claude-test-"));
 
 vi.mock("@/server/singleton", () => ({ getJobScheduler: vi.fn() }));
 
+import { saveRun } from "@/server/job-storage";
 import { CockpitMcpServer } from "@/server/mcp/cockpit-config-server";
 import { registerAuthToken } from "@/server/mcp/run-context";
 import { getJobScheduler } from "@/server/singleton";
@@ -140,7 +141,9 @@ describe("cockpit-config MCP server (in-process HTTP)", () => {
       "update_notification_provider",
       "delete_notification_provider",
       "run_job",
+      "stop_job",
       "list_running_jobs",
+      "get_job_transcript",
     ]) {
       expect(names).toContain(name);
     }
@@ -526,6 +529,129 @@ describe("cockpit-config MCP server (in-process HTTP)", () => {
 
       const reloaded = (await callToolParsed("get_job", { id: a.created.id })) as Record<string, unknown>;
       expect(reloaded).not.toHaveProperty("cron");
+    });
+  });
+
+  describe("get_job_transcript", () => {
+    const CWD = "/tmp";
+
+    function writeTranscript(sessionId: string, lines: Record<string, unknown>[]): void {
+      // Mirrors getTranscriptPath: the project key is the cwd with / and . replaced by -.
+      const dir = join(process.env.CLAUDE_CONFIG_DIR as string, "projects", CWD.replace(/[/.]/g, "-"));
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, `${sessionId}.jsonl`), `${lines.map((l) => JSON.stringify(l)).join("\n")}\n`);
+    }
+
+    async function jobWithRun(name: string, sessionId: string, status: string): Promise<string> {
+      const created = (await callToolParsed("create_job", {
+        name,
+        schedules: [{ type: "simple", frequency: "hourly" }],
+        prompt: "find things to do",
+        cwd: CWD,
+      })) as { created: { id: string } };
+      saveRun({
+        id: `run-${sessionId}`,
+        jobId: created.created.id,
+        sessionId,
+        status: status as "running" | "success",
+        startedAt: Date.now(),
+        toolsUsed: [],
+        messageCount: 2,
+        prompt: "find things to do",
+        cwd: CWD,
+      });
+      return created.created.id;
+    }
+
+    it("returns the latest run's transcript, including while the run is still going", async () => {
+      const sessionId = "sess-live-1";
+      writeTranscript(sessionId, [
+        { type: "user", message: { id: "u1", content: "find things to do" }, timestamp: "2026-07-25T09:00:00Z", cwd: CWD },
+        {
+          type: "assistant",
+          message: { id: "a1", content: [{ type: "text", text: "found three farms" }] },
+          timestamp: "2026-07-25T09:00:05Z",
+          cwd: CWD,
+        },
+      ]);
+      const jobId = await jobWithRun("transcript-live", sessionId, "running");
+
+      const result = (await callToolParsed("get_job_transcript", { id: jobId })) as {
+        job: string;
+        status: string;
+        totalMessages: number;
+        messages: { role: string; text: string }[];
+      };
+      expect(result.job).toBe("transcript-live");
+      // A run is persisted as "running" before it finishes, which is what makes
+      // this readable mid-flight rather than only after completion.
+      expect(result.status).toBe("running");
+      expect(result.totalMessages).toBe(2);
+      expect(result.messages.map((m) => m.role)).toEqual(["user", "assistant"]);
+      expect(result.messages[1].text).toContain("found three farms");
+    });
+
+    it("honours tailMessages and reports how many it held back", async () => {
+      const sessionId = "sess-tail-1";
+      writeTranscript(
+        sessionId,
+        Array.from({ length: 5 }, (_, i) => ({
+          type: "user",
+          message: { id: `u${i}`, content: `message ${i}` },
+          timestamp: `2026-07-25T09:0${i}:00Z`,
+          cwd: CWD,
+        })),
+      );
+      const jobId = await jobWithRun("transcript-tail", sessionId, "success");
+
+      const result = (await callToolParsed("get_job_transcript", { id: jobId, tailMessages: 2 })) as {
+        totalMessages: number;
+        returnedMessages: number;
+        messages: { text: string }[];
+      };
+      expect(result.totalMessages).toBe(5);
+      expect(result.returnedMessages).toBe(2);
+      expect(result.messages[1].text).toContain("message 4");
+    });
+
+    it("errors for an unknown job", async () => {
+      const res = await mcpPost({
+        jsonrpc: "2.0",
+        id: 99,
+        method: "tools/call",
+        params: { name: "get_job_transcript", arguments: { id: "nonexistent" } },
+      });
+      const text = (res.body as { result?: { content: { text: string }[] } })?.result?.content?.[0]?.text ?? "";
+      expect(JSON.parse(text).error).toContain("not found");
+    });
+
+    it("errors when the job has never run", async () => {
+      const created = (await callToolParsed("create_job", {
+        name: "never-run",
+        schedules: [{ type: "simple", frequency: "hourly" }],
+        prompt: "idle",
+        cwd: CWD,
+      })) as { created: { id: string } };
+      const res = await mcpPost({
+        jsonrpc: "2.0",
+        id: 99,
+        method: "tools/call",
+        params: { name: "get_job_transcript", arguments: { id: created.created.id } },
+      });
+      const text = (res.body as { result?: { content: { text: string }[] } })?.result?.content?.[0]?.text ?? "";
+      expect(JSON.parse(text).error).toContain("No runs recorded");
+    });
+
+    it("errors for a run id that does not belong to the job", async () => {
+      const jobId = await jobWithRun("transcript-badrun", "sess-badrun-1", "success");
+      const res = await mcpPost({
+        jsonrpc: "2.0",
+        id: 99,
+        method: "tools/call",
+        params: { name: "get_job_transcript", arguments: { id: jobId, runId: "run-does-not-exist" } },
+      });
+      const text = (res.body as { result?: { content: { text: string }[] } })?.result?.content?.[0]?.text ?? "";
+      expect(JSON.parse(text).error).toContain("Run not found");
     });
   });
 

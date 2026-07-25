@@ -7,11 +7,12 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { CONTEXT_SIZES } from "@/lib/models";
 import { getDefaults, setDefaults } from "@/server/defaults";
-import { deleteJob, getJob, loadJobs, saveJob } from "@/server/job-storage";
+import { deleteJob, getJob, getLatestRun, getRun, loadJobs, saveJob } from "@/server/job-storage";
 import { getNotificationSettings, setNotificationSettings, updateNotificationSettings } from "@/server/notification-settings";
 import { getClaudeUserConfigFile } from "@/server/paths";
 import { addProvider, deleteProvider, getProviders, updateProvider } from "@/server/providers";
 import { getJobScheduler } from "@/server/singleton";
+import { findSessionCwd, loadTranscript } from "@/server/transcript";
 import type { InboxPriority, JobRun, NotificationProviderEntry, ScheduledJob } from "@/types";
 import { isValidToken } from "./run-context";
 
@@ -52,6 +53,11 @@ const JOB_UPDATE_FIELDS = [
   "notifyProviders",
   "runtime",
 ] as const satisfies readonly (keyof ScheduledJob)[];
+
+/** Messages returned by get_job_transcript when the caller does not ask for a count. */
+const JOB_TRANSCRIPT_DEFAULT_MESSAGES = 50;
+/** Per-message character cap, so one long tool dump cannot swamp the reply. */
+const JOB_TRANSCRIPT_MAX_TEXT = 4000;
 
 function pickJobUpdate(source: Record<string, unknown>): Partial<ScheduledJob> {
   const update: Record<string, unknown> = {};
@@ -305,6 +311,23 @@ const TOOL_DEFINITIONS = [
     description: "List scheduled jobs that are currently running",
     inputSchema: { type: "object", properties: {}, required: [] },
   },
+  {
+    name: "get_job_transcript",
+    description:
+      "Read the conversation transcript of a scheduled job's run, so you can see what it actually did rather than only whether it succeeded. Defaults to the most recent run, which may still be in progress, so this is also how you watch a job that is running right now.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "Job ID" },
+        runId: { type: "string", description: "A specific run to read. Defaults to the most recent run, running or finished." },
+        tailMessages: {
+          type: "number",
+          description: `Return only the last N messages. Defaults to ${JOB_TRANSCRIPT_DEFAULT_MESSAGES}.`,
+        },
+      },
+      required: ["id"],
+    },
+  },
 ];
 
 function readClaudeConfig(): { mcpServers: Record<string, McpServerEntry> } {
@@ -321,11 +344,11 @@ function writeClaudeConfig(data: { mcpServers: Record<string, McpServerEntry> })
   writeFileSync(file, JSON.stringify(data, null, 2) + "\n");
 }
 
-function handleToolCall(
+async function handleToolCall(
   name: string,
   args: Record<string, unknown>,
   _token: string,
-): { content: { type: string; text: string }[]; isError?: boolean } {
+): Promise<{ content: { type: string; text: string }[]; isError?: boolean }> {
   try {
     switch (name) {
       case "list_jobs":
@@ -334,6 +357,59 @@ function handleToolCall(
         const job = getJob(args.id as string);
         if (!job) return { content: [{ type: "text", text: JSON.stringify({ error: `Job not found: ${args.id}` }) }], isError: true };
         return { content: [{ type: "text", text: JSON.stringify(job, null, 2) }] };
+      }
+      case "get_job_transcript": {
+        const job = getJob(args.id as string);
+        if (!job) return { content: [{ type: "text", text: JSON.stringify({ error: `Job not found: ${args.id}` }) }], isError: true };
+        const runId = args.runId as string | undefined;
+        // A run is persisted with status "running" the moment its session
+        // exists, so the newest run is often still in flight. That is what lets
+        // this read a job the agent has only just triggered.
+        const run = runId ? getRun(job.id, runId) : getLatestRun(job.id);
+        if (!run) {
+          const detail = runId ? `Run not found: ${runId}` : `No runs recorded for job: ${job.name}`;
+          return { content: [{ type: "text", text: JSON.stringify({ error: detail }) }], isError: true };
+        }
+        const cwd = run.cwd || (await findSessionCwd(run.sessionId));
+        if (!cwd) {
+          return { content: [{ type: "text", text: JSON.stringify({ error: `No transcript found for run ${run.id}` }) }], isError: true };
+        }
+        const { messages } = await loadTranscript(run.sessionId, cwd);
+        const asked =
+          typeof args.tailMessages === "number" && args.tailMessages > 0 ? Math.floor(args.tailMessages) : JOB_TRANSCRIPT_DEFAULT_MESSAGES;
+        const tail = messages.slice(-asked);
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify(
+                {
+                  job: job.name,
+                  jobId: job.id,
+                  runId: run.id,
+                  status: run.status,
+                  startedAt: run.startedAt,
+                  completedAt: run.completedAt,
+                  durationMs: run.durationMs,
+                  error: run.error,
+                  totalMessages: messages.length,
+                  returnedMessages: tail.length,
+                  messages: tail.map((m) => ({
+                    role: m.role,
+                    timestamp: m.timestamp,
+                    text:
+                      m.content.length > JOB_TRANSCRIPT_MAX_TEXT
+                        ? `${m.content.slice(0, JOB_TRANSCRIPT_MAX_TEXT)}\n... (truncated)`
+                        : m.content,
+                    tools: m.toolUses.map((t) => t.name),
+                  })),
+                },
+                null,
+                2,
+              ),
+            },
+          ],
+        };
       }
       case "create_job": {
         const now = Date.now();
