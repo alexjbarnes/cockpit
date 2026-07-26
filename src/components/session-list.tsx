@@ -357,7 +357,12 @@ export function SessionList() {
               <div className="flex items-center gap-3 mb-1">
                 <Zap className="h-5 w-5 text-foreground" />
                 <div className="flex-1">
-                  <div className="text-sm font-medium">Stream (headless)</div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-medium">Stream (headless)</span>
+                    <span className="rounded-sm border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-600 dark:text-amber-400">
+                      Deprecated
+                    </span>
+                  </div>
                   <div className="text-xs text-muted-foreground">Structured output</div>
                 </div>
               </div>

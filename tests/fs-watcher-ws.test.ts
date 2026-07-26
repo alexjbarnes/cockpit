@@ -47,7 +47,7 @@ describe("fs-watcher WebSocket integration", () => {
     () =>
       new Promise<void>((resolve) => {
         sandbox = mkdtempSync(join(tmpdir(), "fsw-ws-test-"));
-        manager = new SessionManager();
+        manager = new SessionManager({ defaultRuntime: "stream" });
         terminalMgr = new TerminalManager();
         server = createServer();
         createWebSocketHandler(server, manager, terminalMgr);

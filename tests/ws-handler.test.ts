@@ -43,7 +43,7 @@ describe("WebSocket handler", () => {
   beforeEach(
     () =>
       new Promise<void>((resolve) => {
-        manager = new SessionManager();
+        manager = new SessionManager({ defaultRuntime: "stream" });
         terminalMgr = new TerminalManager();
         server = createServer();
         createWebSocketHandler(server, manager, terminalMgr);

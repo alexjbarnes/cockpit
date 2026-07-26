@@ -51,9 +51,15 @@ import { findSessionCwd, loadMoreMessages, loadPromptHistory, loadTranscript, tr
 
 export type { SessionRuntime };
 
-function defaultRuntime(): SessionRuntime {
-  return "stream";
-}
+/**
+ * Runtime for sessions that don't pick one.
+ *
+ * PTY is the supported path. Stream runs the CLI under `-p`, which the headless
+ * docs say will default to `--bare` in a future release, and bare mode skips
+ * OAuth and keychain reads, so it would stop authenticating against a
+ * subscription. Stream stays selectable but is no longer the default.
+ */
+const DEFAULT_RUNTIME: SessionRuntime = "pty";
 
 const smLog = (sessionId: string, msg: string) => {
   if (!isDebugEnabled()) return;
@@ -166,7 +172,16 @@ export function buildMcpConfigArg(url: string, token: string): { path: string } 
 export class SessionManager {
   private sessions = new Map<string, Session>();
   private _cockpitAgentSessionPromise: Promise<string> | null = null;
-  constructor() {
+  /**
+   * Injectable so a test can state which transport it exercises instead of
+   * inheriting whatever the product default happens to be. The stream-protocol
+   * tests mock node:child_process, which the PTY path never touches, so they
+   * would silently stop testing anything if the default moved under them.
+   */
+  private readonly defaultRuntime: SessionRuntime;
+
+  constructor(opts?: { defaultRuntime?: SessionRuntime }) {
+    this.defaultRuntime = opts?.defaultRuntime ?? DEFAULT_RUNTIME;
     // Periodically check for sessions stuck in "running" with a dead process
     setInterval(() => {
       for (const [id, session] of this.sessions) {
@@ -195,7 +210,7 @@ export class SessionManager {
     const defaults = getDefaults();
     const modelSlots: ModelSlots = { main: defaults.modelSlots.main ?? "sonnet" };
     const isCockpitAgent = options?.cockpitAgent === true;
-    const rt = options?.runtime ?? defaultRuntime();
+    const rt = options?.runtime ?? this.defaultRuntime;
     const sessionName = isCockpitAgent ? "Cockpit Assistant" : name || path.basename(cwd) || cwd;
     const info: SessionInfo = {
       id,
@@ -291,7 +306,7 @@ export class SessionManager {
       const now = Date.now();
       const modelSlots: ModelSlots =
         prefs?.modelSlots ?? (prefs?.model ? { main: prefs.model } : { main: defaults.modelSlots.main ?? "sonnet" });
-      const restoredRuntime = prefs?.runtime ?? defaultRuntime();
+      const restoredRuntime = prefs?.runtime ?? this.defaultRuntime;
       const restoredContextSize = prefs?.contextSize ?? prefs?.modelSlots?.mainContext ?? DEFAULT_CONTEXT_SIZE;
       session = {
         info: {

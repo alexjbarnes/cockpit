@@ -151,9 +151,16 @@ describe("SessionManager PTY runtime (unit)", () => {
       expect(session.runtime).toBe("pty");
     });
 
-    it("defaults to stream runtime", () => {
+    it("defaults to pty runtime", () => {
       const session = manager.createSession("/tmp");
-      expect(session.runtime).toBe("stream");
+      expect(session.runtime).toBe("pty");
+    });
+
+    it("honours an injected default, which is how the stream-protocol suites pin their transport", () => {
+      const streamFirst = new SessionManager({ defaultRuntime: "stream" });
+      expect(streamFirst.createSession("/tmp").runtime).toBe("stream");
+      // An explicit per-session choice still wins over the injected default.
+      expect(streamFirst.createSession("/tmp", undefined, { runtime: "pty" }).runtime).toBe("pty");
     });
   });
 

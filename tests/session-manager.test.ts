@@ -108,7 +108,7 @@ describe("SessionManager", () => {
   let manager: SessionManager;
 
   beforeEach(() => {
-    manager = new SessionManager();
+    manager = new SessionManager({ defaultRuntime: "stream" });
   });
 
   describe("createSession", () => {
@@ -143,7 +143,7 @@ describe("SessionManager", () => {
         modelSlots: { main: "opus", mainContext: "1m" },
       });
       try {
-        const m = new SessionManager();
+        const m = new SessionManager({ defaultRuntime: "stream" });
         const session = m.createSession("/tmp");
         const s = (m as any).sessions.get(session.id)!;
         expect(s.info.contextSize).toBe("1m");

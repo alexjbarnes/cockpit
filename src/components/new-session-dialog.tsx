@@ -139,7 +139,8 @@ export function NewSessionDialog({ open, onOpenChange, onSubmit }: NewSessionDia
               icon={<Zap className="h-5 w-5" />}
               title="Stream (headless)"
               subtitle="Structured output"
-              description="Runs Claude with structured JSON streaming. Lower overhead, better for automated workflows."
+              badge="Deprecated"
+              description="Runs Claude with structured JSON streaming under the CLI's -p flag. Kept for existing sessions: -p is moving to bare mode, which skips OAuth and would stop authenticating against a subscription."
               onClick={() => pickBackend("stream")}
             />
           </div>
@@ -279,12 +280,14 @@ function BackendCard({
   title,
   subtitle,
   description,
+  badge,
   onClick,
 }: {
   icon: React.ReactNode;
   title: string;
   subtitle: string;
   description: string;
+  badge?: string;
   onClick: () => void;
 }) {
   return (
@@ -296,7 +299,14 @@ function BackendCard({
       <div className="flex items-center gap-3 mb-1">
         <span className="text-foreground">{icon}</span>
         <div className="flex-1">
-          <div className="text-sm font-medium">{title}</div>
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-medium">{title}</span>
+            {badge && (
+              <span className="rounded-sm border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-600 dark:text-amber-400">
+                {badge}
+              </span>
+            )}
+          </div>
           <div className="text-xs text-muted-foreground">{subtitle}</div>
         </div>
       </div>

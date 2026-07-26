@@ -48,18 +48,20 @@ function DialogContent({
 }: React.HTMLAttributes<HTMLDivElement> & { onClose?: () => void; onDelete?: () => void }) {
   return (
     <div className={cn("relative rounded-lg border bg-background text-foreground p-6 shadow-lg overflow-y-auto", className)} {...props}>
+      {/* Right-aligned and pulled flush with the content's top padding, so it
+          reads as sitting beside the title rather than stranded on its own row
+          above it. Still in flow and sticky, not absolute, so it stays reachable
+          while a long dialog scrolls. */}
       {(props.onClose || props.onDelete) && (
-        <div className="sticky top-0 z-10 flex justify-between -mx-2 -mt-2 mb-2">
-          {props.onClose ? (
-            <button className="rounded-sm opacity-70 hover:opacity-100" onClick={props.onClose}>
-              <X className="h-4 w-4" />
-            </button>
-          ) : (
-            <span />
-          )}
+        <div className="sticky top-0 z-10 flex justify-end gap-1 -mx-2 -mt-4 -mb-2">
           {props.onDelete && (
-            <button className="rounded-sm opacity-70 hover:opacity-100 text-destructive" onClick={props.onDelete}>
+            <button className="rounded-sm p-1 opacity-70 hover:opacity-100 text-destructive" onClick={props.onDelete}>
               <Trash2 className="h-4 w-4" />
+            </button>
+          )}
+          {props.onClose && (
+            <button className="rounded-sm p-1 opacity-70 hover:opacity-100" onClick={props.onClose} aria-label="Close">
+              <X className="h-4 w-4" />
             </button>
           )}
         </div>

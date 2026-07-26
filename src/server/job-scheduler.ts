@@ -378,7 +378,9 @@ export class JobScheduler {
     logDiag(job.id, "job:execute-start", {
       runId,
       name: job.name,
-      runtime: job.runtime ?? "stream",
+      // Not the resolved runtime: an unset job falls through to the session
+      // manager's default. The session-created entry below logs what it became.
+      runtime: job.runtime ?? "(default)",
       model: job.model,
       thinkingLevel: job.thinkingLevel,
       contextSize: job.contextSize,

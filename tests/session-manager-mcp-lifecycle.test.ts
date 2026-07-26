@@ -111,7 +111,7 @@ describe("SessionManager MCP token lifecycle", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     ptyInstances.length = 0;
-    manager = new SessionManager();
+    manager = new SessionManager({ defaultRuntime: "stream" });
   });
 
   it("spawning a cockpit-agent session registers a token and sets mcpToken", () => {
