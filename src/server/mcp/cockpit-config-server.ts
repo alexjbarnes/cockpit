@@ -54,6 +54,57 @@ const JOB_UPDATE_FIELDS = [
   "runtime",
 ] as const satisfies readonly (keyof ScheduledJob)[];
 
+/**
+ * Placeholder the assistant sees in place of a stored secret.
+ *
+ * The read tools (list_providers and friends) are auto-approved for the cockpit
+ * assistant, so before this every provider API key, MCP server env value and
+ * notification token was pulled into the model's context unprompted, written to
+ * the session transcript on disk, and sent to whatever provider the assistant
+ * session happens to run on. It never needs the value, only whether one is set.
+ */
+const REDACTED = "<redacted>";
+
+/** Field names whose values are treated as secret wherever they appear. */
+const SECRET_NAME = /key|token|secret|password|credential/i;
+
+/**
+ * Deep-copy `value`, replacing secret-looking string values with REDACTED.
+ * Empty strings are left alone: `ANTHROPIC_API_KEY: ""` is meaningful config
+ * (it stops the CLI falling back to Anthropic), not a secret to hide.
+ */
+function redactSecrets<T>(value: T): T {
+  if (Array.isArray(value)) return value.map((v) => redactSecrets(v)) as unknown as T;
+  if (value && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      out[k] = typeof v === "string" && v !== "" && SECRET_NAME.test(k) ? REDACTED : redactSecrets(v);
+    }
+    return out as T;
+  }
+  return value;
+}
+
+/**
+ * Undo a redacted round trip: wherever `incoming` carries the placeholder, take
+ * the real value from `stored`. Without this, an assistant that read a config
+ * and echoed it back into an update would overwrite a live API key with the
+ * literal string "<redacted>".
+ */
+function restoreRedacted<T>(incoming: T, stored: unknown): T {
+  if (incoming === REDACTED) return (typeof stored === "string" ? stored : incoming) as T;
+  if (Array.isArray(incoming)) return incoming as T;
+  if (incoming && typeof incoming === "object") {
+    const storedObj = (stored && typeof stored === "object" ? stored : {}) as Record<string, unknown>;
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(incoming as Record<string, unknown>)) {
+      out[k] = restoreRedacted(v, storedObj[k]);
+    }
+    return out as T;
+  }
+  return incoming;
+}
+
 /** Messages returned by get_job_transcript when the caller does not ask for a count. */
 const JOB_TRANSCRIPT_DEFAULT_MESSAGES = 50;
 /** Per-message character cap, so one long tool dump cannot swamp the reply. */
@@ -488,40 +539,43 @@ async function handleToolCall(
         return { content: [{ type: "text", text: JSON.stringify({ before, after }, null, 2) }] };
       }
       case "list_providers":
-        return { content: [{ type: "text", text: JSON.stringify(getProviders(), null, 2) }] };
+        return { content: [{ type: "text", text: JSON.stringify(redactSecrets(getProviders()), null, 2) }] };
       case "add_provider": {
         const provider = addProvider({
           name: args.name as string,
           envVars: args.envVars as Record<string, string>,
           models: [],
         });
-        return { content: [{ type: "text", text: JSON.stringify({ created: provider }, null, 2) }] };
+        return { content: [{ type: "text", text: JSON.stringify({ created: redactSecrets(provider) }, null, 2) }] };
       }
       case "update_provider": {
         const { id, ...rest } = args;
         const before = getProviders().find((p) => p.id === id);
         if (!before) return { content: [{ type: "text", text: JSON.stringify({ error: `Provider not found: ${id}` }) }], isError: true };
-        const after = updateProvider(id as string, rest as Parameters<typeof updateProvider>[1]);
-        return { content: [{ type: "text", text: JSON.stringify({ before, after }, null, 2) }] };
+        const patch = restoreRedacted(rest, before) as Parameters<typeof updateProvider>[1];
+        const after = updateProvider(id as string, patch);
+        return {
+          content: [{ type: "text", text: JSON.stringify({ before: redactSecrets(before), after: redactSecrets(after) }, null, 2) }],
+        };
       }
       case "delete_provider": {
         const provider = getProviders().find((p) => p.id === args.id);
         if (!provider)
           return { content: [{ type: "text", text: JSON.stringify({ error: `Provider not found: ${args.id}` }) }], isError: true };
         deleteProvider(args.id as string);
-        return { content: [{ type: "text", text: JSON.stringify({ deleted: provider }, null, 2) }] };
+        return { content: [{ type: "text", text: JSON.stringify({ deleted: redactSecrets(provider) }, null, 2) }] };
       }
       case "list_mcp_servers": {
         const config = readClaudeConfig();
         const entries = Object.entries(config.mcpServers ?? {}).map(([n, c]) => ({ name: n, ...c }));
-        return { content: [{ type: "text", text: JSON.stringify(entries, null, 2) }] };
+        return { content: [{ type: "text", text: JSON.stringify(redactSecrets(entries), null, 2) }] };
       }
       case "get_mcp_server": {
         const config = readClaudeConfig();
         const entry = config.mcpServers?.[args.name as string];
         if (!entry)
           return { content: [{ type: "text", text: JSON.stringify({ error: `MCP server not found: ${args.name}` }) }], isError: true };
-        return { content: [{ type: "text", text: JSON.stringify({ name: args.name, ...entry }, null, 2) }] };
+        return { content: [{ type: "text", text: JSON.stringify(redactSecrets({ name: args.name, ...entry }), null, 2) }] };
       }
       case "save_mcp_server": {
         const config = readClaudeConfig();
@@ -530,10 +584,17 @@ async function handleToolCall(
         servers[args.name as string] = {
           command: args.command as string,
           args: args.args as string[],
-          env: args.env as Record<string, string> | undefined,
+          env: restoreRedacted(args.env as Record<string, string> | undefined, before?.env),
         };
         writeClaudeConfig({ ...config, mcpServers: servers });
-        return { content: [{ type: "text", text: JSON.stringify({ before, after: servers[args.name as string] }, null, 2) }] };
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({ before: redactSecrets(before), after: redactSecrets(servers[args.name as string]) }, null, 2),
+            },
+          ],
+        };
       }
       case "delete_mcp_server": {
         const config = readClaudeConfig();
@@ -543,18 +604,21 @@ async function handleToolCall(
         const deleted = servers[args.name as string];
         delete servers[args.name as string];
         writeClaudeConfig({ ...config, mcpServers: servers });
-        return { content: [{ type: "text", text: JSON.stringify({ deleted }, null, 2) }] };
+        return { content: [{ type: "text", text: JSON.stringify({ deleted: redactSecrets(deleted) }, null, 2) }] };
       }
       case "get_notification_settings":
-        return { content: [{ type: "text", text: JSON.stringify(getNotificationSettings(), null, 2) }] };
+        return { content: [{ type: "text", text: JSON.stringify(redactSecrets(getNotificationSettings()), null, 2) }] };
       case "update_notification_settings": {
         const before = getNotificationSettings();
-        const after = updateNotificationSettings(args as Parameters<typeof updateNotificationSettings>[0]);
-        return { content: [{ type: "text", text: JSON.stringify({ before, after }, null, 2) }] };
+        const patch = restoreRedacted(args, before) as Parameters<typeof updateNotificationSettings>[0];
+        const after = updateNotificationSettings(patch);
+        return {
+          content: [{ type: "text", text: JSON.stringify({ before: redactSecrets(before), after: redactSecrets(after) }, null, 2) }],
+        };
       }
       case "list_notification_providers": {
         const settings = getNotificationSettings();
-        return { content: [{ type: "text", text: JSON.stringify(settings.providers, null, 2) }] };
+        return { content: [{ type: "text", text: JSON.stringify(redactSecrets(settings.providers), null, 2) }] };
       }
       case "add_notification_provider": {
         const settings = getNotificationSettings();
@@ -570,7 +634,11 @@ async function handleToolCall(
               : undefined,
         };
         const after = setNotificationSettings({ ...settings, providers: [...settings.providers, entry] });
-        return { content: [{ type: "text", text: JSON.stringify({ created: entry, providers: after.providers }, null, 2) }] };
+        return {
+          content: [
+            { type: "text", text: JSON.stringify({ created: redactSecrets(entry), providers: redactSecrets(after.providers) }, null, 2) },
+          ],
+        };
       }
       case "update_notification_provider": {
         const settings = getNotificationSettings();
@@ -582,7 +650,9 @@ async function handleToolCall(
           ...before,
           ...(args.name !== undefined ? { name: args.name as string } : {}),
           ...(args.enabled !== undefined ? { enabled: args.enabled as boolean } : {}),
-          ...(args.config !== undefined ? { config: args.config as NotificationProviderEntry["config"] } : {}),
+          ...(args.config !== undefined
+            ? { config: restoreRedacted(args.config, before.config) as NotificationProviderEntry["config"] }
+            : {}),
           ...(Array.isArray(args.filterPriorities)
             ? {
                 filter:
@@ -597,7 +667,11 @@ async function handleToolCall(
         const providers = [...settings.providers];
         providers[idx] = updated;
         const after = setNotificationSettings({ ...settings, providers });
-        return { content: [{ type: "text", text: JSON.stringify({ before, after: after.providers[idx] }, null, 2) }] };
+        return {
+          content: [
+            { type: "text", text: JSON.stringify({ before: redactSecrets(before), after: redactSecrets(after.providers[idx]) }, null, 2) },
+          ],
+        };
       }
       case "delete_notification_provider": {
         const settings = getNotificationSettings();
@@ -605,7 +679,14 @@ async function handleToolCall(
         if (!provider)
           return { content: [{ type: "text", text: JSON.stringify({ error: `Provider not found: ${args.id}` }) }], isError: true };
         const after = setNotificationSettings({ ...settings, providers: settings.providers.filter((p) => p.id !== args.id) });
-        return { content: [{ type: "text", text: JSON.stringify({ deleted: provider, providers: after.providers }, null, 2) }] };
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({ deleted: redactSecrets(provider), providers: redactSecrets(after.providers) }, null, 2),
+            },
+          ],
+        };
       }
       case "run_job": {
         const ids = Array.isArray(args.ids) ? (args.ids as string[]) : args.id ? [args.id as string] : [];

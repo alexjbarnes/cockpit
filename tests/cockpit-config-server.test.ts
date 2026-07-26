@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -721,6 +721,78 @@ describe("cockpit-config MCP server (in-process HTTP)", () => {
       });
       const text = (res.body as { result?: { content: { text: string }[] } })?.result?.content?.[0]?.text ?? "";
       expect(JSON.parse(text).error).toContain("not found");
+    });
+
+    it("never returns a stored secret to the caller", async () => {
+      const created = (await callToolParsed("add_provider", {
+        name: "secret-provider",
+        envVars: { OPENROUTER_API_KEY: "sk-or-v1-realsecret", ANTHROPIC_BASE_URL: "https://example.test", ANTHROPIC_API_KEY: "" },
+      })) as { created: { id: string; envVars: Record<string, string> } };
+
+      // The key is masked, the non-secret URL is not, and a deliberately empty
+      // value stays empty so the assistant can still tell configured from not.
+      expect(created.created.envVars.OPENROUTER_API_KEY).toBe("<redacted>");
+      expect(created.created.envVars.ANTHROPIC_BASE_URL).toBe("https://example.test");
+      expect(created.created.envVars.ANTHROPIC_API_KEY).toBe("");
+
+      const listed = (await callToolParsed("list_providers")) as { name: string; envVars: Record<string, string> }[];
+      const found = listed.find((p) => p.name === "secret-provider")!;
+      expect(found.envVars.OPENROUTER_API_KEY).toBe("<redacted>");
+      expect(JSON.stringify(listed)).not.toContain("sk-or-v1-realsecret");
+
+      await callToolParsed("delete_provider", { id: created.created.id });
+    });
+
+    it("does not overwrite a real secret when the caller echoes the placeholder back", async () => {
+      const created = (await callToolParsed("add_provider", {
+        name: "roundtrip-provider",
+        envVars: { OPENROUTER_API_KEY: "sk-or-v1-keepme" },
+      })) as { created: { id: string } };
+      const id = created.created.id;
+
+      // Exactly what an assistant does after reading: echo the shape back with
+      // one field changed. The masked key must survive.
+      const updated = (await callToolParsed("update_provider", {
+        id,
+        name: "roundtrip-renamed",
+        envVars: { OPENROUTER_API_KEY: "<redacted>", EXTRA: "added" },
+      })) as { after: { name: string; envVars: Record<string, string> } };
+
+      expect(updated.after.name).toBe("roundtrip-renamed");
+      expect(updated.after.envVars.OPENROUTER_API_KEY).toBe("<redacted>");
+      expect(updated.after.envVars.EXTRA).toBe("added");
+
+      // Read the raw store, since every tool response is redacted by design.
+      const stored = JSON.parse(readFileSync(join(process.env.COCKPIT_CONFIG_DIR as string, "providers.json"), "utf-8"));
+      const raw = (Array.isArray(stored) ? stored : (stored.providers ?? [])).find((p: { id: string }) => p.id === id);
+      expect(raw.envVars.OPENROUTER_API_KEY).toBe("sk-or-v1-keepme");
+
+      await callToolParsed("delete_provider", { id });
+    });
+
+    it("masks an mcp server's env values too", async () => {
+      await callToolParsed("save_mcp_server", {
+        name: "secret-mcp",
+        command: "node",
+        args: ["server.js"],
+        env: { GITHUB_TOKEN: "ghp_realtoken", LOG_LEVEL: "debug" },
+      });
+      const got = (await callToolParsed("get_mcp_server", { name: "secret-mcp" })) as { env: Record<string, string> };
+      expect(got.env.GITHUB_TOKEN).toBe("<redacted>");
+      expect(got.env.LOG_LEVEL).toBe("debug");
+
+      // And the placeholder round trip leaves the stored token intact.
+      await callToolParsed("save_mcp_server", {
+        name: "secret-mcp",
+        command: "node",
+        args: ["server.js", "--verbose"],
+        env: { GITHUB_TOKEN: "<redacted>", LOG_LEVEL: "info" },
+      });
+      const config = JSON.parse(readFileSync(join(process.env.CLAUDE_CONFIG_DIR as string, ".claude.json"), "utf-8"));
+      expect(config.mcpServers["secret-mcp"].env.GITHUB_TOKEN).toBe("ghp_realtoken");
+      expect(config.mcpServers["secret-mcp"].env.LOG_LEVEL).toBe("info");
+
+      await callToolParsed("delete_mcp_server", { name: "secret-mcp" });
     });
 
     it("delete_provider removes provider", async () => {
