@@ -173,6 +173,8 @@ export function buildMcpConfigArg(url: string, token: string): { path: string } 
  * Tools the cockpit assistant may use, but only after a human approves the
  * individual call. They skip the assistant's own allow/deny gate and land on the
  * ordinary permission prompt, so the URL or job being read is on screen first.
+ * These are also the only assistant tools "Bypass tool prompts" covers: config
+ * writes keep their approval card either way.
  *
  * WebFetch is the assistant's only egress. Everything else it can reach is
  * local, which is what stops content it reads from walking back out through a
@@ -1726,9 +1728,10 @@ export class SessionManager {
             "This tool is not available in the cockpit assistant",
           );
         }
-        // Bypass never covers the assistant: its prompted tools fall through to
-        // here, and the whole point of them is that a human sees them first.
-      } else if (session.bypassAllPermissions && !session.planMode && !session.cockpitAgent && pa.toolName !== "AskUserQuestion") {
+        // Reached by the assistant only for AGENT_PROMPTED_TOOLS, so bypass
+        // covers its tool calls without touching the config-write proposal
+        // cards, which the branch above still handles.
+      } else if (session.bypassAllPermissions && !session.planMode && pa.toolName !== "AskUserQuestion") {
         this.respondToPermission(sessionId, pa.requestId, true, pa.rawToolInput);
         bypassedRequestIds.add(pa.requestId);
       } else {

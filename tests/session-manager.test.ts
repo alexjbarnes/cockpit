@@ -4916,7 +4916,7 @@ describe("SessionManager", () => {
       expect(s.pendingRequests.has("req-getjob")).toBe(false);
     });
 
-    it("does not let a bypassed assistant session skip a prompted tool", () => {
+    it("lets a bypassed assistant session skip the tool prompts", () => {
       const session = manager.createSession("/tmp", undefined, { cockpitAgent: true });
       const s = (manager as any).sessions.get(session.id);
       s.bypassAllPermissions = true;
@@ -4941,8 +4941,39 @@ describe("SessionManager", () => {
         systemMessages: [],
       });
 
+      expect(respondToPermission).toHaveBeenCalledWith(session.id, "req-fetch-bypass", true, { url: "https://example.test/x" });
+      expect(s.pendingRequests.has("req-fetch-bypass")).toBe(false);
+    });
+
+    it("still raises the approval card for a config write when bypass is on", () => {
+      const session = manager.createSession("/tmp", undefined, { cockpitAgent: true });
+      const s = (manager as any).sessions.get(session.id);
+      s.bypassAllPermissions = true;
+      const respondToPermission = vi.spyOn(manager, "respondToPermission" as any);
+
+      (manager as any).applyProcessedResult(s, session.id, {
+        permissionActions: [
+          {
+            type: "store" as const,
+            toolName: "mcp__cockpit-config__delete_job",
+            requestId: "req-delete-bypass",
+            toolInput: JSON.stringify({ id: "job-1" }),
+            rawToolInput: { id: "job-1" },
+          },
+        ],
+        errors: [],
+        compactDone: false,
+        emit: [],
+        statusChange: undefined,
+        snapshot: null,
+        intermediateMessages: [],
+        systemMessages: [],
+      });
+
+      // The whole point of the split: bypass covers tool calls, never a change
+      // to the user's own configuration.
       expect(respondToPermission).not.toHaveBeenCalled();
-      expect(s.pendingRequests.get("req-fetch-bypass")?.type).toBe("permission");
+      expect(s.pendingRequests.get("req-delete-bypass")?.configProposal?.action).toBe("delete");
     });
 
     it("still denies a tool that is neither allowed nor prompted", () => {

@@ -156,6 +156,10 @@ export class ClaudeStreamAdapter implements HarnessAdapter {
     if (config.planMode) {
       args.push("--permission-mode", "plan");
     } else if (config.bypassAllPermissions && !config.cockpitAgent) {
+      // Never native bypass for the assistant, even when its own bypass toggle
+      // is on: the CLI would stop emitting permission requests, and cockpit
+      // needs them to keep raising the config-write approval cards. Its bypass
+      // is applied server-side instead, in applyProcessedResult.
       args.push("--permission-mode", "bypassPermissions");
     }
 
