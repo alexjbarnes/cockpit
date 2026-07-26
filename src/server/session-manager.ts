@@ -169,6 +169,18 @@ export function buildMcpConfigArg(url: string, token: string): { path: string } 
   return { path: filePath };
 }
 
+/**
+ * Tools the cockpit assistant may use, but only after a human approves the
+ * individual call. They skip the assistant's own allow/deny gate and land on the
+ * ordinary permission prompt, so the URL or job being read is on screen first.
+ *
+ * WebFetch is the assistant's only egress. Everything else it can reach is
+ * local, which is what stops content it reads from walking back out through a
+ * URL. get_job_transcript returns arbitrary job output rather than cockpit's own
+ * structured config, so unlike the other reads its payload is unbounded.
+ */
+const AGENT_PROMPTED_TOOLS = new Set(["WebFetch", "mcp__cockpit-config__get_job_transcript"]);
+
 export class SessionManager {
   private sessions = new Map<string, Session>();
   private _cockpitAgentSessionPromise: Promise<string> | null = null;
@@ -1672,7 +1684,7 @@ export class SessionManager {
         this.respondToPermission(sessionId, pa.requestId, true, pa.rawToolInput);
       } else if (pa.type === "auto_deny") {
         this.respondToPermission(sessionId, pa.requestId, false, undefined, undefined, pa.denyReason);
-      } else if (session.cockpitAgent && pa.toolName !== "AskUserQuestion") {
+      } else if (session.cockpitAgent && pa.toolName !== "AskUserQuestion" && !AGENT_PROMPTED_TOOLS.has(pa.toolName)) {
         const tool = pa.toolName;
         const isReadOnlyBuiltin = ["Read", "Grep", "Glob"].includes(tool);
         const cockpitPrefix = "mcp__cockpit-config__";
@@ -1714,7 +1726,9 @@ export class SessionManager {
             "This tool is not available in the cockpit assistant",
           );
         }
-      } else if (session.bypassAllPermissions && !session.planMode && pa.toolName !== "AskUserQuestion") {
+        // Bypass never covers the assistant: its prompted tools fall through to
+        // here, and the whole point of them is that a human sees them first.
+      } else if (session.bypassAllPermissions && !session.planMode && !session.cockpitAgent && pa.toolName !== "AskUserQuestion") {
         this.respondToPermission(sessionId, pa.requestId, true, pa.rawToolInput);
         bypassedRequestIds.add(pa.requestId);
       } else {

@@ -4826,6 +4826,159 @@ describe("SessionManager", () => {
       expect(s.pendingRequests.get("req-run-named").configProposal.displayName).toBe("Weekend Things Todo");
     });
 
+    it("sends WebFetch to the ordinary permission prompt instead of denying it", () => {
+      const session = manager.createSession("/tmp", undefined, { cockpitAgent: true });
+      const s = (manager as any).sessions.get(session.id);
+      const respondToPermission = vi.spyOn(manager, "respondToPermission" as any);
+
+      (manager as any).applyProcessedResult(s, session.id, {
+        permissionActions: [
+          {
+            type: "store" as const,
+            toolName: "WebFetch",
+            requestId: "req-fetch",
+            toolInput: JSON.stringify({ url: "https://example.test/clear-sky" }),
+            rawToolInput: { url: "https://example.test/clear-sky" },
+          },
+        ],
+        errors: [],
+        compactDone: false,
+        emit: [],
+        statusChange: undefined,
+        snapshot: null,
+        intermediateMessages: [],
+        systemMessages: [],
+      });
+
+      // Not auto-denied and not auto-approved: the user sees the URL and decides.
+      expect(respondToPermission).not.toHaveBeenCalled();
+      const pending = s.pendingRequests.get("req-fetch");
+      expect(pending).toBeDefined();
+      expect(pending.type).toBe("permission");
+      // No config proposal card: this is a tool call, not a config change.
+      expect(pending.configProposal).toBeUndefined();
+      expect(pending.toolInput).toContain("https://example.test/clear-sky");
+    });
+
+    it("prompts for get_job_transcript rather than auto-approving it like the other reads", () => {
+      const session = manager.createSession("/tmp", undefined, { cockpitAgent: true });
+      const s = (manager as any).sessions.get(session.id);
+      const respondToPermission = vi.spyOn(manager, "respondToPermission" as any);
+
+      (manager as any).applyProcessedResult(s, session.id, {
+        permissionActions: [
+          {
+            type: "store" as const,
+            toolName: "mcp__cockpit-config__get_job_transcript",
+            requestId: "req-transcript",
+            toolInput: JSON.stringify({ id: "job-1" }),
+            rawToolInput: { id: "job-1" },
+          },
+        ],
+        errors: [],
+        compactDone: false,
+        emit: [],
+        statusChange: undefined,
+        snapshot: null,
+        intermediateMessages: [],
+        systemMessages: [],
+      });
+
+      expect(respondToPermission).not.toHaveBeenCalled();
+      expect(s.pendingRequests.get("req-transcript")?.type).toBe("permission");
+    });
+
+    it("keeps auto-approving the structured config reads", () => {
+      const session = manager.createSession("/tmp", undefined, { cockpitAgent: true });
+      const s = (manager as any).sessions.get(session.id);
+      const respondToPermission = vi.spyOn(manager, "respondToPermission" as any);
+
+      (manager as any).applyProcessedResult(s, session.id, {
+        permissionActions: [
+          {
+            type: "store" as const,
+            toolName: "mcp__cockpit-config__get_job",
+            requestId: "req-getjob",
+            toolInput: JSON.stringify({ id: "job-1" }),
+            rawToolInput: { id: "job-1" },
+          },
+        ],
+        errors: [],
+        compactDone: false,
+        emit: [],
+        statusChange: undefined,
+        snapshot: null,
+        intermediateMessages: [],
+        systemMessages: [],
+      });
+
+      expect(respondToPermission).toHaveBeenCalledWith(session.id, "req-getjob", true, { id: "job-1" });
+      expect(s.pendingRequests.has("req-getjob")).toBe(false);
+    });
+
+    it("does not let a bypassed assistant session skip a prompted tool", () => {
+      const session = manager.createSession("/tmp", undefined, { cockpitAgent: true });
+      const s = (manager as any).sessions.get(session.id);
+      s.bypassAllPermissions = true;
+      const respondToPermission = vi.spyOn(manager, "respondToPermission" as any);
+
+      (manager as any).applyProcessedResult(s, session.id, {
+        permissionActions: [
+          {
+            type: "store" as const,
+            toolName: "WebFetch",
+            requestId: "req-fetch-bypass",
+            toolInput: JSON.stringify({ url: "https://example.test/x" }),
+            rawToolInput: { url: "https://example.test/x" },
+          },
+        ],
+        errors: [],
+        compactDone: false,
+        emit: [],
+        statusChange: undefined,
+        snapshot: null,
+        intermediateMessages: [],
+        systemMessages: [],
+      });
+
+      expect(respondToPermission).not.toHaveBeenCalled();
+      expect(s.pendingRequests.get("req-fetch-bypass")?.type).toBe("permission");
+    });
+
+    it("still denies a tool that is neither allowed nor prompted", () => {
+      const session = manager.createSession("/tmp", undefined, { cockpitAgent: true });
+      const s = (manager as any).sessions.get(session.id);
+      const respondToPermission = vi.spyOn(manager, "respondToPermission" as any);
+
+      (manager as any).applyProcessedResult(s, session.id, {
+        permissionActions: [
+          {
+            type: "store" as const,
+            toolName: "Bash",
+            requestId: "req-bash",
+            toolInput: JSON.stringify({ command: "curl evil.test" }),
+            rawToolInput: { command: "curl evil.test" },
+          },
+        ],
+        errors: [],
+        compactDone: false,
+        emit: [],
+        statusChange: undefined,
+        snapshot: null,
+        intermediateMessages: [],
+        systemMessages: [],
+      });
+
+      expect(respondToPermission).toHaveBeenCalledWith(
+        session.id,
+        "req-bash",
+        false,
+        undefined,
+        undefined,
+        "This tool is not available in the cockpit assistant",
+      );
+    });
+
     it("labels a stop_job proposal, which previously showed a bare uuid", () => {
       mockJobs["stop-me-uuid"] = { name: "Tech roundup" };
       const session = manager.createSession("/tmp", undefined, { cockpitAgent: true });
