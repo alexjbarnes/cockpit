@@ -325,7 +325,12 @@ export class SessionManager {
       const modelSlots: ModelSlots =
         prefs?.modelSlots ?? (prefs?.model ? { main: prefs.model } : { main: defaults.modelSlots.main ?? "sonnet" });
       const restoredRuntime = prefs?.runtime ?? this.defaultRuntime;
-      const restoredContextSize = prefs?.contextSize ?? prefs?.modelSlots?.mainContext ?? DEFAULT_CONTEXT_SIZE;
+      // Falls back to the app default the same way the model above does.
+      // Without that step a session whose prefs predate contextSize came back
+      // at 200k however the user had configured their default, and the next
+      // send then looked like it was about to overflow.
+      const restoredContextSize =
+        prefs?.contextSize ?? prefs?.modelSlots?.mainContext ?? defaults.modelSlots?.mainContext ?? DEFAULT_CONTEXT_SIZE;
       session = {
         info: {
           id,
@@ -1201,7 +1206,13 @@ export class SessionManager {
     session.contextWindowSize = this.resolveContextWindow(model, resolvedSize);
     const cur = session.contextUsage;
     if (cur) {
-      session.emitter.emit("usage", sessionId, { used: cur.used, total: session.contextWindowSize });
+      // Assign, not just emit. shouldPreCompact reads contextUsage.total, so
+      // telling the client the new window while leaving the server on the old
+      // one made the first message after a 200k -> 1m switch trip the 85%
+      // check and compact a session with plenty of room left.
+      const usage: ContextUsage = { used: cur.used, total: session.contextWindowSize };
+      session.contextUsage = usage;
+      session.emitter.emit("usage", sessionId, usage);
     }
   }
 

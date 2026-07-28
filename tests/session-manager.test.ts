@@ -201,6 +201,62 @@ describe("SessionManager", () => {
       }
     });
 
+    it("falls back to the app default context size when prefs carry none", async () => {
+      // Prefs written before contextSize was persisted have a model but no
+      // size. Restoring those at a hardcoded 200k ignored the user's own
+      // default, so a 1m session came back narrow after every restart.
+      const defaultsMod = await import("@/server/defaults");
+      const prefsMod = await import("@/server/session-prefs");
+      const origDefaults = defaultsMod.getDefaults;
+      const origPrefs = prefsMod.getSessionPrefs;
+      (defaultsMod as { getDefaults: () => unknown }).getDefaults = () => ({
+        thinkingLevel: "high",
+        bypassAllPermissions: false,
+        diffStyle: "split",
+        dismissKeyboardOnSend: true,
+        thinkingExpanded: false,
+        modelSlots: { main: "claude-opus-5", mainContext: "1m" },
+      });
+      (prefsMod as { getSessionPrefs: (id: string) => unknown }).getSessionPrefs = () => ({
+        modelSlots: { main: "claude-opus-5" },
+      });
+      try {
+        const ensured = manager.ensureSession("restored-no-size", "/tmp/proj");
+        const s = (manager as any).sessions.get(ensured.info.id)!;
+        expect(ensured.info.contextSize).toBe("1m");
+        expect(s.contextWindowSize).toBe(1_000_000);
+      } finally {
+        (defaultsMod as { getDefaults: () => unknown }).getDefaults = origDefaults;
+        (prefsMod as { getSessionPrefs: (id: string) => unknown }).getSessionPrefs = origPrefs;
+      }
+    });
+
+    it("still prefers the session's own stored size over the app default", async () => {
+      const defaultsMod = await import("@/server/defaults");
+      const prefsMod = await import("@/server/session-prefs");
+      const origDefaults = defaultsMod.getDefaults;
+      const origPrefs = prefsMod.getSessionPrefs;
+      (defaultsMod as { getDefaults: () => unknown }).getDefaults = () => ({
+        thinkingLevel: "high",
+        bypassAllPermissions: false,
+        diffStyle: "split",
+        dismissKeyboardOnSend: true,
+        thinkingExpanded: false,
+        modelSlots: { main: "claude-opus-5", mainContext: "1m" },
+      });
+      (prefsMod as { getSessionPrefs: (id: string) => unknown }).getSessionPrefs = () => ({
+        contextSize: "200k",
+        modelSlots: { main: "claude-opus-5" },
+      });
+      try {
+        const ensured = manager.ensureSession("restored-explicit-200k", "/tmp/proj");
+        expect(ensured.info.contextSize).toBe("200k");
+      } finally {
+        (defaultsMod as { getDefaults: () => unknown }).getDefaults = origDefaults;
+        (prefsMod as { getSessionPrefs: (id: string) => unknown }).getSessionPrefs = origPrefs;
+      }
+    });
+
     it("pinCliSessionId forces resume of the exact viewed link with its ancestors (history-view continue)", async () => {
       const prefsMod = await import("@/server/session-prefs");
       const orig = prefsMod.findChainForCliSession;
@@ -3203,6 +3259,42 @@ describe("SessionManager", () => {
       expect(result).toBe(true);
       expect(s.compacting).toBe(true);
       expect(s.queuedMessages).toHaveLength(1);
+    });
+
+    it("does not pre-compact after widening the window to 1m", () => {
+      // The reported bug: a session sitting near the 200k ceiling is switched
+      // to a 1m model, and the very first message compacts a session with
+      // 800k of room left, because setModel told the client the new total but
+      // left session.contextUsage on the old one.
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      s.contextUsage = { used: 180_000, total: 200_000 };
+      s.process = { pid: 123 };
+      s.stdin = { write: vi.fn() };
+
+      manager.setModel(session.id, "claude-opus-5", "1m");
+      expect(s.contextUsage.total).toBe(1_000_000);
+      expect(s.contextUsage.used).toBe(180_000);
+
+      const result = manager.sendMessage(session.id, "a normal message");
+      expect(result).toBe(true);
+      expect(s.compacting).toBeFalsy();
+      expect(s.queuedMessages).toHaveLength(0);
+    });
+
+    it("still pre-compacts when the narrower window really is nearly full", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      s.contextUsage = { used: 900_000, total: 1_000_000 };
+      s.process = { pid: 123 };
+      s.stdin = { write: vi.fn() };
+
+      manager.setModel(session.id, "claude-opus-5", "200k");
+      expect(s.contextUsage.total).toBe(200_000);
+
+      const result = manager.sendMessage(session.id, "a normal message");
+      expect(result).toBe(true);
+      expect(s.compacting).toBe(true);
     });
 
     it("pre-compact spawns process when no stdin available", () => {
