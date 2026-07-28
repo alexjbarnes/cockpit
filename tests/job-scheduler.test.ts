@@ -24,7 +24,6 @@ vi.mock("@/server/transcript", () => ({
 
 vi.mock("@/server/inbox", () => ({
   addInboxMessage: vi.fn(),
-  parseInboxBlock: vi.fn(() => null),
   parseErrorBlock: vi.fn(() => null),
 }));
 
@@ -37,7 +36,7 @@ vi.mock("node:fs", async () => {
   return { ...actual, mkdirSync: vi.fn() };
 });
 
-import { addInboxMessage, parseErrorBlock, parseInboxBlock } from "@/server/inbox";
+import { addInboxMessage, parseErrorBlock } from "@/server/inbox";
 import { acquireJobLock, releaseJobLock } from "@/server/job-lock";
 import { JobScheduler } from "@/server/job-scheduler";
 import { loadJobs, loadRuns, saveRun } from "@/server/job-storage";
@@ -324,9 +323,8 @@ describe("JobScheduler", () => {
 
     it("does not fail a run that answered but produced no inbox block", async () => {
       // The Tech-roundup prompt's legitimate 'nothing new to process' exit
-      // deliberately emits no cockpit-inbox block. That must stay a success.
+      // deliberately calls no inbox tool. That must stay a success.
       const job = makeJob({ inboxOutput: true });
-      vi.mocked(parseInboxBlock).mockReturnValueOnce(null);
       const promise = scheduler.executeJob(job);
       await vi.waitFor(() => expect(sm.sendMessage).toHaveBeenCalled());
 
@@ -762,7 +760,10 @@ describe("job prompt construction", () => {
     await promise;
 
     const prompt = sm.sendMessage.mock.calls[0][1] as string;
-    expect(prompt).toContain("cockpit-inbox");
+    expect(prompt).toContain("mcp__cockpit-config__add_inbox_message");
+    // The old contract must not linger in the prompt, or the model has two
+    // ways to report and only one of them delivers.
+    expect(prompt).not.toContain("```cockpit-inbox");
   });
 
   it("includes storage dir when cwd is set", async () => {
@@ -1090,19 +1091,42 @@ describe("inbox output on success", () => {
     scheduler = new JobScheduler(sm as any);
   });
 
-  it("parses inbox block from final text when inboxOutput is enabled", async () => {
-    const { parseInboxBlock } = await import("@/server/inbox");
-    vi.mocked(parseInboxBlock).mockReturnValueOnce({ title: "Report", body: "Data here", priority: "info" });
-
+  it("no longer reads the final message: a fenced block is not delivery", async () => {
     const job = makeJob({ inboxOutput: true });
     const promise = scheduler.executeJob(job);
     await vi.waitFor(() => expect(sm.sendMessage).toHaveBeenCalled());
 
-    sm.emitEvent({ type: "message_done", message: { content: "```cockpit-inbox\n{}\n```" } });
+    // The old contract. Delivery is the add_inbox_message tool call now, so
+    // this text reaches nobody and the run still succeeds.
+    sm.emitEvent({ type: "message_done", message: { content: '```cockpit-inbox\n{"title":"R","body":"B"}\n```' } });
     sm.emitStatus("idle");
 
+    const run = await promise;
+    expect(run.status).toBe("success");
+    expect(vi.mocked(addInboxMessage)).not.toHaveBeenCalled();
+  });
+
+  it("gives an inbox-reporting job a run context, and withholds it from one that does not report", async () => {
+    const reporting = makeJob({ inboxOutput: true });
+    const promise = scheduler.executeJob(reporting);
+    await vi.waitFor(() => expect(sm.sendMessage).toHaveBeenCalled());
+    const withInbox = (sm.createSession.mock.calls.at(-1) as unknown as [string, string, Record<string, any>])[2];
+    expect(withInbox.runContext).toMatchObject({ jobId: reporting.id, jobName: reporting.name });
+    expect(withInbox.runContext.runId).toEqual(expect.any(String));
+    sm.emitEvent({ type: "message_done", message: { content: "done" } });
+    sm.emitStatus("idle");
     await promise;
-    expect(vi.mocked(addInboxMessage)).toHaveBeenCalledWith(expect.objectContaining({ title: "Report", body: "Data here" }));
+
+    vi.clearAllMocks();
+    const silent = makeJob({ inboxOutput: false });
+    const p2 = scheduler.executeJob(silent);
+    await vi.waitFor(() => expect(sm.sendMessage).toHaveBeenCalled());
+    // No run context means no cockpit MCP token at all, so a job that never
+    // reports keeps no reach into cockpit.
+    expect((sm.createSession.mock.calls.at(-1) as unknown as [string, string, Record<string, any>])[2].runContext).toBeUndefined();
+    sm.emitEvent({ type: "message_done", message: { content: "done" } });
+    sm.emitStatus("idle");
+    await p2;
   });
 
   it("does not send inbox when inboxOutput is false", async () => {
@@ -1130,7 +1154,6 @@ describe("inbox suppression on cockpit-error reclassification", () => {
 
   it("does not send inbox output when job is reclassified as failure via cockpit-error", async () => {
     vi.mocked(parseErrorBlock).mockReturnValue({ error: "Task failed", details: "No access" });
-    vi.mocked(parseInboxBlock).mockReturnValue({ title: "Report", body: "Stale data", priority: "info" });
 
     const job = makeJob({ inboxOutput: true });
     const promise = scheduler.executeJob(job);

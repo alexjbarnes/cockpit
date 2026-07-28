@@ -10,7 +10,7 @@ vi.mock("@/server/singleton", () => ({ getJobScheduler: vi.fn() }));
 
 import { saveRun } from "@/server/job-storage";
 import { CockpitMcpServer } from "@/server/mcp/cockpit-config-server";
-import { registerAuthToken } from "@/server/mcp/run-context";
+import { registerAuthToken, registerRunContext } from "@/server/mcp/run-context";
 import { getJobScheduler } from "@/server/singleton";
 
 const HOST = "127.0.0.1";
@@ -529,6 +529,63 @@ describe("cockpit-config MCP server (in-process HTTP)", () => {
 
       const reloaded = (await callToolParsed("get_job", { id: a.created.id })) as Record<string, unknown>;
       expect(reloaded).not.toHaveProperty("cron");
+    });
+  });
+
+  describe("scheduled-job confinement", () => {
+    const RUN_TOKEN = "run-token-for-job-xyz";
+
+    beforeAll(() => {
+      registerRunContext(RUN_TOKEN, { jobId: "job-xyz", jobName: "Tech roundup", runId: "run-1" });
+    });
+
+    async function asJob(name: string, args: Record<string, unknown> = {}) {
+      const res = await mcpPost({ jsonrpc: "2.0", id: 7, method: "tools/call", params: { name, arguments: args } }, RUN_TOKEN);
+      const text = (res.body as { result?: { content: { text: string }[] } })?.result?.content?.[0]?.text ?? "";
+      return JSON.parse(text);
+    }
+
+    it("shows a job only its own tool, and hides that tool from everyone else", async () => {
+      const jobList = await mcpPost({ jsonrpc: "2.0", id: 8, method: "tools/list", params: {} }, RUN_TOKEN);
+      const jobTools = ((jobList.body as { result?: { tools: { name: string }[] } })?.result?.tools ?? []).map((t) => t.name);
+      expect(jobTools).toEqual(["add_inbox_message"]);
+
+      const adminList = await mcpPost({ jsonrpc: "2.0", id: 9, method: "tools/list", params: {} });
+      const adminTools = ((adminList.body as { result?: { tools: { name: string }[] } })?.result?.tools ?? []).map((t) => t.name);
+      expect(adminTools).toContain("delete_job");
+      expect(adminTools).not.toContain("add_inbox_message");
+    });
+
+    it("refuses a config tool even though the job named it directly", async () => {
+      // The filtered list is not the boundary: a model can name a tool it was
+      // never shown, so the call itself has to be refused.
+      for (const tool of ["delete_job", "list_providers", "update_settings", "get_job_transcript"]) {
+        const out = await asJob(tool, { id: "job-xyz" });
+        expect(out.error).toContain("may only call");
+      }
+      expect(vi.mocked(getJobScheduler)).not.toHaveBeenCalled();
+    });
+
+    it("delivers a message attributed to the job that called it", async () => {
+      const out = await asJob("add_inbox_message", { title: "Roundup", body: "# Findings\n\nLots of them.", priority: "warning" });
+      expect(out.delivered).toBe(true);
+      expect(out.title).toBe("Roundup");
+    });
+
+    it("returns a readable error the model can retry on, rather than dropping the report", async () => {
+      const out = await asJob("add_inbox_message", { title: "  ", body: "text" });
+      expect(out.error).toContain("title and body");
+    });
+
+    it("refuses the inbox tool when there is no job to attribute it to", async () => {
+      const res = await mcpPost({
+        jsonrpc: "2.0",
+        id: 10,
+        method: "tools/call",
+        params: { name: "add_inbox_message", arguments: { title: "t", body: "b" } },
+      });
+      const text = (res.body as { result?: { content: { text: string }[] } })?.result?.content?.[0]?.text ?? "";
+      expect(JSON.parse(text).error).toContain("only available to a scheduled job run");
     });
   });
 

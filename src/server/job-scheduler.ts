@@ -4,7 +4,7 @@ import { getJobScratchpadDir } from "@/server/paths";
 import type { JobRun, JobRunToolUse, ScheduledJob } from "@/types";
 import { findMissedRun, getJobSchedules, matchesCron, scheduleToCron } from "./cron-utils";
 import { logDiag } from "./debug-logger";
-import { addInboxMessage, parseErrorBlock, parseInboxBlock } from "./inbox";
+import { addInboxMessage, parseErrorBlock } from "./inbox";
 import { acquireJobLock, clearStaleLocks, forceReleaseJobLock, releaseJobLock } from "./job-lock";
 import { getLatestRun, loadJobs, loadRuns, pruneAllRuns, saveRun } from "./job-storage";
 import { checkJobModel } from "./provider-catalog";
@@ -13,6 +13,15 @@ import { countTranscriptMessages } from "./transcript";
 
 /** Default extra attempts after a `failure` run when a job doesn't set maxRetries. */
 const DEFAULT_JOB_MAX_RETRIES = 1;
+
+/**
+ * The MCP tool a job reports through. Replaces parsing a fenced block out of the
+ * final message, which failed silently: a job could spend seventeen minutes on a
+ * report, emit the block as YAML instead of JSON, and have it dropped with the
+ * run still recorded a success. A tool call is schema-validated, and a rejection
+ * comes back as an error the model can read and retry.
+ */
+const INBOX_TOOL_NAME = "mcp__cockpit-config__add_inbox_message";
 /** Pause before a retry so a fresh session isn't spawned the instant the last one died. */
 const RETRY_BACKOFF_MS = 5_000;
 
@@ -57,15 +66,12 @@ function buildJobPrompt(job: ScheduledJob): string {
 
   if (job.inboxOutput) {
     parts.push("");
-    parts.push("Output: When you have results to report, include a cockpit-inbox block in your final message.");
-    parts.push("If there is nothing to report (e.g. no new data to process), do NOT include an inbox block.");
-    parts.push("Format it as a fenced code block tagged cockpit-inbox containing a JSON object:");
+    parts.push(`Output: report your results by calling the ${INBOX_TOOL_NAME} tool. That is the only way your output reaches the user;`);
+    parts.push("nothing in your final message is read. Call it once, before you finish.");
+    parts.push("If there is nothing to report (e.g. no new data to process), do not call it at all.");
     parts.push("");
-    parts.push("```cockpit-inbox");
-    parts.push(JSON.stringify({ title: "Short descriptive title", body: "Markdown body with your full output", priority: "info" }));
-    parts.push("```");
-    parts.push("");
-    parts.push('The body field supports full markdown. Set priority to "info", "warning", or "error" as appropriate.');
+    parts.push("It takes title (a short one-line summary), body (full markdown, as long as you need), and an optional");
+    parts.push('priority of "info", "warning" or "error". If the call returns an error, read it and call again with it fixed.');
   }
 
   parts.push("", "Task:", job.prompt);
@@ -403,6 +409,10 @@ export class JobScheduler {
     const sessionInfo = this.sessionManager.createSession(jobCwd, `[job] ${job.name}`, {
       bypassPermissions: !!job.bypassPermissions,
       runtime: job.runtime,
+      // Only an inbox-reporting job gets a run context, and only a run context
+      // gets the cockpit MCP server. A job that never reports keeps no reach
+      // into cockpit at all.
+      ...(job.inboxOutput ? { runContext: { jobId: job.id, jobName: job.name, runId, notifyProviders: job.notifyProviders } } : {}),
     });
     const sessionId = sessionInfo.id;
     const jlog = (label: string, data?: Record<string, unknown>) => logDiag(sessionId, `job:${label}`, { jobId: job.id, runId, ...data });
@@ -485,7 +495,12 @@ export class JobScheduler {
         } else {
           const toolName = event.toolName || "unknown";
           const inputStr = event.toolInput || "";
-          const mcpResult = isMcpToolAllowed(toolName, inputStr, enabledServers, job.mcpToolFilters);
+          // The inbox tool is cockpit's own reporting channel, not something the
+          // user configures per job, so it bypasses the mcpServers allowlist it
+          // would otherwise fail. The MCP server still confines a run token to
+          // this one tool, so allowing it here grants nothing else.
+          const isInboxTool = toolName === INBOX_TOOL_NAME;
+          const mcpResult = isInboxTool ? !!job.inboxOutput : isMcpToolAllowed(toolName, inputStr, enabledServers, job.mcpToolFilters);
           const allowed = mcpResult !== null ? mcpResult : isToolAllowed(toolName, inputStr, job.allowedTools || []);
           jlog("permission", {
             toolName,
@@ -675,13 +690,6 @@ export class JobScheduler {
 
         saveRun(run);
 
-        if (job.inboxOutput && lastAssistantText && finalStatus === "success") {
-          const inbox = parseInboxBlock(lastAssistantText);
-          jlog("inbox-parse", { found: !!inbox });
-          if (inbox) {
-            addInboxMessage({ ...inbox, jobId: job.id, jobName: job.name, runId: run.id, notifyProviders: job.notifyProviders });
-          }
-        }
         // A `failure` alert is suppressed on attempts that will be retried (the retry
         // wrapper passes suppressFailureAlert); the final attempt still alerts. A
         // `timeout` is terminal and never retried, so it always alerts.

@@ -7,6 +7,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { CONTEXT_SIZES } from "@/lib/models";
 import { getDefaults, setDefaults } from "@/server/defaults";
+import { addInboxMessage } from "@/server/inbox";
 import { deleteJob, getJob, getLatestRun, getRun, loadJobs, saveJob } from "@/server/job-storage";
 import { getNotificationSettings, setNotificationSettings, updateNotificationSettings } from "@/server/notification-settings";
 import { getClaudeUserConfigFile } from "@/server/paths";
@@ -14,7 +15,7 @@ import { addProvider, deleteProvider, getProviders, updateProvider } from "@/ser
 import { getJobScheduler } from "@/server/singleton";
 import { findSessionCwd, loadTranscript } from "@/server/transcript";
 import type { InboxPriority, JobRun, NotificationProviderEntry, ScheduledJob } from "@/types";
-import { isValidToken } from "./run-context";
+import { isValidToken, lookupRunContext } from "./run-context";
 
 interface McpServerEntry {
   command?: string;
@@ -104,6 +105,20 @@ function restoreRedacted<T>(incoming: T, stored: unknown): T {
   }
   return incoming;
 }
+
+/**
+ * The only tools a scheduled job may call.
+ *
+ * A run token (one registered with a RunContext) gets this set and nothing
+ * else, so a job cannot read or rewrite cockpit's configuration on its way to
+ * posting a message. Enforced twice on purpose: tools/list is filtered so the
+ * job's model never sees the rest, and handleToolCall rejects anything outside
+ * the set, because a list the model was shown is not a security boundary.
+ *
+ * Keep this minimal. Everything added here becomes reachable by an unattended
+ * process running whatever a web page told it.
+ */
+const JOB_TOOL_NAMES = new Set(["add_inbox_message"]);
 
 /** Messages returned by get_job_transcript when the caller does not ask for a count. */
 const JOB_TRANSCRIPT_DEFAULT_MESSAGES = 50;
@@ -363,6 +378,20 @@ const TOOL_DEFINITIONS = [
     inputSchema: { type: "object", properties: {}, required: [] },
   },
   {
+    name: "add_inbox_message",
+    description:
+      "Post your result to the cockpit inbox. This is the only way a scheduled job reports back, so call it once when you have something worth surfacing, and do not call it at all when there is nothing to report. The job you belong to is known from your session, so there is no id to pass.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        title: { type: "string", description: "Short one-line summary, shown in the inbox list." },
+        body: { type: "string", description: "Full report. Markdown, as long as you need. No escaping beyond normal JSON string rules." },
+        priority: { type: "string", enum: ["info", "warning", "error"], description: 'Defaults to "info".' },
+      },
+      required: ["title", "body"],
+    },
+  },
+  {
     name: "get_job_transcript",
     description:
       "Read the conversation transcript of a scheduled job's run, so you can see what it actually did rather than only whether it succeeded. Defaults to the most recent run, which may still be in progress, so this is also how you watch a job that is running right now.",
@@ -398,10 +427,51 @@ function writeClaudeConfig(data: { mcpServers: Record<string, McpServerEntry> })
 async function handleToolCall(
   name: string,
   args: Record<string, unknown>,
-  _token: string,
+  token: string,
 ): Promise<{ content: { type: string; text: string }[]; isError?: boolean }> {
   try {
+    const runContext = lookupRunContext(token);
+    // A run token is a scheduled job. Confine it regardless of what tools/list
+    // showed, and refuse the job tools to anyone else, since without a run
+    // context there is no job to attribute the message to.
+    if (runContext && !JOB_TOOL_NAMES.has(name)) {
+      return {
+        content: [{ type: "text", text: JSON.stringify({ error: `A scheduled job may only call: ${[...JOB_TOOL_NAMES].join(", ")}` }) }],
+        isError: true,
+      };
+    }
+    if (!runContext && JOB_TOOL_NAMES.has(name)) {
+      return {
+        content: [{ type: "text", text: JSON.stringify({ error: `${name} is only available to a scheduled job run` }) }],
+        isError: true,
+      };
+    }
+
     switch (name) {
+      case "add_inbox_message": {
+        const ctx = runContext as NonNullable<typeof runContext>;
+        const title = typeof args.title === "string" ? args.title.trim() : "";
+        const body = typeof args.body === "string" ? args.body : "";
+        if (!title || !body) {
+          // Explicit rather than silent: the model reads this and retries,
+          // which is the whole reason this is a tool and not a parsed fence.
+          return {
+            content: [{ type: "text", text: JSON.stringify({ error: "title and body are both required and must be non-empty" }) }],
+            isError: true,
+          };
+        }
+        const priority = args.priority === "warning" || args.priority === "error" ? args.priority : "info";
+        const entry = addInboxMessage({
+          title,
+          body,
+          priority,
+          jobId: ctx.jobId,
+          jobName: ctx.jobName,
+          runId: ctx.runId,
+          notifyProviders: ctx.notifyProviders,
+        });
+        return { content: [{ type: "text", text: JSON.stringify({ delivered: true, id: entry.id, title: entry.title }) }] };
+      }
       case "list_jobs":
         return { content: [{ type: "text", text: JSON.stringify(loadJobs(), null, 2) }] };
       case "get_job": {
@@ -806,7 +876,13 @@ export class CockpitMcpServer {
         const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
         const mcpServer = new McpServer({ name: "cockpit-config", version: "1.0.0" }, { capabilities: { tools: {} } });
 
-        mcpServer.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOL_DEFINITIONS }));
+        // A scheduled job is shown only its own tools; the assistant is shown
+        // everything except them. handleToolCall enforces the same split, so a
+        // model that names an unlisted tool still gets nothing.
+        mcpServer.setRequestHandler(ListToolsRequestSchema, async () => {
+          const isJobRun = lookupRunContext(token) !== null;
+          return { tools: TOOL_DEFINITIONS.filter((t) => JOB_TOOL_NAMES.has(t.name) === isJobRun) };
+        });
         mcpServer.setRequestHandler(CallToolRequestSchema, async (request) => {
           const toolName = request.params.name;
           const toolArgs = (request.params.arguments as Record<string, unknown>) ?? {};

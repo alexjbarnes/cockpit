@@ -217,7 +217,7 @@ export class SessionManager {
   createSession(
     cwd: string,
     name?: string,
-    options?: { bypassPermissions?: boolean; runtime?: SessionRuntime; cockpitAgent?: boolean },
+    options?: { bypassPermissions?: boolean; runtime?: SessionRuntime; cockpitAgent?: boolean; runContext?: RunContext },
   ): SessionInfo {
     const id = uuidv4();
     const now = Date.now();
@@ -269,6 +269,10 @@ export class SessionManager {
       totalTokens: { input: 0, output: 0, cacheCreate: 0, cacheRead: 0 },
       cockpitAgent: isCockpitAgent,
       cockpitAgentCleanups: [],
+      // Present only for a scheduled job that reports to the inbox. It is what
+      // mints a run-scoped MCP token, and what confines that token to the job
+      // tools. Deliberately not persisted: it belongs to one run.
+      runContext: options?.runContext,
     });
 
     setSessionPrefs(id, { runtime: rt, ...(isCockpitAgent ? { cockpitAgent: true } : {}) });
@@ -2238,8 +2242,11 @@ Additional Cockpit rules beyond the CLI's defaults:
 
     let appendSystemPrompt: string | undefined;
     let mcpConfigPath: string | undefined;
-    if (session.cockpitAgent) {
-      appendSystemPrompt = COCKPIT_AGENT_SYSTEM_PROMPT;
+    // Both the assistant and an inbox-reporting job talk to the cockpit MCP
+    // server, but only the assistant gets its system prompt: a job has its own,
+    // and the token decides which tools either of them can actually reach.
+    if (session.cockpitAgent || session.runContext) {
+      if (session.cockpitAgent) appendSystemPrompt = COCKPIT_AGENT_SYSTEM_PROMPT;
       const cockpitMcp = getCockpitMcp();
       if (cockpitMcp) {
         if (session.mcpToken) {

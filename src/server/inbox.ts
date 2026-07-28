@@ -104,20 +104,6 @@ export function clearInbox(): void {
   writeAll([]);
 }
 
-const INBOX_BLOCK_RE = /```cockpit-inbox\s*\n([\s\S]*?)\n```/;
-
-export function parseInboxBlock(text: string): { title: string; body: string; priority?: InboxPriority } | null {
-  const match = INBOX_BLOCK_RE.exec(text);
-  if (!match) return null;
-  try {
-    const parsed = JSON.parse(match[1]);
-    if (typeof parsed.title !== "string" || typeof parsed.body !== "string") return null;
-    return { title: parsed.title, body: parsed.body, priority: parsed.priority };
-  } catch {
-    return null;
-  }
-}
-
 const ERROR_BLOCK_RE = /```cockpit-error\s*\n([\s\S]*?)\n```/;
 
 export function parseErrorBlock(text: string): { error: string; details?: string } | null {
