@@ -374,7 +374,7 @@ export type ServerMessage =
       suggestions?: PermissionSuggestion[];
       planFilePath?: string;
       planContent?: string;
-      configProposal?: { toolName: string; domain: string; action: string };
+      configProposal?: { toolName: string; domain: string; action: string; displayName?: string; idNames?: Record<string, string> };
     }
   | { type: "question:request"; sessionId: string; requestId: string; questions: string }
   | { type: "session:clear"; sessionId: string }

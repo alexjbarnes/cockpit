@@ -188,4 +188,30 @@ describe("formatConfigChange", () => {
     expect(result.rows[1].label).toBe("Another Key");
     expect(result.rows[1].value).toBe("42");
   });
+  it("shows notification provider names instead of the uuids the tool sent", () => {
+    const result = formatConfigChange(
+      "job",
+      "update",
+      { id: "job-1", notifyProviders: ["2fa2259e-74a8-43b8-8b58-b575cb10b68a", "9c1f0b22-0000-4444-8888-aaaabbbbcccc"] },
+      {
+        "2fa2259e-74a8-43b8-8b58-b575cb10b68a": "Telegram (personal)",
+        "9c1f0b22-0000-4444-8888-aaaabbbbcccc": "ntfy home",
+      },
+    );
+    const row = result.rows.find((r) => r.label === "Notify providers");
+    expect(row?.value).toBe("Telegram (personal), ntfy home");
+    expect(row?.value).not.toContain("2fa2259e");
+  });
+
+  it("leaves an id alone when no name was supplied, rather than blanking it", () => {
+    const result = formatConfigChange("job", "update", { id: "job-1", notifyProviders: ["deleted-provider-id"] }, { "other-id": "Other" });
+    const row = result.rows.find((r) => r.label === "Notify providers");
+    expect(row?.value).toBe("deleted-provider-id");
+  });
+
+  it("resolves a bare string id too, not just array members", () => {
+    const result = formatConfigChange("notification_provider", "delete", { id: "prov-9" }, { "prov-9": "Telegram (personal)" });
+    const row = result.rows.find((r) => r.label === "Provider ID");
+    expect(row?.value).toBe("Telegram (personal)");
+  });
 });

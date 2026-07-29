@@ -43,6 +43,17 @@ vi.mock("@/server/job-storage", () => ({
   getJob: (id: string) => mockJobs[id],
 }));
 
+// Named providers so an approval card can be asserted to show the name rather
+// than the uuid the tool actually sent.
+vi.mock("@/server/notification-settings", () => ({
+  getNotificationSettings: () => ({
+    providers: [
+      { id: "2fa2259e-74a8-43b8-8b58-b575cb10b68a", type: "telegram", name: "Telegram (personal)", enabled: true, config: {} },
+      { id: "unused-provider-id", type: "ntfy", name: "ntfy home", enabled: true, config: {} },
+    ],
+  }),
+}));
+
 vi.mock("@/server/session-prefs", () => ({
   getSessionPrefs: vi.fn(() => undefined),
   setSessionPrefs: vi.fn(),
@@ -5100,6 +5111,62 @@ describe("SessionManager", () => {
         undefined,
         "This tool is not available in the cockpit assistant",
       );
+    });
+
+    it("carries notification provider names on the proposal so the card is not a uuid", () => {
+      const session = manager.createSession("/tmp", undefined, { cockpitAgent: true });
+      const s = (manager as any).sessions.get(session.id);
+
+      (manager as any).applyProcessedResult(s, session.id, {
+        permissionActions: [
+          {
+            type: "store" as const,
+            toolName: "mcp__cockpit-config__update_job",
+            requestId: "req-notify",
+            toolInput: JSON.stringify({ id: "job-1", notifyProviders: ["2fa2259e-74a8-43b8-8b58-b575cb10b68a"] }),
+            rawToolInput: { id: "job-1", notifyProviders: ["2fa2259e-74a8-43b8-8b58-b575cb10b68a"] },
+          },
+        ],
+        errors: [],
+        compactDone: false,
+        emit: [],
+        statusChange: undefined,
+        snapshot: null,
+        intermediateMessages: [],
+        systemMessages: [],
+      });
+
+      const proposal = s.pendingRequests.get("req-notify").configProposal;
+      expect(proposal.idNames).toEqual({ "2fa2259e-74a8-43b8-8b58-b575cb10b68a": "Telegram (personal)" });
+      // Only the referenced provider: approving a job change should not ship
+      // the user's whole notification-provider list to the client.
+      expect(proposal.idNames["unused-provider-id"]).toBeUndefined();
+    });
+
+    it("omits the name map when the arguments reference no provider", () => {
+      const session = manager.createSession("/tmp", undefined, { cockpitAgent: true });
+      const s = (manager as any).sessions.get(session.id);
+
+      (manager as any).applyProcessedResult(s, session.id, {
+        permissionActions: [
+          {
+            type: "store" as const,
+            toolName: "mcp__cockpit-config__update_job",
+            requestId: "req-plain",
+            toolInput: JSON.stringify({ id: "job-1", name: "renamed" }),
+            rawToolInput: { id: "job-1", name: "renamed" },
+          },
+        ],
+        errors: [],
+        compactDone: false,
+        emit: [],
+        statusChange: undefined,
+        snapshot: null,
+        intermediateMessages: [],
+        systemMessages: [],
+      });
+
+      expect(s.pendingRequests.get("req-plain").configProposal.idNames).toBeUndefined();
     });
 
     it("labels a stop_job proposal, which previously showed a bare uuid", () => {

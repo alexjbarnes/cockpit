@@ -42,6 +42,7 @@ import type { HarnessProcess, HarnessProcessCallbacks, HarnessSpawnConfig } from
 import { getJob } from "./job-storage";
 import { COCKPIT_AGENT_SYSTEM_PROMPT } from "./mcp/cockpit-agent-prompt";
 import { clearToken, type RunContext, registerAuthToken, registerRunContext } from "./mcp/run-context";
+import { getNotificationSettings } from "./notification-settings";
 import { findLatestPlanFile, readPlanFile } from "./plans";
 import { findChainForCliSession, getSessionPrefs, type SessionRuntime, setSessionPrefs } from "./session-prefs";
 import { getCockpitMcp } from "./singleton";
@@ -84,7 +85,7 @@ export interface PendingRequest {
   permissionSuggestions?: Record<string, unknown>[];
   planFilePath?: string;
   planContent?: string;
-  configProposal?: { toolName: string; domain: string; action: string; displayName?: string };
+  configProposal?: { toolName: string; domain: string; action: string; displayName?: string; idNames?: Record<string, string> };
 }
 
 export interface StreamingSnapshot {
@@ -182,6 +183,30 @@ export function buildMcpConfigArg(url: string, token: string): { path: string } 
  * structured config, so unlike the other reads its payload is unbounded.
  */
 const AGENT_PROMPTED_TOOLS = new Set(["WebFetch", "mcp__cockpit-config__get_job_transcript"]);
+
+/**
+ * Human names for ids that appear in a proposal's arguments, so the approval
+ * card can show "Telegram" where the tool sent a uuid. A notifyProviders array
+ * is otherwise rendered as raw uuids, which tells the user nothing about what
+ * they are approving.
+ *
+ * Only ids actually referenced are included, so approving an unrelated job
+ * change does not ship the whole provider list to the client.
+ */
+function proposalIdNames(rawInput: unknown): Record<string, string> | undefined {
+  if (!rawInput) return undefined;
+  let serialised: string;
+  try {
+    serialised = JSON.stringify(rawInput);
+  } catch {
+    return undefined;
+  }
+  const names: Record<string, string> = {};
+  for (const provider of getNotificationSettings().providers) {
+    if (provider.id && serialised.includes(provider.id)) names[provider.id] = provider.name || provider.type;
+  }
+  return Object.keys(names).length > 0 ? names : undefined;
+}
 
 export class SessionManager {
   private sessions = new Map<string, Session>();
@@ -1724,13 +1749,20 @@ export class SessionManager {
           // Every job tool, not just update/delete: run_job and stop_job used to
           // render as a bare uuid on the approval card.
           const displayName = domain === "job" ? describeJobTargets(pa.rawToolInput, (id) => getJob(id)?.name) : undefined;
+          const idNames = proposalIdNames(pa.rawToolInput);
           session.pendingRequests.set(pa.requestId, {
             type: "permission",
             requestId: pa.requestId,
             toolName: pa.toolName,
             toolInput: pa.toolInput || "",
             rawToolInput: pa.rawToolInput,
-            configProposal: { toolName: tool, domain, action, ...(displayName ? { displayName } : {}) },
+            configProposal: {
+              toolName: tool,
+              domain,
+              action,
+              ...(displayName ? { displayName } : {}),
+              ...(idNames ? { idNames } : {}),
+            },
           });
           this.notifyPendingChanged(session, sessionId);
         } else {
