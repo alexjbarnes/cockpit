@@ -1,9 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { v4 as uuidv4 } from "uuid";
 import { validateSession } from "@/server/auth";
-import { getLatestRun, loadJobs, saveJob } from "@/server/job-storage";
+import { buildJob, getLatestRun, loadJobs, saveJob } from "@/server/job-storage";
 import { getJobScheduler } from "@/server/singleton";
-import type { ScheduledJob } from "@/types";
 
 function authenticate(req: NextRequest): boolean {
   const token = req.cookies.get("cockpit_session")?.value || req.headers.get("authorization")?.replace("Bearer ", "");
@@ -37,31 +35,8 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "name, prompt, and at least one schedule are required" }, { status: 400 });
   }
 
-  const now = Date.now();
-  const job: ScheduledJob = {
-    id: uuidv4(),
-    name: body.name,
-    schedules,
-    prompt: body.prompt,
-    cwd: body.cwd || "",
-    enabled: body.enabled ?? true,
-    createdAt: now,
-    updatedAt: now,
-    model: body.model,
-    contextSize: body.contextSize,
-    thinkingLevel: body.thinkingLevel,
-    allowedTools: body.allowedTools,
-    mcpServers: body.mcpServers,
-    mcpToolFilters: body.mcpToolFilters,
-    bypassPermissions: body.bypassPermissions ?? false,
-    maxDurationMinutes: body.maxDurationMinutes ?? 30,
-    maxRetries: body.maxRetries,
-    retentionDays: body.retentionDays ?? 90,
-    skipIfMissed: body.skipIfMissed ?? false,
-    inboxOutput: body.inboxOutput ?? false,
-    notifyProviders: body.notifyProviders,
-    runtime: body.runtime,
-  };
+  // Shared with the MCP create_job tool so the two cannot drift again.
+  const job = buildJob({ ...body, schedules });
 
   saveJob(job);
   getJobScheduler()?.reloadJobs();

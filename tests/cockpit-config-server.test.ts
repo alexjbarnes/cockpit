@@ -218,6 +218,89 @@ describe("cockpit-config MCP server (in-process HTTP)", () => {
       expect(JSON.parse(text).error).toContain("not found");
     });
 
+    it("create_job persists every field its schema advertises", async () => {
+      // The regression this guards: create_job documented nineteen fields and
+      // assigned five, so a job the assistant made came out with no tool
+      // access, no inbox output and no notification providers, silently. The
+      // list is read off tools/list rather than hardcoded, so a field added to
+      // the schema and forgotten in the handler fails here.
+      const listed = await mcpPost({ jsonrpc: "2.0", id: 42, method: "tools/list", params: {} });
+      const schema = (
+        (listed.body as { result?: { tools: { name: string; inputSchema: { properties: Record<string, unknown> } }[] } })?.result?.tools ??
+        []
+      ).find((t) => t.name === "create_job");
+      const advertised = Object.keys(schema?.inputSchema.properties ?? {});
+      expect(advertised.length).toBeGreaterThan(15);
+
+      const sent: Record<string, unknown> = {
+        name: "fully-specified",
+        schedules: [{ type: "simple", frequency: "daily", time: "17:00" }],
+        prompt: "Scrape the forecast.",
+        cwd: "/tmp",
+        enabled: false,
+        model: "claude-opus-5",
+        contextSize: "1m",
+        thinkingLevel: "max",
+        bypassPermissions: true,
+        maxDurationMinutes: 45,
+        maxRetries: 3,
+        retentionDays: 30,
+        skipIfMissed: true,
+        inboxOutput: true,
+        runtime: "pty",
+        allowedTools: ["WebFetch"],
+        mcpServers: ["graphene"],
+        mcpToolFilters: { graphene: ["status"] },
+        notifyProviders: ["ntfy-provider-id"],
+      };
+      // Every advertised field must be exercised, or the test would pass while
+      // ignoring the one that regressed.
+      expect(Object.keys(sent).sort()).toEqual(advertised.sort());
+
+      const created = (await callToolParsed("create_job", sent)) as { created: Record<string, unknown> };
+      const id = created.created.id as string;
+      const stored = (await callToolParsed("get_job", { id })) as Record<string, unknown>;
+
+      for (const [key, value] of Object.entries(sent)) {
+        expect(stored[key], `create_job dropped "${key}"`).toEqual(value);
+      }
+
+      await callToolParsed("delete_job", { id });
+    });
+
+    it("create_job applies the same safety defaults as the REST route", async () => {
+      const created = (await callToolParsed("create_job", {
+        name: "bare-minimum",
+        schedules: [{ type: "simple", frequency: "daily", time: "09:00" }],
+        prompt: "Do a thing.",
+      })) as { created: Record<string, unknown> };
+
+      // An unbounded job is the dangerous default; the others just match the UI.
+      expect(created.created.maxDurationMinutes).toBe(30);
+      expect(created.created.retentionDays).toBe(90);
+      expect(created.created.bypassPermissions).toBe(false);
+      expect(created.created.inboxOutput).toBe(false);
+      expect(created.created.skipIfMissed).toBe(false);
+      expect(created.created.enabled).toBe(true);
+
+      await callToolParsed("delete_job", { id: created.created.id as string });
+    });
+
+    it("create_job refuses to make a job with no name, schedule or prompt", async () => {
+      const res = await mcpPost({
+        jsonrpc: "2.0",
+        id: 43,
+        method: "tools/call",
+        params: { name: "create_job", arguments: { cwd: "/tmp" } },
+      });
+      const text = (res.body as { result?: { content: { text: string }[] } })?.result?.content?.[0]?.text ?? "";
+      const parsed = JSON.parse(text);
+      expect(parsed.error).toContain("Missing required field");
+      expect(parsed.error).toContain("name");
+      expect(parsed.error).toContain("schedules");
+      expect(parsed.error).toContain("prompt");
+    });
+
     it("update_job discards fields outside its schema", async () => {
       const jobs = (await callToolParsed("list_jobs")) as { id: string; name: string }[];
       const job = jobs.find((j) => j.name === "updated-job")!;

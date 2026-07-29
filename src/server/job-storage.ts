@@ -1,8 +1,50 @@
+import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
 import { splitLegacyModel } from "@/lib/models";
 import { getCockpitDir, getJobsScratchpadRoot } from "@/server/paths";
 import type { JobRun, JobSchedule, ScheduledJob } from "@/types";
+
+/** Everything a caller may supply when creating a job. */
+export type JobInput = Partial<Omit<ScheduledJob, "id" | "createdAt" | "updatedAt">>;
+
+/**
+ * Build a stored job from caller input, applying the defaults it needs to be
+ * safe to run.
+ *
+ * Shared because the two creation paths had silently drifted. The REST route
+ * assigned all nineteen fields; the MCP create_job tool advertised the same
+ * nineteen in its schema and assigned five, so a job the assistant created came
+ * out with no tool access, no inbox output and no notification providers, and
+ * nothing said so. Anything that creates a job goes through here.
+ */
+export function buildJob(input: JobInput): ScheduledJob {
+  const now = Date.now();
+  return {
+    id: randomUUID(),
+    name: input.name ?? "",
+    schedules: input.schedules ?? [],
+    prompt: input.prompt ?? "",
+    cwd: input.cwd || "",
+    enabled: input.enabled ?? true,
+    createdAt: now,
+    updatedAt: now,
+    model: input.model,
+    contextSize: input.contextSize,
+    thinkingLevel: input.thinkingLevel,
+    allowedTools: input.allowedTools,
+    mcpServers: input.mcpServers,
+    mcpToolFilters: input.mcpToolFilters,
+    bypassPermissions: input.bypassPermissions ?? false,
+    maxDurationMinutes: input.maxDurationMinutes ?? 30,
+    maxRetries: input.maxRetries,
+    retentionDays: input.retentionDays ?? 90,
+    skipIfMissed: input.skipIfMissed ?? false,
+    inboxOutput: input.inboxOutput ?? false,
+    notifyProviders: input.notifyProviders,
+    runtime: input.runtime,
+  };
+}
 
 function prefsDir(): string {
   return getCockpitDir();

@@ -8,7 +8,7 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprot
 import { CONTEXT_SIZES } from "@/lib/models";
 import { getDefaults, setDefaults } from "@/server/defaults";
 import { addInboxMessage } from "@/server/inbox";
-import { deleteJob, getJob, getLatestRun, getRun, loadJobs, saveJob } from "@/server/job-storage";
+import { buildJob, deleteJob, getJob, getLatestRun, getRun, loadJobs, saveJob } from "@/server/job-storage";
 import { getNotificationSettings, setNotificationSettings, updateNotificationSettings } from "@/server/notification-settings";
 import { getClaudeUserConfigFile } from "@/server/paths";
 import { addProvider, deleteProvider, getProviders, updateProvider } from "@/server/providers";
@@ -533,17 +533,21 @@ async function handleToolCall(
         };
       }
       case "create_job": {
-        const now = Date.now();
-        const job: ScheduledJob = {
-          id: randomUUID(),
-          name: args.name as string,
-          schedules: args.schedules as ScheduledJob["schedules"],
-          prompt: args.prompt as string,
-          cwd: args.cwd as string,
-          enabled: (args.enabled as boolean) ?? true,
-          createdAt: now,
-          updatedAt: now,
-        };
+        // pickJobUpdate keeps this to the fields the schema documents, and
+        // buildJob is the same constructor the REST route uses, so a job the
+        // assistant creates is identical to one made through the UI.
+        const input = pickJobUpdate(args);
+        const missing = (["name", "schedules", "prompt"] as const).filter((k) => {
+          const v = input[k];
+          return v === undefined || v === "" || (Array.isArray(v) && v.length === 0);
+        });
+        if (missing.length > 0) {
+          return {
+            content: [{ type: "text", text: JSON.stringify({ error: `Missing required field(s): ${missing.join(", ")}` }) }],
+            isError: true,
+          };
+        }
+        const job = buildJob(input);
         saveJob(job);
         return { content: [{ type: "text", text: JSON.stringify({ created: job }, null, 2) }] };
       }
