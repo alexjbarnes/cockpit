@@ -3,7 +3,7 @@ import path from "node:path";
 import { v4 as uuidv4 } from "uuid";
 import { getCockpitDir } from "@/server/paths";
 import type { InboxMessage, InboxPriority } from "@/types";
-import { dispatchNotification } from "./notifications";
+import { dispatchNotification, type NotificationOutcome } from "./notifications";
 
 function inboxDir(): string {
   return getCockpitDir();
@@ -49,8 +49,10 @@ export function addInboxMessage(msg: {
   jobId?: string;
   jobName?: string;
   runId?: string;
+  sessionId?: string;
+  sessionName?: string;
   notifyProviders?: string[];
-}): InboxMessage {
+}): { entry: InboxMessage; outcome: NotificationOutcome } {
   const messages = readAll();
   const entry: InboxMessage = {
     id: uuidv4(),
@@ -60,20 +62,26 @@ export function addInboxMessage(msg: {
     jobId: msg.jobId,
     jobName: msg.jobName,
     runId: msg.runId,
+    sessionId: msg.sessionId,
+    sessionName: msg.sessionName,
     createdAt: Date.now(),
     read: false,
   };
   messages.push(entry);
   writeAll(messages);
-  dispatchNotification({
+  // Only a session caller gets the "session" source; a job (or the plain
+  // REST/UI path, which passes neither) keeps today's "inbox" so the
+  // per-provider source filter (notifications.ts's matchesFilter) can still
+  // route a job's reports the way it always has.
+  const outcome = dispatchNotification({
     title: entry.title,
     body: entry.body,
     priority: entry.priority,
-    source: "inbox",
+    source: msg.sessionId ? "session" : "inbox",
     url: `/inbox/${entry.id}`,
     providerIds: msg.notifyProviders,
   });
-  return entry;
+  return { entry, outcome };
 }
 
 export function markRead(id: string, read = true): boolean {

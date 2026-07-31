@@ -15,7 +15,7 @@ import { addProvider, deleteProvider, getProviders, updateProvider } from "@/ser
 import { getJobScheduler } from "@/server/singleton";
 import { findSessionCwd, loadTranscript } from "@/server/transcript";
 import type { InboxPriority, JobRun, NotificationProviderEntry, ScheduledJob } from "@/types";
-import { isValidToken, lookupRunContext } from "./run-context";
+import { isValidToken, lookupCaller, type McpCaller } from "./run-context";
 
 interface McpServerEntry {
   command?: string;
@@ -107,23 +107,61 @@ function restoreRedacted<T>(incoming: T, stored: unknown): T {
 }
 
 /**
- * The only tools a scheduled job may call.
+ * Which callers may reach each tool. A tool absent from this map is
+ * assistant-only, which keeps the default closed — anything new added to
+ * TOOL_DEFINITIONS needs an explicit opt-in here to reach a job or session.
  *
- * A run token (one registered with a RunContext) gets this set and nothing
- * else, so a job cannot read or rewrite cockpit's configuration on its way to
- * posting a message. Enforced twice on purpose: tools/list is filtered so the
- * job's model never sees the rest, and handleToolCall rejects anything outside
- * the set, because a list the model was shown is not a security boundary.
+ * Enforced twice on purpose: tools/list is filtered by this map so a job or
+ * session's model never even sees the rest, and handleToolCall rejects
+ * anything outside the map, because a list the model was shown is not a
+ * security boundary — a model can still name a tool it was never offered.
  *
  * Keep this minimal. Everything added here becomes reachable by an unattended
- * process running whatever a web page told it.
+ * job, or by a plain session that often runs with bypass permissions and
+ * reads arbitrary repo content.
  */
-const JOB_TOOL_NAMES = new Set(["add_inbox_message"]);
+type McpScope = "assistant" | "job" | "session";
+
+const TOOL_SCOPES: Record<string, readonly McpScope[]> = {
+  add_inbox_message: ["job", "session"],
+  list_notify_targets: ["job", "session"],
+  // phase 2 adds the issue tools here as ["assistant", "job", "session"]
+};
+
+function scopesFor(name: string): readonly McpScope[] {
+  return TOOL_SCOPES[name] ?? ["assistant"];
+}
 
 /** Messages returned by get_job_transcript when the caller does not ask for a count. */
 const JOB_TRANSCRIPT_DEFAULT_MESSAGES = 50;
 /** Per-message character cap, so one long tool dump cannot swamp the reply. */
 const JOB_TRANSCRIPT_MAX_TEXT = 4000;
+
+/**
+ * Push notifications a single session may trigger per rolling hour, via
+ * add_inbox_message's notifyProviders. A job reports once per run and is
+ * unaffected by this cap; an interactive session can run for hours and loop,
+ * and nothing else stops it from hammering a phone. In-memory only — reset on
+ * restart, deliberately not persisted. The inbox write itself is never rate
+ * limited, only the push.
+ */
+const SESSION_PUSH_LIMIT_PER_HOUR = 10;
+const SESSION_PUSH_WINDOW_MS = 60 * 60 * 1000;
+const sessionPushTimestamps = new Map<string, number[]>();
+
+/** True (and records the attempt) if `sessionId` is still under its hourly
+ *  push cap; false if it has to wait for the window to roll forward. */
+function allowSessionPush(sessionId: string): boolean {
+  const now = Date.now();
+  const recent = (sessionPushTimestamps.get(sessionId) ?? []).filter((t) => now - t < SESSION_PUSH_WINDOW_MS);
+  if (recent.length >= SESSION_PUSH_LIMIT_PER_HOUR) {
+    sessionPushTimestamps.set(sessionId, recent);
+    return false;
+  }
+  recent.push(now);
+  sessionPushTimestamps.set(sessionId, recent);
+  return true;
+}
 
 function pickJobUpdate(source: Record<string, unknown>): Partial<ScheduledJob> {
   const update: Record<string, unknown> = {};
@@ -380,16 +418,28 @@ const TOOL_DEFINITIONS = [
   {
     name: "add_inbox_message",
     description:
-      "Post your result to the cockpit inbox. This is the only way a scheduled job reports back, so call it once when you have something worth surfacing, and do not call it at all when there is nothing to report. The job you belong to is known from your session, so there is no id to pass.",
+      'Post your result to the cockpit inbox. This is how a scheduled job or a plain session reports back, so call it once when you have something worth surfacing, and do not call it at all when there is nothing to report. The job or session you belong to is known already, so there is no id or author to pass. By default this only writes the inbox entry — set notifyProviders to also reach the user\'s phone (see list_notify_targets to turn a name like "telegram" into an id); an interactive session that pushes too often will start getting a rate-limit error back instead of a second push.',
     inputSchema: {
       type: "object",
       properties: {
         title: { type: "string", description: "Short one-line summary, shown in the inbox list." },
         body: { type: "string", description: "Full report. Markdown, as long as you need. No escaping beyond normal JSON string rules." },
         priority: { type: "string", enum: ["info", "warning", "error"], description: 'Defaults to "info".' },
+        notifyProviders: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "Provider ids to push this report to (e.g. Telegram) in addition to the inbox. Omit for inbox-only, no push. Resolve a name to an id with list_notify_targets first.",
+        },
       },
       required: ["title", "body"],
     },
+  },
+  {
+    name: "list_notify_targets",
+    description:
+      'List the notification targets (e.g. Telegram, ntfy) that add_inbox_message can push to. Use this to resolve a name the user gave you, like "telegram" or "my phone", into the id notifyProviders expects.',
+    inputSchema: { type: "object", properties: {}, required: [] },
   },
   {
     name: "get_job_transcript",
@@ -430,26 +480,21 @@ async function handleToolCall(
   token: string,
 ): Promise<{ content: { type: string; text: string }[]; isError?: boolean }> {
   try {
-    const runContext = lookupRunContext(token);
-    // A run token is a scheduled job. Confine it regardless of what tools/list
-    // showed, and refuse the job tools to anyone else, since without a run
-    // context there is no job to attribute the message to.
-    if (runContext && !JOB_TOOL_NAMES.has(name)) {
+    const caller: McpCaller = lookupCaller(token) ?? { kind: "assistant" };
+    // Both enforcement layers matter: tools/list already filters by the same
+    // map so a job or session's model never sees a tool outside its scope,
+    // but a list the model was shown is not a security boundary — a model can
+    // still name a tool it was never offered, so the call itself is refused
+    // here too.
+    if (!scopesFor(name).includes(caller.kind)) {
       return {
-        content: [{ type: "text", text: JSON.stringify({ error: `A scheduled job may only call: ${[...JOB_TOOL_NAMES].join(", ")}` }) }],
-        isError: true,
-      };
-    }
-    if (!runContext && JOB_TOOL_NAMES.has(name)) {
-      return {
-        content: [{ type: "text", text: JSON.stringify({ error: `${name} is only available to a scheduled job run` }) }],
+        content: [{ type: "text", text: JSON.stringify({ error: `${name} is only available to: ${scopesFor(name).join(", ")}` }) }],
         isError: true,
       };
     }
 
     switch (name) {
       case "add_inbox_message": {
-        const ctx = runContext as NonNullable<typeof runContext>;
         const title = typeof args.title === "string" ? args.title.trim() : "";
         const body = typeof args.body === "string" ? args.body : "";
         if (!title || !body) {
@@ -461,16 +506,82 @@ async function handleToolCall(
           };
         }
         const priority = args.priority === "warning" || args.priority === "error" ? args.priority : "info";
-        const entry = addInboxMessage({
+        const explicitNotify = Array.isArray(args.notifyProviders) ? (args.notifyProviders as string[]) : undefined;
+
+        let jobId: string | undefined;
+        let jobName: string | undefined;
+        let runId: string | undefined;
+        let sessionId: string | undefined;
+        let sessionName: string | undefined;
+        let notifyProviders: string[] | undefined;
+        let rateLimitedNote: string | undefined;
+
+        if (caller.kind === "job") {
+          jobId = caller.run.jobId;
+          jobName = caller.run.jobName;
+          runId = caller.run.runId;
+          // 1. an explicit ask wins. 2. otherwise fall back to the job's own
+          // configured providers exactly as before, which may be undefined —
+          // in which case dispatchNotification's default per-provider filter
+          // decides, unchanged from today's behaviour.
+          notifyProviders = explicitNotify ?? caller.run.notifyProviders;
+        } else if (caller.kind === "session") {
+          sessionId = caller.sessionId;
+          sessionName = caller.sessionName;
+          if (explicitNotify && explicitNotify.length > 0) {
+            if (allowSessionPush(sessionId)) {
+              notifyProviders = explicitNotify;
+            } else {
+              // The inbox write below still happens — only the push is capped.
+              notifyProviders = [];
+              rateLimitedNote = `Push notifications for this session are capped at ${SESSION_PUSH_LIMIT_PER_HOUR} per hour; this report was still saved to the inbox but not pushed. Stop retrying the push until the next hour.`;
+            }
+          } else {
+            // Default-quiet: a session that doesn't ask for a push doesn't
+            // get one. A tool that can reach a phone should not fire unless
+            // asked, so this deliberately does NOT fall through to the
+            // per-provider filter the way a job with no notifyProviders does.
+            notifyProviders = [];
+          }
+        } else {
+          // Unreachable: scopesFor("add_inbox_message") excludes "assistant",
+          // so the scope check above already refused this call. Handled
+          // defensively rather than asserted away.
+          return {
+            content: [{ type: "text", text: JSON.stringify({ error: "add_inbox_message requires a job or session caller" }) }],
+            isError: true,
+          };
+        }
+
+        const { entry, outcome } = addInboxMessage({
           title,
           body,
           priority,
-          jobId: ctx.jobId,
-          jobName: ctx.jobName,
-          runId: ctx.runId,
-          notifyProviders: ctx.notifyProviders,
+          jobId,
+          jobName,
+          runId,
+          sessionId,
+          sessionName,
+          notifyProviders,
         });
-        return { content: [{ type: "text", text: JSON.stringify({ delivered: true, id: entry.id, title: entry.title }) }] };
+
+        if (rateLimitedNote) {
+          return {
+            content: [{ type: "text", text: JSON.stringify({ error: rateLimitedNote, delivered: true, id: entry.id }) }],
+            isError: true,
+          };
+        }
+
+        const result: Record<string, unknown> = { delivered: true, id: entry.id, notified: outcome.notified.map((n) => n.name) };
+        if (outcome.skipped.length > 0) {
+          result.skipped = outcome.skipped.map((s) => `${s.name}: ${s.reason}`);
+        }
+        return { content: [{ type: "text", text: JSON.stringify(result) }] };
+      }
+      case "list_notify_targets": {
+        const settings = getNotificationSettings();
+        const targets = settings.providers.map((p) => ({ id: p.id, name: p.name, type: p.type, enabled: p.enabled }));
+        return { content: [{ type: "text", text: JSON.stringify(targets, null, 2) }] };
       }
       case "list_jobs":
         return { content: [{ type: "text", text: JSON.stringify(loadJobs(), null, 2) }] };
@@ -880,12 +991,12 @@ export class CockpitMcpServer {
         const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
         const mcpServer = new McpServer({ name: "cockpit-config", version: "1.0.0" }, { capabilities: { tools: {} } });
 
-        // A scheduled job is shown only its own tools; the assistant is shown
-        // everything except them. handleToolCall enforces the same split, so a
+        // A job or session is shown only the tools scoped to it; the assistant
+        // is shown everything else. handleToolCall enforces the same map, so a
         // model that names an unlisted tool still gets nothing.
         mcpServer.setRequestHandler(ListToolsRequestSchema, async () => {
-          const isJobRun = lookupRunContext(token) !== null;
-          return { tools: TOOL_DEFINITIONS.filter((t) => JOB_TOOL_NAMES.has(t.name) === isJobRun) };
+          const caller: McpCaller = lookupCaller(token) ?? { kind: "assistant" };
+          return { tools: TOOL_DEFINITIONS.filter((t) => scopesFor(t.name).includes(caller.kind)) };
         });
         mcpServer.setRequestHandler(CallToolRequestSchema, async (request) => {
           const toolName = request.params.name;

@@ -41,7 +41,7 @@ import { getHarnessAdapter } from "./harness/registry";
 import type { HarnessProcess, HarnessProcessCallbacks, HarnessSpawnConfig } from "./harness/types";
 import { getJob } from "./job-storage";
 import { COCKPIT_AGENT_SYSTEM_PROMPT } from "./mcp/cockpit-agent-prompt";
-import { clearToken, type RunContext, registerAuthToken, registerRunContext } from "./mcp/run-context";
+import { clearToken, type RunContext, registerAuthToken, registerRunContext, registerSessionContext } from "./mcp/run-context";
 import { getNotificationSettings } from "./notification-settings";
 import { findLatestPlanFile, readPlanFile } from "./plans";
 import { findChainForCliSession, getSessionPrefs, type SessionRuntime, setSessionPrefs } from "./session-prefs";
@@ -2285,30 +2285,32 @@ Additional Cockpit rules beyond the CLI's defaults:
 
     let appendSystemPrompt: string | undefined;
     let mcpConfigPath: string | undefined;
-    // Both the assistant and an inbox-reporting job talk to the cockpit MCP
-    // server, but only the assistant gets its system prompt: a job has its own,
-    // and the token decides which tools either of them can actually reach.
-    if (session.cockpitAgent || session.runContext) {
-      if (session.cockpitAgent) appendSystemPrompt = COCKPIT_AGENT_SYSTEM_PROMPT;
-      const cockpitMcp = getCockpitMcp();
-      if (cockpitMcp) {
-        if (session.mcpToken) {
-          clearToken(session.mcpToken);
-          try {
-            unlinkSync(path.join(tmpdir(), "cockpit-mcp-config", `${session.mcpToken.slice(0, 16)}.json`));
-          } catch {
-            /* best effort */
-          }
+    // Every session talks to the cockpit MCP server now, not just the
+    // assistant and an inbox-reporting job: a plain session gets a
+    // session-scoped token so it can add_inbox_message too. Only the
+    // assistant gets its system prompt — a job has its own, a plain session
+    // gets none — and the token decides which tools any of them can reach.
+    if (session.cockpitAgent) appendSystemPrompt = COCKPIT_AGENT_SYSTEM_PROMPT;
+    const cockpitMcp = getCockpitMcp();
+    if (cockpitMcp) {
+      if (session.mcpToken) {
+        clearToken(session.mcpToken);
+        try {
+          unlinkSync(path.join(tmpdir(), "cockpit-mcp-config", `${session.mcpToken.slice(0, 16)}.json`));
+        } catch {
+          /* best effort */
         }
-        const token = randomBytes(24).toString("hex");
-        if (session.runContext) {
-          registerRunContext(token, session.runContext);
-        } else {
-          registerAuthToken(token);
-        }
-        session.mcpToken = token;
-        mcpConfigPath = buildMcpConfigArg(cockpitMcp.getUrl(), token).path;
       }
+      const token = randomBytes(24).toString("hex");
+      if (session.cockpitAgent) {
+        registerAuthToken(token);
+      } else if (session.runContext) {
+        registerRunContext(token, session.runContext);
+      } else {
+        registerSessionContext(token, sessionId, session.info.name);
+      }
+      session.mcpToken = token;
+      mcpConfigPath = buildMcpConfigArg(cockpitMcp.getUrl(), token).path;
     }
 
     // Matches the original buildContent/buildPtyText call's unconditional side

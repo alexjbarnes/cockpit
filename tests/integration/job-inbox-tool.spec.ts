@@ -149,7 +149,11 @@ test("a job cannot call a config tool even with bypassPermissions", async ({ pag
       .map((r) => r.body)
       .join("\n");
     expect(bodies).toContain(INBOX_TOOL);
-    expect(bodies).not.toContain("may only call");
+    // "is only available to" is handleToolCall's scope-refusal text (see
+    // TOOL_SCOPES in cockpit-config-server.ts); its absence here proves the
+    // call was never forwarded to the MCP server at all — tools/list already
+    // hid delete_job, so the CLI refused locally.
+    expect(bodies).not.toContain("is only available to");
   } finally {
     rmSync(workDir, { recursive: true, force: true });
   }

@@ -68,6 +68,13 @@ vi.mock("@/server/singleton", () => ({
   setHookRouter: vi.fn(),
   getTerminalManager: vi.fn(() => null),
   setTerminalManager: vi.fn(),
+  // Every session now asks for the cockpit MCP server on spawn (Phase 1 of
+  // the issue-tracker spec), not just the assistant/job cases this file used
+  // to only ever exercise. null exercises the same "MCP server unavailable"
+  // path spawnProcess already had to handle gracefully; this file's tests
+  // are about PTY runtime mechanics, not the token lifecycle, which has its
+  // own coverage in session-manager-mcp-lifecycle.test.ts.
+  getCockpitMcp: vi.fn(() => null),
 }));
 
 vi.mock("@/server/debug-logger", () => ({

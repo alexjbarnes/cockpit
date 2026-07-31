@@ -268,6 +268,10 @@ export interface InboxMessage {
   jobId?: string;
   jobName?: string;
   runId?: string;
+  /** Set instead of jobId/jobName when a plain session (not a job run, not
+   *  the assistant) posted this via add_inbox_message. */
+  sessionId?: string;
+  sessionName?: string;
   title: string;
   body: string;
   priority: InboxPriority;

@@ -8,9 +8,11 @@ process.env.CLAUDE_CONFIG_DIR = mkdtempSync(join(tmpdir(), "claude-test-"));
 
 vi.mock("@/server/singleton", () => ({ getJobScheduler: vi.fn() }));
 
+import { getInboxMessages } from "@/server/inbox";
 import { saveRun } from "@/server/job-storage";
 import { CockpitMcpServer } from "@/server/mcp/cockpit-config-server";
-import { registerAuthToken, registerRunContext } from "@/server/mcp/run-context";
+import { registerAuthToken, registerRunContext, registerSessionContext } from "@/server/mcp/run-context";
+import { setNotificationSettings } from "@/server/notification-settings";
 import { getJobScheduler } from "@/server/singleton";
 
 const HOST = "127.0.0.1";
@@ -147,6 +149,10 @@ describe("cockpit-config MCP server (in-process HTTP)", () => {
     ]) {
       expect(names).toContain(name);
     }
+    // The job/session-only tools are the mirror image: the assistant must not
+    // see them, proven directly rather than merely absent-from-the-list-above.
+    expect(names).not.toContain("add_inbox_message");
+    expect(names).not.toContain("list_notify_targets");
   });
 
   describe("jobs", () => {
@@ -628,23 +634,25 @@ describe("cockpit-config MCP server (in-process HTTP)", () => {
       return JSON.parse(text);
     }
 
-    it("shows a job only its own tool, and hides that tool from everyone else", async () => {
+    it("shows a job its scoped tools (add_inbox_message, list_notify_targets), and hides them from everyone else", async () => {
       const jobList = await mcpPost({ jsonrpc: "2.0", id: 8, method: "tools/list", params: {} }, RUN_TOKEN);
       const jobTools = ((jobList.body as { result?: { tools: { name: string }[] } })?.result?.tools ?? []).map((t) => t.name);
-      expect(jobTools).toEqual(["add_inbox_message"]);
+      expect(jobTools).toEqual(["add_inbox_message", "list_notify_targets"]);
 
       const adminList = await mcpPost({ jsonrpc: "2.0", id: 9, method: "tools/list", params: {} });
       const adminTools = ((adminList.body as { result?: { tools: { name: string }[] } })?.result?.tools ?? []).map((t) => t.name);
       expect(adminTools).toContain("delete_job");
       expect(adminTools).not.toContain("add_inbox_message");
+      expect(adminTools).not.toContain("list_notify_targets");
     });
 
     it("refuses a config tool even though the job named it directly", async () => {
       // The filtered list is not the boundary: a model can name a tool it was
-      // never shown, so the call itself has to be refused.
+      // never shown, so the call itself has to be refused too, through the
+      // same scope map (TOOL_SCOPES) that filtered tools/list.
       for (const tool of ["delete_job", "list_providers", "update_settings", "get_job_transcript"]) {
         const out = await asJob(tool, { id: "job-xyz" });
-        expect(out.error).toContain("may only call");
+        expect(out.error).toContain("only available to: assistant");
       }
       expect(vi.mocked(getJobScheduler)).not.toHaveBeenCalled();
     });
@@ -652,7 +660,18 @@ describe("cockpit-config MCP server (in-process HTTP)", () => {
     it("delivers a message attributed to the job that called it", async () => {
       const out = await asJob("add_inbox_message", { title: "Roundup", body: "# Findings\n\nLots of them.", priority: "warning" });
       expect(out.delivered).toBe(true);
-      expect(out.title).toBe("Roundup");
+      expect(typeof out.id).toBe("string");
+      // No provider configured for this run and no explicit notifyProviders,
+      // so nothing is attempted — but the response shape still reports it,
+      // which is the whole point of 1.6 (report what was actually sent).
+      expect(out.notified).toEqual([]);
+      expect(out.skipped).toBeUndefined();
+
+      const delivered = getInboxMessages().find((m) => m.title === "Roundup");
+      expect(delivered?.jobId).toBe("job-xyz");
+      expect(delivered?.jobName).toBe("Tech roundup");
+      expect(delivered?.runId).toBe("run-1");
+      expect(delivered?.sessionId).toBeUndefined();
     });
 
     it("returns a readable error the model can retry on, rather than dropping the report", async () => {
@@ -660,15 +679,179 @@ describe("cockpit-config MCP server (in-process HTTP)", () => {
       expect(out.error).toContain("title and body");
     });
 
-    it("refuses the inbox tool when there is no job to attribute it to", async () => {
-      const res = await mcpPost({
-        jsonrpc: "2.0",
-        id: 10,
-        method: "tools/call",
-        params: { name: "add_inbox_message", arguments: { title: "t", body: "b" } },
-      });
+    it("refuses the inbox tool (and list_notify_targets) when the caller is the assistant, not a job or session", async () => {
+      for (const name of ["add_inbox_message", "list_notify_targets"]) {
+        const res = await mcpPost({
+          jsonrpc: "2.0",
+          id: 10,
+          method: "tools/call",
+          params: { name, arguments: { title: "t", body: "b" } },
+        });
+        const text = (res.body as { result?: { content: { text: string }[] } })?.result?.content?.[0]?.text ?? "";
+        expect(JSON.parse(text).error).toBe(`${name} is only available to: job, session`);
+      }
+    });
+  });
+
+  describe("session confinement", () => {
+    const SESSION_TOKEN = "session-token-for-my-session";
+    const SESSION_ID = "session-abc-123";
+    const SESSION_NAME = "My Working Session";
+
+    beforeAll(() => {
+      registerSessionContext(SESSION_TOKEN, SESSION_ID, SESSION_NAME);
+    });
+
+    // dispatchNotification fires a real (fire-and-forget, uncounted) fetch to
+    // 127.0.0.1:1 for any enabled provider below, which fails fast (nothing
+    // listens there) without being awaited — deliberately not stubbed, because
+    // globalThis.fetch is also what mcpPost uses to reach the MCP server under
+    // test, so mocking it here would intercept the test's own HTTP calls, not
+    // just dispatchNotification's. The "notified"/"skipped" outcome the tool
+    // reports is computed synchronously before that fetch even starts, so it
+    // is unaffected either way.
+
+    async function asSession(name: string, args: Record<string, unknown> = {}) {
+      const res = await mcpPost({ jsonrpc: "2.0", id: 21, method: "tools/call", params: { name, arguments: args } }, SESSION_TOKEN);
       const text = (res.body as { result?: { content: { text: string }[] } })?.result?.content?.[0]?.text ?? "";
-      expect(JSON.parse(text).error).toContain("only available to a scheduled job run");
+      return JSON.parse(text);
+    }
+
+    it("shows a session the same scoped tools as a job, and hides everything else", async () => {
+      const sessionList = await mcpPost({ jsonrpc: "2.0", id: 22, method: "tools/list", params: {} }, SESSION_TOKEN);
+      const sessionTools = ((sessionList.body as { result?: { tools: { name: string }[] } })?.result?.tools ?? []).map((t) => t.name);
+      expect(sessionTools).toEqual(["add_inbox_message", "list_notify_targets"]);
+    });
+
+    it("refuses delete_job, list_providers and update_settings, both by absence and by call", async () => {
+      const list = await mcpPost({ jsonrpc: "2.0", id: 23, method: "tools/list", params: {} }, SESSION_TOKEN);
+      const names = ((list.body as { result?: { tools: { name: string }[] } })?.result?.tools ?? []).map((t) => t.name);
+      for (const tool of ["delete_job", "list_providers", "update_settings"]) {
+        expect(names).not.toContain(tool);
+        const out = await asSession(tool, { id: "whatever" });
+        expect(out.error).toBe(`${tool} is only available to: assistant`);
+      }
+      expect(vi.mocked(getJobScheduler)).not.toHaveBeenCalled();
+    });
+
+    it("delivers a message attributed to the session, not a job", async () => {
+      const out = await asSession("add_inbox_message", { title: "Session report", body: "Body text" });
+      expect(out.delivered).toBe(true);
+
+      const delivered = getInboxMessages().find((m) => m.title === "Session report");
+      expect(delivered?.sessionId).toBe(SESSION_ID);
+      expect(delivered?.sessionName).toBe(SESSION_NAME);
+      expect(delivered?.jobId).toBeUndefined();
+      expect(delivered?.jobName).toBeUndefined();
+    });
+
+    it("with no notifyProviders, nothing is pushed even though a live provider is configured", async () => {
+      setNotificationSettings({
+        providers: [
+          { id: "quiet-1", type: "ntfy", name: "Quiet Ntfy", enabled: true, config: { serverUrl: "http://127.0.0.1:1", topic: "t" } },
+        ],
+      });
+      const out = await asSession("add_inbox_message", { title: "Quiet report", body: "b" });
+      expect(out.notified).toEqual([]);
+      expect(out.skipped).toBeUndefined();
+    });
+
+    it("with notifyProviders naming a live provider, the result reports it in notified", async () => {
+      setNotificationSettings({
+        providers: [
+          { id: "live-1", type: "ntfy", name: "Live Ntfy", enabled: true, config: { serverUrl: "http://127.0.0.1:1", topic: "t" } },
+        ],
+      });
+      const out = await asSession("add_inbox_message", { title: "Live report", body: "b", notifyProviders: ["live-1"] });
+      expect(out.notified).toEqual(["Live Ntfy"]);
+      expect(out.skipped).toBeUndefined();
+    });
+
+    it("with a disabled provider named, notified is empty and skipped explains why", async () => {
+      setNotificationSettings({
+        providers: [
+          { id: "dead-1", type: "ntfy", name: "Dead Ntfy", enabled: false, config: { serverUrl: "http://127.0.0.1:1", topic: "t" } },
+        ],
+      });
+      const out = await asSession("add_inbox_message", { title: "Dead report", body: "b", notifyProviders: ["dead-1"] });
+      expect(out.notified).toEqual([]);
+      expect(out.skipped).toEqual(["Dead Ntfy: disabled"]);
+    });
+
+    it("with an unknown provider id named, skipped reports it as unknown", async () => {
+      setNotificationSettings({ providers: [] });
+      const out = await asSession("add_inbox_message", { title: "Unknown-target report", body: "b", notifyProviders: ["no-such-id"] });
+      expect(out.notified).toEqual([]);
+      expect(out.skipped).toEqual(["no-such-id: unknown"]);
+    });
+
+    it("list_notify_targets returns only id/name/type/enabled, not filter or credentials", async () => {
+      setNotificationSettings({
+        providers: [
+          {
+            id: "target-1",
+            type: "telegram",
+            name: "Telegram (personal)",
+            enabled: true,
+            config: { botToken: "secret-token", chatId: "12345" },
+            filter: { priorities: ["error"] },
+          },
+        ],
+      });
+      const targets = (await asSession("list_notify_targets")) as Record<string, unknown>[];
+      expect(targets).toEqual([{ id: "target-1", name: "Telegram (personal)", type: "telegram", enabled: true }]);
+      const serialised = JSON.stringify(targets);
+      expect(serialised).not.toContain("secret-token");
+      expect(serialised).not.toContain("chatId");
+      expect(serialised).not.toContain("filter");
+    });
+  });
+
+  describe("session push rate limit", () => {
+    const RATE_TOKEN = "session-token-for-rate-limit";
+    const RATE_SESSION_ID = "session-rate-limit-1";
+
+    beforeAll(() => {
+      registerSessionContext(RATE_TOKEN, RATE_SESSION_ID, "Rate Limited Session");
+      setNotificationSettings({
+        providers: [{ id: "rl-1", type: "ntfy", name: "RL Ntfy", enabled: true, config: { serverUrl: "http://127.0.0.1:1", topic: "t" } }],
+      });
+    });
+
+    // See the comment in "session confinement" above: fetch is deliberately
+    // left unmocked here too, for the same reason (mcpPost needs the real one).
+
+    async function pushAsRateLimitedSession(title: string): Promise<{ body: Record<string, unknown>; isError: boolean }> {
+      const res = await mcpPost(
+        {
+          jsonrpc: "2.0",
+          id: 30,
+          method: "tools/call",
+          params: { name: "add_inbox_message", arguments: { title, body: "b", notifyProviders: ["rl-1"] } },
+        },
+        RATE_TOKEN,
+      );
+      const result = (res.body as { result?: { content: { text: string }[]; isError?: boolean } })?.result;
+      return { body: JSON.parse(result?.content?.[0]?.text ?? "{}"), isError: result?.isError ?? false };
+    }
+
+    it("allows 10 pushes per hour, then refuses the 11th while still saving to the inbox", async () => {
+      for (let i = 0; i < 10; i++) {
+        const { body, isError } = await pushAsRateLimitedSession(`Push ${i}`);
+        expect(isError).toBe(false);
+        expect(body.notified).toEqual(["RL Ntfy"]);
+      }
+
+      const { body, isError } = await pushAsRateLimitedSession("Push 10 (over the cap)");
+      expect(isError).toBe(true);
+      expect(body.error).toContain("capped at 10 per hour");
+      expect(body.delivered).toBe(true);
+      expect(typeof body.id).toBe("string");
+
+      // The inbox write is not rate limited — the 11th report still landed.
+      const delivered = getInboxMessages().find((m) => m.title === "Push 10 (over the cap)");
+      expect(delivered).toBeTruthy();
+      expect(delivered?.sessionId).toBe(RATE_SESSION_ID);
     });
   });
 
