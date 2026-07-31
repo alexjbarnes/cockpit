@@ -9,6 +9,7 @@ process.env.CLAUDE_CONFIG_DIR = mkdtempSync(join(tmpdir(), "claude-test-"));
 vi.mock("@/server/singleton", () => ({ getJobScheduler: vi.fn() }));
 
 import { getInboxMessages } from "@/server/inbox";
+import { buildProject, saveProject } from "@/server/issue-storage";
 import { saveRun } from "@/server/job-storage";
 import { CockpitMcpServer } from "@/server/mcp/cockpit-config-server";
 import { registerAuthToken, registerRunContext, registerSessionContext } from "@/server/mcp/run-context";
@@ -72,6 +73,17 @@ async function callTool(name: string, args: Record<string, unknown> = {}): Promi
 
 async function callToolParsed(name: string, args: Record<string, unknown> = {}): Promise<unknown> {
   const text = await callTool(name, args);
+  return JSON.parse(text as string);
+}
+
+/** Like callToolParsed, but as an explicit caller other than the default
+ *  assistant token — for proving job/session callers reach the same tools. */
+async function callToolAsParsed(authToken: string, name: string, args: Record<string, unknown> = {}): Promise<unknown> {
+  const res = await mcpPost(
+    { jsonrpc: "2.0", id: Math.floor(Math.random() * 100000), method: "tools/call", params: { name, arguments: args } },
+    authToken,
+  );
+  const text = (res.body as { result?: { content: { text: string }[] } })?.result?.content?.[0]?.text ?? "";
   return JSON.parse(text as string);
 }
 
@@ -146,6 +158,15 @@ describe("cockpit-config MCP server (in-process HTTP)", () => {
       "stop_job",
       "list_running_jobs",
       "get_job_transcript",
+      // Phase 2.3: the native issue tracker, scoped to assistant/job/session
+      // alike (unlike add_inbox_message below), so the assistant sees these too.
+      "list_projects",
+      "list_issues",
+      "get_issue",
+      "create_issue",
+      "update_issue",
+      "add_issue_comment",
+      "add_issue_attachment",
     ]) {
       expect(names).toContain(name);
     }
@@ -153,6 +174,11 @@ describe("cockpit-config MCP server (in-process HTTP)", () => {
     // see them, proven directly rather than merely absent-from-the-list-above.
     expect(names).not.toContain("add_inbox_message");
     expect(names).not.toContain("list_notify_targets");
+    // No delete-shaped tool exists for issues or projects, anywhere in the
+    // advertised list — Cancelled is a status, and deleting a project stays
+    // UI-only (see issue-storage.ts's deleteProject comment).
+    expect(names).not.toContain("delete_issue");
+    expect(names).not.toContain("delete_project");
   });
 
   describe("jobs", () => {
@@ -634,10 +660,20 @@ describe("cockpit-config MCP server (in-process HTTP)", () => {
       return JSON.parse(text);
     }
 
-    it("shows a job its scoped tools (add_inbox_message, list_notify_targets), and hides them from everyone else", async () => {
+    it("shows a job its scoped tools (add_inbox_message, list_notify_targets, and the issue tools), and hides them from everyone else", async () => {
       const jobList = await mcpPost({ jsonrpc: "2.0", id: 8, method: "tools/list", params: {} }, RUN_TOKEN);
       const jobTools = ((jobList.body as { result?: { tools: { name: string }[] } })?.result?.tools ?? []).map((t) => t.name);
-      expect(jobTools).toEqual(["add_inbox_message", "list_notify_targets"]);
+      expect(jobTools).toEqual([
+        "add_inbox_message",
+        "list_notify_targets",
+        "list_projects",
+        "list_issues",
+        "get_issue",
+        "create_issue",
+        "update_issue",
+        "add_issue_comment",
+        "add_issue_attachment",
+      ]);
 
       const adminList = await mcpPost({ jsonrpc: "2.0", id: 9, method: "tools/list", params: {} });
       const adminTools = ((adminList.body as { result?: { tools: { name: string }[] } })?.result?.tools ?? []).map((t) => t.name);
@@ -720,7 +756,17 @@ describe("cockpit-config MCP server (in-process HTTP)", () => {
     it("shows a session the same scoped tools as a job, and hides everything else", async () => {
       const sessionList = await mcpPost({ jsonrpc: "2.0", id: 22, method: "tools/list", params: {} }, SESSION_TOKEN);
       const sessionTools = ((sessionList.body as { result?: { tools: { name: string }[] } })?.result?.tools ?? []).map((t) => t.name);
-      expect(sessionTools).toEqual(["add_inbox_message", "list_notify_targets"]);
+      expect(sessionTools).toEqual([
+        "add_inbox_message",
+        "list_notify_targets",
+        "list_projects",
+        "list_issues",
+        "get_issue",
+        "create_issue",
+        "update_issue",
+        "add_issue_comment",
+        "add_issue_attachment",
+      ]);
     });
 
     it("refuses delete_job, list_providers and update_settings, both by absence and by call", async () => {
@@ -1236,6 +1282,513 @@ describe("cockpit-config MCP server (in-process HTTP)", () => {
       });
       const text = (res.body as { result?: { content: { text: string }[] } })?.result?.content?.[0]?.text ?? "";
       expect(JSON.parse(text).error).toContain("not found");
+    });
+  });
+
+  describe("issues and projects", () => {
+    const ISSUE_JOB_TOKEN = "job-token-for-issues";
+    const ISSUE_SESSION_TOKEN = "session-token-for-issues";
+    const ISSUE_SESSION_ID = "session-issues-1";
+    const ISSUE_SESSION_NAME = "Issue Session";
+
+    let projectA: { id: string; prefix: string };
+    let projectB: { id: string; prefix: string };
+
+    beforeAll(() => {
+      registerRunContext(ISSUE_JOB_TOKEN, { jobId: "job-issues-1", jobName: "Issue Job", runId: "run-issues-1" });
+      registerSessionContext(ISSUE_SESSION_TOKEN, ISSUE_SESSION_ID, ISSUE_SESSION_NAME);
+
+      const a = buildProject({ name: "Cockpit", prefix: "ISSA", repoPath: "/repo/issues-a" });
+      saveProject(a);
+      projectA = a;
+
+      const b = buildProject({ name: "Rover", prefix: "ISSB" });
+      saveProject(b);
+      projectB = b;
+    });
+
+    it("list_projects returns id, name, prefix, repoPath and archived for every project", async () => {
+      const result = (await callToolParsed("list_projects")) as {
+        id: string;
+        name: string;
+        prefix: string;
+        repoPath?: string;
+        archived?: boolean;
+      }[];
+      const a = result.find((p) => p.id === projectA.id);
+      expect(a).toBeDefined();
+      expect(a?.name).toBe("Cockpit");
+      expect(a?.prefix).toBe("ISSA");
+      expect(a?.repoPath).toBe("/repo/issues-a");
+      expect(a?.archived).toBe(false);
+
+      const b = result.find((p) => p.id === projectB.id);
+      expect(b?.prefix).toBe("ISSB");
+      expect(b?.repoPath).toBeUndefined();
+    });
+
+    describe("create_issue", () => {
+      it("assigns the key and starts every issue at Backlog, never honouring a caller-supplied key/id/status/activity", async () => {
+        const result = (await callToolParsed("create_issue", {
+          project: "ISSA",
+          title: "First bug",
+          description: "Steps to reproduce",
+          // None of these exist in the schema; buildIssue's IssueInput type
+          // has no key/id/createdAt/activity field at all (see
+          // issue-storage.ts), so a caller has no way to make these stick.
+          key: "ISSA-999",
+          id: "fake-uuid",
+          status: "Done",
+          createdAt: 1,
+          activity: [{ id: "x", createdAt: 1, actor: { kind: "user" }, kind: "created" }],
+        })) as {
+          created: {
+            key: string;
+            id: string;
+            status: string;
+            createdAt: number;
+            activity: { kind: string; actor: unknown }[];
+          };
+        };
+        expect(result.created.key).toBe("ISSA-1");
+        expect(result.created.status).toBe("Backlog");
+        expect(result.created.id).not.toBe("fake-uuid");
+        expect(result.created.createdAt).not.toBe(1);
+        expect(result.created.activity).toHaveLength(1);
+        expect(result.created.activity[0].kind).toBe("created");
+        expect(result.created.activity[0].actor).toEqual({ kind: "assistant" });
+      });
+
+      it("accepts a project by its uuid id as well as its prefix", async () => {
+        const result = (await callToolParsed("create_issue", { project: projectB.id, title: "Second project issue" })) as {
+          created: { key: string; projectId: string };
+        };
+        expect(result.created.key).toBe("ISSB-1");
+        expect(result.created.projectId).toBe(projectB.id);
+      });
+
+      it("threads priority and labels through to the created issue", async () => {
+        const result = (await callToolParsed("create_issue", {
+          project: "ISSA",
+          title: "Priority and labels test",
+          priority: 3,
+          labels: ["chore", "backend"],
+        })) as { created: { priority: number; labels: string[] } };
+        expect(result.created.priority).toBe(3);
+        expect(result.created.labels).toEqual(["chore", "backend"]);
+      });
+
+      it("refuses an unknown project", async () => {
+        const result = (await callToolParsed("create_issue", { project: "NOSUCHPROJECT", title: "x" })) as { error: string };
+        expect(result.error).toContain("Unknown project");
+      });
+
+      it("refuses a missing title", async () => {
+        const result = (await callToolParsed("create_issue", { project: "ISSA" })) as { error: string };
+        expect(result.error).toContain("required");
+      });
+
+      it("refuses a missing project", async () => {
+        const result = (await callToolParsed("create_issue", { title: "x" })) as { error: string };
+        expect(result.error).toContain("required");
+      });
+
+      it("refuses an invalid priority", async () => {
+        const result = (await callToolParsed("create_issue", { project: "ISSA", title: "Bad priority", priority: 9 })) as {
+          error: string;
+        };
+        expect(result.error).toContain("priority");
+      });
+
+      it("refuses labels that aren't an array of strings", async () => {
+        const result = (await callToolParsed("create_issue", { project: "ISSA", title: "Bad labels", labels: "not-an-array" })) as {
+          error: string;
+        };
+        expect(result.error).toContain("labels");
+      });
+
+      it("attributes a job-created issue to the job, never to an author/actor argument the job supplies", async () => {
+        const result = (await callToolAsParsed(ISSUE_JOB_TOKEN, "create_issue", {
+          project: "ISSA",
+          title: "Filed by a job",
+          author: { kind: "user" },
+          actor: { kind: "assistant" },
+        })) as { created: { activity: { actor: unknown }[] } };
+        expect(result.created.activity[0].actor).toEqual({
+          kind: "job",
+          jobId: "job-issues-1",
+          jobName: "Issue Job",
+          runId: "run-issues-1",
+        });
+      });
+
+      it("attributes a session-created issue to the session, never to an author/actor argument the session supplies", async () => {
+        const result = (await callToolAsParsed(ISSUE_SESSION_TOKEN, "create_issue", {
+          project: "ISSA",
+          title: "Filed by a session",
+          author: { kind: "assistant" },
+        })) as { created: { activity: { actor: unknown }[] } };
+        expect(result.created.activity[0].actor).toEqual({ kind: "session", sessionId: ISSUE_SESSION_ID, sessionName: ISSUE_SESSION_NAME });
+      });
+    });
+
+    describe("get_issue", () => {
+      it("returns the full issue, including description, comments and activity", async () => {
+        const created = (await callToolParsed("create_issue", { project: "ISSA", title: "Detail test", description: "Body text" })) as {
+          created: { key: string };
+        };
+        const got = (await callToolParsed("get_issue", { key: created.created.key })) as {
+          key: string;
+          description: string;
+          comments: unknown[];
+          activity: unknown[];
+        };
+        expect(got.key).toBe(created.created.key);
+        expect(got.description).toBe("Body text");
+        expect(Array.isArray(got.comments)).toBe(true);
+        expect(Array.isArray(got.activity)).toBe(true);
+      });
+
+      it("is case-insensitive on the key", async () => {
+        const created = (await callToolParsed("create_issue", { project: "ISSA", title: "Case test" })) as { created: { key: string } };
+        const lower = (await callToolParsed("get_issue", { key: created.created.key.toLowerCase() })) as { key: string };
+        expect(lower.key).toBe(created.created.key);
+      });
+
+      it("errors for an unknown key", async () => {
+        const result = (await callToolParsed("get_issue", { key: "ISSA-99999" })) as { error: string };
+        expect(result.error).toContain("not found");
+      });
+
+      it("requires a key", async () => {
+        const result = (await callToolParsed("get_issue", {})) as { error: string };
+        expect(result.error).toContain("required");
+      });
+    });
+
+    describe("update_issue", () => {
+      it("changes only the fields given, and appends one activity entry per changed field", async () => {
+        const created = (await callToolParsed("create_issue", { project: "ISSA", title: "Original", description: "d" })) as {
+          created: { key: string; activity: unknown[] };
+        };
+        const key = created.created.key;
+        const beforeCount = created.created.activity.length;
+
+        const result = (await callToolParsed("update_issue", {
+          key,
+          title: "Updated title",
+          status: "Refine Ready",
+          priority: 2,
+          labels: ["bug", "urgent"],
+        })) as {
+          before: { title: string };
+          after: { title: string; status: string; priority: number; labels: string[]; activity: unknown[] };
+        };
+
+        expect(result.before.title).toBe("Original");
+        expect(result.after.title).toBe("Updated title");
+        expect(result.after.status).toBe("Refine Ready");
+        expect(result.after.priority).toBe(2);
+        expect(result.after.labels).toEqual(["bug", "urgent"]);
+        // title + status + priority + labels changed = 4 new activity entries.
+        expect(result.after.activity.length).toBe(beforeCount + 4);
+      });
+
+      it("updates the description", async () => {
+        const created = (await callToolParsed("create_issue", {
+          project: "ISSA",
+          title: "Description update test",
+          description: "old",
+        })) as { created: { key: string } };
+        const result = (await callToolParsed("update_issue", { key: created.created.key, description: "new" })) as {
+          after: { description: string };
+        };
+        expect(result.after.description).toBe("new");
+      });
+
+      it("is a no-op when no recognised field is given, and adds no activity noise", async () => {
+        const created = (await callToolParsed("create_issue", { project: "ISSA", title: "No-op test" })) as {
+          created: { key: string; activity: unknown[]; updatedAt: number };
+        };
+        const result = (await callToolParsed("update_issue", { key: created.created.key })) as {
+          after: { activity: unknown[]; updatedAt: number };
+        };
+        expect(result.after.activity.length).toBe(created.created.activity.length);
+        expect(result.after.updatedAt).toBe(created.created.updatedAt);
+      });
+
+      it("refuses an invalid status rather than silently corrupting the issue", async () => {
+        const created = (await callToolParsed("create_issue", { project: "ISSA", title: "Bad status test" })) as {
+          created: { key: string };
+        };
+        const result = (await callToolParsed("update_issue", { key: created.created.key, status: "Todo" })) as { error: string };
+        expect(result.error).toContain("Unknown status");
+        expect(result.error).toContain("Backlog");
+
+        const reloaded = (await callToolParsed("get_issue", { key: created.created.key })) as { status: string };
+        expect(reloaded.status).toBe("Backlog");
+      });
+
+      it("refuses an invalid priority", async () => {
+        const created = (await callToolParsed("create_issue", { project: "ISSA", title: "Bad priority update" })) as {
+          created: { key: string };
+        };
+        const result = (await callToolParsed("update_issue", { key: created.created.key, priority: 7 })) as { error: string };
+        expect(result.error).toContain("priority");
+      });
+
+      it("refuses labels that aren't an array of strings", async () => {
+        const created = (await callToolParsed("create_issue", { project: "ISSA", title: "Bad labels update" })) as {
+          created: { key: string };
+        };
+        const result = (await callToolParsed("update_issue", { key: created.created.key, labels: [1, 2, 3] })) as { error: string };
+        expect(result.error).toContain("labels");
+      });
+
+      it("refuses a non-string description", async () => {
+        const created = (await callToolParsed("create_issue", { project: "ISSA", title: "Bad description update" })) as {
+          created: { key: string };
+        };
+        const result = (await callToolParsed("update_issue", { key: created.created.key, description: 123 })) as { error: string };
+        expect(result.error).toContain("description");
+      });
+
+      it("refuses an empty title", async () => {
+        const created = (await callToolParsed("create_issue", { project: "ISSA", title: "Blank title update" })) as {
+          created: { key: string };
+        };
+        const result = (await callToolParsed("update_issue", { key: created.created.key, title: "   " })) as { error: string };
+        expect(result.error).toContain("title");
+      });
+
+      it("errors for an unknown key", async () => {
+        const result = (await callToolParsed("update_issue", { key: "NOPE-1", title: "x" })) as { error: string };
+        expect(result.error).toContain("not found");
+      });
+
+      it("requires a key", async () => {
+        const result = (await callToolParsed("update_issue", { title: "x" })) as { error: string };
+        expect(result.error).toContain("required");
+      });
+
+      it("attributes the change to the actual caller, not anything the args claim", async () => {
+        const created = (await callToolParsed("create_issue", { project: "ISSA", title: "Attribution test" })) as {
+          created: { key: string };
+        };
+        const result = (await callToolAsParsed(ISSUE_SESSION_TOKEN, "update_issue", {
+          key: created.created.key,
+          title: "Changed by session",
+          actor: { kind: "assistant" },
+        })) as { after: { activity: { actor: unknown }[] } };
+        const last = result.after.activity[result.after.activity.length - 1];
+        expect(last.actor).toEqual({ kind: "session", sessionId: ISSUE_SESSION_ID, sessionName: ISSUE_SESSION_NAME });
+      });
+    });
+
+    describe("add_issue_comment", () => {
+      it("attributes the comment to the token, with no author field to spoof", async () => {
+        const created = (await callToolParsed("create_issue", { project: "ISSA", title: "Comment test" })) as {
+          created: { key: string };
+        };
+        const result = (await callToolAsParsed(ISSUE_JOB_TOKEN, "add_issue_comment", {
+          key: created.created.key,
+          body: "Investigated, looks like a race.",
+          author: { kind: "user" },
+        })) as { added: { body: string; author: unknown }; issue: { comments: unknown[] } };
+        expect(result.added.body).toBe("Investigated, looks like a race.");
+        expect(result.added.author).toEqual({ kind: "job", jobId: "job-issues-1", jobName: "Issue Job", runId: "run-issues-1" });
+        expect(result.issue.comments).toHaveLength(1);
+      });
+
+      it("refuses an empty body", async () => {
+        const created = (await callToolParsed("create_issue", { project: "ISSA", title: "Empty comment test" })) as {
+          created: { key: string };
+        };
+        const result = (await callToolParsed("add_issue_comment", { key: created.created.key, body: "   " })) as { error: string };
+        expect(result.error).toContain("required");
+      });
+
+      it("errors for an unknown key", async () => {
+        const result = (await callToolParsed("add_issue_comment", { key: "NOPE-1", body: "x" })) as { error: string };
+        expect(result.error).toContain("not found");
+      });
+
+      it("requires a key and a body", async () => {
+        const result = (await callToolParsed("add_issue_comment", {})) as { error: string };
+        expect(result.error).toContain("required");
+      });
+    });
+
+    describe("add_issue_attachment", () => {
+      it("stores the url and title, for ui-reviewer screenshots", async () => {
+        const created = (await callToolParsed("create_issue", { project: "ISSA", title: "Attachment test" })) as {
+          created: { key: string };
+        };
+        const result = (await callToolParsed("add_issue_attachment", {
+          key: created.created.key,
+          url: "/cockpit/screenshots/abc.png",
+          title: "Mobile viewport, before fix",
+        })) as { added: { url: string; title: string }; issue: { attachments: unknown[] } };
+        expect(result.added.url).toBe("/cockpit/screenshots/abc.png");
+        expect(result.added.title).toBe("Mobile viewport, before fix");
+        expect(result.issue.attachments).toHaveLength(1);
+      });
+
+      it("refuses a missing url or title", async () => {
+        const created = (await callToolParsed("create_issue", { project: "ISSA", title: "Attachment validation test" })) as {
+          created: { key: string };
+        };
+        const result = (await callToolParsed("add_issue_attachment", { key: created.created.key, url: "", title: "" })) as {
+          error: string;
+        };
+        expect(result.error).toContain("required");
+      });
+
+      it("errors for an unknown key", async () => {
+        const result = (await callToolParsed("add_issue_attachment", { key: "NOPE-1", url: "u", title: "t" })) as { error: string };
+        expect(result.error).toContain("not found");
+      });
+
+      it("requires a key, url and title", async () => {
+        const result = (await callToolParsed("add_issue_attachment", {})) as { error: string };
+        expect(result.error).toContain("required");
+      });
+    });
+
+    describe("list_issues filtering", () => {
+      beforeAll(async () => {
+        await callToolParsed("create_issue", { project: "ISSA", title: "Alpha bug", labels: ["bug"] });
+        await callToolParsed("create_issue", { project: "ISSA", title: "Alpha feature", labels: ["feature"] });
+        await callToolParsed("create_issue", { project: "ISSB", title: "Bravo bug", labels: ["bug"] });
+      });
+
+      it("with no filters, returns issues from every project", async () => {
+        const result = (await callToolParsed("list_issues")) as { projectId: string }[];
+        expect(result.some((i) => i.projectId === projectA.id)).toBe(true);
+        expect(result.some((i) => i.projectId === projectB.id)).toBe(true);
+      });
+
+      it("filters by project, accepting either its prefix or its id", async () => {
+        const byPrefix = (await callToolParsed("list_issues", { project: "ISSB" })) as { projectId: string }[];
+        expect(byPrefix.length).toBeGreaterThan(0);
+        expect(byPrefix.every((i) => i.projectId === projectB.id)).toBe(true);
+
+        const byId = (await callToolParsed("list_issues", { project: projectB.id })) as { projectId: string }[];
+        expect(byId).toEqual(byPrefix);
+      });
+
+      it("an unrecognised project filter returns an empty list, not an error", async () => {
+        const result = await callToolParsed("list_issues", { project: "NOSUCHPROJECT" });
+        expect(result).toEqual([]);
+      });
+
+      it("filters by status", async () => {
+        const result = (await callToolParsed("list_issues", { status: "Backlog" })) as { status: string }[];
+        expect(result.length).toBeGreaterThan(0);
+        expect(result.every((i) => i.status === "Backlog")).toBe(true);
+      });
+
+      it("an unrecognised status is refused with the valid names, not silently emptied", async () => {
+        const result = (await callToolParsed("list_issues", { status: "Todo" })) as { error: string };
+        expect(result.error).toContain("Unknown status");
+        expect(result.error).toContain("Backlog");
+      });
+
+      it("filters by label", async () => {
+        const result = (await callToolParsed("list_issues", { label: "feature" })) as { title: string }[];
+        expect(result.some((i) => i.title === "Alpha feature")).toBe(true);
+        expect(result.every((i) => i.title !== "Alpha bug")).toBe(true);
+      });
+
+      it("combines project, status and label filters with AND", async () => {
+        const result = (await callToolParsed("list_issues", { project: "ISSA", status: "Backlog", label: "bug" })) as {
+          title: string;
+          projectId: string;
+        }[];
+        expect(result.some((i) => i.title === "Alpha bug")).toBe(true);
+        expect(result.every((i) => i.projectId === projectA.id)).toBe(true);
+        // Bravo bug matches label+status but not project, so it must be excluded.
+        expect(result.every((i) => i.title !== "Bravo bug")).toBe(true);
+      });
+
+      it("returns a trimmed summary, not the full issue body", async () => {
+        const result = (await callToolParsed("list_issues", { project: "ISSA", label: "bug" })) as Record<string, unknown>[];
+        const found = result.find((i) => i.title === "Alpha bug")!;
+        expect(found).not.toHaveProperty("description");
+        expect(found).not.toHaveProperty("comments");
+        expect(found).not.toHaveProperty("activity");
+        expect(found).not.toHaveProperty("attachments");
+        expect(found.commentCount).toBe(0);
+        expect(found.attachmentCount).toBe(0);
+        expect(found.key).toBeDefined();
+        expect(found.status).toBe("Backlog");
+      });
+    });
+
+    describe("scope: every caller kind can reach the issue tools", () => {
+      it("a job caller can reach every issue tool", async () => {
+        const projects = await callToolAsParsed(ISSUE_JOB_TOKEN, "list_projects");
+        expect(Array.isArray(projects)).toBe(true);
+
+        const issues = await callToolAsParsed(ISSUE_JOB_TOKEN, "list_issues", { project: "ISSA" });
+        expect(Array.isArray(issues)).toBe(true);
+
+        const created = (await callToolAsParsed(ISSUE_JOB_TOKEN, "create_issue", { project: "ISSA", title: "Job reach test" })) as {
+          created: { key: string };
+        };
+        const got = (await callToolAsParsed(ISSUE_JOB_TOKEN, "get_issue", { key: created.created.key })) as { key: string };
+        expect(got.key).toBe(created.created.key);
+
+        const updated = (await callToolAsParsed(ISSUE_JOB_TOKEN, "update_issue", { key: created.created.key, priority: 1 })) as {
+          after: { priority: number };
+        };
+        expect(updated.after.priority).toBe(1);
+
+        const attached = (await callToolAsParsed(ISSUE_JOB_TOKEN, "add_issue_attachment", {
+          key: created.created.key,
+          url: "https://example.test/shot.png",
+          title: "Screenshot",
+        })) as { added: { url: string } };
+        expect(attached.added.url).toBe("https://example.test/shot.png");
+      });
+
+      it("a session caller can reach every issue tool", async () => {
+        const projects = await callToolAsParsed(ISSUE_SESSION_TOKEN, "list_projects");
+        expect(Array.isArray(projects)).toBe(true);
+
+        const created = (await callToolAsParsed(ISSUE_SESSION_TOKEN, "create_issue", {
+          project: "ISSA",
+          title: "Session reach test",
+        })) as { created: { key: string } };
+        const issues = (await callToolAsParsed(ISSUE_SESSION_TOKEN, "list_issues", { project: "ISSA" })) as { key: string }[];
+        expect(issues.some((i) => i.key === created.created.key)).toBe(true);
+
+        const got = (await callToolAsParsed(ISSUE_SESSION_TOKEN, "get_issue", { key: created.created.key })) as { key: string };
+        expect(got.key).toBe(created.created.key);
+
+        const attached = (await callToolAsParsed(ISSUE_SESSION_TOKEN, "add_issue_attachment", {
+          key: created.created.key,
+          url: "https://example.test/shot2.png",
+          title: "Screenshot 2",
+        })) as { added: { url: string } };
+        expect(attached.added.url).toBe("https://example.test/shot2.png");
+      });
+    });
+
+    it("advertises no delete-shaped tool for issues or projects, for any caller", async () => {
+      for (const authToken of [token, ISSUE_JOB_TOKEN, ISSUE_SESSION_TOKEN]) {
+        const res = await mcpPost({ jsonrpc: "2.0", id: 555, method: "tools/list", params: {} }, authToken);
+        const names = ((res.body as { result?: { tools: { name: string }[] } })?.result?.tools ?? []).map((t) => t.name);
+        const deleteish = names.filter((n) => /delete/i.test(n) && /(issue|project)/i.test(n));
+        expect(deleteish).toEqual([]);
+      }
+    });
+
+    it("calling a fabricated delete_issue/delete_project tool name fails as an unknown tool, not a real deletion", async () => {
+      for (const name of ["delete_issue", "delete_project"]) {
+        const result = (await callToolParsed(name, { key: "ISSA-1" })) as { error: string };
+        expect(result.error).toContain("Unknown tool");
+      }
     });
   });
 

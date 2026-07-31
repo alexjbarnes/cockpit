@@ -8,13 +8,24 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprot
 import { CONTEXT_SIZES } from "@/lib/models";
 import { getDefaults, setDefaults } from "@/server/defaults";
 import { addInboxMessage } from "@/server/inbox";
+import {
+  addIssueAttachment,
+  addIssueComment,
+  applyIssueUpdate,
+  buildIssue,
+  getIssue,
+  type IssueUpdateInput,
+  loadIssues,
+  loadProjects,
+  saveIssue,
+} from "@/server/issue-storage";
 import { buildJob, deleteJob, getJob, getLatestRun, getRun, loadJobs, saveJob } from "@/server/job-storage";
 import { getNotificationSettings, setNotificationSettings, updateNotificationSettings } from "@/server/notification-settings";
 import { getClaudeUserConfigFile } from "@/server/paths";
 import { addProvider, deleteProvider, getProviders, updateProvider } from "@/server/providers";
 import { getJobScheduler } from "@/server/singleton";
 import { findSessionCwd, loadTranscript } from "@/server/transcript";
-import type { InboxPriority, JobRun, NotificationProviderEntry, ScheduledJob } from "@/types";
+import type { InboxPriority, Issue, IssueActor, IssueStatus, JobRun, NotificationProviderEntry, Project, ScheduledJob } from "@/types";
 import { isValidToken, lookupCaller, type McpCaller } from "./run-context";
 
 interface McpServerEntry {
@@ -125,7 +136,16 @@ type McpScope = "assistant" | "job" | "session";
 const TOOL_SCOPES: Record<string, readonly McpScope[]> = {
   add_inbox_message: ["job", "session"],
   list_notify_targets: ["job", "session"],
-  // phase 2 adds the issue tools here as ["assistant", "job", "session"]
+  // Phase 2.3: the native issue tracker. A plain session gets no cockpit
+  // system prompt (see run-context.ts's McpCaller doc), so these tool
+  // descriptions are its only affordance for using the tracker at all.
+  list_projects: ["assistant", "job", "session"],
+  list_issues: ["assistant", "job", "session"],
+  get_issue: ["assistant", "job", "session"],
+  create_issue: ["assistant", "job", "session"],
+  update_issue: ["assistant", "job", "session"],
+  add_issue_comment: ["assistant", "job", "session"],
+  add_issue_attachment: ["assistant", "job", "session"],
 };
 
 function scopesFor(name: string): readonly McpScope[] {
@@ -169,6 +189,94 @@ function pickJobUpdate(source: Record<string, unknown>): Partial<ScheduledJob> {
     if (source[key] !== undefined) update[key] = source[key];
   }
   return update as Partial<ScheduledJob>;
+}
+
+/**
+ * Every valid issue status, for validating a caller-supplied `status` filter
+ * or patch field before it reaches storage. IssueStatus is a small, closed
+ * enum — unlike a project id/prefix, which is an open namespace where "no
+ * match" is a normal, expected outcome — so an unrecognised value here is
+ * always a caller mistake, worth a clear error rather than a silent empty
+ * result (list_issues) or a corrupted issue (update_issue).
+ */
+const ISSUE_STATUSES: readonly IssueStatus[] = [
+  "Backlog",
+  "Refine Ready",
+  "Refined",
+  "Implementation Ready",
+  "Implementation",
+  "Human Review",
+  "Accepted",
+  "Done",
+  "Cancelled",
+];
+
+/** Linear's 0-4 priority scale (see the Issue type's own comment). */
+const PRIORITIES = [0, 1, 2, 3, 4] as const;
+
+/**
+ * Map the token's caller identity to the actor recorded on an issue's
+ * activity/comments. This is the *only* place a caller's identity becomes an
+ * IssueActor: none of the issue tool schemas below expose an author/actor
+ * argument, so a caller has no way to claim to be someone else — the token
+ * alone decides. McpCaller has no "user" kind (that one is UI-only, with no
+ * MCP token involved at all — see IssueActor's own comment in
+ * src/types/index.ts), so this switch is exhaustive over assistant/job/session
+ * without needing a fourth branch; the `default` below is an unreachable
+ * exhaustiveness guard, not a real code path (same treatment as the
+ * "Unreachable" branch already in add_inbox_message's caller check below).
+ */
+function actorFromCaller(caller: McpCaller): IssueActor {
+  switch (caller.kind) {
+    case "assistant":
+      return { kind: "assistant" };
+    case "job":
+      return { kind: "job", jobId: caller.run.jobId, jobName: caller.run.jobName, runId: caller.run.runId };
+    case "session":
+      return { kind: "session", sessionId: caller.sessionId, sessionName: caller.sessionName };
+    default: {
+      const exhaustive: never = caller;
+      throw new Error(`Unknown MCP caller kind: ${JSON.stringify(exhaustive)}`);
+    }
+  }
+}
+
+/**
+ * Resolve a caller-supplied project reference to a real Project, accepting
+ * either its id (as returned by list_projects) or its prefix (e.g. "CK",
+ * case-insensitive) — the form an issue key already carries, so a caller who
+ * only knows a key like "CK-12" can filter or create without a round trip
+ * through list_projects first. Returns undefined if neither matches, same as
+ * a plain lookup miss.
+ */
+function resolveProject(idOrPrefix: string): Project | undefined {
+  const projects = loadProjects();
+  const normalized = idOrPrefix.trim().toUpperCase();
+  return projects.find((p) => p.id === idOrPrefix) ?? projects.find((p) => p.prefix.toUpperCase() === normalized);
+}
+
+/**
+ * Trim an Issue down to what list_issues returns. The pipeline calls
+ * list_issues constantly to scan for matching issues by status/label before
+ * opening the ones it cares about with get_issue, so returning every
+ * comment/attachment/activity entry (get_issue's job) for every issue in the
+ * list would be wasteful — counts are enough to know an issue has discussion
+ * worth reading with get_issue.
+ */
+function issueSummary(issue: Issue): Record<string, unknown> {
+  return {
+    id: issue.id,
+    key: issue.key,
+    projectId: issue.projectId,
+    title: issue.title,
+    status: issue.status,
+    priority: issue.priority,
+    labels: issue.labels,
+    createdAt: issue.createdAt,
+    updatedAt: issue.updatedAt,
+    commentCount: issue.comments.length,
+    attachmentCount: issue.attachments.length,
+  };
 }
 
 const TOOL_DEFINITIONS = [
@@ -456,6 +564,96 @@ const TOOL_DEFINITIONS = [
         },
       },
       required: ["id"],
+    },
+  },
+  {
+    name: "list_projects",
+    description:
+      'List every project in the native issue tracker (id, name, prefix, repoPath, archived). Use a project\'s id or its prefix (e.g. "CK") wherever another tool asks for a project.',
+    inputSchema: { type: "object", properties: {}, required: [] },
+  },
+  {
+    name: "list_issues",
+    description:
+      'List issues, optionally filtered by project (its id or prefix, e.g. "CK"), status and/or label; filters combine with AND. Omit all three to list every issue in every project. Returns a trimmed summary (no description, comments or activity — use get_issue for the full record). An unrecognised project filter returns an empty list; an unrecognised status is refused with the valid status names, since status is a fixed set and a typo there is always a mistake.',
+    inputSchema: {
+      type: "object",
+      properties: {
+        project: { type: "string", description: 'Project id or prefix (e.g. "CK"). Omit to search every project.' },
+        status: { type: "string", enum: [...ISSUE_STATUSES], description: "Filter to one status." },
+        label: { type: "string", description: "Filter to issues carrying exactly this label." },
+      },
+      required: [],
+    },
+  },
+  {
+    name: "get_issue",
+    description:
+      'Get one issue by its key (e.g. "CK-12"): full title and description, every comment, every attachment, and its full activity/audit trail. Errors if the key does not resolve to a real issue.',
+    inputSchema: {
+      type: "object",
+      properties: { key: { type: "string", description: 'Issue key, e.g. "CK-12".' } },
+      required: ["key"],
+    },
+  },
+  {
+    name: "create_issue",
+    description:
+      'Create a new issue under a project (its id or prefix, e.g. "CK"). Its key (e.g. "CK-13") is assigned automatically — there is no field to set one, and every new issue starts in the "Backlog" status.',
+    inputSchema: {
+      type: "object",
+      properties: {
+        project: { type: "string", description: 'Project id or prefix (e.g. "CK") to create the issue under.' },
+        title: { type: "string" },
+        description: { type: "string", description: "Markdown body. Optional." },
+        priority: { type: "number", enum: [...PRIORITIES], description: "Linear's 0 (urgent) - 4 (low) scale. Optional." },
+        labels: { type: "array", items: { type: "string" }, description: "Optional." },
+      },
+      required: ["project", "title"],
+    },
+  },
+  {
+    name: "update_issue",
+    description:
+      "Update an existing issue's title, description, status, priority and/or labels, found by its key. Only the fields you pass are changed; everything else is left alone. Every changed field is appended to the issue's activity log, attributed to you automatically.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        key: { type: "string", description: 'Issue key, e.g. "CK-12".' },
+        title: { type: "string" },
+        description: { type: "string" },
+        status: { type: "string", enum: [...ISSUE_STATUSES] },
+        priority: { type: "number", enum: [...PRIORITIES] },
+        labels: { type: "array", items: { type: "string" } },
+      },
+      required: ["key"],
+    },
+  },
+  {
+    name: "add_issue_comment",
+    description:
+      "Add a comment to an issue, found by its key. The author is attributed automatically from your session/job/assistant identity — there is no author field to set.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        key: { type: "string", description: 'Issue key, e.g. "CK-12".' },
+        body: { type: "string", description: "Markdown, as long as you need." },
+      },
+      required: ["key", "body"],
+    },
+  },
+  {
+    name: "add_issue_attachment",
+    description:
+      "Attach a file to an issue, found by its key — the ui-reviewer agent's screenshots are the main use. `url` may be a remote URL or a local/cockpit-served path.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        key: { type: "string", description: 'Issue key, e.g. "CK-12".' },
+        url: { type: "string", description: "A remote URL or a local/cockpit-served path." },
+        title: { type: "string" },
+      },
+      required: ["key", "url", "title"],
     },
   },
 ];
@@ -955,6 +1153,221 @@ async function handleToolCall(
           toolCount: r.toolsUsed.length,
         }));
         return { content: [{ type: "text", text: JSON.stringify({ running, count: running.length }, null, 2) }] };
+      }
+      case "list_projects": {
+        const projects = loadProjects().map((p) => ({
+          id: p.id,
+          name: p.name,
+          prefix: p.prefix,
+          repoPath: p.repoPath,
+          archived: p.archived,
+        }));
+        return { content: [{ type: "text", text: JSON.stringify(projects, null, 2) }] };
+      }
+      case "list_issues": {
+        let statusFilter: IssueStatus | undefined;
+        if (args.status !== undefined) {
+          if (typeof args.status !== "string" || !ISSUE_STATUSES.includes(args.status as IssueStatus)) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: JSON.stringify({ error: `Unknown status "${args.status}". Valid statuses: ${ISSUE_STATUSES.join(", ")}` }),
+                },
+              ],
+              isError: true,
+            };
+          }
+          statusFilter = args.status as IssueStatus;
+        }
+        const labelFilter = typeof args.label === "string" && args.label.length > 0 ? args.label : undefined;
+        const projectArg = typeof args.project === "string" ? args.project.trim() : "";
+
+        // An unresolved project reads as "no issues", not an error — the same
+        // convention loadIssues itself already uses for an unknown projectId
+        // (see issue-storage.ts's safeIssuesFile comment): this is a read, and
+        // "no such project" is a normal outcome here (e.g. a stale reference),
+        // unlike `status` above, which is a small closed enum where a mismatch
+        // is always a caller mistake worth surfacing loudly instead.
+        let projects: Project[];
+        if (projectArg) {
+          const match = resolveProject(projectArg);
+          projects = match ? [match] : [];
+        } else {
+          projects = loadProjects();
+        }
+
+        const issues = projects
+          .flatMap((p) => loadIssues(p.id))
+          .filter((issue) => statusFilter === undefined || issue.status === statusFilter)
+          .filter((issue) => labelFilter === undefined || (issue.labels ?? []).includes(labelFilter))
+          .map(issueSummary);
+
+        return { content: [{ type: "text", text: JSON.stringify(issues, null, 2) }] };
+      }
+      case "get_issue": {
+        const key = typeof args.key === "string" ? args.key.trim() : "";
+        if (!key) {
+          return { content: [{ type: "text", text: JSON.stringify({ error: "key is required" }) }], isError: true };
+        }
+        const issue = getIssue(key);
+        if (!issue) {
+          return { content: [{ type: "text", text: JSON.stringify({ error: `Issue not found: ${key}` }) }], isError: true };
+        }
+        return { content: [{ type: "text", text: JSON.stringify(issue, null, 2) }] };
+      }
+      case "create_issue": {
+        const projectArg = typeof args.project === "string" ? args.project.trim() : "";
+        const title = typeof args.title === "string" ? args.title.trim() : "";
+        if (!projectArg || !title) {
+          return {
+            content: [{ type: "text", text: JSON.stringify({ error: "project and title are both required and must be non-empty" }) }],
+            isError: true,
+          };
+        }
+        const project = resolveProject(projectArg);
+        if (!project) {
+          // Unlike list_issues's read-only project filter, this is a write —
+          // silently discarding it would be the same silent-success shape the
+          // spec elsewhere complains about, so this errors instead, mirroring
+          // saveIssue's own "Unknown project" throw for the same reason.
+          return { content: [{ type: "text", text: JSON.stringify({ error: `Unknown project: ${projectArg}` }) }], isError: true };
+        }
+
+        const description = typeof args.description === "string" ? args.description : undefined;
+
+        let priority: 0 | 1 | 2 | 3 | 4 | undefined;
+        if (args.priority !== undefined) {
+          if (typeof args.priority !== "number" || !PRIORITIES.includes(args.priority as (typeof PRIORITIES)[number])) {
+            return {
+              content: [{ type: "text", text: JSON.stringify({ error: `priority must be one of ${PRIORITIES.join(", ")}` }) }],
+              isError: true,
+            };
+          }
+          priority = args.priority as 0 | 1 | 2 | 3 | 4;
+        }
+
+        let labels: string[] | undefined;
+        if (args.labels !== undefined) {
+          if (!Array.isArray(args.labels) || !args.labels.every((l) => typeof l === "string")) {
+            return { content: [{ type: "text", text: JSON.stringify({ error: "labels must be an array of strings" }) }], isError: true };
+          }
+          labels = args.labels as string[];
+        }
+
+        // buildIssue's IssueInput type has no key/id/createdAt/activity/status
+        // field at all (see issue-storage.ts), so nothing the caller put in
+        // args under those names — however plausible-looking — ever reaches
+        // the stored issue. Only the five fields picked out above are read,
+        // and the actor comes from the token, never from args.
+        const actor = actorFromCaller(caller);
+        const issue = buildIssue({ projectId: project.id, title, description, priority, labels }, actor);
+        saveIssue(issue);
+        return { content: [{ type: "text", text: JSON.stringify({ created: issue }, null, 2) }] };
+      }
+      case "update_issue": {
+        const key = typeof args.key === "string" ? args.key.trim() : "";
+        if (!key) {
+          return { content: [{ type: "text", text: JSON.stringify({ error: "key is required" }) }], isError: true };
+        }
+        const issue = getIssue(key);
+        if (!issue) {
+          return { content: [{ type: "text", text: JSON.stringify({ error: `Issue not found: ${key}` }) }], isError: true };
+        }
+
+        const patch: IssueUpdateInput = {};
+        if (args.title !== undefined) {
+          if (typeof args.title !== "string" || args.title.trim() === "") {
+            return { content: [{ type: "text", text: JSON.stringify({ error: "title must be a non-empty string" }) }], isError: true };
+          }
+          patch.title = args.title;
+        }
+        if (args.description !== undefined) {
+          if (typeof args.description !== "string") {
+            return { content: [{ type: "text", text: JSON.stringify({ error: "description must be a string" }) }], isError: true };
+          }
+          patch.description = args.description;
+        }
+        if (args.status !== undefined) {
+          if (typeof args.status !== "string" || !ISSUE_STATUSES.includes(args.status as IssueStatus)) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: JSON.stringify({ error: `Unknown status "${args.status}". Valid statuses: ${ISSUE_STATUSES.join(", ")}` }),
+                },
+              ],
+              isError: true,
+            };
+          }
+          patch.status = args.status as IssueStatus;
+        }
+        if (args.priority !== undefined) {
+          if (typeof args.priority !== "number" || !PRIORITIES.includes(args.priority as (typeof PRIORITIES)[number])) {
+            return {
+              content: [{ type: "text", text: JSON.stringify({ error: `priority must be one of ${PRIORITIES.join(", ")}` }) }],
+              isError: true,
+            };
+          }
+          patch.priority = args.priority as 0 | 1 | 2 | 3 | 4;
+        }
+        if (args.labels !== undefined) {
+          if (!Array.isArray(args.labels) || !args.labels.every((l) => typeof l === "string")) {
+            return { content: [{ type: "text", text: JSON.stringify({ error: "labels must be an array of strings" }) }], isError: true };
+          }
+          patch.labels = args.labels as string[];
+        }
+
+        // The actor comes from the token, never from args (no field in the
+        // schema could even carry one) — same discipline as create_issue.
+        const actor = actorFromCaller(caller);
+        const updated = applyIssueUpdate(issue, patch, actor);
+        // applyIssueUpdate returns the *same* object reference for a no-op
+        // patch (see its own comment in issue-storage.ts), so this skips an
+        // unnecessary write rather than re-saving unchanged data.
+        if (updated !== issue) saveIssue(updated);
+        return { content: [{ type: "text", text: JSON.stringify({ before: issue, after: updated }, null, 2) }] };
+      }
+      case "add_issue_comment": {
+        const key = typeof args.key === "string" ? args.key.trim() : "";
+        const body = typeof args.body === "string" ? args.body : "";
+        if (!key || !body.trim()) {
+          return {
+            content: [{ type: "text", text: JSON.stringify({ error: "key and body are both required and must be non-empty" }) }],
+            isError: true,
+          };
+        }
+        const issue = getIssue(key);
+        if (!issue) {
+          return { content: [{ type: "text", text: JSON.stringify({ error: `Issue not found: ${key}` }) }], isError: true };
+        }
+
+        const actor = actorFromCaller(caller);
+        const updated = addIssueComment(issue, body, actor);
+        saveIssue(updated);
+        const comment = updated.comments[updated.comments.length - 1];
+        return { content: [{ type: "text", text: JSON.stringify({ added: comment, issue: updated }, null, 2) }] };
+      }
+      case "add_issue_attachment": {
+        const key = typeof args.key === "string" ? args.key.trim() : "";
+        const url = typeof args.url === "string" ? args.url.trim() : "";
+        const title = typeof args.title === "string" ? args.title.trim() : "";
+        if (!key || !url || !title) {
+          return {
+            content: [{ type: "text", text: JSON.stringify({ error: "key, url and title are all required and must be non-empty" }) }],
+            isError: true,
+          };
+        }
+        const issue = getIssue(key);
+        if (!issue) {
+          return { content: [{ type: "text", text: JSON.stringify({ error: `Issue not found: ${key}` }) }], isError: true };
+        }
+
+        const actor = actorFromCaller(caller);
+        const updated = addIssueAttachment(issue, { title, url }, actor);
+        saveIssue(updated);
+        const attachment = updated.attachments[updated.attachments.length - 1];
+        return { content: [{ type: "text", text: JSON.stringify({ added: attachment, issue: updated }, null, 2) }] };
       }
       default:
         return { content: [{ type: "text", text: JSON.stringify({ error: `Unknown tool: ${name}` }) }], isError: true };
