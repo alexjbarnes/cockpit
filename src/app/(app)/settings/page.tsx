@@ -395,6 +395,7 @@ export default function SettingsPage() {
           <NavRow label="Appearance" onClick={() => router.push("/settings/appearance")} />
           <NavRow label="Model Providers" onClick={() => router.push("/settings/providers")} />
           <NavRow label="Notifications" onClick={() => router.push("/settings/notifications")} />
+          <NavRow label="Projects" onClick={() => router.push("/settings/projects")} />
         </div>
 
         <div className="border-t border-border pt-4 mt-4 space-y-0.5">

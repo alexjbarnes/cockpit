@@ -7,6 +7,7 @@ import {
   Bot,
   CalendarClock,
   Check,
+  ClipboardList,
   ExternalLink,
   FileEdit,
   FileMinus,
@@ -640,6 +641,12 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
               router.push("/inbox");
             }}
           />
+          <IssuesButton
+            onClick={() => {
+              close();
+              router.push("/issues");
+            }}
+          />
           <Button
             variant="ghost"
             size="icon"
@@ -1081,6 +1088,20 @@ function InboxButton({ onClick }: { onClick: () => void }) {
     >
       <Inbox className="h-4 w-4" />
       {unread > 0 && <span className="absolute top-1 right-1 h-2 w-2 rounded-full bg-blue-500" />}
+    </Button>
+  );
+}
+
+function IssuesButton({ onClick }: { onClick: () => void }) {
+  return (
+    <Button
+      variant="ghost"
+      size="icon"
+      className="shrink-0 h-8 w-8 text-muted-foreground hover:text-foreground"
+      onClick={onClick}
+      title="Issues"
+    >
+      <ClipboardList className="h-4 w-4" />
     </Button>
   );
 }
