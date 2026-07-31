@@ -26,6 +26,7 @@ import { addProvider, deleteProvider, getProviders, updateProvider } from "@/ser
 import { getJobScheduler } from "@/server/singleton";
 import { findSessionCwd, loadTranscript } from "@/server/transcript";
 import type { InboxPriority, Issue, IssueActor, IssueStatus, JobRun, NotificationProviderEntry, Project, ScheduledJob } from "@/types";
+import { ISSUE_STATUSES } from "@/types";
 import { isValidToken, lookupCaller, type McpCaller } from "./run-context";
 
 interface McpServerEntry {
@@ -191,25 +192,17 @@ function pickJobUpdate(source: Record<string, unknown>): Partial<ScheduledJob> {
   return update as Partial<ScheduledJob>;
 }
 
-/**
- * Every valid issue status, for validating a caller-supplied `status` filter
- * or patch field before it reaches storage. IssueStatus is a small, closed
- * enum — unlike a project id/prefix, which is an open namespace where "no
- * match" is a normal, expected outcome — so an unrecognised value here is
- * always a caller mistake, worth a clear error rather than a silent empty
- * result (list_issues) or a corrupted issue (update_issue).
- */
-const ISSUE_STATUSES: readonly IssueStatus[] = [
-  "Backlog",
-  "Refine Ready",
-  "Refined",
-  "Implementation Ready",
-  "Implementation",
-  "Human Review",
-  "Accepted",
-  "Done",
-  "Cancelled",
-];
+// ISSUE_STATUSES: imported from @/types (canonical array IssueStatus derives
+// from) rather than a local copy — used here to validate a caller-supplied
+// `status` filter or patch field before it reaches storage. IssueStatus is a
+// small, closed enum — unlike a project id/prefix, which is an open
+// namespace where "no match" is a normal, expected outcome — so an
+// unrecognised value here is always a caller mistake, worth a clear error
+// rather than a silent empty result (list_issues) or a corrupted issue
+// (update_issue). issue-storage.ts's buildIssue/applyIssueUpdate now also
+// validate status independently (belt and braces, not a replacement for
+// this) — this tool's own check still runs first and produces the better,
+// isError-shaped message.
 
 /** Linear's 0-4 priority scale (see the Issue type's own comment). */
 const PRIORITIES = [0, 1, 2, 3, 4] as const;

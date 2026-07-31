@@ -93,9 +93,20 @@ describe("projects: build / save / load", () => {
       expect(getProject(p.id)?.prefix).toBe("XY");
     });
 
-    it("rejects an empty/blank prefix", () => {
-      const p = buildProject({ name: "Cockpit", prefix: "   " });
-      expect(() => saveProject(p)).toThrow(/prefix must not be empty/i);
+    it("buildProject itself now rejects an empty/blank prefix (moved earlier by the value-validation fix)", () => {
+      // This test used to construct the invalid Project via buildProject and
+      // rely on saveProject to reject it — that was the only check that
+      // existed. buildProject now validates name/prefix itself (closing the
+      // "one construction path controls fields, not values" gap), so it
+      // throws right here, before saveProject is ever reached; the case
+      // below covers saveProject's own belt-and-braces check separately, for
+      // a caller that bypasses buildProject entirely.
+      expect(() => buildProject({ name: "Cockpit", prefix: "   " })).toThrow(/prefix must be a non-empty string/i);
+    });
+
+    it("saveProject still rejects an empty/blank prefix on a hand-built object that bypassed buildProject", () => {
+      const p = buildProject({ name: "Cockpit", prefix: "CK" });
+      expect(() => saveProject({ ...p, prefix: "   " })).toThrow(/prefix must not be empty/i);
     });
 
     it("rejects a prefix already used by a different project, case-insensitively", () => {
@@ -184,6 +195,76 @@ describe("applyProjectUpdate", () => {
     const p = buildProject({ name: "One", prefix: "CK" });
     applyProjectUpdate(p, { name: "Two" });
     expect(p.name).toBe("One");
+  });
+});
+
+describe("buildProject / applyProjectUpdate: value validation (regression)", () => {
+  // "One construction path" (buildProject/applyProjectUpdate) only ever
+  // controlled which fields a caller could set, never whether the values
+  // were any good — that's the gap a REST route with no validation of its
+  // own could walk straight through. These prove buildProject/
+  // applyProjectUpdate themselves now reject bad values, so every caller
+  // (REST, MCP, a future one) gets the same protection for free.
+
+  it("buildProject rejects a non-string name", () => {
+    // @ts-expect-error deliberately wrong-typed, mirroring an unvalidated REST body
+    expect(() => buildProject({ name: 12345, prefix: "CK" })).toThrow(/name must be a non-empty string/i);
+  });
+
+  it("buildProject rejects a non-string prefix", () => {
+    // @ts-expect-error deliberately wrong-typed, mirroring an unvalidated REST body
+    expect(() => buildProject({ name: "One", prefix: 12345 })).toThrow(/prefix must be a non-empty string/i);
+  });
+
+  it("buildProject rejects a non-string description when provided", () => {
+    // @ts-expect-error deliberately wrong-typed, mirroring an unvalidated REST body
+    expect(() => buildProject({ name: "One", prefix: "CK", description: 12345 })).toThrow(/description must be a string/i);
+  });
+
+  it("buildProject rejects a non-string repoPath when provided", () => {
+    // @ts-expect-error deliberately wrong-typed, mirroring an unvalidated REST body
+    expect(() => buildProject({ name: "One", prefix: "CK", repoPath: 12345 })).toThrow(/repoPath must be a string/i);
+  });
+
+  it("buildProject rejects a non-boolean archived when provided", () => {
+    // @ts-expect-error deliberately wrong-typed, mirroring an unvalidated REST body
+    expect(() => buildProject({ name: "One", prefix: "CK", archived: "yes" })).toThrow(/archived must be a boolean/i);
+  });
+
+  it("applyProjectUpdate rejects a non-string name when provided", () => {
+    const p = buildProject({ name: "One", prefix: "CK" });
+    // @ts-expect-error deliberately wrong-typed, mirroring an unvalidated REST body
+    expect(() => applyProjectUpdate(p, { name: 12345 })).toThrow(/name must be a non-empty string/i);
+  });
+
+  it("applyProjectUpdate rejects a non-string prefix when provided", () => {
+    const p = buildProject({ name: "One", prefix: "CK" });
+    // @ts-expect-error deliberately wrong-typed, mirroring an unvalidated REST body
+    expect(() => applyProjectUpdate(p, { prefix: 12345 })).toThrow(/prefix must be a non-empty string/i);
+  });
+
+  it("applyProjectUpdate rejects a non-string description when provided", () => {
+    const p = buildProject({ name: "One", prefix: "CK" });
+    // @ts-expect-error deliberately wrong-typed, mirroring an unvalidated REST body
+    expect(() => applyProjectUpdate(p, { description: 12345 })).toThrow(/description must be a string/i);
+  });
+
+  it("applyProjectUpdate rejects a non-string repoPath when provided", () => {
+    const p = buildProject({ name: "One", prefix: "CK" });
+    // @ts-expect-error deliberately wrong-typed, mirroring an unvalidated REST body
+    expect(() => applyProjectUpdate(p, { repoPath: 12345 })).toThrow(/repoPath must be a string/i);
+  });
+
+  it("applyProjectUpdate rejects a non-boolean archived when provided", () => {
+    const p = buildProject({ name: "One", prefix: "CK" });
+    // @ts-expect-error deliberately wrong-typed, mirroring an unvalidated REST body
+    expect(() => applyProjectUpdate(p, { archived: "yes" })).toThrow(/archived must be a boolean/i);
+  });
+
+  it("validates before persisting anything: a rejected buildProject call leaves projects.json untouched", () => {
+    // @ts-expect-error deliberately wrong-typed, mirroring an unvalidated REST body
+    expect(() => buildProject({ name: "One", prefix: 12345 })).toThrow();
+    expect(loadProjects()).toEqual([]);
   });
 });
 
@@ -282,6 +363,75 @@ describe("buildIssue", () => {
 
   it("throws for an unknown project and does not allocate a key", () => {
     expect(() => buildIssue({ projectId: "nope", title: "t" }, USER)).toThrow(/Unknown project/);
+  });
+});
+
+describe("buildIssue: value validation (regression)", () => {
+  // Same root problem as the project-side block above: "one construction
+  // path" stopped a caller from choosing *which* fields to set (the
+  // create_job bug), but did nothing about the *values* — a REST-shaped
+  // payload like `{ title: 12345, priority: "critical", labels:
+  // "not-an-array" }` used to be stored verbatim, while the MCP tool's own,
+  // separate validation rejected the identical payload. buildIssue now
+  // rejects it directly, so every caller gets the same protection.
+
+  it("rejects a non-string title", () => {
+    const p = makeProject("CK");
+    // @ts-expect-error deliberately wrong-typed, mirroring an unvalidated REST body
+    expect(() => buildIssue({ projectId: p.id, title: 12345 }, USER)).toThrow(/title must be a non-empty string/i);
+  });
+
+  it("rejects an empty-string title", () => {
+    const p = makeProject("CK");
+    expect(() => buildIssue({ projectId: p.id, title: "" }, USER)).toThrow(/title must be a non-empty string/i);
+  });
+
+  it("rejects a whitespace-only title", () => {
+    const p = makeProject("CK");
+    expect(() => buildIssue({ projectId: p.id, title: "   " }, USER)).toThrow(/title must be a non-empty string/i);
+  });
+
+  it("rejects a non-string description when provided", () => {
+    const p = makeProject("CK");
+    // @ts-expect-error deliberately wrong-typed, mirroring an unvalidated REST body
+    expect(() => buildIssue({ projectId: p.id, title: "t", description: 12345 }, USER)).toThrow(/description must be a string/i);
+  });
+
+  it("rejects a non-numeric priority", () => {
+    const p = makeProject("CK");
+    // @ts-expect-error deliberately wrong-typed, mirroring an unvalidated REST body
+    expect(() => buildIssue({ projectId: p.id, title: "t", priority: "critical" }, USER)).toThrow(/priority must be one of/i);
+  });
+
+  it("rejects an out-of-range numeric priority", () => {
+    const p = makeProject("CK");
+    // @ts-expect-error deliberately wrong-typed, mirroring an unvalidated REST body
+    expect(() => buildIssue({ projectId: p.id, title: "t", priority: 99 }, USER)).toThrow(/priority must be one of/i);
+  });
+
+  it("accepts priority at both boundaries (0 and 4)", () => {
+    const p = makeProject("CK");
+    expect(buildIssue({ projectId: p.id, title: "t", priority: 0 }, USER).priority).toBe(0);
+    expect(buildIssue({ projectId: p.id, title: "t", priority: 4 }, USER).priority).toBe(4);
+  });
+
+  it("rejects non-array labels", () => {
+    const p = makeProject("CK");
+    // @ts-expect-error deliberately wrong-typed, mirroring an unvalidated REST body
+    expect(() => buildIssue({ projectId: p.id, title: "t", labels: "not-an-array" }, USER)).toThrow(/labels must be an array of strings/i);
+  });
+
+  it("rejects a labels array containing a non-string element", () => {
+    const p = makeProject("CK");
+    // @ts-expect-error deliberately wrong-typed, mirroring an unvalidated REST body
+    expect(() => buildIssue({ projectId: p.id, title: "t", labels: ["ok", 5] }, USER)).toThrow(/labels must be an array of strings/i);
+  });
+
+  it("validates title before allocating a key: a rejected create does not advance nextNumber", () => {
+    const p = makeProject("CK");
+    expect(() => buildIssue({ projectId: p.id, title: "" }, USER)).toThrow();
+    expect(getProject(p.id)?.nextNumber).toBe(1);
+    expect(nextKey(p.id)).toBe("CK-1"); // still the first key, nothing was burned
   });
 });
 
@@ -566,6 +716,73 @@ describe("applyIssueUpdate", () => {
     applyIssueUpdate(issue, { title: "Changed" }, USER);
     expect(issue.title).toBe("Original");
     expect(issue.activity).toHaveLength(1);
+  });
+
+  describe("value validation (regression)", () => {
+    // The coordinator's exact probe: calling applyIssueUpdate with the same
+    // REST-shaped payload the PUT route passes through unvalidated used to
+    // store `status: "Definitely Not A Status"`, `priority: "critical"`,
+    // `labels: "not-an-array"` and `title: 12345` verbatim, while the
+    // identical payload via the MCP update_issue tool was rejected. Every
+    // case below is one field from that exact payload.
+
+    it("rejects an invalid status", () => {
+      const issue = freshIssue();
+      // @ts-expect-error deliberately wrong-typed, mirroring an unvalidated REST body
+      expect(() => applyIssueUpdate(issue, { status: "Definitely Not A Status" }, USER)).toThrow(/status must be one of/i);
+    });
+
+    it("rejects a non-numeric priority", () => {
+      const issue = freshIssue();
+      // @ts-expect-error deliberately wrong-typed, mirroring an unvalidated REST body
+      expect(() => applyIssueUpdate(issue, { priority: "critical" }, USER)).toThrow(/priority must be one of/i);
+    });
+
+    it("rejects an out-of-range numeric priority", () => {
+      const issue = freshIssue();
+      // @ts-expect-error deliberately wrong-typed, mirroring an unvalidated REST body
+      expect(() => applyIssueUpdate(issue, { priority: 99 }, USER)).toThrow(/priority must be one of/i);
+    });
+
+    it("rejects non-array labels", () => {
+      const issue = freshIssue();
+      // @ts-expect-error deliberately wrong-typed, mirroring an unvalidated REST body
+      expect(() => applyIssueUpdate(issue, { labels: "not-an-array" }, USER)).toThrow(/labels must be an array of strings/i);
+    });
+
+    it("rejects a labels array containing a non-string element", () => {
+      const issue = freshIssue();
+      // @ts-expect-error deliberately wrong-typed, mirroring an unvalidated REST body
+      expect(() => applyIssueUpdate(issue, { labels: ["ok", 5] }, USER)).toThrow(/labels must be an array of strings/i);
+    });
+
+    it("rejects a non-string (or empty) title", () => {
+      const issue = freshIssue();
+      // @ts-expect-error deliberately wrong-typed, mirroring an unvalidated REST body
+      expect(() => applyIssueUpdate(issue, { title: 12345 }, USER)).toThrow(/title must be a non-empty string/i);
+      expect(() => applyIssueUpdate(issue, { title: "" }, USER)).toThrow(/title must be a non-empty string/i);
+    });
+
+    it("rejects a non-string description", () => {
+      const issue = freshIssue();
+      // @ts-expect-error deliberately wrong-typed, mirroring an unvalidated REST body
+      expect(() => applyIssueUpdate(issue, { description: 12345 }, USER)).toThrow(/description must be a string/i);
+    });
+
+    it("still allows explicitly clearing priority/labels (undefined), which is not the same as an invalid value", () => {
+      const issue = freshIssue(); // priority: 1, labels: ["a"]
+      const cleared = applyIssueUpdate(issue, { priority: undefined, labels: undefined }, USER);
+      expect(cleared.priority).toBeUndefined();
+      expect(cleared.labels).toBeUndefined();
+    });
+
+    it("validates the whole patch before mutating anything: one bad field rejects the entire update, including its otherwise-valid fields", () => {
+      const issue = freshIssue();
+      // @ts-expect-error deliberately wrong-typed, mirroring an unvalidated REST body
+      expect(() => applyIssueUpdate(issue, { title: "New valid title", status: "nonsense" }, USER)).toThrow();
+      // Confirm no partial application: title must still be untouched.
+      expect(issue.title).toBe("Original");
+    });
   });
 });
 

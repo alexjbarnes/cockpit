@@ -3,7 +3,8 @@ import { existsSync, readFileSync, unlinkSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
 import { writeJsonAtomic } from "@/server/atomic-write";
 import { getCockpitDir } from "@/server/paths";
-import type { Issue, IssueActivity, IssueActor, IssueAttachment, IssueComment, Project } from "@/types";
+import type { Issue, IssueActivity, IssueActor, IssueAttachment, IssueComment, IssueStatus, Project } from "@/types";
+import { ISSUE_STATUSES } from "@/types";
 
 function cockpitDir(): string {
   return getCockpitDir();
@@ -65,6 +66,69 @@ function normalizePrefix(prefix: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// Value validation
+// ---------------------------------------------------------------------------
+//
+// "One construction path" (buildIssue/applyIssueUpdate/buildProject/
+// applyProjectUpdate) controls *which* fields a caller can set — the part
+// that stopped create_job's schema/handler drift. It does nothing about
+// *values*: nothing stopped a caller from handing buildIssue a status that
+// isn't in IssueStatus, a priority outside 0-4, or labels that aren't
+// strings, so each caller had to validate independently — which is exactly
+// how two paths drift. They already had: the REST route passed a raw parsed
+// request body straight through with no checks at all, and a payload shaped
+// like `{ status: "Definitely Not A Status", priority: "critical", labels:
+// "not-an-array", title: 12345 }` was stored as-is, while the MCP tool
+// rejected the identical payload. Validating here, in the one place both
+// callers (and any future one — an import script, phase 4's status trigger)
+// funnel through, closes that gap at its root instead of adding a third
+// hand-rolled copy of the same checks.
+//
+// The MCP tool's own validation (cockpit-config-server.ts) stays exactly as
+// it is and still runs first for that caller — it produces a better message
+// and returns an isError tool result instead of throwing. What's here is
+// belt and braces for MCP, and the *only* line of defence for REST (and any
+// future caller that reaches these functions directly).
+
+function assertNonEmptyString(value: unknown, field: string): asserts value is string {
+  if (typeof value !== "string" || value.trim() === "") {
+    throw new Error(`${field} must be a non-empty string`);
+  }
+}
+
+function assertString(value: unknown, field: string): asserts value is string {
+  if (typeof value !== "string") {
+    throw new Error(`${field} must be a string`);
+  }
+}
+
+function assertBoolean(value: unknown, field: string): asserts value is boolean {
+  if (typeof value !== "boolean") {
+    throw new Error(`${field} must be a boolean`);
+  }
+}
+
+function assertValidStatus(value: unknown): asserts value is IssueStatus {
+  if (typeof value !== "string" || !(ISSUE_STATUSES as readonly string[]).includes(value)) {
+    throw new Error(`status must be one of: ${ISSUE_STATUSES.join(", ")}`);
+  }
+}
+
+const VALID_PRIORITIES = [0, 1, 2, 3, 4] as const;
+
+function assertValidPriority(value: unknown): asserts value is 0 | 1 | 2 | 3 | 4 {
+  if (typeof value !== "number" || !(VALID_PRIORITIES as readonly number[]).includes(value)) {
+    throw new Error(`priority must be one of: ${VALID_PRIORITIES.join(", ")}`);
+  }
+}
+
+function assertValidLabels(value: unknown): asserts value is string[] {
+  if (!Array.isArray(value) || !value.every((l) => typeof l === "string")) {
+    throw new Error("labels must be an array of strings");
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Projects
 // ---------------------------------------------------------------------------
 
@@ -101,8 +165,18 @@ export type ProjectInput = Partial<Omit<Project, "id" | "createdAt" | "updatedAt
  * route and the MCP tools (phase 2.3) cannot independently assign a
  * different subset of fields the way create_job's schema and handler once
  * did (19 fields advertised, 5 assigned).
+ *
+ * Validates before doing anything else — including before prefix
+ * normalisation, so a bad value can never reach `.trim()`/`.toUpperCase()`
+ * and surface as an unrelated TypeError instead of a clear message.
  */
 export function buildProject(input: ProjectInput): Project {
+  assertNonEmptyString(input.name, "name");
+  assertNonEmptyString(input.prefix, "prefix");
+  if (input.description !== undefined) assertString(input.description, "description");
+  if (input.repoPath !== undefined) assertString(input.repoPath, "repoPath");
+  if (input.archived !== undefined) assertBoolean(input.archived, "archived");
+
   const now = Date.now();
   return {
     id: randomUUID(),
@@ -121,9 +195,17 @@ export type ProjectUpdateInput = Partial<Pick<Project, "name" | "prefix" | "desc
 
 /**
  * Apply a patch to an existing project. Pure — does not persist; the caller
- * passes the result to saveProject().
+ * passes the result to saveProject(). Validates every touched field upfront,
+ * before any diffing/mutation starts, so a bad value never produces a
+ * partially-applied patch.
  */
 export function applyProjectUpdate(project: Project, patch: ProjectUpdateInput): Project {
+  if (patch.name !== undefined) assertNonEmptyString(patch.name, "name");
+  if (patch.prefix !== undefined) assertNonEmptyString(patch.prefix, "prefix");
+  if (patch.description !== undefined) assertString(patch.description, "description");
+  if (patch.repoPath !== undefined) assertString(patch.repoPath, "repoPath");
+  if (patch.archived !== undefined) assertBoolean(patch.archived, "archived");
+
   const next: Project = { ...project };
   let changed = false;
 
@@ -369,9 +451,20 @@ export type IssueInput = {
  * applyIssueUpdate (plus addIssueComment/addIssueAttachment below) are the
  * only ways an Issue is created or changed, so the REST route and the MCP
  * tools (phase 2.3) cannot drift into building it two different ways — the
- * exact bug the spec's create_job comment describes.
+ * exact bug the spec's create_job comment describes. That controls *which*
+ * fields get read; validating the *values* here closes the other half (see
+ * the "Value validation" section above) — a caller can no longer end up with
+ * a stored title of `12345` or a `priority` of `"critical"`.
+ *
+ * Validates before allocating a key, so a rejected create never burns a
+ * number nextKey() would otherwise have to skip past later.
  */
 export function buildIssue(input: IssueInput, actor: IssueActor): Issue {
+  assertNonEmptyString(input.title, "title");
+  if (input.description !== undefined) assertString(input.description, "description");
+  if (input.priority !== undefined) assertValidPriority(input.priority);
+  if (input.labels !== undefined) assertValidLabels(input.labels);
+
   const key = nextKey(input.projectId); // throws on an unknown project
   const now = Date.now();
   return {
@@ -410,9 +503,27 @@ function sameLabels(a: string[] | undefined, b: string[] | undefined): boolean {
  * `priority`/`labels` use `"field" in patch` rather than `!== undefined` so an
  * explicit clear (set to undefined) is distinguishable from the field simply
  * being absent from the patch — both are optional Issue fields, so omission
- * and clearing would otherwise look identical.
+ * and clearing would otherwise look identical. Validation below preserves
+ * that: a present-but-`undefined` value is still a valid clear and is not
+ * checked against assertValidPriority/assertValidLabels, only a present
+ * *and-defined* value is.
+ *
+ * Every touched field is validated upfront, before any diffing/mutation
+ * starts (and before the no-op short-circuit below), so a bad value throws
+ * cleanly with no activity recorded and no partial patch applied — this is
+ * the fix for the gap "one construction path" alone didn't close: it
+ * controlled which fields a caller could touch, not whether the values were
+ * any good, so a REST-shaped patch of `{ status: "Definitely Not A Status",
+ * priority: "critical", labels: "not-an-array", title: 12345 }` used to be
+ * stored verbatim.
  */
 export function applyIssueUpdate(issue: Issue, patch: IssueUpdateInput, actor: IssueActor): Issue {
+  if (patch.title !== undefined) assertNonEmptyString(patch.title, "title");
+  if (patch.description !== undefined) assertString(patch.description, "description");
+  if (patch.status !== undefined) assertValidStatus(patch.status);
+  if ("priority" in patch && patch.priority !== undefined) assertValidPriority(patch.priority);
+  if ("labels" in patch && patch.labels !== undefined) assertValidLabels(patch.labels);
+
   const now = Date.now();
   const activity: IssueActivity[] = [];
   const next: Issue = { ...issue };

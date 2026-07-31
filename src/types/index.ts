@@ -331,16 +331,33 @@ export interface Project {
   nextNumber: number; // per-project counter, so keys are CK-1, CK-2
 }
 
-export type IssueStatus =
-  | "Backlog"
-  | "Refine Ready"
-  | "Refined"
-  | "Implementation Ready"
-  | "Implementation"
-  | "Human Review"
-  | "Accepted"
-  | "Done"
-  | "Cancelled";
+/**
+ * Canonical lifecycle order (docs/internal/issue-tracker-spec.md 2.1), not
+ * alphabetical — Cancelled sits last since it's a terminal status reached
+ * from anywhere, not a step in the normal flow. `IssueStatus` derives from
+ * this array, not the other way around, so the type and "every valid value
+ * at runtime" can never disagree. This is the single source of truth:
+ * before this, the same nine values were three independent hand-written
+ * copies (this file's old bare union, a private const in
+ * cockpit-config-server.ts, and an exported one in issue-display.ts) that
+ * had already drifted apart in spirit even before disagreeing in fact.
+ * Anything needing every valid status — list grouping order, a status
+ * `<select>`, validating a caller-supplied status — imports this array
+ * rather than hand-writing its own.
+ */
+export const ISSUE_STATUSES = [
+  "Backlog",
+  "Refine Ready",
+  "Refined",
+  "Implementation Ready",
+  "Implementation",
+  "Human Review",
+  "Accepted",
+  "Done",
+  "Cancelled",
+] as const;
+
+export type IssueStatus = (typeof ISSUE_STATUSES)[number];
 
 /**
  * Who did something to an issue — a comment's author, an activity entry's
