@@ -317,6 +317,99 @@ export interface NotificationSettings {
   providers: NotificationProviderEntry[];
 }
 
+// Issues and projects (native issue tracker, see docs/internal/issue-tracker-spec.md)
+
+export interface Project {
+  id: string;
+  name: string;
+  prefix: string; // "CK", "RO" — uppercase, unique, drives issue keys
+  description?: string;
+  repoPath?: string; // the repo this project's work happens in, so one set of pipeline jobs can serve every project
+  archived?: boolean;
+  createdAt: number;
+  updatedAt: number;
+  nextNumber: number; // per-project counter, so keys are CK-1, CK-2
+}
+
+export type IssueStatus =
+  | "Backlog"
+  | "Refine Ready"
+  | "Refined"
+  | "Implementation Ready"
+  | "Implementation"
+  | "Human Review"
+  | "Accepted"
+  | "Done"
+  | "Cancelled";
+
+/**
+ * Who did something to an issue — a comment's author, an activity entry's
+ * actor. Deliberately lines up with `McpCaller` (src/server/mcp/run-context.ts:
+ * assistant / job / session) plus a fourth "user" kind for a human acting
+ * through the UI directly (no MCP token involved), since phase 2.3 attributes
+ * every write to the token's caller and the UI has no token at all. Kept as
+ * its own plain, serialisable POJO rather than reusing the McpCaller union
+ * itself, which lives only in the in-memory token map and carries the full
+ * RunContext (including fields like notifyProviders that have nothing to do
+ * with "who did this").
+ */
+export type IssueActor =
+  | { kind: "assistant" }
+  | { kind: "job"; jobId: string; jobName: string; runId: string }
+  | { kind: "session"; sessionId: string; sessionName: string }
+  | { kind: "user" };
+
+export interface IssueComment {
+  id: string;
+  body: string; // markdown
+  author: IssueActor;
+  createdAt: number;
+}
+
+/** A file the ui-reviewer agent (or a human) attaches to an issue — a
+ *  screenshot, most often. `url` is either a remote URL or a local/cockpit-
+ *  served path. */
+export interface IssueAttachment {
+  id: string;
+  title: string;
+  url: string;
+  createdAt: number;
+}
+
+/** The Issue field names an activity entry can carry a before/after diff for. */
+export type IssueActivityField = "title" | "description" | "status" | "priority" | "labels";
+
+/**
+ * One append-only audit entry. `kind` covers the non-field events (creation,
+ * comments, attachments) alongside "field_changed", which is the only kind
+ * that populates `field`/`from`/`to`. Never mutated or removed once appended.
+ */
+export interface IssueActivity {
+  id: string;
+  createdAt: number;
+  actor: IssueActor;
+  kind: "created" | "field_changed" | "commented" | "attachment_added";
+  field?: IssueActivityField;
+  from?: unknown;
+  to?: unknown;
+}
+
+export interface Issue {
+  id: string; // uuid, stable
+  key: string; // "CK-12", what humans and branches use
+  projectId: string;
+  title: string;
+  description: string; // markdown, the refine skill overwrites this wholesale
+  status: IssueStatus;
+  priority?: 0 | 1 | 2 | 3 | 4; // Linear's scale, so imports map cleanly
+  labels?: string[];
+  createdAt: number;
+  updatedAt: number;
+  comments: IssueComment[];
+  attachments: IssueAttachment[];
+  activity: IssueActivity[]; // append-only, who changed what
+}
+
 // Client -> Server messages
 export type ClientMessage =
   | { type: "session:connect"; sessionId: string; cwd?: string; lastMessageId?: string | null; historyView?: boolean }

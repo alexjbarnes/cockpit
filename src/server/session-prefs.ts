@@ -1,7 +1,8 @@
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { readFileSync, renameSync } from "node:fs";
 import { join } from "node:path";
 import type { ContextSize } from "@/lib/models";
 import { splitLegacyModel } from "@/lib/models";
+import { writeJsonAtomic } from "@/server/atomic-write";
 import { getCockpitDir } from "@/server/paths";
 import type { InitData, ModelSlots, ThinkingLevel } from "@/types";
 
@@ -65,15 +66,10 @@ function load(): Record<string, SessionPrefs> {
 function save(): void {
   if (!cache) return;
   try {
-    mkdirSync(prefsDir(), { recursive: true });
-    const file = prefsFile();
-    // Write-then-rename instead of writing the real path directly: a rename
-    // within the same directory is atomic, so a process killed mid-write
-    // (e.g. a Mac force-quit/lid-close) can never leave prefsFile() holding
-    // truncated JSON that wipes every session's settings on the next load().
-    const tmp = `${file}.tmp-${process.pid}`;
-    writeFileSync(tmp, JSON.stringify(cache, null, 2) + "\n");
-    renameSync(tmp, file);
+    // Atomic write (write-then-rename, see atomic-write.ts): a process killed
+    // mid-write can never leave prefsFile() holding truncated JSON that wipes
+    // every session's settings on the next load().
+    writeJsonAtomic(prefsFile(), cache);
   } catch {
     // best effort
   }
