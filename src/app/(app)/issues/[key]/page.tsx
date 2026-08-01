@@ -331,7 +331,10 @@ export default function IssueDetailPage() {
               {issue.attachments.map((a) => (
                 <a
                   key={a.id}
-                  href={a.url}
+                  // A local file path (the ui-reviewer's screenshots) is only
+                  // reachable through the serving route; a remote url links
+                  // directly.
+                  href={a.url.startsWith("/") ? `/api/issues/${issue.key}/attachments/${a.id}` : a.url}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="flex items-center gap-2 text-sm text-primary hover:underline"

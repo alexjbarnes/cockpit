@@ -23,6 +23,17 @@ export function getJobScratchpadDir(jobId: string): string {
   return path.join(getJobsScratchpadRoot(), jobId);
 }
 
+/**
+ * Root for issue-attachment files that must outlive their producer (the
+ * ui-reviewer agent's screenshots land here, one directory per issue key).
+ * An attachment whose url is a path under this root is served back by
+ * /api/issues/[key]/attachments/[id]; anything stored elsewhere on disk is
+ * deliberately not servable.
+ */
+export function getIssueAttachmentsRoot(): string {
+  return path.join(getCockpitDir(), "issue-attachments");
+}
+
 export function getClaudeDir(): string {
   return process.env.CLAUDE_CONFIG_DIR ?? path.join(homedir(), ".claude");
 }
