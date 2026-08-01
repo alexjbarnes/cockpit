@@ -337,7 +337,7 @@ export interface Project {
  * from anywhere, not a step in the normal flow. `IssueStatus` derives from
  * this array, not the other way around, so the type and "every valid value
  * at runtime" can never disagree. This is the single source of truth:
- * before this, the same nine values were three independent hand-written
+ * before this, the same values were three independent hand-written
  * copies (this file's old bare union, a private const in
  * cockpit-config-server.ts, and an exported one in issue-display.ts) that
  * had already drifted apart in spirit even before disagreeing in fact.
@@ -347,11 +347,13 @@ export interface Project {
  */
 export const ISSUE_STATUSES = [
   "Backlog",
+  "Needs Detail",
   "Refine Ready",
-  "Refined",
+  "Refining",
+  "Plan Review",
   "Implementation Ready",
   "Implementation",
-  "Human Review",
+  "Code Review",
   "Accepted",
   "Done",
   "Cancelled",

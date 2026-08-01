@@ -165,9 +165,9 @@ describe("describeActivity", () => {
       kind: "field_changed",
       field: "status",
       from: "Backlog",
-      to: "Refined",
+      to: "Refining",
     };
-    expect(describeActivity(entry)).toBe("You changed status from Backlog to Refined");
+    expect(describeActivity(entry)).toBe("You changed status from Backlog to Refining");
   });
 
   it("describes a priority change using priority labels, not raw numbers", () => {
