@@ -11,7 +11,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { useJobs } from "@/hooks/use-jobs";
 import { useScrollRestoration } from "@/hooks/use-scroll-restoration";
 import { type JobDisplayStatus, jobDisplayStatus } from "@/lib/job-display";
-import { describeAllSchedules, getJobSchedules, getNextRunTimeAny } from "@/server/cron-utils";
+import { describeAllSchedules, getJobSchedules, getNextRunTimeAny, hasTimeBasedSchedule } from "@/server/cron-utils";
 import type { ScheduledJob } from "@/types";
 
 type JobWithStatus = ScheduledJob & {
@@ -75,8 +75,13 @@ function timeAgo(ts: number): string {
 
 function formatNextRun(job: JobWithStatus): string {
   if (!job.enabled) return "Disabled";
+  const schedules = getJobSchedules(job);
+  // A job whose only schedule(s) are onIssueStatus has no clock-driven next
+  // run at all — getNextRunTimeAny's "nothing matched" fallback would
+  // otherwise print a real-looking but meaningless date (tomorrow, same time).
+  if (!hasTimeBasedSchedule(schedules)) return "On status change";
   try {
-    const next = getNextRunTimeAny(getJobSchedules(job), new Date());
+    const next = getNextRunTimeAny(schedules, new Date());
     return next.toLocaleString();
   } catch {
     return "Unknown";

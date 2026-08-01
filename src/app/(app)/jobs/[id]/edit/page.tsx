@@ -22,7 +22,8 @@ import {
 import { isPositiveNumberField, parseNumberField } from "@/lib/number-field";
 import { cn } from "@/lib/utils";
 import { describeSchedule, getJobSchedules } from "@/server/cron-utils";
-import type { JobSchedule, Provider, ProviderModel, ScheduledJob, SimpleSchedule, SimpleScheduleFrequency, ThinkingLevel } from "@/types";
+import type { IssueStatus, JobSchedule, Provider, ProviderModel, ScheduledJob, SimpleScheduleFrequency, ThinkingLevel } from "@/types";
+import { ISSUE_STATUSES } from "@/types";
 
 const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
@@ -62,27 +63,38 @@ function ScheduleEntry({
   onChange,
   onRemove,
   canRemove,
+  projects,
 }: {
   value: JobSchedule;
   onChange: (s: JobSchedule) => void;
   onRemove: () => void;
   canRemove: boolean;
+  projects: { id: string; name: string; prefix: string }[];
 }) {
-  const isSimple = value.type === "simple";
-
   return (
     <div className="border rounded-md p-3 space-y-2">
       <div className="flex items-center justify-between">
         <div className="flex gap-2">
           <Button
-            variant={isSimple ? "default" : "outline"}
+            variant={value.type === "simple" ? "default" : "outline"}
             size="sm"
             onClick={() => onChange({ type: "simple", frequency: "daily", time: "09:00" })}
           >
             Simple
           </Button>
-          <Button variant={!isSimple ? "default" : "outline"} size="sm" onClick={() => onChange({ type: "cron", expression: "0 9 * * *" })}>
+          <Button
+            variant={value.type === "cron" ? "default" : "outline"}
+            size="sm"
+            onClick={() => onChange({ type: "cron", expression: "0 9 * * *" })}
+          >
             Cron
+          </Button>
+          <Button
+            variant={value.type === "onIssueStatus" ? "default" : "outline"}
+            size="sm"
+            onClick={() => onChange({ type: "onIssueStatus", status: ISSUE_STATUSES[0] })}
+          >
+            On issue status
           </Button>
         </div>
         {canRemove && (
@@ -92,10 +104,10 @@ function ScheduleEntry({
         )}
       </div>
 
-      {isSimple ? (
+      {value.type === "simple" && (
         <div className="space-y-2">
           <select
-            value={(value as SimpleSchedule).frequency}
+            value={value.frequency}
             onChange={(e) => onChange({ ...value, frequency: e.target.value as SimpleScheduleFrequency })}
             className={SELECT_CLASS}
           >
@@ -104,16 +116,12 @@ function ScheduleEntry({
             <option value="weekly">Weekly</option>
             <option value="monthly">Monthly</option>
           </select>
-          {(value as SimpleSchedule).frequency !== "hourly" && (
-            <Input
-              type="time"
-              value={(value as SimpleSchedule).time || "09:00"}
-              onChange={(e) => onChange({ ...value, time: e.target.value })}
-            />
+          {value.frequency !== "hourly" && (
+            <Input type="time" value={value.time || "09:00"} onChange={(e) => onChange({ ...value, time: e.target.value })} />
           )}
-          {(value as SimpleSchedule).frequency === "weekly" && (
+          {value.frequency === "weekly" && (
             <select
-              value={(value as SimpleSchedule).dayOfWeek ?? 1}
+              value={value.dayOfWeek ?? 1}
               onChange={(e) => onChange({ ...value, dayOfWeek: Number(e.target.value) })}
               className={SELECT_CLASS}
             >
@@ -124,25 +132,57 @@ function ScheduleEntry({
               ))}
             </select>
           )}
-          {(value as SimpleSchedule).frequency === "monthly" && (
+          {value.frequency === "monthly" && (
             <Input
               type="number"
               min={1}
               max={31}
-              value={(value as SimpleSchedule).dayOfMonth ?? 1}
+              value={value.dayOfMonth ?? 1}
               onChange={(e) => onChange({ ...value, dayOfMonth: Number(e.target.value) })}
               placeholder="Day of month"
             />
           )}
         </div>
-      ) : (
+      )}
+
+      {value.type === "cron" && (
         <Input
-          value={(value as { expression: string }).expression}
+          value={value.expression}
           onChange={(e) => onChange({ type: "cron", expression: e.target.value })}
           placeholder="0 9 * * 1-5"
           className="font-mono"
         />
       )}
+
+      {value.type === "onIssueStatus" && (
+        <div className="space-y-2">
+          <select
+            value={value.status}
+            onChange={(e) => onChange({ ...value, status: e.target.value as IssueStatus })}
+            className={SELECT_CLASS}
+          >
+            {ISSUE_STATUSES.map((s) => (
+              <option key={s} value={s}>
+                {s}
+              </option>
+            ))}
+          </select>
+          <select
+            value={value.project ?? ""}
+            onChange={(e) => onChange({ ...value, project: e.target.value || undefined })}
+            className={SELECT_CLASS}
+          >
+            <option value="">Any project</option>
+            {projects.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name} ({p.prefix})
+              </option>
+            ))}
+          </select>
+          <p className="text-xs text-muted-foreground">Fires when an issue enters this status, including one just created in it.</p>
+        </div>
+      )}
+
       <p className="text-xs text-muted-foreground">{describeSchedule(value)}</p>
     </div>
   );
@@ -191,6 +231,7 @@ export default function JobEditPage() {
   const [notifyProviders, setNotifyProviders] = useState<string[]>([]);
   const [availableProviders, setAvailableProviders] = useState<{ id: string; name: string; type: string }[]>([]);
   const [providers, setProviders] = useState<Provider[]>([]);
+  const [projects, setProjects] = useState<{ id: string; name: string; prefix: string }[]>([]);
 
   const [showDirPicker, setShowDirPicker] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -394,6 +435,13 @@ export default function JobEditPage() {
       .catch(() => {});
   }, []);
 
+  useEffect(() => {
+    fetch("/api/projects")
+      .then((r) => r.json())
+      .then((data: { projects: { id: string; name: string; prefix: string }[] }) => setProjects(data.projects || []))
+      .catch(() => setProjects([]));
+  }, []);
+
   async function handleSave() {
     const durationValid = isPositiveNumberField(maxDuration);
     const retentionValid = isPositiveNumberField(retentionDays);
@@ -530,6 +578,7 @@ export default function JobEditPage() {
                 onChange={(s) => setSchedules(schedules.map((prev, j) => (j === i ? s : prev)))}
                 onRemove={() => setSchedules(schedules.filter((_, j) => j !== i))}
                 canRemove={schedules.length > 1}
+                projects={projects}
               />
             ))}
             <button

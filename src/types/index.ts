@@ -203,7 +203,23 @@ export interface CronSchedule {
   expression: string;
 }
 
-export type JobSchedule = SimpleSchedule | CronSchedule;
+/**
+ * Fires when an issue transitions into `status` (including a brand-new issue
+ * arriving in its initial status — see issue-storage.ts's saveIssue). There is
+ * no cron form for this: it has no time-of-day, so cron-utils.ts's
+ * scheduleToCron/getNextRunTime are typed to exclude it, and every other
+ * schedule-shape consumer (the 60s tick, describeSchedule, missed-run catch-up)
+ * has to account for it explicitly rather than falling through a case that
+ * assumes every schedule is time-based.
+ */
+export interface IssueStatusSchedule {
+  type: "onIssueStatus";
+  status: IssueStatus;
+  /** Project id; absent means any project. */
+  project?: string;
+}
+
+export type JobSchedule = SimpleSchedule | CronSchedule | IssueStatusSchedule;
 
 export interface ScheduledJob {
   id: string;

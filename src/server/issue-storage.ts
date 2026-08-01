@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync, unlinkSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
 import { writeJsonAtomic } from "@/server/atomic-write";
+import { emitIssueStatusChange } from "@/server/issue-events";
 import { getCockpitDir } from "@/server/paths";
 import type { Issue, IssueActivity, IssueActor, IssueAttachment, IssueComment, IssueStatus, Project } from "@/types";
 import { ISSUE_STATUSES } from "@/types";
@@ -381,6 +382,10 @@ export function saveIssue(issue: Issue): void {
 
   const issues = loadIssues(issue.projectId);
   const idx = issues.findIndex((i) => i.id === issue.id);
+  // Captured before the overwrite below: this is the "previous version by id"
+  // phase 4 needs to detect a status transition, already sitting in memory
+  // from the loadIssues() call above — no extra IO to get it.
+  const previousStatus = idx >= 0 ? issues[idx].status : undefined;
   if (idx >= 0) {
     issues[idx] = issue;
   } else {
@@ -391,6 +396,18 @@ export function saveIssue(issue: Issue): void {
     issues.push(issue);
   }
   writeJsonAtomic(file, { issues });
+
+  // Phase 4 (docs/internal/issue-tracker-spec.md): a job can trigger on an
+  // issue entering a status. A brand new issue (previousStatus undefined)
+  // always fires — a job watching Backlog for triage needs to see an issue
+  // the moment it's created, not just a later move into Backlog — while an
+  // update only fires when the status actually changed, so touching just the
+  // title/description/labels/priority never spuriously retriggers a job.
+  // Placed after writeJsonAtomic so a save that throws (unknown project, key
+  // collision, a disk error) never emits for a change that was never persisted.
+  if (previousStatus !== issue.status) {
+    emitIssueStatusChange({ key: issue.key, projectId: issue.projectId, from: previousStatus, to: issue.status });
+  }
 }
 
 /**

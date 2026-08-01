@@ -31,12 +31,19 @@ vi.mock("@/server/provider-catalog", () => ({
   checkJobModel: vi.fn(() => ({ ok: true })),
 }));
 
+vi.mock("@/server/issue-storage", () => ({
+  loadIssues: vi.fn(() => []),
+  loadProjects: vi.fn(() => []),
+}));
+
 vi.mock("node:fs", async () => {
   const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
   return { ...actual, mkdirSync: vi.fn() };
 });
 
 import { addInboxMessage, parseErrorBlock } from "@/server/inbox";
+import { emitIssueStatusChange } from "@/server/issue-events";
+import { loadIssues, loadProjects } from "@/server/issue-storage";
 import { acquireJobLock, releaseJobLock } from "@/server/job-lock";
 import { JobScheduler } from "@/server/job-scheduler";
 import { loadJobs, loadRuns, saveRun } from "@/server/job-storage";
@@ -1153,7 +1160,15 @@ describe("inbox suppression on cockpit-error reclassification", () => {
   });
 
   it("does not send inbox output when job is reclassified as failure via cockpit-error", async () => {
-    vi.mocked(parseErrorBlock).mockReturnValue({ error: "Task failed", details: "No access" });
+    // mockReturnValueOnce, not mockReturnValue: this is a shared module-level
+    // mock, and clearAllMocks() (unlike resetAllMocks) never clears a mock's
+    // *implementation* between tests — only mock.calls/results. A persistent
+    // override here previously leaked into every later test in this file that
+    // exercises a real (unmocked) success path, silently reclassifying it as
+    // a cockpit-error failure. This test only ever needs the override for its
+    // own single run, so scoping it to one call fixes the leak with no change
+    // to this test's own behaviour.
+    vi.mocked(parseErrorBlock).mockReturnValueOnce({ error: "Task failed", details: "No access" });
 
     const job = makeJob({ inboxOutput: true });
     const promise = scheduler.executeJob(job);
@@ -1315,5 +1330,279 @@ describe("tick: missed run handling", () => {
       expect(run.status).toBe("timeout");
       expect(vi.mocked(addInboxMessage)).toHaveBeenCalled();
     });
+  });
+});
+
+describe("tick: onIssueStatus schedules are event-only, never fired by the 60s tick", () => {
+  let sm: ReturnType<typeof makeMockSessionManager>;
+  let scheduler: JobScheduler;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    sm = makeMockSessionManager();
+    scheduler = new JobScheduler(sm as any);
+  });
+
+  it("does not fire, and does not throw, for a job whose only schedule is onIssueStatus", () => {
+    const job = makeJob({ schedules: [{ type: "onIssueStatus", status: "Backlog" }] });
+    vi.mocked(loadJobs).mockReturnValue([job]);
+
+    expect(() => (scheduler as any).tick()).not.toThrow();
+    expect(sm.createSession).not.toHaveBeenCalled();
+  });
+
+  it("still fires a cron schedule on a job that also carries an onIssueStatus schedule", () => {
+    const now = new Date();
+    now.setSeconds(0, 0);
+    const job = makeJob({
+      schedules: [
+        { type: "onIssueStatus", status: "Backlog" },
+        { type: "cron", expression: `${now.getMinutes()} ${now.getHours()} * * *` },
+      ],
+    });
+    vi.mocked(loadJobs).mockReturnValue([job]);
+
+    (scheduler as any).tick();
+
+    expect(sm.createSession).toHaveBeenCalled();
+  });
+});
+
+describe("onIssueStatus job trigger: matching (phase 4)", () => {
+  let sm: ReturnType<typeof makeMockSessionManager>;
+  let scheduler: JobScheduler;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    sm = makeMockSessionManager();
+    scheduler = new JobScheduler(sm as any);
+    vi.mocked(loadProjects).mockReturnValue([]);
+    vi.mocked(loadIssues).mockReturnValue([]);
+  });
+
+  it("triggers an enabled job whose onIssueStatus schedule matches the event's status", () => {
+    const job = makeJob({ schedules: [{ type: "onIssueStatus", status: "Backlog" }] });
+    vi.mocked(loadJobs).mockReturnValue([job]);
+
+    (scheduler as any).handleIssueStatusChange({ key: "CK-1", projectId: "p1", to: "Backlog" });
+
+    expect(sm.createSession).toHaveBeenCalled();
+  });
+
+  it("does not trigger when the event's status does not match the schedule's status", () => {
+    const job = makeJob({ schedules: [{ type: "onIssueStatus", status: "Backlog" }] });
+    vi.mocked(loadJobs).mockReturnValue([job]);
+
+    (scheduler as any).handleIssueStatusChange({ key: "CK-1", projectId: "p1", to: "Refine Ready" });
+
+    expect(sm.createSession).not.toHaveBeenCalled();
+  });
+
+  it("respects a project filter: fires only for the named project, not others", () => {
+    const job = makeJob({ schedules: [{ type: "onIssueStatus", status: "Backlog", project: "proj-a" }] });
+    vi.mocked(loadJobs).mockReturnValue([job]);
+
+    (scheduler as any).handleIssueStatusChange({ key: "CK-1", projectId: "proj-b", to: "Backlog" });
+    expect(sm.createSession).not.toHaveBeenCalled();
+
+    (scheduler as any).handleIssueStatusChange({ key: "CK-2", projectId: "proj-a", to: "Backlog" });
+    expect(sm.createSession).toHaveBeenCalledTimes(1);
+  });
+
+  it("fires regardless of project when the schedule has no project filter", () => {
+    const job = makeJob({ schedules: [{ type: "onIssueStatus", status: "Backlog" }] });
+    vi.mocked(loadJobs).mockReturnValue([job]);
+
+    (scheduler as any).handleIssueStatusChange({ key: "CK-1", projectId: "whichever-project", to: "Backlog" });
+
+    expect(sm.createSession).toHaveBeenCalled();
+  });
+
+  it("does not trigger a disabled job even on a matching event", () => {
+    const job = makeJob({ enabled: false, schedules: [{ type: "onIssueStatus", status: "Backlog" }] });
+    vi.mocked(loadJobs).mockReturnValue([job]);
+
+    (scheduler as any).handleIssueStatusChange({ key: "CK-1", projectId: "p1", to: "Backlog" });
+
+    expect(sm.createSession).not.toHaveBeenCalled();
+  });
+
+  it("does not double-trigger a job that is already running", async () => {
+    const job = makeJob({ schedules: [{ type: "onIssueStatus", status: "Backlog" }] });
+    vi.mocked(loadJobs).mockReturnValue([job]);
+
+    const promise = scheduler.executeJob(job);
+    await vi.waitFor(() => expect(sm.sendMessage).toHaveBeenCalled());
+    sm.createSession.mockClear();
+
+    (scheduler as any).handleIssueStatusChange({ key: "CK-1", projectId: "p1", to: "Backlog" });
+    expect(sm.createSession).not.toHaveBeenCalled();
+
+    sm.emitStatus("idle");
+    await promise;
+  });
+
+  it("a newly created issue's event (no `from`) still matches on `to`", () => {
+    const job = makeJob({ schedules: [{ type: "onIssueStatus", status: "Backlog" }] });
+    vi.mocked(loadJobs).mockReturnValue([job]);
+
+    (scheduler as any).handleIssueStatusChange({ key: "CK-1", projectId: "p1", from: undefined, to: "Backlog" });
+
+    expect(sm.createSession).toHaveBeenCalled();
+  });
+
+  it("logs rather than throws when the matched job's run rejects (e.g. a lock-acquire race)", async () => {
+    const job = makeJob({ schedules: [{ type: "onIssueStatus", status: "Backlog" }] });
+    vi.mocked(loadJobs).mockReturnValue([job]);
+    vi.mocked(acquireJobLock).mockReturnValueOnce(false);
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    expect(() => (scheduler as any).handleIssueStatusChange({ key: "CK-1", projectId: "p1", to: "Backlog" })).not.toThrow();
+    // The rejection is handled asynchronously (a .catch on the fire-and-forget call).
+    await vi.waitFor(() => expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("on issue status change"), expect.anything()));
+
+    errorSpy.mockRestore();
+  });
+});
+
+describe("onIssueStatus job trigger: drain-on-completion (phase 4)", () => {
+  let sm: ReturnType<typeof makeMockSessionManager>;
+  let scheduler: JobScheduler;
+  const project = { id: "p1", name: "P", prefix: "P", createdAt: 0, updatedAt: 0, nextNumber: 1 };
+  const issueIn = (status: string) => ({ status }) as any;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    sm = makeMockSessionManager();
+    scheduler = new JobScheduler(sm as any);
+    vi.mocked(loadProjects).mockReturnValue([project]);
+  });
+
+  it("re-triggers the job when issues remain in the watched status after the run completes, and stops once drained", async () => {
+    const job = makeJob({ schedules: [{ type: "onIssueStatus", status: "Backlog" }] });
+    vi.mocked(loadJobs).mockReturnValue([job]);
+    // baseline (before the loop starts): 2 matching issues.
+    // after run 1: 1 (progress -> retrigger). after run 2: 0 (drained -> stop).
+    vi.mocked(loadIssues)
+      .mockReturnValueOnce([issueIn("Backlog"), issueIn("Backlog")])
+      .mockReturnValueOnce([issueIn("Backlog")])
+      .mockReturnValueOnce([]);
+
+    (scheduler as any).handleIssueStatusChange({ key: "CK-1", projectId: "p1", to: "Backlog" });
+
+    await vi.waitFor(() => expect(sm.sendMessage).toHaveBeenCalledTimes(1));
+    sm.emitEvent({ type: "message_done", message: { content: "done" } });
+    sm.emitStatus("idle");
+
+    await vi.waitFor(() => expect(sm.sendMessage).toHaveBeenCalledTimes(2));
+    sm.emitEvent({ type: "message_done", message: { content: "done" } });
+    sm.emitStatus("idle");
+
+    await vi.waitFor(() => expect(sm.destroySession).toHaveBeenCalledTimes(2));
+    // Give any stray microtask a chance to (wrongly) start a third run before asserting it never does.
+    await new Promise((r) => setTimeout(r, 10));
+    expect(sm.createSession).toHaveBeenCalledTimes(2);
+  });
+
+  it("stops draining, without throwing, when a completed run does not reduce the matching count", async () => {
+    const job = makeJob({ schedules: [{ type: "onIssueStatus", status: "Backlog" }] });
+    vi.mocked(loadJobs).mockReturnValue([job]);
+    // The run completes but leaves the same two issues in Backlog (it failed,
+    // or it processed something else) -> must not retrigger forever.
+    vi.mocked(loadIssues).mockReturnValue([issueIn("Backlog"), issueIn("Backlog")]);
+
+    (scheduler as any).handleIssueStatusChange({ key: "CK-1", projectId: "p1", to: "Backlog" });
+
+    await vi.waitFor(() => expect(sm.sendMessage).toHaveBeenCalledTimes(1));
+    sm.emitEvent({ type: "message_done", message: { content: "done" } });
+    sm.emitStatus("idle");
+
+    await vi.waitFor(() => expect(sm.destroySession).toHaveBeenCalledTimes(1));
+    await new Promise((r) => setTimeout(r, 10));
+    expect(sm.createSession).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops draining after a failed run whose matching count does not decrease", async () => {
+    const job = makeJob({ schedules: [{ type: "onIssueStatus", status: "Backlog" }] });
+    vi.mocked(loadJobs).mockReturnValue([job]);
+    vi.mocked(loadIssues).mockReturnValue([issueIn("Backlog")]);
+
+    (scheduler as any).handleIssueStatusChange({ key: "CK-1", projectId: "p1", to: "Backlog" });
+
+    await vi.waitFor(() => expect(sm.sendMessage).toHaveBeenCalledTimes(1));
+    sm.emitError("CLI crashed");
+
+    await vi.waitFor(() => expect(sm.destroySession).toHaveBeenCalledTimes(1));
+    await new Promise((r) => setTimeout(r, 10));
+    expect(sm.createSession).toHaveBeenCalledTimes(1);
+  });
+
+  it("scopes the drain count to the schedule's project only, ignoring another project's issues in the same status", async () => {
+    const job = makeJob({ schedules: [{ type: "onIssueStatus", status: "Backlog", project: "p1" }] });
+    vi.mocked(loadJobs).mockReturnValue([job]);
+    const other = { id: "p2", name: "Other", prefix: "O", createdAt: 0, updatedAt: 0, nextNumber: 1 };
+    vi.mocked(loadProjects).mockReturnValue([project, other]);
+
+    // p2 always has 5 Backlog issues that must never be counted: if the
+    // project filter leaked, the combined total would never reach zero and a
+    // third run would fire before the stall guard gave up.
+    let p1Call = 0;
+    vi.mocked(loadIssues).mockImplementation((projectId: unknown) => {
+      if (projectId === "p2") return [issueIn("Backlog"), issueIn("Backlog"), issueIn("Backlog"), issueIn("Backlog"), issueIn("Backlog")];
+      p1Call++;
+      if (p1Call === 1) return [issueIn("Backlog"), issueIn("Backlog")];
+      if (p1Call === 2) return [issueIn("Backlog")];
+      return [];
+    });
+
+    (scheduler as any).handleIssueStatusChange({ key: "CK-1", projectId: "p1", to: "Backlog" });
+
+    await vi.waitFor(() => expect(sm.sendMessage).toHaveBeenCalledTimes(1));
+    sm.emitEvent({ type: "message_done", message: { content: "done" } });
+    sm.emitStatus("idle");
+
+    await vi.waitFor(() => expect(sm.sendMessage).toHaveBeenCalledTimes(2));
+    sm.emitEvent({ type: "message_done", message: { content: "done" } });
+    sm.emitStatus("idle");
+
+    await vi.waitFor(() => expect(sm.destroySession).toHaveBeenCalledTimes(2));
+    await new Promise((r) => setTimeout(r, 10));
+    expect(sm.createSession).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(loadIssues)).not.toHaveBeenCalledWith("p2");
+  });
+});
+
+describe("issue-events wiring: start()/stop() actually subscribe (phase 4)", () => {
+  let sm: ReturnType<typeof makeMockSessionManager>;
+  let scheduler: JobScheduler;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    sm = makeMockSessionManager();
+    scheduler = new JobScheduler(sm as any);
+    vi.mocked(loadProjects).mockReturnValue([]);
+    vi.mocked(loadIssues).mockReturnValue([]);
+  });
+
+  it("reacts to a real emitIssueStatusChange after start(), and stops reacting after stop()", async () => {
+    const job = makeJob({ schedules: [{ type: "onIssueStatus", status: "Backlog" }] });
+    vi.mocked(loadJobs).mockReturnValue([job]);
+
+    scheduler.start();
+    try {
+      emitIssueStatusChange({ key: "CK-1", projectId: "p1", to: "Backlog" });
+      expect(sm.createSession).toHaveBeenCalledTimes(1);
+
+      await vi.waitFor(() => expect(sm.sendMessage).toHaveBeenCalled());
+      sm.emitEvent({ type: "message_done", message: { content: "done" } });
+      sm.emitStatus("idle");
+      await vi.waitFor(() => expect(sm.destroySession).toHaveBeenCalled());
+    } finally {
+      scheduler.stop();
+    }
+
+    sm.createSession.mockClear();
+    emitIssueStatusChange({ key: "CK-2", projectId: "p1", to: "Backlog" });
+    expect(sm.createSession).not.toHaveBeenCalled();
   });
 });

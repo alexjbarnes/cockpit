@@ -1,10 +1,12 @@
 import { mkdirSync } from "node:fs";
 import { v4 as uuidv4 } from "uuid";
 import { getJobScratchpadDir } from "@/server/paths";
-import type { JobRun, JobRunToolUse, ScheduledJob } from "@/types";
+import type { IssueStatusSchedule, JobRun, JobRunToolUse, ScheduledJob } from "@/types";
 import { findMissedRun, getJobSchedules, matchesCron, scheduleToCron } from "./cron-utils";
 import { logDiag } from "./debug-logger";
 import { addInboxMessage, parseErrorBlock } from "./inbox";
+import { type IssueStatusChangeEvent, onIssueStatusChange } from "./issue-events";
+import { loadIssues, loadProjects } from "./issue-storage";
 import { acquireJobLock, clearStaleLocks, forceReleaseJobLock, releaseJobLock } from "./job-lock";
 import { getLatestRun, loadJobs, loadRuns, pruneAllRuns, saveRun } from "./job-storage";
 import { checkJobModel } from "./provider-catalog";
@@ -152,6 +154,14 @@ function isMcpToolAllowed(
   return false;
 }
 
+/** How many issues currently sit in the schedule's watched status (and
+ *  project, if it names one). Used both to decide a match matters and, after
+ *  the triggered run completes, to decide whether to drain another one. */
+function countMatchingIssues(sched: IssueStatusSchedule): number {
+  const projects = sched.project ? loadProjects().filter((p) => p.id === sched.project) : loadProjects();
+  return projects.reduce((n, p) => n + loadIssues(p.id).filter((i) => i.status === sched.status).length, 0);
+}
+
 export class JobScheduler {
   private sessionManager: SessionManager;
   private timer: ReturnType<typeof setInterval> | null = null;
@@ -159,6 +169,7 @@ export class JobScheduler {
   private runningJobs = new Map<string, JobRun>();
   private jobResolvers = new Map<string, (run: JobRun) => void>();
   private lastPruneAt = 0;
+  private unsubIssueEvents: (() => void) | null = null;
 
   constructor(sessionManager: SessionManager) {
     this.sessionManager = sessionManager;
@@ -167,6 +178,10 @@ export class JobScheduler {
   start(): void {
     this.recoverState();
     this.timer = setInterval(() => this.tick(), 60_000);
+    // Phase 4 (docs/internal/issue-tracker-spec.md): saveIssue emits whenever
+    // an issue's status changes, so an onIssueStatus job trigger doesn't wait
+    // for the next tick.
+    this.unsubIssueEvents = onIssueStatusChange((event) => this.handleIssueStatusChange(event));
     console.log("[scheduler] started, ticking every 60s");
   }
 
@@ -175,6 +190,8 @@ export class JobScheduler {
       clearInterval(this.timer);
       this.timer = null;
     }
+    this.unsubIssueEvents?.();
+    this.unsubIssueEvents = null;
     for (const jobId of this.runningJobs.keys()) {
       releaseJobLock(jobId);
     }
@@ -356,6 +373,7 @@ export class JobScheduler {
       let shouldFire = false;
 
       for (const sched of getJobSchedules(job)) {
+        if (sched.type === "onIssueStatus") continue; // event-triggered; the 60s tick never fires it directly
         const cronExpr = scheduleToCron(sched);
         if (matchesCron(cronExpr, now)) {
           if (!lastFired || lastFired.getTime() < now.getTime()) {
@@ -376,6 +394,55 @@ export class JobScheduler {
           console.error(`[scheduler] failed to execute job ${job.name}:`, err);
         });
       }
+    }
+  }
+
+  /**
+   * Phase 4 (docs/internal/issue-tracker-spec.md): saveIssue emits whenever an
+   * issue's status changes, including a brand new issue arriving in its
+   * initial status. Mirrors tick()'s own job scan (enabled, not already
+   * running) but matches against the event instead of the clock.
+   */
+  private handleIssueStatusChange(event: IssueStatusChangeEvent): void {
+    const jobs = loadJobs();
+    for (const job of jobs) {
+      if (!job.enabled) continue;
+      if (this.runningJobs.has(job.id)) continue;
+
+      const sched = getJobSchedules(job).find(
+        (s): s is IssueStatusSchedule =>
+          s.type === "onIssueStatus" && s.status === event.to && (!s.project || s.project === event.projectId),
+      );
+      if (!sched) continue;
+
+      this.runIssueTriggeredJob(job, sched).catch((err) => {
+        console.error(`[scheduler] failed to execute job ${job.name} on issue status change:`, err);
+      });
+    }
+  }
+
+  /**
+   * The pipeline skills process one issue per run. If a second issue enters
+   * the watched status while the first run is in flight, the job-lock
+   * swallows its event and that issue would sit forever — so after the run
+   * completes, re-check for remaining matches and trigger again. Bounded by
+   * construction: `after` must be strictly less than `before` to keep
+   * draining, and both are non-negative integers, so this cannot loop forever
+   * even if the job fails or refuses to process the issue on every attempt —
+   * it just stops on the first run that doesn't make progress.
+   */
+  private async runIssueTriggeredJob(job: ScheduledJob, sched: IssueStatusSchedule): Promise<void> {
+    let before = countMatchingIssues(sched);
+    for (;;) {
+      await this.executeJobWithRetries(job);
+      const after = countMatchingIssues(sched);
+      if (after === 0) return; // drained
+      if (after >= before) {
+        logDiag(job.id, "job:drain-stalled", { status: sched.status, project: sched.project, before, after });
+        console.log(`[scheduler] job ${job.name} drain stalled: ${before} -> ${after} issue(s) still in "${sched.status}"`);
+        return;
+      }
+      before = after;
     }
   }
 

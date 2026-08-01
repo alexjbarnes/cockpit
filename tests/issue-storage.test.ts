@@ -8,6 +8,8 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync 
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { IssueStatusChangeEvent } from "@/server/issue-events";
+import { onIssueStatusChange } from "@/server/issue-events";
 import {
   addIssueAttachment,
   addIssueComment,
@@ -462,6 +464,73 @@ describe("saveIssue", () => {
 
     expect(readdirSync(dir).some((f) => f.includes(".tmp-"))).toBe(false);
     expect(readdirSync(path.join(dir, "issues")).some((f) => f.includes(".tmp-"))).toBe(false);
+  });
+});
+
+describe("saveIssue: status-change events (phase 4 onIssueStatus job trigger)", () => {
+  // Real issue-events emitter, not mocked: this is the actual wiring
+  // job-scheduler.ts subscribes to, so proving saveIssue emits through the
+  // real module is what makes the phase-4 trigger trustworthy rather than
+  // assumed. Every test unsubscribes so listeners never leak onto the next.
+  let events: IssueStatusChangeEvent[];
+  let unsub: () => void;
+
+  beforeEach(() => {
+    events = [];
+    unsub = onIssueStatusChange((e) => events.push(e));
+  });
+
+  afterEach(() => unsub());
+
+  it("emits with to only (no from) when an issue is first created", () => {
+    const p = makeProject("CK");
+    const issue = buildIssue({ projectId: p.id, title: "t" }, USER);
+    saveIssue(issue);
+
+    expect(events).toEqual([{ key: issue.key, projectId: p.id, from: undefined, to: "Backlog" }]);
+  });
+
+  it("emits with from/to on a real status transition", () => {
+    const p = makeProject("CK");
+    const issue = buildIssue({ projectId: p.id, title: "t" }, USER);
+    saveIssue(issue);
+    events.length = 0; // clear the creation emit above; this test is about the transition
+
+    const updated = applyIssueUpdate(issue, { status: "Refine Ready" }, USER);
+    saveIssue(updated);
+
+    expect(events).toEqual([{ key: issue.key, projectId: p.id, from: "Backlog", to: "Refine Ready" }]);
+  });
+
+  it("does not emit when a save changes no status (e.g. a title-only edit)", () => {
+    const p = makeProject("CK");
+    const issue = buildIssue({ projectId: p.id, title: "t" }, USER);
+    saveIssue(issue);
+    events.length = 0;
+
+    const updated = applyIssueUpdate(issue, { title: "New title" }, USER);
+    saveIssue(updated);
+
+    expect(events).toEqual([]);
+  });
+
+  it("does not emit when saveIssue itself rejects the write (unknown project)", () => {
+    const p = makeProject("CK");
+    const issue = buildIssue({ projectId: p.id, title: "t" }, USER);
+
+    expect(() => saveIssue({ ...issue, projectId: "nope" })).toThrow(/Unknown project/);
+    expect(events).toEqual([]);
+  });
+
+  it("does not emit when saveIssue rejects a key collision", () => {
+    const p = makeProject("CK");
+    const issue = buildIssue({ projectId: p.id, title: "t" }, USER);
+    saveIssue(issue);
+    events.length = 0;
+
+    const impostor: Issue = { ...issue, id: "a-different-id", status: "Refine Ready" };
+    expect(() => saveIssue(impostor)).toThrow(/already belongs to a different issue/);
+    expect(events).toEqual([]);
   });
 });
 

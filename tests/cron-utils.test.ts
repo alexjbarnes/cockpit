@@ -6,6 +6,7 @@ import {
   getJobSchedules,
   getNextRunTime,
   getNextRunTimeAny,
+  hasTimeBasedSchedule,
   matchesCron,
   scheduleToCron,
   simpleScheduleToCron,
@@ -183,6 +184,14 @@ describe("describeSchedule", () => {
   it("defaults time to 00:00 for hourly description", () => {
     expect(describeSchedule({ type: "simple", frequency: "hourly" })).toBe("Every hour at :00");
   });
+
+  it("describes an onIssueStatus schedule with no project filter", () => {
+    expect(describeSchedule({ type: "onIssueStatus", status: "Implementation Ready" })).toBe("On issue → Implementation Ready");
+  });
+
+  it("describes an onIssueStatus schedule with a project filter", () => {
+    expect(describeSchedule({ type: "onIssueStatus", status: "Backlog", project: "proj-1" })).toBe("On issue → Backlog (project: proj-1)");
+  });
 });
 
 describe("getNextRunTime", () => {
@@ -273,5 +282,44 @@ describe("getNextRunTimeAny", () => {
     const after = new Date(2026, 4, 17, 10, 0, 0);
     const next = getNextRunTimeAny([], after);
     expect(next.getTime()).toBe(after.getTime() + 86400000);
+  });
+
+  it("ignores onIssueStatus schedules and finds the next time-based one", () => {
+    const after = new Date(2026, 4, 17, 10, 0, 0);
+    const schedules: JobSchedule[] = [
+      { type: "onIssueStatus", status: "Backlog" },
+      { type: "simple", frequency: "daily", time: "15:00" },
+    ];
+    const next = getNextRunTimeAny(schedules, after);
+    expect(next.getHours()).toBe(15);
+  });
+
+  it("falls back to the generic 'nothing matched' answer when every schedule is onIssueStatus (caller must check hasTimeBasedSchedule first)", () => {
+    const after = new Date(2026, 4, 17, 10, 0, 0);
+    const next = getNextRunTimeAny([{ type: "onIssueStatus", status: "Backlog" }], after);
+    expect(next.getTime()).toBe(after.getTime() + 86400000);
+  });
+});
+
+describe("hasTimeBasedSchedule", () => {
+  it("is true for a plain simple/cron schedule list", () => {
+    expect(hasTimeBasedSchedule([{ type: "simple", frequency: "daily", time: "09:00" }])).toBe(true);
+    expect(hasTimeBasedSchedule([{ type: "cron", expression: "0 9 * * *" }])).toBe(true);
+  });
+
+  it("is true when a job mixes a time-based schedule with an onIssueStatus one", () => {
+    const schedules: JobSchedule[] = [
+      { type: "onIssueStatus", status: "Backlog" },
+      { type: "cron", expression: "0 9 * * *" },
+    ];
+    expect(hasTimeBasedSchedule(schedules)).toBe(true);
+  });
+
+  it("is false when every schedule is onIssueStatus", () => {
+    expect(hasTimeBasedSchedule([{ type: "onIssueStatus", status: "Backlog" }])).toBe(false);
+  });
+
+  it("is false for an empty schedule list", () => {
+    expect(hasTimeBasedSchedule([])).toBe(false);
   });
 });

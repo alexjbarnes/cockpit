@@ -7,6 +7,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { buildProject, saveProject } from "@/server/issue-storage";
 import {
   deleteJob,
   getJob,
@@ -257,6 +258,55 @@ describe("job CRUD", () => {
     expect(deleteJob(traversingId)).toBe(true);
     expect(existsSync(dir)).toBe(true);
     expect(existsSync(sibling)).toBe(true);
+  });
+});
+
+describe("saveJob: onIssueStatus schedule validation (phase 4, storage boundary)", () => {
+  // saveJob is the one function every job write funnels through (REST's PUT
+  // route and the MCP update_job tool both bypass buildJob entirely with a
+  // raw field spread), so this is where an onIssueStatus schedule's shape has
+  // to be caught — see job-storage.ts's assertValidSchedules comment.
+
+  it("accepts an onIssueStatus schedule with a valid status and no project", () => {
+    const job = makeJob("a", { schedules: [{ type: "onIssueStatus", status: "Backlog" }] });
+    expect(() => saveJob(job)).not.toThrow();
+    expect(getJob("a")?.schedules).toEqual([{ type: "onIssueStatus", status: "Backlog" }]);
+  });
+
+  it("accepts an onIssueStatus schedule whose project id names a real project", () => {
+    const project = buildProject({ name: "Cockpit", prefix: "CK" });
+    saveProject(project);
+    const job = makeJob("a", { schedules: [{ type: "onIssueStatus", status: "Backlog", project: project.id }] });
+    expect(() => saveJob(job)).not.toThrow();
+  });
+
+  it("rejects an onIssueStatus schedule with a status outside ISSUE_STATUSES", () => {
+    const job = makeJob("a", {
+      // @ts-expect-error deliberately invalid status, mirroring an unvalidated REST/MCP payload
+      schedules: [{ type: "onIssueStatus", status: "Definitely Not A Status" }],
+    });
+    expect(() => saveJob(job)).toThrow(/invalid status/i);
+    expect(loadJobs()).toEqual([]); // rejected write never reaches disk
+  });
+
+  it("rejects an onIssueStatus schedule whose project does not name a real project", () => {
+    const job = makeJob("a", { schedules: [{ type: "onIssueStatus", status: "Backlog", project: "no-such-project" }] });
+    expect(() => saveJob(job)).toThrow(/unknown project/i);
+    expect(loadJobs()).toEqual([]);
+  });
+
+  it("leaves simple/cron schedules on the same job unvalidated (out of scope, unchanged behaviour)", () => {
+    // Documents the deliberate scope limit: only the new onIssueStatus shape
+    // is checked here. A nonsensical cron expression still saves cleanly.
+    const job = makeJob("a", { schedules: [{ type: "cron", expression: "not a cron expression" }] });
+    expect(() => saveJob(job)).not.toThrow();
+  });
+
+  it("does not persist a job at all when its onIssueStatus schedule is invalid", () => {
+    saveJob(makeJob("keep")); // a pre-existing valid job
+    const bad = makeJob("bad", { schedules: [{ type: "onIssueStatus", status: "Backlog", project: "ghost" }] });
+    expect(() => saveJob(bad)).toThrow();
+    expect(loadJobs().map((j) => j.id)).toEqual(["keep"]);
   });
 });
 
