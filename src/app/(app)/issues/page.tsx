@@ -1,6 +1,6 @@
 "use client";
 
-import { ClipboardList, Loader2, Plus, X } from "lucide-react";
+import { ChevronRight, ClipboardList, Loader2, Plus, X } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { usePageHeader } from "@/components/app-shell";
@@ -10,7 +10,18 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { useScrollRestoration } from "@/hooks/use-scroll-restoration";
-import { filterIssues, groupIssuesByStatus, ISSUE_STATUSES, priorityLabel } from "@/lib/issue-display";
+import type { IssueProjectGroup, QuickFilter } from "@/lib/issue-display";
+import {
+  filterByQuickFilter,
+  filterIssues,
+  groupIssuesByProject,
+  groupIssuesByStatus,
+  ISSUE_STATUSES,
+  labelColor,
+  NO_LABEL_GROUP,
+  priorityLabel,
+} from "@/lib/issue-display";
+import { cn } from "@/lib/utils";
 import type { Issue, IssueStatus, Project } from "@/types";
 
 const SELECT_CLASS = "rounded-md border bg-background px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring";
@@ -19,6 +30,40 @@ const SELECT_CLASS = "rounded-md border bg-background px-2.5 py-1.5 text-sm focu
 // ISSUE_STATUSES (see that file's comment). "" up front is this dropdown's
 // own "all statuses" option, not part of the canonical list.
 const ALL_STATUSES: (IssueStatus | "")[] = ["", ...ISSUE_STATUSES];
+
+const QUICK_FILTERS: { value: QuickFilter; label: string }[] = [
+  { value: "active", label: "Active" },
+  { value: "backlog", label: "Backlog" },
+  { value: "all", label: "All issues" },
+];
+
+// "By status"/"By project" and per-project collapse state, mirroring the
+// get/save-a-JSON-map-under-one-key convention SidebarSection already uses
+// for its own per-section collapse state (src/components/sidebar-section.tsx)
+// — same shape, separate storage key since these are unrelated collapse
+// namespaces (nav sections vs. issue project groups).
+const VIEW_KEY = "cockpit_issues_view";
+const PROJECT_OPEN_KEY = "cockpit_issues_projects_open";
+
+function getProjectOpen(id: string): boolean {
+  try {
+    const raw = localStorage.getItem(PROJECT_OPEN_KEY);
+    if (raw) {
+      const map = JSON.parse(raw);
+      if (id in map) return map[id];
+    }
+  } catch {}
+  return true;
+}
+
+function saveProjectOpen(id: string, open: boolean): void {
+  try {
+    const raw = localStorage.getItem(PROJECT_OPEN_KEY);
+    const map = raw ? JSON.parse(raw) : {};
+    map[id] = open;
+    localStorage.setItem(PROJECT_OPEN_KEY, JSON.stringify(map));
+  } catch {}
+}
 
 function timeAgo(ts: number): string {
   const diff = Date.now() - ts;
@@ -57,6 +102,135 @@ function IssueRow({ issue, projectName, onClick }: { issue: Issue; projectName: 
         </div>
       </div>
     </div>
+  );
+}
+
+/** Shared collapsible row for a project group or a label sub-group: chevron
+ *  + optional colour dot + name + count. Left padding (indent) and the
+ *  name's font weight are caller-supplied via className/labelClassName so
+ *  the two nesting levels can read as a visual hierarchy. */
+function GroupHeader({
+  open,
+  onToggle,
+  label,
+  count,
+  dot,
+  className,
+  labelClassName,
+}: {
+  open: boolean;
+  onToggle: () => void;
+  label: string;
+  count: number;
+  dot?: React.ReactNode;
+  className?: string;
+  labelClassName?: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-expanded={open}
+      className={cn("flex w-full items-center gap-2 py-3 pr-4 text-left hover:bg-accent/50 transition-colors min-w-0", className)}
+    >
+      <ChevronRight className={cn("h-4 w-4 shrink-0 text-muted-foreground transition-transform", open && "rotate-90")} />
+      {dot}
+      <span className={cn("flex-1 min-w-0 truncate text-sm", labelClassName)}>{label}</span>
+      <Badge variant="secondary">{count}</Badge>
+    </button>
+  );
+}
+
+// Deliberately leaner than IssueRow: project + label are already implied by
+// where this row sits, so repeating project/priority/labels here would just
+// be noise. Matches the reference screenshot: truncated title, small status
+// indicator, nothing else.
+function ProjectViewIssueRow({ issue, onClick }: { issue: Issue; onClick: () => void }) {
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={onClick}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onClick();
+        }
+      }}
+      className="flex items-center gap-2 pl-14 pr-4 py-2.5 border-b last:border-b-0 hover:bg-accent/50 transition-colors cursor-pointer"
+    >
+      <span className="flex-1 min-w-0 truncate text-sm">{issue.title}</span>
+      <span className="shrink-0 whitespace-nowrap rounded-full border px-1.5 py-0.5 text-[10px] text-muted-foreground">{issue.status}</span>
+    </div>
+  );
+}
+
+/** One collapsible project group in the "By project" view: a header row
+ *  (name + total count, persisted open/closed via getProjectOpen/
+ *  saveProjectOpen) holding its label sub-groups, each independently
+ *  collapsible (not persisted — only per-project state was asked for). */
+function ProjectGroupCard({ group, onIssueClick }: { group: IssueProjectGroup; onIssueClick: (issue: Issue) => void }) {
+  const [open, setOpen] = useState(true);
+  const [collapsedLabels, setCollapsedLabels] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    setOpen(getProjectOpen(group.project.id));
+  }, [group.project.id]);
+
+  const toggleProject = () => {
+    const next = !open;
+    setOpen(next);
+    saveProjectOpen(group.project.id, next);
+  };
+
+  const toggleLabel = (label: string) => {
+    setCollapsedLabels((prev) => {
+      const next = new Set(prev);
+      if (next.has(label)) next.delete(label);
+      else next.add(label);
+      return next;
+    });
+  };
+
+  return (
+    <Card className="py-0 overflow-hidden">
+      <CardContent className="p-0">
+        <GroupHeader
+          open={open}
+          onToggle={toggleProject}
+          label={group.project.name}
+          count={group.issues.length}
+          className="pl-4"
+          labelClassName="font-semibold"
+        />
+        {open &&
+          group.labelGroups.map((lg) => {
+            const labelOpen = !collapsedLabels.has(lg.label);
+            return (
+              <div key={lg.label} className="border-t">
+                <GroupHeader
+                  open={labelOpen}
+                  onToggle={() => toggleLabel(lg.label)}
+                  label={lg.label}
+                  count={lg.issues.length}
+                  className="pl-8 py-2.5"
+                  labelClassName="font-medium"
+                  dot={
+                    <span
+                      className={cn(
+                        "h-2.5 w-2.5 rounded-full shrink-0",
+                        lg.label === NO_LABEL_GROUP ? "bg-muted-foreground/30" : labelColor(lg.label),
+                      )}
+                    />
+                  }
+                />
+                {labelOpen &&
+                  lg.issues.map((issue) => <ProjectViewIssueRow key={issue.id} issue={issue} onClick={() => onIssueClick(issue)} />)}
+              </div>
+            );
+          })}
+      </CardContent>
+    </Card>
   );
 }
 
@@ -174,6 +348,20 @@ export default function IssuesPage() {
   const [projectFilter, setProjectFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState<IssueStatus | "">("");
   const [newOpen, setNewOpen] = useState(false);
+  const [view, setView] = useState<"status" | "project">("status");
+  const [quickFilter, setQuickFilter] = useState<QuickFilter>("all");
+
+  useEffect(() => {
+    const stored = localStorage.getItem(VIEW_KEY);
+    if (stored === "status" || stored === "project") setView(stored);
+  }, []);
+
+  const changeView = useCallback((next: "status" | "project") => {
+    setView(next);
+    try {
+      localStorage.setItem(VIEW_KEY, next);
+    } catch {}
+  }, []);
 
   const fetchAll = useCallback(async () => {
     const [issuesRes, projectsRes] = await Promise.all([fetch("/api/issues"), fetch("/api/projects")]);
@@ -194,18 +382,61 @@ export default function IssuesPage() {
 
   const projectNames = useMemo(() => new Map(projects.map((p) => [p.id, p.name])), [projects]);
 
-  const groups = useMemo(() => {
-    const filtered = filterIssues(issues, {
+  // The status dropdown only renders (and only applies) in the status view —
+  // the project view replaces it with the quick filter pills, so its stale
+  // value must not silently narrow the project view once the user switches.
+  const filtered = useMemo(() => {
+    const byDropdowns = filterIssues(issues, {
       projectId: projectFilter || undefined,
-      status: statusFilter || undefined,
+      status: view === "status" ? statusFilter || undefined : undefined,
     });
-    return groupIssuesByStatus(filtered);
-  }, [issues, projectFilter, statusFilter]);
+    return filterByQuickFilter(byDropdowns, quickFilter);
+  }, [issues, projectFilter, statusFilter, quickFilter, view]);
 
-  const hasFilters = projectFilter !== "" || statusFilter !== "";
+  const statusGroups = useMemo(() => groupIssuesByStatus(filtered), [filtered]);
+  const projectGroups = useMemo(() => groupIssuesByProject(filtered, projects), [filtered, projects]);
+
+  const hasFilters = projectFilter !== "" || (view === "status" && statusFilter !== "");
 
   return (
     <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto p-4 pb-24 space-y-4">
+      <div className="flex items-center gap-2 flex-wrap">
+        <div className="inline-flex shrink-0 gap-0.5 rounded-md border p-0.5">
+          {(["status", "project"] as const).map((v) => (
+            <button
+              key={v}
+              type="button"
+              onClick={() => changeView(v)}
+              aria-pressed={view === v}
+              className={cn(
+                "rounded px-2.5 py-1 text-xs font-medium transition-colors",
+                view === v ? "bg-secondary text-secondary-foreground" : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              {v === "status" ? "By status" : "By project"}
+            </button>
+          ))}
+        </div>
+        <div className="flex flex-wrap items-center gap-1.5">
+          {QUICK_FILTERS.map((f) => (
+            <button
+              key={f.value}
+              type="button"
+              onClick={() => setQuickFilter(f.value)}
+              aria-pressed={quickFilter === f.value}
+              className={cn(
+                "rounded-full border px-3 py-1 text-xs font-medium transition-colors",
+                quickFilter === f.value
+                  ? "border-primary bg-primary text-primary-foreground"
+                  : "border-input bg-background text-muted-foreground hover:text-foreground",
+              )}
+            >
+              {f.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
       <div className="flex items-center gap-2 flex-wrap">
         <select value={projectFilter} onChange={(e) => setProjectFilter(e.target.value)} className={SELECT_CLASS}>
           <option value="">All Projects</option>
@@ -215,13 +446,15 @@ export default function IssuesPage() {
             </option>
           ))}
         </select>
-        <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as IssueStatus | "")} className={SELECT_CLASS}>
-          {ALL_STATUSES.map((s) => (
-            <option key={s || "all"} value={s}>
-              {s || "All Statuses"}
-            </option>
-          ))}
-        </select>
+        {view === "status" && (
+          <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as IssueStatus | "")} className={SELECT_CLASS}>
+            {ALL_STATUSES.map((s) => (
+              <option key={s || "all"} value={s}>
+                {s || "All Statuses"}
+              </option>
+            ))}
+          </select>
+        )}
         {hasFilters && (
           <button
             type="button"
@@ -249,32 +482,44 @@ export default function IssuesPage() {
         </div>
       )}
 
-      {!loading && issues.length > 0 && groups.length === 0 && (
+      {!loading && issues.length > 0 && filtered.length === 0 && (
         <p className="text-sm text-muted-foreground py-8 text-center">No issues match these filters.</p>
       )}
 
-      <div className="space-y-4">
-        {groups.map((group) => (
-          <div key={group.status}>
-            <div className="flex items-center gap-2 mb-1.5 px-1">
-              <h2 className="text-sm font-semibold">{group.status}</h2>
-              <Badge variant="secondary">{group.issues.length}</Badge>
+      {view === "status" ? (
+        <div className="space-y-4">
+          {statusGroups.map((group) => (
+            <div key={group.status}>
+              <div className="flex items-center gap-2 mb-1.5 px-1">
+                <h2 className="text-sm font-semibold">{group.status}</h2>
+                <Badge variant="secondary">{group.issues.length}</Badge>
+              </div>
+              <Card className="py-0 overflow-hidden">
+                <CardContent className="p-0">
+                  {group.issues.map((issue) => (
+                    <IssueRow
+                      key={issue.id}
+                      issue={issue}
+                      projectName={projectNames.get(issue.projectId)}
+                      onClick={() => router.push(`/issues/${encodeURIComponent(issue.key)}`)}
+                    />
+                  ))}
+                </CardContent>
+              </Card>
             </div>
-            <Card className="py-0 overflow-hidden">
-              <CardContent className="p-0">
-                {group.issues.map((issue) => (
-                  <IssueRow
-                    key={issue.id}
-                    issue={issue}
-                    projectName={projectNames.get(issue.projectId)}
-                    onClick={() => router.push(`/issues/${encodeURIComponent(issue.key)}`)}
-                  />
-                ))}
-              </CardContent>
-            </Card>
-          </div>
-        ))}
-      </div>
+          ))}
+        </div>
+      ) : (
+        <div className="space-y-4">
+          {projectGroups.map((group) => (
+            <ProjectGroupCard
+              key={group.project.id}
+              group={group}
+              onIssueClick={(issue) => router.push(`/issues/${encodeURIComponent(issue.key)}`)}
+            />
+          ))}
+        </div>
+      )}
 
       <div className="fixed bottom-6 right-6">
         <Button size="lg" className="rounded-full shadow-lg" onClick={() => setNewOpen(true)}>

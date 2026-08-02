@@ -1,6 +1,18 @@
 import { describe, expect, it } from "vitest";
-import { actorLabel, describeActivity, filterIssues, groupIssuesByStatus, ISSUE_STATUSES, priorityLabel } from "@/lib/issue-display";
-import type { Issue, IssueActivity, IssueActor } from "@/types";
+import {
+  actorLabel,
+  describeActivity,
+  filterByQuickFilter,
+  filterIssues,
+  groupIssuesByProject,
+  groupIssuesByStatus,
+  ISSUE_STATUSES,
+  LABEL_COLORS,
+  labelColor,
+  NO_LABEL_GROUP,
+  priorityLabel,
+} from "@/lib/issue-display";
+import type { Issue, IssueActivity, IssueActor, Project } from "@/types";
 
 function makeIssue(overrides: Partial<Issue> = {}): Issue {
   return {
@@ -17,6 +29,20 @@ function makeIssue(overrides: Partial<Issue> = {}): Issue {
     comments: overrides.comments ?? [],
     attachments: overrides.attachments ?? [],
     activity: overrides.activity ?? [],
+  };
+}
+
+function makeProject(overrides: Partial<Project> = {}): Project {
+  return {
+    id: overrides.id ?? "proj-1",
+    name: overrides.name ?? "Project",
+    prefix: overrides.prefix ?? "PRJ",
+    description: overrides.description,
+    repoPath: overrides.repoPath,
+    archived: overrides.archived,
+    createdAt: overrides.createdAt ?? 1,
+    updatedAt: overrides.updatedAt ?? 1,
+    nextNumber: overrides.nextNumber ?? 1,
   };
 }
 
@@ -87,6 +113,144 @@ describe("groupIssuesByStatus", () => {
     const issues = ISSUE_STATUSES.map((status, i) => makeIssue({ id: String(i), status }));
     const groups = groupIssuesByStatus(issues);
     expect(groups.map((g) => g.status)).toEqual([...ISSUE_STATUSES]);
+  });
+});
+
+describe("filterByQuickFilter", () => {
+  const issues = [
+    makeIssue({ id: "a", status: "Backlog" }),
+    makeIssue({ id: "b", status: "Refining" }),
+    makeIssue({ id: "c", status: "Accepted" }),
+    makeIssue({ id: "d", status: "Done" }),
+    makeIssue({ id: "e", status: "Cancelled" }),
+  ];
+
+  it("all returns every issue unchanged", () => {
+    expect(filterByQuickFilter(issues, "all")).toEqual(issues);
+  });
+
+  it("backlog keeps only Backlog-status issues", () => {
+    expect(filterByQuickFilter(issues, "backlog").map((i) => i.id)).toEqual(["a"]);
+  });
+
+  it("active keeps started/unstarted work, excluding Backlog, Done, and Cancelled", () => {
+    expect(filterByQuickFilter(issues, "active").map((i) => i.id)).toEqual(["b", "c"]);
+  });
+});
+
+describe("groupIssuesByProject", () => {
+  it("returns an empty array for no issues", () => {
+    expect(groupIssuesByProject([], [makeProject()])).toEqual([]);
+  });
+
+  it("excludes projects with zero matching issues", () => {
+    const projects = [makeProject({ id: "p1", name: "Alpha" }), makeProject({ id: "p2", name: "Beta" })];
+    const issues = [makeIssue({ id: "a", projectId: "p1" })];
+    const groups = groupIssuesByProject(issues, projects);
+    expect(groups.map((g) => g.project.id)).toEqual(["p1"]);
+  });
+
+  it("orders project groups by name, not id or insertion order", () => {
+    const projects = [makeProject({ id: "p1", name: "Zeta" }), makeProject({ id: "p2", name: "Alpha" })];
+    const issues = [makeIssue({ id: "a", projectId: "p1" }), makeIssue({ id: "b", projectId: "p2" })];
+    const groups = groupIssuesByProject(issues, projects);
+    expect(groups.map((g) => g.project.name)).toEqual(["Alpha", "Zeta"]);
+  });
+
+  it("drops issues whose projectId matches no known project", () => {
+    const projects = [makeProject({ id: "p1", name: "Alpha" })];
+    const issues = [makeIssue({ id: "a", projectId: "p1" }), makeIssue({ id: "b", projectId: "ghost" })];
+    const groups = groupIssuesByProject(issues, projects);
+    expect(groups).toHaveLength(1);
+    expect(groups[0].issues.map((i) => i.id)).toEqual(["a"]);
+  });
+
+  it("carries the project's full issue count alongside its label sub-groups", () => {
+    const projects = [makeProject({ id: "p1" })];
+    const issues = [makeIssue({ id: "a", projectId: "p1" }), makeIssue({ id: "b", projectId: "p1" })];
+    const groups = groupIssuesByProject(issues, projects);
+    expect(groups[0].issues).toHaveLength(2);
+  });
+
+  it("groups an issue under its first label", () => {
+    const projects = [makeProject({ id: "p1" })];
+    const issues = [makeIssue({ id: "a", projectId: "p1", labels: ["Bug", "UI"] })];
+    const groups = groupIssuesByProject(issues, projects);
+    expect(groups[0].labelGroups.map((g) => g.label)).toEqual(["Bug"]);
+  });
+
+  it("never lists a multi-label issue under more than one label", () => {
+    const projects = [makeProject({ id: "p1" })];
+    const issues = [makeIssue({ id: "a", projectId: "p1", labels: ["Bug", "UI"] })];
+    const groups = groupIssuesByProject(issues, projects);
+    const allIds = groups[0].labelGroups.flatMap((g) => g.issues.map((i) => i.id));
+    expect(allIds).toEqual(["a"]);
+  });
+
+  it("skips ALE-<number> import labels when choosing the grouping label", () => {
+    const projects = [makeProject({ id: "p1" })];
+    const issues = [makeIssue({ id: "a", projectId: "p1", labels: ["ALE-609", "Bug"] })];
+    const groups = groupIssuesByProject(issues, projects);
+    expect(groups[0].labelGroups.map((g) => g.label)).toEqual(["Bug"]);
+  });
+
+  it("buckets an issue with only an ALE-<number> label under No label, not the import id", () => {
+    const projects = [makeProject({ id: "p1" })];
+    const issues = [makeIssue({ id: "a", projectId: "p1", labels: ["ALE-609"] })];
+    const groups = groupIssuesByProject(issues, projects);
+    expect(groups[0].labelGroups.map((g) => g.label)).toEqual([NO_LABEL_GROUP]);
+  });
+
+  it("buckets an issue with no labels at all under No label", () => {
+    const projects = [makeProject({ id: "p1" })];
+    const issues = [makeIssue({ id: "a", projectId: "p1", labels: undefined })];
+    const groups = groupIssuesByProject(issues, projects);
+    expect(groups[0].labelGroups.map((g) => g.label)).toEqual([NO_LABEL_GROUP]);
+  });
+
+  it("sorts No label after a real label when the real label is encountered first", () => {
+    const projects = [makeProject({ id: "p1" })];
+    const issues = [makeIssue({ id: "a", projectId: "p1", labels: ["Bug"] }), makeIssue({ id: "b", projectId: "p1", labels: [] })];
+    const groups = groupIssuesByProject(issues, projects);
+    expect(groups[0].labelGroups.map((g) => g.label)).toEqual(["Bug", NO_LABEL_GROUP]);
+  });
+
+  it("sorts No label after a real label when No label is encountered first", () => {
+    const projects = [makeProject({ id: "p1" })];
+    const issues = [makeIssue({ id: "a", projectId: "p1", labels: [] }), makeIssue({ id: "b", projectId: "p1", labels: ["Bug"] })];
+    const groups = groupIssuesByProject(issues, projects);
+    expect(groups[0].labelGroups.map((g) => g.label)).toEqual(["Bug", NO_LABEL_GROUP]);
+  });
+
+  it("orders label groups by count descending, then name ascending, with No label always last", () => {
+    const projects = [makeProject({ id: "p1" })];
+    const issues = [
+      makeIssue({ id: "a", projectId: "p1", labels: ["Zeta"] }),
+      makeIssue({ id: "b", projectId: "p1", labels: ["Bug"] }),
+      makeIssue({ id: "c", projectId: "p1", labels: ["Bug"] }),
+      makeIssue({ id: "d", projectId: "p1", labels: [] }),
+      makeIssue({ id: "e", projectId: "p1", labels: ["Alpha"] }),
+      makeIssue({ id: "f", projectId: "p1", labels: ["Alpha"] }),
+    ];
+    const groups = groupIssuesByProject(issues, projects);
+    expect(groups[0].labelGroups.map((g) => g.label)).toEqual(["Alpha", "Bug", "Zeta", NO_LABEL_GROUP]);
+    expect(groups[0].labelGroups.map((g) => g.issues.length)).toEqual([2, 2, 1, 1]);
+  });
+});
+
+describe("labelColor", () => {
+  it("is deterministic for the same label", () => {
+    expect(labelColor("Bug")).toBe(labelColor("Bug"));
+  });
+
+  it("always returns a colour from the fixed palette, including for an empty label", () => {
+    expect(LABEL_COLORS).toContain(labelColor("Bug"));
+    expect(LABEL_COLORS).toContain(labelColor(""));
+  });
+
+  it("varies across different labels", () => {
+    const colors = new Set(["Bug", "UI", "Backend", "Docs", "Chore"].map(labelColor));
+    expect(colors.size).toBeGreaterThan(1);
   });
 });
 
