@@ -4,7 +4,7 @@
 // mocking is needed), mirroring tests/job-storage.test.ts's isolation
 // convention.
 
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -23,9 +23,11 @@ import {
   loadIssues,
   loadProjects,
   nextKey,
+  persistAttachmentFile,
   saveIssue,
   saveProject,
 } from "@/server/issue-storage";
+import { getIssueAttachmentsRoot } from "@/server/paths";
 import type { Issue, IssueActor, Project } from "@/types";
 
 let dir: string;
@@ -901,5 +903,50 @@ describe("IssueActor kinds round-trip through storage", () => {
     const reloaded = getIssue(issue.key);
     expect(reloaded?.comments.map((c) => c.author)).toEqual(actors.slice(1));
     expect(reloaded?.activity[0].actor).toEqual(actors[0]);
+  });
+});
+
+describe("persistAttachmentFile", () => {
+  it("passes a remote url through untouched", () => {
+    expect(persistAttachmentFile("CK-1", "https://example.com/a.png")).toBe("https://example.com/a.png");
+  });
+
+  it("copies a local file into the issue-attachments root, preserving the extension", () => {
+    const src = path.join(dir, "shot.jpg");
+    writeFileSync(src, "bytes");
+    const stored = persistAttachmentFile("CK-1", src);
+    expect(stored.startsWith(path.join(getIssueAttachmentsRoot(), "CK-1"))).toBe(true);
+    expect(stored.endsWith(".jpg")).toBe(true);
+    expect(readFileSync(stored, "utf-8")).toBe("bytes");
+  });
+
+  it("survives deletion of the source, which is the whole point", () => {
+    const src = path.join(dir, "transient.png");
+    writeFileSync(src, "bytes");
+    const stored = persistAttachmentFile("CK-1", src);
+    rmSync(src);
+    expect(existsSync(stored)).toBe(true);
+  });
+
+  it("leaves a file already inside the root where it is, without re-copying", () => {
+    const root = path.join(getIssueAttachmentsRoot(), "CK-2");
+    mkdirSync(root, { recursive: true });
+    const src = path.join(root, "already.jpg");
+    writeFileSync(src, "bytes");
+    expect(persistAttachmentFile("CK-2", src)).toBe(src);
+  });
+
+  it("throws for a local path that does not exist rather than storing a dead link", () => {
+    expect(() => persistAttachmentFile("CK-1", path.join(dir, "nope.jpg"))).toThrow(/does not exist/);
+  });
+
+  it("throws for a relative path", () => {
+    expect(() => persistAttachmentFile("CK-1", "relative/path.jpg")).toThrow(/absolute path or a remote url/);
+  });
+
+  it("uppercases the key so the directory matches the issue key's canonical form", () => {
+    const src = path.join(dir, "case.jpg");
+    writeFileSync(src, "bytes");
+    expect(persistAttachmentFile("ck-9", src)).toContain(path.join(getIssueAttachmentsRoot(), "CK-9"));
   });
 });

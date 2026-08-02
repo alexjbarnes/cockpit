@@ -17,6 +17,7 @@ import {
   type IssueUpdateInput,
   loadIssues,
   loadProjects,
+  persistAttachmentFile,
   saveIssue,
 } from "@/server/issue-storage";
 import { buildJob, deleteJob, getJob, getLatestRun, getRun, loadJobs, saveJob } from "@/server/job-storage";
@@ -1357,7 +1358,13 @@ async function handleToolCall(
         }
 
         const actor = actorFromCaller(caller);
-        const updated = addIssueAttachment(issue, { title, url }, actor);
+        // Copies a local file into the issue-attachments root, because the
+        // caller's path is usually one it does not own the lifetime of (a
+        // chat attachment the PTY adapter deletes on the next message, a
+        // screenshot in a temp dir). Throws for a missing file, which the
+        // outer catch turns into an isError response.
+        const storedUrl = persistAttachmentFile(issue.key, url);
+        const updated = addIssueAttachment(issue, { title, url: storedUrl }, actor);
         saveIssue(updated);
         const attachment = updated.attachments[updated.attachments.length - 1];
         return { content: [{ type: "text", text: JSON.stringify({ added: attachment, issue: updated }, null, 2) }] };

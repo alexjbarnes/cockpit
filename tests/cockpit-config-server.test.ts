@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -1620,18 +1620,51 @@ describe("cockpit-config MCP server (in-process HTTP)", () => {
     });
 
     describe("add_issue_attachment", () => {
-      it("stores the url and title, for ui-reviewer screenshots", async () => {
+      it("copies a local screenshot into the attachments root so it outlives its source", async () => {
         const created = (await callToolParsed("create_issue", { project: "ISSA", title: "Attachment test" })) as {
+          created: { key: string };
+        };
+        // The path the ui-reviewer or a session hands over is one it does not
+        // own: a temp dir it rm -rf's, or a chat attachment the PTY adapter
+        // deletes on the next message. Deleting it here is the real scenario.
+        const src = join(process.env.COCKPIT_CONFIG_DIR as string, "transient-shot.png");
+        writeFileSync(src, "png-bytes");
+        const result = (await callToolParsed("add_issue_attachment", {
+          key: created.created.key,
+          url: src,
+          title: "Mobile viewport, before fix",
+        })) as { added: { url: string; title: string }; issue: { attachments: unknown[] } };
+        rmSync(src);
+
+        expect(result.added.url).not.toBe(src);
+        expect(result.added.url).toContain(join("issue-attachments", created.created.key));
+        expect(readFileSync(result.added.url, "utf-8")).toBe("png-bytes");
+        expect(result.added.title).toBe("Mobile viewport, before fix");
+        expect(result.issue.attachments).toHaveLength(1);
+      });
+
+      it("stores a remote url verbatim, with nothing to copy", async () => {
+        const created = (await callToolParsed("create_issue", { project: "ISSA", title: "Remote attachment" })) as {
           created: { key: string };
         };
         const result = (await callToolParsed("add_issue_attachment", {
           key: created.created.key,
-          url: "/cockpit/screenshots/abc.png",
-          title: "Mobile viewport, before fix",
-        })) as { added: { url: string; title: string }; issue: { attachments: unknown[] } };
-        expect(result.added.url).toBe("/cockpit/screenshots/abc.png");
-        expect(result.added.title).toBe("Mobile viewport, before fix");
-        expect(result.issue.attachments).toHaveLength(1);
+          url: "https://example.com/shot.png",
+          title: "Remote",
+        })) as { added: { url: string } };
+        expect(result.added.url).toBe("https://example.com/shot.png");
+      });
+
+      it("refuses a local path that does not exist rather than storing a dead link", async () => {
+        const created = (await callToolParsed("create_issue", { project: "ISSA", title: "Dead link" })) as {
+          created: { key: string };
+        };
+        const result = (await callToolParsed("add_issue_attachment", {
+          key: created.created.key,
+          url: "/cockpit/screenshots/does-not-exist.png",
+          title: "Nope",
+        })) as { error?: string };
+        expect(result.error).toMatch(/does not exist/);
       });
 
       it("refuses a missing url or title", async () => {

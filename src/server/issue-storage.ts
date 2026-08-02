@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, readFileSync, unlinkSync } from "node:fs";
-import { join, resolve, sep } from "node:path";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, unlinkSync } from "node:fs";
+import { extname, join, resolve, sep } from "node:path";
 import { writeJsonAtomic } from "@/server/atomic-write";
 import { emitIssueStatusChange } from "@/server/issue-events";
-import { getCockpitDir } from "@/server/paths";
+import { getCockpitDir, getIssueAttachmentsRoot } from "@/server/paths";
 import type { Issue, IssueActivity, IssueActor, IssueAttachment, IssueComment, IssueStatus, Project } from "@/types";
 import { ISSUE_STATUSES } from "@/types";
 
@@ -593,8 +593,40 @@ export function addIssueComment(issue: Issue, body: string, actor: IssueActor): 
 }
 
 /**
+ * Copy a local attachment file into the issue-attachments root and return its
+ * new absolute path; pass remote urls and already-rooted paths through
+ * untouched.
+ *
+ * Callers hand us a path to a file they do not own the lifetime of. A session
+ * attaching an image the user pasted into chat points at
+ * ~/.cache/cockpit/attachments/<uuid>.jpg, which the PTY adapter deletes the
+ * moment that session's next message is sent (claude-pty-adapter's
+ * cleanupAttachments); the ui-reviewer's screenshots live in a temp dir it
+ * rm -rf's at teardown. Storing the caller's path means storing a link that
+ * works for minutes. Copying at attach time makes the attachment durable, and
+ * lands it in the only directory the serving route will read from.
+ */
+export function persistAttachmentFile(issueKey: string, url: string): string {
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(url)) return url; // remote: nothing to copy
+  if (!url.startsWith("/")) throw new Error(`Attachment url must be an absolute path or a remote url: ${url}`);
+
+  const root = resolve(getIssueAttachmentsRoot());
+  const src = resolve(url);
+  if (isContainedIn(root, src)) return src; // already durable (the ui-reviewer moves its own)
+  if (!existsSync(src)) throw new Error(`Attachment file does not exist: ${url}`);
+
+  const dir = join(root, issueKey.toUpperCase());
+  mkdirSync(dir, { recursive: true });
+  const dest = join(dir, `${randomUUID()}${extname(src)}`);
+  copyFileSync(src, dest);
+  return dest;
+}
+
+/**
  * Append an attachment (the ui-reviewer agent's screenshots, mainly). Pure —
- * does not persist; the caller passes the result to saveIssue().
+ * does not persist; the caller passes the result to saveIssue(). The url is
+ * stored verbatim: run it through persistAttachmentFile first when it names a
+ * local file the caller does not own.
  */
 export function addIssueAttachment(issue: Issue, input: { title: string; url: string }, actor: IssueActor): Issue {
   const now = Date.now();
