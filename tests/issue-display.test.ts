@@ -291,8 +291,8 @@ describe("actorLabel", () => {
     expect(actorLabel({ kind: "job", jobId: "j1", jobName: "Nightly build", runId: "r1" })).toBe("Nightly build");
   });
 
-  it("labels a session by its sessionName", () => {
-    expect(actorLabel({ kind: "session", sessionId: "s1", sessionName: "My session" })).toBe("My session");
+  it("labels a session generically, never by its auto-generated name", () => {
+    expect(actorLabel({ kind: "session", sessionId: "s1", sessionName: "My session" })).toBe("Session");
   });
 
   it("labels a UI user as You", () => {
@@ -375,31 +375,24 @@ describe("describeActivity", () => {
   });
 });
 
-describe("actorLabel name truncation", () => {
+describe("actorLabel", () => {
   const longName =
     "Perfect looks good now. Next sometimes when I go to an article I've never opened before it will be already scrolled half";
 
-  it("truncates an auto-named session's prompt-length name to a readable label", () => {
-    const label = actorLabel({ kind: "session", sessionId: "s1", sessionName: longName });
-    expect(label.length).toBeLessThanOrEqual(60);
-    expect(label.endsWith("…")).toBe(true);
-    expect(label.startsWith("Perfect looks good now.")).toBe(true);
+  it("labels every session actor generically — the session name is a prompt fragment, the link disambiguates", () => {
+    expect(actorLabel({ kind: "session", sessionId: "s1", sessionName: longName })).toBe("Session");
+    expect(actorLabel({ kind: "session", sessionId: "s1", sessionName: "Fix login bug" })).toBe("Session");
   });
 
-  it("collapses internal whitespace/newlines before measuring", () => {
-    const label = actorLabel({ kind: "session", sessionId: "s1", sessionName: "line one\n\nline   two" });
-    expect(label).toBe("line one line two");
-  });
-
-  it("leaves short session and job names untouched", () => {
-    expect(actorLabel({ kind: "session", sessionId: "s1", sessionName: "Fix login bug" })).toBe("Fix login bug");
+  it("keeps a short job name untouched", () => {
     expect(actorLabel({ kind: "job", jobId: "j1", jobName: "Nightly roundup", runId: "r1" })).toBe("Nightly roundup");
   });
 
-  it("truncates a long job name the same way", () => {
+  it("truncates a long job name and collapses its whitespace", () => {
     const label = actorLabel({ kind: "job", jobId: "j1", jobName: longName, runId: "r1" });
     expect(label.endsWith("…")).toBe(true);
     expect(label.length).toBeLessThanOrEqual(60);
+    expect(actorLabel({ kind: "job", jobId: "j1", jobName: "line one\n\nline   two", runId: "r1" })).toBe("line one line two");
   });
 
   it("flows through describeActivity so the sentence stays readable", () => {
@@ -409,8 +402,7 @@ describe("actorLabel name truncation", () => {
       actor: { kind: "session", sessionId: "s1", sessionName: longName },
       kind: "commented",
     });
-    expect(line.endsWith("… commented")).toBe(true);
-    expect(line.length).toBeLessThan(75);
+    expect(line).toBe("Session commented");
   });
 });
 
