@@ -217,14 +217,24 @@ export function priorityLabel(priority?: number): string {
  * response, so a future actor kind (schema evolution) or a hand-edited issues
  * file must degrade to a safe label rather than throw on a missing field.
  */
+/** Session and job names are user-authored and unbounded — cockpit auto-names
+ *  a session from its first message, so an unrenamed session's "name" is the
+ *  whole opening prompt. Untruncated, that prompt becomes the subject of every
+ *  activity sentence ("<entire prompt> commented"). */
+const ACTOR_NAME_MAX = 60;
+function trimName(name: string): string {
+  const flat = name.replace(/\s+/g, " ").trim();
+  return flat.length > ACTOR_NAME_MAX ? `${flat.slice(0, ACTOR_NAME_MAX - 1).trimEnd()}…` : flat;
+}
+
 export function actorLabel(actor: IssueActor): string {
   switch (actor.kind) {
     case "assistant":
       return "Cockpit Assistant";
     case "job":
-      return actor.jobName;
+      return trimName(actor.jobName);
     case "session":
-      return actor.sessionName;
+      return trimName(actor.sessionName);
     case "user":
       return "You";
     default:

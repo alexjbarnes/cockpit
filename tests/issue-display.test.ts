@@ -372,3 +372,42 @@ describe("describeActivity", () => {
     expect(describeActivity(entry)).toBe("You updated this issue");
   });
 });
+
+describe("actorLabel name truncation", () => {
+  const longName =
+    "Perfect looks good now. Next sometimes when I go to an article I've never opened before it will be already scrolled half";
+
+  it("truncates an auto-named session's prompt-length name to a readable label", () => {
+    const label = actorLabel({ kind: "session", sessionId: "s1", sessionName: longName });
+    expect(label.length).toBeLessThanOrEqual(60);
+    expect(label.endsWith("…")).toBe(true);
+    expect(label.startsWith("Perfect looks good now.")).toBe(true);
+  });
+
+  it("collapses internal whitespace/newlines before measuring", () => {
+    const label = actorLabel({ kind: "session", sessionId: "s1", sessionName: "line one\n\nline   two" });
+    expect(label).toBe("line one line two");
+  });
+
+  it("leaves short session and job names untouched", () => {
+    expect(actorLabel({ kind: "session", sessionId: "s1", sessionName: "Fix login bug" })).toBe("Fix login bug");
+    expect(actorLabel({ kind: "job", jobId: "j1", jobName: "Nightly roundup", runId: "r1" })).toBe("Nightly roundup");
+  });
+
+  it("truncates a long job name the same way", () => {
+    const label = actorLabel({ kind: "job", jobId: "j1", jobName: longName, runId: "r1" });
+    expect(label.endsWith("…")).toBe(true);
+    expect(label.length).toBeLessThanOrEqual(60);
+  });
+
+  it("flows through describeActivity so the sentence stays readable", () => {
+    const line = describeActivity({
+      id: "1",
+      createdAt: 1,
+      actor: { kind: "session", sessionId: "s1", sessionName: longName },
+      kind: "commented",
+    });
+    expect(line.endsWith("… commented")).toBe(true);
+    expect(line.length).toBeLessThan(75);
+  });
+});
