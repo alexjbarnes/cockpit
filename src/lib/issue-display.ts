@@ -251,22 +251,48 @@ export function actorLabel(actor: IssueActor): string {
  * defensive for the same reason as actorLabel's.
  */
 export function describeActivity(entry: IssueActivity): string {
-  const who = actorLabel(entry.actor);
+  return `${actorLabel(entry.actor)} ${describeActivityAction(entry)}`;
+}
+
+/**
+ * The sentence minus its subject ("created this issue", "changed status from
+ * A to B"), so the detail page can render the actor separately — a session
+ * actor becomes a link to that session, which a single pre-joined string
+ * cannot express.
+ */
+export function describeActivityAction(entry: IssueActivity): string {
   switch (entry.kind) {
     case "created":
-      return `${who} created this issue`;
+      return "created this issue";
     case "commented":
-      return `${who} commented`;
+      return "commented";
     case "attachment_added":
-      return `${who} added an attachment`;
+      return "added an attachment";
     case "field_changed": {
-      if (entry.field === "status") return `${who} changed status from ${entry.from} to ${entry.to}`;
+      if (entry.field === "status") return `changed status from ${entry.from} to ${entry.to}`;
       if (entry.field === "priority") {
-        return `${who} changed priority from ${priorityLabel(entry.from as number | undefined)} to ${priorityLabel(entry.to as number | undefined)}`;
+        return `changed priority from ${priorityLabel(entry.from as number | undefined)} to ${priorityLabel(entry.to as number | undefined)}`;
       }
-      return `${who} changed the ${entry.field ?? "issue"}`;
+      return `changed the ${entry.field ?? "issue"}`;
     }
     default:
-      return `${who} updated this issue`;
+      return "updated this issue";
+  }
+}
+
+/**
+ * Where an actor can be opened, or undefined for the kinds that have no page
+ * (user, assistant). A session links to its transcript in history view; the
+ * session may have ended long ago, which is exactly what historyView renders.
+ * A job links to its job page.
+ */
+export function actorHref(actor: IssueActor): string | undefined {
+  switch (actor.kind) {
+    case "session":
+      return `/sessions/${actor.sessionId}?historyView=true`;
+    case "job":
+      return `/jobs/${actor.jobId}`;
+    default:
+      return undefined;
   }
 }

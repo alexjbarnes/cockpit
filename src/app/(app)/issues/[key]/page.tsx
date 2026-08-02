@@ -1,6 +1,7 @@
 "use client";
 
 import { ArrowLeft, Loader2, Paperclip, Pencil, X } from "lucide-react";
+import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { usePageHeader } from "@/components/app-shell";
@@ -8,10 +9,23 @@ import { MarkdownRender } from "@/components/markdown-render";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { actorLabel, describeActivity, ISSUE_STATUSES } from "@/lib/issue-display";
-import type { Issue, IssueStatus, Project } from "@/types";
+import { actorHref, actorLabel, describeActivityAction, ISSUE_STATUSES } from "@/lib/issue-display";
+import type { Issue, IssueActor, IssueStatus, Project } from "@/types";
 
 const SELECT_CLASS = "rounded-md border bg-background px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring";
+
+/** The actor's name, as a link to its session transcript or job page when it
+ *  has one (session/job), plain text otherwise (user, assistant). */
+function ActorName({ actor, className }: { actor: IssueActor; className?: string }) {
+  const href = actorHref(actor);
+  const label = actorLabel(actor);
+  if (!href) return <span className={className}>{label}</span>;
+  return (
+    <Link href={href} className={`${className ?? ""} underline-offset-2 hover:underline`.trim()}>
+      {label}
+    </Link>
+  );
+}
 
 function formatDate(ts: number): string {
   return new Date(ts).toLocaleString();
@@ -356,7 +370,7 @@ export default function IssueDetailPage() {
             {issue.comments.map((c) => (
               <div key={c.id} className="border rounded-md p-3">
                 <div className="flex items-center gap-2 text-xs text-muted-foreground mb-1">
-                  <span className="font-medium text-foreground">{actorLabel(c.author)}</span>
+                  <ActorName actor={c.author} className="font-medium text-foreground" />
                   <span>{formatDate(c.createdAt)}</span>
                 </div>
                 <MarkdownRender content={c.body} variant="lite" />
@@ -388,7 +402,9 @@ export default function IssueDetailPage() {
           <CardContent className="space-y-2">
             {[...issue.activity].reverse().map((entry) => (
               <div key={entry.id} className="flex items-center gap-2 text-xs text-muted-foreground">
-                <span>{describeActivity(entry)}</span>
+                <span>
+                  <ActorName actor={entry.actor} /> {describeActivityAction(entry)}
+                </span>
                 <span>·</span>
                 <span>{formatDate(entry.createdAt)}</span>
               </div>

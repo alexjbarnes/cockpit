@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  actorHref,
   actorLabel,
   describeActivity,
+  describeActivityAction,
   filterByQuickFilter,
   filterIssues,
   groupIssuesByProject,
@@ -409,5 +411,37 @@ describe("actorLabel name truncation", () => {
     });
     expect(line.endsWith("… commented")).toBe(true);
     expect(line.length).toBeLessThan(75);
+  });
+});
+
+describe("actorHref", () => {
+  it("links a session actor to its transcript in history view", () => {
+    expect(actorHref({ kind: "session", sessionId: "abc-123", sessionName: "n" })).toBe("/sessions/abc-123?historyView=true");
+  });
+
+  it("links a job actor to its job page", () => {
+    expect(actorHref({ kind: "job", jobId: "j-9", jobName: "n", runId: "r" })).toBe("/jobs/j-9");
+  });
+
+  it("gives user and assistant actors no link", () => {
+    expect(actorHref({ kind: "user" })).toBeUndefined();
+    expect(actorHref({ kind: "assistant" })).toBeUndefined();
+  });
+});
+
+describe("describeActivityAction", () => {
+  it("is describeActivity minus the actor, for every kind", () => {
+    const actor = { kind: "user" as const };
+    const entries = [
+      { id: "1", createdAt: 1, actor, kind: "created" as const },
+      { id: "2", createdAt: 1, actor, kind: "commented" as const },
+      { id: "3", createdAt: 1, actor, kind: "attachment_added" as const },
+      { id: "4", createdAt: 1, actor, kind: "field_changed" as const, field: "status" as const, from: "Backlog", to: "Refining" },
+      { id: "5", createdAt: 1, actor, kind: "field_changed" as const, field: "priority" as const, from: 0, to: 2 },
+      { id: "6", createdAt: 1, actor, kind: "field_changed" as const, field: "labels" as const },
+    ];
+    for (const e of entries) {
+      expect(describeActivity(e)).toBe(`You ${describeActivityAction(e)}`);
+    }
   });
 });
