@@ -2261,8 +2261,8 @@ Additional Cockpit rules beyond the CLI's defaults:
       subagentModel = resolvedSub ? resolvedSub.model.modelId : session.modelSlots.subagent;
     }
 
-    // Catalog-backed builtin sessions (openrouter, zen, deepseek) pin every
-    // default-model slot to the session's models — otherwise the CLI's
+    // Catalog-backed builtin sessions (openrouter, zen, zen-go, deepseek) pin
+    // every default-model slot to the session's models — otherwise the CLI's
     // internal opus/sonnet/haiku-class utility calls route to Claude models
     // billed on the provider's credits behind the user's back.
     let providerEnvVars = resolved?.provider.envVars;

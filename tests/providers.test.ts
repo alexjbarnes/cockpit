@@ -44,12 +44,13 @@ describe("providers", () => {
     const { getProviders } = await import("@/server/providers");
     const providers = getProviders();
 
-    expect(providers.length).toBe(5);
+    expect(providers.length).toBe(6);
     expect(providers[0].id).toBe("anthropic");
     expect(providers[1].id).toBe("openrouter");
     expect(providers[2].id).toBe("zen");
-    expect(providers[3].id).toBe("deepseek");
-    expect(providers[4].id).toBe("or-123");
+    expect(providers[3].id).toBe("zen-go");
+    expect(providers[4].id).toBe("deepseek");
+    expect(providers[5].id).toBe("or-123");
   });
 
   it("openrouter built-in accepts key + enabled set, derives env, and rejects deletion", async () => {
@@ -231,6 +232,190 @@ describe("providers", () => {
     expect(zen.enabledModels).toEqual([]);
     // models.dev reasoning_options land as effortLevels, unknown values dropped
     expect(zen.models[0].effortLevels).toEqual(["high", "max"]);
+    vi.unstubAllGlobals();
+  });
+
+  it("go built-in stores key + models, exposes proxy upstream, and rejects deletion", async () => {
+    const fs = await import("node:fs");
+    vi.mocked(fs.readFileSync).mockImplementation(() => {
+      throw new Error("ENOENT");
+    });
+
+    const { deleteProvider, getProviders, resolveProxyUpstream, updateProvider } = await import("@/server/providers");
+
+    const before = getProviders().find((p) => p.id === "zen-go");
+    expect(before?.isBuiltin).toBe(true);
+    expect(before?.envVars).toEqual({});
+    expect(resolveProxyUpstream("zen-go")).toBeNull();
+
+    const goEntry = [
+      {
+        id: "zen-go",
+        name: "OpenCode Go",
+        isBuiltin: true,
+        envVars: { OPENCODE_GO_API_KEY: "zgk-1" },
+        models: [{ modelId: "grok-code-fast-2", displayName: "grok-code-fast-2", effortLevels: [], contextSizes: [] }],
+        enabledModels: ["grok-code-fast-2"],
+      },
+    ];
+    vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(goEntry));
+
+    const upstream = resolveProxyUpstream("zen-go");
+    expect(upstream).toEqual({
+      baseUrl: "https://opencode.ai/zen/go/v1",
+      apiKey: "zgk-1",
+      modelIds: ["grok-code-fast-2"],
+      effortByModel: {},
+    });
+
+    const updated = updateProvider("zen-go", { enabledModels: [] });
+    expect(updated.id).toBe("zen-go");
+    // without a running proxy in this graph only the connected marker shows
+    expect(updated.envVars.OPENCODE_GO_API_KEY).toBe("zgk-1");
+    expect(updated.envVars.ANTHROPIC_BASE_URL).toBeUndefined();
+
+    expect(() => deleteProvider("zen-go")).toThrow(/built-in/);
+  });
+
+  it("syncGoModels stores models, enables all on first connect, and stamps syncedAt", async () => {
+    const fs = await import("node:fs");
+    vi.mocked(fs.readFileSync).mockImplementation(() => {
+      throw new Error("ENOENT");
+    });
+    vi.mocked(fs.writeFileSync).mockImplementation(() => {});
+    vi.mocked(fs.mkdirSync).mockImplementation(() => "");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (String(url).includes("models.dev")) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              "opencode-go": {
+                models: {
+                  "grok-code-fast-2": {
+                    name: "Grok Code Fast 2",
+                    cost: { input: 0.2, output: 1.5 },
+                    limit: { context: 256000 },
+                    tool_call: true,
+                    reasoning: false,
+                  },
+                  "big-pickle-lite": {
+                    name: "Big Pickle Lite",
+                    cost: { input: 0, output: 0 },
+                    limit: { context: 128000 },
+                    tool_call: true,
+                  },
+                },
+              },
+            }),
+          };
+        }
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ data: [{ id: "grok-code-fast-2" }, { id: "big-pickle-lite" }, { id: "mimo-v2.5-free" }] }),
+        };
+      }) as unknown as typeof fetch,
+    );
+
+    const { syncGoModels } = await import("@/server/providers");
+    const result = await syncGoModels("zgk-9");
+    expect(result).toEqual({ ok: true, modelCount: 3 });
+
+    const written = JSON.parse(vi.mocked(fs.writeFileSync).mock.calls.at(-1)?.[1] as string);
+    const go = written.find((p: { id: string }) => p.id === "zen-go");
+    expect(go.envVars.OPENCODE_GO_API_KEY).toBe("zgk-9");
+    expect(go.enabledModels).toEqual(["grok-code-fast-2", "big-pickle-lite", "mimo-v2.5-free"]);
+
+    const byId = Object.fromEntries(go.models.map((m: { modelId: string }) => [m.modelId, m]));
+    // enriched from models.dev's "opencode-go" key: pricing per M, raw context, capability flags
+    expect(byId["grok-code-fast-2"]).toMatchObject({
+      displayName: "Grok Code Fast 2",
+      pricing: { inPerM: 0.2, outPerM: 1.5 },
+      contextLength: 256000,
+      free: false,
+      supportsTools: true,
+    });
+    // zero cost marks free even without the "-free" suffix
+    expect(byId["big-pickle-lite"]).toMatchObject({ free: true, pricing: { inPerM: 0, outPerM: 0 } });
+    // no models.dev entry: the "-free" suffix is the fallback signal
+    expect(byId["mimo-v2.5-free"]).toMatchObject({ free: true });
+    expect(byId["mimo-v2.5-free"].pricing).toBeUndefined();
+    expect(typeof go.syncedAt).toBe("number");
+    vi.unstubAllGlobals();
+  });
+
+  it("syncGoModels keyless refreshes the list without enabling models or storing a key", async () => {
+    const fs = await import("node:fs");
+    vi.mocked(fs.readFileSync).mockImplementation(() => {
+      throw new Error("ENOENT");
+    });
+    vi.mocked(fs.writeFileSync).mockImplementation(() => {});
+    vi.mocked(fs.mkdirSync).mockImplementation(() => "");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (String(url).includes("models.dev")) {
+          return { ok: true, status: 200, json: async () => ({ "opencode-go": { models: {} } }) };
+        }
+        // the public go list gets no Authorization header without a key
+        expect((init?.headers as Record<string, string> | undefined)?.Authorization).toBeUndefined();
+        return { ok: true, status: 200, json: async () => ({ data: [{ id: "kimi-k3" }] }) };
+      }) as unknown as typeof fetch,
+    );
+
+    const { syncGoModels } = await import("@/server/providers");
+    const result = await syncGoModels();
+    expect(result).toEqual({ ok: true, modelCount: 1 });
+
+    const written = JSON.parse(vi.mocked(fs.writeFileSync).mock.calls.at(-1)?.[1] as string);
+    const go = written.find((p: { id: string }) => p.id === "zen-go");
+    expect(go.envVars.OPENCODE_GO_API_KEY).toBeUndefined();
+    expect(go.enabledModels).toEqual([]);
+    vi.unstubAllGlobals();
+  });
+
+  it("syncGoModels reports a non-OK models fetch as a failure without touching storage", async () => {
+    const fs = await import("node:fs");
+    vi.mocked(fs.readFileSync).mockImplementation(() => {
+      throw new Error("ENOENT");
+    });
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: false, status: 503, json: async () => ({}) })) as unknown as typeof fetch);
+
+    const { syncGoModels } = await import("@/server/providers");
+    expect(await syncGoModels("zgk-1")).toEqual({ ok: false, error: "OpenCode Go models fetch failed: HTTP 503" });
+    expect(fs.writeFileSync).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+
+  it("syncGoModels reports an empty model list as a failure", async () => {
+    const fs = await import("node:fs");
+    vi.mocked(fs.readFileSync).mockImplementation(() => {
+      throw new Error("ENOENT");
+    });
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ data: [] }) })) as unknown as typeof fetch);
+
+    const { syncGoModels } = await import("@/server/providers");
+    expect(await syncGoModels()).toEqual({ ok: false, error: "OpenCode Go models fetch returned no models" });
+    vi.unstubAllGlobals();
+  });
+
+  it("syncGoModels surfaces a network throw as a failure", async () => {
+    const fs = await import("node:fs");
+    vi.mocked(fs.readFileSync).mockImplementation(() => {
+      throw new Error("ENOENT");
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new Error("network down");
+      }) as unknown as typeof fetch,
+    );
+
+    const { syncGoModels } = await import("@/server/providers");
+    expect(await syncGoModels()).toEqual({ ok: false, error: "network down" });
     vi.unstubAllGlobals();
   });
 
@@ -458,6 +643,30 @@ describe("providers", () => {
     const up = fresh.resolveProxyUpstream("openrouter");
     expect(up).toMatchObject({ baseUrl: "https://openrouter.ai/api", apiKey: "sk-or-x", wireFormat: "anthropic" });
     expect(resolveProxyUpstream("openrouter")).toMatchObject({ wireFormat: "anthropic" });
+  });
+
+  it("go built-in exposes the proxy URL and placeholder auth token when the format proxy is active", async () => {
+    const fs = await import("node:fs");
+    const goEntry = () =>
+      JSON.stringify([{ id: "zen-go", name: "OpenCode Go", isBuiltin: true, envVars: { OPENCODE_GO_API_KEY: "zgk-1" }, models: [] }]);
+    vi.mocked(fs.readFileSync).mockReturnValue(goEntry());
+
+    const { getActiveFormatProxy, setActiveFormatProxy } = await import("@/server/format-proxy");
+    setActiveFormatProxy({ isRunning: true, getUrl: (id: string) => `http://127.0.0.1:9999/${id}` } as unknown as ReturnType<
+      typeof getActiveFormatProxy
+    > & { isRunning: boolean });
+    // cache is mtime-gated; force a rebuild by re-importing fresh state
+    vi.resetModules();
+    vi.mocked(fs.readFileSync).mockReturnValue(goEntry());
+
+    const fresh = await import("@/server/providers");
+    const go = fresh.getProviders().find((p) => p.id === "zen-go");
+    expect(go?.envVars.ANTHROPIC_BASE_URL).toBe("http://127.0.0.1:9999/zen-go");
+    // the CLI authenticates to the local proxy with a placeholder; the proxy
+    // itself injects the real stored key upstream, so the CLI never sees it.
+    expect(go?.envVars.ANTHROPIC_AUTH_TOKEN).toBe("cockpit-format-proxy");
+    expect(go?.envVars.ANTHROPIC_API_KEY).toBe("");
+    expect(go?.envVars.OPENCODE_GO_API_KEY).toBe("zgk-1");
   });
 
   it("openRouterModelEnv pins every default-model slot", async () => {

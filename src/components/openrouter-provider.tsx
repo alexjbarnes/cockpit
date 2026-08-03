@@ -321,9 +321,10 @@ function formatAgo(ts: number): string {
   return `${Math.floor(hours / 24)}d ago`;
 }
 
-/** Connect card shared by the key-only built-ins (zen, deepseek). Their model
- *  lists sync keylessly (zen /models is public; deepseek's catalog comes from
- *  models.dev), so model and free counts show before a key is connected. */
+/** Connect card shared by the key-only built-ins (zen, zen-go, deepseek).
+ *  Their model lists sync keylessly (zen/go /models are public; deepseek's
+ *  catalog comes from models.dev), so model and free counts show before a key
+ *  is connected. */
 export function BuiltinKeyCard({
   provider,
   keyEnvVar,
@@ -422,6 +423,20 @@ export function ZenCard(props: { provider: Provider; onChanged: () => void; onMa
       keyEnvVar="OPENCODE_API_KEY"
       tagline="OpenAI wire format · via cockpit proxy"
       keyPlaceholder="Zen API key…"
+    />
+  );
+}
+
+/** OpenCode Go — the open-model subset of Zen at a separate base URL, its own
+ *  subscription with dollar-based limits. Accepts the same key value as Zen,
+ *  but is stored and connected independently. */
+export function GoCard(props: { provider: Provider; onChanged: () => void; onManage: () => void }) {
+  return (
+    <BuiltinKeyCard
+      {...props}
+      keyEnvVar="OPENCODE_GO_API_KEY"
+      tagline="OpenAI wire format · via cockpit proxy"
+      keyPlaceholder="Go API key…"
     />
   );
 }

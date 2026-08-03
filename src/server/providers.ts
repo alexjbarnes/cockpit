@@ -8,10 +8,18 @@ import { catalogModels, loadCatalog, OPENROUTER_PROVIDER_ID, openRouterBaseUrl }
 import type { Provider, ProviderModel, ThinkingLevel } from "@/types";
 
 export const OPENCODE_ZEN_PROVIDER_ID = "zen";
+export const OPENCODE_ZEN_GO_PROVIDER_ID = "zen-go";
 export const DEEPSEEK_PROVIDER_ID = "deepseek";
 /** Test escape hatches mirror COCKPIT_OPENROUTER_BASE_URL. */
 export function zenBaseUrl(): string {
   return process.env.COCKPIT_ZEN_BASE_URL || "https://opencode.ai/zen/v1";
+}
+/** OpenCode Go: same wire format and key style as Zen, but a separate base
+ *  URL serving the open-model ("lite") subset, with its own dollar-based
+ *  subscription limits distinct from Zen's balance — a different service,
+ *  not a mode of Zen (confirmed live: a Zen model id 401s on this endpoint). */
+export function zenGoBaseUrl(): string {
+  return process.env.COCKPIT_ZEN_GO_BASE_URL || "https://opencode.ai/zen/go/v1";
 }
 export function deepseekBaseUrl(): string {
   return process.env.COCKPIT_DEEPSEEK_BASE_URL || "https://api.deepseek.com/anthropic";
@@ -22,10 +30,15 @@ function deepseekApiRoot(): string {
   return deepseekBaseUrl().replace(/\/anthropic\/?$/, "");
 }
 
-const BUILTIN_CONFIG_IDS = new Set<string>([OPENROUTER_PROVIDER_ID, OPENCODE_ZEN_PROVIDER_ID, DEEPSEEK_PROVIDER_ID]);
+const BUILTIN_CONFIG_IDS = new Set<string>([
+  OPENROUTER_PROVIDER_ID,
+  OPENCODE_ZEN_PROVIDER_ID,
+  OPENCODE_ZEN_GO_PROVIDER_ID,
+  DEEPSEEK_PROVIDER_ID,
+]);
 
-/** Catalog-backed built-ins (openrouter, zen, deepseek). Sessions on their
- *  models get the pinned default-model env and derived wiring at spawn. */
+/** Catalog-backed built-ins (openrouter, zen, zen-go, deepseek). Sessions on
+ *  their models get the pinned default-model env and derived wiring at spawn. */
 export function isBuiltinCatalogProvider(id: string): boolean {
   return BUILTIN_CONFIG_IDS.has(id);
 }
@@ -35,6 +48,10 @@ export function isBuiltinCatalogProvider(id: string): boolean {
  *  the env var holding the stored key and the upstream base. */
 const OPENAI_WIRE_BUILTINS: Record<string, { name: string; keyEnvVar: string; baseUrl: () => string }> = {
   [OPENCODE_ZEN_PROVIDER_ID]: { name: "OpenCode Zen", keyEnvVar: "OPENCODE_API_KEY", baseUrl: zenBaseUrl },
+  // Go accepts the same key value as a connected Zen key, but is billed as a
+  // separate subscription, so it is stored under its own env var rather than
+  // sharing OPENCODE_API_KEY — connecting it is a deliberate separate step.
+  [OPENCODE_ZEN_GO_PROVIDER_ID]: { name: "OpenCode Go", keyEnvVar: "OPENCODE_GO_API_KEY", baseUrl: zenGoBaseUrl },
 };
 
 function prefsDir(): string {
@@ -153,6 +170,7 @@ function loadBuiltinStored(id: string): Provider | undefined {
 const BUILTIN_NAMES: Record<string, string> = {
   [OPENROUTER_PROVIDER_ID]: "OpenRouter",
   [OPENCODE_ZEN_PROVIDER_ID]: "OpenCode Zen",
+  [OPENCODE_ZEN_GO_PROVIDER_ID]: "OpenCode Go",
   [DEEPSEEK_PROVIDER_ID]: "DeepSeek",
 };
 
@@ -301,8 +319,8 @@ const modelsDevCache = new Map<string, { at: number; models: Record<string, Mode
 /** Pricing/capability metadata from models.dev — the OpenCode team's model
  *  database (the zen docs pricing table is built from it): cost per 1M,
  *  context windows, capability flags, and reasoning effort values, keyed by
- *  models.dev provider id ("opencode" for zen, "deepseek"). One fetch fills
- *  the cache for every provider. Best-effort: a failed fetch returns {} and
+ *  models.dev provider id ("opencode" for zen, "opencode-go" for go, "deepseek").
+ *  One fetch fills the cache for every provider. Best-effort: a failed fetch returns {} and
  *  callers degrade to bare model lists. */
 async function fetchModelsDevModels(providerKey: string): Promise<Record<string, ModelsDevEntry>> {
   const hit = modelsDevCache.get(providerKey);
@@ -397,6 +415,31 @@ export async function syncZenModels(keyOverride?: string): Promise<{ ok: boolean
   }
 }
 
+/** Same shape as syncZenModels, against Go's base URL and its models.dev key
+ *  ("opencode-go"). Go's /models is public too, so a keyless sync still
+ *  refreshes the browsable list before anyone connects a key. */
+export async function syncGoModels(keyOverride?: string): Promise<{ ok: boolean; modelCount?: number; error?: string }> {
+  const stored = loadBuiltinStored(OPENCODE_ZEN_GO_PROVIDER_ID);
+  const apiKey = keyOverride ?? stored?.envVars?.OPENCODE_GO_API_KEY;
+  try {
+    const res = await fetch(`${zenGoBaseUrl()}/models`, {
+      headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : {},
+      signal: AbortSignal.timeout(30_000),
+    });
+    if (!res.ok) return { ok: false, error: `OpenCode Go models fetch failed: HTTP ${res.status}` };
+    const body = (await res.json()) as { data?: Array<{ id?: string }> };
+    const ids = (body.data ?? []).map((m) => m.id).filter((id): id is string => !!id);
+    if (ids.length === 0) return { ok: false, error: "OpenCode Go models fetch returned no models" };
+
+    const meta = await fetchModelsDevModels("opencode-go");
+    const models = ids.map((id) => modelFromMeta(id, meta[id]));
+    saveSyncedBuiltin(OPENCODE_ZEN_GO_PROVIDER_ID, "OPENCODE_GO_API_KEY", stored, apiKey, models);
+    return { ok: true, modelCount: models.length };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
 /** DeepSeek's catalog comes from models.dev (public, keyless); when a key is
  *  present the authenticated /v1/models list — DeepSeek 401s bad keys, unlike
  *  zen's open endpoint, so connect validation is real — becomes the id source
@@ -431,9 +474,9 @@ export async function syncDeepSeekModels(keyOverride?: string): Promise<{ ok: bo
 const BUILTIN_SYNC_INTERVAL_MS = 24 * 60 * 60 * 1000;
 let builtinSyncTimer: ReturnType<typeof setInterval> | null = null;
 
-/** Boot-time plus daily refresh of the proxied built-ins' model lists. Both
- *  sources are public (zen /models, models.dev), so this runs whether or not
- *  a key is connected — the providers page shows model and free counts before
+/** Boot-time plus daily refresh of the proxied built-ins' model lists. All
+ *  sources are public (zen/go /models, models.dev), so this runs whether or
+ *  not a key is connected — the providers page shows model and free counts before
  *  connect, and connected installs stay fresh without manual syncs. Failures
  *  stay silent (best-effort; the next tick retries). */
 export function startBuiltinModelSync(): void {
@@ -441,6 +484,7 @@ export function startBuiltinModelSync(): void {
   const run = () => {
     const syncs: Array<[string, () => Promise<unknown>]> = [
       [OPENCODE_ZEN_PROVIDER_ID, () => syncZenModels()],
+      [OPENCODE_ZEN_GO_PROVIDER_ID, () => syncGoModels()],
       [DEEPSEEK_PROVIDER_ID, () => syncDeepSeekModels()],
     ];
     for (const [id, sync] of syncs) {
@@ -495,6 +539,7 @@ function rebuildCache(custom: Provider[]): void {
     buildAnthropicProvider(),
     buildOpenRouterProvider(loadBuiltinStored(OPENROUTER_PROVIDER_ID)),
     buildOpenAIWireProvider(OPENCODE_ZEN_PROVIDER_ID, loadBuiltinStored(OPENCODE_ZEN_PROVIDER_ID)),
+    buildOpenAIWireProvider(OPENCODE_ZEN_GO_PROVIDER_ID, loadBuiltinStored(OPENCODE_ZEN_GO_PROVIDER_ID)),
     buildDeepSeekProvider(loadBuiltinStored(DEEPSEEK_PROVIDER_ID)),
     ...custom,
   ];
