@@ -4,6 +4,10 @@ import path from "path";
 export default defineConfig({
   test: {
     globals: true,
+    // Points COCKPIT_CONFIG_DIR at a throwaway dir for every test file, so a
+    // suite that forgets to isolate cannot touch the real ~/.cockpit. See the
+    // file's own comment for the password-deletion bug that prompted it.
+    setupFiles: ["tests/global-setup.ts"],
     // Playwright specs in tests/integration/ run via `npm run test:integration`,
     // not vitest. Excluding them here keeps them from being discovered.
     exclude: ["node_modules/**", "tests/integration/**"],

@@ -1,22 +1,36 @@
-import { existsSync, unlinkSync } from "node:fs";
-import { homedir } from "node:os";
+// These tests set and delete a real password file, so they MUST run against a
+// throwaway COCKPIT_CONFIG_DIR (the isolation convention the rest of tests/
+// follows). They previously hardcoded homedir()/.cockpit and unlinked it in
+// beforeEach AND afterEach, so every `npx vitest run` silently deleted the
+// developer's own password — and an interrupted run left the real file holding
+// a test password like "my-secret", which presents as a corrupted password
+// rather than a missing one.
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const PASSWORD_FILE = path.join(homedir(), ".cockpit", "password.json");
+let dir: string;
+let prevConfigDir: string | undefined;
 
-function cleanupPasswordFile() {
-  if (existsSync(PASSWORD_FILE)) unlinkSync(PASSWORD_FILE);
+/** The password file inside this test's throwaway config dir — never the real
+ *  one under homedir(). */
+function passwordFile(): string {
+  return path.join(dir, "password.json");
 }
 
 describe("auth", () => {
   beforeEach(() => {
     vi.resetModules();
-    cleanupPasswordFile();
+    dir = mkdtempSync(path.join(tmpdir(), "cockpit-auth-"));
+    prevConfigDir = process.env.COCKPIT_CONFIG_DIR;
+    process.env.COCKPIT_CONFIG_DIR = dir;
   });
 
   afterEach(() => {
-    cleanupPasswordFile();
+    if (prevConfigDir === undefined) delete process.env.COCKPIT_CONFIG_DIR;
+    else process.env.COCKPIT_CONFIG_DIR = prevConfigDir;
+    rmSync(dir, { recursive: true, force: true });
   });
 
   it("extracts token from query string", async () => {
@@ -239,24 +253,24 @@ describe("auth", () => {
   describe("readPasswordFile edge cases", () => {
     it("handles empty password file", async () => {
       const fs = await import("node:fs");
-      fs.mkdirSync(path.dirname(PASSWORD_FILE), { recursive: true });
-      fs.writeFileSync(PASSWORD_FILE, "");
+      fs.mkdirSync(path.dirname(passwordFile()), { recursive: true });
+      fs.writeFileSync(passwordFile(), "");
       const { needsSetup } = await import("@/server/auth");
       expect(needsSetup()).toBe(true);
     });
 
     it("handles password file with missing hash field", async () => {
       const fs = await import("node:fs");
-      fs.mkdirSync(path.dirname(PASSWORD_FILE), { recursive: true });
-      fs.writeFileSync(PASSWORD_FILE, JSON.stringify({ salt: "abc" }));
+      fs.mkdirSync(path.dirname(passwordFile()), { recursive: true });
+      fs.writeFileSync(passwordFile(), JSON.stringify({ salt: "abc" }));
       const { needsSetup } = await import("@/server/auth");
       expect(needsSetup()).toBe(true);
     });
 
     it("handles password file with invalid JSON", async () => {
       const fs = await import("node:fs");
-      fs.mkdirSync(path.dirname(PASSWORD_FILE), { recursive: true });
-      fs.writeFileSync(PASSWORD_FILE, "{broken json");
+      fs.mkdirSync(path.dirname(passwordFile()), { recursive: true });
+      fs.writeFileSync(passwordFile(), "{broken json");
       const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
       const { needsSetup } = await import("@/server/auth");
       expect(needsSetup()).toBe(true);

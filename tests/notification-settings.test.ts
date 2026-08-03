@@ -18,6 +18,10 @@ const CONFIG_FILE = join(CONFIG_DIR, "notifications.json");
 
 describe("notification-settings", () => {
   beforeEach(() => {
+    // This suite isolates by mocking homedir() instead of the env var, and
+    // getCockpitDir() prefers COCKPIT_CONFIG_DIR — so drop the blanket one
+    // tests/global-setup.ts sets, or it would win over the mock.
+    delete process.env.COCKPIT_CONFIG_DIR;
     vi.resetModules();
     mkdirSync(CONFIG_DIR, { recursive: true });
   });

@@ -31,6 +31,10 @@ function writeFakeLock(jobId: string, pid: number, runId: string): void {
 }
 
 beforeEach(() => {
+  // This suite isolates by mocking homedir() instead of the env var, and
+  // getCockpitDir() prefers COCKPIT_CONFIG_DIR — so drop the blanket one
+  // tests/global-setup.ts sets, or it would win over the mock.
+  delete process.env.COCKPIT_CONFIG_DIR;
   mkdirSync(LOCKS_DIR, { recursive: true });
 });
 
