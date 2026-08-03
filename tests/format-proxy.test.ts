@@ -110,6 +110,85 @@ describe("anthropicToOpenAIRequest", () => {
   });
 });
 
+describe("anthropicToOpenAIRequest reasoning round trip", () => {
+  // The response direction turns an upstream reasoning_content into an
+  // Anthropic thinking block, so the CLI replays that block in history. Not
+  // sending it back broke every multi-turn zen session on
+  // deepseek-v4-flash-free with HTTP 400 "The `reasoning_content` in the
+  // thinking mode must be passed back to the API".
+  it("sends an assistant turn's thinking block back as reasoning_content", () => {
+    const out = anthropicToOpenAIRequest({
+      model: "deepseek-v4-flash-free",
+      messages: [
+        { role: "user", content: "hi" },
+        {
+          role: "assistant",
+          content: [
+            { type: "thinking", thinking: "The user says hi.", signature: "" },
+            { type: "text", text: "Hello." },
+          ],
+        },
+        { role: "user", content: "again" },
+      ],
+    } as never);
+    const assistant = (out.messages as Array<Record<string, unknown>>).find((m) => m.role === "assistant");
+    expect(assistant?.reasoning_content).toBe("The user says hi.");
+    expect(assistant?.content).toBe("Hello.");
+  });
+
+  it("joins multiple thinking blocks in order", () => {
+    const out = anthropicToOpenAIRequest({
+      model: "m",
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            { type: "thinking", thinking: "first" },
+            { type: "thinking", thinking: "second" },
+          ],
+        },
+      ],
+    } as never);
+    const assistant = (out.messages as Array<Record<string, unknown>>)[0];
+    expect(assistant.reasoning_content).toBe("first\nsecond");
+  });
+
+  it("keeps thinking alongside tool_calls, the shape that actually failed", () => {
+    const out = anthropicToOpenAIRequest({
+      model: "m",
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            { type: "thinking", thinking: "I should read the file." },
+            { type: "tool_use", id: "t1", name: "Read", input: { path: "a.ts" } },
+          ],
+        },
+      ],
+    } as never);
+    const assistant = (out.messages as Array<Record<string, unknown>>)[0];
+    expect(assistant.reasoning_content).toBe("I should read the file.");
+    expect((assistant.tool_calls as unknown[]).length).toBe(1);
+  });
+
+  it("omits the field entirely for an assistant turn with no thinking, so non-reasoning upstreams never see it", () => {
+    const out = anthropicToOpenAIRequest({
+      model: "m",
+      messages: [{ role: "assistant", content: [{ type: "text", text: "plain" }] }],
+    } as never);
+    const assistant = (out.messages as Array<Record<string, unknown>>)[0];
+    expect("reasoning_content" in assistant).toBe(false);
+  });
+
+  it("omits the field when a thinking block is present but empty", () => {
+    const out = anthropicToOpenAIRequest({
+      model: "m",
+      messages: [{ role: "assistant", content: [{ type: "thinking", thinking: "" }] }],
+    } as never);
+    expect("reasoning_content" in (out.messages as Array<Record<string, unknown>>)[0]).toBe(false);
+  });
+});
+
 describe("openAIToAnthropicResponse", () => {
   it("maps a tool_calls response (live capture shape)", () => {
     const out = openAIToAnthropicResponse({

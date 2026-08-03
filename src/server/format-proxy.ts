@@ -48,6 +48,9 @@ export interface ProxyUsageEvent {
 interface AnthropicContentBlock {
   type: string;
   text?: string;
+  /** Chain-of-thought on a thinking block, mapped to/from the upstream's
+   *  reasoning_content — see the assistant branch of anthropicToOpenAIRequest. */
+  thinking?: string;
   source?: { type: string; media_type?: string; data?: string };
   id?: string;
   name?: string;
@@ -126,6 +129,22 @@ export function anthropicToOpenAIRequest(body: AnthropicRequest, opts?: { effort
         }));
       const out: Record<string, unknown> = { role: "assistant", content: text || null };
       if (toolCalls.length > 0) out.tool_calls = toolCalls;
+      // Send the model's own chain-of-thought back the way it arrived. The
+      // response direction turns an upstream reasoning_content into an
+      // Anthropic thinking block, so the CLI replays that block in history on
+      // the next turn; dropping it here made the round trip lossy and DeepSeek
+      // rejects that outright: "The `reasoning_content` in the thinking mode
+      // must be passed back to the API" (HTTP 400, observed killing every
+      // multi-turn zen session on deepseek-v4-flash-free). Only ever set when
+      // the assistant turn actually carried thinking, which only happens for
+      // models that emitted it in the first place, so a model that has never
+      // heard of the field never sees it.
+      const reasoning = msg.content
+        .filter((b) => b.type === "thinking")
+        .map((b) => b.thinking ?? "")
+        .filter(Boolean)
+        .join("\n");
+      if (reasoning) out.reasoning_content = reasoning;
       messages.push(out);
       continue;
     }
