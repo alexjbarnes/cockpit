@@ -108,6 +108,10 @@ function blockText(content: string | AnthropicContentBlock[] | undefined): strin
 
 export function anthropicToOpenAIRequest(body: AnthropicRequest, opts?: { effortLevels?: string[] }): Record<string, unknown> {
   const messages: Array<Record<string, unknown>> = [];
+  // Assistant turns that called a tool but carried no thinking; they only
+  // need a placeholder reasoning_content if this request ends up in thinking
+  // mode, which is not known until reasoning_effort is resolved below.
+  const assistantsNeedingReasoning: Array<Record<string, unknown>> = [];
 
   const system = blockText(body.system);
   if (system) messages.push({ role: "system", content: system });
@@ -144,7 +148,17 @@ export function anthropicToOpenAIRequest(body: AnthropicRequest, opts?: { effort
         .map((b) => b.thinking ?? "")
         .filter(Boolean)
         .join("\n");
+      // A turn that called a tool while also saying something must carry the
+      // field even when it did no reasoning at all. DeepSeek refuses
+      // {content, tool_calls} with no reasoning_content in thinking mode —
+      // measured: tool_calls alone is accepted, tool_calls plus content is
+      // not, and an empty string satisfies it. Not every assistant turn
+      // reasons, so this shape is common in a long session and was the
+      // residual cause of turns dying after the thinking round trip was
+      // fixed. Only applied when reasoning_effort is going upstream, so a
+      // non-thinking request never gains the field.
       if (reasoning) out.reasoning_content = reasoning;
+      else if (toolCalls.length > 0) assistantsNeedingReasoning.push(out);
       messages.push(out);
       continue;
     }
@@ -198,6 +212,7 @@ export function anthropicToOpenAIRequest(body: AnthropicRequest, opts?: { effort
         : undefined);
   if (requested) {
     const effort = clampEffort(requested, opts?.effortLevels ?? []);
+    if (effort) for (const m of assistantsNeedingReasoning) m.reasoning_content = "";
     if (effort) out.reasoning_effort = effort;
   }
   return out;

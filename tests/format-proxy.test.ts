@@ -189,6 +189,67 @@ describe("anthropicToOpenAIRequest reasoning round trip", () => {
   });
 });
 
+describe("anthropicToOpenAIRequest reasoning placeholder in thinking mode", () => {
+  // Measured against the live upstream: in thinking mode DeepSeek accepts an
+  // assistant turn with tool_calls alone, but refuses one with BOTH content
+  // and tool_calls unless reasoning_content is present — an empty string is
+  // enough. Not every assistant turn reasons, so this shape appears
+  // constantly in a long session and was killing turns even after thinking
+  // blocks were being sent back.
+  const toolUse = { type: "tool_use", id: "t1", name: "w", input: {} };
+
+  it("adds an empty reasoning_content to a text+tool_calls turn that did no thinking", () => {
+    const out = anthropicToOpenAIRequest(
+      {
+        model: "m",
+        thinking: { type: "enabled", budget_tokens: 10000 },
+        messages: [{ role: "assistant", content: [{ type: "text", text: "Checking." }, toolUse] }],
+      } as never,
+      { effortLevels: ["high", "max"] },
+    );
+    const assistant = (out.messages as Array<Record<string, unknown>>)[0];
+    expect(out.reasoning_effort).toBeTruthy();
+    expect(assistant.reasoning_content).toBe("");
+  });
+
+  it("leaves a real thinking block's text alone rather than blanking it", () => {
+    const out = anthropicToOpenAIRequest(
+      {
+        model: "m",
+        thinking: { type: "enabled", budget_tokens: 10000 },
+        messages: [{ role: "assistant", content: [{ type: "thinking", thinking: "because" }, toolUse] }],
+      } as never,
+      { effortLevels: ["high", "max"] },
+    );
+    expect((out.messages as Array<Record<string, unknown>>)[0].reasoning_content).toBe("because");
+  });
+
+  it("does not add the field when the request is not in thinking mode", () => {
+    const out = anthropicToOpenAIRequest(
+      {
+        model: "m",
+        thinking: { type: "enabled", budget_tokens: 10000 },
+        messages: [{ role: "assistant", content: [{ type: "text", text: "Checking." }, toolUse] }],
+      } as never,
+      {}, // no effortLevels => no reasoning_effort => not thinking mode
+    );
+    expect(out.reasoning_effort).toBeUndefined();
+    expect("reasoning_content" in (out.messages as Array<Record<string, unknown>>)[0]).toBe(false);
+  });
+
+  it("does not add the field to an assistant turn with no tool calls", () => {
+    const out = anthropicToOpenAIRequest(
+      {
+        model: "m",
+        thinking: { type: "enabled", budget_tokens: 10000 },
+        messages: [{ role: "assistant", content: [{ type: "text", text: "Just talking." }] }],
+      } as never,
+      { effortLevels: ["high", "max"] },
+    );
+    expect("reasoning_content" in (out.messages as Array<Record<string, unknown>>)[0]).toBe(false);
+  });
+});
+
 describe("openAIToAnthropicResponse", () => {
   it("maps a tool_calls response (live capture shape)", () => {
     const out = openAIToAnthropicResponse({
