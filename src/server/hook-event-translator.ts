@@ -175,7 +175,14 @@ function translateSubagentStart(payload: Record<string, unknown>): ParsedEvent[]
   // every agent in a session used to collide onto one entry and the first
   // completion cleared them all. SubagentStart carries no description, so the
   // agent type stands in until the tool use supplies one.
-  const agentId = stringOr(payload.agent_id, "") || uuidv4();
+  // No uuid fallback: taskId doubles as the transcript lookup key (the
+  // `agent-<id>.jsonl` suffix), so a synthesised id is one that can never
+  // match a meta sidecar — it produced a card permanently reporting no
+  // transcript while the file sat on disk. An agent id is always present in
+  // practice; dropping the event is better than emitting an uncorrelatable
+  // card.
+  const agentId = stringOr(payload.agent_id, "");
+  if (!agentId) return [];
   const agentType = stringOr(payload.agent_type, "");
   const description = stringOr(payload.description, "");
   return [
@@ -193,7 +200,10 @@ function translateSubagentStart(payload: Record<string, unknown>): ParsedEvent[]
 }
 
 function translateSubagentStop(payload: Record<string, unknown>): ParsedEvent[] {
-  const agentId = stringOr(payload.agent_id, "") || uuidv4();
+  // Same reasoning as translateSubagentStart, but the sibling task sync below
+  // is still worth emitting without an agent id.
+  const agentId = stringOr(payload.agent_id, "");
+  if (!agentId) return translateBackgroundTasks(payload);
   const agentType = stringOr(payload.agent_type, "");
   const lastMessage = stringOr(payload.last_assistant_message, "");
   const description = stringOr(payload.description, "");

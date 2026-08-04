@@ -124,6 +124,25 @@ describe("loadSubagentByToolUse", () => {
     expect((messages ?? []).some((m) => m.content.includes("resume agent"))).toBe(true);
   });
 
+  // A background agent's card is built from SubagentStart/task-sync hooks
+  // (PTY runtime), which carry the agent id and no tool_use id — so keying
+  // only on tool_use left every such card reporting no transcript while its
+  // file sat on disk.
+  it("also resolves by agent id, for background agents whose card carries no tool_use id", async () => {
+    const byToolUse = await loadSubagentByToolUse([SESSION], CWD, "toolu_MATCH");
+    const byAgentId = await loadSubagentByToolUse([SESSION], CWD, "aaa111");
+    expect(byAgentId).not.toBeNull();
+    // Compared by content: the transcript parser mints a fresh message id and
+    // timestamp on each parse, so the objects are never identity-equal.
+    expect((byAgentId ?? []).map((m) => m.content)).toEqual((byToolUse ?? []).map((m) => m.content));
+    expect((byAgentId ?? []).map((m) => m.content).join(" ")).toContain("found it in foo.ts");
+  });
+
+  it("resolves by agent id under a resumed session id too", async () => {
+    const messages = await loadSubagentByToolUse([SESSION, OTHER_SESSION], CWD, "bbb222");
+    expect(messages).not.toBeNull();
+  });
+
   it("returns null when no subagent maps to the tool_use id", async () => {
     const messages = await loadSubagentByToolUse([SESSION, OTHER_SESSION], CWD, "toolu_UNKNOWN");
     expect(messages).toBeNull();
