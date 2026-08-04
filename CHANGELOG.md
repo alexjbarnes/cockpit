@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-08-04
+
+### Added
+- **Native issue tracking, off by default.** Projects and issues live in cockpit itself, with a list grouped by status, a detail view with markdown descriptions, comments and an audit trail, and a project-grouped browse view with label sub-groups. Every write is attributed to whoever made it — a session, a scheduled job, or you — and a session or job actor links through to its transcript. The tracker is experimental: turn it on under Settings, Appearance, Experimental. While it is off, nothing appears in the UI and the agent cannot see the tools at all.
+- **Issues reachable from sessions and jobs.** Seven MCP tools (list projects and issues, read, create, update, comment, attach) are available to the cockpit assistant, to scheduled jobs, and to plain working sessions, so you can ask a session to file what it just found. The actor on every write comes from the caller's token and cannot be set by the model.
+- **Jobs triggered by an issue changing status.** A schedule can be an issue transition rather than a clock — "when an issue enters Implementation Ready" — replacing jobs that polled on a timer to ask a question usually answered "nothing". Because a run handles one issue, the scheduler re-checks on completion and keeps going while issues remain, stopping if a run makes no progress.
+- **Notifications from a session.** A working session can post to the inbox and push to a named provider, so you can ask it to message you on Telegram or ntfy when it finishes. Rate limited per session.
+- **OpenCode Go.** Added as its own built-in provider alongside OpenCode Zen: separate subscription, separate catalog, its own key, model list and pricing, connected the same way as the others.
+- **Attachments on issues.** Files attached to an issue are copied into cockpit's own store and served back, so a screenshot outlives the temporary directory it was captured in.
+
+### Changed
+- **The issue pipeline runs on cockpit's tracker instead of Linear.** The refine, implement, accept and review skills and their reviewer agents now speak to the native tools, with per-project keys in place of a single prefix. The refinement and implementation human gates, previously one status told apart only by Linear's state groups, are now distinct statuses: Plan Review and Code Review.
+
+### Fixed
+- **Sessions on a reasoning model no longer die mid-task.** A session on OpenCode Zen would stop after a tool call with "Unknown error", because the translation proxy sent the model's own reasoning back incompletely. Both halves are fixed: a turn's thinking is returned as it arrived, and a tool-calling turn that did no reasoning still carries the field the upstream requires.
+- **Scheduled jobs can use any connected provider.** The job editor's provider list offered only Anthropic, so a job could not be pointed at OpenRouter, Zen, Go or DeepSeek even when connected.
+- **`create_job` no longer drops most of what it is given.** The tool advertised nineteen fields and assigned five.
+- **Model, context and thinking survive a restart.** Session defaults reset to 200K on restart, and the first message of a session could trigger a spurious compaction.
+- **Approval cards name the job or notification provider** instead of showing a uuid.
+- **The input box stops growing past its container** on mobile, so a long message stays scrollable instead of pushing its own end off screen.
+
+### Internal
+- The published tarball ships a prebuilt `.next`, so `next`, `react` and `react-dom` are now exact versions rather than ranges. Published 0.5.0 allowed a newer Next to run bundles an older one compiled, which broke every dynamic route on a fresh install while static pages kept returning 200.
+- TypeScript is pinned to the last JavaScript release. TypeScript 7 dropped the file Next probes to detect a TypeScript project, so the path alias silently stopped resolving and no fresh install could build, while type checking still passed.
+- CI now runs a real production build from a clean install on every push, and refuses a range on the three pinned packages — the two checks that would each have caught the above.
+- Running the test suite deleted the developer's own cockpit password. Tests now get a throwaway config directory by default, so a suite that forgets to isolate cannot reach real state.
+
 ## [0.5.0] - 2026-07-25
 
 ### Added
