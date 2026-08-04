@@ -30,6 +30,7 @@ const DOMAIN_LABELS: Record<string, Record<string, string>> = {
     toolCallsExpanded: "Tool calls expanded",
     messageStitching: "Message stitching",
     reviewsEnabled: "Reviews enabled",
+    issuesEnabled: "Issues enabled",
     bypassAllPermissions: "Bypass all permissions",
     modelSlots: "Model",
   },

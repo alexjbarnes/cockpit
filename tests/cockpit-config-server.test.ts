@@ -1,13 +1,14 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 process.env.COCKPIT_CONFIG_DIR = mkdtempSync(join(tmpdir(), "cockpit-test-"));
 process.env.CLAUDE_CONFIG_DIR = mkdtempSync(join(tmpdir(), "claude-test-"));
 
 vi.mock("@/server/singleton", () => ({ getJobScheduler: vi.fn() }));
 
+import { setDefaults } from "@/server/defaults";
 import { getInboxMessages } from "@/server/inbox";
 import { buildProject, saveProject } from "@/server/issue-storage";
 import { saveRun } from "@/server/job-storage";
@@ -27,6 +28,11 @@ beforeAll(async () => {
   baseUrl = server.getUrl(HOST);
   token = "test-token-abc123";
   registerAuthToken(token);
+  // issuesEnabled defaults to false (see defaults.ts); the rest of this file
+  // predates the toggle and exercises the issue tools assuming they're on, so
+  // this turns it on for the whole suite. The "issuesEnabled gate" describe
+  // block below is the one place that flips it off, and restores it after.
+  setDefaults({ issuesEnabled: true });
 });
 
 afterAll(async () => {
@@ -1045,6 +1051,16 @@ describe("cockpit-config MCP server (in-process HTTP)", () => {
       expect(settings.bypassAllPermissions).toBe(true);
     });
 
+    it("update_settings allows issuesEnabled", async () => {
+      await callTool("update_settings", { issuesEnabled: false });
+      try {
+        const settings = (await callToolParsed("get_settings")) as { issuesEnabled?: boolean };
+        expect(settings.issuesEnabled).toBe(false);
+      } finally {
+        await callTool("update_settings", { issuesEnabled: true }); // restore for the rest of the suite
+      }
+    });
+
     it("update_settings allows modelSlots", async () => {
       const modelSlots = { main: "claude-opus-4-5-20251101", mainContext: "100k" };
       await callTool("update_settings", { modelSlots });
@@ -1822,6 +1838,72 @@ describe("cockpit-config MCP server (in-process HTTP)", () => {
         const result = (await callToolParsed(name, { key: "ISSA-1" })) as { error: string };
         expect(result.error).toContain("Unknown tool");
       }
+    });
+  });
+
+  describe("issuesEnabled gate", () => {
+    const GATE_JOB_TOKEN = "job-token-for-issues-gate";
+    const GATE_SESSION_TOKEN = "session-token-for-issues-gate";
+    const ISSUE_TOOL_NAMES = [
+      "list_projects",
+      "list_issues",
+      "get_issue",
+      "create_issue",
+      "update_issue",
+      "add_issue_comment",
+      "add_issue_attachment",
+    ];
+
+    beforeAll(() => {
+      registerRunContext(GATE_JOB_TOKEN, { jobId: "job-gate-1", jobName: "Gate Job", runId: "run-gate-1" });
+      registerSessionContext(GATE_SESSION_TOKEN, "session-gate-1", "Gate Session");
+    });
+
+    // Every other describe block in this file relies on issuesEnabled being on
+    // (see the top-level beforeAll), so this restores it after every test here
+    // rather than only at the end, in case a test fails before reaching its
+    // own cleanup.
+    afterEach(() => {
+      setDefaults({ issuesEnabled: true });
+    });
+
+    it("hides all seven issue/project tools from tools/list for assistant, job and session callers when off", async () => {
+      setDefaults({ issuesEnabled: false });
+      for (const authToken of [token, GATE_JOB_TOKEN, GATE_SESSION_TOKEN]) {
+        const res = await mcpPost({ jsonrpc: "2.0", id: 900, method: "tools/list", params: {} }, authToken);
+        const names = ((res.body as { result?: { tools: { name: string }[] } })?.result?.tools ?? []).map((t) => t.name);
+        for (const toolName of ISSUE_TOOL_NAMES) expect(names).not.toContain(toolName);
+      }
+    });
+
+    it("refuses every issue/project tool by direct call when off, even though scope alone would allow it", async () => {
+      setDefaults({ issuesEnabled: false });
+      for (const toolName of ISSUE_TOOL_NAMES) {
+        const result = (await callToolParsed(toolName, { key: "ISSA-1", project: "ISSA", title: "t", body: "b", url: "u" })) as {
+          error: string;
+        };
+        expect(result.error).toMatch(/disabled/i);
+      }
+    });
+
+    it("shows and allows the issue tools again once turned back on, and a job/session caller too", async () => {
+      setDefaults({ issuesEnabled: false });
+      const off = await mcpPost({ jsonrpc: "2.0", id: 901, method: "tools/list", params: {} });
+      expect(((off.body as { result?: { tools: { name: string }[] } })?.result?.tools ?? []).map((t) => t.name)).not.toContain(
+        "list_projects",
+      );
+
+      setDefaults({ issuesEnabled: true });
+      const on = await mcpPost({ jsonrpc: "2.0", id: 902, method: "tools/list", params: {} });
+      const onNames = ((on.body as { result?: { tools: { name: string }[] } })?.result?.tools ?? []).map((t) => t.name);
+      for (const toolName of ISSUE_TOOL_NAMES) expect(onNames).toContain(toolName);
+
+      // Same running server, no restart: proves getDefaults() is read fresh
+      // per call rather than cached at module load.
+      const projects = await callToolAsParsed(GATE_JOB_TOKEN, "list_projects");
+      expect(Array.isArray(projects)).toBe(true);
+      const sessionProjects = await callToolAsParsed(GATE_SESSION_TOKEN, "list_projects");
+      expect(Array.isArray(sessionProjects)).toBe(true);
     });
   });
 

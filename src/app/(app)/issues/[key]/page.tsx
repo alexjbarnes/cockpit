@@ -9,6 +9,7 @@ import { MarkdownRender } from "@/components/markdown-render";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { useSettings } from "@/hooks/use-settings";
 import { actorHref, actorLabel, describeActivityAction, ISSUE_STATUSES } from "@/lib/issue-display";
 import type { Issue, IssueActor, IssueStatus, Project } from "@/types";
 
@@ -50,6 +51,7 @@ export default function IssueDetailPage() {
   const { key } = useParams<{ key: string }>();
   const router = useRouter();
   usePageHeader("Issue", { hideActions: true });
+  const { settings, loaded: settingsLoaded } = useSettings();
 
   const [issue, setIssue] = useState<Issue | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
@@ -98,6 +100,11 @@ export default function IssueDetailPage() {
       .then((d) => d && setProjects(d.projects || []))
       .catch(() => {});
   }, []);
+
+  // See issues/page.tsx's identical guard for why this waits on settingsLoaded.
+  useEffect(() => {
+    if (settingsLoaded && !settings.issuesEnabled) router.replace("/");
+  }, [settingsLoaded, settings.issuesEnabled, router]);
 
   function startEditing() {
     if (!issue) return;
@@ -195,13 +202,15 @@ export default function IssueDetailPage() {
     }
   }
 
-  if (loading) {
+  if (!settingsLoaded || loading) {
     return (
       <div className="flex items-center justify-center py-12">
         <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
       </div>
     );
   }
+
+  if (!settings.issuesEnabled) return null;
 
   if (notFound || !issue) {
     return (

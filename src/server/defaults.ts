@@ -18,6 +18,13 @@ export interface AppDefaults {
   messageStitching: boolean;
   reviewsEnabled: boolean;
   /**
+   * Native issue tracker (Issues sidebar icon, /issues pages, Projects
+   * settings, the seven issue/project MCP tools). Off by default: it's
+   * experimental and gates surfaces across server/MCP/UI — see the MCP tool
+   * handlers in cockpit-config-server.ts for the enforcement.
+   */
+  issuesEnabled: boolean;
+  /**
    * Opt in to Sonnet 4.6's 1M context window. Off by default because it needs
    * usage credits (claude.ai/settings/usage) and silently runs at 200K without
    * them. When on, cockpit requests 1M for Sonnet 4.6 and surfaces the credits
@@ -45,6 +52,7 @@ const fallback: AppDefaults = {
   modelSlots: { main: "sonnet" },
   messageStitching: true,
   reviewsEnabled: true,
+  issuesEnabled: false,
   allowSonnet1m: false,
 };
 

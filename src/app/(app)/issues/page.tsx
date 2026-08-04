@@ -10,6 +10,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { useScrollRestoration } from "@/hooks/use-scroll-restoration";
+import { useSettings } from "@/hooks/use-settings";
 import type { IssueProjectGroup, QuickFilter } from "@/lib/issue-display";
 import {
   filterByQuickFilter,
@@ -341,6 +342,7 @@ export default function IssuesPage() {
   usePageHeader("Issues", { hideActions: true });
   const scrollRef = useScrollRestoration<HTMLDivElement>("issues-scroll");
   const router = useRouter();
+  const { settings, loaded: settingsLoaded } = useSettings();
 
   const [issues, setIssues] = useState<Issue[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
@@ -355,6 +357,15 @@ export default function IssuesPage() {
     const stored = localStorage.getItem(VIEW_KEY);
     if (stored === "status" || stored === "project") setView(stored);
   }, []);
+
+  // Experimental and off by default (see defaults.ts's issuesEnabled) — a
+  // stale bookmark or typed URL must not land on a working page. Gated on
+  // settingsLoaded first: redirecting on the pre-fetch default (false) would
+  // bounce a user who actually has it enabled, since useSettings starts at
+  // its own default before /api/defaults resolves.
+  useEffect(() => {
+    if (settingsLoaded && !settings.issuesEnabled) router.replace("/");
+  }, [settingsLoaded, settings.issuesEnabled, router]);
 
   const changeView = useCallback((next: "status" | "project") => {
     setView(next);
@@ -397,6 +408,8 @@ export default function IssuesPage() {
   const projectGroups = useMemo(() => groupIssuesByProject(filtered, projects), [filtered, projects]);
 
   const hasFilters = projectFilter !== "" || (view === "status" && statusFilter !== "");
+
+  if (!settingsLoaded || !settings.issuesEnabled) return null;
 
   return (
     <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto p-4 pb-24 space-y-4">

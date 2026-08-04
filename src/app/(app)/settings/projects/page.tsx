@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { useSettings } from "@/hooks/use-settings";
 import type { Issue, Project } from "@/types";
 
 interface FormState {
@@ -28,6 +29,7 @@ function projectToForm(p: Project): FormState {
 export default function ProjectsSettingsPage() {
   usePageHeader("Projects", { hideActions: true });
   const router = useRouter();
+  const { settings, loaded: settingsLoaded } = useSettings();
 
   const [projects, setProjects] = useState<Project[]>([]);
   const [issueCounts, setIssueCounts] = useState<Map<string, number>>(new Map());
@@ -59,6 +61,11 @@ export default function ProjectsSettingsPage() {
   useEffect(() => {
     fetchAll();
   }, [fetchAll]);
+
+  // See issues/page.tsx's identical guard for why this waits on settingsLoaded.
+  useEffect(() => {
+    if (settingsLoaded && !settings.issuesEnabled) router.replace("/");
+  }, [settingsLoaded, settings.issuesEnabled, router]);
 
   function startCreate() {
     setEditForm(emptyForm());
@@ -115,6 +122,8 @@ export default function ProjectsSettingsPage() {
   }
 
   const deleteCount = confirmDelete ? issueCounts.get(confirmDelete.id) || 0 : 0;
+
+  if (!settingsLoaded || !settings.issuesEnabled) return null;
 
   return (
     <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-4">

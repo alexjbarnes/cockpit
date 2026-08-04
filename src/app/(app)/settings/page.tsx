@@ -6,6 +6,7 @@ import { type ReactNode, useCallback, useEffect, useState } from "react";
 import { usePageHeader } from "@/components/app-shell";
 import { Button } from "@/components/ui/button";
 import { useScrollRestoration } from "@/hooks/use-scroll-restoration";
+import { useSettings } from "@/hooks/use-settings";
 
 interface VersionInfo {
   installed: string;
@@ -243,6 +244,7 @@ export default function SettingsPage() {
   const [ccExpandedVersions, setCcExpandedVersions] = useState<Set<string>>(new Set());
   const router = useRouter();
   const scrollRef = useScrollRestoration<HTMLDivElement>("settings-scroll");
+  const { settings } = useSettings();
 
   usePageHeader("Settings", { hideActions: true });
 
@@ -395,7 +397,7 @@ export default function SettingsPage() {
           <NavRow label="Appearance" onClick={() => router.push("/settings/appearance")} />
           <NavRow label="Model Providers" onClick={() => router.push("/settings/providers")} />
           <NavRow label="Notifications" onClick={() => router.push("/settings/notifications")} />
-          <NavRow label="Projects" onClick={() => router.push("/settings/projects")} />
+          {settings.issuesEnabled && <NavRow label="Projects" onClick={() => router.push("/settings/projects")} />}
         </div>
 
         <div className="border-t border-border pt-4 mt-4 space-y-0.5">

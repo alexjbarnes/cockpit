@@ -34,6 +34,7 @@ describe("defaults", () => {
       modelSlots: { main: "sonnet" },
       messageStitching: true,
       reviewsEnabled: true,
+      issuesEnabled: false,
       allowSonnet1m: false,
     });
   });
@@ -62,6 +63,7 @@ describe("defaults", () => {
       modelSlots: { main: "opus" },
       messageStitching: true,
       reviewsEnabled: true,
+      issuesEnabled: false,
       allowSonnet1m: false,
     });
   });
@@ -100,6 +102,21 @@ describe("defaults", () => {
     expect(result.thinkingExpanded).toBe(true);
     expect(fs.mkdirSync).toHaveBeenCalled();
     expect(fs.writeFileSync).toHaveBeenCalled();
+  });
+
+  it("issuesEnabled defaults to false and round-trips through setDefaults", async () => {
+    const fs = await import("node:fs");
+    vi.mocked(fs.readFileSync).mockImplementation(() => {
+      throw new Error("ENOENT");
+    });
+    vi.mocked(fs.writeFileSync).mockImplementation(() => {});
+    vi.mocked(fs.mkdirSync).mockImplementation(() => "");
+
+    const { getDefaults, setDefaults } = await import("@/server/defaults");
+    expect(getDefaults().issuesEnabled).toBe(false);
+
+    const result = setDefaults({ issuesEnabled: true });
+    expect(result.issuesEnabled).toBe(true);
   });
 
   it("setDefaults handles write failure gracefully", async () => {

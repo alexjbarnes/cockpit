@@ -641,12 +641,14 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
               router.push("/inbox");
             }}
           />
-          <IssuesButton
-            onClick={() => {
-              close();
-              router.push("/issues");
-            }}
-          />
+          {settings.issuesEnabled && (
+            <IssuesButton
+              onClick={() => {
+                close();
+                router.push("/issues");
+              }}
+            />
+          )}
           <Button
             variant="ghost"
             size="icon"

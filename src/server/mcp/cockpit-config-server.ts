@@ -154,6 +154,25 @@ function scopesFor(name: string): readonly McpScope[] {
   return TOOL_SCOPES[name] ?? ["assistant"];
 }
 
+/**
+ * The seven issue/project tools, gated separately from TOOL_SCOPES by the
+ * `issuesEnabled` setting (default off — see defaults.ts). Unlike TOOL_SCOPES,
+ * which is static per caller kind, this is read fresh from getDefaults() on
+ * every tools/list and tools/call so a toggle in Settings takes effect
+ * immediately, with no server restart and no module-load caching.
+ */
+const ISSUE_TOOLS = new Set([
+  "list_projects",
+  "list_issues",
+  "get_issue",
+  "create_issue",
+  "update_issue",
+  "add_issue_comment",
+  "add_issue_attachment",
+]);
+
+const ISSUES_DISABLED_ERROR = "The issue tracker is disabled. Turn it on in Settings → Appearance to use this tool.";
+
 /** Messages returned by get_job_transcript when the caller does not ask for a count. */
 const JOB_TRANSCRIPT_DEFAULT_MESSAGES = 50;
 /** Per-message character cap, so one long tool dump cannot swamp the reply. */
@@ -379,6 +398,7 @@ const TOOL_DEFINITIONS = [
         toolCallsExpanded: { type: "boolean" },
         messageStitching: { type: "boolean" },
         reviewsEnabled: { type: "boolean" },
+        issuesEnabled: { type: "boolean" },
         bypassAllPermissions: { type: "boolean" },
         modelSlots: {
           type: "object",
@@ -684,6 +704,11 @@ async function handleToolCall(
         isError: true,
       };
     }
+    // Read per call, not cached at module load, so a toggle in Settings takes
+    // effect on the very next call rather than waiting for a restart.
+    if (ISSUE_TOOLS.has(name) && !getDefaults().issuesEnabled) {
+      return { content: [{ type: "text", text: JSON.stringify({ error: ISSUES_DISABLED_ERROR }) }], isError: true };
+    }
 
     switch (name) {
       case "add_inbox_message": {
@@ -906,6 +931,7 @@ async function handleToolCall(
           "toolCallsExpanded",
           "messageStitching",
           "reviewsEnabled",
+          "issuesEnabled",
           "bypassAllPermissions",
           "modelSlots",
         ];
@@ -1409,7 +1435,10 @@ export class CockpitMcpServer {
         // model that names an unlisted tool still gets nothing.
         mcpServer.setRequestHandler(ListToolsRequestSchema, async () => {
           const caller: McpCaller = lookupCaller(token) ?? { kind: "assistant" };
-          return { tools: TOOL_DEFINITIONS.filter((t) => scopesFor(t.name).includes(caller.kind)) };
+          const issuesEnabled = getDefaults().issuesEnabled;
+          return {
+            tools: TOOL_DEFINITIONS.filter((t) => scopesFor(t.name).includes(caller.kind) && (issuesEnabled || !ISSUE_TOOLS.has(t.name))),
+          };
         });
         mcpServer.setRequestHandler(CallToolRequestSchema, async (request) => {
           const toolName = request.params.name;

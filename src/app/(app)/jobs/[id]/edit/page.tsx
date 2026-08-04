@@ -8,6 +8,7 @@ import { DirectoryPicker } from "@/components/directory-picker";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { useSettings } from "@/hooks/use-settings";
 import {
   allowedEffortLevels,
   CONTEXT_SIZES,
@@ -64,12 +65,14 @@ function ScheduleEntry({
   onRemove,
   canRemove,
   projects,
+  issuesEnabled,
 }: {
   value: JobSchedule;
   onChange: (s: JobSchedule) => void;
   onRemove: () => void;
   canRemove: boolean;
   projects: { id: string; name: string; prefix: string }[];
+  issuesEnabled: boolean;
 }) {
   return (
     <div className="border rounded-md p-3 space-y-2">
@@ -89,13 +92,20 @@ function ScheduleEntry({
           >
             Cron
           </Button>
-          <Button
-            variant={value.type === "onIssueStatus" ? "default" : "outline"}
-            size="sm"
-            onClick={() => onChange({ type: "onIssueStatus", status: ISSUE_STATUSES[0] })}
-          >
-            On issue status
-          </Button>
+          {/* Issue tracker is experimental and off by default (see defaults.ts's
+              issuesEnabled) — hide the option to create a new onIssueStatus
+              schedule while off. A job that already has one keeps the button
+              (and its dropdowns below, which key off value.type, not this
+              condition) so an existing record still displays and is editable. */}
+          {(issuesEnabled || value.type === "onIssueStatus") && (
+            <Button
+              variant={value.type === "onIssueStatus" ? "default" : "outline"}
+              size="sm"
+              onClick={() => onChange({ type: "onIssueStatus", status: ISSUE_STATUSES[0] })}
+            >
+              On issue status
+            </Button>
+          )}
         </div>
         {canRemove && (
           <button type="button" onClick={onRemove} className="text-muted-foreground hover:text-destructive">
@@ -196,6 +206,7 @@ export default function JobEditPage() {
   const duplicateFrom = isNew ? searchParams.get("from") : null;
   const initialCwd = isNew ? searchParams.get("cwd") : null;
   const router = useRouter();
+  const { settings } = useSettings();
 
   usePageHeader(duplicateFrom ? "Duplicate Job" : isNew ? "New Job" : "Edit Job", { hideActions: true });
 
@@ -591,6 +602,7 @@ export default function JobEditPage() {
                 onRemove={() => setSchedules(schedules.filter((_, j) => j !== i))}
                 canRemove={schedules.length > 1}
                 projects={projects}
+                issuesEnabled={settings.issuesEnabled}
               />
             ))}
             <button
