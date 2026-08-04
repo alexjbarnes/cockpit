@@ -221,7 +221,7 @@ export default function JobEditPage() {
   const [contextSize, setContextSize] = useState<ContextSize>("200k");
   const [thinkingLevel, setThinkingLevel] = useState<ThinkingLevel | "">("medium");
   const [selectedProviderId, setSelectedProviderId] = useState("anthropic");
-  const [runtime, setRuntime] = useState<"stream" | "pty">("stream");
+  const [runtime, setRuntime] = useState<"stream" | "pty">("pty");
 
   const [maxDuration, setMaxDuration] = useState<number | "">(30);
   const [maxRetries, setMaxRetries] = useState<number | "">(1);
@@ -409,7 +409,7 @@ export default function JobEditPage() {
     setRetentionDays(job.retentionDays ?? 90);
     setInboxOutput(job.inboxOutput ?? false);
     setNotifyProviders(job.notifyProviders || []);
-    setRuntime(job.runtime || "stream");
+    setRuntime(job.runtime || "pty");
   }, []);
 
   const loadJob = useCallback(async () => {
@@ -986,11 +986,11 @@ export default function JobEditPage() {
             <div className="flex items-center justify-between">
               <label className="text-sm font-medium">Runtime</label>
               <div className="flex gap-1">
-                <Button variant={runtime === "stream" ? "default" : "outline"} size="sm" onClick={() => setRuntime("stream")}>
-                  Stream
-                </Button>
                 <Button variant={runtime === "pty" ? "default" : "outline"} size="sm" onClick={() => setRuntime("pty")}>
                   PTY
+                </Button>
+                <Button variant={runtime === "stream" ? "default" : "outline"} size="sm" onClick={() => setRuntime("stream")}>
+                  Stream (deprecated)
                 </Button>
               </div>
             </div>
