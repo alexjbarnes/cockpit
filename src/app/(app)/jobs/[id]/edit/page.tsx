@@ -266,7 +266,18 @@ export default function JobEditPage() {
     return selectedEntry ? allowedEffortLevels(selectedEntry) : [];
   })();
   const toolSuggestions = COMMON_TOOLS.filter((t) => !allowedTools.includes(t));
-  const customProviders = providers.filter((p) => !p.isBuiltin);
+  // Everything except Anthropic: user-defined providers, plus the catalog
+  // built-ins (openrouter, zen, zen-go, deepseek) once connected — same rule
+  // as the session model picker, a picker entry must be runnable. The job
+  // machinery downstream is already provider-qualified (`zen:model` ids,
+  // checkJobModel, the pre-spawn catalog check), so only this list was
+  // Anthropic-only.
+  const customProviders = providers.filter((p) => p.id !== "anthropic" && (!p.isBuiltin || Object.keys(p.envVars).length > 0));
+  /** Catalog built-ins show their curated enabled set; manual providers show
+   *  every model — mirrors the session picker. */
+  function pickableModels(p: Provider): ProviderModel[] {
+    return p.isBuiltin && p.enabledModels ? p.models.filter((m) => (p.enabledModels ?? []).includes(m.modelId)) : p.models;
+  }
 
   function selectAlias(alias: ModelAlias) {
     const entry = defaultForAlias(alias);
@@ -282,8 +293,9 @@ export default function JobEditPage() {
   function selectCustomProvider(providerId: string) {
     setSelectedProviderId(providerId);
     const provider = providers.find((p) => p.id === providerId);
-    if (provider && provider.models.length > 0) {
-      const first = provider.models[0];
+    const models = provider ? pickableModels(provider) : [];
+    if (provider && models.length > 0) {
+      const first = models[0];
       setModelId(first.modelId);
       setContextSize("200k");
       setThinkingLevel(first.defaultEffort || (first.effortLevels.length > 0 ? first.effortLevels[0] : ""));
@@ -643,7 +655,7 @@ export default function JobEditPage() {
               <div className="flex items-center justify-between px-2 py-2 text-sm">
                 <span>Model</span>
                 <div className="flex gap-1 flex-wrap justify-end">
-                  {selectedProvider.models.map((m) => (
+                  {pickableModels(selectedProvider).map((m) => (
                     <Button
                       key={m.modelId}
                       variant={modelId === m.modelId ? "default" : "outline"}
