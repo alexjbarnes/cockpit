@@ -23,6 +23,9 @@ jobs:
   typecheck:
     needs: verify-tag
     uses: ./.github/workflows/typecheck.yml
+  compile:
+    needs: verify-tag
+    uses: ./.github/workflows/compile.yml
   lint:
     needs: verify-tag
     uses: ./.github/workflows/lint.yml
