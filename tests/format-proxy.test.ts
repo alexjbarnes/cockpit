@@ -324,10 +324,14 @@ describe("StreamTranslator", () => {
     expect(deltas.join("")).toBe("Hello");
     const md = events.find((e) => e.event === "message_delta")?.data as {
       delta: { stop_reason: string };
-      usage: { output_tokens: number };
+      usage: { input_tokens: number; output_tokens: number };
     };
     expect(md.delta.stop_reason).toBe("end_turn");
     expect(md.usage.output_tokens).toBe(5);
+    // prompt_tokens must surface as input_tokens here — message_start already
+    // shipped with zeros before the upstream reported usage. Dropping it means
+    // a zeroed context gauge and no indicator in the UI.
+    expect(md.usage.input_tokens).toBe(10);
   });
 
   it("translates tool-call deltas into tool_use blocks with input_json_delta", () => {

@@ -430,7 +430,12 @@ export class StreamTranslator {
     let out = this.closeBlock();
     out += this.event("message_delta", {
       delta: { stop_reason: STOP_REASON[this.finishReason ?? "stop"] ?? "end_turn", stop_sequence: null },
-      usage: { output_tokens: this.usage?.completion_tokens ?? 0 },
+      // input_tokens must ride here, not message_start: OpenAI only reports
+      // usage in the final chunk (stream_options.include_usage), long after
+      // message_start went out with zeros. The CLI merges message_delta usage
+      // into its transcript record; without input_tokens the context gauge
+      // reads 0 forever and the UI hides the indicator.
+      usage: { input_tokens: this.usage?.prompt_tokens ?? 0, output_tokens: this.usage?.completion_tokens ?? 0 },
     });
     out += this.event("message_stop", {});
     this.started = false;
