@@ -2109,6 +2109,14 @@ Additional Cockpit rules beyond the CLI's defaults:
       return false;
     }
 
+    // Set below, and checked at the `session.compacting` queue guard: this
+    // message is the /compact that just raised the flag, so it must not be
+    // queued behind itself. Doing so deadlocked every manual compaction —
+    // the guard queued the trigger, and the queue only flushes when
+    // `compacting` clears, which needs a PostCompact hook that can never
+    // arrive because the CLI was never told to compact.
+    let isCompactTrigger = false;
+
     if (text.startsWith("/")) {
       const handled = this.handleCommand(sessionId, text);
       if (handled) return true;
@@ -2116,6 +2124,7 @@ Additional Cockpit rules beyond the CLI's defaults:
       if (text.trim().toLowerCase().startsWith("/compact")) {
         logDiag(sessionId, "compact:start");
         session.compacting = true;
+        isCompactTrigger = true;
         this.emitSystem(session, sessionId, "__compact::start");
       }
     }
@@ -2170,7 +2179,7 @@ Additional Cockpit rules beyond the CLI's defaults:
     // delivery into it. Queue instead; flushQueuedMessage runs from every
     // path that clears session.compacting (hook_done, harness exit while
     // compacting, or the transcript's own "__compacted__" marker).
-    if (session.compacting) {
+    if (session.compacting && !isCompactTrigger) {
       session.queuedMessages.push({ id: `q-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, text, images, documents });
       session.emitter.emit("queued", sessionId, session.queuedMessages.length);
       return true;
