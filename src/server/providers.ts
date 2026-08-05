@@ -69,6 +69,30 @@ function validateProvider(p: Pick<Provider, "models"> & { id?: string }): void {
   }
 }
 
+/** Overrides arrive as arbitrary request JSON; only positive integer token
+ *  counts may reach disk. Zero/empty values act as "clear this override". */
+function sanitizeContextOverrides(input: unknown): Record<string, number> | undefined {
+  if (input === undefined) return undefined;
+  if (input === null || typeof input !== "object" || Array.isArray(input)) {
+    throw new Error("contextLengthOverrides must be an object of modelId → tokens");
+  }
+  const out: Record<string, number> = {};
+  for (const [modelId, value] of Object.entries(input)) {
+    if (value === 0 || value === null || value === "") continue; // clear
+    if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
+      throw new Error(`contextLengthOverrides.${modelId} must be a positive integer token count`);
+    }
+    out[modelId] = value;
+  }
+  return out;
+}
+
+/** Corrected model list: an override replaces the catalog contextLength. */
+function applyContextOverrides(models: ProviderModel[], overrides: Record<string, number> | undefined): ProviderModel[] {
+  if (!overrides || Object.keys(overrides).length === 0) return models;
+  return models.map((m) => (overrides[m.modelId] ? { ...m, contextLength: overrides[m.modelId] } : m));
+}
+
 function buildAnthropicProvider(): Provider {
   return {
     id: "anthropic",
@@ -107,10 +131,11 @@ function buildOpenRouterProvider(stored: Provider | undefined): Provider {
           CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
         }
       : {},
-    models: catalogModels(),
+    models: applyContextOverrides(catalogModels(), stored?.contextLengthOverrides),
     isBuiltin: true,
     enabledModels: stored?.enabledModels ?? [],
     syncedAt: loadCatalog()?.syncedAt,
+    contextLengthOverrides: stored?.contextLengthOverrides,
   };
 }
 
@@ -186,6 +211,7 @@ function saveBuiltinStored(id: string, partial: Partial<Provider>): Provider {
     envVars: partial.envVars ?? prev?.envVars ?? {},
     enabledModels: partial.enabledModels ?? prev?.enabledModels ?? [],
     syncedAt: partial.syncedAt ?? prev?.syncedAt,
+    contextLengthOverrides: partial.contextLengthOverrides ?? prev?.contextLengthOverrides,
   };
   saveCustom(loadCustom(), entry);
   return entry;
@@ -236,10 +262,11 @@ function buildOpenAIWireProvider(id: string, stored: Provider | undefined): Prov
             : {}),
         }
       : {},
-    models: stored?.models ?? [],
+    models: applyContextOverrides(stored?.models ?? [], stored?.contextLengthOverrides),
     isBuiltin: true,
     enabledModels: stored?.enabledModels ?? [],
     syncedAt: stored?.syncedAt,
+    contextLengthOverrides: stored?.contextLengthOverrides,
   };
 }
 
@@ -264,10 +291,11 @@ function buildDeepSeekProvider(stored: Provider | undefined): Provider {
           CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
         }
       : {},
-    models: stored?.models ?? [],
+    models: applyContextOverrides(stored?.models ?? [], stored?.contextLengthOverrides),
     isBuiltin: true,
     enabledModels: stored?.enabledModels ?? [],
     syncedAt: stored?.syncedAt,
+    contextLengthOverrides: stored?.contextLengthOverrides,
   };
 }
 
@@ -541,7 +569,7 @@ function rebuildCache(custom: Provider[]): void {
     buildOpenAIWireProvider(OPENCODE_ZEN_PROVIDER_ID, loadBuiltinStored(OPENCODE_ZEN_PROVIDER_ID)),
     buildOpenAIWireProvider(OPENCODE_ZEN_GO_PROVIDER_ID, loadBuiltinStored(OPENCODE_ZEN_GO_PROVIDER_ID)),
     buildDeepSeekProvider(loadBuiltinStored(DEEPSEEK_PROVIDER_ID)),
-    ...custom,
+    ...custom.map((p) => ({ ...p, models: applyContextOverrides(p.models, p.contextLengthOverrides) })),
   ];
   cacheMtimeMs = providersMtimeMs();
 }
@@ -570,11 +598,18 @@ export function addProvider(provider: Omit<Provider, "id">): Provider {
 
 export function updateProvider(id: string, partial: Partial<Provider>): Provider {
   if (id === "anthropic") throw new Error("Cannot modify built-in provider");
+  const contextLengthOverrides = sanitizeContextOverrides(partial.contextLengthOverrides);
   // Catalog-backed built-ins accept only their user state: the key (envVars),
-  // the curated enabled set, and (zen) the synced model list. Their models are
-  // never hand-edited, so the contextSizes validation does not apply.
+  // the curated enabled set, context corrections, and (zen) the synced model
+  // list. Their models are never hand-edited, so the contextSizes validation
+  // does not apply.
   if (BUILTIN_CONFIG_IDS.has(id)) {
-    const entry = saveBuiltinStored(id, { envVars: partial.envVars, enabledModels: partial.enabledModels, models: partial.models });
+    const entry = saveBuiltinStored(id, {
+      envVars: partial.envVars,
+      enabledModels: partial.enabledModels,
+      models: partial.models,
+      contextLengthOverrides,
+    });
     rebuildCache(loadCustom());
     if (id === OPENROUTER_PROVIDER_ID) return buildOpenRouterProvider(entry);
     if (id === DEEPSEEK_PROVIDER_ID) return buildDeepSeekProvider(entry);
@@ -583,7 +618,7 @@ export function updateProvider(id: string, partial: Partial<Provider>): Provider
   const custom = getProviders().filter((p) => !p.isBuiltin);
   const idx = custom.findIndex((p) => p.id === id);
   if (idx === -1) throw new Error(`Provider not found: ${id}`);
-  const merged = { ...custom[idx], ...partial, id };
+  const merged = { ...custom[idx], ...partial, ...(partial.contextLengthOverrides !== undefined ? { contextLengthOverrides } : {}), id };
   validateProvider(merged);
   custom[idx] = merged;
   saveCustom(custom);

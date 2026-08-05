@@ -934,6 +934,81 @@ describe("providers", () => {
     ).toThrow(/contextSizes/);
   });
 
+  it("context override wins over the synced contextLength, survives a resync, and clears via 0", async () => {
+    const fs = await import("node:fs");
+    const dsModel = { modelId: "deepseek-v4-flash-free", displayName: "DS", effortLevels: [], contextSizes: [], contextLength: 200_000 };
+    let stored = JSON.stringify([
+      {
+        id: "zen",
+        name: "OpenCode Zen",
+        isBuiltin: true,
+        envVars: { OPENCODE_API_KEY: "zk-1" },
+        models: [dsModel],
+        enabledModels: [dsModel.modelId],
+      },
+    ]);
+    vi.mocked(fs.readFileSync).mockImplementation(() => stored);
+    vi.mocked(fs.writeFileSync).mockImplementation((_p, data) => {
+      stored = String(data);
+    });
+    vi.mocked(fs.mkdirSync).mockImplementation(() => "");
+
+    const { getProvider, updateProvider } = await import("@/server/providers");
+    expect(getProvider("zen")?.models[0].contextLength).toBe(200_000);
+
+    updateProvider("zen", { contextLengthOverrides: { [dsModel.modelId]: 1_000_000 } });
+    expect(getProvider("zen")?.models[0].contextLength).toBe(1_000_000);
+    expect(getProvider("zen")?.contextLengthOverrides).toEqual({ [dsModel.modelId]: 1_000_000 });
+
+    // A wholesale model replace is exactly what syncZenModels persists — the
+    // catalog's wrong figure comes back, the correction must still win.
+    updateProvider("zen", { models: [dsModel] });
+    expect(getProvider("zen")?.models[0].contextLength).toBe(1_000_000);
+
+    // 0 clears the override back to the catalog figure.
+    updateProvider("zen", { contextLengthOverrides: { [dsModel.modelId]: 0 } });
+    expect(getProvider("zen")?.models[0].contextLength).toBe(200_000);
+    expect(getProvider("zen")?.contextLengthOverrides).toEqual({});
+  });
+
+  it("context override applies to a custom provider's models too", async () => {
+    const fs = await import("node:fs");
+    let stored = JSON.stringify([
+      {
+        id: "p-1",
+        name: "Custom",
+        envVars: {},
+        models: [{ modelId: "m1", displayName: "m1", effortLevels: [], contextSizes: ["200k"], contextLength: 128_000 }],
+      },
+    ]);
+    vi.mocked(fs.readFileSync).mockImplementation(() => stored);
+    vi.mocked(fs.writeFileSync).mockImplementation((_p, data) => {
+      stored = String(data);
+    });
+    vi.mocked(fs.mkdirSync).mockImplementation(() => "");
+
+    const { getProvider, updateProvider } = await import("@/server/providers");
+    updateProvider("p-1", { contextLengthOverrides: { m1: 256_000 } });
+    expect(getProvider("p-1")?.models[0].contextLength).toBe(256_000);
+  });
+
+  it("rejects malformed context overrides at the update boundary", async () => {
+    const fs = await import("node:fs");
+    vi.mocked(fs.readFileSync).mockImplementation(() => {
+      throw new Error("ENOENT");
+    });
+    vi.mocked(fs.writeFileSync).mockImplementation(() => {});
+    vi.mocked(fs.mkdirSync).mockImplementation(() => "");
+
+    const { updateProvider } = await import("@/server/providers");
+    expect(() => updateProvider("zen", { contextLengthOverrides: { m: -5 } })).toThrow(/positive integer/);
+    expect(() => updateProvider("zen", { contextLengthOverrides: { m: 1.5 } })).toThrow(/positive integer/);
+    expect(() => updateProvider("zen", { contextLengthOverrides: { m: "1m" } as unknown as Record<string, number> })).toThrow(
+      /positive integer/,
+    );
+    expect(() => updateProvider("zen", { contextLengthOverrides: [1] as unknown as Record<string, number> })).toThrow(/must be an object/);
+  });
+
   it("reloads providers when providers.json changes out of band (different mtime)", async () => {
     const fs = await import("node:fs");
     const listA = [

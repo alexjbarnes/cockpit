@@ -587,6 +587,9 @@ export interface Provider {
   /** Curated opt-in set for catalog-backed providers: only these model ids
    *  appear in pickers. Absent means nothing enabled yet. */
   enabledModels?: string[];
+  /** User corrections for wrong catalog context figures (modelId → tokens).
+   *  Wins over the synced contextLength and survives catalog re-syncs. */
+  contextLengthOverrides?: Record<string, number>;
   /** Last successful catalog sync, for catalog-backed providers. */
   syncedAt?: number;
 }

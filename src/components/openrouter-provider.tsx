@@ -134,7 +134,10 @@ export function ProviderModelBrowser({ provider, onChanged }: { provider: Provid
   const [syncing, setSyncing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [editingContext, setEditingContext] = useState<string | null>(null);
+  const [contextDraft, setContextDraft] = useState("");
   const enabled = useMemo(() => new Set(provider.enabledModels ?? []), [provider.enabledModels]);
+  const overrides = provider.contextLengthOverrides ?? {};
 
   const models = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -170,6 +173,40 @@ export function ProviderModelBrowser({ provider, onChanged }: { provider: Provid
     if (next.has(id)) next.delete(id);
     else next.add(id);
     void persistEnabled(next);
+  };
+
+  /** "423000", "200k", "1m" → tokens; null = clear; undefined = unparseable. */
+  const parseContextDraft = (raw: string): number | null | undefined => {
+    const t = raw.trim().toLowerCase();
+    if (!t) return null;
+    const m = /^(\d+(?:\.\d+)?)([km]?)$/.exec(t);
+    if (!m) return undefined;
+    const n = Number(m[1]) * (m[2] === "m" ? 1_000_000 : m[2] === "k" ? 1000 : 1);
+    return Number.isInteger(n) && n > 0 ? n : undefined;
+  };
+
+  const saveContextOverride = async (modelId: string) => {
+    const tokens = parseContextDraft(contextDraft);
+    setEditingContext(null);
+    if (tokens === undefined) return; // unparseable input: keep the old value
+    const current = overrides[modelId];
+    if (tokens === current || (tokens === null && current === undefined)) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/providers/${provider.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        // 0 = the server-side "clear this override" signal.
+        body: JSON.stringify({ contextLengthOverrides: { ...overrides, [modelId]: tokens ?? 0 } }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      onChanged();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSaving(false);
+    }
   };
 
   const sync = async () => {
@@ -238,34 +275,71 @@ export function ProviderModelBrowser({ provider, onChanged }: { provider: Provid
       <div className="divide-y rounded-lg border">
         {models.map((m) => {
           const isOn = enabled.has(m.modelId);
+          const overridden = overrides[m.modelId] !== undefined;
           return (
-            <button
-              key={m.modelId}
-              type="button"
-              onClick={() => toggle(m.modelId)}
-              disabled={saving}
-              className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs hover:bg-muted/50 transition-colors"
-              data-testid={`model-row-${m.modelId}`}
-            >
-              <span
-                className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border ${
-                  isOn ? "border-primary bg-primary text-primary-foreground" : "border-muted-foreground/40"
-                }`}
+            <div key={m.modelId} className="flex w-full items-center gap-2 px-3 py-2 text-xs hover:bg-muted/50 transition-colors">
+              <button
+                type="button"
+                onClick={() => toggle(m.modelId)}
+                disabled={saving}
+                className="flex min-w-0 flex-1 items-center gap-2 text-left"
+                data-testid={`model-row-${m.modelId}`}
               >
-                {isOn && <Check className="h-3 w-3" />}
-              </span>
-              <span className="flex min-w-0 flex-col gap-0.5">
-                <span className="flex min-w-0 items-start gap-2">
-                  <span className="min-w-0 break-all font-mono">{splitProviderModelId(m).name}</span>
-                  <span className="shrink-0">
-                    <FreeBadge model={m} />
-                  </span>
+                <span
+                  className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border ${
+                    isOn ? "border-primary bg-primary text-primary-foreground" : "border-muted-foreground/40"
+                  }`}
+                >
+                  {isOn && <Check className="h-3 w-3" />}
                 </span>
-                {splitProviderModelId(m).meta && (
-                  <span className="max-w-full text-[10px] text-muted-foreground tabular-nums">{splitProviderModelId(m).meta}</span>
-                )}
-              </span>
-            </button>
+                <span className="flex min-w-0 flex-col gap-0.5">
+                  <span className="flex min-w-0 items-start gap-2">
+                    <span className="min-w-0 break-all font-mono">{splitProviderModelId(m).name}</span>
+                    <span className="shrink-0">
+                      <FreeBadge model={m} />
+                    </span>
+                  </span>
+                  {splitProviderModelId(m).meta && (
+                    <span className="max-w-full text-[10px] text-muted-foreground tabular-nums">{splitProviderModelId(m).meta}</span>
+                  )}
+                </span>
+              </button>
+              {editingContext === m.modelId ? (
+                <Input
+                  autoFocus
+                  value={contextDraft}
+                  onChange={(e) => setContextDraft(e.target.value)}
+                  onBlur={() => void saveContextOverride(m.modelId)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") void saveContextOverride(m.modelId);
+                    if (e.key === "Escape") setEditingContext(null);
+                  }}
+                  placeholder="e.g. 1m, 200k"
+                  className="h-6 w-24 shrink-0 px-1.5 text-[10px]"
+                  data-testid={`context-override-input-${m.modelId}`}
+                />
+              ) : (
+                <button
+                  type="button"
+                  disabled={saving}
+                  onClick={() => {
+                    setEditingContext(m.modelId);
+                    setContextDraft(m.contextLength ? formatContext(m.contextLength).toLowerCase() : "");
+                  }}
+                  title={
+                    overridden
+                      ? "Context window (manual override — empty to reset to catalog)"
+                      : "Context window from the catalog — click to correct"
+                  }
+                  className={`shrink-0 rounded border px-1.5 py-0.5 text-[10px] tabular-nums transition-colors hover:text-foreground ${
+                    overridden ? "border-amber-600/60 text-amber-600 dark:text-amber-400" : "border-transparent text-muted-foreground"
+                  }`}
+                  data-testid={`context-override-${m.modelId}`}
+                >
+                  {m.contextLength ? formatContext(m.contextLength) : "ctx?"}
+                </button>
+              )}
+            </div>
           );
         })}
         {models.length === 0 && <p className="px-3 py-4 text-xs text-muted-foreground">No models match.</p>}
