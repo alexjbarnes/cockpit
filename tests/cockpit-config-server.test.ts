@@ -759,12 +759,21 @@ describe("cockpit-config MCP server (in-process HTTP)", () => {
       return JSON.parse(text);
     }
 
-    it("shows a session the same scoped tools as a job, and hides everything else", async () => {
+    it("shows a session its scoped tools — inbox, the job suite (user decision 2026-08-08), and the issue tools", async () => {
       const sessionList = await mcpPost({ jsonrpc: "2.0", id: 22, method: "tools/list", params: {} }, SESSION_TOKEN);
       const sessionTools = ((sessionList.body as { result?: { tools: { name: string }[] } })?.result?.tools ?? []).map((t) => t.name);
       expect(sessionTools).toEqual([
+        "list_jobs",
+        "get_job",
+        "create_job",
+        "update_job",
+        "delete_job",
+        "run_job",
+        "stop_job",
+        "list_running_jobs",
         "add_inbox_message",
         "list_notify_targets",
+        "get_job_transcript",
         "list_projects",
         "list_issues",
         "get_issue",
@@ -775,15 +784,64 @@ describe("cockpit-config MCP server (in-process HTTP)", () => {
       ]);
     });
 
-    it("refuses delete_job, list_providers and update_settings, both by absence and by call", async () => {
+    it("refuses config tools (providers, settings, mcp-servers), both by absence and by call", async () => {
       const list = await mcpPost({ jsonrpc: "2.0", id: 23, method: "tools/list", params: {} }, SESSION_TOKEN);
       const names = ((list.body as { result?: { tools: { name: string }[] } })?.result?.tools ?? []).map((t) => t.name);
-      for (const tool of ["delete_job", "list_providers", "update_settings"]) {
+      for (const tool of ["list_providers", "update_settings", "save_mcp_server", "delete_provider"]) {
         expect(names).not.toContain(tool);
         const out = await asSession(tool, { id: "whatever" });
         expect(out.error).toBe(`${tool} is only available to: assistant`);
       }
       expect(vi.mocked(getJobScheduler)).not.toHaveBeenCalled();
+    });
+
+    it("a session can create, inspect, update, run and delete a scheduled job", async () => {
+      const stubScheduler = {
+        getRunningJobs: () => new Map(),
+        triggerJob: vi.fn(() => new Promise(() => {})),
+      };
+      vi.mocked(getJobScheduler).mockReturnValue(stubScheduler as never);
+
+      const created = (await asSession("create_job", {
+        name: "session-made-job",
+        schedules: [{ type: "simple", frequency: "hourly" }],
+        prompt: "summarise the inbox",
+        cwd: "/tmp",
+      })) as { created: { id: string; name: string } };
+      expect(created.created.name).toBe("session-made-job");
+
+      const listed = (await asSession("list_jobs")) as { id: string }[];
+      expect(listed.some((j) => j.id === created.created.id)).toBe(true);
+
+      const updated = (await asSession("update_job", { id: created.created.id, name: "session-renamed-job" })) as {
+        after: { name: string };
+      };
+      expect(updated.after.name).toBe("session-renamed-job");
+
+      const run = (await asSession("run_job", { id: created.created.id })) as { results: { status: string }[] };
+      expect(run.results[0].status).toBe("started");
+      expect(stubScheduler.triggerJob).toHaveBeenCalledWith(created.created.id);
+
+      const deleted = (await asSession("delete_job", { id: created.created.id })) as { deleted: { id: string } };
+      expect(deleted.deleted.id).toBe(created.created.id);
+      const after = (await asSession("list_jobs")) as { id: string }[];
+      expect(after.some((j) => j.id === created.created.id)).toBe(false);
+    });
+
+    it("a job caller still cannot reach the job tools — a scheduled job minting jobs stays closed", async () => {
+      const JOB_TOKEN_FOR_JOBS = "run-token-for-job-self-replication";
+      registerRunContext(JOB_TOKEN_FOR_JOBS, { jobId: "job-self", jobName: "Self", runId: "run-self" });
+      const list = await mcpPost({ jsonrpc: "2.0", id: 24, method: "tools/list", params: {} }, JOB_TOKEN_FOR_JOBS);
+      const names = ((list.body as { result?: { tools: { name: string }[] } })?.result?.tools ?? []).map((t) => t.name);
+      for (const tool of ["create_job", "update_job", "delete_job", "run_job"]) {
+        expect(names).not.toContain(tool);
+        const res = await mcpPost(
+          { jsonrpc: "2.0", id: 25, method: "tools/call", params: { name: tool, arguments: { id: "x" } } },
+          JOB_TOKEN_FOR_JOBS,
+        );
+        const text = (res.body as { result?: { content: { text: string }[] } })?.result?.content?.[0]?.text ?? "";
+        expect(JSON.parse(text).error).toBe(`${tool} is only available to: assistant, session`);
+      }
     });
 
     it("delivers a message attributed to the session, not a job", async () => {

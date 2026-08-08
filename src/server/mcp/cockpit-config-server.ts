@@ -138,6 +138,21 @@ type McpScope = "assistant" | "job" | "session";
 const TOOL_SCOPES: Record<string, readonly McpScope[]> = {
   add_inbox_message: ["job", "session"],
   list_notify_targets: ["job", "session"],
+  // Scheduled-job tools are open to interactive sessions by user decision
+  // (2026-08-08): a session already runs with the user's shell, so it could
+  // write a real crontab entry anyway — the MCP gate was inconvenience, not a
+  // boundary. Deliberately NOT opened to job callers: a scheduled job that
+  // can mint or rewrite scheduled jobs is self-replication with no human in
+  // the loop, and unlike a session there is no user watching the turn.
+  list_jobs: ["assistant", "session"],
+  get_job: ["assistant", "session"],
+  create_job: ["assistant", "session"],
+  update_job: ["assistant", "session"],
+  delete_job: ["assistant", "session"],
+  run_job: ["assistant", "session"],
+  stop_job: ["assistant", "session"],
+  list_running_jobs: ["assistant", "session"],
+  get_job_transcript: ["assistant", "session"],
   // Phase 2.3: the native issue tracker. A plain session gets no cockpit
   // system prompt (see run-context.ts's McpCaller doc), so these tool
   // descriptions are its only affordance for using the tracker at all.
