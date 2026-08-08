@@ -134,10 +134,8 @@ export function ProviderModelBrowser({ provider, onChanged }: { provider: Provid
   const [syncing, setSyncing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [editingContext, setEditingContext] = useState<string | null>(null);
-  const [contextDraft, setContextDraft] = useState("");
   const enabled = useMemo(() => new Set(provider.enabledModels ?? []), [provider.enabledModels]);
-  const overrides = provider.contextLengthOverrides ?? {};
+  const overrides = provider.contextSizeOverrides ?? {};
 
   const models = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -175,30 +173,16 @@ export function ProviderModelBrowser({ provider, onChanged }: { provider: Provid
     void persistEnabled(next);
   };
 
-  /** "423000", "200k", "1m" → tokens; null = clear; undefined = unparseable. */
-  const parseContextDraft = (raw: string): number | null | undefined => {
-    const t = raw.trim().toLowerCase();
-    if (!t) return null;
-    const m = /^(\d+(?:\.\d+)?)([km]?)$/.exec(t);
-    if (!m) return undefined;
-    const n = Number(m[1]) * (m[2] === "m" ? 1_000_000 : m[2] === "k" ? 1000 : 1);
-    return Number.isInteger(n) && n > 0 ? n : undefined;
-  };
-
-  const saveContextOverride = async (modelId: string) => {
-    const tokens = parseContextDraft(contextDraft);
-    setEditingContext(null);
-    if (tokens === undefined) return; // unparseable input: keep the old value
-    const current = overrides[modelId];
-    if (tokens === current || (tokens === null && current === undefined)) return;
+  /** Curate (or clear) a model's 200K/1M session choice. */
+  const toggleContextChoice = async (modelId: string) => {
     setSaving(true);
     setError(null);
     try {
       const res = await fetch(`/api/providers/${provider.id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        // 0 = the server-side "clear this override" signal.
-        body: JSON.stringify({ contextLengthOverrides: { ...overrides, [modelId]: tokens ?? 0 } }),
+        // [] = the server-side "clear this model's curation" signal.
+        body: JSON.stringify({ contextSizeOverrides: { ...overrides, [modelId]: overrides[modelId]?.length ? [] : ["200k", "1m"] } }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       onChanged();
@@ -275,7 +259,7 @@ export function ProviderModelBrowser({ provider, onChanged }: { provider: Provid
       <div className="divide-y rounded-lg border">
         {models.map((m) => {
           const isOn = enabled.has(m.modelId);
-          const overridden = overrides[m.modelId] !== undefined;
+          const overridden = !!overrides[m.modelId]?.length;
           return (
             <div key={m.modelId} className="flex w-full items-center gap-2 px-3 py-2 text-xs hover:bg-muted/50 transition-colors">
               <button
@@ -304,41 +288,22 @@ export function ProviderModelBrowser({ provider, onChanged }: { provider: Provid
                   )}
                 </span>
               </button>
-              {editingContext === m.modelId ? (
-                <Input
-                  autoFocus
-                  value={contextDraft}
-                  onChange={(e) => setContextDraft(e.target.value)}
-                  onBlur={() => void saveContextOverride(m.modelId)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") void saveContextOverride(m.modelId);
-                    if (e.key === "Escape") setEditingContext(null);
-                  }}
-                  placeholder="e.g. 1m, 200k"
-                  className="h-6 w-24 shrink-0 px-1.5 text-[10px]"
-                  data-testid={`context-override-input-${m.modelId}`}
-                />
-              ) : (
-                <button
-                  type="button"
-                  disabled={saving}
-                  onClick={() => {
-                    setEditingContext(m.modelId);
-                    setContextDraft(m.contextLength ? formatContext(m.contextLength).toLowerCase() : "");
-                  }}
-                  title={
-                    overridden
-                      ? "Context window (manual override — empty to reset to catalog)"
-                      : "Context window from the catalog — click to correct"
-                  }
-                  className={`shrink-0 rounded border px-1.5 py-0.5 text-[10px] tabular-nums transition-colors hover:text-foreground ${
-                    overridden ? "border-amber-600/60 text-amber-600 dark:text-amber-400" : "border-transparent text-muted-foreground"
-                  }`}
-                  data-testid={`context-override-${m.modelId}`}
-                >
-                  {m.contextLength ? formatContext(m.contextLength) : "ctx?"}
-                </button>
-              )}
+              <button
+                type="button"
+                disabled={saving}
+                onClick={() => void toggleContextChoice(m.modelId)}
+                title={
+                  overridden
+                    ? "Sessions on this model can pick 200K or 1M — tap to remove the choice"
+                    : "Let sessions pick 200K or 1M for this model (when the catalog figure is wrong)"
+                }
+                className={`shrink-0 rounded border px-1.5 py-0.5 text-[10px] tabular-nums transition-colors hover:text-foreground ${
+                  overridden ? "border-amber-600/60 text-amber-600 dark:text-amber-400" : "border-muted-foreground/40 text-muted-foreground"
+                }`}
+                data-testid={`context-choice-${m.modelId}`}
+              >
+                {overridden ? "200K/1M ✓" : "+ 200K/1M"}
+              </button>
             </div>
           );
         })}

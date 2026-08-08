@@ -1158,7 +1158,9 @@ export class SessionManager {
     const currentSize = session.info.contextSize ?? DEFAULT_CONTEXT_SIZE;
     const requestedSize = contextSize ?? currentSize;
     const resolvedSize: ContextSize = (() => {
-      const sizes = resolveModel(model)?.contextSizes;
+      // Anthropic models constrain the size via the static table; a foreign
+      // model constrains it via its (possibly curated) provider contextSizes.
+      const sizes = resolveModel(model)?.contextSizes ?? resolveProviderModel(model)?.model.contextSizes;
       if (!sizes || sizes.length === 0) return requestedSize;
       return sizes.includes(requestedSize) ? requestedSize : sizes[0];
     })();
@@ -1241,10 +1243,13 @@ export class SessionManager {
     }
   }
 
-  /** Context gauge total: foreign catalog models carry a raw contextLength;
-   *  Anthropic models use the 200k/1m enum. */
+  /** Context gauge total: a model with a curated 200k/1m choice (Anthropic
+   *  always, foreign models via the provider's contextSizeOverrides) follows
+   *  the session's pick; other foreign catalog models carry a raw
+   *  contextLength; the enum default covers the rest. */
   private resolveContextWindow(model: string | undefined, size: ContextSize): number {
     const resolved = model ? resolveProviderModel(model) : null;
+    if (resolved?.model.contextSizes.includes(size)) return contextSizeToWindow(size);
     if (resolved?.model.contextLength && resolved.model.contextLength > 0) return resolved.model.contextLength;
     return contextSizeToWindow(size);
   }
@@ -2279,8 +2284,12 @@ Additional Cockpit rules beyond the CLI's defaults:
       providerEnvVars = { ...providerEnvVars, ...openRouterModelEnv(resolved.model.modelId, subagentModel) };
       // The CLI defaults foreign model ids to a 200k context window; this
       // override (ignored for claude-* ids) aligns its context tracking and
-      // auto-compact with the model's real window.
-      if (resolved.model.contextLength && resolved.model.contextLength > 0) {
+      // auto-compact with the model's real window. A curated 200k/1m model
+      // follows the session's pick, mirroring resolveContextWindow so the
+      // gauge and the CLI always agree on the denominator.
+      if (resolved.model.contextSizes.includes(effectiveContextSize)) {
+        providerEnvVars.CLAUDE_CODE_MAX_CONTEXT_TOKENS = String(contextSizeToWindow(effectiveContextSize));
+      } else if (resolved.model.contextLength && resolved.model.contextLength > 0) {
         providerEnvVars.CLAUDE_CODE_MAX_CONTEXT_TOKENS = String(resolved.model.contextLength);
       }
       // The CLI's effort gate rejects unknown (non-Anthropic) model ids, so

@@ -587,9 +587,11 @@ export interface Provider {
   /** Curated opt-in set for catalog-backed providers: only these model ids
    *  appear in pickers. Absent means nothing enabled yet. */
   enabledModels?: string[];
-  /** User corrections for wrong catalog context figures (modelId → tokens).
-   *  Wins over the synced contextLength and survives catalog re-syncs. */
-  contextLengthOverrides?: Record<string, number>;
+  /** Per-model curated context choices (modelId → sizes). A curated model
+   *  gets the session-menu 200K/1M picker exactly like Anthropic models; the
+   *  session's pick then drives the gauge and the CLI's window env. Stored
+   *  apart from the synced model list so catalog re-syncs can't wipe it. */
+  contextSizeOverrides?: Record<string, ContextSize[]>;
   /** Last successful catalog sync, for catalog-backed providers. */
   syncedAt?: number;
 }

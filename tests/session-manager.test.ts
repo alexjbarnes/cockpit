@@ -2540,6 +2540,44 @@ describe("SessionManager", () => {
       manager.setModel(session.id, "opus", "200k");
       expect(s.contextWindowSize).toBe(200_000);
     });
+
+    it("follows the session pick for a curated foreign model, catalog figure otherwise", async () => {
+      // Real providers.ts against the throwaway COCKPIT_CONFIG_DIR: one zen
+      // model curated with the 200k/1m choice, one carrying only a catalog
+      // contextLength.
+      const { writeFileSync } = await import("node:fs");
+      const { join } = await import("node:path");
+      writeFileSync(
+        join(process.env.COCKPIT_CONFIG_DIR!, "providers.json"),
+        JSON.stringify([
+          {
+            id: "zen",
+            name: "OpenCode Zen",
+            isBuiltin: true,
+            envVars: {},
+            models: [
+              { modelId: "ds-free", displayName: "ds", effortLevels: [], contextSizes: [], contextLength: 200_000 },
+              { modelId: "kimi", displayName: "kimi", effortLevels: [], contextSizes: [], contextLength: 262_144 },
+            ],
+            enabledModels: ["ds-free", "kimi"],
+            contextSizeOverrides: { "ds-free": ["200k", "1m"] },
+          },
+        ]),
+      );
+
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+
+      // Curated model: the session's 1m pick beats the catalog's 200k figure.
+      manager.setModel(session.id, "zen:ds-free", "1m");
+      expect(s.contextWindowSize).toBe(1_000_000);
+
+      // Uncurated model: the pick is not offered, the catalog figure rules
+      // (setModel resolves the size through the provider's empty contextSizes,
+      // so the stale 1m request cannot leak into the window).
+      manager.setModel(session.id, "zen:kimi", "1m");
+      expect(s.contextWindowSize).toBe(262_144);
+    });
   });
 
   describe("setThinkingLevel", () => {
