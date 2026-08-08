@@ -2,10 +2,11 @@ import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
 import { splitLegacyModel } from "@/lib/models";
+import { assertValidCronExpression } from "@/server/cron-utils";
 import { getProject } from "@/server/issue-storage";
 import { getCockpitDir, getJobsScratchpadRoot } from "@/server/paths";
 import type { JobRun, JobSchedule, ScheduledJob } from "@/types";
-import { ISSUE_STATUSES } from "@/types";
+import { ISSUE_STATUSES, SIMPLE_SCHEDULE_FREQUENCIES } from "@/types";
 
 /** Everything a caller may supply when creating a job. */
 export type JobInput = Partial<Omit<ScheduledJob, "id" | "createdAt" | "updatedAt">>;
@@ -99,29 +100,54 @@ export function getJob(id: string): ScheduledJob | undefined {
 }
 
 /**
- * Reject an onIssueStatus schedule with a bogus status or an unknown project.
- * saveJob() is the one function every job write funnels through: the REST
- * POST route builds via buildJob() first, but PUT does a raw
- * `{...existing, ...body}` spread with no construction path at all, and the
- * MCP update_job tool's own field-picking (cockpit-config-server.ts) only
- * controls which keys survive an update, never whether their values are any
- * good. Validating in buildJob() alone would miss both of those, so this
- * lives at the actual write boundary instead — the same lesson
- * issue-storage.ts already paid for once (see its "Value validation" comment
- * and commit 2857515).
+ * Reject a malformed schedule of any shape before it can persist. saveJob()
+ * is the one function every job write funnels through: the REST POST route
+ * builds via buildJob() first, but PUT does a raw `{...existing, ...body}`
+ * spread with no construction path at all, and the MCP create/update tools'
+ * field-picking (cockpit-config-server.ts) only controls which keys survive,
+ * never whether their values are any good. Validating in buildJob() alone
+ * would miss both of those, so this lives at the actual write boundary — the
+ * same lesson issue-storage.ts already paid for once (see its "Value
+ * validation" comment and commit 2857515).
  *
- * Deliberately scoped to only the new onIssueStatus shape: simple/cron
- * schedules — and every other job field — have never been validated on this
- * path and stay that way; fixing that generally is a separate, larger change.
+ * The failure mode this prevents is the silent one: a schedule with a bogus
+ * frequency or a NaN-producing cron expression stores fine and then simply
+ * never fires. Callers deserve the error at write time.
  */
 function assertValidSchedules(schedules: JobSchedule[] | undefined): void {
   for (const s of schedules ?? []) {
-    if (s.type !== "onIssueStatus") continue;
-    if (!(ISSUE_STATUSES as readonly string[]).includes(s.status)) {
-      throw new Error(`onIssueStatus schedule has an invalid status "${s.status}"; must be one of: ${ISSUE_STATUSES.join(", ")}`);
-    }
-    if (s.project !== undefined && !getProject(s.project)) {
-      throw new Error(`onIssueStatus schedule references unknown project "${s.project}"`);
+    if (s.type === "simple") {
+      if (!(SIMPLE_SCHEDULE_FREQUENCIES as readonly string[]).includes(s.frequency)) {
+        throw new Error(
+          `simple schedule has an invalid frequency "${s.frequency}"; must be one of: ${SIMPLE_SCHEDULE_FREQUENCIES.join(", ")}`,
+        );
+      }
+      if (s.time !== undefined) {
+        const m = /^(\d{1,2}):(\d{2})$/.exec(s.time);
+        if (!m || Number(m[1]) > 23 || Number(m[2]) > 59) {
+          throw new Error(`simple schedule has an invalid time "${s.time}"; use 24h HH:MM, e.g. "09:30"`);
+        }
+      }
+      if (s.dayOfWeek !== undefined && (!Number.isInteger(s.dayOfWeek) || s.dayOfWeek < 0 || s.dayOfWeek > 6)) {
+        throw new Error(`simple schedule has an invalid dayOfWeek ${s.dayOfWeek}; must be an integer 0-6 (Sunday=0)`);
+      }
+      if (s.dayOfMonth !== undefined && (!Number.isInteger(s.dayOfMonth) || s.dayOfMonth < 1 || s.dayOfMonth > 31)) {
+        throw new Error(`simple schedule has an invalid dayOfMonth ${s.dayOfMonth}; must be an integer 1-31`);
+      }
+    } else if (s.type === "cron") {
+      if (typeof s.expression !== "string" || !s.expression.trim()) {
+        throw new Error("cron schedule requires a non-empty expression");
+      }
+      assertValidCronExpression(s.expression);
+    } else if (s.type === "onIssueStatus") {
+      if (!(ISSUE_STATUSES as readonly string[]).includes(s.status)) {
+        throw new Error(`onIssueStatus schedule has an invalid status "${s.status}"; must be one of: ${ISSUE_STATUSES.join(", ")}`);
+      }
+      if (s.project !== undefined && !getProject(s.project)) {
+        throw new Error(`onIssueStatus schedule references unknown project "${s.project}"`);
+      }
+    } else {
+      throw new Error(`schedule has unknown type "${(s as { type?: string }).type}"; must be one of: simple, cron, onIssueStatus`);
     }
   }
 }

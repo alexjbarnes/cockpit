@@ -295,11 +295,51 @@ describe("saveJob: onIssueStatus schedule validation (phase 4, storage boundary)
     expect(loadJobs()).toEqual([]);
   });
 
-  it("leaves simple/cron schedules on the same job unvalidated (out of scope, unchanged behaviour)", () => {
-    // Documents the deliberate scope limit: only the new onIssueStatus shape
-    // is checked here. A nonsensical cron expression still saves cleanly.
-    const job = makeJob("a", { schedules: [{ type: "cron", expression: "not a cron expression" }] });
-    expect(() => saveJob(job)).not.toThrow();
+  it("rejects a cron schedule whose expression is nonsense (would silently never fire)", () => {
+    for (const expression of ["not a cron expression", "banana * * * *", "61 * * * *", "* * *", ""]) {
+      const job = makeJob("a", { schedules: [{ type: "cron", expression }] });
+      expect(() => saveJob(job), `expression: "${expression}"`).toThrow();
+    }
+    expect(loadJobs()).toEqual([]);
+  });
+
+  it("accepts well-formed cron expressions", () => {
+    for (const expression of ["0 9 * * 1", "*/15 * * * *", "30 6 1 * *"]) {
+      const job = makeJob(`ok-${expression}`, { schedules: [{ type: "cron", expression }] });
+      expect(() => saveJob(job)).not.toThrow();
+    }
+  });
+
+  it("rejects a simple schedule with a bogus frequency, time, dayOfWeek or dayOfMonth", () => {
+    const cases: Array<Record<string, unknown>> = [
+      { type: "simple", frequency: "fortnightly" },
+      { type: "simple", frequency: "daily", time: "25:00" },
+      { type: "simple", frequency: "daily", time: "9am" },
+      { type: "simple", frequency: "weekly", dayOfWeek: 7 },
+      { type: "simple", frequency: "monthly", dayOfMonth: 32 },
+    ];
+    for (const schedule of cases) {
+      const job = makeJob("a", { schedules: [schedule as never] });
+      expect(() => saveJob(job), JSON.stringify(schedule)).toThrow();
+    }
+    expect(loadJobs()).toEqual([]);
+  });
+
+  it("accepts valid simple schedules of every frequency", () => {
+    const cases = [
+      { type: "simple", frequency: "hourly" },
+      { type: "simple", frequency: "daily", time: "09:30" },
+      { type: "simple", frequency: "weekly", dayOfWeek: 0, time: "8:00" },
+      { type: "simple", frequency: "monthly", dayOfMonth: 31 },
+    ] as never[];
+    for (const [i, schedule] of cases.entries()) {
+      expect(() => saveJob(makeJob(`s-${i}`, { schedules: [schedule] }))).not.toThrow();
+    }
+  });
+
+  it("rejects a schedule with an unknown type", () => {
+    const job = makeJob("a", { schedules: [{ type: "yearly" } as never] });
+    expect(() => saveJob(job)).toThrow(/unknown type/i);
   });
 
   it("does not persist a job at all when its onIssueStatus schedule is invalid", () => {

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  assertValidCronExpression,
   describeAllSchedules,
   describeSchedule,
   findMissedRun,
@@ -12,6 +13,32 @@ import {
   simpleScheduleToCron,
 } from "@/server/cron-utils";
 import type { JobSchedule, SimpleSchedule } from "@/types";
+
+describe("assertValidCronExpression", () => {
+  it("accepts well-formed expressions, including steps, ranges and lists", () => {
+    for (const expr of ["0 9 * * 1", "*/15 * * * *", "30 6 1 * *", "0 8-18/2 * * 1-5", "0,30 9,17 * * *"]) {
+      expect(() => assertValidCronExpression(expr), expr).not.toThrow();
+    }
+  });
+
+  it("rejects the garbage parseCron silently turns into NaN (job would never fire)", () => {
+    for (const expr of ["banana * * * *", "* pear * * *", "1-x * * * *"]) {
+      expect(() => assertValidCronExpression(expr), expr).toThrow(/malformed|out of range/);
+    }
+  });
+
+  it("rejects out-of-range field values", () => {
+    for (const expr of ["61 * * * *", "* 24 * * *", "* * 0 * *", "* * * 13 *", "* * * * 7"]) {
+      expect(() => assertValidCronExpression(expr), expr).toThrow(/out of range/);
+    }
+  });
+
+  it("rejects the wrong number of fields", () => {
+    for (const expr of ["* * *", "* * * * * *", ""]) {
+      expect(() => assertValidCronExpression(expr), expr).toThrow(/expected 5 fields/);
+    }
+  });
+});
 
 describe("matchesCron", () => {
   it("matches exact minute and hour", () => {

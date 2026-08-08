@@ -27,7 +27,7 @@ import { addProvider, deleteProvider, getProviders, updateProvider } from "@/ser
 import { getJobScheduler } from "@/server/singleton";
 import { findSessionCwd, loadTranscript } from "@/server/transcript";
 import type { InboxPriority, Issue, IssueActor, IssueStatus, JobRun, NotificationProviderEntry, Project, ScheduledJob } from "@/types";
-import { ISSUE_STATUSES } from "@/types";
+import { ISSUE_STATUSES, SIMPLE_SCHEDULE_FREQUENCIES } from "@/types";
 import { isValidToken, lookupCaller, type McpCaller } from "./run-context";
 
 interface McpServerEntry {
@@ -307,6 +307,43 @@ function issueSummary(issue: Issue): Record<string, unknown> {
   };
 }
 
+/** Schema for one job schedule — the three JobSchedule variants spelled out
+ *  so a caller can construct one from the schema alone, instead of having to
+ *  list existing jobs and copy a real one's shape. Kept in lockstep with the
+ *  write-boundary validation in job-storage.ts's assertValidSchedules. */
+const JOB_SCHEDULE_SCHEMA = {
+  type: "object",
+  description:
+    'One schedule; shape depends on `type`. Examples: {"type":"simple","frequency":"daily","time":"09:30"} · {"type":"cron","expression":"*/15 * * * *"} · {"type":"onIssueStatus","status":"Refine Ready"}',
+  anyOf: [
+    {
+      properties: {
+        type: { const: "simple" },
+        frequency: { type: "string", enum: [...SIMPLE_SCHEDULE_FREQUENCIES] },
+        time: { type: "string", description: '24h "HH:MM" for daily/weekly/monthly; hourly ignores it' },
+        dayOfWeek: { type: "number", description: "0-6, Sunday=0; used by weekly" },
+        dayOfMonth: { type: "number", description: "1-31; used by monthly" },
+      },
+      required: ["type", "frequency"],
+    },
+    {
+      properties: {
+        type: { const: "cron" },
+        expression: { type: "string", description: '5-field cron "minute hour day-of-month month day-of-week", e.g. "0 9 * * 1"' },
+      },
+      required: ["type", "expression"],
+    },
+    {
+      properties: {
+        type: { const: "onIssueStatus" },
+        status: { type: "string", enum: [...ISSUE_STATUSES], description: "Fires when an issue enters this status" },
+        project: { type: "string", description: "Project id to scope to; omit for any project" },
+      },
+      required: ["type", "status"],
+    },
+  ],
+};
+
 const TOOL_DEFINITIONS = [
   {
     name: "list_jobs",
@@ -327,7 +364,7 @@ const TOOL_DEFINITIONS = [
         name: { type: "string" },
         schedules: {
           type: "array",
-          items: { type: "object" },
+          items: JOB_SCHEDULE_SCHEMA,
           description: "One or more schedules for this job. A single job can hold more than one schedule.",
         },
         prompt: { type: "string" },
@@ -361,7 +398,7 @@ const TOOL_DEFINITIONS = [
         name: { type: "string" },
         schedules: {
           type: "array",
-          items: { type: "object" },
+          items: JOB_SCHEDULE_SCHEMA,
           description: "Replaces all of the job's schedules with this list.",
         },
         prompt: { type: "string" },

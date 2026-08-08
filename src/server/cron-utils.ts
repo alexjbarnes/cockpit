@@ -57,6 +57,29 @@ function parseCron(expression: string): CronFields {
   };
 }
 
+/**
+ * Throws when `expression` is not a well-formed 5-field cron line. parseCron
+ * alone is not enough: parseField turns garbage like "banana" into NaN
+ * entries, which store fine and then never match — a job that silently never
+ * fires. This is the validator the write boundary (job-storage's
+ * assertValidSchedules) runs before a cron schedule may persist.
+ */
+export function assertValidCronExpression(expression: string): void {
+  const fields = parseCron(expression);
+  const bounds: Array<[string, number[], number, number]> = [
+    ["minute", fields.minute, 0, 59],
+    ["hour", fields.hour, 0, 23],
+    ["day-of-month", fields.dayOfMonth, 1, 31],
+    ["month", fields.month, 1, 12],
+    ["day-of-week", fields.dayOfWeek, 0, 6],
+  ];
+  for (const [name, values, min, max] of bounds) {
+    if (values.length === 0 || values.some((v) => !Number.isInteger(v) || v < min || v > max)) {
+      throw new Error(`Invalid cron expression "${expression}": ${name} field is malformed or out of range (${min}-${max})`);
+    }
+  }
+}
+
 export function matchesCron(expression: string, date: Date): boolean {
   const fields = parseCron(expression);
   const minute = date.getMinutes();

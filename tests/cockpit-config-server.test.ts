@@ -324,6 +324,21 @@ describe("cockpit-config MCP server (in-process HTTP)", () => {
       await callToolParsed("delete_job", { id: created.created.id as string });
     });
 
+    it("create_job rejects a malformed schedule with a readable error instead of storing a never-firing job", async () => {
+      const cases = [{ type: "cron", expression: "banana * * * *" }, { type: "simple", frequency: "fortnightly" }, { type: "yearly" }];
+      for (const schedule of cases) {
+        const result = (await callToolParsed("create_job", {
+          name: "bad-schedule-job",
+          schedules: [schedule],
+          prompt: "p",
+          cwd: "/tmp",
+        })) as { error?: string };
+        expect(result.error, JSON.stringify(schedule)).toBeTruthy();
+      }
+      const jobs = (await callToolParsed("list_jobs")) as { name: string }[];
+      expect(jobs.some((j) => j.name === "bad-schedule-job")).toBe(false);
+    });
+
     it("create_job refuses to make a job with no name, schedule or prompt", async () => {
       const res = await mcpPost({
         jsonrpc: "2.0",

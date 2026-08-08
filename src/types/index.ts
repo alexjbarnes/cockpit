@@ -188,7 +188,10 @@ export interface UsageLimits {
 
 // Scheduled Jobs
 
-export type SimpleScheduleFrequency = "hourly" | "daily" | "weekly" | "monthly";
+/** Canonical list; SimpleScheduleFrequency derives from it (same pattern as
+ *  ISSUE_STATUSES) so validators and tool schemas can't drift from the type. */
+export const SIMPLE_SCHEDULE_FREQUENCIES = ["hourly", "daily", "weekly", "monthly"] as const;
+export type SimpleScheduleFrequency = (typeof SIMPLE_SCHEDULE_FREQUENCIES)[number];
 
 export interface SimpleSchedule {
   type: "simple";
