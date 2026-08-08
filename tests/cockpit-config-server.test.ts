@@ -6,7 +6,11 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 process.env.COCKPIT_CONFIG_DIR = mkdtempSync(join(tmpdir(), "cockpit-test-"));
 process.env.CLAUDE_CONFIG_DIR = mkdtempSync(join(tmpdir(), "claude-test-"));
 
-vi.mock("@/server/singleton", () => ({ getJobScheduler: vi.fn() }));
+vi.mock("@/server/singleton", () => ({
+  getJobScheduler: vi.fn(),
+  // mcp-discovery's runtime-servers source; get_job_options reaches it.
+  getSessionManager: vi.fn(() => ({ getKnownMcpServers: () => ["runtime-seen-server"] })),
+}));
 
 import { setDefaults } from "@/server/defaults";
 import { getInboxMessages } from "@/server/inbox";
@@ -780,6 +784,7 @@ describe("cockpit-config MCP server (in-process HTTP)", () => {
       expect(sessionTools).toEqual([
         "list_jobs",
         "get_job",
+        "get_job_options",
         "create_job",
         "update_job",
         "delete_job",
@@ -808,6 +813,72 @@ describe("cockpit-config MCP server (in-process HTTP)", () => {
         expect(out.error).toBe(`${tool} is only available to: assistant`);
       }
       expect(vi.mocked(getJobScheduler)).not.toHaveBeenCalled();
+    });
+
+    it("get_job_options gives a session the full job-editor menu without leaking secrets", async () => {
+      const { writeFileSync: writeFs } = await import("node:fs");
+      const { join: joinPath } = await import("node:path");
+      writeFs(
+        joinPath(process.env.COCKPIT_CONFIG_DIR!, "providers.json"),
+        JSON.stringify([
+          {
+            id: "zen",
+            name: "OpenCode Zen",
+            isBuiltin: true,
+            envVars: { OPENCODE_API_KEY: "zk-super-secret" },
+            models: [
+              { modelId: "kimi-k3", displayName: "Kimi K3", effortLevels: ["max"], contextSizes: [], contextLength: 1_048_576 },
+              { modelId: "hidden-model", displayName: "Hidden", effortLevels: [], contextSizes: [] },
+            ],
+            enabledModels: ["kimi-k3"],
+          },
+          {
+            id: "zen-go",
+            name: "OpenCode Go",
+            isBuiltin: true,
+            envVars: {},
+            models: [{ modelId: "unconnected-model", displayName: "Unconnected", effortLevels: [], contextSizes: [] }],
+            enabledModels: ["unconnected-model"],
+          },
+        ]),
+      );
+      setNotificationSettings({
+        providers: [
+          {
+            id: "ntfy-1",
+            type: "ntfy",
+            name: "Phone",
+            enabled: true,
+            config: { serverUrl: "http://127.0.0.1:1", topic: "secret-topic" },
+          },
+        ],
+      });
+
+      const options = (await asSession("get_job_options")) as {
+        models: { model: string; provider: string; thinkingLevels?: string[] }[];
+        mcpServers: string[];
+        notifyTargets: { id: string; name: string }[];
+        runtimes: string[];
+        defaults: { runtime: string };
+      };
+
+      // Anthropic models are pickable and bare; connected zen offers only its
+      // curated enabled model, provider-prefixed; the unconnected builtin is
+      // absent entirely.
+      expect(options.models.some((m) => m.provider === "Anthropic" && !m.model.includes(":"))).toBe(true);
+      const zenModels = options.models.filter((m) => m.model.startsWith("zen:"));
+      expect(zenModels).toEqual([{ model: "zen:kimi-k3", name: "Kimi K3", provider: "OpenCode Zen", thinkingLevels: ["max"] }]);
+      expect(options.models.some((m) => m.model.includes("unconnected-model"))).toBe(false);
+
+      expect(options.mcpServers).toContain("runtime-seen-server");
+      expect(options.notifyTargets).toEqual([{ id: "ntfy-1", name: "Phone", type: "ntfy", enabled: true }]);
+      expect(options.defaults.runtime).toBe("pty");
+
+      // The one hard boundary: nothing secret-bearing may appear anywhere.
+      const raw = JSON.stringify(options);
+      expect(raw).not.toContain("zk-super-secret");
+      expect(raw).not.toContain("secret-topic");
+      expect(raw).not.toContain("envVars");
     });
 
     it("a session can create, inspect, update, run and delete a scheduled job", async () => {

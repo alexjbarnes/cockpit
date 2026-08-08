@@ -21,6 +21,7 @@ import {
   saveIssue,
 } from "@/server/issue-storage";
 import { buildJob, deleteJob, getJob, getLatestRun, getRun, loadJobs, saveJob } from "@/server/job-storage";
+import { discoverMcpServerNames } from "@/server/mcp-discovery";
 import { getNotificationSettings, setNotificationSettings, updateNotificationSettings } from "@/server/notification-settings";
 import { getClaudeUserConfigFile } from "@/server/paths";
 import { addProvider, deleteProvider, getProviders, updateProvider } from "@/server/providers";
@@ -146,6 +147,7 @@ const TOOL_SCOPES: Record<string, readonly McpScope[]> = {
   // the loop, and unlike a session there is no user watching the turn.
   list_jobs: ["assistant", "session"],
   get_job: ["assistant", "session"],
+  get_job_options: ["assistant", "session"],
   create_job: ["assistant", "session"],
   update_job: ["assistant", "session"],
   delete_job: ["assistant", "session"],
@@ -356,8 +358,19 @@ const TOOL_DEFINITIONS = [
     inputSchema: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
   },
   {
+    name: "get_job_options",
+    description:
+      "The menu for create_job/update_job: every pickable model (with its valid contextSizes and thinkingLevels), MCP server names, notification targets, valid runtimes, the defaults applied to omitted fields, and field semantics. Call this before creating or reconfiguring a job. Pass cwd to include that project's .mcp.json servers.",
+    inputSchema: {
+      type: "object",
+      properties: { cwd: { type: "string", description: "Project directory whose .mcp.json servers should be included" } },
+      required: [],
+    },
+  },
+  {
     name: "create_job",
-    description: "Create a new scheduled job",
+    description:
+      "Create a new scheduled job: a prompt run unattended by a Claude CLI on a schedule, in cwd, with only the access configured here (model, tools, MCP servers, permissions). Call get_job_options first for the valid models, MCP servers and notification targets.",
     inputSchema: {
       type: "object",
       properties: {
@@ -367,30 +380,67 @@ const TOOL_DEFINITIONS = [
           items: JOB_SCHEDULE_SCHEMA,
           description: "One or more schedules for this job. A single job can hold more than one schedule.",
         },
-        prompt: { type: "string" },
-        cwd: { type: "string" },
-        enabled: { type: "boolean" },
-        model: { type: "string" },
-        contextSize: { type: "string", enum: Object.keys(CONTEXT_SIZES), description: "Context window size" },
-        thinkingLevel: { type: "string" },
-        bypassPermissions: { type: "boolean" },
-        maxDurationMinutes: { type: "number" },
+        prompt: { type: "string", description: "The task the job's Claude CLI runs each time it fires" },
+        cwd: { type: "string", description: "Absolute working directory the run starts in" },
+        enabled: { type: "boolean", description: "Disabled jobs never fire. Defaults to true." },
+        model: {
+          type: "string",
+          description:
+            'A model id from get_job_options: Anthropic ids are bare ("opus"), every other provider is "<providerId>:<modelId>" ("zen:kimi-k3"). Omit for the default model.',
+        },
+        contextSize: {
+          type: "string",
+          enum: Object.keys(CONTEXT_SIZES),
+          description: "Context window; only for models get_job_options lists contextSizes on",
+        },
+        thinkingLevel: {
+          type: "string",
+          enum: ["off", "low", "medium", "high", "xhigh", "max"],
+          description: "Reasoning effort. Non-Anthropic models only accept the thinkingLevels get_job_options lists for them.",
+        },
+        bypassPermissions: {
+          type: "boolean",
+          description:
+            "Run with all permission prompts approved. An unattended job cannot answer prompts, so a job that writes files or runs commands needs this or a covering allowedTools list. Defaults to false.",
+        },
+        maxDurationMinutes: { type: "number", description: "Kill the run after this long. Defaults to 30." },
         maxRetries: { type: "number", description: "Extra attempts after a failure run (not timeout/stopped). Defaults to 1." },
-        retentionDays: { type: "number" },
-        skipIfMissed: { type: "boolean" },
-        inboxOutput: { type: "boolean" },
-        runtime: { type: "string", enum: ["stream", "pty"], description: "Execution runtime: stream (default) or pty" },
-        allowedTools: { type: "array", items: { type: "string" }, description: "Tool names the job is allowed to use" },
-        mcpServers: { type: "array", items: { type: "string" }, description: "MCP server names to enable for this job" },
-        mcpToolFilters: { type: "object", description: 'Per-MCP-server tool filter: { serverName: ["tool1", "tool2"] }' },
-        notifyProviders: { type: "array", items: { type: "string" }, description: "Notification provider IDs to alert on job completion" },
+        retentionDays: { type: "number", description: "How long run records are kept. Defaults to 90." },
+        skipIfMissed: {
+          type: "boolean",
+          description: "If the server was down at fire time, skip instead of catching up. Defaults to false.",
+        },
+        inboxOutput: { type: "boolean", description: "Post the run's final message to the cockpit inbox. Defaults to false." },
+        runtime: { type: "string", enum: ["stream", "pty"], description: "Execution runtime. Defaults to pty." },
+        allowedTools: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            'Tools the run may use without prompting: built-in Claude Code tool names ("Bash", "Read", "Edit", ...) and MCP tools as "mcp__<server>__<tool>".',
+        },
+        mcpServers: {
+          type: "array",
+          items: { type: "string" },
+          description: "MCP server names (from get_job_options) to enable for this job's runs",
+        },
+        mcpToolFilters: {
+          type: "object",
+          description:
+            'Limit an enabled MCP server to named tools: { "<serverName>": ["tool1", "tool2"] }. Omitted servers expose all their tools.',
+        },
+        notifyProviders: {
+          type: "array",
+          items: { type: "string" },
+          description: "Notification target ids (from get_job_options) to push the run result to",
+        },
       },
       required: ["name", "schedules", "prompt", "cwd"],
     },
   },
   {
     name: "update_job",
-    description: "Update an existing scheduled job",
+    description:
+      "Update an existing scheduled job. Fields mirror create_job (see get_job_options for valid values); omitted fields keep their current value. Accepts either a single {id, ...fields} or {updates: [{id, ...fields}, ...]} for a batch.",
     inputSchema: {
       type: "object",
       properties: {
@@ -406,7 +456,7 @@ const TOOL_DEFINITIONS = [
         enabled: { type: "boolean" },
         model: { type: "string" },
         contextSize: { type: "string", enum: Object.keys(CONTEXT_SIZES), description: "Context window size" },
-        thinkingLevel: { type: "string" },
+        thinkingLevel: { type: "string", enum: ["off", "low", "medium", "high", "xhigh", "max"] },
         bypassPermissions: { type: "boolean" },
         maxDurationMinutes: { type: "number" },
         maxRetries: { type: "number", description: "Extra attempts after a failure run (not timeout/stopped). Defaults to 1." },
@@ -854,6 +904,54 @@ async function handleToolCall(
       }
       case "list_jobs":
         return { content: [{ type: "text", text: JSON.stringify(loadJobs(), null, 2) }] };
+      case "get_job_options": {
+        // The same menu the job editor UI assembles: pickable models mirror
+        // its customProviders/pickableModels filters (connected providers
+        // only; catalog built-ins offer their curated enabled set), servers
+        // come from the shared discovery helper, targets from notification
+        // settings. Nothing here carries secrets — model ids, names and flags
+        // only.
+        const models = getProviders().flatMap((p) => {
+          if (p.id !== "anthropic" && p.isBuiltin && Object.keys(p.envVars).length === 0) return [];
+          const pickable = p.isBuiltin && p.enabledModels ? p.models.filter((m) => (p.enabledModels ?? []).includes(m.modelId)) : p.models;
+          return pickable.map((m) => ({
+            model: p.id === "anthropic" ? m.modelId : `${p.id}:${m.modelId}`,
+            name: m.displayName,
+            provider: p.name,
+            ...(m.contextSizes.length > 0 ? { contextSizes: m.contextSizes } : {}),
+            ...(m.effortLevels.length > 0 ? { thinkingLevels: m.effortLevels } : {}),
+            ...(m.free ? { free: true } : {}),
+          }));
+        });
+        const targets = getNotificationSettings().providers.map((p) => ({ id: p.id, name: p.name, type: p.type, enabled: p.enabled }));
+        const options = {
+          models,
+          mcpServers: discoverMcpServerNames(typeof args.cwd === "string" ? args.cwd : undefined),
+          notifyTargets: targets,
+          runtimes: ["pty", "stream"],
+          thinkingLevels: ["off", "low", "medium", "high", "xhigh", "max"],
+          defaults: {
+            enabled: true,
+            runtime: "pty",
+            maxDurationMinutes: 30,
+            maxRetries: 1,
+            retentionDays: 90,
+            bypassPermissions: false,
+            skipIfMissed: false,
+            inboxOutput: false,
+          },
+          notes: [
+            'model: Anthropic ids are bare ("opus"); every other provider is "<providerId>:<modelId>". Omit model to run on the default.',
+            "thinkingLevels: Anthropic models accept all levels; any other model only the thinkingLevels listed on its models entry (absent = none).",
+            "contextSize: only meaningful for models whose entry lists contextSizes.",
+            'allowedTools: built-in Claude Code tool names (Bash, Read, Edit, Write, Glob, Grep, WebFetch, WebSearch, Agent, ...) plus MCP tools as "mcp__<server>__<tool>". An unattended job cannot answer permission prompts — cover what it needs, or set bypassPermissions.',
+            'mcpToolFilters: { "<serverName>": ["tool", ...] } limits an enabled server; omitted servers expose all tools.',
+            "inboxOutput posts the final message to the cockpit inbox; notifyProviders pushes it to the named notifyTargets ids.",
+            "onIssueStatus schedules: statuses are enumerated in the schedule schema; project ids come from list_projects.",
+          ],
+        };
+        return { content: [{ type: "text", text: JSON.stringify(options, null, 2) }] };
+      }
       case "get_job": {
         const job = getJob(args.id as string);
         if (!job) return { content: [{ type: "text", text: JSON.stringify({ error: `Job not found: ${args.id}` }) }], isError: true };
