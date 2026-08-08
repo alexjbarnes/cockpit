@@ -31,9 +31,9 @@ export interface PtyRuntimeOptions {
   /** Optional debug callback for raw PTY data chunks. */
   onPtyData?: (chunk: string) => void;
   /** The permission mode the spawn asked for (--permission-mode). Hook
-   *  payloads report the CLI's ACTUAL mode; when an account/org policy
-   *  silently discards a requested bypass, the two diverge and the runtime
-   *  warns instead of letting the UI keep claiming bypass is active. */
+   *  payloads report the CLI's ACTUAL mode; when a requested bypass does not
+   *  take effect, the two diverge and the runtime warns instead of letting
+   *  the UI keep claiming bypass is active. */
   expectedPermissionMode?: "default" | "plan" | "bypassPermissions";
 }
 
@@ -313,10 +313,10 @@ export class PtyRuntime {
 
   /**
    * The CLI runs in a different permission mode than the spawn asked for —
-   * seen live when an Anthropic account/org policy discards a requested
-   * bypass ("Bypass permissions mode was disabled by settings"). Without this
-   * warning the UI keeps showing bypass as on while every privileged action
-   * silently raises prompts. Fires once per process.
+   * seen when a requested bypass does not take effect (the CLI reports
+   * "Bypass permissions mode was disabled by settings"). Without this warning
+   * the UI keeps showing bypass as on while every privileged action silently
+   * raises prompts. Fires once per process.
    */
   private warnModeDivergence(actualMode: string, source: string): void {
     if (this.modeDivergenceWarned) return;
@@ -331,7 +331,7 @@ export class PtyRuntime {
         type: "system_message",
         text:
           "⚠️ Bypass permissions is enabled for this session, but the CLI is actually running in " +
-          `${actualMode} mode — bypass was disabled by your Anthropic account or organization policy. ` +
+          `${actualMode} mode — the requested bypass did not take effect. ` +
           "While bypass stays on, cockpit answers the resulting permission prompts (including protected " +
           ".claude-write dialogs) for you; turn bypass off to review them yourself.",
       },
@@ -581,8 +581,8 @@ export class PtyRuntime {
     // biome-ignore lint/suspicious/noControlCharactersInRegex: strip terminal control chars
     const clean = this.ptyOutputBuffer.replace(ANSI_RE, "").replace(/[\x00-\x1f]/g, "");
 
-    // The CLI announces a policy-discarded bypass in its boot banner before
-    // any hook fires — earliest possible detection of the divergence.
+    // The CLI announces an overridden bypass in its boot banner before any
+    // hook fires — earliest possible detection of the divergence.
     if (
       !this.modeDivergenceWarned &&
       this.opts.expectedPermissionMode === "bypassPermissions" &&

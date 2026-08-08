@@ -171,7 +171,7 @@ export class ClaudePtyAdapter implements HarnessAdapter {
       extraEnv,
       thinkingEnabled: config.thinkingLevel !== "off",
       // Mirrors the --permission-mode arg above, so the runtime can spot the
-      // CLI silently running in a different mode (account policy discards).
+      // CLI silently running in a different mode than requested.
       expectedPermissionMode: config.planMode
         ? "plan"
         : config.bypassAllPermissions && !config.cockpitAgent

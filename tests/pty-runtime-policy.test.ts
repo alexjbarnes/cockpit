@@ -1,6 +1,6 @@
-// The account/org "bypass permissions disabled" policy, as seen from the PTY
-// runtime (discovered live 2026-08-08): the CLI silently runs in default mode
-// despite --permission-mode bypassPermissions, and frontier models refuse a
+// A requested bypass that does not take effect, as seen from the PTY runtime
+// (discovered live 2026-08-08): the CLI silently runs in default mode despite
+// --permission-mode bypassPermissions, and frontier models refuse a
 // PermissionRequest-hook allow for self-modifying writes, hanging on a
 // TUI-only dialog cockpit can't see. These tests pin the three detectors:
 // hook-payload permission_mode divergence, the boot banner, and the
@@ -57,7 +57,7 @@ function makeRuntime(expected: "default" | "plan" | "bypassPermissions") {
 }
 
 function divergenceWarnings(events: ParsedEvent[]): ParsedEvent[] {
-  return events.filter((e) => e.type === "system_message" && /disabled by your Anthropic account/i.test(e.text ?? ""));
+  return events.filter((e) => e.type === "system_message" && /requested bypass did not take effect/i.test(e.text ?? ""));
 }
 
 describe("permission-mode divergence detection", () => {
