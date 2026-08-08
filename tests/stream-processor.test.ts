@@ -678,6 +678,29 @@ describe("processEvents", () => {
       expect(result.emit).toHaveLength(1);
     });
 
+    it("stores interactiveOnly requests untouched, even where plan mode would auto-answer", () => {
+      // A TUI-only dialog (frontier-model self-modification protection) must
+      // reach a human: an auto_approve would blind-press a key in the CLI's
+      // rendered dialog.
+      for (const planMode of [false, true]) {
+        const state = makeState();
+        const events: ParsedEvent[] = [
+          makeEvent({
+            type: "permission_request",
+            requestId: "tui-1",
+            toolName: "unknown",
+            rawToolInput: { file_path: "/x/.claude/skills/a/SKILL.md" },
+            interactiveOnly: true,
+          }),
+        ];
+        const result = processEvents(events, state, { planMode, compacting: false });
+        expect(result.permissionActions, `planMode=${planMode}`).toHaveLength(1);
+        expect(result.permissionActions[0].type).toBe("store");
+        expect(result.permissionActions[0].interactiveOnly).toBe(true);
+        expect(result.emit).toHaveLength(1);
+      }
+    });
+
     it("auto-approves read-only gh commands", () => {
       const state = makeState();
       const events: ParsedEvent[] = [

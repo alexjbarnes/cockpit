@@ -30,6 +30,11 @@ export interface PtyRuntimeOptions {
   thinkingEnabled?: boolean;
   /** Optional debug callback for raw PTY data chunks. */
   onPtyData?: (chunk: string) => void;
+  /** The permission mode the spawn asked for (--permission-mode). Hook
+   *  payloads report the CLI's ACTUAL mode; when an account/org policy
+   *  silently discards a requested bypass, the two diverge and the runtime
+   *  warns instead of letting the UI keep claiming bypass is active. */
+  expectedPermissionMode?: "default" | "plan" | "bypassPermissions";
 }
 
 /**
@@ -50,6 +55,11 @@ export class PtyRuntime {
   private pty: PtySession | null = null;
   private settingsPath: string | null = null;
   private readonly pendingPermissions = new Map<string, (decision: PermissionDecision) => void>();
+  /** Synthetic requests for TUI-only dialogs (see onNotification): answered
+   *  with keystrokes into the PTY, not through the hook response channel. */
+  private readonly pendingTuiDialogs = new Set<string>();
+  private modeDivergenceWarned = false;
+  private lastPreToolUse: { tool: string; input?: Record<string, unknown> } | null = null;
   private exited = false;
   private cleaned = false;
   /** Resolver armed by deliverInitialPrompt; fired when UserPromptSubmit confirms the first prompt landed. */
@@ -278,6 +288,8 @@ export class PtyRuntime {
       resolve({ behavior: "deny", message: "interrupted" });
     }
     this.pendingPermissions.clear();
+    // The Esc above dismissed any rendered TUI dialog with it.
+    this.pendingTuiDialogs.clear();
   }
 
   resize(cols: number, rows: number): void {
@@ -295,11 +307,59 @@ export class PtyRuntime {
       resolve({ behavior: "deny", message: "session ended" });
     }
     this.pendingPermissions.clear();
+    this.pendingTuiDialogs.clear();
     await this.cleanup();
+  }
+
+  /**
+   * The CLI runs in a different permission mode than the spawn asked for —
+   * seen live when an Anthropic account/org policy discards a requested
+   * bypass ("Bypass permissions mode was disabled by settings"). Without this
+   * warning the UI keeps showing bypass as on while every privileged action
+   * silently raises prompts. Fires once per process.
+   */
+  private warnModeDivergence(actualMode: string, source: string): void {
+    if (this.modeDivergenceWarned) return;
+    this.modeDivergenceWarned = true;
+    logDiag(this.opts.sessionId, "pty:permission-mode-divergence", {
+      expected: this.opts.expectedPermissionMode,
+      actual: actualMode,
+      source,
+    });
+    this.emit([
+      {
+        type: "system_message",
+        text:
+          "⚠️ Bypass permissions is enabled for this session, but the CLI is actually running in " +
+          `${actualMode} mode — bypass was disabled by your Anthropic account or organization policy. ` +
+          "Permission prompts will appear, and some actions (like editing .claude skills) need explicit approval.",
+      },
+    ]);
+  }
+
+  /** Compare a hook payload's reported permission_mode against the spawn's request. */
+  private checkPayloadMode(payload: Record<string, unknown>, source: string): void {
+    if (this.opts.expectedPermissionMode !== "bypassPermissions") return;
+    const actual = payload.permission_mode;
+    if (typeof actual === "string" && actual !== "bypassPermissions") {
+      this.warnModeDivergence(actual, source);
+    }
   }
 
   /** Called by SessionManager.respondToPermission when this session is on the pty runtime. */
   notifyPermissionDecision(requestId: string, decision: PermissionDecision): boolean {
+    // A TUI-only dialog has no hook response channel — the CLI refused the
+    // hook's allow (frontier models require interactive confirmation for
+    // self-modifying writes) and is sitting on a rendered dialog. The only
+    // way to answer is keystrokes into the PTY cockpit owns: "1" selects the
+    // dialog's Yes option, Esc cancels it.
+    if (this.pendingTuiDialogs.has(requestId)) {
+      this.pendingTuiDialogs.delete(requestId);
+      logDiag(this.opts.sessionId, "pty:tui-dialog-decision", { requestId, behavior: decision.behavior });
+      if (!this.pty) return false;
+      this.pty.sendKey(decision.behavior === "allow" ? "1" : "\x1b");
+      return true;
+    }
     const resolver = this.pendingPermissions.get(requestId);
     if (!resolver) {
       logDiag(this.opts.sessionId, "pty:permission-decision-unmatched", { requestId, behavior: decision.behavior });
@@ -325,6 +385,10 @@ export class PtyRuntime {
         const toolUseId = typeof payload.tool_use_id === "string" ? payload.tool_use_id.slice(0, 12) : "none";
         logDiag(this.opts.sessionId, "hook:PreToolUse", { tool: toolName, toolUseId });
         console.log(`[pty-runtime] PreToolUse: tool=${toolName} cli_session=${cliSession} tool_use_id=${toolUseId}`);
+        this.checkPayloadMode(payload, "PreToolUse");
+        // Remembered so a later TUI-only permission dialog (see onNotification)
+        // can name the tool it is actually gating.
+        this.lastPreToolUse = { tool: toolName, input: payload.tool_input as Record<string, unknown> | undefined };
         this.emit(translateHookEvent("PreToolUse", payload));
       },
       onPostToolUse: (payload) => {
@@ -367,6 +431,7 @@ export class PtyRuntime {
         this.cancelErrorDebounce();
         this.ptyOutputBuffer = "";
         logDiag(this.opts.sessionId, "pty:hook-user-prompt-submit", { armed: !!this.promptAccepted });
+        this.checkPayloadMode(payload, "UserPromptSubmit");
         this.promptAccepted?.();
         this.emit(translateHookEvent("UserPromptSubmit", payload));
       },
@@ -417,6 +482,28 @@ export class PtyRuntime {
       onNotification: (payload) => {
         this.cancelErrorDebounce();
         this.emit(translateHookEvent("Notification", payload));
+        // "Claude needs your permission" arriving OUTSIDE the PermissionRequest
+        // hook flow means the CLI rendered an interactive-only dialog — on
+        // frontier models a hook allow does not satisfy self-modification
+        // writes (.claude skills, dotfiles), and the session hangs invisibly.
+        // Surface it as a real permission request; the decision comes back via
+        // notifyPermissionDecision, which answers with PTY keystrokes.
+        const message = typeof payload.message === "string" ? payload.message : "";
+        if (/needs your permission/i.test(message)) {
+          const requestId = `tui-${newPermissionRequestId()}`;
+          this.pendingTuiDialogs.add(requestId);
+          logDiag(this.opts.sessionId, "pty:tui-dialog-detected", { requestId, lastTool: this.lastPreToolUse?.tool ?? null });
+          this.emit([
+            {
+              type: "permission_request",
+              requestId,
+              toolName: this.lastPreToolUse?.tool ?? "unknown",
+              toolInput: this.lastPreToolUse?.input ? JSON.stringify(this.lastPreToolUse.input) : "",
+              rawToolInput: this.lastPreToolUse?.input,
+              interactiveOnly: true,
+            },
+          ]);
+        }
       },
       onPermissionRequest: (payload) => this.handlePermissionRequest(payload),
     };
@@ -426,6 +513,9 @@ export class PtyRuntime {
     const requestId = newPermissionRequestId();
     const toolName = typeof payload.tool_name === "string" ? payload.tool_name : "unknown";
     const toolInput = payload.tool_input as Record<string, unknown> | undefined;
+    // A PermissionRequest under an intended bypass is itself divergence — a
+    // CLI genuinely in bypass mode never consults this hook.
+    this.checkPayloadMode(payload, "PermissionRequest");
 
     const event: ParsedEvent = {
       type: "permission_request",
@@ -489,6 +579,16 @@ export class PtyRuntime {
     }
     // biome-ignore lint/suspicious/noControlCharactersInRegex: strip terminal control chars
     const clean = this.ptyOutputBuffer.replace(ANSI_RE, "").replace(/[\x00-\x1f]/g, "");
+
+    // The CLI announces a policy-discarded bypass in its boot banner before
+    // any hook fires — earliest possible detection of the divergence.
+    if (
+      !this.modeDivergenceWarned &&
+      this.opts.expectedPermissionMode === "bypassPermissions" &&
+      /Bypass permissions mode was disabled by settings/i.test(clean)
+    ) {
+      this.warnModeDivergence("default", "boot-banner");
+    }
 
     // A 1M-context request on an account without usage credits (Sonnet 4.6):
     // the CLI prints this and the turn fails. It carries no HTTP code, so the

@@ -41,6 +41,10 @@ export interface ParsedEvent {
   requestId?: string;
   rawToolInput?: Record<string, unknown>;
   permissionSuggestions?: Record<string, unknown>[];
+  /** A TUI-only dialog the CLI insists a human answers (frontier-model
+   *  self-modification writes). Never auto-approved, even under bypass;
+   *  answered with PTY keystrokes rather than the hook response channel. */
+  interactiveOnly?: boolean;
   interrupted?: boolean;
   clearPending?: boolean;
   rateLimitInfo?: { status: string; retryAfterMs?: number };

@@ -3555,6 +3555,38 @@ describe("SessionManager", () => {
   });
 
   describe("applyProcessedResult branches", () => {
+    it("bypass auto-approves a stored permission but never an interactiveOnly one", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      s.bypassAllPermissions = true;
+
+      const base = {
+        intermediateMessages: [],
+        emit: [],
+        systemMessages: [],
+        errors: [],
+        statusChange: null,
+        compactDone: false,
+        snapshot: null,
+      };
+
+      (manager as any).applyProcessedResult(s, session.id, {
+        ...base,
+        permissionActions: [{ type: "store", requestId: "req-normal", toolName: "Write", rawToolInput: {} }],
+      });
+      // Swallowed by the bypass auto-approve: never surfaces to the UI.
+      expect(s.pendingRequests.has("req-normal")).toBe(false);
+
+      (manager as any).applyProcessedResult(s, session.id, {
+        ...base,
+        permissionActions: [{ type: "store", requestId: "tui-1", toolName: "Write", rawToolInput: {}, interactiveOnly: true }],
+      });
+      // The CLI already refused a hook allow for this one — it must reach the
+      // user as a real dialog despite bypass being on.
+      expect(s.pendingRequests.has("tui-1")).toBe(true);
+      expect(s.pendingRequests.get("tui-1")?.type).toBe("permission");
+    });
+
     it("handles permission mode change to plan", () => {
       const session = manager.createSession("/tmp");
       const s = (manager as any).sessions.get(session.id)!;

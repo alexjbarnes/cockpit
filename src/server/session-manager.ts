@@ -1783,7 +1783,11 @@ export class SessionManager {
         // Reached by the assistant only for AGENT_PROMPTED_TOOLS, so bypass
         // covers its tool calls without touching the config-write proposal
         // cards, which the branch above still handles.
-      } else if (session.bypassAllPermissions && !session.planMode && pa.toolName !== "AskUserQuestion") {
+        // interactiveOnly is exempt from the bypass auto-approve: the CLI
+        // already refused a hook allow for it (frontier-model protection on
+        // self-modifying writes), so cockpit answering yes on its own would
+        // both fail and defeat the policy. It falls through to the UI dialog.
+      } else if (session.bypassAllPermissions && !session.planMode && pa.toolName !== "AskUserQuestion" && !pa.interactiveOnly) {
         this.respondToPermission(sessionId, pa.requestId, true, pa.rawToolInput);
         bypassedRequestIds.add(pa.requestId);
       } else {

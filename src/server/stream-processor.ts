@@ -34,6 +34,8 @@ export interface PermissionAction {
   rawToolInput?: Record<string, unknown>;
   denyReason?: string;
   permissionSuggestions?: Record<string, unknown>[];
+  /** See ParsedEvent.interactiveOnly: must reach a human, never auto-approve. */
+  interactiveOnly?: boolean;
 }
 
 const READ_ONLY_BASH_COMMANDS = new Set([
@@ -407,6 +409,22 @@ export function processEvents(
 
     if (event.type === "permission_request" && event.requestId) {
       const toolName = event.toolName || "";
+      // A TUI-only dialog must reach a human whatever the mode — every
+      // auto-approve shortcut below would answer it with a keystroke the
+      // user never chose.
+      if (event.interactiveOnly) {
+        result.permissionActions.push({
+          type: "store",
+          requestId: event.requestId,
+          toolName,
+          toolInput: event.toolInput,
+          rawToolInput: event.rawToolInput,
+          interactiveOnly: true,
+        });
+        result.emit.push(event);
+        result.snapshot = buildSnapshot(state);
+        continue;
+      }
       if (options.planMode) {
         if (toolName === "Bash") {
           const cmd = (event.rawToolInput as { command?: string })?.command ?? "";
@@ -450,6 +468,7 @@ export function processEvents(
         toolInput: event.toolInput,
         rawToolInput: event.rawToolInput,
         permissionSuggestions: event.permissionSuggestions,
+        interactiveOnly: event.interactiveOnly,
       });
     }
 
