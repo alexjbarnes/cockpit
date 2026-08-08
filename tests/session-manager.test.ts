@@ -3555,7 +3555,7 @@ describe("SessionManager", () => {
   });
 
   describe("applyProcessedResult branches", () => {
-    it("bypass auto-approves a stored permission but never an interactiveOnly one", () => {
+    it("bypass auto-approves stored permissions, interactiveOnly ones included (user decision)", () => {
       const session = manager.createSession("/tmp");
       const s = (manager as any).sessions.get(session.id)!;
       s.bypassAllPermissions = true;
@@ -3572,19 +3572,35 @@ describe("SessionManager", () => {
 
       (manager as any).applyProcessedResult(s, session.id, {
         ...base,
-        permissionActions: [{ type: "store", requestId: "req-normal", toolName: "Write", rawToolInput: {} }],
+        permissionActions: [
+          { type: "store", requestId: "req-normal", toolName: "Write", rawToolInput: {} },
+          { type: "store", requestId: "tui-1", toolName: "Write", rawToolInput: {}, interactiveOnly: true },
+        ],
       });
-      // Swallowed by the bypass auto-approve: never surfaces to the UI.
+      // Both swallowed by the bypass auto-approve: bypass on is the user's
+      // standing yes, TUI-only dialogs included (answered via PTY keystrokes
+      // in the respond path). Neither surfaces to the UI.
       expect(s.pendingRequests.has("req-normal")).toBe(false);
+      expect(s.pendingRequests.has("tui-1")).toBe(false);
+    });
+
+    it("without bypass, an interactiveOnly permission surfaces as a real dialog", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      s.bypassAllPermissions = false;
 
       (manager as any).applyProcessedResult(s, session.id, {
-        ...base,
-        permissionActions: [{ type: "store", requestId: "tui-1", toolName: "Write", rawToolInput: {}, interactiveOnly: true }],
+        intermediateMessages: [],
+        emit: [],
+        systemMessages: [],
+        errors: [],
+        statusChange: null,
+        compactDone: false,
+        snapshot: null,
+        permissionActions: [{ type: "store", requestId: "tui-2", toolName: "Write", rawToolInput: {}, interactiveOnly: true }],
       });
-      // The CLI already refused a hook allow for this one — it must reach the
-      // user as a real dialog despite bypass being on.
-      expect(s.pendingRequests.has("tui-1")).toBe(true);
-      expect(s.pendingRequests.get("tui-1")?.type).toBe("permission");
+      expect(s.pendingRequests.has("tui-2")).toBe(true);
+      expect(s.pendingRequests.get("tui-2")?.type).toBe("permission");
     });
 
     it("handles permission mode change to plan", () => {

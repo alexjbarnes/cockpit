@@ -332,7 +332,8 @@ export class PtyRuntime {
         text:
           "⚠️ Bypass permissions is enabled for this session, but the CLI is actually running in " +
           `${actualMode} mode — bypass was disabled by your Anthropic account or organization policy. ` +
-          "Permission prompts will appear, and some actions (like editing .claude skills) need explicit approval.",
+          "While bypass stays on, cockpit answers the resulting permission prompts (including protected " +
+          ".claude-write dialogs) for you; turn bypass off to review them yourself.",
       },
     ]);
   }

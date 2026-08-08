@@ -1783,11 +1783,12 @@ export class SessionManager {
         // Reached by the assistant only for AGENT_PROMPTED_TOOLS, so bypass
         // covers its tool calls without touching the config-write proposal
         // cards, which the branch above still handles.
-        // interactiveOnly is exempt from the bypass auto-approve: the CLI
-        // already refused a hook allow for it (frontier-model protection on
-        // self-modifying writes), so cockpit answering yes on its own would
-        // both fail and defeat the policy. It falls through to the UI dialog.
-      } else if (session.bypassAllPermissions && !session.planMode && pa.toolName !== "AskUserQuestion" && !pa.interactiveOnly) {
+        // interactiveOnly (TUI-only dialogs) rides the same bypass
+        // auto-approve by user decision (2026-08-08): bypass ON is the user's
+        // standing yes, so cockpit presses the dialog's Yes for them (the
+        // respond path answers those with PTY keystrokes). With bypass off
+        // they fall through to a real UI dialog like everything else.
+      } else if (session.bypassAllPermissions && !session.planMode && pa.toolName !== "AskUserQuestion") {
         this.respondToPermission(sessionId, pa.requestId, true, pa.rawToolInput);
         bypassedRequestIds.add(pa.requestId);
       } else {
