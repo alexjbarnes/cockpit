@@ -114,12 +114,22 @@ export function clearInbox(): void {
 
 const ERROR_BLOCK_RE = /```cockpit-error\s*\n([\s\S]*?)\n```/;
 
+/**
+ * Values a run has used to say "nothing went wrong" while still emitting the
+ * block. A job's prompt asks for the block only on failure, but a model that
+ * reads "your final message MUST include" literally emits one regardless and
+ * fills the field in with a placeholder — which marked a completed run failed
+ * and spent a retry redoing finished work. Treated as no error at all.
+ */
+const NON_ERRORS = new Set(["", "none", "n/a", "na", "null", "nil", "no error", "no errors", "success", "ok"]);
+
 export function parseErrorBlock(text: string): { error: string; details?: string } | null {
   const match = ERROR_BLOCK_RE.exec(text);
   if (!match) return null;
   try {
     const parsed = JSON.parse(match[1]);
     if (typeof parsed.error !== "string") return null;
+    if (NON_ERRORS.has(parsed.error.trim().toLowerCase())) return null;
     return { error: parsed.error, details: parsed.details };
   } catch {
     return null;
