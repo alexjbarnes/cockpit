@@ -175,6 +175,18 @@ function normalizeMcpName(name: string): string {
   return name.replace(/[^a-zA-Z0-9]/g, "_");
 }
 
+/**
+ * The prefixes a server's tool names may carry. The CLI does not always
+ * normalise: a server configured as `cockpit-config` emits
+ * `mcp__cockpit-config__list_projects`, hyphen intact. Matching only the
+ * normalised form denied every call to any server whose name was not already
+ * alphanumeric, so both spellings are accepted. Filters stay keyed by the
+ * configured name, which is what the job editor and storage use.
+ */
+function mcpPrefixes(serverName: string): string[] {
+  return [...new Set([serverName, normalizeMcpName(serverName)])].map((n) => `${n}__`);
+}
+
 function isMcpToolAllowed(
   toolName: string,
   toolInput: string,
@@ -185,9 +197,8 @@ function isMcpToolAllowed(
   const remainder = toolName.slice(5);
 
   for (const serverName of enabledServers) {
-    const normalized = normalizeMcpName(serverName);
-    const prefix = `${normalized}__`;
-    if (!remainder.startsWith(prefix)) continue;
+    const prefix = mcpPrefixes(serverName).find((p) => remainder.startsWith(p));
+    if (!prefix) continue;
     const tool = remainder.slice(prefix.length);
     if (!mcpToolFilters || !(serverName in mcpToolFilters)) return true;
     const filters = mcpToolFilters[serverName];
@@ -625,8 +636,19 @@ export class JobScheduler {
           // would otherwise fail. The MCP server still confines a run token to
           // this one tool, so allowing it here grants nothing else.
           const isInboxTool = toolName === INBOX_TOOL_NAME;
+          // An MCP tool passes on either gate: the mcpServers/mcpToolFilters
+          // allowlist, or an allowedTools entry naming it outright. It used to
+          // be the server gate alone — isMcpToolAllowed returns null only for
+          // non-MCP names, so a boolean always short-circuited allowedTools —
+          // while the job editor accepted "mcp__server__tool" entries and the
+          // run's own prompt listed them, so those entries silently did
+          // nothing. OR, not AND, so a job configured with only mcpServers is
+          // unaffected. The inbox tool keeps its own gate: it is cockpit's
+          // reporting channel, governed by inboxOutput rather than either list.
           const mcpResult = isInboxTool ? !!job.inboxOutput : isMcpToolAllowed(toolName, inputStr, enabledServers, job.mcpToolFilters);
-          const allowed = mcpResult !== null ? mcpResult : isToolAllowed(toolName, inputStr, job.allowedTools || []);
+          const allowed = isInboxTool
+            ? mcpResult === true
+            : mcpResult === true || isToolAllowed(toolName, inputStr, job.allowedTools || []);
           jlog("permission", {
             toolName,
             requestId: event.requestId,

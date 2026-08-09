@@ -1027,6 +1027,48 @@ describe("MCP tool permissions (via permission flow)", () => {
     expect(sm.respondToPermission).toHaveBeenCalledWith("session-1", "p2", false, undefined);
   });
 
+  // The CLI does not normalise a server's name into its tool names: a server
+  // configured as `cockpit-config` emits `mcp__cockpit-config__list_projects`.
+  // Matching only the normalised spelling denied every call to any server whose
+  // name was not already alphanumeric.
+  async function mcpVerdict(toolName: string, job: Parameters<typeof makeJob>[0]): Promise<boolean> {
+    vi.clearAllMocks();
+    sm = makeMockSessionManager();
+    scheduler = new JobScheduler(sm as never);
+    const promise = scheduler.executeJob(makeJob(job));
+    await vi.waitFor(() => expect(sm.sendMessage).toHaveBeenCalled());
+    sm.emitEvent({ type: "permission_request", requestId: "p1", toolName, toolInput: "{}", rawToolInput: {} });
+    sm.emitStatus("idle");
+    await promise;
+    const call = sm.respondToPermission.mock.calls.find((c: unknown[]) => c[1] === "p1");
+    return call?.[2] === true;
+  }
+
+  it("matches a hyphenated server against the tool name the CLI actually emits", async () => {
+    const job = { mcpServers: ["my-server"], allowedTools: [] };
+    expect(await mcpVerdict("mcp__my-server__do_thing", job)).toBe(true);
+    // The normalised spelling keeps working, so nothing relying on it breaks.
+    expect(await mcpVerdict("mcp__my_server__do_thing", job)).toBe(true);
+    // A different server is still denied either way.
+    expect(await mcpVerdict("mcp__other-server__do_thing", job)).toBe(false);
+  });
+
+  it("applies mcpToolFilters to a hyphenated server, keyed by its configured name", async () => {
+    const job = { mcpServers: ["my-server"], mcpToolFilters: { "my-server": ["allowed_tool"] }, allowedTools: [] };
+    expect(await mcpVerdict("mcp__my-server__allowed_tool", job)).toBe(true);
+    expect(await mcpVerdict("mcp__my-server__blocked_tool", job)).toBe(false);
+  });
+
+  it("honours an allowedTools entry naming an MCP tool whose server is not enabled", async () => {
+    // The job editor accepts these entries and the run's prompt lists them; the
+    // server gate used to short-circuit them into doing nothing at all.
+    expect(await mcpVerdict("mcp__my-server__do_thing", { mcpServers: [], allowedTools: ["mcp__my-server__do_thing"] })).toBe(true);
+    // Naming one tool does not admit its neighbours.
+    expect(await mcpVerdict("mcp__my-server__other_thing", { mcpServers: [], allowedTools: ["mcp__my-server__do_thing"] })).toBe(false);
+    // The server gate alone still passes, with allowedTools empty.
+    expect(await mcpVerdict("mcp__my-server__do_thing", { mcpServers: ["my-server"], allowedTools: [] })).toBe(true);
+  });
+
   it("allows MCP tool via colon filter with server:tool match", async () => {
     const job = makeJob({
       mcpServers: ["conduit"],
