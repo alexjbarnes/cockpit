@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("node:fs");
 vi.mock("node:os", () => ({ homedir: () => "/home/user" }));
@@ -117,6 +117,48 @@ describe("defaults", () => {
 
     const result = setDefaults({ issuesEnabled: true });
     expect(result.issuesEnabled).toBe(true);
+  });
+
+  describe("COCKPIT_ISSUES_ENABLED override", () => {
+    afterEach(() => {
+      delete process.env.COCKPIT_ISSUES_ENABLED;
+    });
+
+    async function readWithStored(stored: Record<string, unknown> | null) {
+      const fs = await import("node:fs");
+      vi.mocked(fs.readFileSync).mockImplementation(() => {
+        if (stored === null) throw new Error("ENOENT");
+        return JSON.stringify(stored);
+      });
+      const { getDefaults } = await import("@/server/defaults");
+      return getDefaults();
+    }
+
+    it("forces the flag on or off regardless of what is stored", async () => {
+      for (const value of ["1", "true"]) {
+        process.env.COCKPIT_ISSUES_ENABLED = value;
+        expect((await readWithStored({ issuesEnabled: false })).issuesEnabled, value).toBe(true);
+        expect((await readWithStored(null)).issuesEnabled, `${value} (no file)`).toBe(true);
+      }
+      for (const value of ["0", "false"]) {
+        process.env.COCKPIT_ISSUES_ENABLED = value;
+        expect((await readWithStored({ issuesEnabled: true })).issuesEnabled, value).toBe(false);
+      }
+    });
+
+    it("leaves the stored value alone when unset or unrecognised", async () => {
+      expect((await readWithStored({ issuesEnabled: true })).issuesEnabled).toBe(true);
+      process.env.COCKPIT_ISSUES_ENABLED = "yes-please";
+      expect((await readWithStored({ issuesEnabled: true })).issuesEnabled).toBe(true);
+      expect((await readWithStored({ issuesEnabled: false })).issuesEnabled).toBe(false);
+    });
+
+    it("does not write the override back to disk", async () => {
+      const fs = await import("node:fs");
+      process.env.COCKPIT_ISSUES_ENABLED = "1";
+      await readWithStored({ issuesEnabled: false });
+      expect(fs.writeFileSync).not.toHaveBeenCalled();
+    });
   });
 
   it("setDefaults handles write failure gracefully", async () => {
