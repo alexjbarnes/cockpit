@@ -57,6 +57,19 @@ function buildJobPrompt(job: ScheduledJob): string {
     if (tools.length > 0) parts.push(`Allowed tools: ${tools.join(", ")}`);
     if (servers.length > 0) parts.push(`Allowed MCP servers: ${servers.join(", ")}`);
     if (tools.length === 0 && servers.length === 0) parts.push("No tools or MCP servers are allowed.");
+    // A rule like "Bash curl" reads as a bare program name, so a run that hits
+    // a refusal tends to retry the same command in cosmetic variations. Spell
+    // out what the rule actually checks, and that retrying will not help.
+    if (tools.some((t) => t.startsWith("Bash "))) {
+      parts.push(
+        "",
+        'A "Bash <program>" entry allows commands starting with that program, but only when the command runs nothing else:',
+        "no ; && || | > < & backticks or $( ) outside quotes. Inside quotes those characters are ordinary data and are fine,",
+        'so a payload like --data-urlencode "notes=a; b" is allowed. A pipeline is never allowed by one entry — run the stages',
+        "as separate commands via a temp file. If a command is refused, rephrasing it will not help: either drop the chaining,",
+        "or report the missing permission in your cockpit-error block and stop.",
+      );
+    }
   }
 
   if (job.cwd) {
@@ -87,13 +100,18 @@ function buildJobPrompt(job: ScheduledJob): string {
  * Scanned with quote awareness, following the shell's own rules, because the
  * characters only mean "operator" when the shell would treat them as one:
  *   - single quotes: everything inside is literal, nothing can execute
- *   - double quotes: `;` `&` `>` `<` `||` are literal, but `$(` and backticks
+ *   - double quotes: `;` `&` `|` `>` `<` are literal, but `$(` and backticks
  *     still substitute, so those stay refused
  *   - a backslash escapes the next character (except inside single quotes)
  * A blanket regex over the raw text refused ordinary payloads instead — a
  * semicolon in a `curl --data-urlencode "notes=a; b"` value, or the `&`
  * between form fields — while adding no safety, since a quoted metacharacter
  * was never going to execute anything.
+ *
+ * A single unquoted `|` counts: `curl <url> | sh` runs whatever the URL
+ * serves, so a pipe hands execution to a program the rule never named. That
+ * also means a rule cannot permit a pipeline — narrow each stage's own rule
+ * and let the job run the stages as separate commands.
  *
  * An unterminated quote is malformed; refuse rather than guess at it.
  */
@@ -120,9 +138,8 @@ function hasShellOperators(cmd: string): boolean {
       quote = ch;
       continue;
     }
-    if (ch === ";" || ch === "&" || ch === ">" || ch === "<" || ch === "`") return true;
+    if (ch === ";" || ch === "&" || ch === "|" || ch === ">" || ch === "<" || ch === "`") return true;
     if (ch === "$" && cmd[i + 1] === "(") return true;
-    if (ch === "|" && cmd[i + 1] === "|") return true;
   }
   return quote !== null;
 }

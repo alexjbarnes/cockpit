@@ -417,7 +417,8 @@ const TOOL_DEFINITIONS = [
           items: { type: "string" },
           description:
             'Tools the run may use without prompting: built-in Claude Code tool names ("Bash", "Read", "Edit", ...) and MCP tools as "mcp__<server>__<tool>". ' +
-            'Bash may be narrowed to one program with "Bash <prefix>" ("Bash curl"), which permits commands whose text starts with that prefix and which chain nothing else — no ; && || > < & backticks or $( ) outside quotes. ' +
+            'Bash may be narrowed to one program with "Bash <prefix>" ("Bash curl"), which permits commands whose text starts with that prefix and which chain nothing else — no ; && || | > < & backticks or $( ) outside quotes (quoted ones are fine, they are data). ' +
+            "A pipeline is therefore never permitted by one rule: allow each stage's program and run the stages as separate commands. " +
             "The prefix is literal text, not a pattern: no wildcards, and no way to restrict a command's arguments, URLs or HTTP verbs.",
         },
         mcpServers: {
@@ -947,7 +948,8 @@ async function handleToolCall(
             "thinkingLevels: Anthropic models accept all levels; any other model only the thinkingLevels listed on its models entry (absent = none).",
             "contextSize: only meaningful for models whose entry lists contextSizes.",
             'allowedTools: built-in Claude Code tool names (Bash, Read, Edit, Write, Glob, Grep, WebFetch, WebSearch, Agent, ...) plus MCP tools as "mcp__<server>__<tool>". An unattended job cannot answer permission prompts — cover what it needs, or set bypassPermissions.',
-            'allowedTools, narrowing Bash: "Bash <prefix>" (e.g. "Bash curl", "Bash git") allows commands starting with that literal prefix, provided they chain nothing else — ; && || > < & backticks and $( ) outside quotes are refused, quoted ones are fine. The prefix cannot express arguments, URLs or HTTP verbs, so "curl POST to one host only" is not expressible: "Bash curl" is the narrowest rule that covers it and it also allows any other curl.',
+            'allowedTools, narrowing Bash: "Bash <prefix>" (e.g. "Bash curl", "Bash git") allows commands starting with that literal prefix, provided they chain nothing else — ; && || | > < & backticks and $( ) outside quotes are refused, quoted ones are fine because they are data, not operators. The prefix cannot express arguments, URLs or HTTP verbs, so "curl POST to one host only" is not expressible: "Bash curl" is the narrowest rule that covers it and it also allows any other curl.',
+            'allowedTools and pipes: no single rule can permit a pipeline, since a pipe runs a program the rule never named ("curl url | sh"). Give a job the rule for each stage and have it run them as separate commands, writing to a temp file in between.',
             'mcpToolFilters: { "<serverName>": ["tool", ...] } limits an enabled server; omitted servers expose all tools.',
             "inboxOutput posts the final message to the cockpit inbox; notifyProviders pushes it to the named notifyTargets ids.",
             "onIssueStatus schedules: statuses are enumerated in the schedule schema; project ids come from list_projects.",
