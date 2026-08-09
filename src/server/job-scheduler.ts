@@ -67,7 +67,8 @@ function buildJobPrompt(job: ScheduledJob): string {
         "no ; && || | > < & backticks or $( ) outside quotes. Inside quotes those characters are ordinary data and are fine,",
         'so a payload like --data-urlencode "notes=a; b" is allowed. A pipeline is never allowed by one entry — run the stages',
         "as separate commands via a temp file. If a command is refused, rephrasing it will not help: either drop the chaining,",
-        "or report the missing permission in your cockpit-error block and stop.",
+        "or report the missing permission in your cockpit-error block and stop. Do not widen your own permissions to get around a",
+        "refusal — name the entry you needed in the error block and let the user decide.",
       );
     }
   }

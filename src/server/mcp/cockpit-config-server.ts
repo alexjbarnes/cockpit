@@ -401,7 +401,8 @@ const TOOL_DEFINITIONS = [
         bypassPermissions: {
           type: "boolean",
           description:
-            "Run with all permission prompts approved. An unattended job cannot answer prompts, so a job that writes files or runs commands needs this or a covering allowedTools list. Defaults to false.",
+            "Disable the allowlist entirely and approve every prompt. Defaults to false, and should normally stay false: list what the job needs in allowedTools instead. " +
+            "Reserve this for automation whose unrestricted tool use the user has accepted in advance — it is a decision for them, not a way around a refusal.",
         },
         maxDurationMinutes: { type: "number", description: "Kill the run after this long. Defaults to 30." },
         maxRetries: { type: "number", description: "Extra attempts after a failure run (not timeout/stopped). Defaults to 1." },
@@ -460,7 +461,12 @@ const TOOL_DEFINITIONS = [
         model: { type: "string" },
         contextSize: { type: "string", enum: Object.keys(CONTEXT_SIZES), description: "Context window size" },
         thinkingLevel: { type: "string", enum: ["off", "low", "medium", "high", "xhigh", "max"] },
-        bypassPermissions: { type: "boolean" },
+        bypassPermissions: {
+          type: "boolean",
+          description:
+            "Disable the allowlist entirely and approve every prompt. Switching this on to clear a permission failure trades a narrow allowlist for unrestricted tool use, which is rarely what the failure called for: " +
+            "a refusal is usually one missing or too-narrow allowedTools entry, so fix that entry instead. Turn this on only when the user asked for it.",
+        },
         maxDurationMinutes: { type: "number" },
         maxRetries: { type: "number", description: "Extra attempts after a failure run (not timeout/stopped). Defaults to 1." },
         retentionDays: { type: "number" },
@@ -950,6 +956,7 @@ async function handleToolCall(
             'allowedTools: built-in Claude Code tool names (Bash, Read, Edit, Write, Glob, Grep, WebFetch, WebSearch, Agent, ...) plus MCP tools as "mcp__<server>__<tool>". An unattended job cannot answer permission prompts — cover what it needs, or set bypassPermissions.',
             'allowedTools, narrowing Bash: "Bash <prefix>" (e.g. "Bash curl", "Bash git") allows commands starting with that literal prefix, provided they chain nothing else — ; && || | > < & backticks and $( ) outside quotes are refused, quoted ones are fine because they are data, not operators. The prefix cannot express arguments, URLs or HTTP verbs, so "curl POST to one host only" is not expressible: "Bash curl" is the narrowest rule that covers it and it also allows any other curl.',
             'allowedTools and pipes: no single rule can permit a pipeline, since a pipe runs a program the rule never named ("curl url | sh"). Give a job the rule for each stage and have it run them as separate commands, writing to a temp file in between.',
+            "bypassPermissions is not the remedy for a refused tool — it removes the allowlist rather than correcting it. Read the refused command, add or widen the one allowedTools entry it needed, and leave bypass alone unless the user asked for unrestricted automation.",
             'mcpToolFilters: { "<serverName>": ["tool", ...] } limits an enabled server; omitted servers expose all tools.',
             "inboxOutput posts the final message to the cockpit inbox; notifyProviders pushes it to the named notifyTargets ids.",
             "onIssueStatus schedules: statuses are enumerated in the schedule schema; project ids come from list_projects.",
