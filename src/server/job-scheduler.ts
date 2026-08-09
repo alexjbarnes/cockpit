@@ -80,11 +80,51 @@ function buildJobPrompt(job: ScheduledJob): string {
   return parts.join("\n");
 }
 
-const SHELL_OPERATORS = /(?:;|&&|\|\||>|<|`|\$\(|<\()/;
-const BACKGROUND_AMPERSAND = /(?:^|[^|])&(?!&)/;
-
+/**
+ * Does `cmd` chain in another command? A `Bash <prefix>` rule only vouches for
+ * the program it names, so anything that can run a second one is refused.
+ *
+ * Scanned with quote awareness, following the shell's own rules, because the
+ * characters only mean "operator" when the shell would treat them as one:
+ *   - single quotes: everything inside is literal, nothing can execute
+ *   - double quotes: `;` `&` `>` `<` `||` are literal, but `$(` and backticks
+ *     still substitute, so those stay refused
+ *   - a backslash escapes the next character (except inside single quotes)
+ * A blanket regex over the raw text refused ordinary payloads instead — a
+ * semicolon in a `curl --data-urlencode "notes=a; b"` value, or the `&`
+ * between form fields — while adding no safety, since a quoted metacharacter
+ * was never going to execute anything.
+ *
+ * An unterminated quote is malformed; refuse rather than guess at it.
+ */
 function hasShellOperators(cmd: string): boolean {
-  return SHELL_OPERATORS.test(cmd) || BACKGROUND_AMPERSAND.test(cmd);
+  let quote: '"' | "'" | null = null;
+  for (let i = 0; i < cmd.length; i++) {
+    const ch = cmd[i];
+    // Backslash escapes the following character everywhere but single quotes.
+    if (ch === "\\" && quote !== "'") {
+      i++;
+      continue;
+    }
+    if (quote === "'") {
+      if (ch === "'") quote = null;
+      continue;
+    }
+    if (quote === '"') {
+      if (ch === '"') quote = null;
+      // Command substitution survives double quoting.
+      else if (ch === "`" || (ch === "$" && cmd[i + 1] === "(")) return true;
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      continue;
+    }
+    if (ch === ";" || ch === "&" || ch === ">" || ch === "<" || ch === "`") return true;
+    if (ch === "$" && cmd[i + 1] === "(") return true;
+    if (ch === "|" && cmd[i + 1] === "|") return true;
+  }
+  return quote !== null;
 }
 
 function parseToolRule(rule: string): { tool: string; restriction?: string } {
