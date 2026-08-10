@@ -931,6 +931,18 @@ export class SessionManager {
     return () => session.emitter.off("pending", handler);
   }
 
+  onAgents(id: string, listener: (count: number) => void): (() => void) | null {
+    const session = this.sessions.get(id);
+    if (!session) return null;
+
+    const handler = (_sessionId: string, count: number) => {
+      listener(count);
+    };
+
+    session.emitter.on("agents", handler);
+    return () => session.emitter.off("agents", handler);
+  }
+
   onError(id: string, listener: (error: string) => void): (() => void) | null {
     const session = this.sessions.get(id);
     if (!session) return null;
@@ -1628,6 +1640,12 @@ export class SessionManager {
     );
   }
 
+  private notifyAgentsChanged(session: Session, sessionId: string, count: number): void {
+    if (session.info.agentCount === count) return;
+    session.info.agentCount = count;
+    session.emitter.emit("agents", sessionId, count);
+  }
+
   private notifyPendingChanged(session: Session, sessionId: string): void {
     const count = session.pendingRequests.size;
     if (session.info.pendingRequestCount === count) return;
@@ -1650,10 +1668,14 @@ export class SessionManager {
     }
 
     for (const sysMsg of result.systemMessages) {
-      if (sysMsg === "__tool_use_start") {
+      if (sysMsg === "__tool_use_start" || sysMsg === "__turn_start") {
         session.info.status = "running";
-        console.log(`[sm] emit status running (via tool_use_start) for ${sessionId.slice(0, 8)} (runtime=${session.runtime})`);
+        console.log(`[sm] emit status running (via ${sysMsg.slice(2)}) for ${sessionId.slice(0, 8)} (runtime=${session.runtime})`);
         session.emitter.emit("status", sessionId, "running");
+        continue;
+      }
+      if (sysMsg.startsWith("__agents::")) {
+        this.notifyAgentsChanged(session, sessionId, Number(sysMsg.slice("__agents::".length)) || 0);
         continue;
       }
       if (sysMsg === "__compact::hook_start") {

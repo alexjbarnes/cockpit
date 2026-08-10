@@ -280,6 +280,15 @@ function SortableSessionRow({
             <div className="absolute h-4 w-4 rounded-full bg-yellow-500/20 animate-ping" />
             <div className="h-2.5 w-2.5 rounded-full bg-yellow-500" title="Working" data-testid="status-running" />
           </>
+        ) : (session.agentCount ?? 0) > 0 ? (
+          // Idle but not finished: the turn ended while agents it launched keep
+          // working. Pulsing, not pinging, to read as background work — the
+          // session takes input in this state.
+          <div
+            className="h-2.5 w-2.5 rounded-full bg-yellow-500/50 animate-pulse"
+            title={`${session.agentCount} background agent${session.agentCount === 1 ? "" : "s"} working`}
+            data-testid="status-agents"
+          />
         ) : isUnread ? (
           <div className="h-2.5 w-2.5 rounded-full bg-green-500" title="New response" data-testid="status-unread" />
         ) : (
@@ -390,6 +399,9 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
         }
         console.log("[sidebar] pending updated", sessionId.slice(0, 8), "->", count);
         setSessions((list) => list.map((s) => (s.id === sessionId ? { ...s, pendingRequestCount: count } : s)));
+      } else if (msg.type === "session:agents") {
+        const { sessionId, count } = msg;
+        setSessions((list) => list.map((s) => (s.id === sessionId ? { ...s, agentCount: count } : s)));
       } else if (msg.type === "session:info_updated") {
         const { sessionId, info } = msg;
         setSessions((list) => list.map((s) => (s.id === sessionId ? { ...s, name: info.name, model: info.model } : s)));

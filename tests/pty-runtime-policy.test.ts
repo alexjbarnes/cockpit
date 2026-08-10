@@ -200,13 +200,67 @@ describe("status while a subagent is running", () => {
     expect(statusSignals(events)).toHaveLength(1);
   });
 
-  it("ignores a subagent payload with no agent id rather than blocking status forever", () => {
+  // Agent ids do not pair up: one SubagentStart arrives with ~15 SubagentStops,
+  // because agents launch their own agents and only their stops surface on the
+  // parent session. Tracking a set keyed on agent_id therefore never emptied,
+  // and the suppression above latched for the rest of the process — the spinner
+  // never came back. Counting, and clamping at zero, cannot latch.
+  it("restores the signal on the first stop however many follow, and whatever the ids", () => {
+    const { runtime, events } = makeRuntime("default");
+    const handler = handlerFor(runtime);
+    handler.onSubagentStart({ agent_id: "agent-1", agent_type: "general-purpose" });
+    for (const agentId of ["nested-a", "nested-b", "agent-1", "nested-c"]) {
+      handler.onSubagentStop({ agent_id: agentId });
+    }
+
+    events.length = 0;
+    handler.onPreToolUse({ permission_mode: "default", tool_name: "Bash", tool_input: {} });
+    expect(statusSignals(events)).toHaveLength(1);
+  });
+
+  it("counts a subagent with no agent id, and still releases it", () => {
     const { runtime, events } = makeRuntime("default");
     const handler = handlerFor(runtime);
     handler.onSubagentStart({ agent_type: "general-purpose" });
 
     events.length = 0;
     handler.onPreToolUse({ permission_mode: "default", tool_name: "Bash", tool_input: {} });
+    expect(statusSignals(events), "an agent is running, id or no id").toHaveLength(0);
+
+    handler.onSubagentStop({ agent_type: "general-purpose" });
+    events.length = 0;
+    handler.onPreToolUse({ permission_mode: "default", tool_name: "Bash", tool_input: {} });
     expect(statusSignals(events)).toHaveLength(1);
+  });
+
+  // The other half of the bug: the parent resumes and replies in text, making
+  // no tool call, so nothing marked the session running again.
+  it("starts a turn on UserPromptSubmit, and stops suppressing from there", () => {
+    const { runtime, events } = makeRuntime("default");
+    const handler = handlerFor(runtime);
+    handler.onSubagentStart({ agent_id: "agent-1" });
+
+    events.length = 0;
+    handler.onUserPromptSubmit({ permission_mode: "default", prompt: "resumed" });
+    expect(events.filter((e) => e.type === "system_message" && e.text === "__turn_start")).toHaveLength(1);
+
+    events.length = 0;
+    handler.onPreToolUse({ permission_mode: "default", tool_name: "Bash", tool_input: {} });
+    expect(statusSignals(events), "a new turn clears the gate the old one left").toHaveLength(1);
+  });
+
+  it("reports the running count so an idle session can show background work", () => {
+    const { runtime, events } = makeRuntime("default");
+    const handler = handlerFor(runtime);
+    const counts = () => events.filter((e) => e.type === "system_message" && e.text?.startsWith("__agents::")).map((e) => e.text);
+
+    handler.onSubagentStart({ agent_id: "agent-1" });
+    handler.onSubagentStart({ agent_id: "agent-2" });
+    handler.onSubagentStop({ agent_id: "agent-1" });
+    handler.onSubagentStop({ agent_id: "agent-2" });
+    // Already zero: an unmatched extra stop must not re-report.
+    handler.onSubagentStop({ agent_id: "nested" });
+
+    expect(counts()).toEqual(["__agents::1", "__agents::2", "__agents::1", "__agents::0"]);
   });
 });

@@ -219,6 +219,11 @@ export function createWebSocketHandler(
       });
       if (unsubPending) cleanups.push(unsubPending);
 
+      const unsubAgents = sessionManager.onAgents(sessionId, (count) => {
+        send(ws, { type: "session:agents", sessionId, count });
+      });
+      if (unsubAgents) cleanups.push(unsubAgents);
+
       const unsubError = sessionManager.onError(sessionId, (error) => {
         send(ws, { type: "session:error", sessionId, error });
       });
@@ -794,6 +799,11 @@ export function createWebSocketHandler(
               send(ws, { type: "session:pending", sessionId: id, count });
             });
             if (unsubPending) watchCleanups.push(unsubPending);
+
+            const unsubAgents = sessionManager.onAgents(id, (count) => {
+              send(ws, { type: "session:agents", sessionId: id, count });
+            });
+            if (unsubAgents) watchCleanups.push(unsubAgents);
 
             const unsubInfo = sessionManager.onInfoUpdated(id, (info) => {
               send(ws, { type: "session:info_updated", sessionId: id, info });

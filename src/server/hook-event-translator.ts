@@ -11,7 +11,7 @@ import type { HookEventName } from "./hook-router";
  * status tracking, permission request bookkeeping, and emission.
  *
  * Returns an empty array for events that don't map to a ParsedEvent
- * (e.g. UserPromptSubmit, which only affects status).
+ * (e.g. UserPromptExpansion, which only confirms a prompt landed).
  */
 export function translateHookEvent(eventName: HookEventName, payload: Record<string, unknown>): ParsedEvent[] {
   switch (eventName) {
@@ -35,7 +35,14 @@ export function translateHookEvent(eventName: HookEventName, payload: Record<str
       return translatePreCompact(payload);
     case "PostCompact":
       return translatePostCompact(payload);
+    // A prompt submission opens a parent turn, so the session is working from
+    // here until its Stop. The CLI submits one itself when it resumes the
+    // parent after a launched agent finishes; without this, a resumed turn that
+    // replies in text alone never emitted anything that marked the session
+    // running, and the in-progress indicator stayed off until it happened to
+    // call a tool.
     case "UserPromptSubmit":
+      return [{ type: "system_message", text: "__turn_start" }];
     case "UserPromptExpansion":
       return [];
   }

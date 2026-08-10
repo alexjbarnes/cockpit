@@ -223,9 +223,12 @@ describe("translateHookEvent", () => {
   });
 
   describe("UserPromptSubmit", () => {
-    it("returns no events (status is handled by session manager)", () => {
+    // The CLI submits a prompt of its own when it resumes the parent turn after
+    // a launched agent finishes. Without a status signal here, a resumed turn
+    // that answers in text alone never marked the session running.
+    it("starts a turn", () => {
       const events = translateHookEvent("UserPromptSubmit", { prompt: "hello", session_id: "s" });
-      expect(events).toEqual([]);
+      expect(events).toEqual([{ type: "system_message", text: "__turn_start" }]);
     });
   });
 
