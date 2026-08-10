@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { splitAtQuestion } from "@/lib/split-question-blocks";
+import { pairQuestionBlocks, splitAtQuestion } from "@/lib/split-question-blocks";
 import type { ContentBlock, ToolUse } from "@/types";
 
 function text(t: string): ContentBlock {
@@ -144,5 +144,53 @@ describe("splitAtQuestion", () => {
     // After: text, Read, Edit, text (4 blocks, no AskUserQuestion)
     expect(result.after).toHaveLength(4);
     expect(result.after.map((b) => b.type)).toEqual(["text", "tool_use", "tool_use", "text"]);
+  });
+});
+
+describe("pairQuestionBlocks", () => {
+  function assistant(id: string, blocks: ContentBlock[]) {
+    return { id, role: "assistant", blocks };
+  }
+
+  const question = (opts?: Partial<ToolUse>) => toolUse("AskUserQuestion", { output: "", ...opts });
+
+  it("gives each unanswered block its own request slot, in message order", () => {
+    const pairing = pairQuestionBlocks([
+      assistant("m1", [text("first"), question()]),
+      { id: "u1", role: "user", blocks: [] },
+      assistant("m2", [question()]),
+    ]);
+
+    expect([...pairing.entries()]).toEqual([
+      ["m1", 0],
+      ["m2", 1],
+    ]);
+  });
+
+  it("leaves a duplicate of the same turn without a slot of its own", () => {
+    // The reported duplicate: one request rendered as two identical cards, each
+    // with its own selection. The second copy must pair with nothing, so with a
+    // single pending request only one card can render.
+    const pairing = pairQuestionBlocks([assistant("m1", [question()]), assistant("m1", [question()])]);
+
+    expect(pairing.size).toBe(1);
+    expect(pairing.get("m1")).toBe(0);
+  });
+
+  it("skips answered blocks, so a follow-up still reaches slot 0", () => {
+    const pairing = pairQuestionBlocks([assistant("m1", [question({ output: "chose A" })]), assistant("m2", [question()])]);
+
+    expect(pairing.has("m1")).toBe(false);
+    expect(pairing.get("m2")).toBe(0);
+  });
+
+  it("ignores user messages and messages without a question", () => {
+    const pairing = pairQuestionBlocks([
+      { id: "u1", role: "user", blocks: [question()] },
+      assistant("m1", [text("no question here")]),
+      assistant("m2", []),
+    ]);
+
+    expect(pairing.size).toBe(0);
   });
 });
