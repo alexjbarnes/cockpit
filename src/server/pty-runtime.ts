@@ -50,6 +50,10 @@ export interface PtyRuntimeOptions {
 // biome-ignore lint/suspicious/noControlCharactersInRegex: strip ANSI escape sequences
 const ANSI_RE = /\x1b\[[0-9;]*[a-zA-Z]/g;
 
+function stringOrEmpty(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
 export class PtyRuntime {
   private readonly opts: PtyRuntimeOptions;
   private pty: PtySession | null = null;
@@ -60,6 +64,19 @@ export class PtyRuntime {
   private readonly pendingTuiDialogs = new Set<string>();
   private modeDivergenceWarned = false;
   private lastPreToolUse: { tool: string; input?: Record<string, unknown> } | null = null;
+  /**
+   * Subagents currently running, by the agent id SubagentStart/Stop carry.
+   *
+   * A subagent's PreToolUse is indistinguishable from the main thread's —
+   * probed against the real CLI: same session_id, same transcript_path, no
+   * agent id — and every PreToolUse emits `__tool_use_start`, which drives the
+   * session to "running". So a background subagent working on after its
+   * parent's turn ended restarted the spinner on a session that was idle and
+   * waiting for the user. Bracketing the agent's lifetime is the only signal
+   * available, and it is enough: while one is running, a tool call is not
+   * evidence that the user's turn resumed.
+   */
+  private readonly activeAgents = new Set<string>();
   private exited = false;
   private cleaned = false;
   /** Resolver armed by deliverInitialPrompt; fired when UserPromptSubmit confirms the first prompt landed. */
@@ -308,6 +325,8 @@ export class PtyRuntime {
     }
     this.pendingPermissions.clear();
     this.pendingTuiDialogs.clear();
+    // The process is going away, so nothing it launched is still running.
+    this.activeAgents.clear();
     await this.cleanup();
   }
 
@@ -390,7 +409,13 @@ export class PtyRuntime {
         // Remembered so a later TUI-only permission dialog (see onNotification)
         // can name the tool it is actually gating.
         this.lastPreToolUse = { tool: toolName, input: payload.tool_input as Record<string, unknown> | undefined };
-        this.emit(translateHookEvent("PreToolUse", payload));
+        let events = translateHookEvent("PreToolUse", payload);
+        if (this.activeAgents.size > 0) {
+          // Keep the tool card, drop only the status signal (see activeAgents).
+          // Mid-turn this changes nothing — the session is already running.
+          events = events.filter((e) => !(e.type === "system_message" && e.text === "__tool_use_start"));
+        }
+        this.emit(events);
       },
       onPostToolUse: (payload) => {
         this.cancelErrorDebounce();
@@ -454,6 +479,9 @@ export class PtyRuntime {
         const desc = typeof payload.description === "string" ? payload.description.slice(0, 80) : "";
         console.log(`[pty-runtime] SubagentStart: cli_session=${cliSession} tool_use_id=${toolUseId} type=${agentType} desc="${desc}"`);
         console.log(`[pty-runtime] SubagentStart full payload keys: ${Object.keys(payload).join(", ")}`);
+        const startedAgent = stringOrEmpty(payload.agent_id);
+        if (startedAgent) this.activeAgents.add(startedAgent);
+        logDiag(this.opts.sessionId, "pty:subagent-start", { agentId: startedAgent || null, active: this.activeAgents.size });
         this.emit(translateHookEvent("SubagentStart", payload));
       },
       onSubagentStop: (payload) => {
@@ -464,6 +492,9 @@ export class PtyRuntime {
         const agentType = typeof payload.agent_type === "string" ? payload.agent_type : "unknown";
         console.log(`[pty-runtime] SubagentStop: cli_session=${cliSession} tool_use_id=${toolUseId} type=${agentType}`);
         console.log(`[pty-runtime] SubagentStop full payload keys: ${Object.keys(payload).join(", ")}`);
+        const stoppedAgent = stringOrEmpty(payload.agent_id);
+        if (stoppedAgent) this.activeAgents.delete(stoppedAgent);
+        logDiag(this.opts.sessionId, "pty:subagent-stop", { agentId: stoppedAgent || null, active: this.activeAgents.size });
         this.emit(translateHookEvent("SubagentStop", payload));
       },
       onPreCompact: (payload) => {
