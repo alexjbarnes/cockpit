@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.6.0] - 2026-08-04
+## [0.6.0] - 2026-08-10
 
 ### Added
 - **Native issue tracking, off by default.** Projects and issues live in cockpit itself, with a list grouped by status, a detail view with markdown descriptions, comments and an audit trail, and a project-grouped browse view with label sub-groups. Every write is attributed to whoever made it — a session, a scheduled job, or you — and a session or job actor links through to its transcript. The tracker is experimental: turn it on under Settings, Appearance, Experimental. While it is off, nothing appears in the UI and the agent cannot see the tools at all.
@@ -14,9 +14,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Notifications from a session.** A working session can post to the inbox and push to a named provider, so you can ask it to message you on Telegram or ntfy when it finishes. Rate limited per session.
 - **OpenCode Go.** Added as its own built-in provider alongside OpenCode Zen: separate subscription, separate catalog, its own key, model list and pricing, connected the same way as the others.
 - **Attachments on issues.** Files attached to an issue are copied into cockpit's own store and served back, so a screenshot outlives the temporary directory it was captured in.
+- **Scheduled jobs from a working session.** The job tools — list, read, create, update, delete, run, stop, and read a past run's transcript — are available to plain sessions as well as the cockpit assistant, so you can ask the session you are already in to set a job up instead of relaying through the assistant. A companion tool hands over the job editor's whole menu: which models are pickable and the context and thinking levels each accepts, which MCP servers exist, which notification targets can be pushed to, and what every field defaults to when omitted. Scheduled jobs themselves still cannot reach these tools — a job that could create jobs is a loop with nobody watching it.
+- **A 200K/1M context choice for gateway models.** Where a provider's published context figure is wrong, a model can be marked in the model browser as offering both sizes, and it then gets the same 200K/1M chips Anthropic models have in the session picker. The session's pick drives the context gauge and the CLI's own auto-compact together, and it survives the daily catalog resync that would otherwise restore the published figure.
 
 ### Changed
 - **The issue pipeline runs on cockpit's tracker instead of Linear.** The refine, implement, accept and review skills and their reviewer agents now speak to the native tools, with per-project keys in place of a single prefix. The refinement and implementation human gates, previously one status told apart only by Linear's state groups, are now distinct statuses: Plan Review and Code Review.
+- **New scheduled jobs default to the PTY runtime**, matching what sessions use.
 
 ### Fixed
 - **Sessions on a reasoning model no longer die mid-task.** A session on OpenCode Zen would stop after a tool call with "Unknown error", because the translation proxy sent the model's own reasoning back incompletely. Both halves are fixed: a turn's thinking is returned as it arrived, and a tool-calling turn that did no reasoning still carries the field the upstream requires.
@@ -25,12 +28,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Model, context and thinking survive a restart.** Session defaults reset to 200K on restart, and the first message of a session could trigger a spurious compaction.
 - **Approval cards name the job or notification provider** instead of showing a uuid.
 - **The input box stops growing past its container** on mobile, so a long message stays scrollable instead of pushing its own end off screen.
+- **`/compact` no longer hangs.** Triggering a compaction from the menu or by typing the command raised the indicator and then did nothing, permanently: the trigger was queued behind the very flag it had just set, and that queue only drains when the compaction it is waiting for finishes.
+- **A background agent's transcript renders.** An Agent card reported no transcript while the file sat on disk, because a background agent's card is built from a hook carrying the agent id rather than the tool-use id the lookup expected.
+- **Sessions on a gateway provider show their context gauge again.** On OpenCode Zen, Go, OpenRouter or a custom OpenAI-format provider the context indicator was missing entirely: the translation proxy passed on only the output half of each turn's token usage, so the gauge saw an empty window and hid itself. It also means those sessions were compacting on the CLI's estimate rather than a real figure.
+- **A bypass that never took effect is no longer silent.** Where an account or its settings decline bypass permissions, the CLI runs in its ordinary mode while cockpit's indicator still claimed bypass was on, and the resulting prompts appeared as a dialog cockpit could not display — the session simply stopped, with no visible reason. Cockpit now spots the mismatch, says so in the session, and while bypass is on answers those dialogs on your behalf.
+- **A job's `Bash` rule stops refusing ordinary data.** A `Bash curl` rule rejected any command containing a shell metacharacter anywhere, so a POST whose body held a semicolon or an ampersand was denied while the same request without them went through — and an unattended run has nobody to ask. Quoting is now honoured, so a quoted `;` is data. A pipe is refused, since it runs a program the rule never named; that also means no single rule can permit a pipeline.
+- **MCP tools work for servers whose name contains a hyphen.** Every call from a job to such a server was denied, because the name was normalised on one side of the comparison only. Separately, an `allowedTools` entry naming an MCP tool now actually grants it — the entries were accepted by the editor and printed in the run's prompt while doing nothing at all.
+- **A job's schedules are checked when saved.** A malformed schedule stored cleanly and then simply never fired; the shapes are also now described in the tools that write them.
+- **A finished run is no longer recorded as a failure** because it volunteered an error block saying nothing went wrong.
 
 ### Internal
 - The published tarball ships a prebuilt `.next`, so `next`, `react` and `react-dom` are now exact versions rather than ranges. Published 0.5.0 allowed a newer Next to run bundles an older one compiled, which broke every dynamic route on a fresh install while static pages kept returning 200.
-- TypeScript is pinned to the last JavaScript release. TypeScript 7 dropped the file Next probes to detect a TypeScript project, so the path alias silently stopped resolving and no fresh install could build, while type checking still passed.
+- A fresh install could not build for a while: TypeScript 7 drops the file Next probes to detect a TypeScript project, so the path alias silently stopped resolving while type checking still passed. Pinning to TypeScript 6 fixed it at the time; the Next version shipped here no longer relies on that file, so this release runs TypeScript 7 with the pin lifted.
 - CI now runs a real production build from a clean install on every push, and refuses a range on the three pinned packages — the two checks that would each have caught the above.
-- Running the test suite deleted the developer's own cockpit password. Tests now get a throwaway config directory by default, so a suite that forgets to isolate cannot reach real state.
+- Running the test suite deleted the developer's own cockpit password. Tests now get a throwaway config directory by default, so a suite that forgets to isolate cannot reach real state. They also clear every `COCKPIT_*` variable first: `make start` and `make dev` export several, a session cockpit spawns inherits them, and a suite run from inside cockpit therefore behaved differently from one run in a plain shell.
+- The job tools no longer present `bypassPermissions` as the fix for a refused tool. `create_job` described it as the alternative to listing tools, and `update_job` — the call made to repair a failing job — did not describe it at all, so a session reached for it the moment a job hit a permission wall.
+- `@pierre/theme` is declared directly rather than left to be inferred as a peer dependency. A generated lockfile placed the only copy where the package that imports it could not see it, and the build failed on an unresolved import; a declared dependency cannot be dropped that way, and a lockfile missing it now fails the install outright.
 
 ## [0.5.0] - 2026-07-25
 
