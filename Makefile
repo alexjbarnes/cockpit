@@ -25,15 +25,33 @@ dev:
 build:
 	npm run build
 
-# Start production server via a packed tarball (simulates `npx @alexjbarnes/cockpit`)
-start: build
+# Start production server via a packed tarball (simulates `npx @alexjbarnes/cockpit`).
+#
+# Deliberately reinstalls from the lockfile into an empty node_modules and
+# rebuilds from that, rather than packing whatever the working tree happens to
+# hold. A user gets exactly what the lockfile resolves; a developer's tree
+# drifts, so a build can pass here and fail on a fresh install — which is how a
+# published release broke every dynamic route while local builds were fine.
+# `npm run dev` is the fast path; this one buys fidelity with the time it takes.
+#
+# Nothing is silenced. Deprecation notices, peer warnings and engine warnings
+# are what a user sees on install, so they belong on screen.
+#
+# NODE_ENV is forced: this shell exports production, under which npm omits
+# devDependencies, and the build then fails on a missing TypeScript with every
+# @/* import unresolved — a confusing error a long way from its cause.
+start:
 	@$(KILL_PORT) $(PORT)
-	@rm -rf $(TARBALL_DIR)
+	@rm -rf node_modules .next $(TARBALL_DIR)
 	@mkdir -p $(TARBALL_DIR)
+	@echo ">>> Installing dependencies from the lockfile"
+	NODE_ENV=development npm ci
+	@echo ">>> Building"
+	npm run build
 	@echo ">>> Packing tarball into $(TARBALL_DIR)"
-	@npm pack --silent --pack-destination $(TARBALL_DIR) >/dev/null
-	@echo ">>> Installing tarball with fresh node_modules"
-	@cd $(TARBALL_DIR) && npm init -y >/dev/null 2>&1 && npm install --silent ./alexjbarnes-cockpit-*.tgz >/dev/null
+	npm pack --pack-destination $(TARBALL_DIR)
+	@echo ">>> Installing the tarball the way a user would"
+	cd $(TARBALL_DIR) && npm init -y >/dev/null 2>&1 && npm install ./alexjbarnes-cockpit-*.tgz
 	@echo ">>> Running from $(TARBALL_DIR) on port $(PORT)"
 	@unset GITHUB_TOKEN && COCKPIT_DEBUG=1 COCKPIT_ISSUES_ENABLED=1 PORT=$(PORT) \
 	  node $(TARBALL_DIR)/node_modules/@alexjbarnes/cockpit/bin/cockpit.js
