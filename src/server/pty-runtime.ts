@@ -58,7 +58,10 @@ export class PtyRuntime {
   private readonly opts: PtyRuntimeOptions;
   private pty: PtySession | null = null;
   private settingsPath: string | null = null;
-  private readonly pendingPermissions = new Map<string, (decision: PermissionDecision) => void>();
+  /** Hook requests awaiting a decision, by request id. The tool name rides
+   *  along so onNotification can tell whether a rendered dialog belongs to a
+   *  request the user already has a card for. */
+  private readonly pendingPermissions = new Map<string, { resolve: (decision: PermissionDecision) => void; toolName: string }>();
   /** Synthetic requests for TUI-only dialogs (see onNotification): answered
    *  with keystrokes into the PTY, not through the hook response channel. */
   private readonly pendingTuiDialogs = new Set<string>();
@@ -308,8 +311,8 @@ export class PtyRuntime {
   interrupt(): void {
     if (!this.pty) return;
     this.pty.sendKey("\x1b");
-    for (const [, resolve] of this.pendingPermissions) {
-      resolve({ behavior: "deny", message: "interrupted" });
+    for (const [, pending] of this.pendingPermissions) {
+      pending.resolve({ behavior: "deny", message: "interrupted" });
     }
     this.pendingPermissions.clear();
     // The Esc above dismissed any rendered TUI dialog with it.
@@ -327,8 +330,8 @@ export class PtyRuntime {
       this.pty = null;
     }
     // Resolve any in-flight permission promises so the bridge subprocess can exit.
-    for (const [, resolve] of this.pendingPermissions) {
-      resolve({ behavior: "deny", message: "session ended" });
+    for (const [, pending] of this.pendingPermissions) {
+      pending.resolve({ behavior: "deny", message: "session ended" });
     }
     this.pendingPermissions.clear();
     this.pendingTuiDialogs.clear();
@@ -399,8 +402,8 @@ export class PtyRuntime {
       this.pty.sendKey(decision.behavior === "allow" ? "1" : "\x1b");
       return true;
     }
-    const resolver = this.pendingPermissions.get(requestId);
-    if (!resolver) {
+    const pending = this.pendingPermissions.get(requestId);
+    if (!pending) {
       logDiag(this.opts.sessionId, "pty:permission-decision-unmatched", { requestId, behavior: decision.behavior });
       return false;
     }
@@ -410,7 +413,7 @@ export class PtyRuntime {
       behavior: decision.behavior,
       pending: this.pendingPermissions.size,
     });
-    resolver(decision);
+    pending.resolve(decision);
     return true;
   }
 
@@ -546,6 +549,21 @@ export class PtyRuntime {
         // notifyPermissionDecision, which answers with PTY keystrokes.
         const message = typeof payload.message === "string" ? payload.message : "";
         if (/needs your permission/i.test(message)) {
+          const tool = this.lastPreToolUse?.tool ?? "unknown";
+          // The CLI notifies for a dialog it rendered itself AND for one it is
+          // waiting on cockpit's hook response for. Rescuing the second kind
+          // raises a second request for the same tool, and because it carries a
+          // different id the client's per-id dedupe can't collapse it — the user
+          // gets two identical cards (seen with AskUserQuestion). Worse, only the
+          // hook request can actually be answered: a synthetic one is answered
+          // with a "1" keystroke, which for a question card blind-selects the
+          // first option. A still-pending hook request is proof the CLI has a
+          // channel back, so leave that card alone. Once it has been answered,
+          // a notification is the genuine article and gets rescued as before.
+          if ([...this.pendingPermissions.values()].some((p) => p.toolName === tool)) {
+            logDiag(this.opts.sessionId, "pty:tui-dialog-skipped-hook-pending", { tool });
+            return;
+          }
           const requestId = `tui-${newPermissionRequestId()}`;
           this.pendingTuiDialogs.add(requestId);
           logDiag(this.opts.sessionId, "pty:tui-dialog-detected", { requestId, lastTool: this.lastPreToolUse?.tool ?? null });
@@ -553,7 +571,7 @@ export class PtyRuntime {
             {
               type: "permission_request",
               requestId,
-              toolName: this.lastPreToolUse?.tool ?? "unknown",
+              toolName: tool,
               toolInput: this.lastPreToolUse?.input ? JSON.stringify(this.lastPreToolUse.input) : "",
               rawToolInput: this.lastPreToolUse?.input,
               interactiveOnly: true,
@@ -583,7 +601,7 @@ export class PtyRuntime {
 
     logDiag(this.opts.sessionId, "pty:permission-request", { requestId, toolName });
     return new Promise<PermissionDecision>((resolve) => {
-      this.pendingPermissions.set(requestId, resolve);
+      this.pendingPermissions.set(requestId, { resolve, toolName });
       try {
         this.opts.onEvents([event]);
       } catch (err) {

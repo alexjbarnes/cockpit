@@ -147,6 +147,44 @@ describe("TUI-only permission dialog rescue", () => {
     handler.onNotification({ message: "Claude is waiting for your input" });
     expect(events.find((e) => e.type === "permission_request")).toBeUndefined();
   });
+
+  // Observed live 2026-08-12 with AskUserQuestion: the PermissionRequest hook
+  // raised a request, then the notification hook raised a second one for the
+  // same tool six seconds later, and the two ids meant the client's per-id
+  // dedupe let both through — one question rendered as two identical cards.
+  // The rescue is only for a dialog cockpit has no hook channel for, so a
+  // request still waiting on its hook resolver is proof this is not that.
+  it("does not raise a second request while a hook request for the same tool is pending", () => {
+    const { runtime, events } = makeRuntime("default");
+    const handler = (runtime as never as { buildHandler(): Record<string, (p: Record<string, unknown>) => unknown> }).buildHandler();
+    const toolInput = { questions: [{ question: "Which?", header: "Pick", options: [] }] };
+
+    handler.onPreToolUse({ permission_mode: "default", tool_name: "AskUserQuestion", tool_input: toolInput });
+    handler.onPermissionRequest({ permission_mode: "default", tool_name: "AskUserQuestion", tool_input: toolInput });
+    handler.onNotification({ message: "Claude needs your permission to use AskUserQuestion", notification_type: "permission" });
+
+    const requests = events.filter((e) => e.type === "permission_request");
+    expect(requests).toHaveLength(1);
+    expect(requests[0].requestId?.startsWith("tui-")).toBe(false);
+  });
+
+  it("still rescues the dialog once the hook request has been answered", () => {
+    const { runtime, events } = makeRuntime("default");
+    const handler = (runtime as never as { buildHandler(): Record<string, (p: Record<string, unknown>) => unknown> }).buildHandler();
+    const preToolUse = { permission_mode: "default", tool_name: "Write", tool_input: { file_path: "/x/.claude/skills/a/SKILL.md" } };
+
+    handler.onPreToolUse(preToolUse);
+    handler.onPermissionRequest(preToolUse);
+    const hookRequest = events.find((e) => e.type === "permission_request");
+    runtime.notifyPermissionDecision(hookRequest?.requestId as string, { behavior: "allow" });
+
+    // The CLI refused the hook's allow and is sitting on its own dialog.
+    handler.onNotification({ message: "Claude needs your permission to use Write", notification_type: "permission" });
+
+    const rescued = events.filter((e) => e.type === "permission_request").at(-1);
+    expect(rescued?.requestId?.startsWith("tui-")).toBe(true);
+    expect(rescued?.interactiveOnly).toBe(true);
+  });
 });
 
 // A background subagent keeps calling tools after its parent's turn has ended.
