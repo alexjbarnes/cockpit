@@ -68,7 +68,7 @@ export class PtyRuntime {
   private modeDivergenceWarned = false;
   private lastPreToolUse: { tool: string; input?: Record<string, unknown> } | null = null;
   /**
-   * How many subagents are running.
+   * Subagents this session launched that are still running, by agent id.
    *
    * A subagent's PreToolUse is indistinguishable from the main thread's —
    * probed against the real CLI: same session_id, same transcript_path, no
@@ -79,14 +79,17 @@ export class PtyRuntime {
    * available, and it is enough: while one is running, a tool call is not
    * evidence that the user's turn resumed.
    *
-   * A count, not a set of agent ids: the ids do not pair up. One SubagentStart
-   * arrives with ~15 SubagentStops (agents launch their own agents, and only
-   * their stops surface here), so deleting by id left the set permanently
-   * non-empty and suppressed the status signal for the rest of the process —
-   * the spinner then never came back. Clamped at zero, and reset outright by
-   * UserPromptSubmit, which begins a new parent turn.
+   * Membership, NOT a count. SubagentStop arrives for agents that never
+   * started here — the CLI's own internal agents report stops on the parent
+   * session (seen live: start a06f66a7, then stops for a1c34184 and a8efbb68,
+   * ids with no matching start). A count decremented on those, releasing the
+   * gate seconds after a real agent began and putting the spinner straight
+   * back on an idle session. A set ignores a stop it never saw start.
+   *
+   * What keeps the set from latching is not id pairing but UserPromptSubmit,
+   * which empties it: a new parent turn cannot be gated by an old one's agents.
    */
-  private activeAgents = 0;
+  private readonly activeAgents = new Set<string>();
   private exited = false;
   private cleaned = false;
   /** Resolver armed by deliverInitialPrompt; fired when UserPromptSubmit confirms the first prompt landed. */
@@ -336,20 +339,18 @@ export class PtyRuntime {
     this.pendingPermissions.clear();
     this.pendingTuiDialogs.clear();
     // The process is going away, so nothing it launched is still running.
-    this.activeAgents = 0;
+    this.activeAgents.clear();
     await this.cleanup();
   }
 
   /**
-   * Track the running-subagent count and tell the session about it, so a
-   * session that is idle and accepting input can still show that work it
-   * launched is going on.
+   * Report how many subagents are running, so a session that is idle and
+   * accepting input can still show that work it launched is going on. Called
+   * after every change to the set; emits only when the count actually moved.
    */
-  private setActiveAgents(count: number): void {
-    const next = Math.max(0, count);
-    if (next === this.activeAgents) return;
-    this.activeAgents = next;
-    this.emit([{ type: "system_message", text: `__agents::${next}` }]);
+  private reportActiveAgents(previous: number): void {
+    if (this.activeAgents.size === previous) return;
+    this.emit([{ type: "system_message", text: `__agents::${this.activeAgents.size}` }]);
   }
 
   /**
@@ -432,7 +433,7 @@ export class PtyRuntime {
         // can name the tool it is actually gating.
         this.lastPreToolUse = { tool: toolName, input: payload.tool_input as Record<string, unknown> | undefined };
         let events = translateHookEvent("PreToolUse", payload);
-        if (this.activeAgents > 0) {
+        if (this.activeAgents.size > 0) {
           // Keep the tool card, drop only the status signal (see activeAgents).
           // Mid-turn this changes nothing — the session is already running.
           events = events.filter((e) => !(e.type === "system_message" && e.text === "__tool_use_start"));
@@ -478,7 +479,7 @@ export class PtyRuntime {
       onUserPromptSubmit: (payload) => {
         this.cancelErrorDebounce();
         this.ptyOutputBuffer = "";
-        logDiag(this.opts.sessionId, "pty:hook-user-prompt-submit", { armed: !!this.promptAccepted, activeAgents: this.activeAgents });
+        logDiag(this.opts.sessionId, "pty:hook-user-prompt-submit", { armed: !!this.promptAccepted, activeAgents: this.activeAgents.size });
         this.checkPayloadMode(payload, "UserPromptSubmit");
         this.promptAccepted?.();
         // A parent turn is starting, so nothing a previous one launched can
@@ -487,7 +488,9 @@ export class PtyRuntime {
         // is also the signal that the session is working again: a resumed turn
         // that answers in text alone makes no tool call, so `__tool_use_start`
         // never arrives and the session would sit idle while it typed.
-        this.setActiveAgents(0);
+        const beforePrompt = this.activeAgents.size;
+        this.activeAgents.clear();
+        this.reportActiveAgents(beforePrompt);
         this.emit(translateHookEvent("UserPromptSubmit", payload));
       },
       onUserPromptExpansion: (payload) => {
@@ -508,8 +511,11 @@ export class PtyRuntime {
         const desc = typeof payload.description === "string" ? payload.description.slice(0, 80) : "";
         console.log(`[pty-runtime] SubagentStart: cli_session=${cliSession} tool_use_id=${toolUseId} type=${agentType} desc="${desc}"`);
         console.log(`[pty-runtime] SubagentStart full payload keys: ${Object.keys(payload).join(", ")}`);
-        this.setActiveAgents(this.activeAgents + 1);
-        logDiag(this.opts.sessionId, "pty:subagent-start", { agentId: stringOrEmpty(payload.agent_id) || null, active: this.activeAgents });
+        const startedAgent = stringOrEmpty(payload.agent_id);
+        const beforeStart = this.activeAgents.size;
+        if (startedAgent) this.activeAgents.add(startedAgent);
+        this.reportActiveAgents(beforeStart);
+        logDiag(this.opts.sessionId, "pty:subagent-start", { agentId: startedAgent || null, active: this.activeAgents.size });
         this.emit(translateHookEvent("SubagentStart", payload));
       },
       onSubagentStop: (payload) => {
@@ -520,8 +526,18 @@ export class PtyRuntime {
         const agentType = typeof payload.agent_type === "string" ? payload.agent_type : "unknown";
         console.log(`[pty-runtime] SubagentStop: cli_session=${cliSession} tool_use_id=${toolUseId} type=${agentType}`);
         console.log(`[pty-runtime] SubagentStop full payload keys: ${Object.keys(payload).join(", ")}`);
-        this.setActiveAgents(this.activeAgents - 1);
-        logDiag(this.opts.sessionId, "pty:subagent-stop", { agentId: stringOrEmpty(payload.agent_id) || null, active: this.activeAgents });
+        // Only a stop for an agent that started here counts. The CLI reports
+        // stops for its own internal agents on the parent session, and letting
+        // those through released the gate while a real agent was still working.
+        const stoppedAgent = stringOrEmpty(payload.agent_id);
+        const beforeStop = this.activeAgents.size;
+        if (stoppedAgent) this.activeAgents.delete(stoppedAgent);
+        this.reportActiveAgents(beforeStop);
+        logDiag(this.opts.sessionId, "pty:subagent-stop", {
+          agentId: stoppedAgent || null,
+          active: this.activeAgents.size,
+          known: beforeStop !== this.activeAgents.size,
+        });
         this.emit(translateHookEvent("SubagentStop", payload));
       },
       onPreCompact: (payload) => {

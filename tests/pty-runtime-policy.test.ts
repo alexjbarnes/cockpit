@@ -238,37 +238,38 @@ describe("status while a subagent is running", () => {
     expect(statusSignals(events)).toHaveLength(1);
   });
 
-  // Agent ids do not pair up: one SubagentStart arrives with ~15 SubagentStops,
-  // because agents launch their own agents and only their stops surface on the
-  // parent session. Tracking a set keyed on agent_id therefore never emptied,
-  // and the suppression above latched for the rest of the process — the spinner
-  // never came back. Counting, and clamping at zero, cannot latch.
-  it("restores the signal on the first stop however many follow, and whatever the ids", () => {
+  // Seen live (2026-08-12, session c5d328f8): SubagentStart for a06f66a7, then
+  // SubagentStops for a1c34184 and a8efbb68 — ids with no matching start, from
+  // the CLI's own internal agents reporting on the parent session. A count
+  // decremented on those and released the gate eight seconds after a real agent
+  // began, putting the spinner straight back on an idle session. Membership must
+  // ignore a stop it never saw start.
+  it("keeps suppressing when a stop arrives for an agent that never started here", () => {
     const { runtime, events } = makeRuntime("default");
     const handler = handlerFor(runtime);
     handler.onSubagentStart({ agent_id: "agent-1", agent_type: "general-purpose" });
-    for (const agentId of ["nested-a", "nested-b", "agent-1", "nested-c"]) {
+    for (const agentId of ["internal-a", "internal-b", "internal-c"]) {
       handler.onSubagentStop({ agent_id: agentId });
     }
 
     events.length = 0;
     handler.onPreToolUse({ permission_mode: "default", tool_name: "Bash", tool_input: {} });
-    expect(statusSignals(events)).toHaveLength(1);
+    expect(statusSignals(events), "agent-1 is still working: foreign stops must not release the gate").toHaveLength(0);
+
+    handler.onSubagentStop({ agent_id: "agent-1" });
+    events.length = 0;
+    handler.onPreToolUse({ permission_mode: "default", tool_name: "Bash", tool_input: {} });
+    expect(statusSignals(events), "its own stop does release it").toHaveLength(1);
   });
 
-  it("counts a subagent with no agent id, and still releases it", () => {
+  it("ignores a subagent payload with no agent id rather than gating on it forever", () => {
     const { runtime, events } = makeRuntime("default");
     const handler = handlerFor(runtime);
     handler.onSubagentStart({ agent_type: "general-purpose" });
 
     events.length = 0;
     handler.onPreToolUse({ permission_mode: "default", tool_name: "Bash", tool_input: {} });
-    expect(statusSignals(events), "an agent is running, id or no id").toHaveLength(0);
-
-    handler.onSubagentStop({ agent_type: "general-purpose" });
-    events.length = 0;
-    handler.onPreToolUse({ permission_mode: "default", tool_name: "Bash", tool_input: {} });
-    expect(statusSignals(events)).toHaveLength(1);
+    expect(statusSignals(events), "nothing to key the gate on, so status behaves as normal").toHaveLength(1);
   });
 
   // The other half of the bug: the parent resumes and replies in text, making
@@ -294,11 +295,26 @@ describe("status while a subagent is running", () => {
 
     handler.onSubagentStart({ agent_id: "agent-1" });
     handler.onSubagentStart({ agent_id: "agent-2" });
+    // A repeated start for an agent already tracked must not double the count.
+    handler.onSubagentStart({ agent_id: "agent-2" });
     handler.onSubagentStop({ agent_id: "agent-1" });
+    // A stop for an agent that never started must not move the count either.
+    handler.onSubagentStop({ agent_id: "internal" });
     handler.onSubagentStop({ agent_id: "agent-2" });
-    // Already zero: an unmatched extra stop must not re-report.
-    handler.onSubagentStop({ agent_id: "nested" });
 
     expect(counts()).toEqual(["__agents::1", "__agents::2", "__agents::1", "__agents::0"]);
+  });
+
+  it("clears the gate and the count when a new parent turn starts", () => {
+    const { runtime, events } = makeRuntime("default");
+    const handler = handlerFor(runtime);
+    handler.onSubagentStart({ agent_id: "agent-1" });
+
+    events.length = 0;
+    handler.onUserPromptSubmit({ permission_mode: "default", prompt: "next turn" });
+    expect(
+      events.filter((e) => e.type === "system_message" && e.text === "__agents::0"),
+      "the dot must go out: a new turn cannot be gated by an old turn's agents",
+    ).toHaveLength(1);
   });
 });
