@@ -26,6 +26,23 @@ export type QueuedText = {
   textFiles?: TextFileAttachment[];
 };
 
+export interface PendingQuestionEntry {
+  requestId: string;
+  questions: string;
+  answered?: boolean;
+}
+
+/**
+ * Add a question request to the pending list, refusing to stack a second entry
+ * for a request id already held. The server can forward the same pending
+ * request more than once (the live emission plus the transcript re-parse of
+ * the same tool block), and two entries read as two unanswered questions: a
+ * duplicated card, each with its own selection.
+ */
+export function pushPendingQuestion(prev: PendingQuestionEntry[], request: PendingQuestionEntry): PendingQuestionEntry[] {
+  return prev.some((q) => q.requestId === request.requestId) ? prev : [...prev, request];
+}
+
 /** Build the optimistic user bubble for a flushed queued message.
  *  `sentText` is the EXPANDED apiText the server echoes back. Content is set
  *  to the cleaned (collapsed) form so it equals what the transcript parser

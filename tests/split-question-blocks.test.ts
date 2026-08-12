@@ -215,4 +215,26 @@ describe("pairQuestionBlocks", () => {
 
     expect(pairing.size).toBe(0);
   });
+
+  it("renders one card for the reported duplicate: twin messages plus a request forwarded twice", () => {
+    // The reported failure (5034a1f): a question showed as two identical cards
+    // the moment it raised. Two mechanisms compounded: the same assistant turn
+    // arrived under two message ids (live message_done vs transcript re-parse),
+    // and the same pending request was forwarded twice. Simulate the client
+    // state after both — twin messages, and a pending list the request dedupe
+    // (pushPendingQuestion) kept at one entry — then apply the render decision
+    // from chat-view: a card renders for each message whose pairing slot has an
+    // unanswered request.
+    const messages = [assistant("live-id", [question({ id: "toolu_01" })]), assistant("file-id", [question({ id: "toolu_01" })])];
+    const unanswered = [{ requestId: "r1", questions: "q" }];
+    const pairing = pairQuestionBlocks(messages);
+
+    const cards = messages.filter((m) => {
+      const slot = pairing.get(m.id);
+      return slot !== undefined && unanswered[slot] !== undefined;
+    });
+
+    expect(cards.map((m) => m.id)).toEqual(["live-id"]);
+    expect(pairing.size).toBe(1);
+  });
 });

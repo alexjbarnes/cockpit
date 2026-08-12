@@ -18,7 +18,14 @@ import type {
   TodoItem,
   ToolUse,
 } from "@/types";
-import { applyMessageDone, applyTranscript, buildQueuedUserMessage, buildUserMessage, type QueuedText } from "./message-ordering";
+import {
+  applyMessageDone,
+  applyTranscript,
+  buildQueuedUserMessage,
+  buildUserMessage,
+  pushPendingQuestion,
+  type QueuedText,
+} from "./message-ordering";
 import { useWebSocket } from "./use-websocket";
 
 export interface PendingPermission {
@@ -964,9 +971,7 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
           // live emission plus the transcript re-parse of the same tool block),
           // so never stack a second entry for a request id already held. Two
           // entries read as two unanswered questions: a duplicated card.
-          setPendingQuestions((prev) =>
-            prev.some((q) => q.requestId === msg.requestId) ? prev : [...prev, { requestId: msg.requestId, questions: msg.questions }],
-          );
+          setPendingQuestions((prev) => pushPendingQuestion(prev, { requestId: msg.requestId, questions: msg.questions }));
           break;
         }
       }
