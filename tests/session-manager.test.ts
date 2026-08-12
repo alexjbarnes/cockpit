@@ -163,6 +163,36 @@ describe("SessionManager", () => {
         (defaultsMod as { getDefaults: () => unknown }).getDefaults = orig;
       }
     });
+
+    // createSession used to persist only { runtime }, so everything a session
+    // was born with — its name, model, context size, thinking level — was left
+    // to ensureSession's defaults fallback on the next server start. A session
+    // created with a name came back as its cwd basename, and one created on the
+    // then-current default model came back on whatever the default is now.
+    it("persists what the session was created with, so a restart restores it", async () => {
+      const prefsMod = await import("@/server/session-prefs");
+      const origGet = prefsMod.getSessionPrefs;
+      const origSet = prefsMod.setSessionPrefs;
+      const store: Record<string, Record<string, unknown>> = {};
+      (prefsMod as { setSessionPrefs: (id: string, p: Record<string, unknown>) => void }).setSessionPrefs = (id, p) => {
+        store[id] = { ...(store[id] || {}), ...p };
+      };
+      (prefsMod as { getSessionPrefs: (id: string) => unknown }).getSessionPrefs = (id) => store[id];
+      try {
+        const created = manager.createSession("/tmp/proj", "My Session");
+
+        const restarted = new SessionManager({ defaultRuntime: "stream" });
+        const restored = restarted.ensureSession(created.id, "/tmp/proj");
+
+        expect(restored.info.name).toBe("My Session");
+        expect(restored.info.model).toBe(created.model);
+        expect(restored.info.contextSize).toBe(created.contextSize);
+        expect((restarted as any).sessions.get(created.id)!.thinkingLevel).toBe("high");
+      } finally {
+        (prefsMod as { getSessionPrefs: typeof origGet }).getSessionPrefs = origGet;
+        (prefsMod as { setSessionPrefs: typeof origSet }).setSessionPrefs = origSet;
+      }
+    });
   });
 
   describe("getSession", () => {
@@ -265,6 +295,27 @@ describe("SessionManager", () => {
       } finally {
         (defaultsMod as { getDefaults: () => unknown }).getDefaults = origDefaults;
         (prefsMod as { getSessionPrefs: (id: string) => unknown }).getSessionPrefs = origPrefs;
+      }
+    });
+
+    // setModelSlot persists modelSlots alone, so a session whose model was last
+    // changed through the slots editor has no top-level `model` field. Deriving
+    // the thinking level from prefs.model only meant those sessions came back on
+    // the default model's recommended effort rather than their own model's.
+    it("derives the thinking level from the session's own model, not the app default", async () => {
+      const prefsMod = await import("@/server/session-prefs");
+      const orig = prefsMod.getSessionPrefs;
+      // Sonnet 4.6 recommends "medium"; the app default (bare "sonnet" resolves
+      // to Sonnet 5) recommends "xhigh", so the two are distinguishable.
+      (prefsMod as { getSessionPrefs: (id: string) => unknown }).getSessionPrefs = () => ({
+        modelSlots: { main: "claude-sonnet-4-6" },
+      });
+      try {
+        const ensured = manager.ensureSession("restored-slots-only", "/tmp/proj");
+        const s = (manager as any).sessions.get(ensured.info.id)!;
+        expect(s.thinkingLevel).toBe("medium");
+      } finally {
+        (prefsMod as { getSessionPrefs: (id: string) => unknown }).getSessionPrefs = orig;
       }
     });
 

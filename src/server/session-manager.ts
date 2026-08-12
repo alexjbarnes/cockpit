@@ -300,7 +300,20 @@ export class SessionManager {
       runContext: options?.runContext,
     });
 
-    setSessionPrefs(id, { runtime: rt, ...(isCockpitAgent ? { cockpitAgent: true } : {}) });
+    // Persist everything the session was born with, not just its runtime. These
+    // are what ensureSession rebuilds from after a restart, and its fallback for
+    // each of them is the *current* app default — so a session created as
+    // "My Session" on the then-default model used to come back named after its
+    // cwd, on whatever model the default happens to be now.
+    setSessionPrefs(id, {
+      name: sessionName,
+      model: modelSlots.main,
+      contextSize: info.contextSize,
+      modelSlots,
+      thinkingLevel: defaults.thinkingLevel,
+      runtime: rt,
+      ...(isCockpitAgent ? { cockpitAgent: true } : {}),
+    });
 
     if (isCockpitAgent) {
       this.registerCockpitAgentOnInit(id);
@@ -378,13 +391,16 @@ export class SessionManager {
         pendingPlanReminder: prefs?.planMode ?? false,
         needsRespawnForPermissions: false,
         compacting: false,
-        thinkingLevel:
-          prefs?.thinkingLevel ??
-          recommendedEffort(resolveModel((prefs?.model || defaults.modelSlots.main) ?? "sonnet")) ??
-          defaults.thinkingLevel,
+        // modelSlots.main, not prefs.model: setModelSlot persists modelSlots on
+        // its own, so a session whose model was last changed through the slots
+        // editor has no top-level `model` field, and reading that field alone
+        // gave it the *default* model's recommended effort and context window.
+        // modelSlots is already resolved above (prefs, then legacy model, then
+        // the app default), so it is the one place that knows the real model.
+        thinkingLevel: prefs?.thinkingLevel ?? recommendedEffort(resolveModel(modelSlots.main ?? "sonnet")) ?? defaults.thinkingLevel,
         streamState: null,
         contextUsage: null,
-        contextWindowSize: this.resolveContextWindow((prefs?.model || defaults.modelSlots.main) ?? undefined, restoredContextSize),
+        contextWindowSize: this.resolveContextWindow(modelSlots.main ?? undefined, restoredContextSize),
         todoItems: [],
         pendingRequests: new Map(),
         initData: prefs?.initData,
