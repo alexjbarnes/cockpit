@@ -960,7 +960,13 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
         }
 
         case "question:request": {
-          setPendingQuestions((prev) => [...prev, { requestId: msg.requestId, questions: msg.questions }]);
+          // The server can forward the same pending request more than once (the
+          // live emission plus the transcript re-parse of the same tool block),
+          // so never stack a second entry for a request id already held. Two
+          // entries read as two unanswered questions: a duplicated card.
+          setPendingQuestions((prev) =>
+            prev.some((q) => q.requestId === msg.requestId) ? prev : [...prev, { requestId: msg.requestId, questions: msg.questions }],
+          );
           break;
         }
       }

@@ -27,6 +27,7 @@ export interface SplitResult {
  */
 export function pairQuestionBlocks(messages: { id: string; role: string; blocks?: ContentBlock[] }[]): Map<string, number> {
   const pairing = new Map<string, number>();
+  const boundToolIds = new Set<string>();
   let next = 0;
 
   for (const message of messages) {
@@ -36,6 +37,13 @@ export function pairQuestionBlocks(messages: { id: string; role: string; blocks?
     // A message id can repeat when the same turn arrives twice (a streaming
     // copy alongside the finalized one); the first occurrence keeps the request.
     if (pairing.has(message.id)) continue;
+    // The same question can also arrive under a DIFFERENT message id: the live
+    // message_done and the transcript re-parse id one turn differently, so the
+    // client holds two copies of the same assistant message. The tool use id is
+    // stable across both, so bind slots to that instead of to the message.
+    const toolId = questionBlock.toolUse.id;
+    if (toolId && boundToolIds.has(toolId)) continue;
+    if (toolId) boundToolIds.add(toolId);
     pairing.set(message.id, next);
     next += 1;
   }

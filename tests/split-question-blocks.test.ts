@@ -177,6 +177,28 @@ describe("pairQuestionBlocks", () => {
     expect(pairing.get("m1")).toBe(0);
   });
 
+  it("leaves a copy of the same question under a different message id without a slot", () => {
+    // The live message_done and the transcript re-parse id one turn differently,
+    // so the client can hold two copies of the same assistant message. The tool
+    // use id is stable across both, so the second copy must pair with nothing.
+    const pairing = pairQuestionBlocks([
+      assistant("live-id", [question({ id: "toolu_01" })]),
+      assistant("file-id", [question({ id: "toolu_01" })]),
+    ]);
+
+    expect(pairing.size).toBe(1);
+    expect(pairing.get("live-id")).toBe(0);
+    expect(pairing.has("file-id")).toBe(false);
+  });
+
+  it("still slots two genuinely different questions from the same turn", () => {
+    const pairing = pairQuestionBlocks([assistant("m1", [question({ id: "toolu_01" }), question({ id: "toolu_02" })])]);
+
+    // splitAtQuestion only takes the first block of a message, so one slot.
+    expect(pairing.size).toBe(1);
+    expect(pairing.get("m1")).toBe(0);
+  });
+
   it("skips answered blocks, so a follow-up still reaches slot 0", () => {
     const pairing = pairQuestionBlocks([assistant("m1", [question({ output: "chose A" })]), assistant("m2", [question()])]);
 
