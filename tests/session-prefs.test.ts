@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("node:fs", () => ({
@@ -6,11 +6,13 @@ vi.mock("node:fs", () => ({
   writeFileSync: vi.fn(),
   mkdirSync: vi.fn(),
   renameSync: vi.fn(),
+  statSync: vi.fn(),
 }));
 
 const mockReadFileSync = vi.mocked(readFileSync);
 const mockWriteFileSync = vi.mocked(writeFileSync);
 const mockRenameSync = vi.mocked(renameSync);
+const mockStatSync = vi.mocked(statSync);
 
 describe("session-prefs", () => {
   beforeEach(() => {
@@ -18,6 +20,7 @@ describe("session-prefs", () => {
     mockReadFileSync.mockReset();
     mockWriteFileSync.mockReset();
     mockRenameSync.mockReset();
+    mockStatSync.mockReset();
     vi.mocked(mkdirSync).mockReset();
   });
 
@@ -169,5 +172,97 @@ describe("session-prefs", () => {
     expect(data).toEqual({ s2: { name: "New" } });
 
     consoleErrorSpy.mockRestore();
+  });
+
+  it("reuses the parsed cache while the file is untouched", async () => {
+    mockReadFileSync.mockReturnValue(JSON.stringify({ s1: { name: "A" } }));
+    mockStatSync.mockReturnValue({ mtimeMs: 111, size: 22 } as never);
+    const { getSessionPrefs } = await import("@/server/session-prefs");
+
+    expect(getSessionPrefs("s1")?.name).toBe("A");
+    expect(getSessionPrefs("s1")?.name).toBe("A");
+    expect(mockReadFileSync).toHaveBeenCalledOnce();
+  });
+
+  it("re-reads when the file changed underneath it", async () => {
+    mockReadFileSync.mockReturnValueOnce(JSON.stringify({ s1: { name: "A" } }));
+    mockStatSync.mockReturnValueOnce({ mtimeMs: 111, size: 22 } as never);
+    const { getSessionPrefs } = await import("@/server/session-prefs");
+    expect(getSessionPrefs("s1")?.name).toBe("A");
+
+    mockReadFileSync.mockReturnValueOnce(JSON.stringify({ s1: { name: "B" } }));
+    mockStatSync.mockReturnValueOnce({ mtimeMs: 222, size: 22 } as never);
+    expect(getSessionPrefs("s1")?.name).toBe("B");
+  });
+});
+
+// The module is compiled into two separate bundles that both load into the one
+// server process: dist/src/server/session-prefs.js for the custom server
+// (session-manager, ws-handler, transcript) and a Next chunk for the route
+// handlers under /api/sessions/[id]/. Each held its own copy of the whole prefs
+// map and each save() rewrote the entire file from it, so a tab open (Next side)
+// stamped a stale snapshot back over the rename and model change the WS side had
+// just made. vi.resetModules() reproduces the two instances exactly.
+describe("session-prefs loaded twice in one process", () => {
+  let disk: Record<string, { data: string; mtimeMs: number }>;
+
+  beforeEach(() => {
+    vi.resetModules();
+    disk = {};
+    let clock = 0;
+    mockReadFileSync.mockReset();
+    mockWriteFileSync.mockReset();
+    mockRenameSync.mockReset();
+    mockStatSync.mockReset();
+    mockReadFileSync.mockImplementation((p) => {
+      const entry = disk[String(p)];
+      if (!entry) throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+      return entry.data;
+    });
+    mockWriteFileSync.mockImplementation((p, data) => {
+      clock += 1;
+      disk[String(p)] = { data: String(data), mtimeMs: clock };
+    });
+    mockRenameSync.mockImplementation((from, to) => {
+      disk[String(to)] = disk[String(from)];
+      delete disk[String(from)];
+    });
+    mockStatSync.mockImplementation((p) => {
+      const entry = disk[String(p)];
+      if (!entry) throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+      return { mtimeMs: entry.mtimeMs, size: entry.data.length } as never;
+    });
+    vi.mocked(mkdirSync).mockReset();
+  });
+
+  function prefsOnDisk(): Record<string, { name?: string; model?: string; activeTabId?: string }> {
+    const file = Object.keys(disk).find((f) => !f.includes(".tmp-"));
+    return JSON.parse(disk[file!].data);
+  }
+
+  it("keeps a write made by the other instance", async () => {
+    const custom = await import("@/server/session-prefs");
+    custom.setSessionPrefs("s1", { openTabs: [{ type: "file", filePath: "a.ts" }] });
+
+    vi.resetModules();
+    const route = await import("@/server/session-prefs");
+    route.setSessionPrefs("s1", { name: "renamed by user", model: "opus" });
+
+    custom.setSessionPrefs("s1", { activeTabId: "chat" });
+
+    expect(prefsOnDisk().s1.name).toBe("renamed by user");
+    expect(prefsOnDisk().s1.model).toBe("opus");
+    expect(prefsOnDisk().s1.activeTabId).toBe("chat");
+  });
+
+  it("reads a write made by the other instance", async () => {
+    const custom = await import("@/server/session-prefs");
+    custom.setSessionPrefs("s1", { name: "before" });
+
+    vi.resetModules();
+    const route = await import("@/server/session-prefs");
+    route.setSessionPrefs("s1", { name: "renamed by user" });
+
+    expect(custom.getSessionPrefs("s1")?.name).toBe("renamed by user");
   });
 });
