@@ -33,6 +33,7 @@ import { useJobFailureCount } from "@/hooks/use-jobs";
 import { useSettings } from "@/hooks/use-settings";
 import { useWebSocket } from "@/hooks/use-websocket";
 import { useCheckedFiles } from "@/lib/checked-files";
+import { createStaleGuard } from "@/lib/stale-guard";
 import { cn } from "@/lib/utils";
 import type { SessionInfo } from "@/types";
 import { AssistantModal } from "./assistant-modal";
@@ -344,6 +345,7 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
   }, []);
 
   const prevStatusRef = useRef<Map<string, string>>(new Map());
+  const staleGuard = useRef(createStaleGuard()).current;
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -410,9 +412,17 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
   }, [subscribe, currentSessionId, sessions]);
 
   const fetchSessions = useCallback(async () => {
+    // The effects below can start a second run while the first is still waiting
+    // on by-ids, whose transcript scan slows down as the pinned list grows. The
+    // guard makes the newest run win: without it the response order decided,
+    // and a run that started before a session was created would land last and
+    // overwrite the list that had it — the new session showed up in the sidebar
+    // and then disappeared until the page was refreshed.
+    const isStale = staleGuard.begin();
     setUnread(getUnreadSessions());
 
     const pinnedIds = await fetchPinnedIds();
+    if (isStale()) return;
     if (pinnedIds.length === 0) {
       setSessions([]);
       return;
@@ -423,7 +433,7 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
       .then((r) => (r.ok ? r.json() : null))
       .catch(() => null);
 
-    if (!res) return;
+    if (!res || isStale()) return;
 
     const fetchedSessions: SessionInfo[] = (res.sessions || []).filter((s: SessionInfo) => !s.cwd.endsWith(".cockpit/reviews"));
     const foundIds: string[] = Array.isArray(res.foundIds) ? res.foundIds : fetchedSessions.map((s) => s.id);
@@ -461,7 +471,7 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
     if (visible.length > 0) {
       send({ type: "session:subscribe", sessionIds: visible.map((s) => s.id) });
     }
-  }, [send]);
+  }, [send, staleGuard]);
 
   // Fetch immediately on mount so pinned sessions appear without waiting
   // for the WebSocket connection to establish.
