@@ -2,9 +2,10 @@
 // (discovered live 2026-08-08): the CLI silently runs in default mode despite
 // --permission-mode bypassPermissions, and frontier models refuse a
 // PermissionRequest-hook allow for self-modifying writes, hanging on a
-// TUI-only dialog cockpit can't see. These tests pin the three detectors:
-// hook-payload permission_mode divergence, the boot banner, and the
-// Notification-hook dialog rescue with its keystroke answer path.
+// TUI-only dialog cockpit can't see. These tests pin the divergence detectors
+// staying SILENT in the chat (cockpit answers the prompts, so the user has
+// nothing to act on) and the Notification-hook dialog rescue with its keystroke
+// answer path.
 import { describe, expect, it, vi } from "vitest";
 import type { ParsedEvent } from "@/server/event-parser";
 import { PtyRuntime } from "@/server/pty-runtime";
@@ -60,49 +61,27 @@ function divergenceWarnings(events: ParsedEvent[]): ParsedEvent[] {
   return events.filter((e) => e.type === "system_message" && /requested bypass did not take effect/i.test(e.text ?? ""));
 }
 
-describe("permission-mode divergence detection", () => {
-  it("warns once when a hook payload reports default under an intended bypass", () => {
+describe("permission-mode divergence stays out of the chat", () => {
+  // The banner used to be emitted as a system_message on every affected
+  // session. Since cockpit answers the resulting prompts itself, it told the
+  // user about something they could not act on, so it is a debug-log note now.
+  it("emits nothing when a hook payload reports default under an intended bypass", () => {
     const { runtime, events } = makeRuntime("bypassPermissions");
     const handler = (runtime as never as { buildHandler(): Record<string, (p: Record<string, unknown>) => unknown> }).buildHandler();
 
     handler.onUserPromptSubmit({ permission_mode: "default", prompt: "hi" });
-    expect(divergenceWarnings(events)).toHaveLength(1);
-
-    // Once per process — repeated payloads stay quiet.
-    handler.onUserPromptSubmit({ permission_mode: "default", prompt: "again" });
     handler.onPreToolUse({ permission_mode: "default", tool_name: "Bash", tool_input: {} });
-    expect(divergenceWarnings(events)).toHaveLength(1);
+
+    expect(divergenceWarnings(events), "no banner, whatever the payload says").toHaveLength(0);
+    expect(events.filter((e) => e.type === "system_message" && /bypass/i.test(e.text ?? ""))).toHaveLength(0);
   });
 
-  it("stays quiet when modes agree, when no mode was expected, and in plan mode", () => {
-    const agree = makeRuntime("bypassPermissions");
-    (agree.runtime as never as { buildHandler(): Record<string, (p: Record<string, unknown>) => unknown> })
-      .buildHandler()
-      .onUserPromptSubmit({ permission_mode: "bypassPermissions", prompt: "hi" });
-    expect(divergenceWarnings(agree.events)).toHaveLength(0);
-
-    const dflt = makeRuntime("default");
-    (dflt.runtime as never as { buildHandler(): Record<string, (p: Record<string, unknown>) => unknown> })
-      .buildHandler()
-      .onUserPromptSubmit({ permission_mode: "default", prompt: "hi" });
-    expect(divergenceWarnings(dflt.events)).toHaveLength(0);
-
-    const plan = makeRuntime("plan");
-    (plan.runtime as never as { buildHandler(): Record<string, (p: Record<string, unknown>) => unknown> })
-      .buildHandler()
-      .onUserPromptSubmit({ permission_mode: "plan", prompt: "hi" });
-    expect(divergenceWarnings(plan.events)).toHaveLength(0);
-  });
-
-  it("detects the boot banner before any hook fires", () => {
+  it("emits nothing for the boot banner either", () => {
     const { runtime, events } = makeRuntime("bypassPermissions");
     (runtime as never as { scanForErrors(chunk: string): void }).scanForErrors(
       "some output\nBypass permissions mode was disabled by settings\nmore output",
     );
-    expect(divergenceWarnings(events)).toHaveLength(1);
-    // Banner sticks around in the rolling buffer; must not re-warn.
-    (runtime as never as { scanForErrors(chunk: string): void }).scanForErrors("tail");
-    expect(divergenceWarnings(events)).toHaveLength(1);
+    expect(events.filter((e) => e.type === "system_message")).toHaveLength(0);
   });
 });
 

@@ -32,8 +32,9 @@ export interface PtyRuntimeOptions {
   onPtyData?: (chunk: string) => void;
   /** The permission mode the spawn asked for (--permission-mode). Hook
    *  payloads report the CLI's ACTUAL mode; when a requested bypass does not
-   *  take effect, the two diverge and the runtime warns instead of letting
-   *  the UI keep claiming bypass is active. */
+   *  take effect the two diverge, which the runtime records in the debug log
+   *  (see noteModeDivergence) because it explains a session raising prompts
+   *  while the UI reports bypass as on. */
   expectedPermissionMode?: "default" | "plan" | "bypassPermissions";
 }
 
@@ -385,11 +386,15 @@ export class PtyRuntime {
   /**
    * The CLI runs in a different permission mode than the spawn asked for —
    * seen when a requested bypass does not take effect (the CLI reports
-   * "Bypass permissions mode was disabled by settings"). Without this warning
-   * the UI keeps showing bypass as on while every privileged action silently
-   * raises prompts. Fires once per process.
+   * "Bypass permissions mode was disabled by settings").
+   *
+   * Logged once per process, and deliberately not shown in the chat: cockpit
+   * answers the prompts that result, so the divergence changes nothing the user
+   * needs to act on, and a banner on every affected session was just noise.
+   * The detection stays because it is the one signal that explains a session
+   * raising prompts while the UI reports bypass as on.
    */
-  private warnModeDivergence(actualMode: string, source: string): void {
+  private noteModeDivergence(actualMode: string, source: string): void {
     if (this.modeDivergenceWarned) return;
     this.modeDivergenceWarned = true;
     logDiag(this.opts.sessionId, "pty:permission-mode-divergence", {
@@ -397,16 +402,6 @@ export class PtyRuntime {
       actual: actualMode,
       source,
     });
-    this.emit([
-      {
-        type: "system_message",
-        text:
-          "⚠️ Bypass permissions is enabled for this session, but the CLI is actually running in " +
-          `${actualMode} mode — the requested bypass did not take effect. ` +
-          "While bypass stays on, cockpit answers the resulting permission prompts (including protected " +
-          ".claude-write dialogs) for you; turn bypass off to review them yourself.",
-      },
-    ]);
   }
 
   /** Compare a hook payload's reported permission_mode against the spawn's request. */
@@ -414,7 +409,7 @@ export class PtyRuntime {
     if (this.opts.expectedPermissionMode !== "bypassPermissions") return;
     const actual = payload.permission_mode;
     if (typeof actual === "string" && actual !== "bypassPermissions") {
-      this.warnModeDivergence(actual, source);
+      this.noteModeDivergence(actual, source);
     }
   }
 
@@ -720,7 +715,7 @@ export class PtyRuntime {
       this.opts.expectedPermissionMode === "bypassPermissions" &&
       /Bypass permissions mode was disabled by settings/i.test(clean)
     ) {
-      this.warnModeDivergence("default", "boot-banner");
+      this.noteModeDivergence("default", "boot-banner");
     }
 
     // A 1M-context request on an account without usage credits (Sonnet 4.6):
