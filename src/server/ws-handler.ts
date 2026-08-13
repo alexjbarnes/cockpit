@@ -416,6 +416,16 @@ export function createWebSocketHandler(
               }
             }
 
+            // Hand over the current background tasks too. The transcript marks
+            // an async agent's tool use done at launch, so without this a
+            // reloaded page judged a running agent finished until the next Stop
+            // or subagent hook happened to arrive with a real list — the agent
+            // card's spinner disappeared for ~10s and then came back.
+            const tasksOnConnect = sessionManager.getBackgroundTasks(msg.sessionId);
+            if (tasksOnConnect.length > 0) {
+              send(ws, { type: "session:task_sync", sessionId: msg.sessionId, tasks: tasksOnConnect });
+            }
+
             // If client already has messages, send only the delta to avoid
             // re-sending 1000+ messages on every mobile reconnect.
             // Uses the last known server message ID instead of a count, since

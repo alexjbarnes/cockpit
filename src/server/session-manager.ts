@@ -22,6 +22,7 @@ import { getCockpitDir } from "@/server/paths";
 import { ensureCatalogFresh, OPENROUTER_PROVIDER_ID } from "@/server/provider-catalog";
 import { getProvider, isBuiltinCatalogProvider, openRouterModelEnv, resolveProviderModel } from "@/server/providers";
 import type {
+  BackgroundTask,
   ChatMessage,
   ContentBlock,
   ContextUsage,
@@ -118,6 +119,8 @@ interface Session {
   contextUsage: ContextUsage | null;
   contextWindowSize: number;
   todoItems: TodoItem[];
+  /** Last reported background tasks, replayed to a client on connect. */
+  backgroundTasks: BackgroundTask[];
   initData?: InitData;
   pendingRequests: Map<string, PendingRequest>;
   streamingSnapshot: StreamingSnapshot | null;
@@ -279,6 +282,7 @@ export class SessionManager {
       contextUsage: null,
       contextWindowSize: this.resolveContextWindow(info.model, info.contextSize ?? DEFAULT_CONTEXT_SIZE),
       todoItems: [],
+      backgroundTasks: [],
       pendingRequests: new Map(),
       streamingSnapshot: null,
       queuedMessages: [],
@@ -402,6 +406,7 @@ export class SessionManager {
         contextUsage: null,
         contextWindowSize: this.resolveContextWindow(modelSlots.main ?? undefined, restoredContextSize),
         todoItems: [],
+        backgroundTasks: [],
         pendingRequests: new Map(),
         initData: prefs?.initData,
         streamingSnapshot: null,
@@ -1513,6 +1518,47 @@ export class SessionManager {
     return this.sessions.get(sessionId)?.todoItems ?? [];
   }
 
+  /**
+   * The background tasks last reported for a session, for replay on connect.
+   *
+   * Without this a reload had nothing to go on: the transcript records an async
+   * agent's tool use as done the moment it launches, so the client guessed from
+   * whether the session was mid-turn and showed a running agent as finished
+   * until the next Stop or subagent hook arrived with a real list — the ~10s
+   * flip where the agent card's spinner vanished and then came back.
+   */
+  getBackgroundTasks(sessionId: string): BackgroundTask[] {
+    return this.sessions.get(sessionId)?.backgroundTasks ?? [];
+  }
+
+  /** Keep the session's task list in step with what is being emitted, so a
+   *  client connecting later can be handed the same picture. task_sync carries
+   *  the whole list (an empty one means nothing is running); task_update carries
+   *  one task, which may be new. */
+  private rememberBackgroundTasks(session: Session, event: ParsedEvent): void {
+    if (event.type === "task_sync" && Array.isArray(event.tasks)) {
+      session.backgroundTasks = event.tasks;
+      return;
+    }
+    if (event.type !== "task_update" || !event.taskInfo) return;
+    const info = event.taskInfo;
+    // Mirror the mapping ws-handler applies on the way out, so a replayed task
+    // is identical to the one a client already connected would have received.
+    // "progress" is an activity line on a task that is still running.
+    const isProgress = info.status === "progress";
+    const task: BackgroundTask = {
+      taskId: info.taskId,
+      toolUseId: info.toolUseId,
+      status: isProgress ? "running" : (info.status as "running" | "completed"),
+      title: isProgress ? undefined : info.title || info.description,
+      description: info.description,
+      activity: isProgress ? info.description : undefined,
+      summary: info.summary,
+    };
+    const rest = session.backgroundTasks.filter((t) => t.taskId !== task.taskId);
+    session.backgroundTasks = [...rest, task];
+  }
+
   onTodos(id: string, listener: (todos: TodoItem[]) => void): (() => void) | null {
     const session = this.sessions.get(id);
     if (!session) return null;
@@ -1866,6 +1912,7 @@ export class SessionManager {
     for (const event of result.emit) {
       // Skip phantom permission events that were already bypass-approved above
       if (event.type === "permission_request" && event.requestId && bypassedRequestIds.has(event.requestId)) continue;
+      this.rememberBackgroundTasks(session, event);
       session.emitter.emit("event", sessionId, event);
     }
 

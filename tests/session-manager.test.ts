@@ -3635,6 +3635,97 @@ describe("SessionManager", () => {
       expect(s.pendingRequests.has("tui-1")).toBe(false);
     });
 
+    // A reloaded page has no task state: the transcript records an async
+    // agent's tool use as done the moment it launches, so the client judged a
+    // running agent finished until the next Stop or subagent hook arrived with a
+    // real list. That was the agent card's spinner vanishing for ~10s and coming
+    // back. The session now keeps the last reported list for replay on connect.
+    describe("background task memory", () => {
+      const base = {
+        intermediateMessages: [],
+        emit: [],
+        systemMessages: [],
+        errors: [],
+        statusChange: null,
+        compactDone: false,
+        snapshot: null,
+        permissionActions: [],
+      };
+      const task = (taskId: string, status: "running" | "completed") => ({
+        taskId,
+        toolUseId: taskId,
+        status,
+        title: "general-purpose",
+        description: "work",
+      });
+
+      it("remembers a synced list, and a later sync replaces it", () => {
+        const session = manager.createSession("/tmp");
+        const s = (manager as any).sessions.get(session.id)!;
+
+        (manager as any).applyProcessedResult(s, session.id, {
+          ...base,
+          emit: [{ type: "task_sync", tasks: [task("a1", "running")] }],
+        });
+        expect(manager.getBackgroundTasks(session.id)).toEqual([task("a1", "running")]);
+
+        // An empty sync is how the CLI reports that nothing is running.
+        (manager as any).applyProcessedResult(s, session.id, { ...base, emit: [{ type: "task_sync", tasks: [] }] });
+        expect(manager.getBackgroundTasks(session.id)).toEqual([]);
+      });
+
+      it("upserts a single task_update without dropping the others", () => {
+        const session = manager.createSession("/tmp");
+        const s = (manager as any).sessions.get(session.id)!;
+
+        (manager as any).applyProcessedResult(s, session.id, {
+          ...base,
+          emit: [{ type: "task_sync", tasks: [task("a1", "running"), task("a2", "running")] }],
+        });
+        (manager as any).applyProcessedResult(s, session.id, {
+          ...base,
+          emit: [{ type: "task_update", taskInfo: task("a2", "completed") }],
+        });
+
+        const held = manager.getBackgroundTasks(session.id);
+        expect(held).toHaveLength(2);
+        expect(held.find((t) => t.taskId === "a1")?.status).toBe("running");
+        expect(held.find((t) => t.taskId === "a2")?.status).toBe("completed");
+      });
+
+      it("adds a task_update for an id it has not seen", () => {
+        const session = manager.createSession("/tmp");
+        const s = (manager as any).sessions.get(session.id)!;
+
+        (manager as any).applyProcessedResult(s, session.id, {
+          ...base,
+          emit: [{ type: "task_update", taskInfo: task("fresh", "running") }],
+        });
+        expect(manager.getBackgroundTasks(session.id)).toEqual([task("fresh", "running")]);
+      });
+
+      it("stores a progress update as a running task carrying the activity line", () => {
+        const session = manager.createSession("/tmp");
+        const s = (manager as any).sessions.get(session.id)!;
+
+        (manager as any).applyProcessedResult(s, session.id, {
+          ...base,
+          emit: [{ type: "task_update", taskInfo: { taskId: "a1", toolUseId: "a1", status: "progress", description: "reading files" } }],
+        });
+
+        // Mirrors what ws-handler sends live, so a replayed task is identical to
+        // one an already-connected client received.
+        const [held] = manager.getBackgroundTasks(session.id);
+        expect(held.status).toBe("running");
+        expect(held.activity).toBe("reading files");
+        expect(held.title).toBeUndefined();
+      });
+
+      it("returns an empty list for a session it does not hold", () => {
+        expect(manager.getBackgroundTasks("nope")).toEqual([]);
+      });
+    });
+
     it("without bypass, an interactiveOnly permission surfaces as a real dialog", () => {
       const session = manager.createSession("/tmp");
       const s = (manager as any).sessions.get(session.id)!;
