@@ -120,4 +120,8 @@ export type SSEScriptEvent = {
 
 export interface TurnScript {
   events: SSEScriptEvent[];
+  /** Hold the response open this long before the first event. Lets a test keep
+   *  a turn in flight — a subagent's turn, say, so the parent sits idle with a
+   *  live agent for long enough to observe. */
+  delayMs?: number;
 }

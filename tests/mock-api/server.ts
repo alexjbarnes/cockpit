@@ -194,8 +194,9 @@ export function createMockApiServer(): Promise<MockApiServer> {
               return;
             }
             const ev = turn.events[i++];
-            // Small delay between events to simulate streaming
-            const delay = i === 1 ? 0 : 5;
+            // Small delay between events to simulate streaming. The first event
+            // can be held longer (turn.delayMs) to keep the turn in flight.
+            const delay = i === 1 ? (turn.delayMs ?? 0) : 5;
             setTimeout(() => {
               res.write(`event: ${ev.event}\n`);
               res.write(`data: ${JSON.stringify(ev.data)}\n\n`);
