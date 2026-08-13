@@ -22,6 +22,13 @@ function formatToolSummary(toolName: string, input: Record<string, unknown>): st
       const fp = (input.file_path as string) || "";
       return fp ? shortPath(fp) : "";
     }
+    // The URL is the whole decision for a fetch, so put it in the summary
+    // instead of leaving it to be read out of the raw input JSON.
+    case "WebFetch":
+    case "WebSearch": {
+      const target = (input.url as string) || (input.query as string) || "";
+      return target.length > 80 ? target.slice(0, 80) + "..." : target;
+    }
     default:
       return "";
   }

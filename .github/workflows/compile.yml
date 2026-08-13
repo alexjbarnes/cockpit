@@ -1,0 +1,29 @@
+name: Compile
+
+# Full production build from a clean npm ci — the check the TS7 incident
+# proved was missing. Typecheck alone stayed green for ten days while no
+# fresh install could build: TypeScript 7's tsc works, but it dropped
+# lib/typescript.js, Next's probe for that exact file failed silently,
+# tsconfig paths never loaded, and every "@/..." import was unresolvable.
+# Only `next build` sees that class of failure.
+
+on:
+  workflow_call:
+
+jobs:
+  compile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: step-security/harden-runner@b09bb98e06d4d774595224525879c09bc6e98c40 # v2.20.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+          cache: "npm"
+      - run: npm ci
+      # Cheap and first: a range on next/react/react-dom is only detectable
+      # here, since CI installs from the (already exact) lockfile.
+      - run: node scripts/check-exact-pins.mjs
+      - run: npm run build

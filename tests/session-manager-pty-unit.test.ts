@@ -68,6 +68,13 @@ vi.mock("@/server/singleton", () => ({
   setHookRouter: vi.fn(),
   getTerminalManager: vi.fn(() => null),
   setTerminalManager: vi.fn(),
+  // Every session now asks for the cockpit MCP server on spawn (Phase 1 of
+  // the issue-tracker spec), not just the assistant/job cases this file used
+  // to only ever exercise. null exercises the same "MCP server unavailable"
+  // path spawnProcess already had to handle gracefully; this file's tests
+  // are about PTY runtime mechanics, not the token lifecycle, which has its
+  // own coverage in session-manager-mcp-lifecycle.test.ts.
+  getCockpitMcp: vi.fn(() => null),
 }));
 
 vi.mock("@/server/debug-logger", () => ({
@@ -151,9 +158,16 @@ describe("SessionManager PTY runtime (unit)", () => {
       expect(session.runtime).toBe("pty");
     });
 
-    it("defaults to stream runtime", () => {
+    it("defaults to pty runtime", () => {
       const session = manager.createSession("/tmp");
-      expect(session.runtime).toBe("stream");
+      expect(session.runtime).toBe("pty");
+    });
+
+    it("honours an injected default, which is how the stream-protocol suites pin their transport", () => {
+      const streamFirst = new SessionManager({ defaultRuntime: "stream" });
+      expect(streamFirst.createSession("/tmp").runtime).toBe("stream");
+      // An explicit per-session choice still wins over the injected default.
+      expect(streamFirst.createSession("/tmp", undefined, { runtime: "pty" }).runtime).toBe("pty");
     });
   });
 
@@ -191,6 +205,50 @@ describe("SessionManager PTY runtime (unit)", () => {
 
       manager.sendMessage(session.id, "second");
       expect(ptyMocks.sendUserText).toHaveBeenCalledWith("second");
+    });
+
+    // /compact used to deadlock: it set session.compacting to raise the
+    // progress indicator, then hit its own `if (session.compacting)` queue
+    // guard and was queued behind itself. The queue only flushes when
+    // compacting clears, which needs a PostCompact hook that can never arrive
+    // because the CLI was never told to compact. Result: a spinner forever and
+    // nothing sent.
+    it("delivers /compact to the CLI instead of queueing it behind its own flag", () => {
+      const session = manager.createSession("/tmp", undefined, { runtime: "pty" });
+      manager.sendMessage(session.id, "first");
+      emitMessageDone();
+
+      manager.sendMessage(session.id, "/compact");
+      expect(ptyMocks.sendUserText).toHaveBeenCalledWith("/compact");
+      expect(manager.getQueuedCount(session.id)).toBe(0);
+    });
+
+    it("still raises the compacting indicator for /compact", () => {
+      const session = manager.createSession("/tmp", undefined, { runtime: "pty" });
+      const systems: string[] = [];
+      manager.onSystem(session.id, (text) => systems.push(text));
+      manager.sendMessage(session.id, "first");
+      emitMessageDone();
+
+      manager.sendMessage(session.id, "/compact");
+      expect(systems).toContain("__compact::start");
+      expect(manager.isCompacting(session.id)).toBe(true);
+    });
+
+    // The guard still has to do its original job: a normal message arriving
+    // while a compaction is genuinely in flight must wait, not race a respawn.
+    it("still queues an ordinary message sent while compacting", () => {
+      const session = manager.createSession("/tmp", undefined, { runtime: "pty" });
+      manager.sendMessage(session.id, "first");
+      emitMessageDone();
+      manager.sendMessage(session.id, "/compact");
+      // No compact-done event: the compaction is still in flight, which is
+      // exactly the state the guard exists for.
+      expect(manager.isCompacting(session.id)).toBe(true);
+
+      manager.sendMessage(session.id, "after");
+      expect(ptyMocks.sendUserText).not.toHaveBeenCalledWith("after");
+      expect(manager.getQueuedCount(session.id)).toBeGreaterThan(0);
     });
 
     it("includes --permission-mode plan when plan mode active", () => {

@@ -196,6 +196,18 @@ export default function AppearanceSettingsPage() {
           <Toggle enabled={settings.reviewsEnabled} onToggle={() => updateSetting("reviewsEnabled", !settings.reviewsEnabled)} />
         </SettingRow>
       </div>
+
+      <div className="mt-4 border-t pt-3">
+        <p className="px-0 pb-1 text-xs font-medium text-muted-foreground uppercase tracking-wide">Experimental</p>
+        <div className="space-y-1">
+          <SettingRow
+            label="Issue tracker"
+            hint="Show the native issue tracker (Issues sidebar icon, /issues, Projects settings). Experimental and may change."
+          >
+            <Toggle enabled={settings.issuesEnabled} onToggle={() => updateSetting("issuesEnabled", !settings.issuesEnabled)} />
+          </SettingRow>
+        </div>
+      </div>
     </div>
   );
 }

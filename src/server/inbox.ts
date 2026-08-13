@@ -3,7 +3,7 @@ import path from "node:path";
 import { v4 as uuidv4 } from "uuid";
 import { getCockpitDir } from "@/server/paths";
 import type { InboxMessage, InboxPriority } from "@/types";
-import { dispatchNotification } from "./notifications";
+import { dispatchNotification, type NotificationOutcome } from "./notifications";
 
 function inboxDir(): string {
   return getCockpitDir();
@@ -49,8 +49,10 @@ export function addInboxMessage(msg: {
   jobId?: string;
   jobName?: string;
   runId?: string;
+  sessionId?: string;
+  sessionName?: string;
   notifyProviders?: string[];
-}): InboxMessage {
+}): { entry: InboxMessage; outcome: NotificationOutcome } {
   const messages = readAll();
   const entry: InboxMessage = {
     id: uuidv4(),
@@ -60,20 +62,26 @@ export function addInboxMessage(msg: {
     jobId: msg.jobId,
     jobName: msg.jobName,
     runId: msg.runId,
+    sessionId: msg.sessionId,
+    sessionName: msg.sessionName,
     createdAt: Date.now(),
     read: false,
   };
   messages.push(entry);
   writeAll(messages);
-  dispatchNotification({
+  // Only a session caller gets the "session" source; a job (or the plain
+  // REST/UI path, which passes neither) keeps today's "inbox" so the
+  // per-provider source filter (notifications.ts's matchesFilter) can still
+  // route a job's reports the way it always has.
+  const outcome = dispatchNotification({
     title: entry.title,
     body: entry.body,
     priority: entry.priority,
-    source: "inbox",
+    source: msg.sessionId ? "session" : "inbox",
     url: `/inbox/${entry.id}`,
     providerIds: msg.notifyProviders,
   });
-  return entry;
+  return { entry, outcome };
 }
 
 export function markRead(id: string, read = true): boolean {
@@ -104,21 +112,16 @@ export function clearInbox(): void {
   writeAll([]);
 }
 
-const INBOX_BLOCK_RE = /```cockpit-inbox\s*\n([\s\S]*?)\n```/;
-
-export function parseInboxBlock(text: string): { title: string; body: string; priority?: InboxPriority } | null {
-  const match = INBOX_BLOCK_RE.exec(text);
-  if (!match) return null;
-  try {
-    const parsed = JSON.parse(match[1]);
-    if (typeof parsed.title !== "string" || typeof parsed.body !== "string") return null;
-    return { title: parsed.title, body: parsed.body, priority: parsed.priority };
-  } catch {
-    return null;
-  }
-}
-
 const ERROR_BLOCK_RE = /```cockpit-error\s*\n([\s\S]*?)\n```/;
+
+/**
+ * Values a run has used to say "nothing went wrong" while still emitting the
+ * block. A job's prompt asks for the block only on failure, but a model that
+ * reads "your final message MUST include" literally emits one regardless and
+ * fills the field in with a placeholder — which marked a completed run failed
+ * and spent a retry redoing finished work. Treated as no error at all.
+ */
+const NON_ERRORS = new Set(["", "none", "n/a", "na", "null", "nil", "no error", "no errors", "success", "ok"]);
 
 export function parseErrorBlock(text: string): { error: string; details?: string } | null {
   const match = ERROR_BLOCK_RE.exec(text);
@@ -126,6 +129,7 @@ export function parseErrorBlock(text: string): { error: string; details?: string
   try {
     const parsed = JSON.parse(match[1]);
     if (typeof parsed.error !== "string") return null;
+    if (NON_ERRORS.has(parsed.error.trim().toLowerCase())) return null;
     return { error: parsed.error, details: parsed.details };
   } catch {
     return null;

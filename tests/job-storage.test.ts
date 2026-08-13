@@ -3,10 +3,11 @@
 // the env var per call, so no fs mocking is needed). The legacy [1m] model
 // migration on read is covered separately in job-storage-context.test.ts.
 
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { buildProject, saveProject } from "@/server/issue-storage";
 import {
   deleteJob,
   getJob,
@@ -212,6 +213,140 @@ describe("job CRUD", () => {
     expect(loadRuns("a")).toHaveLength(1);
     deleteJob("a");
     expect(loadRuns("a")).toEqual([]);
+  });
+
+  it("deleteJob removes the job's scratchpad, state files and all", () => {
+    const pad = path.join(dir, "jobs", "a");
+    mkdirSync(path.join(pad, "nested"), { recursive: true });
+    writeFileSync(path.join(pad, "state.json"), '{"suggested":[]}');
+    writeFileSync(path.join(pad, "nested", "cache.txt"), "x");
+    saveJob(makeJob("a"));
+
+    deleteJob("a");
+    expect(existsSync(pad)).toBe(false);
+  });
+
+  it("deleteJob leaves other jobs' scratchpads alone", () => {
+    const keep = path.join(dir, "jobs", "b");
+    mkdirSync(keep, { recursive: true });
+    writeFileSync(path.join(keep, "state.json"), "{}");
+    saveJob(makeJob("a"));
+    saveJob(makeJob("b"));
+
+    deleteJob("a");
+    expect(existsSync(keep)).toBe(true);
+  });
+
+  it("deleteJob copes with a job that never wrote a scratchpad", () => {
+    saveJob(makeJob("a"));
+    expect(existsSync(path.join(dir, "jobs", "a"))).toBe(false);
+    expect(deleteJob("a")).toBe(true);
+  });
+
+  it("deleteJob does not touch the scratchpad when the job is unknown", () => {
+    const pad = path.join(dir, "jobs", "ghost");
+    mkdirSync(pad, { recursive: true });
+    expect(deleteJob("ghost")).toBe(false);
+    expect(existsSync(pad)).toBe(true);
+  });
+
+  it("deleteJob cannot escape the scratchpad root via a traversing id", () => {
+    // The id would resolve to <config>/jobs/../.. and take the tmpdir with it.
+    const traversingId = "../..";
+    const sibling = path.join(dir, "scheduled-jobs.json");
+    saveJob({ ...makeJob("a"), id: traversingId });
+    expect(deleteJob(traversingId)).toBe(true);
+    expect(existsSync(dir)).toBe(true);
+    expect(existsSync(sibling)).toBe(true);
+  });
+});
+
+describe("saveJob: onIssueStatus schedule validation (phase 4, storage boundary)", () => {
+  // saveJob is the one function every job write funnels through (REST's PUT
+  // route and the MCP update_job tool both bypass buildJob entirely with a
+  // raw field spread), so this is where an onIssueStatus schedule's shape has
+  // to be caught — see job-storage.ts's assertValidSchedules comment.
+
+  it("accepts an onIssueStatus schedule with a valid status and no project", () => {
+    const job = makeJob("a", { schedules: [{ type: "onIssueStatus", status: "Backlog" }] });
+    expect(() => saveJob(job)).not.toThrow();
+    expect(getJob("a")?.schedules).toEqual([{ type: "onIssueStatus", status: "Backlog" }]);
+  });
+
+  it("accepts an onIssueStatus schedule whose project id names a real project", () => {
+    const project = buildProject({ name: "Cockpit", prefix: "CK" });
+    saveProject(project);
+    const job = makeJob("a", { schedules: [{ type: "onIssueStatus", status: "Backlog", project: project.id }] });
+    expect(() => saveJob(job)).not.toThrow();
+  });
+
+  it("rejects an onIssueStatus schedule with a status outside ISSUE_STATUSES", () => {
+    const job = makeJob("a", {
+      // @ts-expect-error deliberately invalid status, mirroring an unvalidated REST/MCP payload
+      schedules: [{ type: "onIssueStatus", status: "Definitely Not A Status" }],
+    });
+    expect(() => saveJob(job)).toThrow(/invalid status/i);
+    expect(loadJobs()).toEqual([]); // rejected write never reaches disk
+  });
+
+  it("rejects an onIssueStatus schedule whose project does not name a real project", () => {
+    const job = makeJob("a", { schedules: [{ type: "onIssueStatus", status: "Backlog", project: "no-such-project" }] });
+    expect(() => saveJob(job)).toThrow(/unknown project/i);
+    expect(loadJobs()).toEqual([]);
+  });
+
+  it("rejects a cron schedule whose expression is nonsense (would silently never fire)", () => {
+    for (const expression of ["not a cron expression", "banana * * * *", "61 * * * *", "* * *", ""]) {
+      const job = makeJob("a", { schedules: [{ type: "cron", expression }] });
+      expect(() => saveJob(job), `expression: "${expression}"`).toThrow();
+    }
+    expect(loadJobs()).toEqual([]);
+  });
+
+  it("accepts well-formed cron expressions", () => {
+    for (const expression of ["0 9 * * 1", "*/15 * * * *", "30 6 1 * *"]) {
+      const job = makeJob(`ok-${expression}`, { schedules: [{ type: "cron", expression }] });
+      expect(() => saveJob(job)).not.toThrow();
+    }
+  });
+
+  it("rejects a simple schedule with a bogus frequency, time, dayOfWeek or dayOfMonth", () => {
+    const cases: Array<Record<string, unknown>> = [
+      { type: "simple", frequency: "fortnightly" },
+      { type: "simple", frequency: "daily", time: "25:00" },
+      { type: "simple", frequency: "daily", time: "9am" },
+      { type: "simple", frequency: "weekly", dayOfWeek: 7 },
+      { type: "simple", frequency: "monthly", dayOfMonth: 32 },
+    ];
+    for (const schedule of cases) {
+      const job = makeJob("a", { schedules: [schedule as never] });
+      expect(() => saveJob(job), JSON.stringify(schedule)).toThrow();
+    }
+    expect(loadJobs()).toEqual([]);
+  });
+
+  it("accepts valid simple schedules of every frequency", () => {
+    const cases = [
+      { type: "simple", frequency: "hourly" },
+      { type: "simple", frequency: "daily", time: "09:30" },
+      { type: "simple", frequency: "weekly", dayOfWeek: 0, time: "8:00" },
+      { type: "simple", frequency: "monthly", dayOfMonth: 31 },
+    ] as never[];
+    for (const [i, schedule] of cases.entries()) {
+      expect(() => saveJob(makeJob(`s-${i}`, { schedules: [schedule] }))).not.toThrow();
+    }
+  });
+
+  it("rejects a schedule with an unknown type", () => {
+    const job = makeJob("a", { schedules: [{ type: "yearly" } as never] });
+    expect(() => saveJob(job)).toThrow(/unknown type/i);
+  });
+
+  it("does not persist a job at all when its onIssueStatus schedule is invalid", () => {
+    saveJob(makeJob("keep")); // a pre-existing valid job
+    const bad = makeJob("bad", { schedules: [{ type: "onIssueStatus", status: "Backlog", project: "ghost" }] });
+    expect(() => saveJob(bad)).toThrow();
+    expect(loadJobs().map((j) => j.id)).toEqual(["keep"]);
   });
 });
 

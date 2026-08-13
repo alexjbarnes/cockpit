@@ -1,4 +1,14 @@
-import type { JobSchedule, SimpleSchedule } from "@/types";
+import type { CronSchedule, JobSchedule, SimpleSchedule } from "@/types";
+
+/**
+ * The subset of JobSchedule with an actual cron/time-of-day form. Excludes
+ * IssueStatusSchedule on purpose: it fires on an event, not a clock, so it has
+ * no cron expression and no "next run time". scheduleToCron and getNextRunTime
+ * are typed to this narrower union so a caller can't reach either with an
+ * onIssueStatus schedule without the compiler forcing it to filter first —
+ * see getNextRunTimeAny below and job-scheduler.ts's tick().
+ */
+export type TimeBasedSchedule = SimpleSchedule | CronSchedule;
 
 interface CronFields {
   minute: number[];
@@ -47,6 +57,29 @@ function parseCron(expression: string): CronFields {
   };
 }
 
+/**
+ * Throws when `expression` is not a well-formed 5-field cron line. parseCron
+ * alone is not enough: parseField turns garbage like "banana" into NaN
+ * entries, which store fine and then never match — a job that silently never
+ * fires. This is the validator the write boundary (job-storage's
+ * assertValidSchedules) runs before a cron schedule may persist.
+ */
+export function assertValidCronExpression(expression: string): void {
+  const fields = parseCron(expression);
+  const bounds: Array<[string, number[], number, number]> = [
+    ["minute", fields.minute, 0, 59],
+    ["hour", fields.hour, 0, 23],
+    ["day-of-month", fields.dayOfMonth, 1, 31],
+    ["month", fields.month, 1, 12],
+    ["day-of-week", fields.dayOfWeek, 0, 6],
+  ];
+  for (const [name, values, min, max] of bounds) {
+    if (values.length === 0 || values.some((v) => !Number.isInteger(v) || v < min || v > max)) {
+      throw new Error(`Invalid cron expression "${expression}": ${name} field is malformed or out of range (${min}-${max})`);
+    }
+  }
+}
+
 export function matchesCron(expression: string, date: Date): boolean {
   const fields = parseCron(expression);
   const minute = date.getMinutes();
@@ -85,12 +118,15 @@ export function simpleScheduleToCron(schedule: SimpleSchedule): string {
   }
 }
 
-export function scheduleToCron(schedule: JobSchedule): string {
+export function scheduleToCron(schedule: TimeBasedSchedule): string {
   if (schedule.type === "cron") return schedule.expression;
   return simpleScheduleToCron(schedule);
 }
 
 export function describeSchedule(schedule: JobSchedule): string {
+  if (schedule.type === "onIssueStatus") {
+    return schedule.project ? `On issue → ${schedule.status} (project: ${schedule.project})` : `On issue → ${schedule.status}`;
+  }
   if (schedule.type === "cron") {
     return `cron: ${schedule.expression}`;
   }
@@ -110,7 +146,7 @@ export function describeSchedule(schedule: JobSchedule): string {
   }
 }
 
-export function getNextRunTime(schedule: JobSchedule, after: Date): Date {
+export function getNextRunTime(schedule: TimeBasedSchedule, after: Date): Date {
   const cron = scheduleToCron(schedule);
   const fields = parseCron(cron);
   const candidate = new Date(after.getTime());
@@ -159,10 +195,23 @@ export function describeAllSchedules(schedules: JobSchedule[]): string {
 export function getNextRunTimeAny(schedules: JobSchedule[], after: Date): Date {
   let earliest: Date | null = null;
   for (const s of schedules) {
+    if (s.type === "onIssueStatus") continue; // no cron form; see TimeBasedSchedule
     const next = getNextRunTime(s, after);
     if (!earliest || next.getTime() < earliest.getTime()) {
       earliest = new Date(next.getTime());
     }
   }
   return earliest ?? new Date(after.getTime() + 86400000);
+}
+
+/**
+ * True if at least one schedule has a cron/time-of-day form. The jobs list UI
+ * uses this to decide whether "Next: <date>" means anything for a job — one
+ * whose only schedule is onIssueStatus has no next-run time at all, and
+ * getNextRunTimeAny's "no schedules matched" fallback (tomorrow, same time)
+ * would otherwise read as a real, if wrong, answer instead of the honest "on
+ * status change".
+ */
+export function hasTimeBasedSchedule(schedules: JobSchedule[]): boolean {
+  return schedules.some((s) => s.type !== "onIssueStatus");
 }

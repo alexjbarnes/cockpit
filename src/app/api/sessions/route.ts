@@ -38,6 +38,11 @@ export async function GET(req: NextRequest) {
       if (running) {
         session.status = running.status;
         session.pendingRequestCount = running.pendingRequestCount;
+        // Live-only, like the two above: a scan builds this from the transcript
+        // file, which knows nothing about running agents. Omitting it let the
+        // sidebar's poll overwrite the count the websocket had just delivered,
+        // so the background-agent dot vanished within seconds of appearing.
+        session.agentCount = running.agentCount;
       }
       const mem = knownMap.get(session.id);
       if (mem) {

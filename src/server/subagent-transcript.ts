@@ -79,13 +79,22 @@ export async function listSubagentMetasForSessions(cliSessionIds: string[], cwd:
 
 /**
  * The subagent transcript for a parent Agent tool_use id, as ChatMessages, or
- * null when no subagent maps to that tool_use id. Searches every passed CLI
- * session id (resumes) for a matching meta sidecar.
+ * null when nothing maps to that id. Searches every passed CLI session id
+ * (resumes) for a matching meta sidecar.
+ *
+ * Accepts an agent id as well as a tool_use id, because a background agent's
+ * card is not built from the tool_use event. Under the PTY runtime the card
+ * comes from SubagentStart/task-sync hooks (hook-event-translator.ts), which
+ * carry the AGENT id and no tool_use id, so keying only on tool_use left every
+ * background agent's card reporting no transcript while its file sat on disk.
+ * The two id spaces do not overlap — a tool_use id is the CLI's `call_`/`toolu_`
+ * id, an agent id is the `agent-<id>.jsonl` suffix — so accepting both cannot
+ * mismatch.
  */
 export async function loadSubagentByToolUse(cliSessionIds: string[], cwd: string, toolUseId: string): Promise<ChatMessage[] | null> {
   for (const cliSessionId of cliSessionIds) {
     const metas = await listSubagentMetas(cliSessionId, cwd);
-    const match = metas.find((m) => m.toolUseId === toolUseId);
+    const match = metas.find((m) => m.toolUseId === toolUseId) ?? metas.find((m) => m.agentId === toolUseId);
     if (!match) continue;
     const file = path.join(subagentsDir(cliSessionId, cwd), `agent-${match.agentId}.jsonl`);
     return loadTranscriptFileAbs(file);

@@ -3,6 +3,7 @@ import { networkInterfaces } from "node:os";
 import { parse } from "node:url";
 import next from "next";
 import { deletePasswordFile, needsSetup } from "./src/server/auth";
+import { logDiag, logProxy } from "./src/server/debug-logger";
 import { FormatProxy, setActiveFormatProxy } from "./src/server/format-proxy";
 import { startHealthProbe } from "./src/server/health-probe";
 import { HookRouter } from "./src/server/hook-router";
@@ -85,14 +86,20 @@ async function main() {
   const hookPortPref = parseInt(process.env.COCKPIT_HOOK_PORT || "0", 10);
   await hookRouter.start(hookHost, Number.isFinite(hookPortPref) ? hookPortPref : 0);
   setHookRouter(hookRouter);
-  console.log(`Hook router listening on ${hookRouter.getUrl(hookHost)}`);
+  // These three are internal loopback services, not somewhere the user
+  // connects, so their addresses belong in the debug log rather than the
+  // startup banner. Only the Cockpit URL above is worth printing.
+  logDiag("-", "hook-router-listening", { url: hookRouter.getUrl(hookHost) });
 
   const cockpitMcp = new CockpitMcpServer();
   try {
     await cockpitMcp.start();
     setCockpitMcp(cockpitMcp);
-    console.log(`Cockpit MCP server listening on ${cockpitMcp.getUrl()}`);
+    logDiag("-", "mcp-listening", { url: cockpitMcp.getUrl() });
   } catch (err) {
+    // As with the format proxy, a start FAILURE stays on stderr: debug logging
+    // is off by default, so a debug-only record would be written nowhere.
+    logDiag("-", "mcp-start-failed", { error: err instanceof Error ? err.message : String(err) });
     console.error("Failed to start cockpit MCP server:", err);
   }
 
@@ -106,8 +113,11 @@ async function main() {
   try {
     await formatProxy.start();
     setActiveFormatProxy(formatProxy);
-    console.log(`Format proxy listening on ${formatProxy.getUrl("<provider>")}`);
   } catch (err) {
+    // The proxy start line moved to the debug log, but a start FAILURE stays on
+    // stderr: it silently breaks every OpenAI-format provider, and debug
+    // logging is off by default, so hiding it would make it undiagnosable.
+    logProxy("-", "start-failed", { error: err instanceof Error ? err.message : String(err) });
     console.error("Failed to start format proxy:", err);
   }
 

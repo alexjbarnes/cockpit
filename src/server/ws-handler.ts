@@ -219,6 +219,11 @@ export function createWebSocketHandler(
       });
       if (unsubPending) cleanups.push(unsubPending);
 
+      const unsubAgents = sessionManager.onAgents(sessionId, (count) => {
+        send(ws, { type: "session:agents", sessionId, count });
+      });
+      if (unsubAgents) cleanups.push(unsubAgents);
+
       const unsubError = sessionManager.onError(sessionId, (error) => {
         send(ws, { type: "session:error", sessionId, error });
       });
@@ -409,6 +414,16 @@ export function createWebSocketHandler(
                 }
                 send(ws, permMsg);
               }
+            }
+
+            // Hand over the current background tasks too. The transcript marks
+            // an async agent's tool use done at launch, so without this a
+            // reloaded page judged a running agent finished until the next Stop
+            // or subagent hook happened to arrive with a real list — the agent
+            // card's spinner disappeared for ~10s and then came back.
+            const tasksOnConnect = sessionManager.getBackgroundTasks(msg.sessionId);
+            if (tasksOnConnect.length > 0) {
+              send(ws, { type: "session:task_sync", sessionId: msg.sessionId, tasks: tasksOnConnect });
             }
 
             // If client already has messages, send only the delta to avoid
@@ -794,6 +809,11 @@ export function createWebSocketHandler(
               send(ws, { type: "session:pending", sessionId: id, count });
             });
             if (unsubPending) watchCleanups.push(unsubPending);
+
+            const unsubAgents = sessionManager.onAgents(id, (count) => {
+              send(ws, { type: "session:agents", sessionId: id, count });
+            });
+            if (unsubAgents) watchCleanups.push(unsubAgents);
 
             const unsubInfo = sessionManager.onInfoUpdated(id, (info) => {
               send(ws, { type: "session:info_updated", sessionId: id, info });

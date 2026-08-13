@@ -127,23 +127,76 @@ function matchesFilter(entry: NotificationProviderEntry, payload: NotificationPa
   return true;
 }
 
-export function dispatchNotification(payload: NotificationPayload): void {
+/** What dispatchNotification actually attempted, so a caller that asked for a
+ *  specific provider by name can tell the difference between "delivered" and
+ *  "silently dropped" instead of assuming success the way a fire-and-forget
+ *  void return used to invite. */
+export interface NotificationOutcome {
+  notified: { id: string; name: string }[];
+  skipped: { id: string; name: string; reason: "disabled" | "filtered" | "unknown" }[];
+}
+
+function fireAndForget(
+  provider: NotificationProvider<never>,
+  payload: NotificationPayload,
+  entry: NotificationProviderEntry,
+  baseUrl?: string,
+): void {
+  provider.send(payload, entry.config as never, baseUrl).catch((err) => {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`[notifications] ${entry.type}/${entry.name} failed:`, err);
+    debugLog(`[notifications] ${entry.type}/${entry.name} failed after retries: ${message}`);
+  });
+}
+
+export function dispatchNotification(payload: NotificationPayload): NotificationOutcome {
   const settings = getNotificationSettings();
-  for (const entry of settings.providers) {
-    if (!entry.enabled) continue;
-    if (payload.providerIds) {
-      if (!payload.providerIds.includes(entry.id)) continue;
-    } else {
-      if (!matchesFilter(entry, payload)) continue;
+  const notified: NotificationOutcome["notified"] = [];
+  const skipped: NotificationOutcome["skipped"] = [];
+
+  if (payload.providerIds) {
+    // Explicit ids bypass matchesFilter entirely (the filter check only runs
+    // in the else branch below), so a caller that named a provider is never
+    // silently filtered — only "disabled" and "unknown" can happen here.
+    for (const id of payload.providerIds) {
+      const entry = settings.providers.find((p) => p.id === id);
+      if (!entry) {
+        skipped.push({ id, name: id, reason: "unknown" });
+        continue;
+      }
+      if (!entry.enabled) {
+        skipped.push({ id: entry.id, name: entry.name, reason: "disabled" });
+        continue;
+      }
+      const provider = getProvider(entry.type);
+      if (!provider) {
+        skipped.push({ id: entry.id, name: entry.name, reason: "unknown" });
+        continue;
+      }
+      notified.push({ id: entry.id, name: entry.name });
+      fireAndForget(provider, payload, entry, settings.baseUrl);
     }
-    const provider = getProvider(entry.type);
-    if (!provider) continue;
-    provider.send(payload, entry.config as never, settings.baseUrl).catch((err) => {
-      const message = err instanceof Error ? err.message : String(err);
-      console.error(`[notifications] ${entry.type}/${entry.name} failed:`, err);
-      debugLog(`[notifications] ${entry.type}/${entry.name} failed after retries: ${message}`);
-    });
+  } else {
+    for (const entry of settings.providers) {
+      if (!entry.enabled) {
+        skipped.push({ id: entry.id, name: entry.name, reason: "disabled" });
+        continue;
+      }
+      if (!matchesFilter(entry, payload)) {
+        skipped.push({ id: entry.id, name: entry.name, reason: "filtered" });
+        continue;
+      }
+      const provider = getProvider(entry.type);
+      if (!provider) {
+        skipped.push({ id: entry.id, name: entry.name, reason: "unknown" });
+        continue;
+      }
+      notified.push({ id: entry.id, name: entry.name });
+      fireAndForget(provider, payload, entry, settings.baseUrl);
+    }
   }
+
+  return { notified, skipped };
 }
 
 export async function sendTestNotification(entry: NotificationProviderEntry, baseUrl?: string): Promise<string> {

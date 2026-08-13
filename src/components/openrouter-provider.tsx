@@ -135,6 +135,7 @@ export function ProviderModelBrowser({ provider, onChanged }: { provider: Provid
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const enabled = useMemo(() => new Set(provider.enabledModels ?? []), [provider.enabledModels]);
+  const overrides = provider.contextSizeOverrides ?? {};
 
   const models = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -170,6 +171,26 @@ export function ProviderModelBrowser({ provider, onChanged }: { provider: Provid
     if (next.has(id)) next.delete(id);
     else next.add(id);
     void persistEnabled(next);
+  };
+
+  /** Curate (or clear) a model's 200K/1M session choice. */
+  const toggleContextChoice = async (modelId: string) => {
+    setSaving(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/providers/${provider.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        // [] = the server-side "clear this model's curation" signal.
+        body: JSON.stringify({ contextSizeOverrides: { ...overrides, [modelId]: overrides[modelId]?.length ? [] : ["200k", "1m"] } }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      onChanged();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSaving(false);
+    }
   };
 
   const sync = async () => {
@@ -238,34 +259,52 @@ export function ProviderModelBrowser({ provider, onChanged }: { provider: Provid
       <div className="divide-y rounded-lg border">
         {models.map((m) => {
           const isOn = enabled.has(m.modelId);
+          const overridden = !!overrides[m.modelId]?.length;
           return (
-            <button
-              key={m.modelId}
-              type="button"
-              onClick={() => toggle(m.modelId)}
-              disabled={saving}
-              className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs hover:bg-muted/50 transition-colors"
-              data-testid={`model-row-${m.modelId}`}
-            >
-              <span
-                className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border ${
-                  isOn ? "border-primary bg-primary text-primary-foreground" : "border-muted-foreground/40"
-                }`}
+            <div key={m.modelId} className="flex w-full items-center gap-2 px-3 py-2 text-xs hover:bg-muted/50 transition-colors">
+              <button
+                type="button"
+                onClick={() => toggle(m.modelId)}
+                disabled={saving}
+                className="flex min-w-0 flex-1 items-center gap-2 text-left"
+                data-testid={`model-row-${m.modelId}`}
               >
-                {isOn && <Check className="h-3 w-3" />}
-              </span>
-              <span className="flex min-w-0 flex-col gap-0.5">
-                <span className="flex min-w-0 items-start gap-2">
-                  <span className="min-w-0 break-all font-mono">{splitProviderModelId(m).name}</span>
-                  <span className="shrink-0">
-                    <FreeBadge model={m} />
-                  </span>
+                <span
+                  className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border ${
+                    isOn ? "border-primary bg-primary text-primary-foreground" : "border-muted-foreground/40"
+                  }`}
+                >
+                  {isOn && <Check className="h-3 w-3" />}
                 </span>
-                {splitProviderModelId(m).meta && (
-                  <span className="max-w-full text-[10px] text-muted-foreground tabular-nums">{splitProviderModelId(m).meta}</span>
-                )}
-              </span>
-            </button>
+                <span className="flex min-w-0 flex-col gap-0.5">
+                  <span className="flex min-w-0 items-start gap-2">
+                    <span className="min-w-0 break-all font-mono">{splitProviderModelId(m).name}</span>
+                    <span className="shrink-0">
+                      <FreeBadge model={m} />
+                    </span>
+                  </span>
+                  {splitProviderModelId(m).meta && (
+                    <span className="max-w-full text-[10px] text-muted-foreground tabular-nums">{splitProviderModelId(m).meta}</span>
+                  )}
+                </span>
+              </button>
+              <button
+                type="button"
+                disabled={saving}
+                onClick={() => void toggleContextChoice(m.modelId)}
+                title={
+                  overridden
+                    ? "Sessions on this model can pick 200K or 1M — tap to remove the choice"
+                    : "Let sessions pick 200K or 1M for this model (when the catalog figure is wrong)"
+                }
+                className={`shrink-0 rounded border px-1.5 py-0.5 text-[10px] tabular-nums transition-colors hover:text-foreground ${
+                  overridden ? "border-amber-600/60 text-amber-600 dark:text-amber-400" : "border-muted-foreground/40 text-muted-foreground"
+                }`}
+                data-testid={`context-choice-${m.modelId}`}
+              >
+                {overridden ? "200K/1M ✓" : "+ 200K/1M"}
+              </button>
+            </div>
           );
         })}
         {models.length === 0 && <p className="px-3 py-4 text-xs text-muted-foreground">No models match.</p>}
@@ -321,9 +360,10 @@ function formatAgo(ts: number): string {
   return `${Math.floor(hours / 24)}d ago`;
 }
 
-/** Connect card shared by the key-only built-ins (zen, deepseek). Their model
- *  lists sync keylessly (zen /models is public; deepseek's catalog comes from
- *  models.dev), so model and free counts show before a key is connected. */
+/** Connect card shared by the key-only built-ins (zen, zen-go, deepseek).
+ *  Their model lists sync keylessly (zen/go /models are public; deepseek's
+ *  catalog comes from models.dev), so model and free counts show before a key
+ *  is connected. */
 export function BuiltinKeyCard({
   provider,
   keyEnvVar,
@@ -422,6 +462,20 @@ export function ZenCard(props: { provider: Provider; onChanged: () => void; onMa
       keyEnvVar="OPENCODE_API_KEY"
       tagline="OpenAI wire format · via cockpit proxy"
       keyPlaceholder="Zen API key…"
+    />
+  );
+}
+
+/** OpenCode Go — the open-model subset of Zen at a separate base URL, its own
+ *  subscription with dollar-based limits. Accepts the same key value as Zen,
+ *  but is stored and connected independently. */
+export function GoCard(props: { provider: Provider; onChanged: () => void; onManage: () => void }) {
+  return (
+    <BuiltinKeyCard
+      {...props}
+      keyEnvVar="OPENCODE_GO_API_KEY"
+      tagline="OpenAI wire format · via cockpit proxy"
+      keyPlaceholder="Go API key…"
     />
   );
 }

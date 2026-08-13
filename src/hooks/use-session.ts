@@ -18,7 +18,14 @@ import type {
   TodoItem,
   ToolUse,
 } from "@/types";
-import { applyMessageDone, applyTranscript, buildQueuedUserMessage, buildUserMessage, type QueuedText } from "./message-ordering";
+import {
+  applyMessageDone,
+  applyTranscript,
+  buildQueuedUserMessage,
+  buildUserMessage,
+  pushPendingQuestion,
+  type QueuedText,
+} from "./message-ordering";
 import { useWebSocket } from "./use-websocket";
 
 export interface PendingPermission {
@@ -28,7 +35,7 @@ export interface PendingPermission {
   suggestions?: import("@/types").PermissionSuggestion[];
   planFilePath?: string;
   planContent?: string;
-  configProposal?: { toolName: string; domain: string; action: string; displayName?: string };
+  configProposal?: { toolName: string; domain: string; action: string; displayName?: string; idNames?: Record<string, string> };
 }
 
 export interface PendingQuestion {
@@ -960,7 +967,11 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
         }
 
         case "question:request": {
-          setPendingQuestions((prev) => [...prev, { requestId: msg.requestId, questions: msg.questions }]);
+          // The server can forward the same pending request more than once (the
+          // live emission plus the transcript re-parse of the same tool block),
+          // so never stack a second entry for a request id already held. Two
+          // entries read as two unanswered questions: a duplicated card.
+          setPendingQuestions((prev) => pushPendingQuestion(prev, { requestId: msg.requestId, questions: msg.questions }));
           break;
         }
       }

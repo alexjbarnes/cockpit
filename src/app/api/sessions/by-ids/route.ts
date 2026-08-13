@@ -39,6 +39,10 @@ export async function GET(req: NextRequest) {
     if (running) {
       session.status = running.status;
       session.pendingRequestCount = running.pendingRequestCount;
+      // Live-only, like the two above. This route backs the sidebar's poll, so
+      // leaving it out overwrote the websocket's count with undefined every few
+      // seconds and the background-agent dot went out.
+      session.agentCount = running.agentCount;
     }
     const mem = knownMap.get(session.id);
     if (mem) {

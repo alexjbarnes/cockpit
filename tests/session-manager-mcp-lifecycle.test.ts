@@ -66,12 +66,16 @@ vi.mock("@/server/pty-runtime", () => {
 });
 
 const mockRegisterAuthToken = vi.fn();
+const mockRegisterRunContext = vi.fn();
+const mockRegisterSessionContext = vi.fn();
 const mockClearToken = vi.fn();
 vi.mock("@/server/mcp/run-context", () => ({
   registerAuthToken: (t: string) => mockRegisterAuthToken(t),
-  registerRunContext: vi.fn(),
+  registerRunContext: (t: string, ctx: unknown) => mockRegisterRunContext(t, ctx),
+  registerSessionContext: (t: string, sessionId: string, sessionName: string) => mockRegisterSessionContext(t, sessionId, sessionName),
   isValidToken: vi.fn(() => true),
   lookupRunContext: vi.fn(() => null),
+  lookupCaller: vi.fn(() => null),
   clearToken: (t: string) => mockClearToken(t),
 }));
 
@@ -104,6 +108,7 @@ vi.mock("@/server/todo-watcher", () => {
 import { spawn } from "node:child_process";
 import { COCKPIT_AGENT_SYSTEM_PROMPT } from "@/server/mcp/cockpit-agent-prompt";
 import { SessionManager } from "@/server/session-manager";
+import { getCockpitMcp } from "@/server/singleton";
 
 describe("SessionManager MCP token lifecycle", () => {
   let manager: SessionManager;
@@ -111,7 +116,7 @@ describe("SessionManager MCP token lifecycle", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     ptyInstances.length = 0;
-    manager = new SessionManager();
+    manager = new SessionManager({ defaultRuntime: "stream" });
   });
 
   it("spawning a cockpit-agent session registers a token and sets mcpToken", () => {
@@ -127,6 +132,61 @@ describe("SessionManager MCP token lifecycle", () => {
     expect(typeof token).toBe("string");
     expect(token.length).toBeGreaterThan(0);
     expect(s!.mcpToken).toBe(token);
+  });
+
+  it("spawning a plain session registers a session context (not an auth or run token) and sets mcpToken", () => {
+    const info = manager.createSession("/tmp", "my-session-name");
+    const mgr = manager as unknown as { sessions: Map<string, Record<string, unknown>>; spawnProcess: (s: unknown, id: string) => void };
+    const s = mgr.sessions.get(info.id);
+    expect(s).toBeDefined();
+
+    mgr.spawnProcess(s, info.id);
+
+    expect(mockRegisterSessionContext).toHaveBeenCalledOnce();
+    const [token, sessionId, sessionName] = mockRegisterSessionContext.mock.calls[0];
+    expect(typeof token).toBe("string");
+    expect(token.length).toBeGreaterThan(0);
+    expect(sessionId).toBe(info.id);
+    expect(sessionName).toBe("my-session-name");
+    expect(s!.mcpToken).toBe(token);
+    // A plain session must never be registered as the assistant or a job.
+    expect(mockRegisterAuthToken).not.toHaveBeenCalled();
+    expect(mockRegisterRunContext).not.toHaveBeenCalled();
+  });
+
+  it("spawning a job (runContext) session registers a run context, not a session context", () => {
+    const runContext = { jobId: "job-1", jobName: "Nightly", runId: "run-1" };
+    const info = manager.createSession("/tmp", undefined, { runContext });
+    const mgr = manager as unknown as { sessions: Map<string, Record<string, unknown>>; spawnProcess: (s: unknown, id: string) => void };
+    const s = mgr.sessions.get(info.id);
+    expect(s).toBeDefined();
+
+    mgr.spawnProcess(s, info.id);
+
+    expect(mockRegisterRunContext).toHaveBeenCalledOnce();
+    const [token, ctx] = mockRegisterRunContext.mock.calls[0];
+    expect(typeof token).toBe("string");
+    expect(ctx).toEqual(runContext);
+    expect(s!.mcpToken).toBe(token);
+    expect(mockRegisterSessionContext).not.toHaveBeenCalled();
+    expect(mockRegisterAuthToken).not.toHaveBeenCalled();
+  });
+
+  it("does not throw and leaves mcpConfigPath unset when the MCP server is unavailable", () => {
+    // Forces the "server never started" case past the mock's non-null return type.
+    vi.mocked(getCockpitMcp).mockReturnValueOnce(null as any);
+
+    const info = manager.createSession("/tmp");
+    const mgr = manager as unknown as { sessions: Map<string, Record<string, unknown>>; spawnProcess: (s: unknown, id: string) => void };
+    const s = mgr.sessions.get(info.id);
+    expect(s).toBeDefined();
+
+    expect(() => mgr.spawnProcess(s, info.id)).not.toThrow();
+
+    expect(s!.mcpToken).toBeUndefined();
+    expect(mockRegisterSessionContext).not.toHaveBeenCalled();
+    expect(mockRegisterAuthToken).not.toHaveBeenCalled();
+    expect(mockRegisterRunContext).not.toHaveBeenCalled();
   });
 
   it("destroySession clears the mcpToken", async () => {

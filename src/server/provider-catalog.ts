@@ -243,12 +243,13 @@ export async function getOpenRouterUsage(): Promise<OpenRouterUsage | null> {
 
 // Built-ins whose synced model list lives on their providers.json entry
 // (ids inlined — providers.ts imports this module, so no import back).
-const ENTRY_BACKED_BUILTINS: Record<string, string> = { zen: "OpenCode Zen", deepseek: "DeepSeek" };
+const ENTRY_BACKED_BUILTINS: Record<string, string> = { zen: "OpenCode Zen", "zen-go": "OpenCode Go", deepseek: "DeepSeek" };
 
 /** W6j: a job on a catalog-backed model that is missing from the catalog must
  *  fail before the CLI spawns. Judges openrouter-qualified ids against the
- *  synced catalog and zen/deepseek ids against their stored model lists —
- *  and only once a list exists, so an unsynced install never fails jobs. */
+ *  synced catalog and zen/zen-go/deepseek ids against their stored model
+ *  lists — and only once a list exists, so an unsynced install never fails
+ *  jobs. */
 export function checkJobModel(model: string | undefined): { ok: true } | { ok: false; reason: string } {
   if (!model) return { ok: true };
   for (const [pid, name] of Object.entries(ENTRY_BACKED_BUILTINS)) {

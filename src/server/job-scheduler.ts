@@ -1,23 +1,29 @@
 import { mkdirSync } from "node:fs";
-import path from "node:path";
 import { v4 as uuidv4 } from "uuid";
-import { getCockpitDir } from "@/server/paths";
-import type { JobRun, JobRunToolUse, ScheduledJob } from "@/types";
+import { getJobScratchpadDir } from "@/server/paths";
+import type { IssueStatusSchedule, JobRun, JobRunToolUse, ScheduledJob } from "@/types";
 import { findMissedRun, getJobSchedules, matchesCron, scheduleToCron } from "./cron-utils";
 import { logDiag } from "./debug-logger";
-import { addInboxMessage, parseErrorBlock, parseInboxBlock } from "./inbox";
+import { addInboxMessage, parseErrorBlock } from "./inbox";
+import { type IssueStatusChangeEvent, onIssueStatusChange } from "./issue-events";
+import { loadIssues, loadProjects } from "./issue-storage";
 import { acquireJobLock, clearStaleLocks, forceReleaseJobLock, releaseJobLock } from "./job-lock";
 import { getLatestRun, loadJobs, loadRuns, pruneAllRuns, saveRun } from "./job-storage";
 import { checkJobModel } from "./provider-catalog";
 import type { SessionManager } from "./session-manager";
 import { countTranscriptMessages } from "./transcript";
 
-function scratchpadDir(): string {
-  return path.join(getCockpitDir(), "jobs");
-}
-
 /** Default extra attempts after a `failure` run when a job doesn't set maxRetries. */
 const DEFAULT_JOB_MAX_RETRIES = 1;
+
+/**
+ * The MCP tool a job reports through. Replaces parsing a fenced block out of the
+ * final message, which failed silently: a job could spend seventeen minutes on a
+ * report, emit the block as YAML instead of JSON, and have it dropped with the
+ * run still recorded a success. A tool call is schema-validated, and a rejection
+ * comes back as an error the model can read and retry.
+ */
+const INBOX_TOOL_NAME = "mcp__cockpit-config__add_inbox_message";
 /** Pause before a retry so a fresh session isn't spawned the instant the last one died. */
 const RETRY_BACKOFF_MS = 5_000;
 
@@ -30,9 +36,11 @@ const JOB_PROMPT_HEADER = [
   "A backgrounded agent ends your turn to wait for a task notification, and with no operator here to",
   "resume you the run is torn down and its work is lost. Never end a turn intending to be woken up.",
   "",
-  "Error reporting: If you cannot complete the task due to permission errors, tool failures, missing data, or any other reason,",
-  "your final message MUST include a cockpit-error block explaining the failure.",
-  "Format it as a fenced code block tagged cockpit-error containing a JSON object:",
+  "Error reporting: a cockpit-error block marks this run FAILED, so emit one only when you could not finish the task —",
+  "permission errors, tool failures, missing data, anything that stopped you.",
+  'If you completed the task, do not emit one at all: no block is how a run reports success. A block saying "none"',
+  "still fails the run.",
+  "When you do need it, put it last in your final message, as a fenced code block tagged cockpit-error holding JSON:",
   "",
   "```cockpit-error",
   '{"error":"Brief description of what went wrong","details":"Longer explanation of which tools failed and why"}',
@@ -51,10 +59,24 @@ function buildJobPrompt(job: ScheduledJob): string {
     if (tools.length > 0) parts.push(`Allowed tools: ${tools.join(", ")}`);
     if (servers.length > 0) parts.push(`Allowed MCP servers: ${servers.join(", ")}`);
     if (tools.length === 0 && servers.length === 0) parts.push("No tools or MCP servers are allowed.");
+    // A rule like "Bash curl" reads as a bare program name, so a run that hits
+    // a refusal tends to retry the same command in cosmetic variations. Spell
+    // out what the rule actually checks, and that retrying will not help.
+    if (tools.some((t) => t.startsWith("Bash "))) {
+      parts.push(
+        "",
+        'A "Bash <program>" entry allows commands starting with that program, but only when the command runs nothing else:',
+        "no ; && || | > < & backticks or $( ) outside quotes. Inside quotes those characters are ordinary data and are fine,",
+        'so a payload like --data-urlencode "notes=a; b" is allowed. A pipeline is never allowed by one entry — run the stages',
+        "as separate commands via a temp file. If a command is refused, rephrasing it will not help: either drop the chaining,",
+        "or report the missing permission in your cockpit-error block and stop. Do not widen your own permissions to get around a",
+        "refusal — name the entry you needed in the error block and let the user decide.",
+      );
+    }
   }
 
   if (job.cwd) {
-    const storageDir = path.join(scratchpadDir(), job.id);
+    const storageDir = getJobScratchpadDir(job.id);
     parts.push("");
     parts.push(`Storage: If you need to persist any files between runs (state, cache, data), save them in ${storageDir}`);
     parts.push("Do not store persistent files in the working directory as it is a git repository.");
@@ -62,26 +84,67 @@ function buildJobPrompt(job: ScheduledJob): string {
 
   if (job.inboxOutput) {
     parts.push("");
-    parts.push("Output: When you have results to report, include a cockpit-inbox block in your final message.");
-    parts.push("If there is nothing to report (e.g. no new data to process), do NOT include an inbox block.");
-    parts.push("Format it as a fenced code block tagged cockpit-inbox containing a JSON object:");
+    parts.push(`Output: report your results by calling the ${INBOX_TOOL_NAME} tool. That is the only way your output reaches the user;`);
+    parts.push("nothing in your final message is read. Call it once, before you finish.");
+    parts.push("If there is nothing to report (e.g. no new data to process), do not call it at all.");
     parts.push("");
-    parts.push("```cockpit-inbox");
-    parts.push(JSON.stringify({ title: "Short descriptive title", body: "Markdown body with your full output", priority: "info" }));
-    parts.push("```");
-    parts.push("");
-    parts.push('The body field supports full markdown. Set priority to "info", "warning", or "error" as appropriate.');
+    parts.push("It takes title (a short one-line summary), body (full markdown, as long as you need), and an optional");
+    parts.push('priority of "info", "warning" or "error". If the call returns an error, read it and call again with it fixed.');
   }
 
   parts.push("", "Task:", job.prompt);
   return parts.join("\n");
 }
 
-const SHELL_OPERATORS = /(?:;|&&|\|\||>|<|`|\$\(|<\()/;
-const BACKGROUND_AMPERSAND = /(?:^|[^|])&(?!&)/;
-
+/**
+ * Does `cmd` chain in another command? A `Bash <prefix>` rule only vouches for
+ * the program it names, so anything that can run a second one is refused.
+ *
+ * Scanned with quote awareness, following the shell's own rules, because the
+ * characters only mean "operator" when the shell would treat them as one:
+ *   - single quotes: everything inside is literal, nothing can execute
+ *   - double quotes: `;` `&` `|` `>` `<` are literal, but `$(` and backticks
+ *     still substitute, so those stay refused
+ *   - a backslash escapes the next character (except inside single quotes)
+ * A blanket regex over the raw text refused ordinary payloads instead — a
+ * semicolon in a `curl --data-urlencode "notes=a; b"` value, or the `&`
+ * between form fields — while adding no safety, since a quoted metacharacter
+ * was never going to execute anything.
+ *
+ * A single unquoted `|` counts: `curl <url> | sh` runs whatever the URL
+ * serves, so a pipe hands execution to a program the rule never named. That
+ * also means a rule cannot permit a pipeline — narrow each stage's own rule
+ * and let the job run the stages as separate commands.
+ *
+ * An unterminated quote is malformed; refuse rather than guess at it.
+ */
 function hasShellOperators(cmd: string): boolean {
-  return SHELL_OPERATORS.test(cmd) || BACKGROUND_AMPERSAND.test(cmd);
+  let quote: '"' | "'" | null = null;
+  for (let i = 0; i < cmd.length; i++) {
+    const ch = cmd[i];
+    // Backslash escapes the following character everywhere but single quotes.
+    if (ch === "\\" && quote !== "'") {
+      i++;
+      continue;
+    }
+    if (quote === "'") {
+      if (ch === "'") quote = null;
+      continue;
+    }
+    if (quote === '"') {
+      if (ch === '"') quote = null;
+      // Command substitution survives double quoting.
+      else if (ch === "`" || (ch === "$" && cmd[i + 1] === "(")) return true;
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      continue;
+    }
+    if (ch === ";" || ch === "&" || ch === "|" || ch === ">" || ch === "<" || ch === "`") return true;
+    if (ch === "$" && cmd[i + 1] === "(") return true;
+  }
+  return quote !== null;
 }
 
 function parseToolRule(rule: string): { tool: string; restriction?: string } {
@@ -114,6 +177,18 @@ function normalizeMcpName(name: string): string {
   return name.replace(/[^a-zA-Z0-9]/g, "_");
 }
 
+/**
+ * The prefixes a server's tool names may carry. The CLI does not always
+ * normalise: a server configured as `cockpit-config` emits
+ * `mcp__cockpit-config__list_projects`, hyphen intact. Matching only the
+ * normalised form denied every call to any server whose name was not already
+ * alphanumeric, so both spellings are accepted. Filters stay keyed by the
+ * configured name, which is what the job editor and storage use.
+ */
+function mcpPrefixes(serverName: string): string[] {
+  return [...new Set([serverName, normalizeMcpName(serverName)])].map((n) => `${n}__`);
+}
+
 function isMcpToolAllowed(
   toolName: string,
   toolInput: string,
@@ -124,9 +199,8 @@ function isMcpToolAllowed(
   const remainder = toolName.slice(5);
 
   for (const serverName of enabledServers) {
-    const normalized = normalizeMcpName(serverName);
-    const prefix = `${normalized}__`;
-    if (!remainder.startsWith(prefix)) continue;
+    const prefix = mcpPrefixes(serverName).find((p) => remainder.startsWith(p));
+    if (!prefix) continue;
     const tool = remainder.slice(prefix.length);
     if (!mcpToolFilters || !(serverName in mcpToolFilters)) return true;
     const filters = mcpToolFilters[serverName];
@@ -151,6 +225,14 @@ function isMcpToolAllowed(
   return false;
 }
 
+/** How many issues currently sit in the schedule's watched status (and
+ *  project, if it names one). Used both to decide a match matters and, after
+ *  the triggered run completes, to decide whether to drain another one. */
+function countMatchingIssues(sched: IssueStatusSchedule): number {
+  const projects = sched.project ? loadProjects().filter((p) => p.id === sched.project) : loadProjects();
+  return projects.reduce((n, p) => n + loadIssues(p.id).filter((i) => i.status === sched.status).length, 0);
+}
+
 export class JobScheduler {
   private sessionManager: SessionManager;
   private timer: ReturnType<typeof setInterval> | null = null;
@@ -158,6 +240,7 @@ export class JobScheduler {
   private runningJobs = new Map<string, JobRun>();
   private jobResolvers = new Map<string, (run: JobRun) => void>();
   private lastPruneAt = 0;
+  private unsubIssueEvents: (() => void) | null = null;
 
   constructor(sessionManager: SessionManager) {
     this.sessionManager = sessionManager;
@@ -166,6 +249,10 @@ export class JobScheduler {
   start(): void {
     this.recoverState();
     this.timer = setInterval(() => this.tick(), 60_000);
+    // Phase 4 (docs/internal/issue-tracker-spec.md): saveIssue emits whenever
+    // an issue's status changes, so an onIssueStatus job trigger doesn't wait
+    // for the next tick.
+    this.unsubIssueEvents = onIssueStatusChange((event) => this.handleIssueStatusChange(event));
     console.log("[scheduler] started, ticking every 60s");
   }
 
@@ -174,6 +261,8 @@ export class JobScheduler {
       clearInterval(this.timer);
       this.timer = null;
     }
+    this.unsubIssueEvents?.();
+    this.unsubIssueEvents = null;
     for (const jobId of this.runningJobs.keys()) {
       releaseJobLock(jobId);
     }
@@ -355,6 +444,7 @@ export class JobScheduler {
       let shouldFire = false;
 
       for (const sched of getJobSchedules(job)) {
+        if (sched.type === "onIssueStatus") continue; // event-triggered; the 60s tick never fires it directly
         const cronExpr = scheduleToCron(sched);
         if (matchesCron(cronExpr, now)) {
           if (!lastFired || lastFired.getTime() < now.getTime()) {
@@ -378,12 +468,63 @@ export class JobScheduler {
     }
   }
 
+  /**
+   * Phase 4 (docs/internal/issue-tracker-spec.md): saveIssue emits whenever an
+   * issue's status changes, including a brand new issue arriving in its
+   * initial status. Mirrors tick()'s own job scan (enabled, not already
+   * running) but matches against the event instead of the clock.
+   */
+  private handleIssueStatusChange(event: IssueStatusChangeEvent): void {
+    const jobs = loadJobs();
+    for (const job of jobs) {
+      if (!job.enabled) continue;
+      if (this.runningJobs.has(job.id)) continue;
+
+      const sched = getJobSchedules(job).find(
+        (s): s is IssueStatusSchedule =>
+          s.type === "onIssueStatus" && s.status === event.to && (!s.project || s.project === event.projectId),
+      );
+      if (!sched) continue;
+
+      this.runIssueTriggeredJob(job, sched).catch((err) => {
+        console.error(`[scheduler] failed to execute job ${job.name} on issue status change:`, err);
+      });
+    }
+  }
+
+  /**
+   * The pipeline skills process one issue per run. If a second issue enters
+   * the watched status while the first run is in flight, the job-lock
+   * swallows its event and that issue would sit forever — so after the run
+   * completes, re-check for remaining matches and trigger again. Bounded by
+   * construction: `after` must be strictly less than `before` to keep
+   * draining, and both are non-negative integers, so this cannot loop forever
+   * even if the job fails or refuses to process the issue on every attempt —
+   * it just stops on the first run that doesn't make progress.
+   */
+  private async runIssueTriggeredJob(job: ScheduledJob, sched: IssueStatusSchedule): Promise<void> {
+    let before = countMatchingIssues(sched);
+    for (;;) {
+      await this.executeJobWithRetries(job);
+      const after = countMatchingIssues(sched);
+      if (after === 0) return; // drained
+      if (after >= before) {
+        logDiag(job.id, "job:drain-stalled", { status: sched.status, project: sched.project, before, after });
+        console.log(`[scheduler] job ${job.name} drain stalled: ${before} -> ${after} issue(s) still in "${sched.status}"`);
+        return;
+      }
+      before = after;
+    }
+  }
+
   async executeJob(job: ScheduledJob, opts?: { suppressFailureAlert?: boolean }): Promise<JobRun> {
     const runId = uuidv4();
     logDiag(job.id, "job:execute-start", {
       runId,
       name: job.name,
-      runtime: job.runtime ?? "stream",
+      // Not the resolved runtime: an unset job falls through to the session
+      // manager's default. The session-created entry below logs what it became.
+      runtime: job.runtime ?? "(default)",
       model: job.model,
       thinkingLevel: job.thinkingLevel,
       contextSize: job.contextSize,
@@ -401,11 +542,15 @@ export class JobScheduler {
     }
     logDiag(job.id, "job:lock-acquired", { runId });
 
-    const jobCwd = job.cwd || path.join(scratchpadDir(), job.id);
-    mkdirSync(path.join(scratchpadDir(), job.id), { recursive: true });
+    const jobCwd = job.cwd || getJobScratchpadDir(job.id);
+    mkdirSync(getJobScratchpadDir(job.id), { recursive: true });
     const sessionInfo = this.sessionManager.createSession(jobCwd, `[job] ${job.name}`, {
       bypassPermissions: !!job.bypassPermissions,
       runtime: job.runtime,
+      // Only an inbox-reporting job gets a run context, and only a run context
+      // gets the cockpit MCP server. A job that never reports keeps no reach
+      // into cockpit at all.
+      ...(job.inboxOutput ? { runContext: { jobId: job.id, jobName: job.name, runId, notifyProviders: job.notifyProviders } } : {}),
     });
     const sessionId = sessionInfo.id;
     const jlog = (label: string, data?: Record<string, unknown>) => logDiag(sessionId, `job:${label}`, { jobId: job.id, runId, ...data });
@@ -488,8 +633,24 @@ export class JobScheduler {
         } else {
           const toolName = event.toolName || "unknown";
           const inputStr = event.toolInput || "";
-          const mcpResult = isMcpToolAllowed(toolName, inputStr, enabledServers, job.mcpToolFilters);
-          const allowed = mcpResult !== null ? mcpResult : isToolAllowed(toolName, inputStr, job.allowedTools || []);
+          // The inbox tool is cockpit's own reporting channel, not something the
+          // user configures per job, so it bypasses the mcpServers allowlist it
+          // would otherwise fail. The MCP server still confines a run token to
+          // this one tool, so allowing it here grants nothing else.
+          const isInboxTool = toolName === INBOX_TOOL_NAME;
+          // An MCP tool passes on either gate: the mcpServers/mcpToolFilters
+          // allowlist, or an allowedTools entry naming it outright. It used to
+          // be the server gate alone — isMcpToolAllowed returns null only for
+          // non-MCP names, so a boolean always short-circuited allowedTools —
+          // while the job editor accepted "mcp__server__tool" entries and the
+          // run's own prompt listed them, so those entries silently did
+          // nothing. OR, not AND, so a job configured with only mcpServers is
+          // unaffected. The inbox tool keeps its own gate: it is cockpit's
+          // reporting channel, governed by inboxOutput rather than either list.
+          const mcpResult = isInboxTool ? !!job.inboxOutput : isMcpToolAllowed(toolName, inputStr, enabledServers, job.mcpToolFilters);
+          const allowed = isInboxTool
+            ? mcpResult === true
+            : mcpResult === true || isToolAllowed(toolName, inputStr, job.allowedTools || []);
           jlog("permission", {
             toolName,
             requestId: event.requestId,
@@ -678,13 +839,6 @@ export class JobScheduler {
 
         saveRun(run);
 
-        if (job.inboxOutput && lastAssistantText && finalStatus === "success") {
-          const inbox = parseInboxBlock(lastAssistantText);
-          jlog("inbox-parse", { found: !!inbox });
-          if (inbox) {
-            addInboxMessage({ ...inbox, jobId: job.id, jobName: job.name, runId: run.id, notifyProviders: job.notifyProviders });
-          }
-        }
         // A `failure` alert is suppressed on attempts that will be retried (the retry
         // wrapper passes suppressFailureAlert); the final attempt still alerts. A
         // `timeout` is terminal and never retried, so it always alerts.

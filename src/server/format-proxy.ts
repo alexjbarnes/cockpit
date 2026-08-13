@@ -9,7 +9,9 @@
 // Anthropic SSE. This is the same job OpenRouter's "Anthropic Skin" does on
 // their servers, done locally for providers that don't offer one.
 
+import { randomBytes } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { logProxy } from "@/server/debug-logger";
 
 export interface ProxyUpstream {
   /** OpenAI-compatible base (e.g. https://opencode.ai/zen/v1), or for
@@ -46,6 +48,9 @@ export interface ProxyUsageEvent {
 interface AnthropicContentBlock {
   type: string;
   text?: string;
+  /** Chain-of-thought on a thinking block, mapped to/from the upstream's
+   *  reasoning_content — see the assistant branch of anthropicToOpenAIRequest. */
+  thinking?: string;
   source?: { type: string; media_type?: string; data?: string };
   id?: string;
   name?: string;
@@ -103,6 +108,10 @@ function blockText(content: string | AnthropicContentBlock[] | undefined): strin
 
 export function anthropicToOpenAIRequest(body: AnthropicRequest, opts?: { effortLevels?: string[] }): Record<string, unknown> {
   const messages: Array<Record<string, unknown>> = [];
+  // Assistant turns that called a tool but carried no thinking; they only
+  // need a placeholder reasoning_content if this request ends up in thinking
+  // mode, which is not known until reasoning_effort is resolved below.
+  const assistantsNeedingReasoning: Array<Record<string, unknown>> = [];
 
   const system = blockText(body.system);
   if (system) messages.push({ role: "system", content: system });
@@ -124,6 +133,32 @@ export function anthropicToOpenAIRequest(body: AnthropicRequest, opts?: { effort
         }));
       const out: Record<string, unknown> = { role: "assistant", content: text || null };
       if (toolCalls.length > 0) out.tool_calls = toolCalls;
+      // Send the model's own chain-of-thought back the way it arrived. The
+      // response direction turns an upstream reasoning_content into an
+      // Anthropic thinking block, so the CLI replays that block in history on
+      // the next turn; dropping it here made the round trip lossy and DeepSeek
+      // rejects that outright: "The `reasoning_content` in the thinking mode
+      // must be passed back to the API" (HTTP 400, observed killing every
+      // multi-turn zen session on deepseek-v4-flash-free). Only ever set when
+      // the assistant turn actually carried thinking, which only happens for
+      // models that emitted it in the first place, so a model that has never
+      // heard of the field never sees it.
+      const reasoning = msg.content
+        .filter((b) => b.type === "thinking")
+        .map((b) => b.thinking ?? "")
+        .filter(Boolean)
+        .join("\n");
+      // A turn that called a tool while also saying something must carry the
+      // field even when it did no reasoning at all. DeepSeek refuses
+      // {content, tool_calls} with no reasoning_content in thinking mode —
+      // measured: tool_calls alone is accepted, tool_calls plus content is
+      // not, and an empty string satisfies it. Not every assistant turn
+      // reasons, so this shape is common in a long session and was the
+      // residual cause of turns dying after the thinking round trip was
+      // fixed. Only applied when reasoning_effort is going upstream, so a
+      // non-thinking request never gains the field.
+      if (reasoning) out.reasoning_content = reasoning;
+      else if (toolCalls.length > 0) assistantsNeedingReasoning.push(out);
       messages.push(out);
       continue;
     }
@@ -177,6 +212,7 @@ export function anthropicToOpenAIRequest(body: AnthropicRequest, opts?: { effort
         : undefined);
   if (requested) {
     const effort = clampEffort(requested, opts?.effortLevels ?? []);
+    if (effort) for (const m of assistantsNeedingReasoning) m.reasoning_content = "";
     if (effort) out.reasoning_effort = effort;
   }
   return out;
@@ -394,7 +430,12 @@ export class StreamTranslator {
     let out = this.closeBlock();
     out += this.event("message_delta", {
       delta: { stop_reason: STOP_REASON[this.finishReason ?? "stop"] ?? "end_turn", stop_sequence: null },
-      usage: { output_tokens: this.usage?.completion_tokens ?? 0 },
+      // input_tokens must ride here, not message_start: OpenAI only reports
+      // usage in the final chunk (stream_options.include_usage), long after
+      // message_start went out with zeros. The CLI merges message_delta usage
+      // into its transcript record; without input_tokens the context gauge
+      // reads 0 forever and the UI hides the indicator.
+      usage: { input_tokens: this.usage?.prompt_tokens ?? 0, output_tokens: this.usage?.completion_tokens ?? 0 },
     });
     out += this.event("message_stop", {});
     this.started = false;
@@ -487,6 +528,19 @@ export class FormatProxy {
   private port = 0;
   private retryBackoffMs: number[];
   private onUsage?: (u: ProxyUsageEvent) => void;
+  /**
+   * Gate for inbound requests, carried as the first path segment of the base
+   * URL rather than a header. Without it any local process could POST to the
+   * loopback port and spend the stored provider credits, since the proxy
+   * attaches the upstream key itself.
+   *
+   * It cannot ride on ANTHROPIC_AUTH_TOKEN: for the passthrough providers
+   * (OpenRouter, DeepSeek) that variable holds the real upstream key, which
+   * the CLI sends and passthrough() forwards verbatim. Overwriting it would
+   * send this token upstream instead of the credential. The path needs no
+   * cooperation from the CLI at all, since cockpit sets the whole base URL.
+   */
+  private readonly token = randomBytes(24).toString("hex");
 
   constructor(
     private resolveUpstream: UpstreamResolver,
@@ -499,7 +553,7 @@ export class FormatProxy {
   /** Fetch with bounded retries on saturation-class failures. Safe because it
    *  only runs before any response bytes reach the client. Honors a small
    *  Retry-After when the upstream sends one. */
-  private async fetchWithRetry(url: string, init: RequestInit): Promise<Response> {
+  private async fetchWithRetry(url: string, init: RequestInit, providerId: string): Promise<Response> {
     for (let attempt = 0; ; attempt++) {
       let res: Response | null = null;
       let networkErr: unknown = null;
@@ -510,18 +564,33 @@ export class FormatProxy {
       }
       const retryable = res ? RETRYABLE_STATUS.has(res.status) : true;
       if (!retryable || attempt >= this.retryBackoffMs.length) {
-        if (res) return res;
+        if (res) {
+          if (attempt > 0) logProxy(providerId, "retry-settled", { status: res.status, attempts: attempt + 1 });
+          return res;
+        }
+        logProxy(providerId, "upstream-network-error", {
+          url,
+          attempts: attempt + 1,
+          error: networkErr instanceof Error ? networkErr.message : String(networkErr),
+        });
         throw networkErr;
       }
       const retryAfter = Number(res?.headers.get("retry-after") ?? 0);
       const wait = retryAfter > 0 && retryAfter <= 10 ? retryAfter * 1000 : this.retryBackoffMs[attempt];
+      logProxy(providerId, "retry", {
+        attempt: attempt + 1,
+        status: res?.status ?? null,
+        networkError: res ? null : networkErr instanceof Error ? networkErr.message : String(networkErr),
+        retryAfterHeader: retryAfter || null,
+        waitMs: wait,
+      });
       await res?.body?.cancel();
       await new Promise((r) => setTimeout(r, wait));
     }
   }
 
   getUrl(providerId: string): string {
-    return `http://127.0.0.1:${this.port}/${providerId}`;
+    return `http://127.0.0.1:${this.port}/${this.token}/${providerId}`;
   }
 
   get isRunning(): boolean {
@@ -538,6 +607,7 @@ export class FormatProxy {
     this.server = server;
     const addr = server.address();
     this.port = typeof addr === "object" && addr ? addr.port : port;
+    logProxy("-", "listening", { port: this.port });
   }
 
   async stop(): Promise<void> {
@@ -548,10 +618,26 @@ export class FormatProxy {
 
   private async handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const [pathPart, query] = (req.url || "").split("?");
-    const [, providerId, ...rest] = pathPart.split("/");
+    const [, token, providerId, ...rest] = pathPart.split("/");
     const path = `/${rest.join("/")}`;
+    if (token !== this.token) {
+      // Deliberately says nothing about which part was wrong, and never echoes
+      // the offered token.
+      logProxy(providerId || "-", "unauthorized", { method: req.method, path, status: 401 });
+      jsonError(res, 401, "Unauthorized");
+      return;
+    }
     const upstream = providerId ? this.resolveUpstream(providerId) : null;
+    logProxy(providerId || "-", "request", {
+      method: req.method,
+      path,
+      resolved: !!upstream,
+      wireFormat: upstream?.wireFormat ?? null,
+      baseUrl: upstream?.baseUrl ?? null,
+      hasKey: !!upstream?.apiKey,
+    });
     if (!upstream) {
+      logProxy(providerId || "-", "unknown-provider", { status: 404 });
       jsonError(res, 404, `Unknown proxied provider: ${providerId}`);
       return;
     }
@@ -573,6 +659,7 @@ export class FormatProxy {
       const wanted = decodeURIComponent(path.slice("/v1/models/".length));
       const known = (upstream.modelIds ?? []).find((id) => id === wanted);
       if (!known) {
+        logProxy(providerId, "model-not-in-catalog", { model: wanted, catalogSize: (upstream.modelIds ?? []).length });
         jsonError(res, 404, `Model ${wanted} is not in the ${providerId} catalog`);
         return;
       }
@@ -589,7 +676,7 @@ export class FormatProxy {
     }
 
     if (upstream.wireFormat === "anthropic") {
-      await this.passthrough(req, res, upstream, path + (query ? `?${query}` : ""));
+      await this.passthrough(req, res, upstream, path + (query ? `?${query}` : ""), providerId);
       return;
     }
 
@@ -598,6 +685,7 @@ export class FormatProxy {
       return;
     }
 
+    logProxy(providerId, "unsupported-path", { method: req.method, path, status: 404 });
     jsonError(res, 404, `Unsupported proxy path: ${path}`);
   }
 
@@ -606,7 +694,13 @@ export class FormatProxy {
    *  retry saturation-class failures, then pipe the response bytes straight
    *  through. The CLI sees exactly what the upstream would have sent, minus
    *  the 429s that a retry absorbed. */
-  private async passthrough(req: IncomingMessage, res: ServerResponse, upstream: ProxyUpstream, pathWithQuery: string): Promise<void> {
+  private async passthrough(
+    req: IncomingMessage,
+    res: ServerResponse,
+    upstream: ProxyUpstream,
+    pathWithQuery: string,
+    providerId: string,
+  ): Promise<void> {
     const body = req.method === "GET" || req.method === "HEAD" ? undefined : await readBody(req);
     const headers: Record<string, string> = {};
     for (const [key, value] of Object.entries(req.headers)) {
@@ -628,8 +722,9 @@ export class FormatProxy {
     let saturatedPeek: string | null = null;
     for (let attempt = 0; ; attempt++) {
       try {
-        upstreamRes = await this.fetchWithRetry(`${upstream.baseUrl}${pathWithQuery}`, { method: req.method, headers, body });
+        upstreamRes = await this.fetchWithRetry(`${upstream.baseUrl}${pathWithQuery}`, { method: req.method, headers, body }, providerId);
       } catch (err) {
+        logProxy(providerId, "passthrough-failed", { status: 502, error: err instanceof Error ? err.message : String(err) });
         jsonError(res, 502, `Upstream request failed: ${err instanceof Error ? err.message : String(err)}`);
         return;
       }
@@ -646,6 +741,9 @@ export class FormatProxy {
       firstChunk = value ?? null;
       const peek = firstChunk ? new TextDecoder().decode(firstChunk).slice(0, 256) : "";
       if (is200Saturation(peek, done && !value)) {
+        // The tell for the free-tier bug: a 200 whose body is an error. The
+        // peek is what decides it, so it is logged verbatim.
+        logProxy(providerId, "saturation-200", { attempt: attempt + 1, emptyBody: done && !value, peek });
         if (attempt < this.retryBackoffMs.length) {
           await reader.cancel().catch(() => {});
           await new Promise((r) => setTimeout(r, this.retryBackoffMs[attempt]));
@@ -660,10 +758,16 @@ export class FormatProxy {
     }
 
     if (saturatedPeek !== null) {
+      logProxy(providerId, "saturation-exhausted", { status: 529, peek: saturatedPeek });
       jsonError(res, 529, saturationMessage(saturatedPeek));
       return;
     }
 
+    logProxy(providerId, "passthrough-relay", {
+      status: upstreamRes.status,
+      contentType: upstreamRes.headers.get("content-type"),
+      streamed: !!reader,
+    });
     res.writeHead(upstreamRes.status, { "Content-Type": upstreamRes.headers.get("content-type") ?? "application/json" });
     if (!reader) {
       res.end();
@@ -676,8 +780,9 @@ export class FormatProxy {
         if (done) break;
         res.write(Buffer.from(value));
       }
-    } catch {
+    } catch (err) {
       // upstream died mid-stream — end what we have
+      logProxy(providerId, "passthrough-stream-aborted", { error: err instanceof Error ? err.message : String(err) });
     }
     res.end();
   }
@@ -687,11 +792,20 @@ export class FormatProxy {
     try {
       anthropicBody = JSON.parse(await readBody(req));
     } catch {
+      logProxy(providerId, "bad-request-body", { status: 400 });
       jsonError(res, 400, "Invalid JSON body");
       return;
     }
 
     const openaiBody = anthropicToOpenAIRequest(anthropicBody, { effortLevels: upstream.effortByModel?.[anthropicBody.model] });
+    logProxy(providerId, "translate", {
+      model: anthropicBody.model,
+      stream: !!anthropicBody.stream,
+      messages: Array.isArray(anthropicBody.messages) ? anthropicBody.messages.length : null,
+      hasSystem: anthropicBody.system !== undefined,
+      effortLevels: upstream.effortByModel?.[anthropicBody.model] ?? null,
+      openaiKeys: Object.keys(openaiBody),
+    });
     const init: RequestInit = {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${upstream.apiKey}` },
@@ -699,7 +813,7 @@ export class FormatProxy {
     };
     let upstreamRes: Response;
     try {
-      upstreamRes = await this.fetchWithRetry(`${upstream.baseUrl}/chat/completions`, init);
+      upstreamRes = await this.fetchWithRetry(`${upstream.baseUrl}/chat/completions`, init, providerId);
       // Zen wraps non-auth failures in 401 ("Model X is not supported",
       // "No provider available" when its routing finds no upstream), which the
       // CLI reads as an auth failure and answers with a "run /login" prompt.
@@ -711,10 +825,16 @@ export class FormatProxy {
           .json()
           .catch(() => null)) as { error?: { type?: string; message?: string } } | null;
         if (!/no provider available/i.test(probe?.error?.message ?? "")) break;
+        logProxy(providerId, "no-provider-retry", { attempt: attempt + 1, upstreamMessage: probe?.error?.message ?? null });
         await new Promise((r) => setTimeout(r, this.retryBackoffMs[attempt]));
         upstreamRes = await fetch(`${upstream.baseUrl}/chat/completions`, init);
       }
     } catch (err) {
+      logProxy(providerId, "upstream-failed", {
+        status: 502,
+        model: anthropicBody.model,
+        error: err instanceof Error ? err.message : String(err),
+      });
       jsonError(res, 502, `Upstream request failed: ${err instanceof Error ? err.message : String(err)}`);
       return;
     }
@@ -737,6 +857,14 @@ export class FormatProxy {
       if (status === 401 && errType !== "AuthError" && !/api key|unauthorized/i.test(message)) {
         status = /no provider available/i.test(message) ? 503 : 404;
       }
+      logProxy(providerId, "upstream-error", {
+        model: anthropicBody.model,
+        upstreamStatus: upstreamRes.status,
+        sentStatus: status,
+        remapped: status !== upstreamRes.status,
+        errorType: errType || null,
+        message: message.slice(0, 500),
+      });
       jsonError(res, status, message || `Upstream HTTP ${status}`);
       return;
     }
@@ -745,6 +873,13 @@ export class FormatProxy {
       const body = (await upstreamRes.json()) as OpenAIResponse;
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify(openAIToAnthropicResponse(body)));
+      logProxy(providerId, "complete", {
+        model: anthropicBody.model,
+        stream: false,
+        finishReason: body.choices?.[0]?.finish_reason ?? null,
+        inputTokens: body.usage?.prompt_tokens ?? null,
+        outputTokens: body.usage?.completion_tokens ?? null,
+      });
       if (body.usage) {
         this.onUsage?.({
           providerId,
@@ -760,10 +895,12 @@ export class FormatProxy {
     const translator = new StreamTranslator();
     const reader = upstreamRes.body?.getReader();
     if (!reader) {
+      logProxy(providerId, "stream-no-body", { model: anthropicBody.model });
       res.end(translator.finish());
       return;
     }
     const decoder = new TextDecoder();
+    let aborted: string | null = null;
     try {
       for (;;) {
         const { done, value } = await reader.read();
@@ -771,12 +908,20 @@ export class FormatProxy {
         const out = translator.feed(decoder.decode(value, { stream: true }));
         if (out) res.write(out);
       }
-    } catch {
+    } catch (err) {
       // upstream died mid-stream — close out what we have
+      aborted = err instanceof Error ? err.message : String(err);
     }
     const usage = translator.getUsage();
     res.write(translator.finish());
     res.end();
+    logProxy(providerId, "complete", {
+      model: anthropicBody.model,
+      stream: true,
+      aborted,
+      inputTokens: usage?.prompt_tokens ?? null,
+      outputTokens: usage?.completion_tokens ?? null,
+    });
     if (usage) {
       this.onUsage?.({
         providerId,

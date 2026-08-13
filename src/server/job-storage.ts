@@ -1,8 +1,53 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { randomUUID } from "node:crypto";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { join, resolve, sep } from "node:path";
 import { splitLegacyModel } from "@/lib/models";
-import { getCockpitDir } from "@/server/paths";
+import { assertValidCronExpression } from "@/server/cron-utils";
+import { getProject } from "@/server/issue-storage";
+import { getCockpitDir, getJobsScratchpadRoot } from "@/server/paths";
 import type { JobRun, JobSchedule, ScheduledJob } from "@/types";
+import { ISSUE_STATUSES, SIMPLE_SCHEDULE_FREQUENCIES } from "@/types";
+
+/** Everything a caller may supply when creating a job. */
+export type JobInput = Partial<Omit<ScheduledJob, "id" | "createdAt" | "updatedAt">>;
+
+/**
+ * Build a stored job from caller input, applying the defaults it needs to be
+ * safe to run.
+ *
+ * Shared because the two creation paths had silently drifted. The REST route
+ * assigned all nineteen fields; the MCP create_job tool advertised the same
+ * nineteen in its schema and assigned five, so a job the assistant created came
+ * out with no tool access, no inbox output and no notification providers, and
+ * nothing said so. Anything that creates a job goes through here.
+ */
+export function buildJob(input: JobInput): ScheduledJob {
+  const now = Date.now();
+  return {
+    id: randomUUID(),
+    name: input.name ?? "",
+    schedules: input.schedules ?? [],
+    prompt: input.prompt ?? "",
+    cwd: input.cwd || "",
+    enabled: input.enabled ?? true,
+    createdAt: now,
+    updatedAt: now,
+    model: input.model,
+    contextSize: input.contextSize,
+    thinkingLevel: input.thinkingLevel,
+    allowedTools: input.allowedTools,
+    mcpServers: input.mcpServers,
+    mcpToolFilters: input.mcpToolFilters,
+    bypassPermissions: input.bypassPermissions ?? false,
+    maxDurationMinutes: input.maxDurationMinutes ?? 30,
+    maxRetries: input.maxRetries,
+    retentionDays: input.retentionDays ?? 90,
+    skipIfMissed: input.skipIfMissed ?? false,
+    inboxOutput: input.inboxOutput ?? false,
+    notifyProviders: input.notifyProviders,
+    runtime: input.runtime,
+  };
+}
 
 function prefsDir(): string {
   return getCockpitDir();
@@ -54,7 +99,61 @@ export function getJob(id: string): ScheduledJob | undefined {
   return loadJobs().find((j) => j.id === id);
 }
 
+/**
+ * Reject a malformed schedule of any shape before it can persist. saveJob()
+ * is the one function every job write funnels through: the REST POST route
+ * builds via buildJob() first, but PUT does a raw `{...existing, ...body}`
+ * spread with no construction path at all, and the MCP create/update tools'
+ * field-picking (cockpit-config-server.ts) only controls which keys survive,
+ * never whether their values are any good. Validating in buildJob() alone
+ * would miss both of those, so this lives at the actual write boundary — the
+ * same lesson issue-storage.ts already paid for once (see its "Value
+ * validation" comment and commit 2857515).
+ *
+ * The failure mode this prevents is the silent one: a schedule with a bogus
+ * frequency or a NaN-producing cron expression stores fine and then simply
+ * never fires. Callers deserve the error at write time.
+ */
+function assertValidSchedules(schedules: JobSchedule[] | undefined): void {
+  for (const s of schedules ?? []) {
+    if (s.type === "simple") {
+      if (!(SIMPLE_SCHEDULE_FREQUENCIES as readonly string[]).includes(s.frequency)) {
+        throw new Error(
+          `simple schedule has an invalid frequency "${s.frequency}"; must be one of: ${SIMPLE_SCHEDULE_FREQUENCIES.join(", ")}`,
+        );
+      }
+      if (s.time !== undefined) {
+        const m = /^(\d{1,2}):(\d{2})$/.exec(s.time);
+        if (!m || Number(m[1]) > 23 || Number(m[2]) > 59) {
+          throw new Error(`simple schedule has an invalid time "${s.time}"; use 24h HH:MM, e.g. "09:30"`);
+        }
+      }
+      if (s.dayOfWeek !== undefined && (!Number.isInteger(s.dayOfWeek) || s.dayOfWeek < 0 || s.dayOfWeek > 6)) {
+        throw new Error(`simple schedule has an invalid dayOfWeek ${s.dayOfWeek}; must be an integer 0-6 (Sunday=0)`);
+      }
+      if (s.dayOfMonth !== undefined && (!Number.isInteger(s.dayOfMonth) || s.dayOfMonth < 1 || s.dayOfMonth > 31)) {
+        throw new Error(`simple schedule has an invalid dayOfMonth ${s.dayOfMonth}; must be an integer 1-31`);
+      }
+    } else if (s.type === "cron") {
+      if (typeof s.expression !== "string" || !s.expression.trim()) {
+        throw new Error("cron schedule requires a non-empty expression");
+      }
+      assertValidCronExpression(s.expression);
+    } else if (s.type === "onIssueStatus") {
+      if (!(ISSUE_STATUSES as readonly string[]).includes(s.status)) {
+        throw new Error(`onIssueStatus schedule has an invalid status "${s.status}"; must be one of: ${ISSUE_STATUSES.join(", ")}`);
+      }
+      if (s.project !== undefined && !getProject(s.project)) {
+        throw new Error(`onIssueStatus schedule references unknown project "${s.project}"`);
+      }
+    } else {
+      throw new Error(`schedule has unknown type "${(s as { type?: string }).type}"; must be one of: simple, cron, onIssueStatus`);
+    }
+  }
+}
+
 export function saveJob(job: ScheduledJob): void {
+  assertValidSchedules(job.schedules);
   const jobs = loadJobs();
   const idx = jobs.findIndex((j) => j.id === job.id);
   if (idx >= 0) {
@@ -64,6 +163,25 @@ export function saveJob(job: ScheduledJob): void {
   }
   ensureDir(prefsDir());
   writeFileSync(jobsFile(), JSON.stringify({ jobs }, null, 2) + "\n");
+}
+
+/**
+ * Remove a job's scratchpad, the directory it persisted state between runs in.
+ * Deleting a job used to leave it behind, so `~/.cockpit/jobs` accumulated
+ * orphan directories with no job left to explain them.
+ *
+ * `id` has already been matched against a stored job by the time this runs, so
+ * it is one cockpit generated. The containment check is belt and braces so a
+ * crafted id could never resolve outside the scratchpad root and take an
+ * unrelated directory with it.
+ */
+function deleteJobScratchpad(id: string): void {
+  const root = resolve(getJobsScratchpadRoot());
+  const dir = resolve(root, id);
+  if (dir === root || !dir.startsWith(root + sep)) return;
+  try {
+    rmSync(dir, { recursive: true, force: true });
+  } catch {}
 }
 
 export function deleteJob(id: string): boolean {
@@ -80,6 +198,8 @@ export function deleteJob(id: string): boolean {
       unlinkSync(rf);
     }
   } catch {}
+
+  deleteJobScratchpad(id);
 
   return true;
 }

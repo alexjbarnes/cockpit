@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { v4 as uuidv4 } from "uuid";
 import { classifyCliCommand } from "@/lib/cli-commands";
+import { describeJobTargets } from "@/lib/job-target-label";
 import {
   allowedEffortLevels,
   type ContextSize,
@@ -21,6 +22,7 @@ import { getCockpitDir } from "@/server/paths";
 import { ensureCatalogFresh, OPENROUTER_PROVIDER_ID } from "@/server/provider-catalog";
 import { getProvider, isBuiltinCatalogProvider, openRouterModelEnv, resolveProviderModel } from "@/server/providers";
 import type {
+  BackgroundTask,
   ChatMessage,
   ContentBlock,
   ContextUsage,
@@ -40,7 +42,8 @@ import { getHarnessAdapter } from "./harness/registry";
 import type { HarnessProcess, HarnessProcessCallbacks, HarnessSpawnConfig } from "./harness/types";
 import { getJob } from "./job-storage";
 import { COCKPIT_AGENT_SYSTEM_PROMPT } from "./mcp/cockpit-agent-prompt";
-import { clearToken, type RunContext, registerAuthToken, registerRunContext } from "./mcp/run-context";
+import { clearToken, type RunContext, registerAuthToken, registerRunContext, registerSessionContext } from "./mcp/run-context";
+import { getNotificationSettings } from "./notification-settings";
 import { findLatestPlanFile, readPlanFile } from "./plans";
 import { findChainForCliSession, getSessionPrefs, type SessionRuntime, setSessionPrefs } from "./session-prefs";
 import { getCockpitMcp } from "./singleton";
@@ -50,9 +53,15 @@ import { findSessionCwd, loadMoreMessages, loadPromptHistory, loadTranscript, tr
 
 export type { SessionRuntime };
 
-function defaultRuntime(): SessionRuntime {
-  return "stream";
-}
+/**
+ * Runtime for sessions that don't pick one.
+ *
+ * PTY is the supported path. Stream runs the CLI under `-p`, which the headless
+ * docs say will default to `--bare` in a future release, and bare mode skips
+ * OAuth and keychain reads, so it would stop authenticating against a
+ * subscription. Stream stays selectable but is no longer the default.
+ */
+const DEFAULT_RUNTIME: SessionRuntime = "pty";
 
 const smLog = (sessionId: string, msg: string) => {
   if (!isDebugEnabled()) return;
@@ -77,7 +86,7 @@ export interface PendingRequest {
   permissionSuggestions?: Record<string, unknown>[];
   planFilePath?: string;
   planContent?: string;
-  configProposal?: { toolName: string; domain: string; action: string; displayName?: string };
+  configProposal?: { toolName: string; domain: string; action: string; displayName?: string; idNames?: Record<string, string> };
 }
 
 export interface StreamingSnapshot {
@@ -110,6 +119,8 @@ interface Session {
   contextUsage: ContextUsage | null;
   contextWindowSize: number;
   todoItems: TodoItem[];
+  /** Last reported background tasks, replayed to a client on connect. */
+  backgroundTasks: BackgroundTask[];
   initData?: InitData;
   pendingRequests: Map<string, PendingRequest>;
   streamingSnapshot: StreamingSnapshot | null;
@@ -162,10 +173,57 @@ export function buildMcpConfigArg(url: string, token: string): { path: string } 
   return { path: filePath };
 }
 
+/**
+ * Tools the cockpit assistant may use, but only after a human approves the
+ * individual call. They skip the assistant's own allow/deny gate and land on the
+ * ordinary permission prompt, so the URL or job being read is on screen first.
+ * These are also the only assistant tools "Bypass tool prompts" covers: config
+ * writes keep their approval card either way.
+ *
+ * WebFetch is the assistant's only egress. Everything else it can reach is
+ * local, which is what stops content it reads from walking back out through a
+ * URL. get_job_transcript returns arbitrary job output rather than cockpit's own
+ * structured config, so unlike the other reads its payload is unbounded.
+ */
+const AGENT_PROMPTED_TOOLS = new Set(["WebFetch", "mcp__cockpit-config__get_job_transcript"]);
+
+/**
+ * Human names for ids that appear in a proposal's arguments, so the approval
+ * card can show "Telegram" where the tool sent a uuid. A notifyProviders array
+ * is otherwise rendered as raw uuids, which tells the user nothing about what
+ * they are approving.
+ *
+ * Only ids actually referenced are included, so approving an unrelated job
+ * change does not ship the whole provider list to the client.
+ */
+function proposalIdNames(rawInput: unknown): Record<string, string> | undefined {
+  if (!rawInput) return undefined;
+  let serialised: string;
+  try {
+    serialised = JSON.stringify(rawInput);
+  } catch {
+    return undefined;
+  }
+  const names: Record<string, string> = {};
+  for (const provider of getNotificationSettings().providers) {
+    if (provider.id && serialised.includes(provider.id)) names[provider.id] = provider.name || provider.type;
+  }
+  return Object.keys(names).length > 0 ? names : undefined;
+}
+
 export class SessionManager {
   private sessions = new Map<string, Session>();
   private _cockpitAgentSessionPromise: Promise<string> | null = null;
-  constructor() {
+  /**
+   * Injectable so a test can state which transport it exercises instead of
+   * inheriting whatever the product default happens to be. The stream-protocol
+   * tests mock node:child_process, which the PTY path never touches, so they
+   * would silently stop testing anything if the default moved under them.
+   */
+  private readonly defaultRuntime: SessionRuntime;
+
+  constructor(opts?: { defaultRuntime?: SessionRuntime }) {
+    this.defaultRuntime = opts?.defaultRuntime ?? DEFAULT_RUNTIME;
     // Periodically check for sessions stuck in "running" with a dead process
     setInterval(() => {
       for (const [id, session] of this.sessions) {
@@ -187,14 +245,14 @@ export class SessionManager {
   createSession(
     cwd: string,
     name?: string,
-    options?: { bypassPermissions?: boolean; runtime?: SessionRuntime; cockpitAgent?: boolean },
+    options?: { bypassPermissions?: boolean; runtime?: SessionRuntime; cockpitAgent?: boolean; runContext?: RunContext },
   ): SessionInfo {
     const id = uuidv4();
     const now = Date.now();
     const defaults = getDefaults();
     const modelSlots: ModelSlots = { main: defaults.modelSlots.main ?? "sonnet" };
     const isCockpitAgent = options?.cockpitAgent === true;
-    const rt = options?.runtime ?? defaultRuntime();
+    const rt = options?.runtime ?? this.defaultRuntime;
     const sessionName = isCockpitAgent ? "Cockpit Assistant" : name || path.basename(cwd) || cwd;
     const info: SessionInfo = {
       id,
@@ -224,6 +282,7 @@ export class SessionManager {
       contextUsage: null,
       contextWindowSize: this.resolveContextWindow(info.model, info.contextSize ?? DEFAULT_CONTEXT_SIZE),
       todoItems: [],
+      backgroundTasks: [],
       pendingRequests: new Map(),
       streamingSnapshot: null,
       queuedMessages: [],
@@ -239,9 +298,26 @@ export class SessionManager {
       totalTokens: { input: 0, output: 0, cacheCreate: 0, cacheRead: 0 },
       cockpitAgent: isCockpitAgent,
       cockpitAgentCleanups: [],
+      // Present only for a scheduled job that reports to the inbox. It is what
+      // mints a run-scoped MCP token, and what confines that token to the job
+      // tools. Deliberately not persisted: it belongs to one run.
+      runContext: options?.runContext,
     });
 
-    setSessionPrefs(id, { runtime: rt, ...(isCockpitAgent ? { cockpitAgent: true } : {}) });
+    // Persist everything the session was born with, not just its runtime. These
+    // are what ensureSession rebuilds from after a restart, and its fallback for
+    // each of them is the *current* app default — so a session created as
+    // "My Session" on the then-default model used to come back named after its
+    // cwd, on whatever model the default happens to be now.
+    setSessionPrefs(id, {
+      name: sessionName,
+      model: modelSlots.main,
+      contextSize: info.contextSize,
+      modelSlots,
+      thinkingLevel: defaults.thinkingLevel,
+      runtime: rt,
+      ...(isCockpitAgent ? { cockpitAgent: true } : {}),
+    });
 
     if (isCockpitAgent) {
       this.registerCockpitAgentOnInit(id);
@@ -290,8 +366,13 @@ export class SessionManager {
       const now = Date.now();
       const modelSlots: ModelSlots =
         prefs?.modelSlots ?? (prefs?.model ? { main: prefs.model } : { main: defaults.modelSlots.main ?? "sonnet" });
-      const restoredRuntime = prefs?.runtime ?? defaultRuntime();
-      const restoredContextSize = prefs?.contextSize ?? prefs?.modelSlots?.mainContext ?? DEFAULT_CONTEXT_SIZE;
+      const restoredRuntime = prefs?.runtime ?? this.defaultRuntime;
+      // Falls back to the app default the same way the model above does.
+      // Without that step a session whose prefs predate contextSize came back
+      // at 200k however the user had configured their default, and the next
+      // send then looked like it was about to overflow.
+      const restoredContextSize =
+        prefs?.contextSize ?? prefs?.modelSlots?.mainContext ?? defaults.modelSlots?.mainContext ?? DEFAULT_CONTEXT_SIZE;
       session = {
         info: {
           id,
@@ -314,14 +395,18 @@ export class SessionManager {
         pendingPlanReminder: prefs?.planMode ?? false,
         needsRespawnForPermissions: false,
         compacting: false,
-        thinkingLevel:
-          prefs?.thinkingLevel ??
-          recommendedEffort(resolveModel((prefs?.model || defaults.modelSlots.main) ?? "sonnet")) ??
-          defaults.thinkingLevel,
+        // modelSlots.main, not prefs.model: setModelSlot persists modelSlots on
+        // its own, so a session whose model was last changed through the slots
+        // editor has no top-level `model` field, and reading that field alone
+        // gave it the *default* model's recommended effort and context window.
+        // modelSlots is already resolved above (prefs, then legacy model, then
+        // the app default), so it is the one place that knows the real model.
+        thinkingLevel: prefs?.thinkingLevel ?? recommendedEffort(resolveModel(modelSlots.main ?? "sonnet")) ?? defaults.thinkingLevel,
         streamState: null,
         contextUsage: null,
-        contextWindowSize: this.resolveContextWindow((prefs?.model || defaults.modelSlots.main) ?? undefined, restoredContextSize),
+        contextWindowSize: this.resolveContextWindow(modelSlots.main ?? undefined, restoredContextSize),
         todoItems: [],
+        backgroundTasks: [],
         pendingRequests: new Map(),
         initData: prefs?.initData,
         streamingSnapshot: null,
@@ -867,6 +952,18 @@ export class SessionManager {
     return () => session.emitter.off("pending", handler);
   }
 
+  onAgents(id: string, listener: (count: number) => void): (() => void) | null {
+    const session = this.sessions.get(id);
+    if (!session) return null;
+
+    const handler = (_sessionId: string, count: number) => {
+      listener(count);
+    };
+
+    session.emitter.on("agents", handler);
+    return () => session.emitter.off("agents", handler);
+  }
+
   onError(id: string, listener: (error: string) => void): (() => void) | null {
     const session = this.sessions.get(id);
     if (!session) return null;
@@ -1094,7 +1191,9 @@ export class SessionManager {
     const currentSize = session.info.contextSize ?? DEFAULT_CONTEXT_SIZE;
     const requestedSize = contextSize ?? currentSize;
     const resolvedSize: ContextSize = (() => {
-      const sizes = resolveModel(model)?.contextSizes;
+      // Anthropic models constrain the size via the static table; a foreign
+      // model constrains it via its (possibly curated) provider contextSizes.
+      const sizes = resolveModel(model)?.contextSizes ?? resolveProviderModel(model)?.model.contextSizes;
       if (!sizes || sizes.length === 0) return requestedSize;
       return sizes.includes(requestedSize) ? requestedSize : sizes[0];
     })();
@@ -1167,14 +1266,23 @@ export class SessionManager {
     session.contextWindowSize = this.resolveContextWindow(model, resolvedSize);
     const cur = session.contextUsage;
     if (cur) {
-      session.emitter.emit("usage", sessionId, { used: cur.used, total: session.contextWindowSize });
+      // Assign, not just emit. shouldPreCompact reads contextUsage.total, so
+      // telling the client the new window while leaving the server on the old
+      // one made the first message after a 200k -> 1m switch trip the 85%
+      // check and compact a session with plenty of room left.
+      const usage: ContextUsage = { used: cur.used, total: session.contextWindowSize };
+      session.contextUsage = usage;
+      session.emitter.emit("usage", sessionId, usage);
     }
   }
 
-  /** Context gauge total: foreign catalog models carry a raw contextLength;
-   *  Anthropic models use the 200k/1m enum. */
+  /** Context gauge total: a model with a curated 200k/1m choice (Anthropic
+   *  always, foreign models via the provider's contextSizeOverrides) follows
+   *  the session's pick; other foreign catalog models carry a raw
+   *  contextLength; the enum default covers the rest. */
   private resolveContextWindow(model: string | undefined, size: ContextSize): number {
     const resolved = model ? resolveProviderModel(model) : null;
+    if (resolved?.model.contextSizes.includes(size)) return contextSizeToWindow(size);
     if (resolved?.model.contextLength && resolved.model.contextLength > 0) return resolved.model.contextLength;
     return contextSizeToWindow(size);
   }
@@ -1410,6 +1518,47 @@ export class SessionManager {
     return this.sessions.get(sessionId)?.todoItems ?? [];
   }
 
+  /**
+   * The background tasks last reported for a session, for replay on connect.
+   *
+   * Without this a reload had nothing to go on: the transcript records an async
+   * agent's tool use as done the moment it launches, so the client guessed from
+   * whether the session was mid-turn and showed a running agent as finished
+   * until the next Stop or subagent hook arrived with a real list — the ~10s
+   * flip where the agent card's spinner vanished and then came back.
+   */
+  getBackgroundTasks(sessionId: string): BackgroundTask[] {
+    return this.sessions.get(sessionId)?.backgroundTasks ?? [];
+  }
+
+  /** Keep the session's task list in step with what is being emitted, so a
+   *  client connecting later can be handed the same picture. task_sync carries
+   *  the whole list (an empty one means nothing is running); task_update carries
+   *  one task, which may be new. */
+  private rememberBackgroundTasks(session: Session, event: ParsedEvent): void {
+    if (event.type === "task_sync" && Array.isArray(event.tasks)) {
+      session.backgroundTasks = event.tasks;
+      return;
+    }
+    if (event.type !== "task_update" || !event.taskInfo) return;
+    const info = event.taskInfo;
+    // Mirror the mapping ws-handler applies on the way out, so a replayed task
+    // is identical to the one a client already connected would have received.
+    // "progress" is an activity line on a task that is still running.
+    const isProgress = info.status === "progress";
+    const task: BackgroundTask = {
+      taskId: info.taskId,
+      toolUseId: info.toolUseId,
+      status: isProgress ? "running" : (info.status as "running" | "completed"),
+      title: isProgress ? undefined : info.title || info.description,
+      description: info.description,
+      activity: isProgress ? info.description : undefined,
+      summary: info.summary,
+    };
+    const rest = session.backgroundTasks.filter((t) => t.taskId !== task.taskId);
+    session.backgroundTasks = [...rest, task];
+  }
+
   onTodos(id: string, listener: (todos: TodoItem[]) => void): (() => void) | null {
     const session = this.sessions.get(id);
     if (!session) return null;
@@ -1553,6 +1702,12 @@ export class SessionManager {
     );
   }
 
+  private notifyAgentsChanged(session: Session, sessionId: string, count: number): void {
+    if (session.info.agentCount === count) return;
+    session.info.agentCount = count;
+    session.emitter.emit("agents", sessionId, count);
+  }
+
   private notifyPendingChanged(session: Session, sessionId: string): void {
     const count = session.pendingRequests.size;
     if (session.info.pendingRequestCount === count) return;
@@ -1575,10 +1730,14 @@ export class SessionManager {
     }
 
     for (const sysMsg of result.systemMessages) {
-      if (sysMsg === "__tool_use_start") {
+      if (sysMsg === "__tool_use_start" || sysMsg === "__turn_start") {
         session.info.status = "running";
-        console.log(`[sm] emit status running (via tool_use_start) for ${sessionId.slice(0, 8)} (runtime=${session.runtime})`);
+        console.log(`[sm] emit status running (via ${sysMsg.slice(2)}) for ${sessionId.slice(0, 8)} (runtime=${session.runtime})`);
         session.emitter.emit("status", sessionId, "running");
+        continue;
+      }
+      if (sysMsg.startsWith("__agents::")) {
+        this.notifyAgentsChanged(session, sessionId, Number(sysMsg.slice("__agents::".length)) || 0);
         continue;
       }
       if (sysMsg === "__compact::hook_start") {
@@ -1656,7 +1815,7 @@ export class SessionManager {
         this.respondToPermission(sessionId, pa.requestId, true, pa.rawToolInput);
       } else if (pa.type === "auto_deny") {
         this.respondToPermission(sessionId, pa.requestId, false, undefined, undefined, pa.denyReason);
-      } else if (session.cockpitAgent && pa.toolName !== "AskUserQuestion") {
+      } else if (session.cockpitAgent && pa.toolName !== "AskUserQuestion" && !AGENT_PROMPTED_TOOLS.has(pa.toolName)) {
         const tool = pa.toolName;
         const isReadOnlyBuiltin = ["Read", "Grep", "Glob"].includes(tool);
         const cockpitPrefix = "mcp__cockpit-config__";
@@ -1676,20 +1835,23 @@ export class SessionManager {
           const parts = suffix.split("_");
           const action = parts[0];
           const domain = parts.slice(1).join("_");
-          let displayName: string | undefined;
-          if (domain === "job" && (action === "update" || action === "delete")) {
-            const jobId = (pa.rawToolInput as Record<string, unknown>)?.id;
-            if (typeof jobId === "string") {
-              displayName = getJob(jobId)?.name;
-            }
-          }
+          // Every job tool, not just update/delete: run_job and stop_job used to
+          // render as a bare uuid on the approval card.
+          const displayName = domain === "job" ? describeJobTargets(pa.rawToolInput, (id) => getJob(id)?.name) : undefined;
+          const idNames = proposalIdNames(pa.rawToolInput);
           session.pendingRequests.set(pa.requestId, {
             type: "permission",
             requestId: pa.requestId,
             toolName: pa.toolName,
             toolInput: pa.toolInput || "",
             rawToolInput: pa.rawToolInput,
-            configProposal: { toolName: tool, domain, action, ...(displayName ? { displayName } : {}) },
+            configProposal: {
+              toolName: tool,
+              domain,
+              action,
+              ...(displayName ? { displayName } : {}),
+              ...(idNames ? { idNames } : {}),
+            },
           });
           this.notifyPendingChanged(session, sessionId);
         } else {
@@ -1702,6 +1864,14 @@ export class SessionManager {
             "This tool is not available in the cockpit assistant",
           );
         }
+        // Reached by the assistant only for AGENT_PROMPTED_TOOLS, so bypass
+        // covers its tool calls without touching the config-write proposal
+        // cards, which the branch above still handles.
+        // interactiveOnly (TUI-only dialogs) rides the same bypass
+        // auto-approve by user decision (2026-08-08): bypass ON is the user's
+        // standing yes, so cockpit presses the dialog's Yes for them (the
+        // respond path answers those with PTY keystrokes). With bypass off
+        // they fall through to a real UI dialog like everything else.
       } else if (session.bypassAllPermissions && !session.planMode && pa.toolName !== "AskUserQuestion") {
         this.respondToPermission(sessionId, pa.requestId, true, pa.rawToolInput);
         bypassedRequestIds.add(pa.requestId);
@@ -1742,6 +1912,7 @@ export class SessionManager {
     for (const event of result.emit) {
       // Skip phantom permission events that were already bypass-approved above
       if (event.type === "permission_request" && event.requestId && bypassedRequestIds.has(event.requestId)) continue;
+      this.rememberBackgroundTasks(session, event);
       session.emitter.emit("event", sessionId, event);
     }
 
@@ -2033,6 +2204,14 @@ Additional Cockpit rules beyond the CLI's defaults:
       return false;
     }
 
+    // Set below, and checked at the `session.compacting` queue guard: this
+    // message is the /compact that just raised the flag, so it must not be
+    // queued behind itself. Doing so deadlocked every manual compaction —
+    // the guard queued the trigger, and the queue only flushes when
+    // `compacting` clears, which needs a PostCompact hook that can never
+    // arrive because the CLI was never told to compact.
+    let isCompactTrigger = false;
+
     if (text.startsWith("/")) {
       const handled = this.handleCommand(sessionId, text);
       if (handled) return true;
@@ -2040,6 +2219,7 @@ Additional Cockpit rules beyond the CLI's defaults:
       if (text.trim().toLowerCase().startsWith("/compact")) {
         logDiag(sessionId, "compact:start");
         session.compacting = true;
+        isCompactTrigger = true;
         this.emitSystem(session, sessionId, "__compact::start");
       }
     }
@@ -2094,7 +2274,7 @@ Additional Cockpit rules beyond the CLI's defaults:
     // delivery into it. Queue instead; flushQueuedMessage runs from every
     // path that clears session.compacting (hook_done, harness exit while
     // compacting, or the transcript's own "__compacted__" marker).
-    if (session.compacting) {
+    if (session.compacting && !isCompactTrigger) {
       session.queuedMessages.push({ id: `q-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, text, images, documents });
       session.emitter.emit("queued", sessionId, session.queuedMessages.length);
       return true;
@@ -2185,8 +2365,8 @@ Additional Cockpit rules beyond the CLI's defaults:
       subagentModel = resolvedSub ? resolvedSub.model.modelId : session.modelSlots.subagent;
     }
 
-    // Catalog-backed builtin sessions (openrouter, zen, deepseek) pin every
-    // default-model slot to the session's models — otherwise the CLI's
+    // Catalog-backed builtin sessions (openrouter, zen, zen-go, deepseek) pin
+    // every default-model slot to the session's models — otherwise the CLI's
     // internal opus/sonnet/haiku-class utility calls route to Claude models
     // billed on the provider's credits behind the user's back.
     let providerEnvVars = resolved?.provider.envVars;
@@ -2194,8 +2374,12 @@ Additional Cockpit rules beyond the CLI's defaults:
       providerEnvVars = { ...providerEnvVars, ...openRouterModelEnv(resolved.model.modelId, subagentModel) };
       // The CLI defaults foreign model ids to a 200k context window; this
       // override (ignored for claude-* ids) aligns its context tracking and
-      // auto-compact with the model's real window.
-      if (resolved.model.contextLength && resolved.model.contextLength > 0) {
+      // auto-compact with the model's real window. A curated 200k/1m model
+      // follows the session's pick, mirroring resolveContextWindow so the
+      // gauge and the CLI always agree on the denominator.
+      if (resolved.model.contextSizes.includes(effectiveContextSize)) {
+        providerEnvVars.CLAUDE_CODE_MAX_CONTEXT_TOKENS = String(contextSizeToWindow(effectiveContextSize));
+      } else if (resolved.model.contextLength && resolved.model.contextLength > 0) {
         providerEnvVars.CLAUDE_CODE_MAX_CONTEXT_TOKENS = String(resolved.model.contextLength);
       }
       // The CLI's effort gate rejects unknown (non-Anthropic) model ids, so
@@ -2209,27 +2393,32 @@ Additional Cockpit rules beyond the CLI's defaults:
 
     let appendSystemPrompt: string | undefined;
     let mcpConfigPath: string | undefined;
-    if (session.cockpitAgent) {
-      appendSystemPrompt = COCKPIT_AGENT_SYSTEM_PROMPT;
-      const cockpitMcp = getCockpitMcp();
-      if (cockpitMcp) {
-        if (session.mcpToken) {
-          clearToken(session.mcpToken);
-          try {
-            unlinkSync(path.join(tmpdir(), "cockpit-mcp-config", `${session.mcpToken.slice(0, 16)}.json`));
-          } catch {
-            /* best effort */
-          }
+    // Every session talks to the cockpit MCP server now, not just the
+    // assistant and an inbox-reporting job: a plain session gets a
+    // session-scoped token so it can add_inbox_message too. Only the
+    // assistant gets its system prompt — a job has its own, a plain session
+    // gets none — and the token decides which tools any of them can reach.
+    if (session.cockpitAgent) appendSystemPrompt = COCKPIT_AGENT_SYSTEM_PROMPT;
+    const cockpitMcp = getCockpitMcp();
+    if (cockpitMcp) {
+      if (session.mcpToken) {
+        clearToken(session.mcpToken);
+        try {
+          unlinkSync(path.join(tmpdir(), "cockpit-mcp-config", `${session.mcpToken.slice(0, 16)}.json`));
+        } catch {
+          /* best effort */
         }
-        const token = randomBytes(24).toString("hex");
-        if (session.runContext) {
-          registerRunContext(token, session.runContext);
-        } else {
-          registerAuthToken(token);
-        }
-        session.mcpToken = token;
-        mcpConfigPath = buildMcpConfigArg(cockpitMcp.getUrl(), token).path;
       }
+      const token = randomBytes(24).toString("hex");
+      if (session.cockpitAgent) {
+        registerAuthToken(token);
+      } else if (session.runContext) {
+        registerRunContext(token, session.runContext);
+      } else {
+        registerSessionContext(token, sessionId, session.info.name);
+      }
+      session.mcpToken = token;
+      mcpConfigPath = buildMcpConfigArg(cockpitMcp.getUrl(), token).path;
     }
 
     // Matches the original buildContent/buildPtyText call's unconditional side

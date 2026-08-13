@@ -36,6 +36,24 @@ vi.mock("@/server/transcript", () => ({
   loadPromptHistory: () => Promise.resolve([]),
 }));
 
+// session-manager pulls only getJob from job-storage, to label config proposals.
+// Mocked so the test never touches the real ~/.cockpit/scheduled-jobs.json.
+const { mockJobs } = vi.hoisted(() => ({ mockJobs: {} as Record<string, { name: string }> }));
+vi.mock("@/server/job-storage", () => ({
+  getJob: (id: string) => mockJobs[id],
+}));
+
+// Named providers so an approval card can be asserted to show the name rather
+// than the uuid the tool actually sent.
+vi.mock("@/server/notification-settings", () => ({
+  getNotificationSettings: () => ({
+    providers: [
+      { id: "2fa2259e-74a8-43b8-8b58-b575cb10b68a", type: "telegram", name: "Telegram (personal)", enabled: true, config: {} },
+      { id: "unused-provider-id", type: "ntfy", name: "ntfy home", enabled: true, config: {} },
+    ],
+  }),
+}));
+
 vi.mock("@/server/session-prefs", () => ({
   getSessionPrefs: vi.fn(() => undefined),
   setSessionPrefs: vi.fn(),
@@ -101,7 +119,7 @@ describe("SessionManager", () => {
   let manager: SessionManager;
 
   beforeEach(() => {
-    manager = new SessionManager();
+    manager = new SessionManager({ defaultRuntime: "stream" });
   });
 
   describe("createSession", () => {
@@ -136,13 +154,43 @@ describe("SessionManager", () => {
         modelSlots: { main: "opus", mainContext: "1m" },
       });
       try {
-        const m = new SessionManager();
+        const m = new SessionManager({ defaultRuntime: "stream" });
         const session = m.createSession("/tmp");
         const s = (m as any).sessions.get(session.id)!;
         expect(s.info.contextSize).toBe("1m");
         expect(s.contextWindowSize).toBe(1_000_000);
       } finally {
         (defaultsMod as { getDefaults: () => unknown }).getDefaults = orig;
+      }
+    });
+
+    // createSession used to persist only { runtime }, so everything a session
+    // was born with — its name, model, context size, thinking level — was left
+    // to ensureSession's defaults fallback on the next server start. A session
+    // created with a name came back as its cwd basename, and one created on the
+    // then-current default model came back on whatever the default is now.
+    it("persists what the session was created with, so a restart restores it", async () => {
+      const prefsMod = await import("@/server/session-prefs");
+      const origGet = prefsMod.getSessionPrefs;
+      const origSet = prefsMod.setSessionPrefs;
+      const store: Record<string, Record<string, unknown>> = {};
+      (prefsMod as { setSessionPrefs: (id: string, p: Record<string, unknown>) => void }).setSessionPrefs = (id, p) => {
+        store[id] = { ...(store[id] || {}), ...p };
+      };
+      (prefsMod as { getSessionPrefs: (id: string) => unknown }).getSessionPrefs = (id) => store[id];
+      try {
+        const created = manager.createSession("/tmp/proj", "My Session");
+
+        const restarted = new SessionManager({ defaultRuntime: "stream" });
+        const restored = restarted.ensureSession(created.id, "/tmp/proj");
+
+        expect(restored.info.name).toBe("My Session");
+        expect(restored.info.model).toBe(created.model);
+        expect(restored.info.contextSize).toBe(created.contextSize);
+        expect((restarted as any).sessions.get(created.id)!.thinkingLevel).toBe("high");
+      } finally {
+        (prefsMod as { getSessionPrefs: typeof origGet }).getSessionPrefs = origGet;
+        (prefsMod as { setSessionPrefs: typeof origSet }).setSessionPrefs = origSet;
       }
     });
   });
@@ -189,6 +237,83 @@ describe("SessionManager", () => {
         const s = (manager as any).sessions.get(ensured.info.id)!;
         expect(ensured.info.contextSize).toBe("1m");
         expect(s.contextWindowSize).toBe(1_000_000);
+      } finally {
+        (prefsMod as { getSessionPrefs: (id: string) => unknown }).getSessionPrefs = orig;
+      }
+    });
+
+    it("falls back to the app default context size when prefs carry none", async () => {
+      // Prefs written before contextSize was persisted have a model but no
+      // size. Restoring those at a hardcoded 200k ignored the user's own
+      // default, so a 1m session came back narrow after every restart.
+      const defaultsMod = await import("@/server/defaults");
+      const prefsMod = await import("@/server/session-prefs");
+      const origDefaults = defaultsMod.getDefaults;
+      const origPrefs = prefsMod.getSessionPrefs;
+      (defaultsMod as { getDefaults: () => unknown }).getDefaults = () => ({
+        thinkingLevel: "high",
+        bypassAllPermissions: false,
+        diffStyle: "split",
+        dismissKeyboardOnSend: true,
+        thinkingExpanded: false,
+        modelSlots: { main: "claude-opus-5", mainContext: "1m" },
+      });
+      (prefsMod as { getSessionPrefs: (id: string) => unknown }).getSessionPrefs = () => ({
+        modelSlots: { main: "claude-opus-5" },
+      });
+      try {
+        const ensured = manager.ensureSession("restored-no-size", "/tmp/proj");
+        const s = (manager as any).sessions.get(ensured.info.id)!;
+        expect(ensured.info.contextSize).toBe("1m");
+        expect(s.contextWindowSize).toBe(1_000_000);
+      } finally {
+        (defaultsMod as { getDefaults: () => unknown }).getDefaults = origDefaults;
+        (prefsMod as { getSessionPrefs: (id: string) => unknown }).getSessionPrefs = origPrefs;
+      }
+    });
+
+    it("still prefers the session's own stored size over the app default", async () => {
+      const defaultsMod = await import("@/server/defaults");
+      const prefsMod = await import("@/server/session-prefs");
+      const origDefaults = defaultsMod.getDefaults;
+      const origPrefs = prefsMod.getSessionPrefs;
+      (defaultsMod as { getDefaults: () => unknown }).getDefaults = () => ({
+        thinkingLevel: "high",
+        bypassAllPermissions: false,
+        diffStyle: "split",
+        dismissKeyboardOnSend: true,
+        thinkingExpanded: false,
+        modelSlots: { main: "claude-opus-5", mainContext: "1m" },
+      });
+      (prefsMod as { getSessionPrefs: (id: string) => unknown }).getSessionPrefs = () => ({
+        contextSize: "200k",
+        modelSlots: { main: "claude-opus-5" },
+      });
+      try {
+        const ensured = manager.ensureSession("restored-explicit-200k", "/tmp/proj");
+        expect(ensured.info.contextSize).toBe("200k");
+      } finally {
+        (defaultsMod as { getDefaults: () => unknown }).getDefaults = origDefaults;
+        (prefsMod as { getSessionPrefs: (id: string) => unknown }).getSessionPrefs = origPrefs;
+      }
+    });
+
+    // setModelSlot persists modelSlots alone, so a session whose model was last
+    // changed through the slots editor has no top-level `model` field. Deriving
+    // the thinking level from prefs.model only meant those sessions came back on
+    // the default model's recommended effort rather than their own model's.
+    it("derives the thinking level from the session's own model, not the app default", async () => {
+      const prefsMod = await import("@/server/session-prefs");
+      const orig = prefsMod.getSessionPrefs;
+      // Sonnet 4.6 recommends "medium"; the app default (bare "sonnet" resolves
+      // to Sonnet 5) recommends "xhigh", so the two are distinguishable.
+      (prefsMod as { getSessionPrefs: (id: string) => unknown }).getSessionPrefs = () => ({
+        modelSlots: { main: "claude-sonnet-4-6" },
+      });
+      try {
+        const ensured = manager.ensureSession("restored-slots-only", "/tmp/proj");
+        const s = (manager as any).sessions.get(ensured.info.id)!;
+        expect(s.thinkingLevel).toBe("medium");
       } finally {
         (prefsMod as { getSessionPrefs: (id: string) => unknown }).getSessionPrefs = orig;
       }
@@ -2466,6 +2591,44 @@ describe("SessionManager", () => {
       manager.setModel(session.id, "opus", "200k");
       expect(s.contextWindowSize).toBe(200_000);
     });
+
+    it("follows the session pick for a curated foreign model, catalog figure otherwise", async () => {
+      // Real providers.ts against the throwaway COCKPIT_CONFIG_DIR: one zen
+      // model curated with the 200k/1m choice, one carrying only a catalog
+      // contextLength.
+      const { writeFileSync } = await import("node:fs");
+      const { join } = await import("node:path");
+      writeFileSync(
+        join(process.env.COCKPIT_CONFIG_DIR!, "providers.json"),
+        JSON.stringify([
+          {
+            id: "zen",
+            name: "OpenCode Zen",
+            isBuiltin: true,
+            envVars: {},
+            models: [
+              { modelId: "ds-free", displayName: "ds", effortLevels: [], contextSizes: [], contextLength: 200_000 },
+              { modelId: "kimi", displayName: "kimi", effortLevels: [], contextSizes: [], contextLength: 262_144 },
+            ],
+            enabledModels: ["ds-free", "kimi"],
+            contextSizeOverrides: { "ds-free": ["200k", "1m"] },
+          },
+        ]),
+      );
+
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+
+      // Curated model: the session's 1m pick beats the catalog's 200k figure.
+      manager.setModel(session.id, "zen:ds-free", "1m");
+      expect(s.contextWindowSize).toBe(1_000_000);
+
+      // Uncurated model: the pick is not offered, the catalog figure rules
+      // (setModel resolves the size through the provider's empty contextSizes,
+      // so the stale 1m request cannot leak into the window).
+      manager.setModel(session.id, "zen:kimi", "1m");
+      expect(s.contextWindowSize).toBe(262_144);
+    });
   });
 
   describe("setThinkingLevel", () => {
@@ -3198,6 +3361,42 @@ describe("SessionManager", () => {
       expect(s.queuedMessages).toHaveLength(1);
     });
 
+    it("does not pre-compact after widening the window to 1m", () => {
+      // The reported bug: a session sitting near the 200k ceiling is switched
+      // to a 1m model, and the very first message compacts a session with
+      // 800k of room left, because setModel told the client the new total but
+      // left session.contextUsage on the old one.
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      s.contextUsage = { used: 180_000, total: 200_000 };
+      s.process = { pid: 123 };
+      s.stdin = { write: vi.fn() };
+
+      manager.setModel(session.id, "claude-opus-5", "1m");
+      expect(s.contextUsage.total).toBe(1_000_000);
+      expect(s.contextUsage.used).toBe(180_000);
+
+      const result = manager.sendMessage(session.id, "a normal message");
+      expect(result).toBe(true);
+      expect(s.compacting).toBeFalsy();
+      expect(s.queuedMessages).toHaveLength(0);
+    });
+
+    it("still pre-compacts when the narrower window really is nearly full", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      s.contextUsage = { used: 900_000, total: 1_000_000 };
+      s.process = { pid: 123 };
+      s.stdin = { write: vi.fn() };
+
+      manager.setModel(session.id, "claude-opus-5", "200k");
+      expect(s.contextUsage.total).toBe(200_000);
+
+      const result = manager.sendMessage(session.id, "a normal message");
+      expect(result).toBe(true);
+      expect(s.compacting).toBe(true);
+    });
+
     it("pre-compact spawns process when no stdin available", () => {
       const session = manager.createSession("/tmp");
       const s = (manager as any).sessions.get(session.id)!;
@@ -3407,6 +3606,145 @@ describe("SessionManager", () => {
   });
 
   describe("applyProcessedResult branches", () => {
+    it("bypass auto-approves stored permissions, interactiveOnly ones included (user decision)", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      s.bypassAllPermissions = true;
+
+      const base = {
+        intermediateMessages: [],
+        emit: [],
+        systemMessages: [],
+        errors: [],
+        statusChange: null,
+        compactDone: false,
+        snapshot: null,
+      };
+
+      (manager as any).applyProcessedResult(s, session.id, {
+        ...base,
+        permissionActions: [
+          { type: "store", requestId: "req-normal", toolName: "Write", rawToolInput: {} },
+          { type: "store", requestId: "tui-1", toolName: "Write", rawToolInput: {}, interactiveOnly: true },
+        ],
+      });
+      // Both swallowed by the bypass auto-approve: bypass on is the user's
+      // standing yes, TUI-only dialogs included (answered via PTY keystrokes
+      // in the respond path). Neither surfaces to the UI.
+      expect(s.pendingRequests.has("req-normal")).toBe(false);
+      expect(s.pendingRequests.has("tui-1")).toBe(false);
+    });
+
+    // A reloaded page has no task state: the transcript records an async
+    // agent's tool use as done the moment it launches, so the client judged a
+    // running agent finished until the next Stop or subagent hook arrived with a
+    // real list. That was the agent card's spinner vanishing for ~10s and coming
+    // back. The session now keeps the last reported list for replay on connect.
+    describe("background task memory", () => {
+      const base = {
+        intermediateMessages: [],
+        emit: [],
+        systemMessages: [],
+        errors: [],
+        statusChange: null,
+        compactDone: false,
+        snapshot: null,
+        permissionActions: [],
+      };
+      const task = (taskId: string, status: "running" | "completed") => ({
+        taskId,
+        toolUseId: taskId,
+        status,
+        title: "general-purpose",
+        description: "work",
+      });
+
+      it("remembers a synced list, and a later sync replaces it", () => {
+        const session = manager.createSession("/tmp");
+        const s = (manager as any).sessions.get(session.id)!;
+
+        (manager as any).applyProcessedResult(s, session.id, {
+          ...base,
+          emit: [{ type: "task_sync", tasks: [task("a1", "running")] }],
+        });
+        expect(manager.getBackgroundTasks(session.id)).toEqual([task("a1", "running")]);
+
+        // An empty sync is how the CLI reports that nothing is running.
+        (manager as any).applyProcessedResult(s, session.id, { ...base, emit: [{ type: "task_sync", tasks: [] }] });
+        expect(manager.getBackgroundTasks(session.id)).toEqual([]);
+      });
+
+      it("upserts a single task_update without dropping the others", () => {
+        const session = manager.createSession("/tmp");
+        const s = (manager as any).sessions.get(session.id)!;
+
+        (manager as any).applyProcessedResult(s, session.id, {
+          ...base,
+          emit: [{ type: "task_sync", tasks: [task("a1", "running"), task("a2", "running")] }],
+        });
+        (manager as any).applyProcessedResult(s, session.id, {
+          ...base,
+          emit: [{ type: "task_update", taskInfo: task("a2", "completed") }],
+        });
+
+        const held = manager.getBackgroundTasks(session.id);
+        expect(held).toHaveLength(2);
+        expect(held.find((t) => t.taskId === "a1")?.status).toBe("running");
+        expect(held.find((t) => t.taskId === "a2")?.status).toBe("completed");
+      });
+
+      it("adds a task_update for an id it has not seen", () => {
+        const session = manager.createSession("/tmp");
+        const s = (manager as any).sessions.get(session.id)!;
+
+        (manager as any).applyProcessedResult(s, session.id, {
+          ...base,
+          emit: [{ type: "task_update", taskInfo: task("fresh", "running") }],
+        });
+        expect(manager.getBackgroundTasks(session.id)).toEqual([task("fresh", "running")]);
+      });
+
+      it("stores a progress update as a running task carrying the activity line", () => {
+        const session = manager.createSession("/tmp");
+        const s = (manager as any).sessions.get(session.id)!;
+
+        (manager as any).applyProcessedResult(s, session.id, {
+          ...base,
+          emit: [{ type: "task_update", taskInfo: { taskId: "a1", toolUseId: "a1", status: "progress", description: "reading files" } }],
+        });
+
+        // Mirrors what ws-handler sends live, so a replayed task is identical to
+        // one an already-connected client received.
+        const [held] = manager.getBackgroundTasks(session.id);
+        expect(held.status).toBe("running");
+        expect(held.activity).toBe("reading files");
+        expect(held.title).toBeUndefined();
+      });
+
+      it("returns an empty list for a session it does not hold", () => {
+        expect(manager.getBackgroundTasks("nope")).toEqual([]);
+      });
+    });
+
+    it("without bypass, an interactiveOnly permission surfaces as a real dialog", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      s.bypassAllPermissions = false;
+
+      (manager as any).applyProcessedResult(s, session.id, {
+        intermediateMessages: [],
+        emit: [],
+        systemMessages: [],
+        errors: [],
+        statusChange: null,
+        compactDone: false,
+        snapshot: null,
+        permissionActions: [{ type: "store", requestId: "tui-2", toolName: "Write", rawToolInput: {}, interactiveOnly: true }],
+      });
+      expect(s.pendingRequests.has("tui-2")).toBe(true);
+      expect(s.pendingRequests.get("tui-2")?.type).toBe("permission");
+    });
+
     it("handles permission mode change to plan", () => {
       const session = manager.createSession("/tmp");
       const s = (manager as any).sessions.get(session.id)!;
@@ -4790,6 +5128,302 @@ describe("SessionManager", () => {
       expect(pending.configProposal).toBeDefined();
       expect(pending.configProposal.action).toBe("run");
       expect(pending.configProposal.domain).toBe("job");
+    });
+
+    it("labels a run_job proposal with the job name, not its uuid", () => {
+      mockJobs["7c9e-4f21-uuid"] = { name: "Weekend Things Todo" };
+      const session = manager.createSession("/tmp", undefined, { cockpitAgent: true });
+      const s = (manager as any).sessions.get(session.id);
+
+      (manager as any).applyProcessedResult(s, session.id, {
+        permissionActions: [
+          {
+            type: "store" as const,
+            toolName: "mcp__cockpit-config__run_job",
+            requestId: "req-run-named",
+            toolInput: JSON.stringify({ id: "7c9e-4f21-uuid" }),
+            rawToolInput: { id: "7c9e-4f21-uuid" },
+          },
+        ],
+        errors: [],
+        compactDone: false,
+        emit: [],
+        statusChange: undefined,
+        snapshot: null,
+        intermediateMessages: [],
+        systemMessages: [],
+      });
+
+      expect(s.pendingRequests.get("req-run-named").configProposal.displayName).toBe("Weekend Things Todo");
+    });
+
+    it("sends WebFetch to the ordinary permission prompt instead of denying it", () => {
+      const session = manager.createSession("/tmp", undefined, { cockpitAgent: true });
+      const s = (manager as any).sessions.get(session.id);
+      const respondToPermission = vi.spyOn(manager, "respondToPermission" as any);
+
+      (manager as any).applyProcessedResult(s, session.id, {
+        permissionActions: [
+          {
+            type: "store" as const,
+            toolName: "WebFetch",
+            requestId: "req-fetch",
+            toolInput: JSON.stringify({ url: "https://example.test/clear-sky" }),
+            rawToolInput: { url: "https://example.test/clear-sky" },
+          },
+        ],
+        errors: [],
+        compactDone: false,
+        emit: [],
+        statusChange: undefined,
+        snapshot: null,
+        intermediateMessages: [],
+        systemMessages: [],
+      });
+
+      // Not auto-denied and not auto-approved: the user sees the URL and decides.
+      expect(respondToPermission).not.toHaveBeenCalled();
+      const pending = s.pendingRequests.get("req-fetch");
+      expect(pending).toBeDefined();
+      expect(pending.type).toBe("permission");
+      // No config proposal card: this is a tool call, not a config change.
+      expect(pending.configProposal).toBeUndefined();
+      expect(pending.toolInput).toContain("https://example.test/clear-sky");
+    });
+
+    it("prompts for get_job_transcript rather than auto-approving it like the other reads", () => {
+      const session = manager.createSession("/tmp", undefined, { cockpitAgent: true });
+      const s = (manager as any).sessions.get(session.id);
+      const respondToPermission = vi.spyOn(manager, "respondToPermission" as any);
+
+      (manager as any).applyProcessedResult(s, session.id, {
+        permissionActions: [
+          {
+            type: "store" as const,
+            toolName: "mcp__cockpit-config__get_job_transcript",
+            requestId: "req-transcript",
+            toolInput: JSON.stringify({ id: "job-1" }),
+            rawToolInput: { id: "job-1" },
+          },
+        ],
+        errors: [],
+        compactDone: false,
+        emit: [],
+        statusChange: undefined,
+        snapshot: null,
+        intermediateMessages: [],
+        systemMessages: [],
+      });
+
+      expect(respondToPermission).not.toHaveBeenCalled();
+      expect(s.pendingRequests.get("req-transcript")?.type).toBe("permission");
+    });
+
+    it("keeps auto-approving the structured config reads", () => {
+      const session = manager.createSession("/tmp", undefined, { cockpitAgent: true });
+      const s = (manager as any).sessions.get(session.id);
+      const respondToPermission = vi.spyOn(manager, "respondToPermission" as any);
+
+      (manager as any).applyProcessedResult(s, session.id, {
+        permissionActions: [
+          {
+            type: "store" as const,
+            toolName: "mcp__cockpit-config__get_job",
+            requestId: "req-getjob",
+            toolInput: JSON.stringify({ id: "job-1" }),
+            rawToolInput: { id: "job-1" },
+          },
+        ],
+        errors: [],
+        compactDone: false,
+        emit: [],
+        statusChange: undefined,
+        snapshot: null,
+        intermediateMessages: [],
+        systemMessages: [],
+      });
+
+      expect(respondToPermission).toHaveBeenCalledWith(session.id, "req-getjob", true, { id: "job-1" });
+      expect(s.pendingRequests.has("req-getjob")).toBe(false);
+    });
+
+    it("lets a bypassed assistant session skip the tool prompts", () => {
+      const session = manager.createSession("/tmp", undefined, { cockpitAgent: true });
+      const s = (manager as any).sessions.get(session.id);
+      s.bypassAllPermissions = true;
+      const respondToPermission = vi.spyOn(manager, "respondToPermission" as any);
+
+      (manager as any).applyProcessedResult(s, session.id, {
+        permissionActions: [
+          {
+            type: "store" as const,
+            toolName: "WebFetch",
+            requestId: "req-fetch-bypass",
+            toolInput: JSON.stringify({ url: "https://example.test/x" }),
+            rawToolInput: { url: "https://example.test/x" },
+          },
+        ],
+        errors: [],
+        compactDone: false,
+        emit: [],
+        statusChange: undefined,
+        snapshot: null,
+        intermediateMessages: [],
+        systemMessages: [],
+      });
+
+      expect(respondToPermission).toHaveBeenCalledWith(session.id, "req-fetch-bypass", true, { url: "https://example.test/x" });
+      expect(s.pendingRequests.has("req-fetch-bypass")).toBe(false);
+    });
+
+    it("still raises the approval card for a config write when bypass is on", () => {
+      const session = manager.createSession("/tmp", undefined, { cockpitAgent: true });
+      const s = (manager as any).sessions.get(session.id);
+      s.bypassAllPermissions = true;
+      const respondToPermission = vi.spyOn(manager, "respondToPermission" as any);
+
+      (manager as any).applyProcessedResult(s, session.id, {
+        permissionActions: [
+          {
+            type: "store" as const,
+            toolName: "mcp__cockpit-config__delete_job",
+            requestId: "req-delete-bypass",
+            toolInput: JSON.stringify({ id: "job-1" }),
+            rawToolInput: { id: "job-1" },
+          },
+        ],
+        errors: [],
+        compactDone: false,
+        emit: [],
+        statusChange: undefined,
+        snapshot: null,
+        intermediateMessages: [],
+        systemMessages: [],
+      });
+
+      // The whole point of the split: bypass covers tool calls, never a change
+      // to the user's own configuration.
+      expect(respondToPermission).not.toHaveBeenCalled();
+      expect(s.pendingRequests.get("req-delete-bypass")?.configProposal?.action).toBe("delete");
+    });
+
+    it("still denies a tool that is neither allowed nor prompted", () => {
+      const session = manager.createSession("/tmp", undefined, { cockpitAgent: true });
+      const s = (manager as any).sessions.get(session.id);
+      const respondToPermission = vi.spyOn(manager, "respondToPermission" as any);
+
+      (manager as any).applyProcessedResult(s, session.id, {
+        permissionActions: [
+          {
+            type: "store" as const,
+            toolName: "Bash",
+            requestId: "req-bash",
+            toolInput: JSON.stringify({ command: "curl evil.test" }),
+            rawToolInput: { command: "curl evil.test" },
+          },
+        ],
+        errors: [],
+        compactDone: false,
+        emit: [],
+        statusChange: undefined,
+        snapshot: null,
+        intermediateMessages: [],
+        systemMessages: [],
+      });
+
+      expect(respondToPermission).toHaveBeenCalledWith(
+        session.id,
+        "req-bash",
+        false,
+        undefined,
+        undefined,
+        "This tool is not available in the cockpit assistant",
+      );
+    });
+
+    it("carries notification provider names on the proposal so the card is not a uuid", () => {
+      const session = manager.createSession("/tmp", undefined, { cockpitAgent: true });
+      const s = (manager as any).sessions.get(session.id);
+
+      (manager as any).applyProcessedResult(s, session.id, {
+        permissionActions: [
+          {
+            type: "store" as const,
+            toolName: "mcp__cockpit-config__update_job",
+            requestId: "req-notify",
+            toolInput: JSON.stringify({ id: "job-1", notifyProviders: ["2fa2259e-74a8-43b8-8b58-b575cb10b68a"] }),
+            rawToolInput: { id: "job-1", notifyProviders: ["2fa2259e-74a8-43b8-8b58-b575cb10b68a"] },
+          },
+        ],
+        errors: [],
+        compactDone: false,
+        emit: [],
+        statusChange: undefined,
+        snapshot: null,
+        intermediateMessages: [],
+        systemMessages: [],
+      });
+
+      const proposal = s.pendingRequests.get("req-notify").configProposal;
+      expect(proposal.idNames).toEqual({ "2fa2259e-74a8-43b8-8b58-b575cb10b68a": "Telegram (personal)" });
+      // Only the referenced provider: approving a job change should not ship
+      // the user's whole notification-provider list to the client.
+      expect(proposal.idNames["unused-provider-id"]).toBeUndefined();
+    });
+
+    it("omits the name map when the arguments reference no provider", () => {
+      const session = manager.createSession("/tmp", undefined, { cockpitAgent: true });
+      const s = (manager as any).sessions.get(session.id);
+
+      (manager as any).applyProcessedResult(s, session.id, {
+        permissionActions: [
+          {
+            type: "store" as const,
+            toolName: "mcp__cockpit-config__update_job",
+            requestId: "req-plain",
+            toolInput: JSON.stringify({ id: "job-1", name: "renamed" }),
+            rawToolInput: { id: "job-1", name: "renamed" },
+          },
+        ],
+        errors: [],
+        compactDone: false,
+        emit: [],
+        statusChange: undefined,
+        snapshot: null,
+        intermediateMessages: [],
+        systemMessages: [],
+      });
+
+      expect(s.pendingRequests.get("req-plain").configProposal.idNames).toBeUndefined();
+    });
+
+    it("labels a stop_job proposal, which previously showed a bare uuid", () => {
+      mockJobs["stop-me-uuid"] = { name: "Tech roundup" };
+      const session = manager.createSession("/tmp", undefined, { cockpitAgent: true });
+      const s = (manager as any).sessions.get(session.id);
+
+      (manager as any).applyProcessedResult(s, session.id, {
+        permissionActions: [
+          {
+            type: "store" as const,
+            toolName: "mcp__cockpit-config__stop_job",
+            requestId: "req-stop-named",
+            toolInput: JSON.stringify({ id: "stop-me-uuid" }),
+            rawToolInput: { id: "stop-me-uuid" },
+          },
+        ],
+        errors: [],
+        compactDone: false,
+        emit: [],
+        statusChange: undefined,
+        snapshot: null,
+        intermediateMessages: [],
+        systemMessages: [],
+      });
+
+      const proposal = s.pendingRequests.get("req-stop-named").configProposal;
+      expect(proposal.action).toBe("stop");
+      expect(proposal.displayName).toBe("Tech roundup");
     });
   });
 });

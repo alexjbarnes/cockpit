@@ -30,6 +30,12 @@ export interface PtyRuntimeOptions {
   thinkingEnabled?: boolean;
   /** Optional debug callback for raw PTY data chunks. */
   onPtyData?: (chunk: string) => void;
+  /** The permission mode the spawn asked for (--permission-mode). Hook
+   *  payloads report the CLI's ACTUAL mode; when a requested bypass does not
+   *  take effect the two diverge, which the runtime records in the debug log
+   *  (see noteModeDivergence) because it explains a session raising prompts
+   *  while the UI reports bypass as on. */
+  expectedPermissionMode?: "default" | "plan" | "bypassPermissions";
 }
 
 /**
@@ -45,11 +51,55 @@ export interface PtyRuntimeOptions {
 // biome-ignore lint/suspicious/noControlCharactersInRegex: strip ANSI escape sequences
 const ANSI_RE = /\x1b\[[0-9;]*[a-zA-Z]/g;
 
+function stringOrEmpty(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
 export class PtyRuntime {
   private readonly opts: PtyRuntimeOptions;
   private pty: PtySession | null = null;
   private settingsPath: string | null = null;
-  private readonly pendingPermissions = new Map<string, (decision: PermissionDecision) => void>();
+  /** Hook requests awaiting a decision, by request id. The tool name rides
+   *  along so onNotification can tell whether a rendered dialog belongs to a
+   *  request the user already has a card for. */
+  private readonly pendingPermissions = new Map<string, { resolve: (decision: PermissionDecision) => void; toolName: string }>();
+  /** Synthetic requests for TUI-only dialogs (see onNotification): answered
+   *  with keystrokes into the PTY, not through the hook response channel. */
+  private readonly pendingTuiDialogs = new Set<string>();
+  private modeDivergenceWarned = false;
+  private lastPreToolUse: { tool: string; input?: Record<string, unknown> } | null = null;
+  /**
+   * Background work still running, by task id, taken from the CLI's own
+   * `background_tasks` list rather than inferred from the Subagent hooks.
+   *
+   * SubagentStop is not "the agent finished". Measured against the real CLI:
+   * SubagentStop fires ~90ms after SubagentStart, right after the parent's
+   * message_done, while the SAME payload's background_tasks still reports the
+   * agent running; the genuine completion arrives much later as a task list
+   * that no longer contains it. Live, the opposite failure: the launched
+   * agent's own stop never arrived at all, and stops turned up for ids that
+   * never started (the CLI's internal agents report on the parent session). So
+   * neither counting stops nor pairing their ids can track agent lifetime.
+   * background_tasks can, and does — it is what the task cards already use.
+   *
+   * SubagentStart still adds optimistically, so the indicator appears the
+   * moment an agent launches instead of waiting for the parent's Stop to carry
+   * the first list.
+   */
+  private readonly runningTasks = new Set<string>();
+  /**
+   * Whether the parent's turn has ended (Stop seen, no new prompt yet).
+   *
+   * The status gate below applies only in that window. A subagent's PreToolUse
+   * is indistinguishable from the main thread's — probed against the real CLI:
+   * same session_id, same transcript_path, no agent id — and every PreToolUse
+   * emits `__tool_use_start`, which drives the session to "running". That is
+   * correct mid-turn and wrong once the turn has ended, where it restarted the
+   * spinner on a session idle and waiting for the user. Keying the gate on the
+   * turn boundary means a user who sends a new message while an agent is still
+   * working still gets a spinner for their own turn.
+   */
+  private turnEnded = false;
   private exited = false;
   private cleaned = false;
   /** Resolver armed by deliverInitialPrompt; fired when UserPromptSubmit confirms the first prompt landed. */
@@ -274,10 +324,12 @@ export class PtyRuntime {
   interrupt(): void {
     if (!this.pty) return;
     this.pty.sendKey("\x1b");
-    for (const [, resolve] of this.pendingPermissions) {
-      resolve({ behavior: "deny", message: "interrupted" });
+    for (const [, pending] of this.pendingPermissions) {
+      pending.resolve({ behavior: "deny", message: "interrupted" });
     }
     this.pendingPermissions.clear();
+    // The Esc above dismissed any rendered TUI dialog with it.
+    this.pendingTuiDialogs.clear();
   }
 
   resize(cols: number, rows: number): void {
@@ -291,17 +343,92 @@ export class PtyRuntime {
       this.pty = null;
     }
     // Resolve any in-flight permission promises so the bridge subprocess can exit.
-    for (const [, resolve] of this.pendingPermissions) {
-      resolve({ behavior: "deny", message: "session ended" });
+    for (const [, pending] of this.pendingPermissions) {
+      pending.resolve({ behavior: "deny", message: "session ended" });
     }
     this.pendingPermissions.clear();
+    this.pendingTuiDialogs.clear();
+    // The process is going away, so nothing it launched is still running.
+    this.runningTasks.clear();
     await this.cleanup();
+  }
+
+  /**
+   * Replace the running-task set from a payload's `background_tasks`, the CLI's
+   * own account of what is still working. Payloads that carry it (Stop,
+   * SubagentStop) are authoritative, including when the list is empty — an
+   * empty list is how a finished agent is reported.
+   */
+  private syncRunningTasks(payload: Record<string, unknown>): void {
+    const raw = payload.background_tasks;
+    if (!Array.isArray(raw)) return;
+    const running = new Set<string>();
+    for (const entry of raw as { id?: unknown; status?: unknown }[]) {
+      const id = stringOrEmpty(entry?.id);
+      if (id && entry?.status === "running") running.add(id);
+    }
+    const before = this.runningTasks.size;
+    this.runningTasks.clear();
+    for (const id of running) this.runningTasks.add(id);
+    this.reportRunningTasks(before);
+  }
+
+  /**
+   * Report how much background work is running, so a session that is idle and
+   * accepting input can still show that work it launched is going on. Emits
+   * only when the count actually moved.
+   */
+  private reportRunningTasks(previous: number): void {
+    if (this.runningTasks.size === previous) return;
+    this.emit([{ type: "system_message", text: `__agents::${this.runningTasks.size}` }]);
+  }
+
+  /**
+   * The CLI runs in a different permission mode than the spawn asked for —
+   * seen when a requested bypass does not take effect (the CLI reports
+   * "Bypass permissions mode was disabled by settings").
+   *
+   * Logged once per process, and deliberately not shown in the chat: cockpit
+   * answers the prompts that result, so the divergence changes nothing the user
+   * needs to act on, and a banner on every affected session was just noise.
+   * The detection stays because it is the one signal that explains a session
+   * raising prompts while the UI reports bypass as on.
+   */
+  private noteModeDivergence(actualMode: string, source: string): void {
+    if (this.modeDivergenceWarned) return;
+    this.modeDivergenceWarned = true;
+    logDiag(this.opts.sessionId, "pty:permission-mode-divergence", {
+      expected: this.opts.expectedPermissionMode,
+      actual: actualMode,
+      source,
+    });
+  }
+
+  /** Compare a hook payload's reported permission_mode against the spawn's request. */
+  private checkPayloadMode(payload: Record<string, unknown>, source: string): void {
+    if (this.opts.expectedPermissionMode !== "bypassPermissions") return;
+    const actual = payload.permission_mode;
+    if (typeof actual === "string" && actual !== "bypassPermissions") {
+      this.noteModeDivergence(actual, source);
+    }
   }
 
   /** Called by SessionManager.respondToPermission when this session is on the pty runtime. */
   notifyPermissionDecision(requestId: string, decision: PermissionDecision): boolean {
-    const resolver = this.pendingPermissions.get(requestId);
-    if (!resolver) {
+    // A TUI-only dialog has no hook response channel — the CLI refused the
+    // hook's allow (frontier models require interactive confirmation for
+    // self-modifying writes) and is sitting on a rendered dialog. The only
+    // way to answer is keystrokes into the PTY cockpit owns: "1" selects the
+    // dialog's Yes option, Esc cancels it.
+    if (this.pendingTuiDialogs.has(requestId)) {
+      this.pendingTuiDialogs.delete(requestId);
+      logDiag(this.opts.sessionId, "pty:tui-dialog-decision", { requestId, behavior: decision.behavior });
+      if (!this.pty) return false;
+      this.pty.sendKey(decision.behavior === "allow" ? "1" : "\x1b");
+      return true;
+    }
+    const pending = this.pendingPermissions.get(requestId);
+    if (!pending) {
       logDiag(this.opts.sessionId, "pty:permission-decision-unmatched", { requestId, behavior: decision.behavior });
       return false;
     }
@@ -311,7 +438,7 @@ export class PtyRuntime {
       behavior: decision.behavior,
       pending: this.pendingPermissions.size,
     });
-    resolver(decision);
+    pending.resolve(decision);
     return true;
   }
 
@@ -325,7 +452,18 @@ export class PtyRuntime {
         const toolUseId = typeof payload.tool_use_id === "string" ? payload.tool_use_id.slice(0, 12) : "none";
         logDiag(this.opts.sessionId, "hook:PreToolUse", { tool: toolName, toolUseId });
         console.log(`[pty-runtime] PreToolUse: tool=${toolName} cli_session=${cliSession} tool_use_id=${toolUseId}`);
-        this.emit(translateHookEvent("PreToolUse", payload));
+        this.checkPayloadMode(payload, "PreToolUse");
+        // Remembered so a later TUI-only permission dialog (see onNotification)
+        // can name the tool it is actually gating.
+        this.lastPreToolUse = { tool: toolName, input: payload.tool_input as Record<string, unknown> | undefined };
+        let events = translateHookEvent("PreToolUse", payload);
+        if (this.turnEnded && this.runningTasks.size > 0) {
+          // The turn is over and background work is still going, so this tool
+          // call is that work's, not the user's turn resuming. Keep the tool
+          // card, drop only the status signal (see turnEnded).
+          events = events.filter((e) => !(e.type === "system_message" && e.text === "__tool_use_start"));
+        }
+        this.emit(events);
       },
       onPostToolUse: (payload) => {
         this.cancelErrorDebounce();
@@ -350,6 +488,12 @@ export class PtyRuntime {
           payloadKeys: Object.keys(payload),
         });
         console.log(`[pty-runtime] Stop hook received for session ${this.opts.sessionId.slice(0, 8)}`);
+        // The turn has ended: from here a tool call belongs to background work,
+        // not the user's turn. The same payload carries the authoritative list
+        // of what is still running.
+        this.turnEnded = true;
+        this.syncRunningTasks(payload);
+        logDiag(this.opts.sessionId, "pty:turn-ended", { runningTasks: this.runningTasks.size });
         const events = translateHookEvent("Stop", payload);
         this.emit(events);
       },
@@ -366,8 +510,24 @@ export class PtyRuntime {
       onUserPromptSubmit: (payload) => {
         this.cancelErrorDebounce();
         this.ptyOutputBuffer = "";
-        logDiag(this.opts.sessionId, "pty:hook-user-prompt-submit", { armed: !!this.promptAccepted });
+        logDiag(this.opts.sessionId, "pty:hook-user-prompt-submit", {
+          armed: !!this.promptAccepted,
+          runningTasks: this.runningTasks.size,
+        });
+        this.checkPayloadMode(payload, "UserPromptSubmit");
         this.promptAccepted?.();
+        // A parent turn is starting, so the gate closes: this turn's tool calls
+        // are the user's, whatever background work is still going. The CLI
+        // submits a prompt of its own when it resumes the parent after a
+        // launched agent finishes, which is why this is also the signal that the
+        // session is working again — a resumed turn that answers in text alone
+        // makes no tool call, so `__tool_use_start` never arrives and the
+        // session would sit idle while it typed.
+        //
+        // The running-task count is NOT cleared here. Background work outlives
+        // the turn that launched it, and the user can send a message while it
+        // runs; the next Stop re-syncs the truth either way.
+        this.turnEnded = false;
         this.emit(translateHookEvent("UserPromptSubmit", payload));
       },
       onUserPromptExpansion: (payload) => {
@@ -388,6 +548,14 @@ export class PtyRuntime {
         const desc = typeof payload.description === "string" ? payload.description.slice(0, 80) : "";
         console.log(`[pty-runtime] SubagentStart: cli_session=${cliSession} tool_use_id=${toolUseId} type=${agentType} desc="${desc}"`);
         console.log(`[pty-runtime] SubagentStart full payload keys: ${Object.keys(payload).join(", ")}`);
+        // Optimistic: the first authoritative list arrives with the parent's
+        // Stop, and waiting for it would leave the indicator dark while an
+        // agent was plainly launching.
+        const startedAgent = stringOrEmpty(payload.agent_id);
+        const beforeStart = this.runningTasks.size;
+        if (startedAgent) this.runningTasks.add(startedAgent);
+        this.reportRunningTasks(beforeStart);
+        logDiag(this.opts.sessionId, "pty:subagent-start", { agentId: startedAgent || null, running: this.runningTasks.size });
         this.emit(translateHookEvent("SubagentStart", payload));
       },
       onSubagentStop: (payload) => {
@@ -398,6 +566,16 @@ export class PtyRuntime {
         const agentType = typeof payload.agent_type === "string" ? payload.agent_type : "unknown";
         console.log(`[pty-runtime] SubagentStop: cli_session=${cliSession} tool_use_id=${toolUseId} type=${agentType}`);
         console.log(`[pty-runtime] SubagentStop full payload keys: ${Object.keys(payload).join(", ")}`);
+        // The stop itself decides nothing: it fires ~90ms after the start while
+        // this very payload's background_tasks still reports the agent running,
+        // and stops also arrive for ids that never started here. Only the list
+        // counts.
+        this.syncRunningTasks(payload);
+        logDiag(this.opts.sessionId, "pty:subagent-stop", {
+          agentId: stringOrEmpty(payload.agent_id) || null,
+          running: this.runningTasks.size,
+          hadList: Array.isArray(payload.background_tasks),
+        });
         this.emit(translateHookEvent("SubagentStop", payload));
       },
       onPreCompact: (payload) => {
@@ -417,6 +595,43 @@ export class PtyRuntime {
       onNotification: (payload) => {
         this.cancelErrorDebounce();
         this.emit(translateHookEvent("Notification", payload));
+        // "Claude needs your permission" arriving OUTSIDE the PermissionRequest
+        // hook flow means the CLI rendered an interactive-only dialog — on
+        // frontier models a hook allow does not satisfy self-modification
+        // writes (.claude skills, dotfiles), and the session hangs invisibly.
+        // Surface it as a real permission request; the decision comes back via
+        // notifyPermissionDecision, which answers with PTY keystrokes.
+        const message = typeof payload.message === "string" ? payload.message : "";
+        if (/needs your permission/i.test(message)) {
+          const tool = this.lastPreToolUse?.tool ?? "unknown";
+          // The CLI notifies for a dialog it rendered itself AND for one it is
+          // waiting on cockpit's hook response for. Rescuing the second kind
+          // raises a second request for the same tool, and because it carries a
+          // different id the client's per-id dedupe can't collapse it — the user
+          // gets two identical cards (seen with AskUserQuestion). Worse, only the
+          // hook request can actually be answered: a synthetic one is answered
+          // with a "1" keystroke, which for a question card blind-selects the
+          // first option. A still-pending hook request is proof the CLI has a
+          // channel back, so leave that card alone. Once it has been answered,
+          // a notification is the genuine article and gets rescued as before.
+          if ([...this.pendingPermissions.values()].some((p) => p.toolName === tool)) {
+            logDiag(this.opts.sessionId, "pty:tui-dialog-skipped-hook-pending", { tool });
+            return;
+          }
+          const requestId = `tui-${newPermissionRequestId()}`;
+          this.pendingTuiDialogs.add(requestId);
+          logDiag(this.opts.sessionId, "pty:tui-dialog-detected", { requestId, lastTool: this.lastPreToolUse?.tool ?? null });
+          this.emit([
+            {
+              type: "permission_request",
+              requestId,
+              toolName: tool,
+              toolInput: this.lastPreToolUse?.input ? JSON.stringify(this.lastPreToolUse.input) : "",
+              rawToolInput: this.lastPreToolUse?.input,
+              interactiveOnly: true,
+            },
+          ]);
+        }
       },
       onPermissionRequest: (payload) => this.handlePermissionRequest(payload),
     };
@@ -426,6 +641,9 @@ export class PtyRuntime {
     const requestId = newPermissionRequestId();
     const toolName = typeof payload.tool_name === "string" ? payload.tool_name : "unknown";
     const toolInput = payload.tool_input as Record<string, unknown> | undefined;
+    // A PermissionRequest under an intended bypass is itself divergence — a
+    // CLI genuinely in bypass mode never consults this hook.
+    this.checkPayloadMode(payload, "PermissionRequest");
 
     const event: ParsedEvent = {
       type: "permission_request",
@@ -437,7 +655,7 @@ export class PtyRuntime {
 
     logDiag(this.opts.sessionId, "pty:permission-request", { requestId, toolName });
     return new Promise<PermissionDecision>((resolve) => {
-      this.pendingPermissions.set(requestId, resolve);
+      this.pendingPermissions.set(requestId, { resolve, toolName });
       try {
         this.opts.onEvents([event]);
       } catch (err) {
@@ -489,6 +707,16 @@ export class PtyRuntime {
     }
     // biome-ignore lint/suspicious/noControlCharactersInRegex: strip terminal control chars
     const clean = this.ptyOutputBuffer.replace(ANSI_RE, "").replace(/[\x00-\x1f]/g, "");
+
+    // The CLI announces an overridden bypass in its boot banner before any
+    // hook fires — earliest possible detection of the divergence.
+    if (
+      !this.modeDivergenceWarned &&
+      this.opts.expectedPermissionMode === "bypassPermissions" &&
+      /Bypass permissions mode was disabled by settings/i.test(clean)
+    ) {
+      this.noteModeDivergence("default", "boot-banner");
+    }
 
     // A 1M-context request on an account without usage credits (Sonnet 4.6):
     // the CLI prints this and the turn fails. It carries no HTTP code, so the

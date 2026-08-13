@@ -12,14 +12,14 @@ interface ConfigProposalCardProps {
 }
 
 export function ConfigProposalCard({ permission, onRespond }: ConfigProposalCardProps) {
-  const { domain, action } = permission.configProposal || {};
+  const { domain, action, idNames } = permission.configProposal || {};
 
   const display = useMemo(() => {
     if (domain && action && permission.input) {
       try {
         const parsed = JSON.parse(permission.input);
         if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
-          return formatConfigChange(domain, action, parsed);
+          return formatConfigChange(domain, action, parsed, idNames);
         }
       } catch {
         // fall through to raw fallback
@@ -33,7 +33,7 @@ export function ConfigProposalCard({ permission, onRespond }: ConfigProposalCard
       title: "Configuration change",
       rows: [{ label: "Change", value: permission.input || "", block: false }],
     };
-  }, [domain, action, permission.input]);
+  }, [domain, action, permission.input, idNames]);
 
   const { displayName } = permission.configProposal || {};
   const title = displayName ? `${display.title}: ${displayName}` : display.title;

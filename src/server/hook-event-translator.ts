@@ -11,7 +11,7 @@ import type { HookEventName } from "./hook-router";
  * status tracking, permission request bookkeeping, and emission.
  *
  * Returns an empty array for events that don't map to a ParsedEvent
- * (e.g. UserPromptSubmit, which only affects status).
+ * (e.g. UserPromptExpansion, which only confirms a prompt landed).
  */
 export function translateHookEvent(eventName: HookEventName, payload: Record<string, unknown>): ParsedEvent[] {
   switch (eventName) {
@@ -35,7 +35,14 @@ export function translateHookEvent(eventName: HookEventName, payload: Record<str
       return translatePreCompact(payload);
     case "PostCompact":
       return translatePostCompact(payload);
+    // A prompt submission opens a parent turn, so the session is working from
+    // here until its Stop. The CLI submits one itself when it resumes the
+    // parent after a launched agent finishes; without this, a resumed turn that
+    // replies in text alone never emitted anything that marked the session
+    // running, and the in-progress indicator stayed off until it happened to
+    // call a tool.
     case "UserPromptSubmit":
+      return [{ type: "system_message", text: "__turn_start" }];
     case "UserPromptExpansion":
       return [];
   }
@@ -175,7 +182,14 @@ function translateSubagentStart(payload: Record<string, unknown>): ParsedEvent[]
   // every agent in a session used to collide onto one entry and the first
   // completion cleared them all. SubagentStart carries no description, so the
   // agent type stands in until the tool use supplies one.
-  const agentId = stringOr(payload.agent_id, "") || uuidv4();
+  // No uuid fallback: taskId doubles as the transcript lookup key (the
+  // `agent-<id>.jsonl` suffix), so a synthesised id is one that can never
+  // match a meta sidecar — it produced a card permanently reporting no
+  // transcript while the file sat on disk. An agent id is always present in
+  // practice; dropping the event is better than emitting an uncorrelatable
+  // card.
+  const agentId = stringOr(payload.agent_id, "");
+  if (!agentId) return [];
   const agentType = stringOr(payload.agent_type, "");
   const description = stringOr(payload.description, "");
   return [
@@ -193,7 +207,10 @@ function translateSubagentStart(payload: Record<string, unknown>): ParsedEvent[]
 }
 
 function translateSubagentStop(payload: Record<string, unknown>): ParsedEvent[] {
-  const agentId = stringOr(payload.agent_id, "") || uuidv4();
+  // Same reasoning as translateSubagentStart, but the sibling task sync below
+  // is still worth emitting without an agent id.
+  const agentId = stringOr(payload.agent_id, "");
+  if (!agentId) return translateBackgroundTasks(payload);
   const agentType = stringOr(payload.agent_type, "");
   const lastMessage = stringOr(payload.last_assistant_message, "");
   const description = stringOr(payload.description, "");

@@ -43,7 +43,22 @@ Each job has an explicit allowlist. Tools are listed by name, and Bash can be re
 - `Read`, `Write`, `Edit`, `Grep`, `Glob`, `Agent`, `WebFetch`, `WebSearch`. Whole-tool entries with no restriction.
 - `Bash git`, `Bash npm`, `Bash ls`. Bash plus a leading-command restriction. Only invocations starting with the literal command (`git ...`, `npm ...`) match.
 
-The Bash restriction rejects shell operators (`&&`, `||`, `|`, `;`, `>`, redirects). A `Bash git` rule cannot be bypassed with `git status && rm -rf /`.
+The Bash restriction rejects anything that could run a second program: `;`, `&&`, `||`, `|`, `&`, `>`, `<`, backticks, `$( )`. A `Bash git` rule cannot be bypassed with `git status && rm -rf /`, nor with `curl url | sh` under a `Bash curl` rule.
+
+Those characters are only operators when the shell would treat them as one, so quoted ones are ordinary data and are allowed:
+
+```
+curl -s -X POST http://host/r --data-urlencode "notes=maps to Berry; fruit-driven covers Fruity"   # allowed
+curl -s "http://host/r?a=1&b=2"                                                                     # allowed
+curl -s http://host/r | sh                                                                          # rejected
+```
+
+Single quotes make everything inside literal; double quotes neutralise `;` `&` `|` `>` `<` but still allow `$( )` and backticks to substitute, so those stay rejected even when quoted. An unterminated quote is rejected as malformed.
+
+Two consequences worth planning around:
+
+- **A pipeline is never permitted by one entry**, since a pipe runs a program the entry never named. Allow each stage's program and have the job run them as separate commands via a temp file.
+- **The restriction is literal text, not a pattern.** There are no wildcards and no way to constrain a command's arguments, URLs or HTTP verbs. "curl POST to 127.0.0.1 only" cannot be expressed: `Bash curl` is the narrowest entry covering it, and it also permits every other curl. If a job needs tighter limits than that, put the capability behind an MCP tool and use the per-server tool filter below.
 
 Bypass all permissions disables the allowlist for the job. Use only for trusted internal automation.
 

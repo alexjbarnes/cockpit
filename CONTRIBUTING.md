@@ -18,13 +18,21 @@ CI runs on every push to `main` and `next`, and on PRs targeting either branch.
 
 ## Releasing
 
-After `next` merges into `main`:
+Steps 1 and 2 land on `next` and reach `main` through the release PR:
 
-1. Bump the version in `package.json`
-2. Move the `[Unreleased]` entries in `CHANGELOG.md` under a new dated version heading
-3. Tag and push: `git tag v0.x.y && git push --tags`
-4. `npm publish`
-5. Reset `next` to match `main`:
+1. Bump with `npm version 0.x.y --no-git-tag-version`, so `package-lock.json` stays in step. Editing `package.json` by hand leaves the lockfile stale.
+2. Add the dated version heading to `CHANGELOG.md`, then commit both as `chore(release): 0.x.y`
+3. Open the release PR (`next` into `main`, titled `Release 0.x.y`) and squash merge it
+4. Tag `main`'s release commit and push just that tag:
+
+   ```sh
+   git checkout main && git pull
+   git tag -a v0.x.y -m "Release 0.x.y"
+   git push origin v0.x.y
+   ```
+
+5. `make publish`, which refuses unless the tree is clean, you are on `main` in sync with `origin/main`, and `v0.x.y` exists, points at `HEAD`, and is pushed
+6. Reset `next` to match `main`. This discards anything on `next` that did not go through the release PR, so check for post-release merges (Dependabot lands there) before running it:
 
    ```sh
    git checkout next

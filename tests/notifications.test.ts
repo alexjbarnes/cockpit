@@ -353,6 +353,99 @@ describe("dispatchNotification", () => {
     fetchSpy.mockRestore();
     consoleSpy.mockRestore();
   });
+
+  describe("return value (NotificationOutcome)", () => {
+    it("reports an explicitly named live provider as notified", async () => {
+      const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("ok"));
+      const { dispatchNotification } = await import("@/server/notifications");
+
+      const outcome = dispatchNotification({
+        title: "Test",
+        body: "body",
+        priority: "info",
+        source: "inbox",
+        providerIds: ["ntfy-1"],
+      });
+
+      expect(outcome.notified).toEqual([{ id: "ntfy-1", name: "Ntfy" }]);
+      expect(outcome.skipped).toEqual([]);
+      fetchSpy.mockRestore();
+    });
+
+    it("reports an explicitly named disabled provider as skipped:disabled, never silently", async () => {
+      mockSettings.providers[0].enabled = false; // tg-1
+      const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("ok"));
+      const { dispatchNotification } = await import("@/server/notifications");
+
+      const outcome = dispatchNotification({
+        title: "Test",
+        body: "body",
+        priority: "info",
+        source: "inbox",
+        providerIds: ["tg-1"],
+      });
+
+      expect(outcome.notified).toEqual([]);
+      expect(outcome.skipped).toEqual([{ id: "tg-1", name: "Telegram", reason: "disabled" }]);
+      fetchSpy.mockRestore();
+    });
+
+    it("reports an id that matches no configured provider as skipped:unknown", async () => {
+      const { dispatchNotification } = await import("@/server/notifications");
+
+      const outcome = dispatchNotification({
+        title: "Test",
+        body: "body",
+        priority: "info",
+        source: "inbox",
+        providerIds: ["does-not-exist"],
+      });
+
+      expect(outcome.notified).toEqual([]);
+      expect(outcome.skipped).toEqual([{ id: "does-not-exist", name: "does-not-exist", reason: "unknown" }]);
+    });
+
+    it("an explicit ask is never filtered: a priority filter that would exclude the default dispatch is bypassed", async () => {
+      mockSettings.providers[0].filter = { priorities: ["error"] };
+      const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("ok"));
+      const { dispatchNotification } = await import("@/server/notifications");
+
+      const outcome = dispatchNotification({
+        title: "Test",
+        body: "body",
+        priority: "info", // does not match the ["error"] filter
+        source: "inbox",
+        providerIds: ["tg-1"],
+      });
+
+      expect(outcome.notified).toEqual([{ id: "tg-1", name: "Telegram" }]);
+      expect(outcome.skipped).toEqual([]);
+      fetchSpy.mockRestore();
+    });
+
+    it("reports a filtered-out provider as skipped:filtered when providerIds is undefined", async () => {
+      mockSettings.providers[0].filter = { priorities: ["error"] };
+      const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("ok"));
+      const { dispatchNotification } = await import("@/server/notifications");
+
+      const outcome = dispatchNotification({ title: "Test", body: "body", priority: "info", source: "inbox" });
+
+      expect(outcome.skipped).toContainEqual({ id: "tg-1", name: "Telegram", reason: "filtered" });
+      expect(outcome.notified).toContainEqual({ id: "ntfy-1", name: "Ntfy" });
+      fetchSpy.mockRestore();
+    });
+
+    it("reports a disabled provider as skipped:disabled when providerIds is undefined too", async () => {
+      mockSettings.providers[0].enabled = false;
+      const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("ok"));
+      const { dispatchNotification } = await import("@/server/notifications");
+
+      const outcome = dispatchNotification({ title: "Test", body: "body", priority: "info", source: "inbox" });
+
+      expect(outcome.skipped).toContainEqual({ id: "tg-1", name: "Telegram", reason: "disabled" });
+      fetchSpy.mockRestore();
+    });
+  });
 });
 
 describe("sendTestNotification", () => {

@@ -11,6 +11,9 @@ export interface SessionInfo {
   contextSize?: ContextSize;
   runtime?: "pty" | "stream";
   pendingRequestCount?: number;
+  /** Subagents the session launched that are still running. A session can be
+   *  idle and accepting input while these work on. */
+  agentCount?: number;
 }
 
 export interface SessionGroup {
@@ -188,7 +191,10 @@ export interface UsageLimits {
 
 // Scheduled Jobs
 
-export type SimpleScheduleFrequency = "hourly" | "daily" | "weekly" | "monthly";
+/** Canonical list; SimpleScheduleFrequency derives from it (same pattern as
+ *  ISSUE_STATUSES) so validators and tool schemas can't drift from the type. */
+export const SIMPLE_SCHEDULE_FREQUENCIES = ["hourly", "daily", "weekly", "monthly"] as const;
+export type SimpleScheduleFrequency = (typeof SIMPLE_SCHEDULE_FREQUENCIES)[number];
 
 export interface SimpleSchedule {
   type: "simple";
@@ -203,7 +209,23 @@ export interface CronSchedule {
   expression: string;
 }
 
-export type JobSchedule = SimpleSchedule | CronSchedule;
+/**
+ * Fires when an issue transitions into `status` (including a brand-new issue
+ * arriving in its initial status — see issue-storage.ts's saveIssue). There is
+ * no cron form for this: it has no time-of-day, so cron-utils.ts's
+ * scheduleToCron/getNextRunTime are typed to exclude it, and every other
+ * schedule-shape consumer (the 60s tick, describeSchedule, missed-run catch-up)
+ * has to account for it explicitly rather than falling through a case that
+ * assumes every schedule is time-based.
+ */
+export interface IssueStatusSchedule {
+  type: "onIssueStatus";
+  status: IssueStatus;
+  /** Project id; absent means any project. */
+  project?: string;
+}
+
+export type JobSchedule = SimpleSchedule | CronSchedule | IssueStatusSchedule;
 
 export interface ScheduledJob {
   id: string;
@@ -268,6 +290,10 @@ export interface InboxMessage {
   jobId?: string;
   jobName?: string;
   runId?: string;
+  /** Set instead of jobId/jobName when a plain session (not a job run, not
+   *  the assistant) posted this via add_inbox_message. */
+  sessionId?: string;
+  sessionName?: string;
   title: string;
   body: string;
   priority: InboxPriority;
@@ -311,6 +337,118 @@ export interface NotificationProviderEntry {
 export interface NotificationSettings {
   baseUrl?: string;
   providers: NotificationProviderEntry[];
+}
+
+// Issues and projects (native issue tracker, see docs/internal/issue-tracker-spec.md)
+
+export interface Project {
+  id: string;
+  name: string;
+  prefix: string; // "CK", "RO" — uppercase, unique, drives issue keys
+  description?: string;
+  repoPath?: string; // the repo this project's work happens in, so one set of pipeline jobs can serve every project
+  archived?: boolean;
+  createdAt: number;
+  updatedAt: number;
+  nextNumber: number; // per-project counter, so keys are CK-1, CK-2
+}
+
+/**
+ * Canonical lifecycle order (docs/internal/issue-tracker-spec.md 2.1), not
+ * alphabetical — Cancelled sits last since it's a terminal status reached
+ * from anywhere, not a step in the normal flow. `IssueStatus` derives from
+ * this array, not the other way around, so the type and "every valid value
+ * at runtime" can never disagree. This is the single source of truth:
+ * before this, the same values were three independent hand-written
+ * copies (this file's old bare union, a private const in
+ * cockpit-config-server.ts, and an exported one in issue-display.ts) that
+ * had already drifted apart in spirit even before disagreeing in fact.
+ * Anything needing every valid status — list grouping order, a status
+ * `<select>`, validating a caller-supplied status — imports this array
+ * rather than hand-writing its own.
+ */
+export const ISSUE_STATUSES = [
+  "Backlog",
+  "Needs Detail",
+  "Refine Ready",
+  "Refining",
+  "Plan Review",
+  "Implementation Ready",
+  "Implementation",
+  "Code Review",
+  "Accepted",
+  "Done",
+  "Cancelled",
+] as const;
+
+export type IssueStatus = (typeof ISSUE_STATUSES)[number];
+
+/**
+ * Who did something to an issue — a comment's author, an activity entry's
+ * actor. Deliberately lines up with `McpCaller` (src/server/mcp/run-context.ts:
+ * assistant / job / session) plus a fourth "user" kind for a human acting
+ * through the UI directly (no MCP token involved), since phase 2.3 attributes
+ * every write to the token's caller and the UI has no token at all. Kept as
+ * its own plain, serialisable POJO rather than reusing the McpCaller union
+ * itself, which lives only in the in-memory token map and carries the full
+ * RunContext (including fields like notifyProviders that have nothing to do
+ * with "who did this").
+ */
+export type IssueActor =
+  | { kind: "assistant" }
+  | { kind: "job"; jobId: string; jobName: string; runId: string }
+  | { kind: "session"; sessionId: string; sessionName: string }
+  | { kind: "user" };
+
+export interface IssueComment {
+  id: string;
+  body: string; // markdown
+  author: IssueActor;
+  createdAt: number;
+}
+
+/** A file the ui-reviewer agent (or a human) attaches to an issue — a
+ *  screenshot, most often. `url` is either a remote URL or a local/cockpit-
+ *  served path. */
+export interface IssueAttachment {
+  id: string;
+  title: string;
+  url: string;
+  createdAt: number;
+}
+
+/** The Issue field names an activity entry can carry a before/after diff for. */
+export type IssueActivityField = "title" | "description" | "status" | "priority" | "labels";
+
+/**
+ * One append-only audit entry. `kind` covers the non-field events (creation,
+ * comments, attachments) alongside "field_changed", which is the only kind
+ * that populates `field`/`from`/`to`. Never mutated or removed once appended.
+ */
+export interface IssueActivity {
+  id: string;
+  createdAt: number;
+  actor: IssueActor;
+  kind: "created" | "field_changed" | "commented" | "attachment_added";
+  field?: IssueActivityField;
+  from?: unknown;
+  to?: unknown;
+}
+
+export interface Issue {
+  id: string; // uuid, stable
+  key: string; // "CK-12", what humans and branches use
+  projectId: string;
+  title: string;
+  description: string; // markdown, the refine skill overwrites this wholesale
+  status: IssueStatus;
+  priority?: 0 | 1 | 2 | 3 | 4; // Linear's scale, so imports map cleanly
+  labels?: string[];
+  createdAt: number;
+  updatedAt: number;
+  comments: IssueComment[];
+  attachments: IssueAttachment[];
+  activity: IssueActivity[]; // append-only, who changed what
 }
 
 // Client -> Server messages
@@ -363,6 +501,7 @@ export type ServerMessage =
   | { type: "assistant:tool_children"; sessionId: string; messageId: string; toolId: string; children: ToolUse[] }
   | { type: "session:status"; sessionId: string; status: "idle" | "running" }
   | { type: "session:pending"; sessionId: string; count: number }
+  | { type: "session:agents"; sessionId: string; count: number }
   | { type: "session:fs_changed"; cwd: string }
   | { type: "session:error"; sessionId: string; error: string }
   | {
@@ -374,7 +513,7 @@ export type ServerMessage =
       suggestions?: PermissionSuggestion[];
       planFilePath?: string;
       planContent?: string;
-      configProposal?: { toolName: string; domain: string; action: string };
+      configProposal?: { toolName: string; domain: string; action: string; displayName?: string; idNames?: Record<string, string> };
     }
   | { type: "question:request"; sessionId: string; requestId: string; questions: string }
   | { type: "session:clear"; sessionId: string }
@@ -455,6 +594,11 @@ export interface Provider {
   /** Curated opt-in set for catalog-backed providers: only these model ids
    *  appear in pickers. Absent means nothing enabled yet. */
   enabledModels?: string[];
+  /** Per-model curated context choices (modelId → sizes). A curated model
+   *  gets the session-menu 200K/1M picker exactly like Anthropic models; the
+   *  session's pick then drives the gauge and the CLI's window env. Stored
+   *  apart from the synced model list so catalog re-syncs can't wipe it. */
+  contextSizeOverrides?: Record<string, ContextSize[]>;
   /** Last successful catalog sync, for catalog-backed providers. */
   syncedAt?: number;
 }

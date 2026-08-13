@@ -2,7 +2,20 @@
 // from the OpenRouter spike (docs/internal/or-fixtures): the OpenAI door's
 // tool_calls response and the Anthropic door's equivalents.
 import { createServer, type Server } from "node:http";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+// The proxy's only diagnostics are debug-log entries, and the real logger is
+// gated on COCKPIT_DEBUG at module load. Capture the calls instead, so the
+// instrumentation is proven to fire rather than merely to compile.
+const { proxyLogs } = vi.hoisted(() => ({
+  proxyLogs: [] as { providerId: string; label: string; data: Record<string, unknown> }[],
+}));
+vi.mock("@/server/debug-logger", () => ({
+  logProxy: (providerId: string, label: string, data?: Record<string, unknown>) => {
+    proxyLogs.push({ providerId, label, data: data ?? {} });
+  },
+}));
+
 import {
   anthropicToOpenAIRequest,
   estimateInputTokens,
@@ -97,6 +110,146 @@ describe("anthropicToOpenAIRequest", () => {
   });
 });
 
+describe("anthropicToOpenAIRequest reasoning round trip", () => {
+  // The response direction turns an upstream reasoning_content into an
+  // Anthropic thinking block, so the CLI replays that block in history. Not
+  // sending it back broke every multi-turn zen session on
+  // deepseek-v4-flash-free with HTTP 400 "The `reasoning_content` in the
+  // thinking mode must be passed back to the API".
+  it("sends an assistant turn's thinking block back as reasoning_content", () => {
+    const out = anthropicToOpenAIRequest({
+      model: "deepseek-v4-flash-free",
+      messages: [
+        { role: "user", content: "hi" },
+        {
+          role: "assistant",
+          content: [
+            { type: "thinking", thinking: "The user says hi.", signature: "" },
+            { type: "text", text: "Hello." },
+          ],
+        },
+        { role: "user", content: "again" },
+      ],
+    } as never);
+    const assistant = (out.messages as Array<Record<string, unknown>>).find((m) => m.role === "assistant");
+    expect(assistant?.reasoning_content).toBe("The user says hi.");
+    expect(assistant?.content).toBe("Hello.");
+  });
+
+  it("joins multiple thinking blocks in order", () => {
+    const out = anthropicToOpenAIRequest({
+      model: "m",
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            { type: "thinking", thinking: "first" },
+            { type: "thinking", thinking: "second" },
+          ],
+        },
+      ],
+    } as never);
+    const assistant = (out.messages as Array<Record<string, unknown>>)[0];
+    expect(assistant.reasoning_content).toBe("first\nsecond");
+  });
+
+  it("keeps thinking alongside tool_calls, the shape that actually failed", () => {
+    const out = anthropicToOpenAIRequest({
+      model: "m",
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            { type: "thinking", thinking: "I should read the file." },
+            { type: "tool_use", id: "t1", name: "Read", input: { path: "a.ts" } },
+          ],
+        },
+      ],
+    } as never);
+    const assistant = (out.messages as Array<Record<string, unknown>>)[0];
+    expect(assistant.reasoning_content).toBe("I should read the file.");
+    expect((assistant.tool_calls as unknown[]).length).toBe(1);
+  });
+
+  it("omits the field entirely for an assistant turn with no thinking, so non-reasoning upstreams never see it", () => {
+    const out = anthropicToOpenAIRequest({
+      model: "m",
+      messages: [{ role: "assistant", content: [{ type: "text", text: "plain" }] }],
+    } as never);
+    const assistant = (out.messages as Array<Record<string, unknown>>)[0];
+    expect("reasoning_content" in assistant).toBe(false);
+  });
+
+  it("omits the field when a thinking block is present but empty", () => {
+    const out = anthropicToOpenAIRequest({
+      model: "m",
+      messages: [{ role: "assistant", content: [{ type: "thinking", thinking: "" }] }],
+    } as never);
+    expect("reasoning_content" in (out.messages as Array<Record<string, unknown>>)[0]).toBe(false);
+  });
+});
+
+describe("anthropicToOpenAIRequest reasoning placeholder in thinking mode", () => {
+  // Measured against the live upstream: in thinking mode DeepSeek accepts an
+  // assistant turn with tool_calls alone, but refuses one with BOTH content
+  // and tool_calls unless reasoning_content is present — an empty string is
+  // enough. Not every assistant turn reasons, so this shape appears
+  // constantly in a long session and was killing turns even after thinking
+  // blocks were being sent back.
+  const toolUse = { type: "tool_use", id: "t1", name: "w", input: {} };
+
+  it("adds an empty reasoning_content to a text+tool_calls turn that did no thinking", () => {
+    const out = anthropicToOpenAIRequest(
+      {
+        model: "m",
+        thinking: { type: "enabled", budget_tokens: 10000 },
+        messages: [{ role: "assistant", content: [{ type: "text", text: "Checking." }, toolUse] }],
+      } as never,
+      { effortLevels: ["high", "max"] },
+    );
+    const assistant = (out.messages as Array<Record<string, unknown>>)[0];
+    expect(out.reasoning_effort).toBeTruthy();
+    expect(assistant.reasoning_content).toBe("");
+  });
+
+  it("leaves a real thinking block's text alone rather than blanking it", () => {
+    const out = anthropicToOpenAIRequest(
+      {
+        model: "m",
+        thinking: { type: "enabled", budget_tokens: 10000 },
+        messages: [{ role: "assistant", content: [{ type: "thinking", thinking: "because" }, toolUse] }],
+      } as never,
+      { effortLevels: ["high", "max"] },
+    );
+    expect((out.messages as Array<Record<string, unknown>>)[0].reasoning_content).toBe("because");
+  });
+
+  it("does not add the field when the request is not in thinking mode", () => {
+    const out = anthropicToOpenAIRequest(
+      {
+        model: "m",
+        thinking: { type: "enabled", budget_tokens: 10000 },
+        messages: [{ role: "assistant", content: [{ type: "text", text: "Checking." }, toolUse] }],
+      } as never,
+      {}, // no effortLevels => no reasoning_effort => not thinking mode
+    );
+    expect(out.reasoning_effort).toBeUndefined();
+    expect("reasoning_content" in (out.messages as Array<Record<string, unknown>>)[0]).toBe(false);
+  });
+
+  it("does not add the field to an assistant turn with no tool calls", () => {
+    const out = anthropicToOpenAIRequest(
+      {
+        model: "m",
+        thinking: { type: "enabled", budget_tokens: 10000 },
+        messages: [{ role: "assistant", content: [{ type: "text", text: "Just talking." }] }],
+      } as never,
+      { effortLevels: ["high", "max"] },
+    );
+    expect("reasoning_content" in (out.messages as Array<Record<string, unknown>>)[0]).toBe(false);
+  });
+});
+
 describe("openAIToAnthropicResponse", () => {
   it("maps a tool_calls response (live capture shape)", () => {
     const out = openAIToAnthropicResponse({
@@ -171,10 +324,14 @@ describe("StreamTranslator", () => {
     expect(deltas.join("")).toBe("Hello");
     const md = events.find((e) => e.event === "message_delta")?.data as {
       delta: { stop_reason: string };
-      usage: { output_tokens: number };
+      usage: { input_tokens: number; output_tokens: number };
     };
     expect(md.delta.stop_reason).toBe("end_turn");
     expect(md.usage.output_tokens).toBe(5);
+    // prompt_tokens must surface as input_tokens here — message_start already
+    // shipped with zeros before the upstream reported usage. Dropping it means
+    // a zeroed context gauge and no indicator in the UI.
+    expect(md.usage.input_tokens).toBe(10);
   });
 
   it("translates tool-call deltas into tool_use blocks with input_json_delta", () => {
@@ -774,6 +931,207 @@ describe("FormatProxy server", () => {
     });
     await res.text();
     expect(events).toEqual([{ providerId: "zen", modelId: "m1", inputTokens: 40, outputTokens: 9 }]);
+  });
+});
+
+describe("FormatProxy inbound auth", () => {
+  let proxy: FormatProxy | null = null;
+  let upstream: Server | null = null;
+
+  beforeEach(() => {
+    proxyLogs.length = 0;
+  });
+
+  afterEach(async () => {
+    await proxy?.stop();
+    proxy = null;
+    await new Promise<void>((r) => (upstream ? upstream.close(() => r()) : r()));
+    upstream = null;
+  });
+
+  it("embeds a per-instance token in the base URL", async () => {
+    const a = new FormatProxy(() => null);
+    const b = new FormatProxy(() => null);
+    await a.start();
+    await b.start();
+    try {
+      const tokenOf = (p: FormatProxy) => new URL(p.getUrl("zen")).pathname.split("/")[1];
+      expect(tokenOf(a)).toMatch(/^[0-9a-f]{48}$/);
+      expect(tokenOf(a)).not.toBe(tokenOf(b));
+      expect(new URL(a.getUrl("zen")).pathname).toBe(`/${tokenOf(a)}/zen`);
+    } finally {
+      await a.stop();
+      await b.stop();
+    }
+  });
+
+  it("rejects a request that omits the token, without reaching the upstream", async () => {
+    let upstreamHits = 0;
+    upstream = createServer((_req, res) => {
+      upstreamHits += 1;
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end("{}");
+    });
+    await new Promise<void>((r) => upstream?.listen(0, "127.0.0.1", () => r()));
+    const addr = upstream?.address();
+    const port = typeof addr === "object" && addr ? addr.port : 0;
+
+    proxy = new FormatProxy(() => ({ baseUrl: `http://127.0.0.1:${port}`, apiKey: "secret-key", modelIds: [] }));
+    await proxy.start();
+
+    // The pre-auth URL shape: no token segment at all.
+    const base = new URL(proxy.getUrl("zen"));
+    const res = await fetch(`${base.origin}/zen/v1/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "m", max_tokens: 5, messages: [] }),
+    });
+
+    expect(res.status).toBe(401);
+    // The point of the gate: no upstream call, so no credits spent.
+    expect(upstreamHits).toBe(0);
+    const body = await res.json();
+    expect(body.error.message).toBe("Unauthorized");
+  });
+
+  it("rejects a wrong token and never echoes the offered one", async () => {
+    proxy = new FormatProxy(() => ({ baseUrl: "http://127.0.0.1:1", apiKey: "k", modelIds: [] }));
+    await proxy.start();
+    const base = new URL(proxy.getUrl("zen"));
+    const res = await fetch(`${base.origin}/${"f".repeat(48)}/zen/v1/models`);
+
+    expect(res.status).toBe(401);
+    const logged = proxyLogs.find((l) => l.label === "unauthorized");
+    expect(logged).toBeDefined();
+    expect(JSON.stringify(proxyLogs)).not.toContain("f".repeat(48));
+  });
+
+  it("still serves every route once the token is right", async () => {
+    proxy = new FormatProxy(() => ({ baseUrl: "http://127.0.0.1:1", apiKey: "k", modelIds: ["opencode/gpt-5.5"] }));
+    await proxy.start();
+    const models = await fetch(`${proxy.getUrl("zen")}/v1/models`);
+    expect(models.status).toBe(200);
+    expect((await models.json()).data).toHaveLength(1);
+  });
+});
+
+describe("FormatProxy debug logging", () => {
+  let proxy: FormatProxy | null = null;
+  let upstream: Server | null = null;
+
+  // Earlier describes in this file drive the proxy too, so reset before each
+  // test rather than after: otherwise the first test here sees their entries.
+  beforeEach(() => {
+    proxyLogs.length = 0;
+  });
+
+  afterEach(async () => {
+    await proxy?.stop();
+    proxy = null;
+    await new Promise<void>((r) => (upstream ? upstream.close(() => r()) : r()));
+    upstream = null;
+  });
+
+  async function startUpstream(handler: (body: string, res: import("node:http").ServerResponse) => void): Promise<number> {
+    upstream = createServer((req, res) => {
+      let data = "";
+      req.on("data", (c) => {
+        data += c;
+      });
+      req.on("end", () => handler(data, res));
+    });
+    await new Promise<void>((r) => upstream?.listen(0, "127.0.0.1", () => r()));
+    const addr = upstream?.address();
+    return typeof addr === "object" && addr ? addr.port : 0;
+  }
+
+  const labels = () => proxyLogs.map((l) => l.label);
+  const entry = (label: string) => proxyLogs.find((l) => l.label === label);
+
+  it("records the whole 200-wrapped saturation loop, peek included", async () => {
+    const port = await startUpstream((_body, res) => {
+      res.writeHead(200, { "Content-Type": "text/event-stream" });
+      res.end('event: error\ndata: {"error":{"message":"Worker local total request limit reached"}}\n\n');
+    });
+    proxy = new FormatProxy(() => ({ baseUrl: `http://127.0.0.1:${port}`, apiKey: "k", wireFormat: "anthropic", modelIds: [] }), {
+      retryBackoffMs: [10, 10],
+    });
+    await proxy.start();
+    await fetch(`${proxy.getUrl("openrouter")}/v1/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "m", max_tokens: 5, messages: [] }),
+    });
+
+    expect(labels()).toContain("listening");
+    expect(labels()).toContain("request");
+    // One per attempt: the initial call plus both retries.
+    expect(labels().filter((l) => l === "saturation-200")).toHaveLength(3);
+    expect(labels()).toContain("saturation-exhausted");
+
+    expect(entry("request")?.providerId).toBe("openrouter");
+    expect(entry("request")?.data.wireFormat).toBe("anthropic");
+    // The peek is the evidence for the retry decision, so it is logged verbatim.
+    expect(String(entry("saturation-exhausted")?.data.peek)).toContain("Worker local total request limit reached");
+    expect(entry("saturation-exhausted")?.data.status).toBe(529);
+  });
+
+  it("records an upstream error with both the real and the remapped status", async () => {
+    const port = await startUpstream((_body, res) => {
+      res.writeHead(401, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: { message: "No provider available", type: "ProviderError" } }));
+    });
+    proxy = new FormatProxy(() => ({ baseUrl: `http://127.0.0.1:${port}`, apiKey: "k", modelIds: [] }), { retryBackoffMs: [] });
+    await proxy.start();
+    await fetch(`${proxy.getUrl("zen")}/v1/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "opencode/gpt-5.5", max_tokens: 5, messages: [], stream: false }),
+    });
+
+    expect(entry("translate")?.data.model).toBe("opencode/gpt-5.5");
+    expect(entry("translate")?.data.stream).toBe(false);
+
+    const err = entry("upstream-error");
+    expect(err?.data.upstreamStatus).toBe(401);
+    // Zen's non-auth 401 is remapped so the CLI stops demanding /login. Both
+    // numbers are logged, since the remap is exactly what hides the original.
+    expect(err?.data.sentStatus).toBe(503);
+    expect(err?.data.remapped).toBe(true);
+    expect(err?.data.message).toBe("No provider available");
+  });
+
+  it("records a completed translated turn with its token counts", async () => {
+    const port = await startUpstream((_body, res) => {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify({
+          choices: [{ message: { content: "hi" }, finish_reason: "stop" }],
+          usage: { prompt_tokens: 11, completion_tokens: 7 },
+        }),
+      );
+    });
+    proxy = new FormatProxy(() => ({ baseUrl: `http://127.0.0.1:${port}`, apiKey: "k", modelIds: [] }));
+    await proxy.start();
+    await fetch(`${proxy.getUrl("zen")}/v1/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "m", max_tokens: 5, messages: [], stream: false }),
+    });
+
+    const done = entry("complete");
+    expect(done?.data.inputTokens).toBe(11);
+    expect(done?.data.outputTokens).toBe(7);
+    expect(done?.data.finishReason).toBe("stop");
+  });
+
+  it("records an unknown provider rather than failing silently", async () => {
+    proxy = new FormatProxy(() => null);
+    await proxy.start();
+    const res = await fetch(`${proxy.getUrl("nope")}/v1/messages`, { method: "POST", body: "{}" });
+    expect(res.status).toBe(404);
+    expect(entry("unknown-provider")?.providerId).toBe("nope");
+    expect(entry("request")?.data.resolved).toBe(false);
   });
 });
 

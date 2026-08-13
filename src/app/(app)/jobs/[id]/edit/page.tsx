@@ -8,6 +8,7 @@ import { DirectoryPicker } from "@/components/directory-picker";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { useSettings } from "@/hooks/use-settings";
 import {
   allowedEffortLevels,
   CONTEXT_SIZES,
@@ -22,7 +23,8 @@ import {
 import { isPositiveNumberField, parseNumberField } from "@/lib/number-field";
 import { cn } from "@/lib/utils";
 import { describeSchedule, getJobSchedules } from "@/server/cron-utils";
-import type { JobSchedule, Provider, ProviderModel, ScheduledJob, SimpleSchedule, SimpleScheduleFrequency, ThinkingLevel } from "@/types";
+import type { IssueStatus, JobSchedule, Provider, ProviderModel, ScheduledJob, SimpleScheduleFrequency, ThinkingLevel } from "@/types";
+import { ISSUE_STATUSES } from "@/types";
 
 const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
@@ -62,28 +64,48 @@ function ScheduleEntry({
   onChange,
   onRemove,
   canRemove,
+  projects,
+  issuesEnabled,
 }: {
   value: JobSchedule;
   onChange: (s: JobSchedule) => void;
   onRemove: () => void;
   canRemove: boolean;
+  projects: { id: string; name: string; prefix: string }[];
+  issuesEnabled: boolean;
 }) {
-  const isSimple = value.type === "simple";
-
   return (
     <div className="border rounded-md p-3 space-y-2">
       <div className="flex items-center justify-between">
         <div className="flex gap-2">
           <Button
-            variant={isSimple ? "default" : "outline"}
+            variant={value.type === "simple" ? "default" : "outline"}
             size="sm"
             onClick={() => onChange({ type: "simple", frequency: "daily", time: "09:00" })}
           >
             Simple
           </Button>
-          <Button variant={!isSimple ? "default" : "outline"} size="sm" onClick={() => onChange({ type: "cron", expression: "0 9 * * *" })}>
+          <Button
+            variant={value.type === "cron" ? "default" : "outline"}
+            size="sm"
+            onClick={() => onChange({ type: "cron", expression: "0 9 * * *" })}
+          >
             Cron
           </Button>
+          {/* Issue tracker is experimental and off by default (see defaults.ts's
+              issuesEnabled) — hide the option to create a new onIssueStatus
+              schedule while off. A job that already has one keeps the button
+              (and its dropdowns below, which key off value.type, not this
+              condition) so an existing record still displays and is editable. */}
+          {(issuesEnabled || value.type === "onIssueStatus") && (
+            <Button
+              variant={value.type === "onIssueStatus" ? "default" : "outline"}
+              size="sm"
+              onClick={() => onChange({ type: "onIssueStatus", status: ISSUE_STATUSES[0] })}
+            >
+              On issue status
+            </Button>
+          )}
         </div>
         {canRemove && (
           <button type="button" onClick={onRemove} className="text-muted-foreground hover:text-destructive">
@@ -92,10 +114,10 @@ function ScheduleEntry({
         )}
       </div>
 
-      {isSimple ? (
+      {value.type === "simple" && (
         <div className="space-y-2">
           <select
-            value={(value as SimpleSchedule).frequency}
+            value={value.frequency}
             onChange={(e) => onChange({ ...value, frequency: e.target.value as SimpleScheduleFrequency })}
             className={SELECT_CLASS}
           >
@@ -104,16 +126,12 @@ function ScheduleEntry({
             <option value="weekly">Weekly</option>
             <option value="monthly">Monthly</option>
           </select>
-          {(value as SimpleSchedule).frequency !== "hourly" && (
-            <Input
-              type="time"
-              value={(value as SimpleSchedule).time || "09:00"}
-              onChange={(e) => onChange({ ...value, time: e.target.value })}
-            />
+          {value.frequency !== "hourly" && (
+            <Input type="time" value={value.time || "09:00"} onChange={(e) => onChange({ ...value, time: e.target.value })} />
           )}
-          {(value as SimpleSchedule).frequency === "weekly" && (
+          {value.frequency === "weekly" && (
             <select
-              value={(value as SimpleSchedule).dayOfWeek ?? 1}
+              value={value.dayOfWeek ?? 1}
               onChange={(e) => onChange({ ...value, dayOfWeek: Number(e.target.value) })}
               className={SELECT_CLASS}
             >
@@ -124,25 +142,57 @@ function ScheduleEntry({
               ))}
             </select>
           )}
-          {(value as SimpleSchedule).frequency === "monthly" && (
+          {value.frequency === "monthly" && (
             <Input
               type="number"
               min={1}
               max={31}
-              value={(value as SimpleSchedule).dayOfMonth ?? 1}
+              value={value.dayOfMonth ?? 1}
               onChange={(e) => onChange({ ...value, dayOfMonth: Number(e.target.value) })}
               placeholder="Day of month"
             />
           )}
         </div>
-      ) : (
+      )}
+
+      {value.type === "cron" && (
         <Input
-          value={(value as { expression: string }).expression}
+          value={value.expression}
           onChange={(e) => onChange({ type: "cron", expression: e.target.value })}
           placeholder="0 9 * * 1-5"
           className="font-mono"
         />
       )}
+
+      {value.type === "onIssueStatus" && (
+        <div className="space-y-2">
+          <select
+            value={value.status}
+            onChange={(e) => onChange({ ...value, status: e.target.value as IssueStatus })}
+            className={SELECT_CLASS}
+          >
+            {ISSUE_STATUSES.map((s) => (
+              <option key={s} value={s}>
+                {s}
+              </option>
+            ))}
+          </select>
+          <select
+            value={value.project ?? ""}
+            onChange={(e) => onChange({ ...value, project: e.target.value || undefined })}
+            className={SELECT_CLASS}
+          >
+            <option value="">Any project</option>
+            {projects.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name} ({p.prefix})
+              </option>
+            ))}
+          </select>
+          <p className="text-xs text-muted-foreground">Fires when an issue enters this status, including one just created in it.</p>
+        </div>
+      )}
+
       <p className="text-xs text-muted-foreground">{describeSchedule(value)}</p>
     </div>
   );
@@ -156,6 +206,7 @@ export default function JobEditPage() {
   const duplicateFrom = isNew ? searchParams.get("from") : null;
   const initialCwd = isNew ? searchParams.get("cwd") : null;
   const router = useRouter();
+  const { settings } = useSettings();
 
   usePageHeader(duplicateFrom ? "Duplicate Job" : isNew ? "New Job" : "Edit Job", { hideActions: true });
 
@@ -170,7 +221,7 @@ export default function JobEditPage() {
   const [contextSize, setContextSize] = useState<ContextSize>("200k");
   const [thinkingLevel, setThinkingLevel] = useState<ThinkingLevel | "">("medium");
   const [selectedProviderId, setSelectedProviderId] = useState("anthropic");
-  const [runtime, setRuntime] = useState<"stream" | "pty">("stream");
+  const [runtime, setRuntime] = useState<"stream" | "pty">("pty");
 
   const [maxDuration, setMaxDuration] = useState<number | "">(30);
   const [maxRetries, setMaxRetries] = useState<number | "">(1);
@@ -191,6 +242,7 @@ export default function JobEditPage() {
   const [notifyProviders, setNotifyProviders] = useState<string[]>([]);
   const [availableProviders, setAvailableProviders] = useState<{ id: string; name: string; type: string }[]>([]);
   const [providers, setProviders] = useState<Provider[]>([]);
+  const [projects, setProjects] = useState<{ id: string; name: string; prefix: string }[]>([]);
 
   const [showDirPicker, setShowDirPicker] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -225,7 +277,18 @@ export default function JobEditPage() {
     return selectedEntry ? allowedEffortLevels(selectedEntry) : [];
   })();
   const toolSuggestions = COMMON_TOOLS.filter((t) => !allowedTools.includes(t));
-  const customProviders = providers.filter((p) => !p.isBuiltin);
+  // Everything except Anthropic: user-defined providers, plus the catalog
+  // built-ins (openrouter, zen, zen-go, deepseek) once connected — same rule
+  // as the session model picker, a picker entry must be runnable. The job
+  // machinery downstream is already provider-qualified (`zen:model` ids,
+  // checkJobModel, the pre-spawn catalog check), so only this list was
+  // Anthropic-only.
+  const customProviders = providers.filter((p) => p.id !== "anthropic" && (!p.isBuiltin || Object.keys(p.envVars).length > 0));
+  /** Catalog built-ins show their curated enabled set; manual providers show
+   *  every model — mirrors the session picker. */
+  function pickableModels(p: Provider): ProviderModel[] {
+    return p.isBuiltin && p.enabledModels ? p.models.filter((m) => (p.enabledModels ?? []).includes(m.modelId)) : p.models;
+  }
 
   function selectAlias(alias: ModelAlias) {
     const entry = defaultForAlias(alias);
@@ -241,8 +304,9 @@ export default function JobEditPage() {
   function selectCustomProvider(providerId: string) {
     setSelectedProviderId(providerId);
     const provider = providers.find((p) => p.id === providerId);
-    if (provider && provider.models.length > 0) {
-      const first = provider.models[0];
+    const models = provider ? pickableModels(provider) : [];
+    if (provider && models.length > 0) {
+      const first = models[0];
       setModelId(first.modelId);
       setContextSize("200k");
       setThinkingLevel(first.defaultEffort || (first.effortLevels.length > 0 ? first.effortLevels[0] : ""));
@@ -345,7 +409,7 @@ export default function JobEditPage() {
     setRetentionDays(job.retentionDays ?? 90);
     setInboxOutput(job.inboxOutput ?? false);
     setNotifyProviders(job.notifyProviders || []);
-    setRuntime(job.runtime || "stream");
+    setRuntime(job.runtime || "pty");
   }, []);
 
   const loadJob = useCallback(async () => {
@@ -392,6 +456,13 @@ export default function JobEditPage() {
         if (Array.isArray(data)) setProviders(data);
       })
       .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    fetch("/api/projects")
+      .then((r) => r.json())
+      .then((data: { projects: { id: string; name: string; prefix: string }[] }) => setProjects(data.projects || []))
+      .catch(() => setProjects([]));
   }, []);
 
   async function handleSave() {
@@ -530,6 +601,8 @@ export default function JobEditPage() {
                 onChange={(s) => setSchedules(schedules.map((prev, j) => (j === i ? s : prev)))}
                 onRemove={() => setSchedules(schedules.filter((_, j) => j !== i))}
                 canRemove={schedules.length > 1}
+                projects={projects}
+                issuesEnabled={settings.issuesEnabled}
               />
             ))}
             <button
@@ -594,7 +667,7 @@ export default function JobEditPage() {
               <div className="flex items-center justify-between px-2 py-2 text-sm">
                 <span>Model</span>
                 <div className="flex gap-1 flex-wrap justify-end">
-                  {selectedProvider.models.map((m) => (
+                  {pickableModels(selectedProvider).map((m) => (
                     <Button
                       key={m.modelId}
                       variant={modelId === m.modelId ? "default" : "outline"}
@@ -913,11 +986,11 @@ export default function JobEditPage() {
             <div className="flex items-center justify-between">
               <label className="text-sm font-medium">Runtime</label>
               <div className="flex gap-1">
-                <Button variant={runtime === "stream" ? "default" : "outline"} size="sm" onClick={() => setRuntime("stream")}>
-                  Stream
-                </Button>
                 <Button variant={runtime === "pty" ? "default" : "outline"} size="sm" onClick={() => setRuntime("pty")}>
                   PTY
+                </Button>
+                <Button variant={runtime === "stream" ? "default" : "outline"} size="sm" onClick={() => setRuntime("stream")}>
+                  Stream (deprecated)
                 </Button>
               </div>
             </div>

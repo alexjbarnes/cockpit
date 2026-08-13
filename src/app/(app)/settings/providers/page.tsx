@@ -4,7 +4,7 @@ import { ArrowLeft, ChevronRight, Plus } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { usePageHeader } from "@/components/app-shell";
-import { DeepSeekCard, OpenRouterCard, ZenCard } from "@/components/openrouter-provider";
+import { DeepSeekCard, GoCard, OpenRouterCard, ZenCard } from "@/components/openrouter-provider";
 import { Button } from "@/components/ui/button";
 import type { Provider } from "@/types";
 
@@ -29,6 +29,7 @@ export default function ProvidersPage() {
   const anthropic = providers.find((p) => p.id === "anthropic");
   const openrouter = providers.find((p) => p.id === "openrouter");
   const zen = providers.find((p) => p.id === "zen");
+  const go = providers.find((p) => p.id === "zen-go");
   const deepseek = providers.find((p) => p.id === "deepseek");
   const custom = providers.filter((p) => !p.isBuiltin);
 
@@ -53,6 +54,7 @@ export default function ProvidersPage() {
           <OpenRouterCard provider={openrouter} onChanged={fetchProviders} onManage={() => router.push("/settings/providers/openrouter")} />
         )}
         {zen && <ZenCard provider={zen} onChanged={fetchProviders} onManage={() => router.push("/settings/providers/zen")} />}
+        {go && <GoCard provider={go} onChanged={fetchProviders} onManage={() => router.push("/settings/providers/zen-go")} />}
         {deepseek && (
           <DeepSeekCard provider={deepseek} onChanged={fetchProviders} onManage={() => router.push("/settings/providers/deepseek")} />
         )}

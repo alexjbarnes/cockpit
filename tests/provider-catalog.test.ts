@@ -297,6 +297,24 @@ describe("checkJobModel", () => {
     writeFileSync(join(dir, "providers.json"), JSON.stringify([{ id: "deepseek", isBuiltin: true, envVars: {}, models: [] }]));
     expect(cat.checkJobModel("deepseek:deepseek-v4-flash").ok).toBe(true);
   });
+
+  it("judges zen-go ids against its stored model list, distinct from zen's", async () => {
+    writeFileSync(
+      join(dir, "providers.json"),
+      JSON.stringify([
+        { id: "zen", isBuiltin: true, envVars: {}, models: [{ modelId: "big-pickle" }] },
+        { id: "zen-go", isBuiltin: true, envVars: {}, models: [{ modelId: "grok-code-fast-2" }] },
+      ]),
+    );
+    const cat = await loadModule();
+    expect(cat.checkJobModel("zen-go:grok-code-fast-2").ok).toBe(true);
+    // a zen-go id is not confused with the plain zen entry's list, and vice versa
+    expect(cat.checkJobModel("zen-go:big-pickle").ok).toBe(false);
+    expect(cat.checkJobModel("zen:grok-code-fast-2").ok).toBe(false);
+    const missing = cat.checkJobModel("zen-go:gone-model");
+    expect(missing.ok).toBe(false);
+    if (!missing.ok) expect(missing.reason).toContain("OpenCode Go");
+  });
 });
 
 describe("getOpenRouterUsage", () => {

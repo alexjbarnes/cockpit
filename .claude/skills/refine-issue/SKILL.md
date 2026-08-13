@@ -1,33 +1,30 @@
 ---
-description: Refine a Linear issue into an exact implementation plan an agent can execute. Reads the target issue, investigates the real code, reproduces bugs, then overwrites the issue description with a precise build spec (files, symbols, exact changes, acceptance criteria). Use when asked to refine, plan, or work up a Linear issue, e.g. "refine ALE-123".
+description: Refine a cockpit issue into an exact implementation plan an agent can execute. Reads the target issue, investigates the real code, reproduces bugs, then overwrites the issue description with a precise build spec (files, symbols, exact changes, acceptance criteria). Use when asked to refine, plan, or work up a cockpit issue, e.g. "refine CK-12".
 ---
 
-# Refine a Linear issue
+# Refine a cockpit issue
 
-Turn a rough Linear issue into a precise plan another agent will execute without interpretation. The plan replaces the issue description. The bar: an implementation agent should read the plan end-to-end and start writing code without asking a single follow-up question.
+Turn a rough cockpit issue into a precise plan another agent will execute without interpretation. The plan replaces the issue description. The bar: an implementation agent should read the plan end-to-end and start writing code without asking a single follow-up question.
 
 ## Input
-The issue ID (e.g. ALE-123) from the invocation. If none was given, ask which issue, or use `list_issues` to show open candidates and confirm one.
-
-## Linear access
-Linear is a downstream server behind conduit. Call tools with `mcp__conduit__call_tool`, server `Linear`. If this is the first Linear call in the session, run `describe_server` for `Linear` first. Pass markdown with literal newlines, never escaped.
+The issue key (e.g. CK-12) from the invocation. If none was given, ask which issue, or use `mcp__cockpit-config__list_issues` to show open candidates and confirm one.
 
 ## Invocation modes
 This skill runs in two modes. Determine which from how it was invoked.
 
-- **Pipeline (autonomous)**: a ticket enters `Issue Refinement Ready` and an agent runs the skill end to end with no human in the loop. Perform the detail check gate, the self-review loop, all status transitions, and **skip** the preview/confirm step. The agent never waits for a human.
-- **Interactive**: a human runs the skill directly (e.g. "refine ALE-123"). Same flow, but do the preview/confirm step before writing.
+- **Pipeline (autonomous)**: a ticket enters `Refine Ready` and an agent runs the skill end to end with no human in the loop. Perform the detail check gate, the self-review loop, all status transitions, and **skip** the preview/confirm step. The agent never waits for a human.
+- **Interactive**: a human runs the skill directly (e.g. "refine CK-12"). Same flow, but do the preview/confirm step before writing.
 
 The default is pipeline mode. Treat it as interactive only when a human invoked it directly in this session.
 
-Refinement and the adversarial review are one stage. The skill investigates once (warm context), then self-reviews and fixes in the same run, posting each review round's findings as a comment. There is no separate review stage in the autonomous pipeline. The issue moves Issue Refinement -> Human Review directly.
+Refinement and the adversarial review are one stage. The skill investigates once (warm context), then self-reviews and fixes in the same run, posting each review round's findings as a comment. There is no separate review stage in the autonomous pipeline. The issue moves Refining -> Plan Review directly.
 
 ## Steps
 
-### 1. Read the issue
-- `get_issue` for the ID. Capture the title, full description verbatim, type/labels, state.
-- `list_comments` for the issue. Read any context the reporter added.
-- If the description or comments contain images, pull them with `extract_images`.
+### 1. Read the issue and resolve the repo
+- `mcp__cockpit-config__get_issue` for the key. One call returns the full title, description verbatim, labels, status, and every comment — capture all of it, including any context a reporter left in a comment.
+- Resolve the repo to investigate: `list_projects`, match the issue's `projectId`, and use that project's `repoPath` if set. Otherwise use the session's current working directory (today's behaviour, and the only case while cockpit is the sole project). Investigation and file reads in the steps below happen in that repo.
+- If the description or a comment links an image, view it directly from its URL; attachments returned by `get_issue` are also plain URLs, viewable directly.
 
 Do not ask follow-up clarifying questions yet. The Explore step often answers them.
 
@@ -40,14 +37,14 @@ Before doing any investigation, verify the issue has enough basic information to
 - **Chore / task**: what needs to change and why.
 
 **If details are missing:**
-1. Set the issue status to `Needs Detail` via `save_issue` (id + state).
-2. Add a comment via `save_comment` listing exactly what is missing and what the reporter should add.
+1. Set the issue status to `Needs Detail` via `update_issue` (key + status).
+2. Add a comment via `add_issue_comment` listing exactly what is missing and what the reporter should add.
 3. Stop. Do not proceed with refinement.
 
 In interactive mode, surface the gaps to the human and ask whether to proceed anyway before moving to `Needs Detail`.
 
 **If details are sufficient:**
-1. Set the issue status to `Issue Refinement` via `save_issue` (id + state).
+1. Set the issue status to `Refining` via `update_issue` (key + status).
 2. Continue to step 3.
 
 ### 3. Classify
@@ -72,7 +69,7 @@ Use the explore guidance to direct your investigation in the next step. Use the 
 ### 5. Investigate the code (the core of the job)
 This is where the plan earns its precision. Do not guess.
 
-Spawn the **Explore** subagent (`subagent_type: "Explore"`) with the explore prompt from the loaded reference file. Do the exploration in the subagent, not inline. This keeps the main context lean and lets the search run without bloating the conversation.
+Spawn the **Explore** subagent (`subagent_type: "Explore"`) with the explore prompt from the loaded reference file, scoped to the repo resolved in step 1. Do the exploration in the subagent, not inline. This keeps the main context lean and lets the search run without bloating the conversation.
 
 - If the repo uses graphene, read the relevant nodes before exploring files, and record any boundary or gotcha you find.
 - Wait for the Explore subagent to return before continuing.
@@ -92,7 +89,7 @@ If you would cite a file you have not read in this skill invocation, read it now
 - The reproduction goes into the plan as a re-runnable recipe. Do not depend on a scratch dir surviving.
 
 ### 8. Write the plan
-Build the full description using the template sections from the loaded reference file. Do not write it to Linear yet.
+Build the full description using the template sections from the loaded reference file. Do not write it to the issue yet.
 
 Every plan starts with:
 
@@ -137,7 +134,7 @@ Dispatch the `plan-reviewer` agent (`subagent_type: "plan-reviewer"`) to attack 
 
 The agent returns Critical/High/Medium/Low findings and a PASS/FAIL verdict.
 
-**Post every round's findings as a comment.** After each review round, post the agent's full findings (all four buckets and the verdict) to the issue via `save_comment` before fixing anything. This is the observability trail: it shows what refinement's draft got wrong each pass, which is the signal for improving this skill over time. Do not skip a round's comment, even on PASS.
+**Post every round's findings as a comment.** After each review round, post the agent's full findings (all four buckets and the verdict) to the issue via `add_issue_comment` before fixing anything. This is the observability trail: it shows what refinement's draft got wrong each pass, which is the signal for improving this skill over time. Do not skip a round's comment, even on PASS.
 
 **On FAIL or any Critical/High findings:** fix the named issues in the draft, then re-dispatch. Productive iteration is allowed. Keep going as long as each round surfaces new issues, because that means the fixes are working and the reviewer is finding genuinely fresh problems.
 
@@ -151,7 +148,7 @@ The agent returns Critical/High/Medium/Low findings and a PASS/FAIL verdict.
 
 **If something genuinely cannot be fixed from available material** (e.g. the template asks for a Telemetry section but Explore returned no telemetry patterns), do not invent content. Note it as `**Unresolved:** <what's missing and why>` in the Open questions section of the plan.
 
-**If the loop hits the hard cap with blocking findings still open**, put them in the plan's Open questions section, post a final comment flagging them, and still route to Human Review. The human decides whether to send it back to Issue Refinement Ready or add detail.
+**If the loop hits the hard cap with blocking findings still open**, put them in the plan's Open questions section, post a final comment flagging them, and still route to Plan Review. The human decides whether to send it back to Refine Ready or add detail.
 
 ### 10. Preview and confirm (interactive mode only)
 
@@ -164,13 +161,11 @@ In interactive mode, show the user the full plan as it will appear in the issue 
 
 Wait for explicit confirmation before writing. Do not proceed on ambiguous responses.
 
-### 11. Write to Linear and transition status
-Resolve the correct Human Review state first. There are two states named "Human Review" (one in the Unstarted group, one in the Started group). Setting by name is ambiguous. This is the issue-level gate, the **Unstarted** one. Call `list_issue_statuses` for the issue's team, find the status whose name is "Human Review" and whose type is `unstarted`, and use its **ID**.
-
-Then write the final converged plan in one `save_issue` call with `id`, `description`, and `state: <that status ID>`. The description opens with the user's verbatim ask, so nothing is lost when it overwrites the field. The self-review already ran inline (step 9), so the plan moves straight to the human gate. The round-by-round findings are already on the issue as comments.
+### 11. Write the plan and transition status
+Write the final converged plan and move the status in one `update_issue` call: `key`, `description`, and `status: "Plan Review"`. `Plan Review` is its own named status, distinct from the implementation-side `Code Review` gate, so setting it by name is unambiguous — no group-qualified state ID to resolve first. The description opens with the user's verbatim ask, so nothing is lost when it overwrites the field. The self-review already ran inline (step 9), so the plan moves straight to the human gate. The round-by-round findings are already on the issue as comments.
 
 ## Rules
-- Build the whole plan before writing. One `save_issue`, not incremental edits.
+- Build the whole plan before writing. One `update_issue` call, not incremental edits.
 - Preserve the original ask verbatim at the top. The overwrite is why this matters.
 - Quote real code from real files. Do not paraphrase snippets. If you would cite a file you have not read, read it first.
 - Include reference patterns with quoted snippets so the implementation agent knows what good looks like in this codebase.

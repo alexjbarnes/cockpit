@@ -83,6 +83,17 @@ export function logDiag(sessionId: string, label: string, data?: Record<string, 
   init().then(() => write({ dir: "diag", sessionId, label, ...data }));
 }
 
+/**
+ * Log a format-proxy event. `providerId` stands in for the sessionId the other
+ * loggers carry: the CLI reaches the proxy over plain HTTP with nothing but a
+ * provider in the URL, so there is no session to attribute a request to.
+ * Filter these with `jq 'select(.dir == "proxy")' ~/.cockpit/debug.jsonl`.
+ */
+export function logProxy(providerId: string, label: string, data?: Record<string, unknown>): void {
+  if (!enabled) return;
+  init().then(() => write({ dir: "proxy", providerId, label, ...data }));
+}
+
 export function isDebugEnabled(): boolean {
   return enabled;
 }

@@ -337,6 +337,28 @@ interface SpawnOpts {
   deepseekBaseUrl?: string;
 }
 
+/**
+ * process.env minus the marks of a Claude Code session.
+ *
+ * Whatever runs the suite may itself be a Claude Code session, and its
+ * CLAUDECODE / CLAUDE_CODE_* variables would be inherited by cockpit and then
+ * by every CLI cockpit spawns. A CLI that sees them takes itself for a nested
+ * invocation and writes NO transcript, so the session produces no messages, no
+ * assistant text renders, and every spec that asserts on output fails with
+ * "element not found" — while the mock shows the request arriving and the
+ * status going running then idle, which reads like a cockpit bug rather than a
+ * harness one. Keeps CLAUDE_CONFIG_DIR and CLAUDE_BIN: neither carries the
+ * prefix, and the harness sets both deliberately.
+ */
+function envWithoutClaudeCodeSession(): Record<string, string | undefined> {
+  const clean: Record<string, string | undefined> = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (key === "CLAUDECODE" || key.startsWith("CLAUDE_CODE_")) continue;
+    clean[key] = value;
+  }
+  return clean;
+}
+
 function spawnCockpit(opts: SpawnOpts): ChildProcess {
   const repoRoot = path.resolve(__dirname, "..", "..");
   // Use the compiled dist/ instead of `npx tsx server.ts`. tsx incurs ~10s
@@ -345,7 +367,7 @@ function spawnCockpit(opts: SpawnOpts): ChildProcess {
   return spawn("node", ["dist/server.js"], {
     cwd: repoRoot,
     env: {
-      ...process.env,
+      ...envWithoutClaudeCodeSession(),
       PORT: String(opts.cockpitPort),
       HOST: "127.0.0.1",
       COCKPIT_TOKEN: opts.cockpitToken,

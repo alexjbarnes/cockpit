@@ -46,7 +46,7 @@ describe("fs_changed cwd value", () => {
     () =>
       new Promise<void>((resolve) => {
         sandbox = mkdtempSync(join(tmpdir(), "fsw-cwd-test-"));
-        manager = new SessionManager();
+        manager = new SessionManager({ defaultRuntime: "stream" });
         terminalMgr = new TerminalManager();
         server = createServer();
         createWebSocketHandler(server, manager, terminalMgr);

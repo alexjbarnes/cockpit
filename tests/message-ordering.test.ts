@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyMessageDone, applyTranscript, buildUserMessage } from "@/hooks/message-ordering";
+import { applyMessageDone, applyTranscript, buildUserMessage, pushPendingQuestion } from "@/hooks/message-ordering";
 import { extractTextFiles } from "@/lib/paste-detect";
 import type { ChatMessage } from "@/types";
 
@@ -219,5 +219,24 @@ describe("applyTranscript", () => {
 
     expect(result).toHaveLength(1);
     expect(result[0].textFiles).toEqual([{ name: "paste.ts", content: "const x = 1" }]);
+  });
+});
+
+describe("pushPendingQuestion", () => {
+  it("appends a new request id", () => {
+    const result = pushPendingQuestion([], { requestId: "r1", questions: "q" });
+    expect(result).toHaveLength(1);
+  });
+
+  it("refuses to stack a second entry for a request id already held", () => {
+    const first = pushPendingQuestion([], { requestId: "r1", questions: "q" });
+    const second = pushPendingQuestion(first, { requestId: "r1", questions: "q" });
+    expect(second).toHaveLength(1);
+  });
+
+  it("keeps an answered entry so the id stays taken", () => {
+    const first = pushPendingQuestion([{ requestId: "r1", questions: "q", answered: true }], { requestId: "r1", questions: "q" });
+    expect(first).toHaveLength(1);
+    expect(first[0].answered).toBe(true);
   });
 });

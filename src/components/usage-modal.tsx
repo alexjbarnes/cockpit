@@ -145,8 +145,8 @@ function formatUSD(v: number): string {
   return `$${v.toFixed(2)}`;
 }
 
-/** Zen has no spend API, so cockpit meters proxied traffic locally; DeepSeek
- *  shows the account balance from their API. */
+/** Zen and Go have no spend API, so cockpit meters proxied traffic locally;
+ *  DeepSeek shows the account balance from their API. */
 function BuiltinUsagePanel({ providerId }: { providerId: string }) {
   const [data, setData] = useState<BuiltinUsageData | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -183,14 +183,16 @@ function BuiltinUsagePanel({ providerId }: { providerId: string }) {
         </>
       )}
       {data.balanceError && <p className="text-xs text-destructive mb-2">Balance unavailable: {data.balanceError}</p>}
-      {providerId === "zen" && (
+      {(providerId === "zen" || providerId === "zen-go") && (
         <>
           <CreditRow label="Spend today (est.)" value={formatUSD(data.spend.today.costUSD)} />
           <CreditRow label="Spend this week (est.)" value={formatUSD(data.spend.week.costUSD)} />
           <CreditRow label="Spend this month (est.)" value={formatUSD(data.spend.month.costUSD)} />
           <CreditRow label="Requests this week" value={String(data.spend.week.requests)} />
           <p className="mt-3 text-xs text-muted-foreground">
-            Metered by cockpit from proxied sessions at current model prices. Billing lives in your opencode.ai workspace console.
+            {providerId === "zen"
+              ? "Metered by cockpit from proxied sessions at current model prices. Billing lives in your opencode.ai workspace console."
+              : "Metered by cockpit from proxied sessions at current model prices. Go has no spend API — its real limits are dollar-based (5-hour, weekly, and monthly caps), viewable only in your opencode.ai workspace console."}
           </p>
         </>
       )}
@@ -206,7 +208,7 @@ export function UsageButton({ className, sessionModel }: { className?: string; s
   const { usage, loading, error, refresh } = useUsage();
 
   // The indicator follows the active session's provider: OpenRouter sessions
-  // show credit spend, zen shows cockpit-metered spend, deepseek shows the
+  // show credit spend, zen/go show cockpit-metered spend, deepseek shows the
   // account balance, everything else keeps the Anthropic subscription view.
   // The model arrives live from the session view via the shell context — the
   // sessions list API omits model for scanned sessions, so it can never be
@@ -215,6 +217,7 @@ export function UsageButton({ className, sessionModel }: { className?: string; s
   const PROVIDER_TITLES: Record<string, string> = {
     openrouter: "OpenRouter Usage",
     zen: "OpenCode Zen Usage",
+    "zen-go": "OpenCode Go Usage",
     deepseek: "DeepSeek Usage",
   };
   const providerId = prefix && PROVIDER_TITLES[prefix] ? prefix : null;

@@ -1,16 +1,44 @@
 import { describe, expect, it } from "vitest";
 import {
+  assertValidCronExpression,
   describeAllSchedules,
   describeSchedule,
   findMissedRun,
   getJobSchedules,
   getNextRunTime,
   getNextRunTimeAny,
+  hasTimeBasedSchedule,
   matchesCron,
   scheduleToCron,
   simpleScheduleToCron,
 } from "@/server/cron-utils";
 import type { JobSchedule, SimpleSchedule } from "@/types";
+
+describe("assertValidCronExpression", () => {
+  it("accepts well-formed expressions, including steps, ranges and lists", () => {
+    for (const expr of ["0 9 * * 1", "*/15 * * * *", "30 6 1 * *", "0 8-18/2 * * 1-5", "0,30 9,17 * * *"]) {
+      expect(() => assertValidCronExpression(expr), expr).not.toThrow();
+    }
+  });
+
+  it("rejects the garbage parseCron silently turns into NaN (job would never fire)", () => {
+    for (const expr of ["banana * * * *", "* pear * * *", "1-x * * * *"]) {
+      expect(() => assertValidCronExpression(expr), expr).toThrow(/malformed|out of range/);
+    }
+  });
+
+  it("rejects out-of-range field values", () => {
+    for (const expr of ["61 * * * *", "* 24 * * *", "* * 0 * *", "* * * 13 *", "* * * * 7"]) {
+      expect(() => assertValidCronExpression(expr), expr).toThrow(/out of range/);
+    }
+  });
+
+  it("rejects the wrong number of fields", () => {
+    for (const expr of ["* * *", "* * * * * *", ""]) {
+      expect(() => assertValidCronExpression(expr), expr).toThrow(/expected 5 fields/);
+    }
+  });
+});
 
 describe("matchesCron", () => {
   it("matches exact minute and hour", () => {
@@ -183,6 +211,14 @@ describe("describeSchedule", () => {
   it("defaults time to 00:00 for hourly description", () => {
     expect(describeSchedule({ type: "simple", frequency: "hourly" })).toBe("Every hour at :00");
   });
+
+  it("describes an onIssueStatus schedule with no project filter", () => {
+    expect(describeSchedule({ type: "onIssueStatus", status: "Implementation Ready" })).toBe("On issue → Implementation Ready");
+  });
+
+  it("describes an onIssueStatus schedule with a project filter", () => {
+    expect(describeSchedule({ type: "onIssueStatus", status: "Backlog", project: "proj-1" })).toBe("On issue → Backlog (project: proj-1)");
+  });
 });
 
 describe("getNextRunTime", () => {
@@ -273,5 +309,44 @@ describe("getNextRunTimeAny", () => {
     const after = new Date(2026, 4, 17, 10, 0, 0);
     const next = getNextRunTimeAny([], after);
     expect(next.getTime()).toBe(after.getTime() + 86400000);
+  });
+
+  it("ignores onIssueStatus schedules and finds the next time-based one", () => {
+    const after = new Date(2026, 4, 17, 10, 0, 0);
+    const schedules: JobSchedule[] = [
+      { type: "onIssueStatus", status: "Backlog" },
+      { type: "simple", frequency: "daily", time: "15:00" },
+    ];
+    const next = getNextRunTimeAny(schedules, after);
+    expect(next.getHours()).toBe(15);
+  });
+
+  it("falls back to the generic 'nothing matched' answer when every schedule is onIssueStatus (caller must check hasTimeBasedSchedule first)", () => {
+    const after = new Date(2026, 4, 17, 10, 0, 0);
+    const next = getNextRunTimeAny([{ type: "onIssueStatus", status: "Backlog" }], after);
+    expect(next.getTime()).toBe(after.getTime() + 86400000);
+  });
+});
+
+describe("hasTimeBasedSchedule", () => {
+  it("is true for a plain simple/cron schedule list", () => {
+    expect(hasTimeBasedSchedule([{ type: "simple", frequency: "daily", time: "09:00" }])).toBe(true);
+    expect(hasTimeBasedSchedule([{ type: "cron", expression: "0 9 * * *" }])).toBe(true);
+  });
+
+  it("is true when a job mixes a time-based schedule with an onIssueStatus one", () => {
+    const schedules: JobSchedule[] = [
+      { type: "onIssueStatus", status: "Backlog" },
+      { type: "cron", expression: "0 9 * * *" },
+    ];
+    expect(hasTimeBasedSchedule(schedules)).toBe(true);
+  });
+
+  it("is false when every schedule is onIssueStatus", () => {
+    expect(hasTimeBasedSchedule([{ type: "onIssueStatus", status: "Backlog" }])).toBe(false);
+  });
+
+  it("is false for an empty schedule list", () => {
+    expect(hasTimeBasedSchedule([])).toBe(false);
   });
 });

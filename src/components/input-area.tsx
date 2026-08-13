@@ -106,6 +106,36 @@ const thinkingLevels: { value: ThinkingLevel; label: string }[] = [
   { value: "max", label: "Max" },
 ];
 
+/** How tall the textarea may grow when there is plenty of room. */
+const TEXTAREA_MAX_PX = 200;
+/** Never shrink it below roughly two lines, however cramped the container. */
+const TEXTAREA_MIN_PX = 72;
+/** Always leave this much of the conversation visible above the input. */
+const MIN_MESSAGES_PX = 56;
+
+/**
+ * The height ceiling for the auto-growing textarea.
+ *
+ * A flat 200px is fine on a full page, where the input row owns the whole
+ * viewport width and height it needs. Inside the assistant modal the chat
+ * column is a fraction of the viewport tall, the input row is `shrink-0`, and
+ * the modal is `overflow-hidden`: once the row outgrew the column the excess
+ * was silently clipped, taking the caret off screen while you typed. Cap by
+ * what the surrounding column can actually spare instead, measuring the row's
+ * non-textarea chrome (attachment chips, toolbar, padding) so a pasted file
+ * shrinks the writing area rather than pushing it out of view.
+ */
+function maxTextareaHeight(el: HTMLTextAreaElement | null): number {
+  const row = el?.closest<HTMLElement>("[data-input-row]");
+  // Not row.parentElement: that wrapper is sized by the row itself, so it would
+  // report the row's own height and the cap would collapse to the floor.
+  const bounds = row?.closest<HTMLElement>("[data-input-bounds]");
+  if (!el || !row || !bounds) return TEXTAREA_MAX_PX;
+  const chrome = row.offsetHeight - el.offsetHeight;
+  const room = bounds.clientHeight - chrome - MIN_MESSAGES_PX;
+  return Math.max(TEXTAREA_MIN_PX, Math.min(TEXTAREA_MAX_PX, room));
+}
+
 const IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
 
 const TEXT_EXTENSIONS = new Set([
@@ -595,10 +625,22 @@ export function InputArea({
 
   const handleInput = useCallback(() => {
     const el = textareaRef.current;
+    // Measure the cap BEFORE collapsing to auto, since it reads the row's
+    // current chrome height against the textarea's current height.
+    const cap = maxTextareaHeight(el);
     if (!el) return;
     el.style.height = "auto";
-    el.style.height = Math.min(el.scrollHeight, 200) + "px";
+    el.style.height = Math.min(el.scrollHeight, cap) + "px";
   }, []);
+
+  // The keyboard opening (or any viewport change) shrinks the room the input
+  // has without firing an input event, so re-apply the cap on resize.
+  useEffect(() => {
+    const target: { addEventListener: typeof window.addEventListener; removeEventListener: typeof window.removeEventListener } =
+      window.visualViewport ?? window;
+    target.addEventListener("resize", handleInput);
+    return () => target.removeEventListener("resize", handleInput);
+  }, [handleInput]);
 
   const pasteCountRef = useRef(0);
 
@@ -789,6 +831,7 @@ export function InputArea({
 
   return (
     <div
+      data-input-row
       className={`border-t bg-background px-1 pt-2 pb-1 ${dragOver ? "ring-2 ring-primary ring-inset" : ""}`}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
@@ -1183,35 +1226,36 @@ export function InputArea({
                             Restart agent harness
                           </button>
 
-                          {!isCockpitAgent && (
-                            <button
-                              onClick={() => onSetBypass(!bypassActive)}
-                              className="flex w-full items-center justify-between rounded-lg border border-border px-4 py-3 text-xs hover:bg-muted/50 transition-colors"
-                              data-testid="bypass-toggle"
-                            >
-                              <div className="flex items-center gap-3">
-                                {bypassActive ? (
-                                  <ShieldOff className="h-4 w-4 text-orange-500" />
-                                ) : (
-                                  <ShieldCheck className="h-4 w-4 text-muted-foreground" />
-                                )}
-                                <span className={bypassActive ? "text-orange-500 font-medium" : "text-muted-foreground"}>
-                                  Bypass all permissions
-                                </span>
-                              </div>
-                              <span
-                                className={`inline-flex h-5 w-9 items-center rounded-full transition-colors shrink-0 ${
-                                  bypassActive ? "bg-orange-500" : "bg-muted-foreground/30"
-                                }`}
-                              >
-                                <span
-                                  className={`inline-block h-4 w-4 rounded-full bg-white transition-transform shadow-sm ${
-                                    bypassActive ? "translate-x-4.5" : "translate-x-0.5"
-                                  }`}
-                                />
+                          <button
+                            onClick={() => onSetBypass(!bypassActive)}
+                            className="flex w-full items-center justify-between rounded-lg border border-border px-4 py-3 text-xs hover:bg-muted/50 transition-colors"
+                            data-testid="bypass-toggle"
+                          >
+                            <div className="flex items-center gap-3">
+                              {bypassActive ? (
+                                <ShieldOff className="h-4 w-4 text-orange-500" />
+                              ) : (
+                                <ShieldCheck className="h-4 w-4 text-muted-foreground" />
+                              )}
+                              <span className={bypassActive ? "text-orange-500 font-medium" : "text-muted-foreground"}>
+                                {/* In the assistant it covers tool calls only: config
+                                    changes always keep their approval card, so the
+                                    blanket wording would overpromise. */}
+                                {isCockpitAgent ? "Bypass tool prompts" : "Bypass all permissions"}
                               </span>
-                            </button>
-                          )}
+                            </div>
+                            <span
+                              className={`inline-flex h-5 w-9 items-center rounded-full transition-colors shrink-0 ${
+                                bypassActive ? "bg-orange-500" : "bg-muted-foreground/30"
+                              }`}
+                            >
+                              <span
+                                className={`inline-block h-4 w-4 rounded-full bg-white transition-transform shadow-sm ${
+                                  bypassActive ? "translate-x-4.5" : "translate-x-0.5"
+                                }`}
+                              />
+                            </span>
+                          </button>
 
                           {initData?.mcpServers && initData.mcpServers.length > 0 && (
                             <button

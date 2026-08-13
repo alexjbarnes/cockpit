@@ -35,7 +35,7 @@ describe("WebSocket reconnection", () => {
   beforeEach(
     () =>
       new Promise<void>((resolve) => {
-        manager = new SessionManager();
+        manager = new SessionManager({ defaultRuntime: "stream" });
         server = createServer();
         createWebSocketHandler(server, manager, new TerminalManager());
         validToken = createAuthSession();

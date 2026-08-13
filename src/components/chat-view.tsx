@@ -8,7 +8,7 @@ import { useSession } from "@/hooks/use-session";
 import { useSettings } from "@/hooks/use-settings";
 import { useWebSocket } from "@/hooks/use-websocket";
 import { pathBasename } from "@/lib/path";
-import { splitAtQuestion } from "@/lib/split-question-blocks";
+import { pairQuestionBlocks, splitAtQuestion } from "@/lib/split-question-blocks";
 import { cn } from "@/lib/utils";
 import type { Provider } from "@/types";
 import { useShell, useShellSessionModel } from "./app-shell";
@@ -139,6 +139,11 @@ export function ChatView({
   const startIndex = Math.max(0, totalMessages - renderWindow);
   const visibleMessages = useMemo(() => uniqueMessages.slice(startIndex), [uniqueMessages, startIndex]);
   const hasMoreAbove = startIndex > 0;
+
+  // One card per pending question: each unanswered question block gets the
+  // request at its own position, rather than every block getting the first.
+  const unansweredQuestions = useMemo(() => pendingQuestions.filter((q) => !q.answered), [pendingQuestions]);
+  const questionPairing = useMemo(() => pairQuestionBlocks(visibleMessages), [visibleMessages]);
 
   // "Worked for" duration, keyed by the assistant message that ENDS a turn:
   // the next visible message is a user prompt, or it is the last message and the
@@ -378,7 +383,10 @@ export function ChatView({
   }, [cwd, currentRuntime, thinkingCheck?.targetModel, cancelThinkingCheck, router]);
 
   return (
-    <div className={cn("flex flex-col flex-1 min-h-0", className)}>
+    // data-input-bounds: the height the input row must live within. InputArea
+    // measures it to cap how tall the textarea may grow, which matters in the
+    // assistant modal where this column is only a fraction of the viewport.
+    <div data-input-bounds className={cn("flex flex-col flex-1 min-h-0", className)}>
       <div
         ref={scrollRef}
         data-chat-scroll
@@ -407,10 +415,11 @@ export function ChatView({
               const { before, questionBlock, after } = splitAtQuestion(msg.blocks || []);
 
               if (questionBlock) {
-                // Match an UNANSWERED pending question. find(() => true) grabbed
-                // the first entry, which after a prior answered question is the
-                // stale answered one — so a follow-up question never rendered.
-                const pending = pendingQuestions.find((q) => !q.answered);
+                // Pair this block with its OWN pending request by position (see
+                // pairQuestionBlocks). Taking the first unanswered one for every
+                // block rendered a single request as several identical cards.
+                const slot = questionPairing.get(msg.id);
+                const pending = slot === undefined ? undefined : unansweredQuestions[slot];
                 const hasOutput = !!questionBlock.toolUse.output;
 
                 return (
