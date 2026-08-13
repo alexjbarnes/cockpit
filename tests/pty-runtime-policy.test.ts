@@ -187,134 +187,143 @@ describe("TUI-only permission dialog rescue", () => {
   });
 });
 
-// A background subagent keeps calling tools after its parent's turn has ended.
-// Every PreToolUse emits `__tool_use_start`, which drives the session back to
-// "running" — so the spinner restarted on a session that was idle and waiting
-// for the user. A subagent's PreToolUse is indistinguishable from the main
-// thread's (probed against the real CLI: same session_id, same
-// transcript_path, no agent id), so the agent's lifetime is the only signal.
-describe("status while a subagent is running", () => {
+// Status and the background-work indicator, both driven by the CLI's own
+// `background_tasks` list rather than inferred from the Subagent hooks.
+//
+// Measured against the real CLI (harness probe, 2026-08-13) in this order:
+//   SubagentStart                          agent launched
+//   Stop, background_tasks:[{running}]     parent's turn ends, agent still going
+//   SubagentStop, background_tasks:[{running}]   fires ~90ms later and LIES
+//   Stop, background_tasks:[]              genuine completion, much later
+// and live on a real box the launched agent's own stop never arrived at all,
+// while stops turned up for ids that never started. So a stop proves nothing;
+// only the list does.
+describe("background work: status gate and reported count", () => {
   function handlerFor(runtime: PtyRuntime) {
     return (runtime as never as { buildHandler(): Record<string, (p: Record<string, unknown>) => unknown> }).buildHandler();
   }
 
   const statusSignals = (events: ParsedEvent[]) => events.filter((e) => e.type === "system_message" && e.text === "__tool_use_start");
   const toolStarts = (events: ParsedEvent[]) => events.filter((e) => e.type === "tool_use_start");
+  const counts = (events: ParsedEvent[]) =>
+    events.filter((e) => e.type === "system_message" && e.text?.startsWith("__agents::")).map((e) => e.text);
 
-  it("suppresses the status signal while an agent is active, and restores it after", () => {
+  const preToolUse = { permission_mode: "default", tool_name: "Bash", tool_input: { command: "echo hi" } };
+  const task = (id: string, status = "running") => ({ id, status, agent_type: "general-purpose", description: "work" });
+
+  it("mid-turn, a tool call always drives status, agent running or not", () => {
     const { runtime, events } = makeRuntime("default");
     const handler = handlerFor(runtime);
-    const preToolUse = { permission_mode: "default", tool_name: "Bash", tool_input: { command: "echo hi" } };
 
     handler.onPreToolUse(preToolUse);
-    expect(statusSignals(events), "no agent running: the main thread drives status as before").toHaveLength(1);
+    expect(statusSignals(events)).toHaveLength(1);
 
     handler.onSubagentStart({ agent_id: "agent-1", agent_type: "general-purpose" });
     events.length = 0;
     handler.onPreToolUse(preToolUse);
-    expect(statusSignals(events), "agent running: a tool call is not evidence the turn resumed").toHaveLength(0);
-    expect(toolStarts(events), "the tool itself still renders").toHaveLength(1);
-
-    handler.onSubagentStop({ agent_id: "agent-1", agent_type: "general-purpose" });
-    events.length = 0;
-    handler.onPreToolUse(preToolUse);
-    expect(statusSignals(events), "agent finished: status recovery works again").toHaveLength(1);
+    expect(statusSignals(events), "the turn has not ended, so this is the main thread working").toHaveLength(1);
   });
 
-  it("waits for every agent to stop before restoring it", () => {
+  it("suppresses the status signal after the turn ends while work is still listed", () => {
     const { runtime, events } = makeRuntime("default");
     const handler = handlerFor(runtime);
+
+    handler.onSubagentStart({ agent_id: "agent-1", agent_type: "general-purpose" });
+    handler.onStop({ background_tasks: [task("agent-1")] });
+
+    events.length = 0;
+    handler.onPreToolUse(preToolUse);
+    expect(statusSignals(events), "the agent's tool call is not the user's turn resuming").toHaveLength(0);
+    expect(toolStarts(events), "the tool itself still renders").toHaveLength(1);
+  });
+
+  it("ignores a SubagentStop whose own payload still lists the agent running", () => {
+    const { runtime, events } = makeRuntime("default");
+    const handler = handlerFor(runtime);
+
     handler.onSubagentStart({ agent_id: "agent-1" });
-    handler.onSubagentStart({ agent_id: "agent-2" });
-    handler.onSubagentStop({ agent_id: "agent-1" });
+    handler.onStop({ background_tasks: [task("agent-1")] });
+    // The real sequence: the stop arrives ~90ms in, carrying a list that still
+    // says running. Believing the stop released the gate and blanked the dot.
+    handler.onSubagentStop({ agent_id: "agent-1", background_tasks: [task("agent-1")] });
 
     events.length = 0;
-    handler.onPreToolUse({ permission_mode: "default", tool_name: "Bash", tool_input: {} });
+    handler.onPreToolUse(preToolUse);
     expect(statusSignals(events)).toHaveLength(0);
+    expect(counts(events), "nothing changed, so nothing is re-reported").toHaveLength(0);
+  });
 
-    handler.onSubagentStop({ agent_id: "agent-2" });
+  it("releases the gate when the list finally comes back empty", () => {
+    const { runtime, events } = makeRuntime("default");
+    const handler = handlerFor(runtime);
+
+    handler.onSubagentStart({ agent_id: "agent-1" });
+    handler.onStop({ background_tasks: [task("agent-1")] });
+    handler.onSubagentStop({ agent_id: "agent-1", background_tasks: [] });
+
     events.length = 0;
-    handler.onPreToolUse({ permission_mode: "default", tool_name: "Bash", tool_input: {} });
+    handler.onPreToolUse(preToolUse);
     expect(statusSignals(events)).toHaveLength(1);
   });
 
-  // Seen live (2026-08-12, session c5d328f8): SubagentStart for a06f66a7, then
-  // SubagentStops for a1c34184 and a8efbb68 — ids with no matching start, from
-  // the CLI's own internal agents reporting on the parent session. A count
-  // decremented on those and released the gate eight seconds after a real agent
-  // began, putting the spinner straight back on an idle session. Membership must
-  // ignore a stop it never saw start.
-  it("keeps suppressing when a stop arrives for an agent that never started here", () => {
+  it("ignores a stop for an agent that never started here", () => {
     const { runtime, events } = makeRuntime("default");
     const handler = handlerFor(runtime);
-    handler.onSubagentStart({ agent_id: "agent-1", agent_type: "general-purpose" });
-    for (const agentId of ["internal-a", "internal-b", "internal-c"]) {
-      handler.onSubagentStop({ agent_id: agentId });
-    }
 
-    events.length = 0;
-    handler.onPreToolUse({ permission_mode: "default", tool_name: "Bash", tool_input: {} });
-    expect(statusSignals(events), "agent-1 is still working: foreign stops must not release the gate").toHaveLength(0);
-
-    handler.onSubagentStop({ agent_id: "agent-1" });
-    events.length = 0;
-    handler.onPreToolUse({ permission_mode: "default", tool_name: "Bash", tool_input: {} });
-    expect(statusSignals(events), "its own stop does release it").toHaveLength(1);
-  });
-
-  it("ignores a subagent payload with no agent id rather than gating on it forever", () => {
-    const { runtime, events } = makeRuntime("default");
-    const handler = handlerFor(runtime);
-    handler.onSubagentStart({ agent_type: "general-purpose" });
-
-    events.length = 0;
-    handler.onPreToolUse({ permission_mode: "default", tool_name: "Bash", tool_input: {} });
-    expect(statusSignals(events), "nothing to key the gate on, so status behaves as normal").toHaveLength(1);
-  });
-
-  // The other half of the bug: the parent resumes and replies in text, making
-  // no tool call, so nothing marked the session running again.
-  it("starts a turn on UserPromptSubmit, and stops suppressing from there", () => {
-    const { runtime, events } = makeRuntime("default");
-    const handler = handlerFor(runtime);
     handler.onSubagentStart({ agent_id: "agent-1" });
+    handler.onStop({ background_tasks: [task("agent-1")] });
+    // Live: the CLI's internal agents report stops on the parent session.
+    handler.onSubagentStop({ agent_id: "internal-x", background_tasks: [task("agent-1")] });
 
     events.length = 0;
-    handler.onUserPromptSubmit({ permission_mode: "default", prompt: "resumed" });
+    handler.onPreToolUse(preToolUse);
+    expect(statusSignals(events)).toHaveLength(0);
+  });
+
+  it("a payload with no task list leaves the count alone", () => {
+    const { runtime, events } = makeRuntime("default");
+    const handler = handlerFor(runtime);
+
+    handler.onSubagentStart({ agent_id: "agent-1" });
+    handler.onStop({ background_tasks: [task("agent-1")] });
+    events.length = 0;
+    // Not every hook carries background_tasks; absence is not emptiness.
+    handler.onSubagentStop({ agent_id: "agent-1" });
+
+    handler.onPreToolUse(preToolUse);
+    expect(statusSignals(events)).toHaveLength(0);
+    expect(counts(events)).toHaveLength(0);
+  });
+
+  it("reports the count on launch, on change, and never twice for the same value", () => {
+    const { runtime, events } = makeRuntime("default");
+    const handler = handlerFor(runtime);
+
+    handler.onSubagentStart({ agent_id: "agent-1" });
+    handler.onSubagentStart({ agent_id: "agent-2" });
+    handler.onSubagentStart({ agent_id: "agent-2" });
+    handler.onStop({ background_tasks: [task("agent-1"), task("agent-2")] });
+    handler.onStop({ background_tasks: [task("agent-1"), task("agent-2", "completed")] });
+    handler.onStop({ background_tasks: [] });
+
+    expect(counts(events)).toEqual(["__agents::1", "__agents::2", "__agents::1", "__agents::0"]);
+  });
+
+  it("keeps the count across a new user turn, but reopens the spinner for it", () => {
+    const { runtime, events } = makeRuntime("default");
+    const handler = handlerFor(runtime);
+
+    handler.onSubagentStart({ agent_id: "agent-1" });
+    handler.onStop({ background_tasks: [task("agent-1")] });
+    events.length = 0;
+
+    // The user sends a message while the agent works on.
+    handler.onUserPromptSubmit({ permission_mode: "default", prompt: "meanwhile" });
     expect(events.filter((e) => e.type === "system_message" && e.text === "__turn_start")).toHaveLength(1);
+    expect(counts(events), "background work outlives the turn that launched it").toHaveLength(0);
 
     events.length = 0;
-    handler.onPreToolUse({ permission_mode: "default", tool_name: "Bash", tool_input: {} });
-    expect(statusSignals(events), "a new turn clears the gate the old one left").toHaveLength(1);
-  });
-
-  it("reports the running count so an idle session can show background work", () => {
-    const { runtime, events } = makeRuntime("default");
-    const handler = handlerFor(runtime);
-    const counts = () => events.filter((e) => e.type === "system_message" && e.text?.startsWith("__agents::")).map((e) => e.text);
-
-    handler.onSubagentStart({ agent_id: "agent-1" });
-    handler.onSubagentStart({ agent_id: "agent-2" });
-    // A repeated start for an agent already tracked must not double the count.
-    handler.onSubagentStart({ agent_id: "agent-2" });
-    handler.onSubagentStop({ agent_id: "agent-1" });
-    // A stop for an agent that never started must not move the count either.
-    handler.onSubagentStop({ agent_id: "internal" });
-    handler.onSubagentStop({ agent_id: "agent-2" });
-
-    expect(counts()).toEqual(["__agents::1", "__agents::2", "__agents::1", "__agents::0"]);
-  });
-
-  it("clears the gate and the count when a new parent turn starts", () => {
-    const { runtime, events } = makeRuntime("default");
-    const handler = handlerFor(runtime);
-    handler.onSubagentStart({ agent_id: "agent-1" });
-
-    events.length = 0;
-    handler.onUserPromptSubmit({ permission_mode: "default", prompt: "next turn" });
-    expect(
-      events.filter((e) => e.type === "system_message" && e.text === "__agents::0"),
-      "the dot must go out: a new turn cannot be gated by an old turn's agents",
-    ).toHaveLength(1);
+    handler.onPreToolUse(preToolUse);
+    expect(statusSignals(events), "this turn's tool calls are the user's").toHaveLength(1);
   });
 });

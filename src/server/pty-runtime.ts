@@ -68,28 +68,37 @@ export class PtyRuntime {
   private modeDivergenceWarned = false;
   private lastPreToolUse: { tool: string; input?: Record<string, unknown> } | null = null;
   /**
-   * Subagents this session launched that are still running, by agent id.
+   * Background work still running, by task id, taken from the CLI's own
+   * `background_tasks` list rather than inferred from the Subagent hooks.
    *
-   * A subagent's PreToolUse is indistinguishable from the main thread's —
-   * probed against the real CLI: same session_id, same transcript_path, no
-   * agent id — and every PreToolUse emits `__tool_use_start`, which drives the
-   * session to "running". So a background subagent working on after its
-   * parent's turn ended restarted the spinner on a session that was idle and
-   * waiting for the user. Bracketing the agent's lifetime is the only signal
-   * available, and it is enough: while one is running, a tool call is not
-   * evidence that the user's turn resumed.
+   * SubagentStop is not "the agent finished". Measured against the real CLI:
+   * SubagentStop fires ~90ms after SubagentStart, right after the parent's
+   * message_done, while the SAME payload's background_tasks still reports the
+   * agent running; the genuine completion arrives much later as a task list
+   * that no longer contains it. Live, the opposite failure: the launched
+   * agent's own stop never arrived at all, and stops turned up for ids that
+   * never started (the CLI's internal agents report on the parent session). So
+   * neither counting stops nor pairing their ids can track agent lifetime.
+   * background_tasks can, and does — it is what the task cards already use.
    *
-   * Membership, NOT a count. SubagentStop arrives for agents that never
-   * started here — the CLI's own internal agents report stops on the parent
-   * session (seen live: start a06f66a7, then stops for a1c34184 and a8efbb68,
-   * ids with no matching start). A count decremented on those, releasing the
-   * gate seconds after a real agent began and putting the spinner straight
-   * back on an idle session. A set ignores a stop it never saw start.
-   *
-   * What keeps the set from latching is not id pairing but UserPromptSubmit,
-   * which empties it: a new parent turn cannot be gated by an old one's agents.
+   * SubagentStart still adds optimistically, so the indicator appears the
+   * moment an agent launches instead of waiting for the parent's Stop to carry
+   * the first list.
    */
-  private readonly activeAgents = new Set<string>();
+  private readonly runningTasks = new Set<string>();
+  /**
+   * Whether the parent's turn has ended (Stop seen, no new prompt yet).
+   *
+   * The status gate below applies only in that window. A subagent's PreToolUse
+   * is indistinguishable from the main thread's — probed against the real CLI:
+   * same session_id, same transcript_path, no agent id — and every PreToolUse
+   * emits `__tool_use_start`, which drives the session to "running". That is
+   * correct mid-turn and wrong once the turn has ended, where it restarted the
+   * spinner on a session idle and waiting for the user. Keying the gate on the
+   * turn boundary means a user who sends a new message while an agent is still
+   * working still gets a spinner for their own turn.
+   */
+  private turnEnded = false;
   private exited = false;
   private cleaned = false;
   /** Resolver armed by deliverInitialPrompt; fired when UserPromptSubmit confirms the first prompt landed. */
@@ -339,18 +348,38 @@ export class PtyRuntime {
     this.pendingPermissions.clear();
     this.pendingTuiDialogs.clear();
     // The process is going away, so nothing it launched is still running.
-    this.activeAgents.clear();
+    this.runningTasks.clear();
     await this.cleanup();
   }
 
   /**
-   * Report how many subagents are running, so a session that is idle and
-   * accepting input can still show that work it launched is going on. Called
-   * after every change to the set; emits only when the count actually moved.
+   * Replace the running-task set from a payload's `background_tasks`, the CLI's
+   * own account of what is still working. Payloads that carry it (Stop,
+   * SubagentStop) are authoritative, including when the list is empty — an
+   * empty list is how a finished agent is reported.
    */
-  private reportActiveAgents(previous: number): void {
-    if (this.activeAgents.size === previous) return;
-    this.emit([{ type: "system_message", text: `__agents::${this.activeAgents.size}` }]);
+  private syncRunningTasks(payload: Record<string, unknown>): void {
+    const raw = payload.background_tasks;
+    if (!Array.isArray(raw)) return;
+    const running = new Set<string>();
+    for (const entry of raw as { id?: unknown; status?: unknown }[]) {
+      const id = stringOrEmpty(entry?.id);
+      if (id && entry?.status === "running") running.add(id);
+    }
+    const before = this.runningTasks.size;
+    this.runningTasks.clear();
+    for (const id of running) this.runningTasks.add(id);
+    this.reportRunningTasks(before);
+  }
+
+  /**
+   * Report how much background work is running, so a session that is idle and
+   * accepting input can still show that work it launched is going on. Emits
+   * only when the count actually moved.
+   */
+  private reportRunningTasks(previous: number): void {
+    if (this.runningTasks.size === previous) return;
+    this.emit([{ type: "system_message", text: `__agents::${this.runningTasks.size}` }]);
   }
 
   /**
@@ -433,9 +462,10 @@ export class PtyRuntime {
         // can name the tool it is actually gating.
         this.lastPreToolUse = { tool: toolName, input: payload.tool_input as Record<string, unknown> | undefined };
         let events = translateHookEvent("PreToolUse", payload);
-        if (this.activeAgents.size > 0) {
-          // Keep the tool card, drop only the status signal (see activeAgents).
-          // Mid-turn this changes nothing — the session is already running.
+        if (this.turnEnded && this.runningTasks.size > 0) {
+          // The turn is over and background work is still going, so this tool
+          // call is that work's, not the user's turn resuming. Keep the tool
+          // card, drop only the status signal (see turnEnded).
           events = events.filter((e) => !(e.type === "system_message" && e.text === "__tool_use_start"));
         }
         this.emit(events);
@@ -463,6 +493,12 @@ export class PtyRuntime {
           payloadKeys: Object.keys(payload),
         });
         console.log(`[pty-runtime] Stop hook received for session ${this.opts.sessionId.slice(0, 8)}`);
+        // The turn has ended: from here a tool call belongs to background work,
+        // not the user's turn. The same payload carries the authoritative list
+        // of what is still running.
+        this.turnEnded = true;
+        this.syncRunningTasks(payload);
+        logDiag(this.opts.sessionId, "pty:turn-ended", { runningTasks: this.runningTasks.size });
         const events = translateHookEvent("Stop", payload);
         this.emit(events);
       },
@@ -479,18 +515,24 @@ export class PtyRuntime {
       onUserPromptSubmit: (payload) => {
         this.cancelErrorDebounce();
         this.ptyOutputBuffer = "";
-        logDiag(this.opts.sessionId, "pty:hook-user-prompt-submit", { armed: !!this.promptAccepted, activeAgents: this.activeAgents.size });
+        logDiag(this.opts.sessionId, "pty:hook-user-prompt-submit", {
+          armed: !!this.promptAccepted,
+          runningTasks: this.runningTasks.size,
+        });
         this.checkPayloadMode(payload, "UserPromptSubmit");
         this.promptAccepted?.();
-        // A parent turn is starting, so nothing a previous one launched can
-        // still be gating status. The CLI submits a prompt of its own when it
-        // resumes the parent after a launched agent finishes, which is why this
-        // is also the signal that the session is working again: a resumed turn
-        // that answers in text alone makes no tool call, so `__tool_use_start`
-        // never arrives and the session would sit idle while it typed.
-        const beforePrompt = this.activeAgents.size;
-        this.activeAgents.clear();
-        this.reportActiveAgents(beforePrompt);
+        // A parent turn is starting, so the gate closes: this turn's tool calls
+        // are the user's, whatever background work is still going. The CLI
+        // submits a prompt of its own when it resumes the parent after a
+        // launched agent finishes, which is why this is also the signal that the
+        // session is working again — a resumed turn that answers in text alone
+        // makes no tool call, so `__tool_use_start` never arrives and the
+        // session would sit idle while it typed.
+        //
+        // The running-task count is NOT cleared here. Background work outlives
+        // the turn that launched it, and the user can send a message while it
+        // runs; the next Stop re-syncs the truth either way.
+        this.turnEnded = false;
         this.emit(translateHookEvent("UserPromptSubmit", payload));
       },
       onUserPromptExpansion: (payload) => {
@@ -511,11 +553,14 @@ export class PtyRuntime {
         const desc = typeof payload.description === "string" ? payload.description.slice(0, 80) : "";
         console.log(`[pty-runtime] SubagentStart: cli_session=${cliSession} tool_use_id=${toolUseId} type=${agentType} desc="${desc}"`);
         console.log(`[pty-runtime] SubagentStart full payload keys: ${Object.keys(payload).join(", ")}`);
+        // Optimistic: the first authoritative list arrives with the parent's
+        // Stop, and waiting for it would leave the indicator dark while an
+        // agent was plainly launching.
         const startedAgent = stringOrEmpty(payload.agent_id);
-        const beforeStart = this.activeAgents.size;
-        if (startedAgent) this.activeAgents.add(startedAgent);
-        this.reportActiveAgents(beforeStart);
-        logDiag(this.opts.sessionId, "pty:subagent-start", { agentId: startedAgent || null, active: this.activeAgents.size });
+        const beforeStart = this.runningTasks.size;
+        if (startedAgent) this.runningTasks.add(startedAgent);
+        this.reportRunningTasks(beforeStart);
+        logDiag(this.opts.sessionId, "pty:subagent-start", { agentId: startedAgent || null, running: this.runningTasks.size });
         this.emit(translateHookEvent("SubagentStart", payload));
       },
       onSubagentStop: (payload) => {
@@ -526,17 +571,15 @@ export class PtyRuntime {
         const agentType = typeof payload.agent_type === "string" ? payload.agent_type : "unknown";
         console.log(`[pty-runtime] SubagentStop: cli_session=${cliSession} tool_use_id=${toolUseId} type=${agentType}`);
         console.log(`[pty-runtime] SubagentStop full payload keys: ${Object.keys(payload).join(", ")}`);
-        // Only a stop for an agent that started here counts. The CLI reports
-        // stops for its own internal agents on the parent session, and letting
-        // those through released the gate while a real agent was still working.
-        const stoppedAgent = stringOrEmpty(payload.agent_id);
-        const beforeStop = this.activeAgents.size;
-        if (stoppedAgent) this.activeAgents.delete(stoppedAgent);
-        this.reportActiveAgents(beforeStop);
+        // The stop itself decides nothing: it fires ~90ms after the start while
+        // this very payload's background_tasks still reports the agent running,
+        // and stops also arrive for ids that never started here. Only the list
+        // counts.
+        this.syncRunningTasks(payload);
         logDiag(this.opts.sessionId, "pty:subagent-stop", {
-          agentId: stoppedAgent || null,
-          active: this.activeAgents.size,
-          known: beforeStop !== this.activeAgents.size,
+          agentId: stringOrEmpty(payload.agent_id) || null,
+          running: this.runningTasks.size,
+          hadList: Array.isArray(payload.background_tasks),
         });
         this.emit(translateHookEvent("SubagentStop", payload));
       },
