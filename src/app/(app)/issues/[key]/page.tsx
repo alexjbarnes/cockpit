@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowLeft, Loader2, Paperclip, Pencil, X } from "lucide-react";
+import { ArrowLeft, Loader2, Paperclip, Pencil, Trash2, X } from "lucide-react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
@@ -8,6 +8,7 @@ import { usePageHeader } from "@/components/app-shell";
 import { MarkdownRender } from "@/components/markdown-render";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { useSettings } from "@/hooks/use-settings";
 import { actorHref, actorLabel, describeActivityAction, ISSUE_STATUSES } from "@/lib/issue-display";
@@ -76,6 +77,10 @@ export default function IssueDetailPage() {
 
   const [commentDraft, setCommentDraft] = useState("");
   const [savingComment, setSavingComment] = useState(false);
+
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const [commentError, setCommentError] = useState<string | null>(null);
 
   const fetchIssue = useCallback(async () => {
@@ -202,6 +207,27 @@ export default function IssueDetailPage() {
     }
   }
 
+  async function deleteIssue() {
+    if (!issue) return;
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      const res = await fetch(`/api/issues/${encodeURIComponent(issue.key)}`, { method: "DELETE" });
+      if (!res.ok) {
+        // Staying on the page with the reason beats bouncing to a list that
+        // still shows the issue, which is what a silent failure looks like.
+        const body = await res.json().catch(() => ({}));
+        setDeleteError(body.error || `Delete failed (${res.status})`);
+        return;
+      }
+      router.push("/issues");
+    } catch (err) {
+      setDeleteError(err instanceof Error ? err.message : "Delete failed");
+    } finally {
+      setDeleting(false);
+    }
+  }
+
   if (!settingsLoaded || loading) {
     return (
       <div className="flex items-center justify-center py-12">
@@ -235,6 +261,15 @@ export default function IssueDetailPage() {
           </Button>
           <span className="font-mono text-sm text-muted-foreground">{issue.key}</span>
           {project && <span className="text-sm text-muted-foreground">{project.name}</span>}
+          <Button
+            variant="ghost"
+            size="icon"
+            className="ml-auto shrink-0 text-destructive hover:text-destructive"
+            onClick={() => setConfirmDelete(true)}
+            title="Delete issue"
+          >
+            <Trash2 className="h-4 w-4" />
+          </Button>
         </div>
 
         <Card>
@@ -421,6 +456,30 @@ export default function IssueDetailPage() {
           </CardContent>
         </Card>
       </div>
+
+      <Dialog open={confirmDelete} onOpenChange={(open) => !deleting && setConfirmDelete(open)}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Delete {issue.key}?</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <p className="text-sm text-muted-foreground">
+              This removes the issue, its comments, its activity trail and its attachments. It cannot be undone, and{" "}
+              <span className="font-mono">{issue.key}</span> will not be reused. To retire an issue while keeping the record, set its status
+              to Cancelled instead.
+            </p>
+            {deleteError && <p className="text-sm text-destructive">{deleteError}</p>}
+            <div className="flex justify-end gap-2">
+              <Button variant="ghost" onClick={() => setConfirmDelete(false)} disabled={deleting}>
+                Cancel
+              </Button>
+              <Button variant="destructive" onClick={deleteIssue} disabled={deleting}>
+                {deleting ? <Loader2 className="h-4 w-4 animate-spin" /> : "Delete"}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

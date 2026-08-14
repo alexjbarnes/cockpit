@@ -17,6 +17,7 @@ import {
   applyProjectUpdate,
   buildIssue,
   buildProject,
+  deleteIssue,
   deleteProject,
   getIssue,
   getProject,
@@ -948,5 +949,60 @@ describe("persistAttachmentFile", () => {
     const src = path.join(dir, "case.jpg");
     writeFileSync(src, "bytes");
     expect(persistAttachmentFile("ck-9", src)).toContain(path.join(getIssueAttachmentsRoot(), "CK-9"));
+  });
+});
+
+describe("deleteIssue", () => {
+  it("removes only the named issue from its project's file", () => {
+    const project = buildProject({ name: "Delete", prefix: "DL" });
+    saveProject(project);
+    const a = buildIssue({ projectId: project.id, title: "a" }, { kind: "user" });
+    const b = buildIssue({ projectId: project.id, title: "b" }, { kind: "user" });
+    saveIssue(a);
+    saveIssue(b);
+
+    expect(deleteIssue(a.key)).toBe(true);
+    expect(loadIssues(project.id).map((i) => i.key)).toEqual([b.key]);
+  });
+
+  it("returns false for a key that matches nothing, so a caller can 404", () => {
+    const project = buildProject({ name: "Empty", prefix: "EM" });
+    saveProject(project);
+
+    expect(deleteIssue("EM-404"), "real project, no such issue").toBe(false);
+    expect(deleteIssue("GONE-1"), "no such project").toBe(false);
+    expect(deleteIssue("nonsense"), "not a key at all").toBe(false);
+    expect(deleteIssue(""), "empty key").toBe(false);
+  });
+
+  it("takes the issue's attachment files with it", () => {
+    const project = buildProject({ name: "Files", prefix: "FL" });
+    saveProject(project);
+    const issue = buildIssue({ projectId: project.id, title: "with a screenshot" }, { kind: "user" });
+    saveIssue(issue);
+
+    const source = path.join(dir, "shot.png");
+    writeFileSync(source, "not really a png");
+    const stored = persistAttachmentFile(issue.key, source);
+    expect(existsSync(stored), "the file is copied into cockpit's own store").toBe(true);
+
+    expect(deleteIssue(issue.key)).toBe(true);
+    expect(existsSync(stored), "an issue's attachments must not outlive it").toBe(false);
+  });
+
+  it("leaves another issue's attachments alone", () => {
+    const project = buildProject({ name: "Files2", prefix: "FT" });
+    saveProject(project);
+    const doomed = buildIssue({ projectId: project.id, title: "goes" }, { kind: "user" });
+    const keeper = buildIssue({ projectId: project.id, title: "stays" }, { kind: "user" });
+    saveIssue(doomed);
+    saveIssue(keeper);
+
+    const source = path.join(dir, "keep.png");
+    writeFileSync(source, "keep me");
+    const keeperFile = persistAttachmentFile(keeper.key, source);
+
+    expect(deleteIssue(doomed.key)).toBe(true);
+    expect(existsSync(keeperFile)).toBe(true);
   });
 });

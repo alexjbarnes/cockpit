@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, unlinkSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, unlinkSync } from "node:fs";
 import { extname, join, resolve, sep } from "node:path";
 import { writeJsonAtomic } from "@/server/atomic-write";
 import { emitIssueStatusChange } from "@/server/issue-events";
@@ -408,6 +408,49 @@ export function saveIssue(issue: Issue): void {
   if (previousStatus !== issue.status) {
     emitIssueStatusChange({ key: issue.key, projectId: issue.projectId, from: previousStatus, to: issue.status });
   }
+}
+
+/**
+ * Remove an issue by its key. Returns false when the key resolves to nothing,
+ * so a caller can answer 404 rather than pretend it deleted something.
+ *
+ * Deliberately permanent, and deliberately not offered to the MCP tools: a
+ * status of Cancelled is how an agent or a job retires an issue, and a model
+ * that can delete one can also destroy the record of why it did. This is a
+ * human action from the UI.
+ *
+ * The key counter is NOT rewound. Deleting CK-12 leaves the next issue as
+ * CK-13, because the key is how the issue is referred to in branches, PR
+ * titles, worktree paths and other issues' comments, and handing the same key
+ * to a different issue later would silently repoint all of them.
+ */
+export function deleteIssue(key: string): boolean {
+  const prefix = keyPrefix(key);
+  if (!prefix) return false;
+  const project = getProjectByPrefix(prefix);
+  if (!project) return false;
+  const file = safeIssuesFile(project.id);
+  if (!file) return false;
+
+  const target = key.toUpperCase();
+  const issues = loadIssues(project.id);
+  const remaining = issues.filter((i) => i.key.toUpperCase() !== target);
+  if (remaining.length === issues.length) return false;
+
+  writeJsonAtomic(file, { issues: remaining });
+
+  // Attachments are copied into cockpit's own store per issue key
+  // (persistAttachmentFile), so they outlive the issue unless removed here.
+  // Containment-checked before unlinking, same reasoning as deleteProject.
+  try {
+    const root = resolve(getIssueAttachmentsRoot());
+    const dir = resolve(join(root, target));
+    if (isContainedIn(root, dir) && existsSync(dir)) rmSync(dir, { recursive: true, force: true });
+  } catch {
+    // best effort: a stranded screenshot is not a reason to fail the delete
+  }
+
+  return true;
 }
 
 /**

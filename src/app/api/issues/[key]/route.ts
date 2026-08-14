@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { validateSession } from "@/server/auth";
-import { applyIssueUpdate, getIssue, saveIssue } from "@/server/issue-storage";
+import { applyIssueUpdate, deleteIssue, getIssue, saveIssue } from "@/server/issue-storage";
 
 function authenticate(req: NextRequest): boolean {
   const token = req.cookies.get("cockpit_session")?.value || req.headers.get("authorization")?.replace("Bearer ", "");
@@ -46,5 +46,22 @@ export function PUT(req: NextRequest, { params }: { params: Promise<{ key: strin
     } catch (err) {
       return NextResponse.json({ error: err instanceof Error ? err.message : "Failed to save issue" }, { status: 400 });
     }
+  });
+}
+
+export function DELETE(req: NextRequest, { params }: { params: Promise<{ key: string }> }) {
+  if (!authenticate(req)) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  return params.then(({ key }) => {
+    // Permanent, and only reachable from the UI — the MCP tools have no
+    // equivalent on purpose (see deleteIssue). A missing key is a 404 rather
+    // than a cheerful ok, so a mistyped key does not read as a deletion.
+    const deleted = deleteIssue(key);
+    if (!deleted) {
+      return NextResponse.json({ error: "Not found" }, { status: 404 });
+    }
+    return NextResponse.json({ ok: true });
   });
 }
