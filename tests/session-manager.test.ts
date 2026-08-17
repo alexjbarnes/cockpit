@@ -704,6 +704,40 @@ describe("SessionManager", () => {
     });
   });
 
+  describe("spawning on a model that no longer resolves", () => {
+    it("refuses, and says why, instead of sending a foreign id to Anthropic", async () => {
+      // The provider's base URL and key ride on the resolved model. When a
+      // model is delisted — or filtered out as unusable, which is what happens
+      // to a model whose endpoint refuses tool calls — spawning anyway would
+      // send "openrouter:whatever" to Anthropic with Anthropic's credentials.
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      const systems: string[] = [];
+      s.emitter.on("system", (_id: string, text: string) => systems.push(text));
+
+      s.info.model = "openrouter:z-ai/glm-5.2:free";
+
+      (manager as any).spawnProcess(s, session.id);
+
+      expect(s.harnessProcess, "nothing may be spawned").toBeFalsy();
+      const message = systems.find((t) => t.includes("no longer available"));
+      expect(message).toBeTruthy();
+      expect(message).toContain("tool calls");
+    });
+
+    it("still spawns for an unqualified Anthropic model", async () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      const systems: string[] = [];
+      s.emitter.on("system", (_id: string, text: string) => systems.push(text));
+
+      s.info.model = "sonnet";
+      (manager as any).spawnProcess(s, session.id);
+
+      expect(systems.find((t) => t.includes("no longer available"))).toBeUndefined();
+    });
+  });
+
   describe("setThinkingLevel", () => {
     it("sets thinking level on session", () => {
       const session = manager.createSession("/tmp");

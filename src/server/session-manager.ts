@@ -2363,6 +2363,25 @@ Additional Cockpit rules beyond the CLI's defaults:
     this.log(sessionId, `spawning CLI process (resume=${willResume}, model=${session.info.model || "sonnet"}, runtime=${session.runtime})`);
 
     const resolved = resolveProviderModel(session.info.model ?? "sonnet");
+
+    // A provider-qualified model that no longer resolves has been delisted, or
+    // filtered out as unusable (a model whose endpoint refuses tool calls is
+    // dropped from the catalog — see provider-catalog.ts). Spawning anyway is
+    // the worst option available: `resolved` carries the provider's base URL
+    // and key, so without it the CLI would send a foreign model id to
+    // Anthropic. Say what happened and leave the session idle for the user to
+    // pick another model.
+    if (!resolved && session.info.model && this.slotProviderId(session.info.model) !== "anthropic") {
+      const message =
+        `${session.info.model} is no longer available from its provider. ` +
+        "It was either delisted, or it cannot accept tool calls, which a session needs. Pick another model to carry on.";
+      this.log(sessionId, `spawn: refusing, model does not resolve (${session.info.model})`);
+      this.emitSystem(session, sessionId, message);
+      session.info.status = "idle";
+      session.emitter.emit("status", sessionId, "idle");
+      return;
+    }
+
     const baseCliModel = resolved ? resolved.model.modelId : session.info.model;
     // A credit-gated model (Sonnet 4.6) at 1M only requests its 1M window when
     // the id carries a [1m] suffix, and only if the user opted in. Everything
