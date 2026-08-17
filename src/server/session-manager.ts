@@ -1197,9 +1197,21 @@ export class SessionManager {
       if (!sizes || sizes.length === 0) return requestedSize;
       return sizes.includes(requestedSize) ? requestedSize : sizes[0];
     })();
-    // CLAUDE_CODE_DISABLE_1M_CONTEXT is applied at spawn, so a context-size
-    // change mid-session requires a CLI restart to take effect.
-    const contextChanged = currentSize !== resolvedSize;
+    // CLAUDE_CODE_DISABLE_1M_CONTEXT and CLAUDE_CODE_MAX_CONTEXT_TOKENS are
+    // both applied at spawn, so any change to the window the CLI enforces
+    // requires a restart to take effect.
+    //
+    // Comparing the ContextSize enum alone was not enough. A foreign model
+    // carries its window in `contextLength`, not in the 200k/1m enum, so
+    // switching between two models that both sit at the enum's default looked
+    // unchanged and took the live-switch path below. The CLI then kept the
+    // window it was spawned with while cockpit's gauge moved to the new
+    // model's: seen live, a session switched onto a 128k model kept filling to
+    // 439k, and when the upstream finally refused the prompt the CLI's
+    // automatic compaction — which has to send that same oversized prompt —
+    // failed too, reporting it as "there's an issue with the selected model".
+    const nextWindow = this.resolveContextWindow(model, resolvedSize);
+    const contextChanged = currentSize !== resolvedSize || nextWindow !== session.contextWindowSize;
 
     if (session.info.model === model && !contextChanged) {
       this.log(sessionId, `setModel: skipping (already ${model} with size ${resolvedSize})`);
@@ -1263,8 +1275,20 @@ export class SessionManager {
       session.emitter.emit("status", sessionId, "idle");
     }
     this.emitInfoUpdated(session, sessionId);
-    session.contextWindowSize = this.resolveContextWindow(model, resolvedSize);
+    session.contextWindowSize = nextWindow;
     const cur = session.contextUsage;
+    // A conversation that is already larger than the model just chosen cannot
+    // be rescued by the restart above: the CLI has to send the whole history to
+    // compact it, and that request is the one the upstream refuses. Say so,
+    // because the error the user would otherwise meet blames the model.
+    if (cur && cur.used > nextWindow) {
+      this.emitSystem(
+        session,
+        sessionId,
+        `This conversation holds about ${Math.round(cur.used / 1000)}k tokens, more than this model's ${Math.round(nextWindow / 1000)}k window. ` +
+          "It cannot compact its way back under, because compacting sends the whole conversation. Start a new session, or switch back to a model with a larger window.",
+      );
+    }
     if (cur) {
       // Assign, not just emit. shouldPreCompact reads contextUsage.total, so
       // telling the client the new window while leaving the server on the old

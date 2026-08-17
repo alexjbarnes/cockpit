@@ -2629,6 +2629,126 @@ describe("SessionManager", () => {
       manager.setModel(session.id, "zen:kimi", "1m");
       expect(s.contextWindowSize).toBe(262_144);
     });
+
+    // The CLI is told its window once, at spawn (CLAUDE_CODE_MAX_CONTEXT_TOKENS),
+    // so a switch that changes the window has to restart it. Comparing only the
+    // 200k/1m enum missed this entirely for foreign models, which carry their
+    // window in contextLength: seen live, a session switched onto a 128k model
+    // kept filling to 439k because the CLI still enforced the window it started
+    // with, and the automatic compaction that should have saved it failed too —
+    // compacting sends the whole conversation, which is the request being
+    // refused.
+    async function twoForeignModels() {
+      const { utimesSync, writeFileSync } = await import("node:fs");
+      const { join } = await import("node:path");
+      const file = join(process.env.COCKPIT_CONFIG_DIR!, "providers.json");
+      writeFileSync(
+        file,
+        JSON.stringify([
+          {
+            // zen, not openrouter: the openrouter built-in derives its model
+            // list from the synced catalog rather than this file, so a stored
+            // entry for it is ignored. The defect is provider-agnostic.
+            id: "zen",
+            name: "OpenCode Zen",
+            isBuiltin: true,
+            envVars: {},
+            models: [
+              { modelId: "big", displayName: "big", effortLevels: [], contextSizes: [], contextLength: 1_000_000 },
+              { modelId: "big2", displayName: "big2", effortLevels: [], contextSizes: [], contextLength: 1_000_000 },
+              { modelId: "small", displayName: "small", effortLevels: [], contextSizes: [], contextLength: 128_000 },
+            ],
+            enabledModels: ["big", "big2", "small"],
+          },
+        ]),
+      );
+      // The provider cache reloads on the file's mtime, and another test in
+      // this file writes the same path; two writes in the same millisecond
+      // would leave the cache holding that one's providers.
+      const future = Date.now() / 1000 + 60;
+      utimesSync(file, future, future);
+    }
+
+    it("restarts the CLI when the switch changes the window, even at the same context size", async () => {
+      await twoForeignModels();
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+
+      manager.setModel(session.id, "zen:big");
+      expect(s.contextWindowSize).toBe(1_000_000);
+
+      // A live process that COULD take a set_model control request. The window
+      // change must kill it anyway, because the env it was spawned with is the
+      // only place the CLI reads its window from.
+      const control = vi.fn();
+      let killed = false;
+      s.harnessProcess = {
+        writeControlRequest: control,
+        isAlive: true,
+        kill: () => {
+          killed = true;
+        },
+      };
+
+      manager.setModel(session.id, "zen:small");
+
+      expect(s.contextWindowSize).toBe(128_000);
+      expect(control, "a live set_model cannot change the spawn-time window").not.toHaveBeenCalled();
+      expect(killed, "so the process has to be restarted instead").toBe(true);
+    });
+
+    it("still switches live when the window is unchanged", async () => {
+      await twoForeignModels();
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      manager.setModel(session.id, "zen:big");
+
+      const control = vi.fn();
+      let killed = false;
+      s.harnessProcess = {
+        writeControlRequest: control,
+        isAlive: true,
+        kill: () => {
+          killed = true;
+        },
+      };
+
+      // Same catalog window, different model: no reason to pay for a restart.
+      manager.setModel(session.id, "zen:big2");
+      expect(killed).toBe(false);
+    });
+
+    it("says so when the conversation is already bigger than the model being chosen", async () => {
+      await twoForeignModels();
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      const systems: string[] = [];
+      s.emitter.on("system", (_id: string, text: string) => systems.push(text));
+
+      manager.setModel(session.id, "zen:big");
+      s.contextUsage = { used: 439_341, total: 1_000_000 };
+
+      manager.setModel(session.id, "zen:small");
+
+      const warning = systems.find((t) => t.includes("more than this model"));
+      expect(warning, "the CLI's own error blames the model, so cockpit has to explain").toBeTruthy();
+      expect(warning).toContain("439k");
+      expect(warning).toContain("128k");
+    });
+
+    it("says nothing when the conversation still fits", async () => {
+      await twoForeignModels();
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      const systems: string[] = [];
+      s.emitter.on("system", (_id: string, text: string) => systems.push(text));
+
+      manager.setModel(session.id, "zen:big");
+      s.contextUsage = { used: 10_000, total: 1_000_000 };
+      manager.setModel(session.id, "zen:small");
+
+      expect(systems.find((t) => t.includes("more than this model"))).toBeUndefined();
+    });
   });
 
   describe("setThinkingLevel", () => {
