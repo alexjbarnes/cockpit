@@ -63,6 +63,23 @@ vi.mock("@/server/pty-runtime", () => ({
   },
 }));
 
+// The adapter builds a real TranscriptWatcher. Capture its callback so a test
+// can drive transcript updates, which is the only channel that tells
+// session-manager a compaction the CLI declined has resolved.
+const watcherMock = vi.hoisted(() => ({
+  emit: null as null | ((messages: unknown[], lastUsage: { used: number } | null) => void),
+}));
+
+vi.mock("@/server/transcript-watcher", () => ({
+  TranscriptWatcher: class {
+    constructor(_id: string, _cwd: string, cb: (messages: unknown[], lastUsage: { used: number } | null) => void) {
+      watcherMock.emit = cb;
+    }
+    start() {}
+    stop() {}
+  },
+}));
+
 vi.mock("@/server/singleton", () => ({
   getHookRouter: vi.fn(() => mockHookRouter),
   setHookRouter: vi.fn(),
@@ -150,6 +167,7 @@ describe("SessionManager PTY runtime (unit)", () => {
     ptyMocks.kill.mockClear().mockResolvedValue(undefined);
     ptyMocks.interrupt.mockClear();
     ptyMocks.notifyPermissionDecision.mockClear().mockReturnValue(true);
+    watcherMock.emit = null;
   });
 
   describe("createSession", () => {
@@ -249,6 +267,106 @@ describe("SessionManager PTY runtime (unit)", () => {
       manager.sendMessage(session.id, "after");
       expect(ptyMocks.sendUserText).not.toHaveBeenCalledWith("after");
       expect(manager.getQueuedCount(session.id)).toBeGreaterThan(0);
+    });
+
+    // The CLI can accept a /compact, fire PreCompact, then decline it outright
+    // ("Not enough messages to compact.") with NO PostCompact and no Stop hook
+    // — verified against CLI 2.1.233 in the integration spec of the same name.
+    // The refusal reaches cockpit only as a transcript update, so that is the
+    // one place the flag can be released. Without this the session compacts
+    // forever and every later message queues behind it.
+    describe("a compaction the CLI declines", () => {
+      // Get to a live idle PTY with one exchange already on the transcript,
+      // then ask for a compaction the CLI will refuse.
+      function requestCompact(sessionId: string) {
+        manager.sendMessage(sessionId, "first");
+        emitMessageDone();
+        watcherMock.emit?.(
+          [
+            { id: "m1", role: "user" },
+            { id: "m2", role: "assistant" },
+          ],
+          null,
+        );
+        manager.sendMessage(sessionId, "/compact");
+        expect(manager.isCompacting(sessionId)).toBe(true);
+      }
+
+      it("releases the flag when the CLI answers instead of compacting", () => {
+        const session = manager.createSession("/tmp", undefined, { runtime: "pty" });
+        const systems: string[] = [];
+        manager.onSystem(session.id, (text) => systems.push(text));
+        requestCompact(session.id);
+
+        watcherMock.emit?.(
+          [
+            { id: "m1", role: "user" },
+            { id: "m2", role: "assistant" },
+            { id: "m3", role: "user", content: "/compact" },
+            { id: "m4", role: "assistant", content: "Not enough messages to compact." },
+          ],
+          null,
+        );
+
+        expect(manager.isCompacting(session.id)).toBe(false);
+        expect(systems).toContain("__compact::done");
+      });
+
+      it("delivers the message that queued behind it", () => {
+        const session = manager.createSession("/tmp", undefined, { runtime: "pty" });
+        requestCompact(session.id);
+        manager.sendMessage(session.id, "after");
+        expect(manager.getQueuedCount(session.id)).toBe(1);
+
+        watcherMock.emit?.(
+          [
+            { id: "m1", role: "user" },
+            { id: "m2", role: "assistant" },
+            { id: "m3", role: "assistant", content: "Not enough messages to compact." },
+          ],
+          null,
+        );
+
+        expect(ptyMocks.sendUserText).toHaveBeenCalledWith("after");
+        expect(manager.getQueuedCount(session.id)).toBe(0);
+      });
+
+      it("leaves a compaction that is genuinely in flight alone", () => {
+        const session = manager.createSession("/tmp", undefined, { runtime: "pty" });
+        requestCompact(session.id);
+
+        // The user's own "/compact" line reaching the transcript is not the CLI
+        // answering, so it must not release the flag.
+        watcherMock.emit?.(
+          [
+            { id: "m1", role: "user" },
+            { id: "m2", role: "assistant" },
+            { id: "m3", role: "user", content: "/compact" },
+          ],
+          null,
+        );
+
+        expect(manager.isCompacting(session.id)).toBe(true);
+      });
+
+      it("still takes the compaction marker as the real thing", () => {
+        const session = manager.createSession("/tmp", undefined, { runtime: "pty" });
+        requestCompact(session.id);
+
+        watcherMock.emit?.(
+          [
+            { id: "m1", role: "user" },
+            { id: "m2", role: "assistant" },
+            { id: "c1", role: "assistant", content: "__compacted__" },
+          ],
+          null,
+        );
+
+        expect(manager.isCompacting(session.id)).toBe(false);
+        // The marker path estimates post-compact usage; the declined path must
+        // not, because nothing was compacted.
+        expect(manager.getContextUsage(session.id)?.used).toBeGreaterThan(0);
+      });
     });
 
     it("includes --permission-mode plan when plan mode active", () => {
