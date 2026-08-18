@@ -313,6 +313,17 @@ export class PtyRuntime {
         logDiag(sessionId, "pty:user-send-abandoned", { attempt, exited: this.exited, superseded: this.sendEpoch !== epoch });
         return;
       }
+      const dialog = this.blockingDialogOnScreen();
+      if (dialog) {
+        logDiag(sessionId, "pty:user-send-blocked-by-dialog", { attempt, dialog });
+        console.log(`[pty-runtime] refusing to type into a CLI dialog for ${sessionId.slice(0, 8)}: ${dialog}`);
+        this.emitApiError(
+          `Your message was not sent. The CLI is waiting on a dialog that has to be answered in the terminal: "${dialog}". ` +
+            "Stop the session to dismiss it, then send again.",
+          { keepScreen: true },
+        );
+        return;
+      }
       let timer: ReturnType<typeof setTimeout> | null = null;
       const accepted = new Promise<boolean>((resolve) => {
         this.promptAccepted = () => resolve(true);
@@ -783,10 +794,42 @@ export class PtyRuntime {
     this.errorDebounce = setTimeout(() => this.emitApiError(errMsg), 10_000);
   }
 
+  /**
+   * A modal TUI dialog the CLI is waiting on, by title, or null.
+   *
+   * Cockpit types blind, so a dialog it cannot see eats the keystrokes: the
+   * message never becomes a turn, and worse, the text drives the dialog. Caught
+   * live (Mac, 2026-08-18) with the CLI's `/auto-mode-setup` wizard — the recorded
+   * screens show a checkbox flipping from [ ] to [✔] between delivery attempts,
+   * i.e. cockpit's own retry answering a consent dialog about scanning shell
+   * history and other repositories on the user's behalf.
+   *
+   * "Esc to cancel" is the discriminator. It is on every cancellable dialog
+   * footer and on none of the idle REPL's, which reads
+   * "auto mode on (shift+tab to cycle) · ← for agents". Matched whitespace-blind
+   * because the TUI writes those footers a character at a time with cursor moves
+   * in between, so the stripped screen has no spaces left in them.
+   */
+  private blockingDialogOnScreen(): string | null {
+    const screen = this.recentScreen(1500);
+    if (!/esctocancel/i.test(screen.replace(/\s+/g, ""))) return null;
+    // The first line that is neither blank nor box-drawing is the dialog's
+    // question — worth quoting back, since which dialog it is decides what the
+    // user should do about it.
+    const title = screen
+      .split("\n")
+      .map((line) => line.replace(/[─━│┌┐└┘]/g, "").trim())
+      .find((line) => line.length > 3);
+    return title ? title.slice(0, 120) : "an interactive prompt";
+  }
+
   /** Force the turn idle and surface `errMsg`. Shared by the coded-error debounce and the 1M-credits path. */
-  private emitApiError(errMsg: string): void {
+  private emitApiError(errMsg: string, opts?: { keepScreen?: boolean }): void {
     this.errorDebounce = null;
-    this.ptyOutputBuffer = "";
+    // A dialog the user has not dismissed is still on screen, and clearing the
+    // buffer would blind the next send to it — which is how the keystrokes got
+    // into it in the first place.
+    if (!opts?.keepScreen) this.ptyOutputBuffer = "";
 
     console.log(`[pty-runtime] API error detected for session ${this.opts.sessionId.slice(0, 8)}: ${errMsg}`);
 

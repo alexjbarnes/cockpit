@@ -255,6 +255,72 @@ describe("PtyRuntime interactive user send (sendUserText)", () => {
     logSpy.mockRestore();
   });
 
+  // Verbatim from a user's debug log (Mac, 2026-08-18, label
+  // pty:user-send-no-turn): the CLI's /auto-mode-setup wizard, which cockpit
+  // could not see and typed three messages into. The footer arrives with its
+  // spaces already eaten by the TUI's per-character cursor moves, which is why
+  // the detector matches whitespace-blind — keep this sample as recorded.
+  const AUTO_MODE_DIALOG =
+    "\r❯ /auto-mode-setup \r\r────────────────────────\rSet up auto mode for your environment?\r\n" +
+    "ClaudeCodereadsthisproject,yourrecentClaudesessions,andoptionallyyourshellhistoryandotherrepositories.\r\n" +
+    "HowyouuseClaudehere◀Mixed ▶\r\n❯Alsoscanshellhistory[✔]\r\nAlsoscanyourotherrepos[]\r\n\r\nContinue\r\n" +
+    "\r\n←/→tochangeusage·Entertocontinue·Esctocancel\r\n";
+
+  it("does not type into a CLI dialog, and names it", async () => {
+    vi.useFakeTimers();
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const { runtime, onError } = await startedRuntime();
+    transcriptMock.count = 5;
+    (runtime as unknown as { scanForErrors(chunk: string): void }).scanForErrors(AUTO_MODE_DIALOG);
+
+    await runtime.sendUserText("That branch doesn't exist, we've already merged.");
+
+    expect(ptySessionMock.sendText, "keystrokes here answer the dialog, they do not send the message").not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledWith(expect.stringContaining("Set up auto mode for your environment?"));
+    logSpy.mockRestore();
+  });
+
+  it("stops retrying when a dialog opens under the first attempt", async () => {
+    vi.useFakeTimers();
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const { runtime } = await startedRuntime();
+    transcriptMock.count = 5;
+
+    const sent = runtime.sendUserText("hello");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(ptySessionMock.sendText).toHaveBeenCalledTimes(1);
+
+    // The send opened a dialog rather than starting a turn. Retyping would drive
+    // it — a checkbox per attempt, in the reported case.
+    (runtime as unknown as { scanForErrors(chunk: string): void }).scanForErrors(AUTO_MODE_DIALOG);
+    await vi.advanceTimersByTimeAsync(4000 * 3 + 50);
+    await sent;
+
+    expect(ptySessionMock.sendText).toHaveBeenCalledTimes(1);
+    logSpy.mockRestore();
+  });
+
+  it("still retries when the screen is an ordinary idle REPL", async () => {
+    vi.useFakeTimers();
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const { runtime } = await startedRuntime();
+    transcriptMock.count = 5;
+    // The healthy footer, also verbatim from the same log. It must not read as
+    // a dialog, or every send on an idle session would be refused.
+    (runtime as unknown as { scanForErrors(chunk: string): void }).scanForErrors(
+      "\r❯ \r────────────\r⏵⏵automodeon (shift+tabtocycle)·←foragents71125tokens\r\n",
+    );
+
+    const sent = runtime.sendUserText("hello");
+    await vi.advanceTimersByTimeAsync(4000 + 50);
+    expect(ptySessionMock.sendText).toHaveBeenCalledTimes(2);
+
+    transcriptMock.count = 6;
+    await vi.advanceTimersByTimeAsync(4000 + 50);
+    await sent;
+    logSpy.mockRestore();
+  });
+
   it("stops retrying once the user interrupts", async () => {
     vi.useFakeTimers();
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
