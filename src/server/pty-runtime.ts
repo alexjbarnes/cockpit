@@ -102,8 +102,11 @@ export class PtyRuntime {
   private turnEnded = false;
   private exited = false;
   private cleaned = false;
-  /** Resolver armed by deliverInitialPrompt; fired when UserPromptSubmit confirms the first prompt landed. */
+  /** Resolver armed by a delivery attempt; fired when UserPromptSubmit confirms the prompt landed. */
   private promptAccepted: (() => void) | null = null;
+  /** Bumped by every send, and by interrupt/kill, so sendUserText's retry loop
+   *  can tell its own delivery is still the current one. */
+  private sendEpoch = 0;
   private ptyOutputBuffer = "";
   private errorDebounce: ReturnType<typeof setTimeout> | null = null;
   /** Fire the 1M-credits error at most once per spawn. */
@@ -268,46 +271,83 @@ export class PtyRuntime {
   }
 
   /**
-   * Deliver an interactive (live) user message, then confirm a turn actually
-   * started. Unlike the initial prompt, interactive sends were fire-and-forget:
-   * sendMessage flips the session to "running" and types the keystrokes, but if
-   * the REPL swallows them (no turn written) the session hangs "running" with the
-   * bubble vanishing on reload and no diagnostic. This logs the outcome: a turn
-   * started (transcript grew), or NO turn after the window — in which case it
-   * captures the REPL screen so the stuck case is explainable from the logs.
-   * Diagnostic only; it does not resend or change status.
+   * Deliver an interactive (live) user message, confirming a turn actually
+   * started and retyping it if not.
+   *
+   * Typing into a TUI is blind: there is no ready signal and no ack, so the same
+   * swallow deliverInitialPrompt guards against happens on live sends too, and
+   * was measured happening on a real Mac (two `pty:user-send-no-turn` records in
+   * one session, one right after an Esc dismissed an AskUserQuestion dialog).
+   * The cost was worse here than at spawn, because nothing recovered: the
+   * session hung "running" on a message the CLI never saw, the optimistic bubble
+   * vanished on reload, and the only way out was interrupting and sending again
+   * by hand. So this is now the same confirm-and-resend loop as the initial
+   * prompt — which is exactly that manual workaround, done automatically.
+   *
+   * Resending cannot double-submit a message that was merely slow: sendText
+   * opens with \x15 (kill-line), so a retype clears anything still sitting
+   * unsubmitted in the input box before typing over it. And a submitted prompt
+   * writes its user turn to the JSONL immediately, so the end-of-window
+   * transcript check catches a landed message even when the hook is lost, and
+   * returns rather than resending into it.
    */
   async sendUserText(text: string): Promise<void> {
     if (!this.pty) throw new Error("PtyRuntime not started");
     const { sessionId, cliSessionId, cwd } = this.opts;
+    const MAX_ATTEMPTS = 3;
+    // Shorter than the initial prompt's 8s: a live REPL that accepts input does
+    // so within a few hundred ms, and three windows here add up to the 12s this
+    // used to spend just watching the failure happen.
+    const CONFIRM_MS = 4000;
     const baselineMsgs = countTranscriptMessages(cliSessionId, cwd);
+    const turnStarted = () => countTranscriptMessages(cliSessionId, cwd) > baselineMsgs;
+    // Interrupting or killing the session, or superseding this send with
+    // another, invalidates the retry: keystrokes must not keep arriving at a
+    // REPL the user has since taken somewhere else.
+    const epoch = ++this.sendEpoch;
     logDiag(sessionId, "pty:user-send", { textLen: text.length, head: text.slice(0, 80), baselineMsgs, screenBefore: this.recentScreen() });
-    await this.pty.sendText(text);
 
-    const CONFIRM_MS = 12000;
-    setTimeout(() => {
-      if (this.exited) return;
-      const nowMsgs = countTranscriptMessages(cliSessionId, cwd);
-      if (nowMsgs > baselineMsgs) {
-        logDiag(sessionId, "pty:user-send-confirmed", { waitedMs: CONFIRM_MS, baselineMsgs, nowMsgs });
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      const pty = this.pty;
+      if (this.exited || !pty || this.sendEpoch !== epoch) {
+        logDiag(sessionId, "pty:user-send-abandoned", { attempt, exited: this.exited, superseded: this.sendEpoch !== epoch });
         return;
       }
-      // A submitted prompt writes a user turn to the JSONL at submit time, so no
-      // growth in this window means the keystrokes never produced a turn — the
-      // "sent but stuck, nothing happens, gone on reload" report. Surface it
-      // unconditionally (matches the other [pty-runtime] logs the user watches),
-      // and dump the REPL screen via the debug gate to show what swallowed it.
+      let timer: ReturnType<typeof setTimeout> | null = null;
+      const accepted = new Promise<boolean>((resolve) => {
+        this.promptAccepted = () => resolve(true);
+        timer = setTimeout(() => resolve(false), CONFIRM_MS);
+      });
+      const attemptAt = Date.now();
+      await pty.sendText(text);
+      const ok = await accepted;
+      if (timer) clearTimeout(timer);
+      this.promptAccepted = null;
+
+      if (ok || turnStarted()) {
+        logDiag(sessionId, "pty:user-send-confirmed", { attempt, waitedMs: Date.now() - attemptAt, viaHook: ok });
+        return;
+      }
       console.log(
-        `[pty-runtime] user message produced NO turn after ${CONFIRM_MS}ms for ${sessionId.slice(0, 8)} (textLen=${text.length}); input may have been swallowed by the REPL. Set COCKPIT_DEBUG=1 for the screen.`,
+        `[pty-runtime] user message produced NO turn after ${CONFIRM_MS}ms for ${sessionId.slice(0, 8)} (attempt ${attempt}/${MAX_ATTEMPTS}, textLen=${text.length}); input was swallowed by the REPL, resending.`,
       );
       logDiag(sessionId, "pty:user-send-no-turn", {
-        waitedMs: CONFIRM_MS,
+        attempt,
+        waitedMs: Date.now() - attemptAt,
         baselineMsgs,
-        nowMsgs,
         head: text.slice(0, 80),
         screenAfter: this.recentScreen(),
       });
-    }, CONFIRM_MS);
+    }
+
+    if (this.exited || this.sendEpoch !== epoch) return;
+    // Every attempt was swallowed, so the message is provably not in the CLI.
+    // Say so and force the turn idle: leaving it "running" is the hang this set
+    // out to fix, and a stuck-running session also holds back its queue.
+    logDiag(sessionId, "pty:user-send-failed", { attempts: MAX_ATTEMPTS });
+    this.emitApiError(
+      `Your message never reached Claude — it was typed in ${MAX_ATTEMPTS} times and the CLI never started a turn. Nothing was sent. Send it again; if that fails too, stop the session first.`,
+    );
   }
 
   sendSlash(command: string): void {
@@ -323,6 +363,9 @@ export class PtyRuntime {
   /** Sends Esc to claude — the interactive REPL treats it as interrupt. */
   interrupt(): void {
     if (!this.pty) return;
+    // Stop any in-flight delivery retry: the user asked for this turn to end, so
+    // retyping the message they interrupted would restart it behind their back.
+    this.sendEpoch++;
     this.pty.sendKey("\x1b");
     for (const [, pending] of this.pendingPermissions) {
       pending.resolve({ behavior: "deny", message: "interrupted" });
@@ -338,6 +381,7 @@ export class PtyRuntime {
 
   async kill(signal?: string): Promise<void> {
     this.cancelErrorDebounce();
+    this.sendEpoch++;
     if (this.pty) {
       this.pty.kill(signal);
       this.pty = null;
