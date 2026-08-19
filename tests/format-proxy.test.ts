@@ -265,7 +265,7 @@ describe("openAIToAnthropicResponse", () => {
     });
     expect(out.stop_reason).toBe("tool_use");
     expect(out.content).toEqual([{ type: "tool_use", id: "call_1", name: "get_weather", input: { city: "Leeds" } }]);
-    expect(out.usage).toEqual({ input_tokens: 24, output_tokens: 64 });
+    expect(out.usage).toEqual({ input_tokens: 24, output_tokens: 64, cache_read_input_tokens: 0 });
     expect(out.type).toBe("message");
     expect(out.role).toBe("assistant");
   });
@@ -388,6 +388,58 @@ describe("StreamTranslator", () => {
     for (const ch of full) out += t.feed(ch);
     const deltas = parseAnthropicSSE(out).filter((e) => e.event === "content_block_delta");
     expect(deltas).toHaveLength(1);
+  });
+});
+
+// Caching on the translated providers is automatic prefix caching, so the only
+// thing cockpit can do about it is report it. Before this, the proxy read
+// prompt_tokens and completion_tokens and nothing else, so cache_read_input_tokens
+// was absent on every proxied response — which is what the session token report
+// and the context gauge read, so a proxied session showed zero cache forever
+// whatever the upstream actually served.
+describe("prompt-cache reporting through the proxy", () => {
+  it("splits an OpenAI-style cached_tokens out of input_tokens", () => {
+    const out = openAIToAnthropicResponse({
+      choices: [{ message: { content: "ok" }, finish_reason: "stop" }],
+      usage: { prompt_tokens: 1000, completion_tokens: 20, prompt_tokens_details: { cached_tokens: 900 } },
+    });
+    // Anthropic's input_tokens excludes cache reads; prompt_tokens includes
+    // them. Reporting both in full would double-count 900 tokens in every
+    // consumer that sums the three fields.
+    expect(out.usage).toEqual({ input_tokens: 100, output_tokens: 20, cache_read_input_tokens: 900 });
+  });
+
+  it("reads DeepSeek's own cache field names", () => {
+    const out = openAIToAnthropicResponse({
+      choices: [{ message: { content: "ok" }, finish_reason: "stop" }],
+      usage: { prompt_tokens: 500, completion_tokens: 5, prompt_cache_hit_tokens: 448, prompt_cache_miss_tokens: 52 },
+    });
+    expect(out.usage).toEqual({ input_tokens: 52, output_tokens: 5, cache_read_input_tokens: 448 });
+  });
+
+  it("reports zero cache rather than negative input when the upstream is inconsistent", () => {
+    const out = openAIToAnthropicResponse({
+      choices: [{ message: { content: "ok" }, finish_reason: "stop" }],
+      usage: { prompt_tokens: 10, completion_tokens: 1, prompt_tokens_details: { cached_tokens: 400 } },
+    });
+    expect(out.usage).toEqual({ input_tokens: 0, output_tokens: 1, cache_read_input_tokens: 10 });
+  });
+
+  it("carries the cache read through the streaming path's message_delta", () => {
+    const t = new StreamTranslator();
+    const out = t.feed(
+      sse([
+        '{"id":"c1","model":"m","choices":[{"delta":{"content":"hi"},"finish_reason":null}]}',
+        '{"choices":[{"delta":{},"finish_reason":"stop"}]}',
+        '{"choices":[],"usage":{"prompt_tokens":800,"completion_tokens":4,"prompt_cache_hit_tokens":768}}',
+        "[DONE]",
+      ]),
+    );
+    const events = parseAnthropicSSE(out);
+    const md = events.find((e) => e.event === "message_delta")?.data as {
+      usage: { input_tokens: number; output_tokens: number; cache_read_input_tokens: number };
+    };
+    expect(md.usage).toEqual({ input_tokens: 32, output_tokens: 4, cache_read_input_tokens: 768 });
   });
 });
 
@@ -520,9 +572,38 @@ describe("FormatProxy server", () => {
     expect(body.type).toBe("message");
     expect(body.content).toEqual([{ type: "text", text: "hello from zen" }]);
     expect(body.stop_reason).toBe("end_turn");
-    expect(body.usage).toEqual({ input_tokens: 3, output_tokens: 4 });
+    expect(body.usage).toEqual({ input_tokens: 3, output_tokens: 4, cache_read_input_tokens: 0 });
     expect(seenAuth).toBe("Bearer zen-key-1");
     expect(JSON.parse(seenBody).messages).toEqual([{ role: "user", content: "hi" }]);
+  });
+
+  // Cache hit rate was unanswerable from the logs: "complete" carried only
+  // input/output tokens, so there was no way to tell a session serving most of
+  // its prompt from cache from one missing every time.
+  it("logs the cache hit rate on completion", async () => {
+    const port = await startUpstream((_body, res) => {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify({
+          id: "gen-1",
+          model: "deepseek-v4-flash",
+          choices: [{ message: { content: "ok" }, finish_reason: "stop" }],
+          usage: { prompt_tokens: 1000, completion_tokens: 8, prompt_cache_hit_tokens: 750, prompt_cache_miss_tokens: 250 },
+        }),
+      );
+    });
+    proxy = new FormatProxy(() => ({ baseUrl: `http://127.0.0.1:${port}`, apiKey: "k", modelIds: [] }));
+    await proxy.start();
+    proxyLogs.length = 0;
+
+    await fetch(`${proxy.getUrl("zen-go")}/v1/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "deepseek-v4-flash", max_tokens: 50, messages: [{ role: "user", content: "hi" }] }),
+    });
+
+    const complete = proxyLogs.find((l) => l.label === "complete");
+    expect(complete?.data).toMatchObject({ cachedInputTokens: 750, cacheMissTokens: 250, cacheHitRatio: 0.75 });
   });
 
   it("translates a streaming round trip end to end", async () => {
