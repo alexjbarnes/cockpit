@@ -113,6 +113,7 @@ vi.mock("@/server/transcript", () => ({
   loadLastAssistantMessage: vi.fn().mockResolvedValue(null),
   getTranscriptPath: vi.fn().mockReturnValue("/tmp/fake-transcript.jsonl"),
   loadPromptHistory: vi.fn().mockResolvedValue([]),
+  sumTranscriptUsage: vi.fn().mockResolvedValue({ input: 0, output: 0, cacheRead: 0, cacheCreate: 0 }),
 }));
 
 vi.mock("@/server/session-prefs", () => ({
@@ -653,12 +654,34 @@ describe("SessionManager PTY runtime (unit)", () => {
   });
 
   describe("PTY-handled slash commands", () => {
-    it("/cost emits token usage without throwing", () => {
+    // /cost reads the transcript now. It used to read an in-memory counter fed
+    // by onRawLine, which the PTY adapter never calls — so on the default
+    // runtime it reported four zeros for every session, however much the
+    // session had actually spent.
+    it("/cost reports the transcript's totals, including the cache hit rate", async () => {
+      const { sumTranscriptUsage } = await import("@/server/transcript");
+      vi.mocked(sumTranscriptUsage).mockResolvedValue({ input: 250, output: 400, cacheRead: 750, cacheCreate: 0 });
       const session = manager.createSession("/tmp", undefined, { runtime: "pty" });
       const msgs: string[] = [];
       manager.onSystem(session.id, (m) => msgs.push(m));
+
       expect(manager.sendMessage(session.id, "/cost")).toBe(true);
-      expect(msgs.some((m) => m.includes("Input tokens"))).toBe(true);
+      await vi.waitFor(() => expect(msgs.some((m) => m.includes("Input tokens"))).toBe(true));
+
+      const report = msgs.find((m) => m.includes("Input tokens")) ?? "";
+      expect(report).toContain("Cache read tokens:  750");
+      expect(report, "750 of 1,000 prompt tokens came from cache").toContain("Cache hit rate:     75%");
+    });
+
+    it("/cost says so rather than throwing when the transcript cannot be read", async () => {
+      const { sumTranscriptUsage } = await import("@/server/transcript");
+      vi.mocked(sumTranscriptUsage).mockRejectedValue(new Error("EACCES"));
+      const session = manager.createSession("/tmp", undefined, { runtime: "pty" });
+      const msgs: string[] = [];
+      manager.onSystem(session.id, (m) => msgs.push(m));
+
+      expect(manager.sendMessage(session.id, "/cost")).toBe(true);
+      await vi.waitFor(() => expect(msgs.some((m) => m.includes("Could not read"))).toBe(true));
     });
 
     it("/context emits context usage without throwing", () => {

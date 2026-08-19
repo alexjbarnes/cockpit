@@ -49,7 +49,7 @@ import { findChainForCliSession, getSessionPrefs, type SessionRuntime, setSessio
 import { getCockpitMcp } from "./singleton";
 import { createStreamState, processEvents, type StreamState } from "./stream-processor";
 import { TodoWatcher } from "./todo-watcher";
-import { findSessionCwd, loadMoreMessages, loadPromptHistory, loadTranscript, transcriptExists } from "./transcript";
+import { findSessionCwd, loadMoreMessages, loadPromptHistory, loadTranscript, sumTranscriptUsage, transcriptExists } from "./transcript";
 
 export type { SessionRuntime };
 
@@ -168,7 +168,6 @@ interface Session {
   spawning?: boolean;
   todoWatcher: TodoWatcher | null;
   /** Cumulative token counts for the current session (used by /cost). */
-  totalTokens: { input: number; output: number; cacheCreate: number; cacheRead: number };
 }
 
 export function buildMcpConfigArg(url: string, token: string): { path: string } {
@@ -312,7 +311,6 @@ export class SessionManager {
       paginationPrevIds: [],
       runtime: rt,
       todoWatcher: null,
-      totalTokens: { input: 0, output: 0, cacheCreate: 0, cacheRead: 0 },
       cockpitAgent: isCockpitAgent,
       cockpitAgentCleanups: [],
       // Present only for a scheduled job that reports to the inbox. It is what
@@ -439,7 +437,6 @@ export class SessionManager {
         paginationPrevIds: [],
         runtime: restoredRuntime,
         todoWatcher: null,
-        totalTokens: { input: 0, output: 0, cacheCreate: 0, cacheRead: 0 },
         cockpitAgent: prefs?.cockpitAgent ?? false,
         cockpitAgentCleanups: [],
       };
@@ -1693,10 +1690,6 @@ export class SessionManager {
         });
         session.emitter.emit("usage", sessionId, usage);
       }
-      session.totalTokens.input += u.input_tokens || 0;
-      session.totalTokens.output += u.output_tokens || 0;
-      session.totalTokens.cacheCreate += u.cache_creation_input_tokens || 0;
-      session.totalTokens.cacheRead += u.cache_read_input_tokens || 0;
     } catch {
       // not valid JSON, ignore
     }
@@ -2107,14 +2100,22 @@ export class SessionManager {
       }
 
       case "/cost": {
-        const t = session.totalTokens;
-        const lines = [
-          `Input tokens:       ${t.input.toLocaleString()}`,
-          `Output tokens:      ${t.output.toLocaleString()}`,
-          `Cache write tokens: ${t.cacheCreate.toLocaleString()}`,
-          `Cache read tokens:  ${t.cacheRead.toLocaleString()}`,
-        ];
-        this.emitSystem(session, sessionId, lines.join("\n"));
+        // Read from the transcript, not a running counter: the counter only
+        // ever filled on the stream runtime (onRawLine never fires on PTY), so
+        // this reported four zeros for every session on the default runtime.
+        sumTranscriptUsage(session.cliSessionId, session.info.cwd)
+          .then((t) => {
+            const prompt = t.input + t.cacheRead + t.cacheCreate;
+            const lines = [
+              `Input tokens:       ${t.input.toLocaleString()}`,
+              `Output tokens:      ${t.output.toLocaleString()}`,
+              `Cache write tokens: ${t.cacheCreate.toLocaleString()}`,
+              `Cache read tokens:  ${t.cacheRead.toLocaleString()}`,
+              `Cache hit rate:     ${prompt > 0 ? `${Math.round((t.cacheRead / prompt) * 100)}%` : "n/a"}`,
+            ];
+            this.emitSystem(session, sessionId, lines.join("\n"));
+          })
+          .catch(() => this.emitSystem(session, sessionId, "Could not read this session's token usage."));
         return true;
       }
 

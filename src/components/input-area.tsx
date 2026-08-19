@@ -1389,7 +1389,7 @@ export function InputArea({
           )}
           <input ref={fileInputRef} type="file" accept={FILE_ACCEPT} multiple onChange={handleFileInputChange} className="hidden" />
           <div className="flex flex-col items-center justify-evenly w-8 shrink-0">
-            {contextUsage && <ContextIndicator usage={contextUsage} onCompact={onCompact} />}
+            {contextUsage && <ContextIndicator usage={contextUsage} sessionId={sessionId} cwd={cwd} onCompact={onCompact} />}
             <Button
               size="icon"
               variant="ghost"

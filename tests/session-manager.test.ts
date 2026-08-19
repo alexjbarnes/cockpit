@@ -34,6 +34,7 @@ vi.mock("@/server/transcript", () => ({
   findSessionCwd: () => Promise.resolve(null),
   getTranscriptPath: () => "/tmp/fake-transcript.jsonl",
   loadPromptHistory: () => Promise.resolve([]),
+  sumTranscriptUsage: () => Promise.resolve({ input: 0, output: 0, cacheRead: 0, cacheCreate: 0 }),
 }));
 
 // session-manager pulls only getJob from job-storage, to label config proposals.
@@ -4549,33 +4550,45 @@ describe("SessionManager", () => {
     });
   });
 
-  describe("extractUsage totalTokens accumulation", () => {
-    it("accumulates input, output, cacheCreate, and cacheRead across calls", () => {
+  // The in-memory totalTokens counter this used to assert is gone: it only ever
+  // filled on the stream runtime, so /cost reported zeros on the default one.
+  // Cumulative spend comes from sumTranscriptUsage now. What extractUsage still
+  // owns is the live context gauge, which reads all three prompt categories.
+  describe("extractUsage drives the context gauge", () => {
+    it("sums input, cache write and cache read into the gauge reading", () => {
       const session = manager.createSession("/tmp");
       const s = (manager as any).sessions.get(session.id)!;
+      const seen: Array<{ used: number; total: number }> = [];
+      s.emitter.on("usage", (_id: string, u: { used: number; total: number }) => seen.push(u));
 
-      const line1 = JSON.stringify({
-        type: "assistant",
-        message: {
-          usage: { input_tokens: 100, output_tokens: 50, cache_creation_input_tokens: 20, cache_read_input_tokens: 10 },
-          model: "claude-4",
-        },
-      });
-      const line2 = JSON.stringify({
-        type: "assistant",
-        message: {
-          usage: { input_tokens: 200, output_tokens: 30, cache_creation_input_tokens: 0, cache_read_input_tokens: 40 },
-          model: "claude-4",
-        },
-      });
+      (manager as any).extractUsage(
+        s,
+        session.id,
+        JSON.stringify({
+          type: "assistant",
+          message: {
+            usage: { input_tokens: 100, output_tokens: 50, cache_creation_input_tokens: 20, cache_read_input_tokens: 10 },
+            model: "claude-4",
+          },
+        }),
+      );
 
-      (manager as any).extractUsage(s, session.id, line1);
-      (manager as any).extractUsage(s, session.id, line2);
+      expect(seen.at(-1)?.used, "a cached prompt token still occupies the window").toBe(130);
+    });
 
-      expect(s.totalTokens.input).toBe(300);
-      expect(s.totalTokens.output).toBe(80);
-      expect(s.totalTokens.cacheCreate).toBe(20);
-      expect(s.totalTokens.cacheRead).toBe(50);
+    it("ignores an all-zero reading rather than wiping the gauge", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      const seen: Array<{ used: number }> = [];
+      s.emitter.on("usage", (_id: string, u: { used: number }) => seen.push(u));
+
+      (manager as any).extractUsage(
+        s,
+        session.id,
+        JSON.stringify({ type: "assistant", message: { usage: { input_tokens: 0, output_tokens: 0 }, model: "claude-4" } }),
+      );
+
+      expect(seen).toHaveLength(0);
     });
   });
 

@@ -272,6 +272,51 @@ export async function loadLastUsage(sessionId: string, cwd: string): Promise<{ u
   return lastUsage;
 }
 
+/** Cumulative token spend for a session, in Anthropic's four categories. */
+export interface TokenTotals {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheCreate: number;
+}
+
+/**
+ * Sum a session's whole token spend from its transcript.
+ *
+ * SessionManager keeps a running `totalTokens`, but it only ever filled for
+ * stream-runtime sessions — it is driven by onRawLine, which the PTY adapter
+ * never calls — so /cost reported four zeros for every session on the default
+ * runtime. The transcript is the one record that has the numbers regardless of
+ * runtime, and it survives a restart, which an in-memory counter does not.
+ *
+ * Deliberately NOT reset at a compaction boundary: those tokens were still paid
+ * for, unlike the live window that lastUsage tracks. Subagent turns live in
+ * their own files under `<session>/subagents/`, so this is main-thread spend.
+ */
+export async function sumTranscriptUsage(sessionId: string, cwd: string): Promise<TokenTotals> {
+  const totals: TokenTotals = { input: 0, output: 0, cacheRead: 0, cacheCreate: 0 };
+  const fp = getTranscriptPath(sessionId, cwd);
+  if (!existsSync(fp)) return totals;
+  const raw = await readFile(fp, "utf-8");
+  for (const line of raw.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    try {
+      const entry = JSON.parse(line);
+      if (entry.type !== "assistant" || !entry.message?.usage) continue;
+      // Synthetic turns (a local command like /context) carry all-zero usage.
+      if (entry.message.model === "<synthetic>") continue;
+      const u = entry.message.usage;
+      totals.input += u.input_tokens || 0;
+      totals.output += u.output_tokens || 0;
+      totals.cacheRead += u.cache_read_input_tokens || 0;
+      totals.cacheCreate += u.cache_creation_input_tokens || 0;
+    } catch {
+      // not valid JSON, ignore
+    }
+  }
+  return totals;
+}
+
 export interface TranscriptResult {
   messages: ChatMessage[];
   byteOffset: number;

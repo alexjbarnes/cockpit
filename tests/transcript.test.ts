@@ -1036,6 +1036,71 @@ describe("transcript module", () => {
     });
   });
 
+  // Cumulative spend for /cost and the session-usage panel. SessionManager's
+  // in-memory counter only ever filled on the stream runtime (it is fed by
+  // onRawLine, which the PTY adapter never calls), so the transcript is the one
+  // record that has these numbers whatever the runtime — and it survives a
+  // restart, which the counter did not.
+  describe("sumTranscriptUsage", () => {
+    it("returns zeros when the transcript does not exist", async () => {
+      const { sumTranscriptUsage } = await import("@/server/transcript");
+      (existsSync as any).mockReturnValue(false);
+
+      expect(await sumTranscriptUsage("session-123", "/tmp")).toEqual({ input: 0, output: 0, cacheRead: 0, cacheCreate: 0 });
+    });
+
+    it("sums every assistant turn's four categories", async () => {
+      const { sumTranscriptUsage } = await import("@/server/transcript");
+      (existsSync as any).mockReturnValue(true);
+      (readFile as any).mockResolvedValue(
+        jsonl(
+          { type: "user", message: { content: "hi" } },
+          {
+            type: "assistant",
+            message: {
+              model: "m",
+              usage: { input_tokens: 100, output_tokens: 50, cache_creation_input_tokens: 20, cache_read_input_tokens: 10 },
+            },
+          },
+          { type: "assistant", message: { model: "m", usage: { input_tokens: 200, output_tokens: 30, cache_read_input_tokens: 40 } } },
+        ),
+      );
+
+      expect(await sumTranscriptUsage("session-123", "/tmp")).toEqual({ input: 300, output: 80, cacheRead: 50, cacheCreate: 20 });
+    });
+
+    it("keeps counting across a compaction boundary", async () => {
+      const { sumTranscriptUsage } = await import("@/server/transcript");
+      (existsSync as any).mockReturnValue(true);
+      (readFile as any).mockResolvedValue(
+        jsonl(
+          { type: "assistant", message: { model: "m", usage: { input_tokens: 100, output_tokens: 10 } } },
+          { type: "system", subtype: "compact_boundary" },
+          { type: "assistant", message: { model: "m", usage: { input_tokens: 5, output_tokens: 1 } } },
+        ),
+      );
+
+      // Unlike the live-window reading, spend before a compaction was still
+      // paid for, so it must not be discarded at the boundary.
+      expect(await sumTranscriptUsage("session-123", "/tmp")).toMatchObject({ input: 105, output: 11 });
+    });
+
+    it("skips synthetic turns and unparseable lines", async () => {
+      const { sumTranscriptUsage } = await import("@/server/transcript");
+      (existsSync as any).mockReturnValue(true);
+      (readFile as any).mockResolvedValue(
+        [
+          JSON.stringify({ type: "assistant", message: { model: "<synthetic>", usage: { input_tokens: 999, output_tokens: 999 } } }),
+          "{ truncated",
+          "",
+          JSON.stringify({ type: "assistant", message: { model: "m", usage: { input_tokens: 7, output_tokens: 3 } } }),
+        ].join("\n"),
+      );
+
+      expect(await sumTranscriptUsage("session-123", "/tmp")).toEqual({ input: 7, output: 3, cacheRead: 0, cacheCreate: 0 });
+    });
+  });
+
   describe("loadLastUsage", () => {
     it("returns null when file does not exist", async () => {
       const { loadLastUsage } = await import("@/server/transcript");
