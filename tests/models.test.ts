@@ -5,6 +5,7 @@ import {
   coerceEffort,
   defaultForAlias,
   describeModelSelection,
+  describeProviderModel,
   findModelById,
   MODELS,
   modelOneMRequiresCredits,
@@ -409,6 +410,50 @@ describe("describeModelSelection", () => {
       { id: "lm", models: [{ modelId: "m", displayName: "M", effortLevels: ["low", "high"], contextSizes: ["200k"] }] },
     ];
     expect(describeModelSelection("lm:m", "off", "200k", providers).thinking).toBe("off");
+  });
+});
+
+// Powers the provider/model lines on the scheduled-job cards, which name both
+// rather than showing one pill.
+describe("describeProviderModel", () => {
+  const providers = [
+    {
+      id: "zen-go",
+      name: "OpenCode Go",
+      models: [
+        { modelId: "deepseek-v4-flash", displayName: "DeepSeek V4 Flash", effortLevels: [], contextSizes: ["200k"] as const },
+      ] as ProviderModel[],
+    },
+  ];
+
+  it("names Anthropic for an alias and for an exact model id", () => {
+    expect(describeProviderModel("sonnet", undefined)).toEqual({ provider: "Anthropic", model: "Sonnet 5" });
+    expect(describeProviderModel("claude-opus-4-7", undefined)).toEqual({ provider: "Anthropic", model: "Opus 4.7" });
+  });
+
+  it("uses the provider's own name and the model's display name", () => {
+    expect(describeProviderModel("zen-go:deepseek-v4-flash", providers)).toEqual({
+      provider: "OpenCode Go",
+      model: "DeepSeek V4 Flash",
+    });
+  });
+
+  it("strips a [1m] suffix before resolving", () => {
+    expect(describeProviderModel("sonnet[1m]", undefined)).toEqual({ provider: "Anthropic", model: "Sonnet 5" });
+  });
+
+  // A job outlives the provider it was set up against, and a card that goes
+  // blank hides which model the job is still set to run.
+  it("falls back to the raw ids for a disconnected provider or delisted model", () => {
+    expect(describeProviderModel("zen-go:some-new-model", providers)).toEqual({ provider: "OpenCode Go", model: "some-new-model" });
+    expect(describeProviderModel("ghost:m", [])).toEqual({ provider: "ghost", model: "m" });
+  });
+
+  // The run would fall back to a default this helper cannot know, and naming
+  // the wrong model is worse than naming none.
+  it("returns null for an unset model", () => {
+    expect(describeProviderModel(undefined, providers)).toBeNull();
+    expect(describeProviderModel("", providers)).toBeNull();
   });
 });
 

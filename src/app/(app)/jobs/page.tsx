@@ -2,7 +2,7 @@
 
 import { AlertCircle, CalendarClock, CheckCircle2, ChevronRight, Copy, Folder, Loader2, Play, Plus, Square, Trash2 } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { usePageHeader } from "@/components/app-shell";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -11,8 +11,9 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { useJobs } from "@/hooks/use-jobs";
 import { useScrollRestoration } from "@/hooks/use-scroll-restoration";
 import { type JobDisplayStatus, jobDisplayStatus } from "@/lib/job-display";
+import { describeProviderModel } from "@/lib/models";
 import { describeAllSchedules, getJobSchedules, getNextRunTimeAny, hasTimeBasedSchedule } from "@/server/cron-utils";
-import type { ScheduledJob } from "@/types";
+import type { Provider, ScheduledJob } from "@/types";
 
 type JobWithStatus = ScheduledJob & {
   lastRunStatus?: string;
@@ -122,6 +123,7 @@ function groupJobsByDir(jobs: JobWithStatus[]): JobGroupData[] {
 
 function JobCard({
   job,
+  providers,
   triggeringJobs,
   stoppingJobs,
   onTrigger,
@@ -131,6 +133,7 @@ function JobCard({
   onClick,
 }: {
   job: JobWithStatus;
+  providers: Provider[];
   triggeringJobs: Set<string>;
   stoppingJobs?: Set<string>;
   onTrigger: (e: React.MouseEvent, id: string) => void;
@@ -141,6 +144,7 @@ function JobCard({
 }) {
   const status = jobDisplayStatus(job, triggeringJobs.has(job.id));
   const running = status === "running";
+  const model = describeProviderModel(job.model, providers);
   return (
     <Card className="cursor-pointer hover:bg-accent/50 transition-colors" onClick={() => onClick(job.id)}>
       <CardContent className="p-4">
@@ -154,6 +158,12 @@ function JobCard({
           <div className="flex-1 min-w-0">
             <p className="text-xs text-muted-foreground">{describeAllSchedules(getJobSchedules(job))}</p>
             <p className="text-xs text-muted-foreground mt-0.5">Next: {formatNextRun(job)}</p>
+            {model && (
+              <>
+                <p className="text-xs text-muted-foreground mt-0.5 truncate">Provider: {model.provider}</p>
+                <p className="text-xs text-muted-foreground mt-0.5 truncate">Model: {model.model}</p>
+              </>
+            )}
             {running ? (
               <p className="text-xs mt-0.5">{runningIndicator()}</p>
             ) : (
@@ -204,6 +214,7 @@ function JobCard({
 
 function JobDirGroup({
   group,
+  providers,
   triggeringJobs,
   stoppingJobs,
   onTrigger,
@@ -215,6 +226,7 @@ function JobDirGroup({
   defaultExpanded,
 }: {
   group: JobGroupData;
+  providers: Provider[];
   triggeringJobs: Set<string>;
   stoppingJobs?: Set<string>;
   onTrigger: (e: React.MouseEvent, id: string) => void;
@@ -261,6 +273,7 @@ function JobDirGroup({
             <JobCard
               key={job.id}
               job={job}
+              providers={providers}
               triggeringJobs={triggeringJobs}
               stoppingJobs={stoppingJobs}
               onTrigger={onTrigger}
@@ -285,6 +298,18 @@ export default function JobsPage() {
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const [triggeringJobs, setTriggeringJobs] = useState<Set<string>>(new Set());
   const [stoppingJobs, setStoppingJobs] = useState<Set<string>>(new Set());
+  // Needed to turn a job's stored `provider:modelId` into names worth reading.
+  // Fetched once for the page rather than per card.
+  const [providers, setProviders] = useState<Provider[]>([]);
+
+  useEffect(() => {
+    fetch("/api/providers")
+      .then((res) => res.json())
+      .then((data) => {
+        if (Array.isArray(data)) setProviders(data);
+      })
+      .catch(() => {});
+  }, []);
 
   const groups = useMemo(() => groupJobsByDir(jobs as JobWithStatus[]), [jobs]);
 
@@ -351,6 +376,7 @@ export default function JobsPage() {
               <JobCard
                 key={job.id}
                 job={job}
+                providers={providers}
                 triggeringJobs={triggeringJobs}
                 stoppingJobs={stoppingJobs}
                 onTrigger={handleTrigger}
@@ -364,6 +390,7 @@ export default function JobsPage() {
               <JobDirGroup
                 key={group.cwd}
                 group={group}
+                providers={providers}
                 triggeringJobs={triggeringJobs}
                 stoppingJobs={stoppingJobs}
                 onTrigger={handleTrigger}
