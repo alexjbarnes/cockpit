@@ -1,12 +1,13 @@
 "use client";
 
-import { AlertTriangle, ArrowDown, Loader2, RotateCcw } from "lucide-react";
+import { AlertTriangle, ArrowDown, Loader2, RotateCcw, Square } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useMessageSelection } from "@/hooks/use-message-selection";
 import { useSession } from "@/hooks/use-session";
 import { useSettings } from "@/hooks/use-settings";
 import { useWebSocket } from "@/hooks/use-websocket";
+import { formatDuration } from "@/lib/format-time";
 import { pathBasename } from "@/lib/path";
 import { pairQuestionBlocks, splitAtQuestion } from "@/lib/split-question-blocks";
 import { cn } from "@/lib/utils";
@@ -168,6 +169,34 @@ export function ChatView({
     }
     return map;
   }, [visibleMessages, isResponding]);
+
+  // Live "how long has this been going" beside the spinner. Turn start is the
+  // last user message, the same anchor workedByMessageId uses above, so the
+  // counter and the "Worked for" it settles into measure the same span.
+  const turnStartedAt = useMemo(() => {
+    for (let i = visibleMessages.length - 1; i >= 0; i--) {
+      if (visibleMessages[i].role === "user") return visibleMessages[i].timestamp;
+    }
+    return null;
+  }, [visibleMessages]);
+
+  // Stopping a session whose turn is already idle changes nothing on screen, so
+  // the click needs its own acknowledgement. 2.5s covers the server's bounded
+  // clear (3 passes x 400ms) plus the round trip; the outcome itself arrives as
+  // a system message in the chat.
+  const [clearingCli, setClearingCli] = useState(false);
+
+  const [elapsedMs, setElapsedMs] = useState<number | null>(null);
+  useEffect(() => {
+    if (!isResponding || turnStartedAt == null) {
+      setElapsedMs(null);
+      return;
+    }
+    const tick = () => setElapsedMs(Date.now() - turnStartedAt);
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [isResponding, turnStartedAt]);
 
   // Reset window on session change
   useEffect(() => {
@@ -483,6 +512,11 @@ export function ChatView({
           {(isResponding || errorActive) && pendingPermissions.length === 0 && !pendingQuestions.some((q) => !q.answered) && (
             <div className="flex items-center gap-2 text-muted-foreground">
               <Loader2 className="h-4 w-4 animate-spin" />
+              {elapsedMs != null && (
+                <span className="text-xs tabular-nums" data-testid="turn-elapsed">
+                  {formatDuration(elapsedMs)}
+                </span>
+              )}
               {errorActive && !isResponding && <span className="text-xs text-red-500">API error, retrying...</span>}
               {rateLimitStatus && <span className="text-xs">Rate limited, retrying...</span>}
             </div>
@@ -495,13 +529,33 @@ export function ChatView({
                   <span className="text-sm font-medium">API Error</span>
                 </div>
                 <p className="text-xs text-muted-foreground mb-3">{apiError}</p>
-                <button
-                  onClick={retry}
-                  className="flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs hover:bg-muted transition-colors"
-                >
-                  <RotateCcw className="h-3 w-3" />
-                  Retry
-                </button>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    onClick={retry}
+                    className="flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs hover:bg-muted transition-colors"
+                  >
+                    <RotateCcw className="h-3 w-3" />
+                    Retry
+                  </button>
+                  {/* The composer's Stop button only exists while a turn runs, and an
+                      error like "the CLI is waiting on a dialog" arrives with the
+                      session already idle — so this is the only way to reach the
+                      interrupt that clears the CLI screen. */}
+                  <button
+                    onClick={() => {
+                      interrupt();
+                      setClearingCli(true);
+                      setTimeout(() => setClearingCli(false), 2500);
+                    }}
+                    disabled={clearingCli}
+                    data-testid="btn-clear-cli"
+                    title="Stop the CLI and clear whatever dialog is on its screen"
+                    className="flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs hover:bg-muted transition-colors disabled:opacity-60"
+                  >
+                    {clearingCli ? <Loader2 className="h-3 w-3 animate-spin" /> : <Square className="h-3 w-3" />}
+                    {clearingCli ? "Clearing..." : "Clear the CLI"}
+                  </button>
+                </div>
               </div>
             </div>
           )}

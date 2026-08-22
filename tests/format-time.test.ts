@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatMessageTime, formatWorkedFor } from "@/lib/format-time";
+import { formatDuration, formatMessageTime, formatWorkedFor } from "@/lib/format-time";
 
 // Fixed reference "now": Wednesday 2026-07-15 14:30 local time.
 const NOW = new Date(2026, 6, 15, 14, 30, 0).getTime();
@@ -64,5 +64,33 @@ describe("formatWorkedFor", () => {
 
   it("drops the minutes at a whole hour", () => {
     expect(formatWorkedFor(3_600_000)).toBe("Worked for 1h");
+  });
+});
+
+// Shared by the finished-turn label and the live counter beside the spinner, so
+// a turn must not change format the moment it ends.
+describe("formatDuration", () => {
+  it("rounds a just-started turn up to 1s rather than showing 0s", () => {
+    expect(formatDuration(0)).toBe("1s");
+    expect(formatDuration(400)).toBe("1s");
+  });
+
+  it("counts in seconds under a minute", () => {
+    expect(formatDuration(18_000)).toBe("18s");
+    expect(formatDuration(59_400)).toBe("59s");
+  });
+
+  it("switches to minutes and drops a zero seconds remainder", () => {
+    expect(formatDuration(125_000)).toBe("2m 5s");
+    expect(formatDuration(120_000)).toBe("2m");
+  });
+
+  it("switches to hours and drops a zero minutes remainder", () => {
+    expect(formatDuration(3_840_000)).toBe("1h 4m");
+    expect(formatDuration(3_600_000)).toBe("1h");
+  });
+
+  it("is the same string formatWorkedFor wraps, so the counter does not jump on turn end", () => {
+    expect(formatWorkedFor(125_000)).toBe(`Worked for ${formatDuration(125_000)}`);
   });
 });

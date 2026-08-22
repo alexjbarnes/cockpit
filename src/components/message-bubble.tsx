@@ -308,7 +308,12 @@ function MessageActions({ message, isUser, workedMs }: { message: ChatMessage; i
     [text],
   );
 
-  const meta = isUser ? formatMessageTime(message.timestamp) : workedMs != null ? formatWorkedFor(workedMs) : null;
+  // Assistant turns carry a clock time as well as their duration: "Worked for
+  // 2m" alone said how long it took but never when it landed, which is the
+  // thing you want when you come back to a session and scroll up.
+  const meta = isUser
+    ? formatMessageTime(message.timestamp)
+    : [workedMs != null ? formatWorkedFor(workedMs) : null, formatMessageTime(message.timestamp)].filter(Boolean).join(" · ");
   if (!text && !meta) return null;
 
   const copyBtn = text ? <CopyButton copied={copied} onCopy={handleCopy} /> : null;

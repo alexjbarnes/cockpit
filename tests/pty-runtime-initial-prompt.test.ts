@@ -7,6 +7,7 @@ import type { HookRouter, SessionHookHandler } from "@/server/hook-router";
 const ptySessionMock = vi.hoisted(() => ({
   start: vi.fn().mockResolvedValue(undefined),
   sendText: vi.fn().mockResolvedValue(undefined),
+  sendKey: vi.fn(),
   kill: vi.fn(),
 }));
 
@@ -24,7 +25,9 @@ vi.mock("@/server/pty-session", () => ({
     }
     resize() {}
     sendSlash() {}
-    sendKey() {}
+    sendKey(key: string) {
+      return ptySessionMock.sendKey(key);
+    }
   },
 }));
 
@@ -165,6 +168,7 @@ describe("PtyRuntime interactive user send (sendUserText)", () => {
   beforeEach(() => {
     ptySessionMock.start.mockClear().mockResolvedValue(undefined);
     ptySessionMock.sendText.mockClear().mockResolvedValue(undefined);
+    ptySessionMock.sendKey.mockClear();
     transcriptMock.count = 0;
   });
 
@@ -260,6 +264,11 @@ describe("PtyRuntime interactive user send (sendUserText)", () => {
   // could not see and typed three messages into. The footer arrives with its
   // spaces already eaten by the TUI's per-character cursor moves, which is why
   // the detector matches whitespace-blind — keep this sample as recorded.
+  // The healthy REPL footer, verbatim from the same log: no "Esc to cancel", so
+  // it must read as a clear screen.
+  const IDLE_FOOTER =
+    "\\r\u276f \\r\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\\r\u23f5\u23f5automodeon (shift+tabtocycle)\u00b7\u2190foragents71125tokens\\r\\n";
+
   const AUTO_MODE_DIALOG =
     "\r❯ /auto-mode-setup \r\r────────────────────────\rSet up auto mode for your environment?\r\n" +
     "ClaudeCodereadsthisproject,yourrecentClaudesessions,andoptionallyyourshellhistoryandotherrepositories.\r\n" +
@@ -305,15 +314,69 @@ describe("PtyRuntime interactive user send (sendUserText)", () => {
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
     const { runtime } = await startedRuntime();
     transcriptMock.count = 5;
-    // The healthy footer, also verbatim from the same log. It must not read as
-    // a dialog, or every send on an idle session would be refused.
-    (runtime as unknown as { scanForErrors(chunk: string): void }).scanForErrors(
-      "\r❯ \r────────────\r⏵⏵automodeon (shift+tabtocycle)·←foragents71125tokens\r\n",
-    );
+    // The healthy footer must not read as a dialog, or every send on an idle
+    // session would be refused.
+    (runtime as unknown as { scanForErrors(chunk: string): void }).scanForErrors(IDLE_FOOTER);
 
     const sent = runtime.sendUserText("hello");
     await vi.advanceTimersByTimeAsync(4000 + 50);
     expect(ptySessionMock.sendText).toHaveBeenCalledTimes(2);
+
+    transcriptMock.count = 6;
+    await vi.advanceTimersByTimeAsync(4000 + 50);
+    await sent;
+    logSpy.mockRestore();
+  });
+
+  // The CLI puts "esc to cancel" on its ordinary busy line too, so matching that
+  // alone refused every send while the CLI was merely working — shipped in
+  // 04281d0 and caught by tests/integration/turn-timing.spec.ts, which could not
+  // get a turn to start at all. A spinner offers no way to commit a decision,
+  // which is what separates it from a dialog.
+  const BUSY_LINE = "\r⠋ Accessing workspace: /tmp/demo\r\n\r\n esc to cancel\r\n";
+
+  it("does not mistake the CLI's busy line for a dialog", async () => {
+    vi.useFakeTimers();
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const { runtime, onError } = await startedRuntime();
+    transcriptMock.count = 5;
+    (runtime as unknown as { scanForErrors(chunk: string): void }).scanForErrors(BUSY_LINE);
+
+    const sent = runtime.sendUserText("hello");
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(ptySessionMock.sendText, "the CLI is working, not waiting on an answer").toHaveBeenCalledTimes(1);
+    expect(onError).not.toHaveBeenCalled();
+
+    transcriptMock.count = 6;
+    await vi.advanceTimersByTimeAsync(4000 + 50);
+    await sent;
+    logSpy.mockRestore();
+  });
+
+  // Verbatim from the harness against CLI 2.1.240: the spawn-time trust dialog,
+  // already auto-answered by handleTrustDialog, followed by the REPL banner it
+  // returns to. Nothing cleared the output buffer between spawn and the first
+  // hook, so this stale dialog read as live and refused the session's very first
+  // message. The idle footer painted after the dialog is the proof it is gone.
+  const ANSWERED_TRUST_DIALOG =
+    "\rAccessing workspace: /tmp/demo\r\nQuick safety check: Is this a project you created or one you trust?\r\n" +
+    "❯ 1. Yes, I trust this folder\r\n  2. No, exit\r\nEnter to confirm · Esc to cancel\r\n" +
+    "╭─── Claude Code v2.1.240 ───╮\r\n│ Welcome back! │\r\n╰────╯\r\n" +
+    "⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents\r\n";
+
+  it("does not mistake an already-answered spawn dialog for a live one", async () => {
+    vi.useFakeTimers();
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const { runtime, onError } = await startedRuntime();
+    transcriptMock.count = 5;
+    (runtime as unknown as { scanForErrors(chunk: string): void }).scanForErrors(ANSWERED_TRUST_DIALOG);
+
+    const sent = runtime.sendUserText("hello");
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(ptySessionMock.sendText, "the prompt is back; the dialog was answered at spawn").toHaveBeenCalledTimes(1);
+    expect(onError).not.toHaveBeenCalled();
 
     transcriptMock.count = 6;
     await vi.advanceTimersByTimeAsync(4000 + 50);
@@ -337,6 +400,83 @@ describe("PtyRuntime interactive user send (sendUserText)", () => {
 
     expect(ptySessionMock.sendText, "the user ended the turn; do not type into it again").toHaveBeenCalledTimes(1);
     expect(onError, "an abandoned send is not a delivery failure").not.toHaveBeenCalled();
+    logSpy.mockRestore();
+  });
+
+  // Stopping has to leave the CLI at an input box. One Esc only backs a wizard
+  // out by one step, and until the screen is clear every send is refused while
+  // the session is already idle, i.e. the user has nothing left to press.
+  const systemTexts = (onEvents: ReturnType<typeof vi.fn>) =>
+    onEvents.mock.calls.flatMap((c) =>
+      (c[0] as { type: string; text?: string }[]).filter((e) => e.type === "system_message").map((e) => e.text),
+    );
+
+  it("keeps pressing Esc until the CLI screen is clear", async () => {
+    vi.useFakeTimers();
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const { runtime, onEvents } = await startedRuntime();
+    const feed = (chunk: string) => (runtime as unknown as { scanForErrors(c: string): void }).scanForErrors(chunk);
+    feed(AUTO_MODE_DIALOG);
+
+    runtime.interrupt();
+    expect(ptySessionMock.sendKey).toHaveBeenCalledTimes(1);
+    expect(ptySessionMock.sendKey).toHaveBeenLastCalledWith("\x1b");
+
+    // The wizard answers that Esc with its previous step, so the repaint the
+    // check reads is still a dialog.
+    await vi.advanceTimersByTimeAsync(100);
+    feed(AUTO_MODE_DIALOG);
+    await vi.advanceTimersByTimeAsync(400);
+    expect(ptySessionMock.sendKey, "a dialog still on the fresh screen gets another Esc").toHaveBeenCalledTimes(2);
+
+    // That one lands: the repaint is an ordinary REPL footer.
+    await vi.advanceTimersByTimeAsync(100);
+    feed(IDLE_FOOTER);
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(ptySessionMock.sendKey, "screen is clear, stop pressing keys").toHaveBeenCalledTimes(2);
+    // Stopping an already-idle session changes nothing else on screen, so the
+    // outcome has to be said out loud, naming the dialog that went.
+    // The title carries the CLI's own echoed "> /auto-mode-setup" prompt with it,
+    // which is what blockingDialogOnScreen already reports on the refusal path.
+    const said = systemTexts(onEvents);
+    expect(said).toHaveLength(1);
+    expect(said[0]).toContain("Cleared the CLI");
+    expect(said[0]).toContain("Set up auto mode for your environment?");
+    logSpy.mockRestore();
+  });
+
+  it("presses Esc once when nothing modal is on screen", async () => {
+    vi.useFakeTimers();
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const { runtime, onEvents } = await startedRuntime();
+    (runtime as unknown as { scanForErrors(c: string): void }).scanForErrors(IDLE_FOOTER);
+
+    runtime.interrupt();
+    // Well past every pass. A blind repeat here would open the CLI's own rewind
+    // picker, so an idle screen must cost exactly the interrupt's own Esc.
+    await vi.advanceTimersByTimeAsync(400 * 4);
+    expect(ptySessionMock.sendKey).toHaveBeenCalledTimes(1);
+    // Every ordinary stop goes through here. Nothing was blocking, so nothing is
+    // reported — the turn ending is its own feedback.
+    expect(systemTexts(onEvents), "an ordinary stop must not narrate itself").toEqual([]);
+    logSpy.mockRestore();
+  });
+
+  it("gives up rather than spinning on a dialog that ignores Esc", async () => {
+    vi.useFakeTimers();
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const { runtime, onEvents } = await startedRuntime();
+    const feed = (chunk: string) => (runtime as unknown as { scanForErrors(c: string): void }).scanForErrors(chunk);
+
+    runtime.interrupt();
+    for (let i = 0; i < 6; i++) {
+      await vi.advanceTimersByTimeAsync(100);
+      feed(AUTO_MODE_DIALOG);
+      await vi.advanceTimersByTimeAsync(400);
+    }
+    // The interrupt's own Esc plus one per bounded pass, then it stops.
+    expect(ptySessionMock.sendKey).toHaveBeenCalledTimes(4);
+    expect(systemTexts(onEvents)).toContainEqual(expect.stringContaining("has to be answered in the terminal"));
     logSpy.mockRestore();
   });
 });

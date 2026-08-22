@@ -169,6 +169,11 @@ export class PtyRuntime {
       throw err;
     }
     logDiag(sessionId, "pty:process-started", { pid: this.pid, elapsedMs: Date.now() - startAt });
+    // The REPL is up, so everything painted getting here is history — including
+    // the trust dialog handleTrustDialog already answered. Left in the buffer it
+    // reads as a live dialog to blockingDialogOnScreen for the whole window
+    // before the first hook clears it, which refused the session's first message.
+    this.ptyOutputBuffer = "";
 
     if (initialText) {
       await this.deliverInitialPrompt(initialText);
@@ -371,7 +376,10 @@ export class PtyRuntime {
     this.pty.sendKey(key);
   }
 
-  /** Sends Esc to claude — the interactive REPL treats it as interrupt. */
+  /**
+   * Sends Esc to claude — the interactive REPL treats it as interrupt — and then
+   * keeps pressing until nothing modal is left on screen (clearBlockingDialogs).
+   */
   interrupt(): void {
     if (!this.pty) return;
     // Stop any in-flight delivery retry: the user asked for this turn to end, so
@@ -384,6 +392,60 @@ export class PtyRuntime {
     this.pendingPermissions.clear();
     // The Esc above dismissed any rendered TUI dialog with it.
     this.pendingTuiDialogs.clear();
+    void this.clearBlockingDialogs();
+  }
+
+  /**
+   * Press Esc until no dialog is left on screen, so stopping really does clear
+   * the CLI.
+   *
+   * One Esc cancels one dialog. A multi-step wizard (the /auto-mode-setup case
+   * in 04281d0) puts up the next step instead, and cockpit then refuses every
+   * send with "the CLI is waiting on a dialog" while the user, whose session is
+   * already idle, has nothing left to press.
+   *
+   * Each pass wipes the screen buffer first and waits for the repaint an Esc
+   * always triggers, so the check reads the CURRENT screen. That wipe is what
+   * makes this safe rather than blind: the buffer is append-only, so a dismissed
+   * dialog's own footer is still in its tail and an unwiped check would press
+   * again forever. Blind repeats are the thing to avoid here — a second Esc at
+   * an idle REPL opens the CLI's own rewind picker, i.e. a loop that did not
+   * look would toggle a dialog rather than clear one. Bounded, so a dialog that
+   * ignores Esc costs three keystrokes and not a spin.
+   */
+  private async clearBlockingDialogs(): Promise<void> {
+    const MAX_PASSES = 3;
+    const REPAINT_MS = 400;
+    // Named so the report can say WHICH dialog went, and so a stop that had
+    // nothing to clear stays silent — the common case is stopping a live turn,
+    // where the spinner stopping is already the feedback.
+    let cleared: string | null = null;
+    for (let pass = 1; pass <= MAX_PASSES; pass++) {
+      this.ptyOutputBuffer = "";
+      await new Promise((resolve) => setTimeout(resolve, REPAINT_MS));
+      if (this.exited || !this.pty) return;
+      const dialog = this.blockingDialogOnScreen();
+      if (!dialog) {
+        if (cleared) {
+          logDiag(this.opts.sessionId, "pty:dialog-clear-done", { passes: pass - 1, dialog: cleared });
+          this.emit([{ type: "system_message", text: `Cleared the CLI's "${cleared}" dialog. Send your message again.` }]);
+        }
+        return;
+      }
+      cleared = dialog;
+      logDiag(this.opts.sessionId, "pty:dialog-cleared", { pass, dialog });
+      console.log(`[pty-runtime] clearing a CLI dialog for ${this.opts.sessionId.slice(0, 8)} (pass ${pass}): ${dialog}`);
+      this.pty.sendKey("\x1b");
+    }
+    logDiag(this.opts.sessionId, "pty:dialog-clear-gave-up", { passes: MAX_PASSES, screen: this.recentScreen() });
+    // Silence here would read as "stop did nothing", which is exactly what the
+    // user sees anyway — say that Esc was refused so the terminal is the answer.
+    this.emit([
+      {
+        type: "system_message",
+        text: `The CLI is still showing its "${cleared}" dialog after ${MAX_PASSES} attempts to dismiss it. It has to be answered in the terminal.`,
+      },
+    ]);
   }
 
   resize(cols: number, rows: number): void {
@@ -804,15 +866,34 @@ export class PtyRuntime {
    * i.e. cockpit's own retry answering a consent dialog about scanning shell
    * history and other repositories on the user's behalf.
    *
-   * "Esc to cancel" is the discriminator. It is on every cancellable dialog
-   * footer and on none of the idle REPL's, which reads
-   * "auto mode on (shift+tab to cycle) · ← for agents". Matched whitespace-blind
-   * because the TUI writes those footers a character at a time with cursor moves
-   * in between, so the stripped screen has no spaces left in them.
+   * The discriminator is an "Esc to cancel" AND an "Enter to <verb>" affordance
+   * together, matched whitespace-blind because the TUI writes those footers a
+   * character at a time with cursor moves in between, so the stripped screen has
+   * no spaces left in them.
+   *
+   * "Esc to cancel" ALONE is not enough, though it looks like it should be: the
+   * CLI puts it on its ordinary busy line too ("Accessing workspace… esc to
+   * cancel"), and matching that refused every send while the CLI was merely
+   * working — caught by tests/integration/turn-timing.spec.ts against the real
+   * CLI, having shipped in 04281d0. Only something waiting on a decision offers
+   * a way to commit one, so requiring the Enter half separates a dialog from a
+   * spinner. The idle REPL footer has neither; it reads "auto mode on
+   * (shift+tab to cycle) · ← for agents".
+   *
+   * The failure modes are not symmetric, which is why this errs strict: a false
+   * negative costs a lost message (the pre-04281d0 behaviour), a false positive
+   * blocks every message the session will ever send.
    */
   private blockingDialogOnScreen(): string | null {
     const screen = this.recentScreen(1500);
-    if (!/esctocancel/i.test(screen.replace(/\s+/g, ""))) return null;
+    const flat = screen.replace(/\s+/g, "");
+    const lastFooter = flat.toLowerCase().lastIndexOf("esctocancel");
+    if (lastFooter < 0 || !/enterto\w/i.test(flat)) return null;
+    // A dialog that is still open is the last thing on screen. The REPL's own
+    // idle footer painted after it means it has been answered and the prompt is
+    // back — which is how a spawn's trust dialog, auto-answered seconds earlier,
+    // otherwise reads as live.
+    if (/shift\+tabtocycle/i.test(flat.slice(lastFooter))) return null;
     // The first line that is neither blank nor box-drawing is the dialog's
     // question — worth quoting back, since which dialog it is decides what the
     // user should do about it.
