@@ -187,12 +187,27 @@ export function ChatView({
   const [clearingCli, setClearingCli] = useState(false);
 
   const [elapsedMs, setElapsedMs] = useState<number | null>(null);
+  // Latched once per turn, because the anchor moves underneath it. The bubble
+  // rendered on click carries the CLIENT clock; the transcript's copy that
+  // replaces it moments later carries the CLI's clock at submit, which is both
+  // later and — on a phone talking to a desktop — subject to device clock skew.
+  // Re-reading it made the counter sit on "1s" (a negative elapsed floors
+  // there) until real time caught up with the skew, then start counting.
+  // Clamped to now for the same reason on a reload mid-turn, where there is no
+  // client-clocked bubble left to anchor to.
+  const turnStartRef = useRef<number | null>(null);
   useEffect(() => {
-    if (!isResponding || turnStartedAt == null) {
+    if (!isResponding) {
+      turnStartRef.current = null;
       setElapsedMs(null);
       return;
     }
-    const tick = () => setElapsedMs(Date.now() - turnStartedAt);
+    if (turnStartRef.current == null) {
+      const now = Date.now();
+      turnStartRef.current = turnStartedAt != null && turnStartedAt <= now ? turnStartedAt : now;
+    }
+    const startedAt = turnStartRef.current;
+    const tick = () => setElapsedMs(Date.now() - startedAt);
     tick();
     const id = setInterval(tick, 1000);
     return () => clearInterval(id);
