@@ -743,6 +743,78 @@ describe("FormatProxy server", () => {
     expect(calls).toBe(2);
   });
 
+  // Measured live 2026-08-23 on an openrouter :free model: the streaming request
+  // produced zero events and the CLI's non-streaming retry got HTTP 200 with
+  // content-type application/json whose body was a plain error object — which the
+  // CLI reports as "body is JSON but not a Message ... check for a proxy". The
+  // {"type":"error"} shape above did not cover this one; an "error" key in a 200
+  // body always means an error, because Anthropic Messages never carry one.
+  it("retries a JSON 200 wrapping an OpenRouter refusal, then relays the retry", async () => {
+    let calls = 0;
+    const port = await startUpstream((_body, res) => {
+      calls += 1;
+      if (calls === 1) {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: { message: "No endpoints found that support tool use", code: 404 } }));
+        return;
+      }
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ type: "message", role: "assistant", model: "m", content: [{ type: "text", text: "ok" }] }));
+    });
+    proxy = new FormatProxy(() => ({ baseUrl: `http://127.0.0.1:${port}`, apiKey: "k", wireFormat: "anthropic", modelIds: [] }), {
+      retryBackoffMs: [10],
+    });
+    await proxy.start();
+
+    const res = await fetch(`${proxy.getUrl("openrouter")}/v1/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "m", max_tokens: 5, messages: [] }),
+    });
+    expect(res.status).toBe(200);
+    expect((await res.json()).content).toEqual([{ type: "text", text: "ok" }]);
+    expect(calls).toBe(2);
+  });
+
+  it("surfaces the real message when a JSON-200 refusal exhausts retries", async () => {
+    const port = await startUpstream((_body, res) => {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ user_id: "u1", error: { message: "Moderation flagged this request", code: 403 } }));
+    });
+    proxy = new FormatProxy(() => ({ baseUrl: `http://127.0.0.1:${port}`, apiKey: "k", wireFormat: "anthropic", modelIds: [] }), {
+      retryBackoffMs: [10],
+    });
+    await proxy.start();
+
+    const res = await fetch(`${proxy.getUrl("openrouter")}/v1/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "m", max_tokens: 5, stream: true, messages: [] }),
+    });
+    expect(res.status).toBe(529);
+    const body = (await res.json()) as { error?: { message?: string } };
+    expect(body.error?.message).toContain("Moderation flagged");
+  });
+
+  it("logs the body peek of a JSON 200 relay so unknown shapes stay diagnosable", async () => {
+    const port = await startUpstream((_body, res) => {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ type: "message", role: "assistant", model: "m", content: [{ type: "text", text: "fine" }] }));
+    });
+    proxy = new FormatProxy(() => ({ baseUrl: `http://127.0.0.1:${port}`, apiKey: "k", wireFormat: "anthropic", modelIds: [] }));
+    await proxy.start();
+    proxyLogs.length = 0;
+
+    await fetch(`${proxy.getUrl("openrouter")}/v1/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "m", max_tokens: 5, messages: [] }),
+    });
+
+    const relay = proxyLogs.find((l) => l.label === "passthrough-relay");
+    expect(String(relay?.data.bodyPeek)).toContain('"type":"message"');
+  });
+
   it("retries an empty 200 then serves the retry", async () => {
     let calls = 0;
     const port = await startUpstream((_body, res) => {

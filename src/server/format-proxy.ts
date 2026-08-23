@@ -568,6 +568,13 @@ function is200Saturation(peek: string, emptyBody: boolean): boolean {
   const t = peek.trimStart();
   if (t.startsWith("event: error")) return true;
   if (t.startsWith("{") && t.slice(0, 200).includes('"type":"error"')) return true;
+  // OpenRouter also refuses through a plain {"error":{...}} object with HTTP
+  // 200 — moderation on :free models, or "no endpoints found that support X".
+  // Measured live (2026-08-23): the CLI's streaming attempt received zero
+  // events and its non-streaming retry received exactly this shape, which it
+  // reports as "body is JSON but not a Message". Anthropic Messages never
+  // carry an "error" key, so its presence in a 200 body is always an error.
+  if (t.startsWith("{") && t.slice(0, 200).includes('"error"')) return true;
   return false;
 }
 
@@ -822,6 +829,15 @@ export class FormatProxy {
       status: upstreamRes.status,
       contentType: upstreamRes.headers.get("content-type"),
       streamed: !!reader,
+      // A JSON 200 is the shape that slips past saturation detection when a new
+      // refusal appears; logging its start makes any such case answerable from
+      // debug.jsonl instead of ending at the CLI's "malformed response" again.
+      bodyPeek:
+        reader && (upstreamRes.headers.get("content-type") ?? "").includes("json")
+          ? firstChunk
+            ? new TextDecoder().decode(firstChunk).slice(0, 256)
+            : ""
+          : undefined,
     });
     res.writeHead(upstreamRes.status, { "Content-Type": upstreamRes.headers.get("content-type") ?? "application/json" });
     if (!reader) {
