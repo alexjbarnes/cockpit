@@ -1,10 +1,10 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { getClaudeUserConfigFile, getJobsScratchpadRoot } from "@/server/paths";
+import { getClaudeUserConfigFile } from "@/server/paths";
 
 /**
- * Pre-accept the CLI's workspace-trust dialog for a scratchpad directory
- * cockpit created itself.
+ * Pre-accept the CLI's workspace-trust dialog for a directory cockpit is about
+ * to run in unattended.
  *
  * The CLI raises "Is this a project you created or one you trust?" the first
  * time it runs in a directory, and cockpit cannot answer it: it types blind,
@@ -35,35 +35,20 @@ export function isDirectoryTrusted(dir: string): boolean {
 }
 
 /**
- * Record trust for any directory, on the user's explicit say-so.
+ * Record trust for a directory, on the user's say-so.
  *
- * `ensureScratchpadTrusted` decides for itself and is therefore fenced to
- * cockpit's own scratchpads. This one is the other half: a person clicked
- * "Trust this directory" on the session that could not start, so any path is
- * fair game and the caller owns the decision.
+ * Two callers, both of which are that say-so: the "Trust this directory"
+ * button on a session that could not start, and a scheduled job about to run
+ * in a directory its author chose. Neither is cockpit deciding for itself, so
+ * there is no fence here — the caller owns the decision.
+ *
+ * A job used to be fenced to cockpit's own scratchpads, on the reasoning that
+ * a job's own cwd points at the user's real code. That was the wrong line: a
+ * job runs unattended, so refusing to start leaves it failing every run with
+ * nobody to answer, and configuring the job to run an agent with tools in that
+ * directory is a far larger grant than trust already.
  */
 export function trustDirectory(dir: string): boolean {
-  return writeTrustEntry(dir);
-}
-
-/** Only directories cockpit itself creates under the jobs scratchpad root are
- *  ever auto-trusted. A job with its own `cwd` points at the user's real code,
- *  and that trust decision stays theirs to make. */
-export function isCockpitOwnedScratchpad(dir: string): boolean {
-  const root = path.resolve(getJobsScratchpadRoot());
-  const resolved = path.resolve(dir);
-  return resolved === root || resolved.startsWith(root + path.sep);
-}
-
-/**
- * Record trust for `dir` if it is a cockpit scratchpad and is not trusted yet.
- * Returns true when an entry was added.
- *
- * Best effort by design: a job that cannot be pre-trusted should still be
- * attempted, and will fail the way it always did rather than not run at all.
- */
-export function ensureScratchpadTrusted(dir: string): boolean {
-  if (!isCockpitOwnedScratchpad(dir)) return false;
   return writeTrustEntry(dir);
 }
 

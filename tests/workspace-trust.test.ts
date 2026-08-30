@@ -7,7 +7,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { ensureScratchpadTrusted, isCockpitOwnedScratchpad, isDirectoryTrusted, trustDirectory } from "@/server/workspace-trust";
+import { isDirectoryTrusted, trustDirectory } from "@/server/workspace-trust";
 
 let root: string;
 let cockpitDir: string;
@@ -45,81 +45,10 @@ afterEach(() => {
   rmSync(root, { recursive: true, force: true });
 });
 
-describe("isCockpitOwnedScratchpad", () => {
-  it("accepts a job scratchpad", () => {
-    expect(isCockpitOwnedScratchpad(scratchpad("job-1"))).toBe(true);
-  });
-
-  // Trusting the user's own code is their decision, not cockpit's. A job with
-  // its own cwd must never be auto-trusted.
-  it("rejects a directory outside the scratchpad root", () => {
-    expect(isCockpitOwnedScratchpad("/home/dev/repos/cockpit")).toBe(false);
-    expect(isCockpitOwnedScratchpad(path.join(cockpitDir, "issues"))).toBe(false);
-  });
-
-  it("is not fooled by a sibling that merely shares the prefix, or by traversal", () => {
-    expect(isCockpitOwnedScratchpad(`${path.join(cockpitDir, "jobs")}-evil`)).toBe(false);
-    expect(isCockpitOwnedScratchpad(path.join(cockpitDir, "jobs", "..", "..", "elsewhere"))).toBe(false);
-  });
-});
-
-describe("ensureScratchpadTrusted", () => {
-  it("adds the trust flag for a scratchpad that has no entry", () => {
-    writeConfig({ projects: {} });
-    const dir = scratchpad("job-1");
-
-    expect(ensureScratchpadTrusted(dir)).toBe(true);
-    expect(readConfig().projects?.[dir]).toEqual({ hasTrustDialogAccepted: true });
-  });
-
-  it("creates the projects map when the config has none", () => {
-    writeConfig({ hasCompletedOnboarding: true });
-    const dir = scratchpad("job-1");
-
-    expect(ensureScratchpadTrusted(dir)).toBe(true);
-    expect(readConfig().projects?.[dir]?.hasTrustDialogAccepted).toBe(true);
-  });
-
-  // The CLI keeps real per-project state on these entries — allowed tools, MCP
-  // choices, last-run stats. Only the trust flag is cockpit's to set.
-  it("preserves an existing entry's other fields", () => {
-    const dir = scratchpad("job-1");
-    writeConfig({ projects: { [dir]: { allowedTools: ["Bash"], lastCost: 1.23 } } });
-
-    expect(ensureScratchpadTrusted(dir)).toBe(true);
-    expect(readConfig().projects?.[dir]).toEqual({ allowedTools: ["Bash"], lastCost: 1.23, hasTrustDialogAccepted: true });
-  });
-
-  it("does nothing when the directory is already trusted", () => {
-    const dir = scratchpad("job-1");
-    writeConfig({ projects: { [dir]: { hasTrustDialogAccepted: true } } });
-    const before = readFileSync(configFile(), "utf-8");
-
-    expect(ensureScratchpadTrusted(dir)).toBe(false);
-    expect(readFileSync(configFile(), "utf-8"), "an untouched config cannot race the CLI's own writes").toBe(before);
-  });
-
-  it("leaves a job's own cwd alone", () => {
-    writeConfig({ projects: {} });
-
-    expect(ensureScratchpadTrusted("/home/dev/repos/cockpit")).toBe(false);
-    expect(readConfig().projects).toEqual({});
-  });
-
-  // Best effort: a job that cannot be pre-trusted should still be attempted.
-  it("reports false rather than throwing when the config is missing or corrupt", () => {
-    const dir = scratchpad("job-1");
-    expect(existsSync(configFile())).toBe(false);
-    expect(ensureScratchpadTrusted(dir)).toBe(false);
-
-    writeFileSync(configFile(), "{ not json");
-    expect(ensureScratchpadTrusted(dir)).toBe(false);
-  });
-});
-
-// The session half: a directory the user picks is theirs to trust, so the grant
-// is unfenced — unlike the scratchpad path, which decides for itself and is
-// therefore limited to directories cockpit created.
+// Two callers, both of them the user's say-so: the "Trust this directory"
+// button on a session that could not start, and a scheduled job about to run
+// unattended in a directory its author chose. There is no fence — cockpit never
+// decides this for itself.
 describe("trustDirectory and isDirectoryTrusted", () => {
   it("reports an untrusted directory as untrusted, then trusted once granted", () => {
     writeConfig({ projects: {} });
@@ -130,13 +59,49 @@ describe("trustDirectory and isDirectoryTrusted", () => {
     expect(isDirectoryTrusted(dir)).toBe(true);
   });
 
-  it("grants a directory outside the scratchpad root, which the scratchpad path refuses", () => {
+  it("grants a scratchpad and a real project alike", () => {
     writeConfig({ projects: {} });
-    const dir = "/home/dev/repos/cockpit";
 
-    expect(ensureScratchpadTrusted(dir), "cockpit never decides this for itself").toBe(false);
-    expect(trustDirectory(dir), "but the user can").toBe(true);
+    expect(trustDirectory(scratchpad("job-1"))).toBe(true);
+    expect(trustDirectory("/home/dev/repos/cockpit")).toBe(true);
+    expect(readConfig().projects?.[scratchpad("job-1")]?.hasTrustDialogAccepted).toBe(true);
+    expect(readConfig().projects?.["/home/dev/repos/cockpit"]?.hasTrustDialogAccepted).toBe(true);
+  });
+
+  it("creates the projects map when the config has none", () => {
+    writeConfig({ hasCompletedOnboarding: true });
+    const dir = scratchpad("job-1");
+
+    expect(trustDirectory(dir)).toBe(true);
     expect(readConfig().projects?.[dir]?.hasTrustDialogAccepted).toBe(true);
+  });
+
+  // The CLI keeps real per-project state on these entries — allowed tools, MCP
+  // choices, last-run stats. Only the trust flag is cockpit's to set.
+  it("preserves an existing entry's other fields", () => {
+    const dir = scratchpad("job-1");
+    writeConfig({ projects: { [dir]: { allowedTools: ["Bash"], lastCost: 1.23 } } });
+
+    expect(trustDirectory(dir)).toBe(true);
+    expect(readConfig().projects?.[dir]).toEqual({ allowedTools: ["Bash"], lastCost: 1.23, hasTrustDialogAccepted: true });
+  });
+
+  it("leaves an already-trusted config byte-identical, so it cannot race the CLI's own writes", () => {
+    const dir = scratchpad("job-1");
+    writeConfig({ projects: { [dir]: { hasTrustDialogAccepted: true } } });
+    const before = readFileSync(configFile(), "utf-8");
+
+    expect(trustDirectory(dir)).toBe(false);
+    expect(readFileSync(configFile(), "utf-8")).toBe(before);
+  });
+
+  // Best effort: a job that cannot be pre-trusted should still be attempted.
+  it("reports false rather than throwing when the config is missing or corrupt", () => {
+    expect(existsSync(configFile())).toBe(false);
+    expect(trustDirectory(scratchpad("job-1"))).toBe(false);
+
+    writeFileSync(configFile(), "{ not json");
+    expect(trustDirectory(scratchpad("job-1"))).toBe(false);
   });
 
   it("treats an already-trusted directory as a no-op the caller can still call twice", () => {

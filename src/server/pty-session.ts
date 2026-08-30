@@ -209,7 +209,7 @@ export class PtySession {
    * row. On 2.1.248+ nothing cockpit can type does: Enter, arrow keys and a
    * pre-set `hasTrustDialogAccepted` were each measured against the real CLI.
    * Trust has to exist in the config before the spawn (which is what
-   * ensureScratchpadTrusted does for cockpit's own job directories).
+   * trustDirectory does for a scheduled job's directory before it spawns).
    *
    * Failing here is the point. Before this, start() went on to type the whole
    * prompt into the dialog, the CLI exited 1 under a second, and a scheduled

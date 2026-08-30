@@ -36,6 +36,14 @@ vi.mock("@/server/issue-storage", () => ({
   loadProjects: vi.fn(() => []),
 }));
 
+const { trustCalls } = vi.hoisted(() => ({ trustCalls: [] as string[] }));
+vi.mock("@/server/workspace-trust", () => ({
+  trustDirectory: (dir: string) => {
+    trustCalls.push(dir);
+    return true;
+  },
+}));
+
 vi.mock("node:fs", async () => {
   const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
   return { ...actual, mkdirSync: vi.fn() };
@@ -152,6 +160,23 @@ describe("JobScheduler", () => {
       expect(vi.mocked(releaseJobLock)).toHaveBeenCalledWith("job-1");
       // One-shot job session must be torn down so its PTY claude doesn't linger.
       expect(sm.destroySession).toHaveBeenCalledWith("session-1");
+    });
+
+    // A job runs unattended, so the CLI's workspace-trust dialog — which
+    // cockpit cannot answer — would otherwise kill every run forever, reporting
+    // only "went idle without producing any assistant message". Whichever
+    // directory the job's author pointed it at is the trust decision.
+    it("trusts the job's own cwd before spawning, not just a scratchpad", async () => {
+      trustCalls.length = 0;
+      const job = makeJob({ cwd: "/home/dev/repos/real-project" });
+      const promise = scheduler.executeJob(job);
+
+      await vi.waitFor(() => expect(sm.sendMessage).toHaveBeenCalled());
+      expect(trustCalls, "the directory is trusted before the CLI is spawned in it").toContain("/home/dev/repos/real-project");
+
+      sm.emitEvent({ type: "message_done", message: { content: "Done." } });
+      sm.emitStatus("idle");
+      await promise;
     });
 
     it("sets model and thinking level when job specifies them", async () => {

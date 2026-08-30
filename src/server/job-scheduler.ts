@@ -1,7 +1,7 @@
 import { mkdirSync } from "node:fs";
 import { v4 as uuidv4 } from "uuid";
 import { getJobScratchpadDir } from "@/server/paths";
-import { ensureScratchpadTrusted } from "@/server/workspace-trust";
+import { trustDirectory } from "@/server/workspace-trust";
 import type { IssueStatusSchedule, JobRun, JobRunToolUse, ScheduledJob } from "@/types";
 import { findMissedRun, getJobSchedules, matchesCron, scheduleToCron } from "./cron-utils";
 import { logDiag } from "./debug-logger";
@@ -545,12 +545,13 @@ export class JobScheduler {
 
     const jobCwd = job.cwd || getJobScratchpadDir(job.id);
     mkdirSync(getJobScratchpadDir(job.id), { recursive: true });
-    // A scratchpad cockpit just created has no trust entry, and the CLI's
-    // trust dialog is one cockpit cannot answer — it would type the prompt
-    // into it and die, reporting only "went idle without producing any
-    // assistant message". No-op for a job with its own cwd: trusting the
-    // user's real code is their decision, not ours.
-    if (ensureScratchpadTrusted(jobCwd)) {
+    // The CLI's trust dialog is one cockpit cannot answer — it would type the
+    // prompt into it and die, reporting only "went idle without producing any
+    // assistant message". A job runs unattended, so there is nobody to answer
+    // it either: whichever directory the job's author pointed it at, that
+    // choice is the trust decision, and it is a smaller grant than the agent
+    // and tools they already scheduled to run there.
+    if (trustDirectory(jobCwd)) {
       logDiag(job.id, "job:scratchpad-trusted", { runId, cwd: jobCwd });
     }
     const sessionInfo = this.sessionManager.createSession(jobCwd, `[job] ${job.name}`, {
