@@ -76,6 +76,10 @@ interface UseSessionReturn {
   apiError: string | null;
   /** Directory the CLI refuses to open until trust is granted, or null. */
   untrustedDir: string | null;
+  /** Re-attach and spawn the CLI, e.g. after granting trust for the cwd. */
+  connectSession: () => void;
+  /** Dismiss the untrusted-directory card once its trust has been granted. */
+  clearUntrustedDir: () => void;
   suggestions: string[];
   sessionName: string | null;
   initData: InitData | null;
@@ -195,24 +199,37 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
     currentModelRef.current = currentModel;
   }, [currentModel]);
 
+  /**
+   * Ask the server to (re)attach and spawn the CLI. `session:connect` is what
+   * calls ensureProcess, so this is also how a spawn that failed is retried —
+   * without inventing a prompt for a session that never ran one.
+   */
+  const connectSession = useCallback(() => {
+    // Clear stale client-side state before server re-sends current state
+    setPendingPermissions([]);
+    setPendingQuestions([]);
+    const isReconnect = loadedSessionRef.current === sessionId;
+    console.log(`[session] sending session:connect for ${sessionId.slice(0, 8)}`);
+    (window as unknown as Record<string, unknown>).__sessionConnectTime = performance.now();
+    send({
+      type: "session:connect",
+      sessionId,
+      cwd: cwd || undefined,
+      lastMessageId: isReconnect ? lastServerMsgIdRef.current : undefined,
+      historyView: historyView || undefined,
+    });
+  }, [sessionId, cwd, historyView, send]);
+
+  // Dismissed on the user's grant rather than on reaching "running": a spawn
+  // with no message to send stops at an idle REPL, so waiting for a turn would
+  // leave the card up over a session that had already started fine. If the
+  // directory is somehow still refused, the server re-emits and it comes back.
+  const clearUntrustedDir = useCallback(() => setUntrustedDir(null), []);
+
   // Send session:connect whenever WS (re)connects
   useEffect(() => {
-    if (connected) {
-      // Clear stale client-side state before server re-sends current state
-      setPendingPermissions([]);
-      setPendingQuestions([]);
-      const isReconnect = loadedSessionRef.current === sessionId;
-      console.log(`[session] sending session:connect for ${sessionId.slice(0, 8)}`);
-      (window as unknown as Record<string, unknown>).__sessionConnectTime = performance.now();
-      send({
-        type: "session:connect",
-        sessionId,
-        cwd: cwd || undefined,
-        lastMessageId: isReconnect ? lastServerMsgIdRef.current : undefined,
-        historyView: historyView || undefined,
-      });
-    }
-  }, [connected, sessionId, cwd, historyView, send]);
+    if (connected) connectSession();
+  }, [connected, connectSession]);
 
   useEffect(() => {
     const unsub = subscribe((msg: ServerMessage) => {
@@ -1395,6 +1412,8 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
     rateLimitStatus,
     apiError,
     untrustedDir,
+    connectSession,
+    clearUntrustedDir,
     suggestions,
     sessionName,
     initData,

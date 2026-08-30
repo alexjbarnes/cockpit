@@ -64,6 +64,8 @@ export function ChatView({
     rateLimitStatus,
     apiError,
     untrustedDir,
+    connectSession,
+    clearUntrustedDir,
     sessionName,
     initData,
     activeModelId,
@@ -240,15 +242,18 @@ export function ChatView({
         setTrustError(body?.error ?? `Could not trust the directory (HTTP ${res.status})`);
         return;
       }
-      // The spawn is retried by sending the turn that never ran; the card
-      // clears itself when the session reaches "running".
-      wsSend({ type: "message:send", sessionId, text: "Continue from where you left off." });
+      // Re-attach so the server spawns the CLI again. NOT a message: this
+      // session never ran a turn, so "continue where you left off" would be a
+      // prompt invented out of nothing. The card clears when it reaches
+      // "running", or comes back if the directory is somehow still refused.
+      clearUntrustedDir();
+      connectSession();
     } catch (err) {
       setTrustError(err instanceof Error ? err.message : String(err));
     } finally {
       setTrusting(false);
     }
-  }, [untrustedDir, sessionId, wsSend]);
+  }, [untrustedDir, connectSession, clearUntrustedDir]);
   const handleRename = useCallback(
     (name: string) => {
       wsSend({ type: "message:send", sessionId, text: `/rename ${name}` });
