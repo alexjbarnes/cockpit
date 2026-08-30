@@ -23,6 +23,18 @@ const REPL_QUIET_MS = 300;
 const REPL_SETTLE_MAX_MS = 2000;
 const REPL_POLL_MS = 50;
 
+/**
+ * The CLI is sitting on its workspace-trust dialog for `cwd` and cockpit cannot
+ * answer it. Typed so the session layer can offer the one-click grant instead
+ * of surfacing a spawn failure nobody can act on.
+ */
+export class UntrustedWorkspaceError extends Error {
+  constructor(readonly cwd: string) {
+    super(`The Claude CLI does not trust ${cwd}`);
+    this.name = "UntrustedWorkspaceError";
+  }
+}
+
 export interface PtySessionOptions {
   cwd: string;
   settingsPath: string;
@@ -190,21 +202,46 @@ export class PtySession {
     return this.buffer.replace(ansi, "").replace(extras, "");
   }
 
+  /**
+   * Answer the CLI's workspace-trust dialog, or fail naming the directory.
+   *
+   * The Enter below still clears it on CLI versions where Yes is the default
+   * row. On 2.1.248+ nothing cockpit can type does: Enter, arrow keys and a
+   * pre-set `hasTrustDialogAccepted` were each measured against the real CLI.
+   * Trust has to exist in the config before the spawn (which is what
+   * ensureScratchpadTrusted does for cockpit's own job directories).
+   *
+   * Failing here is the point. Before this, start() went on to type the whole
+   * prompt into the dialog, the CLI exited 1 under a second, and a scheduled
+   * job reported "went idle without producing any assistant message" — no
+   * transcript, no mention of trust, on a directory it had run in for weeks.
+   */
   private async handleTrustDialog(): Promise<void> {
     const deadline = Date.now() + TRUST_DIALOG_WINDOW_MS;
-    let accepted = false;
+    let seen = false;
     while (Date.now() < deadline) {
       if (this.exited) return;
       const clean = this.cleanOutput();
       if (clean.includes("trust") || clean.includes("Yes,")) {
         this.requirePty().write("\r");
-        accepted = true;
+        seen = true;
         break;
       }
       if (clean.length > REPL_READY_MIN_BYTES) break;
       await sleep(200);
     }
-    if (accepted) await sleep(2000);
+    if (!seen) return;
+    await sleep(2000);
+    if (this.exited || !this.trustDialogOnScreen()) return;
+    throw new UntrustedWorkspaceError(this.opts.cwd);
+  }
+
+  /** Whether the trust dialog is what is currently on screen. Matched
+   *  space-blind: the TUI paints each row a character at a time with cursor
+   *  moves between, so the ANSI-stripped screen keeps no spaces inside a row. */
+  private trustDialogOnScreen(): boolean {
+    const flat = this.cleanOutput().replace(/\s+/g, "").toLowerCase();
+    return flat.includes("yes,itrustthisfolder") || flat.includes("isthisaprojectyou");
   }
 
   private async waitForReplReady(): Promise<void> {

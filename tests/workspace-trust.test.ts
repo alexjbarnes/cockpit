@@ -7,7 +7,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { ensureScratchpadTrusted, isCockpitOwnedScratchpad } from "@/server/workspace-trust";
+import { ensureScratchpadTrusted, isCockpitOwnedScratchpad, isDirectoryTrusted, trustDirectory } from "@/server/workspace-trust";
 
 let root: string;
 let cockpitDir: string;
@@ -114,5 +114,41 @@ describe("ensureScratchpadTrusted", () => {
 
     writeFileSync(configFile(), "{ not json");
     expect(ensureScratchpadTrusted(dir)).toBe(false);
+  });
+});
+
+// The session half: a directory the user picks is theirs to trust, so the grant
+// is unfenced — unlike the scratchpad path, which decides for itself and is
+// therefore limited to directories cockpit created.
+describe("trustDirectory and isDirectoryTrusted", () => {
+  it("reports an untrusted directory as untrusted, then trusted once granted", () => {
+    writeConfig({ projects: {} });
+    const dir = "/home/dev/repos/somewhere";
+
+    expect(isDirectoryTrusted(dir)).toBe(false);
+    expect(trustDirectory(dir)).toBe(true);
+    expect(isDirectoryTrusted(dir)).toBe(true);
+  });
+
+  it("grants a directory outside the scratchpad root, which the scratchpad path refuses", () => {
+    writeConfig({ projects: {} });
+    const dir = "/home/dev/repos/cockpit";
+
+    expect(ensureScratchpadTrusted(dir), "cockpit never decides this for itself").toBe(false);
+    expect(trustDirectory(dir), "but the user can").toBe(true);
+    expect(readConfig().projects?.[dir]?.hasTrustDialogAccepted).toBe(true);
+  });
+
+  it("treats an already-trusted directory as a no-op the caller can still call twice", () => {
+    const dir = "/home/dev/repos/somewhere";
+    writeConfig({ projects: { [dir]: { hasTrustDialogAccepted: true } } });
+
+    expect(trustDirectory(dir)).toBe(false);
+    expect(isDirectoryTrusted(dir), "a double click must still leave it trusted").toBe(true);
+  });
+
+  it("reports untrusted rather than throwing when the config is unreadable", () => {
+    writeFileSync(configFile(), "{ not json");
+    expect(isDirectoryTrusted("/anything")).toBe(false);
   });
 });

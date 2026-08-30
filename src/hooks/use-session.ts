@@ -74,6 +74,8 @@ interface UseSessionReturn {
   contextUsage: ContextUsage | null;
   rateLimitStatus: string | null;
   apiError: string | null;
+  /** Directory the CLI refuses to open until trust is granted, or null. */
+  untrustedDir: string | null;
   suggestions: string[];
   sessionName: string | null;
   initData: InitData | null;
@@ -130,6 +132,7 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
   const [contextUsage, setContextUsage] = useState<ContextUsage | null>(null);
   const [rateLimitStatus, setRateLimitStatus] = useState<string | null>(null);
   const [apiError, setApiError] = useState<string | null>(null);
+  const [untrustedDir, setUntrustedDir] = useState<string | null>(null);
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const [sessionName, setSessionName] = useState<string | null>(null);
   const [initData, setInitData] = useState<InitData | null>(null);
@@ -744,6 +747,8 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
           isRespondingRef.current = nowRunning;
           if (nowRunning) {
             setApiError(null);
+            // A session that reached "running" is trusted by definition.
+            setUntrustedDir(null);
             setErrorActive(false);
             clearTimeout(errorTimerRef.current);
           }
@@ -864,6 +869,11 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
           if (msg.text.startsWith(thinkingPrefix)) {
             const level = msg.text.slice(thinkingPrefix.length) as ThinkingLevel;
             setThinkingLevelState(level);
+            break;
+          }
+          const untrustedPrefix = "__untrusted_dir::";
+          if (msg.text.startsWith(untrustedPrefix)) {
+            setUntrustedDir(msg.text.slice(untrustedPrefix.length));
             break;
           }
           const runtimePrefix = "__runtime::";
@@ -1384,6 +1394,7 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
     contextUsage,
     rateLimitStatus,
     apiError,
+    untrustedDir,
     suggestions,
     sessionName,
     initData,

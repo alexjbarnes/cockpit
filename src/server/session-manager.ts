@@ -45,6 +45,7 @@ import { COCKPIT_AGENT_SYSTEM_PROMPT } from "./mcp/cockpit-agent-prompt";
 import { clearToken, type RunContext, registerAuthToken, registerRunContext, registerSessionContext } from "./mcp/run-context";
 import { getNotificationSettings } from "./notification-settings";
 import { findLatestPlanFile, readPlanFile } from "./plans";
+import { UntrustedWorkspaceError } from "./pty-session";
 import { findChainForCliSession, getSessionPrefs, type SessionRuntime, setSessionPrefs } from "./session-prefs";
 import { getCockpitMcp } from "./singleton";
 import { createStreamState, processEvents, type StreamState } from "./stream-processor";
@@ -2553,6 +2554,16 @@ Additional Cockpit rules beyond the CLI's defaults:
         const msg = err instanceof Error ? err.message : String(err);
         this.log(sessionId, `runtime start failed: ${msg}`);
         if (session.harnessProcess === handle) session.harnessProcess = null;
+        // A workspace the CLI will not open is the one spawn failure the user
+        // can fix from here, so it goes out as its own signal and the client
+        // offers the grant. Everything else is just an error.
+        if (err instanceof UntrustedWorkspaceError) {
+          logDiag(sessionId, "spawn:untrusted-workspace", { cwd: err.cwd });
+          this.emitSystem(session, sessionId, `__untrusted_dir::${err.cwd}`);
+          session.info.status = "idle";
+          session.emitter.emit("status", sessionId, "idle");
+          return;
+        }
         // Emit error BEFORE idle: a job's onStatus("idle") maps to success, so an
         // idle-first order would mark a failed spawn as a successful empty run.
         session.emitter.emit("error", sessionId, msg);

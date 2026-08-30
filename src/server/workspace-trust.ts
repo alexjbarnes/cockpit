@@ -22,6 +22,30 @@ import { getClaudeUserConfigFile, getJobsScratchpadRoot } from "@/server/paths";
  * the PTY runtime is not). So the entry is written directly, before the spawn.
  */
 
+/** Whether the CLI already trusts `dir`, i.e. it will not raise its dialog. */
+export function isDirectoryTrusted(dir: string): boolean {
+  const file = getClaudeUserConfigFile();
+  if (!existsSync(file)) return false;
+  try {
+    const config = JSON.parse(readFileSync(file, "utf-8")) as { projects?: Record<string, { hasTrustDialogAccepted?: boolean }> };
+    return config.projects?.[path.resolve(dir)]?.hasTrustDialogAccepted === true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Record trust for any directory, on the user's explicit say-so.
+ *
+ * `ensureScratchpadTrusted` decides for itself and is therefore fenced to
+ * cockpit's own scratchpads. This one is the other half: a person clicked
+ * "Trust this directory" on the session that could not start, so any path is
+ * fair game and the caller owns the decision.
+ */
+export function trustDirectory(dir: string): boolean {
+  return writeTrustEntry(dir);
+}
+
 /** Only directories cockpit itself creates under the jobs scratchpad root are
  *  ever auto-trusted. A job with its own `cwd` points at the user's real code,
  *  and that trust decision stays theirs to make. */
@@ -40,6 +64,10 @@ export function isCockpitOwnedScratchpad(dir: string): boolean {
  */
 export function ensureScratchpadTrusted(dir: string): boolean {
   if (!isCockpitOwnedScratchpad(dir)) return false;
+  return writeTrustEntry(dir);
+}
+
+function writeTrustEntry(dir: string): boolean {
   const file = getClaudeUserConfigFile();
   if (!existsSync(file)) return false;
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { AlertTriangle, ArrowDown, Loader2, RotateCcw, Square } from "lucide-react";
+import { AlertTriangle, ArrowDown, Loader2, RotateCcw, ShieldCheck, Square } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useMessageSelection } from "@/hooks/use-message-selection";
@@ -63,6 +63,7 @@ export function ChatView({
     contextUsage,
     rateLimitStatus,
     apiError,
+    untrustedDir,
     sessionName,
     initData,
     activeModelId,
@@ -220,6 +221,34 @@ export function ChatView({
 
   // Update header with session name
   const { send: wsSend } = useWebSocket();
+  // The one spawn failure the user can fix from here: grant the CLI's
+  // workspace trust for this directory, then start the session that could not.
+  const [trusting, setTrusting] = useState(false);
+  const [trustError, setTrustError] = useState<string | null>(null);
+  const grantTrust = useCallback(async () => {
+    if (!untrustedDir) return;
+    setTrusting(true);
+    setTrustError(null);
+    try {
+      const res = await fetch("/api/trust", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cwd: untrustedDir }),
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => null)) as { error?: string } | null;
+        setTrustError(body?.error ?? `Could not trust the directory (HTTP ${res.status})`);
+        return;
+      }
+      // The spawn is retried by sending the turn that never ran; the card
+      // clears itself when the session reaches "running".
+      wsSend({ type: "message:send", sessionId, text: "Continue from where you left off." });
+    } catch (err) {
+      setTrustError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setTrusting(false);
+    }
+  }, [untrustedDir, sessionId, wsSend]);
   const handleRename = useCallback(
     (name: string) => {
       wsSend({ type: "message:send", sessionId, text: `/rename ${name}` });
@@ -534,6 +563,31 @@ export function ChatView({
               )}
               {errorActive && !isResponding && <span className="text-xs text-red-500">API error, retrying...</span>}
               {rateLimitStatus && <span className="text-xs">Rate limited, retrying...</span>}
+            </div>
+          )}
+          {untrustedDir && !isResponding && (
+            <div className="flex w-full justify-start" data-testid="untrusted-dir-card">
+              <div className="max-w-[85%] rounded-lg border border-amber-500/30 bg-amber-500/5 px-4 py-3">
+                <div className="mb-1 flex items-center gap-2 text-amber-500">
+                  <AlertTriangle className="h-4 w-4 shrink-0" />
+                  <span className="text-sm font-medium">Directory not trusted</span>
+                </div>
+                <p className="mb-1 text-xs text-muted-foreground">
+                  The Claude CLI will not open <span className="font-mono break-all">{untrustedDir}</span> until you say you trust it. It
+                  asks in the terminal, which cockpit cannot answer for you.
+                </p>
+                <p className="mb-3 text-xs text-muted-foreground">Only trust a directory whose contents you know.</p>
+                <button
+                  type="button"
+                  disabled={trusting}
+                  onClick={grantTrust}
+                  className="flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs transition-colors hover:bg-muted disabled:opacity-60"
+                >
+                  {trusting ? <Loader2 className="h-3 w-3 animate-spin" /> : <ShieldCheck className="h-3 w-3" />}
+                  Trust this directory and start
+                </button>
+                {trustError && <p className="mt-2 text-xs text-red-500">{trustError}</p>}
+              </div>
             </div>
           )}
           {apiError && !isResponding && !errorActive && (
