@@ -159,6 +159,11 @@ describe("PtySession workspace trust", () => {
     try {
       const session = newSession();
       const started = session.start();
+      // The rejection lands inside advanceTimersByTimeAsync, before the
+      // assertion below attaches its handler, and node flags that as an
+      // unhandled rejection — which fails the run even though every test
+      // passes. Same guard the initial-prompt tests use.
+      started.catch(() => {});
       await vi.advanceTimersByTimeAsync(0);
       emit(TRUST_DIALOG);
       // The Enter goes out; 2s later the dialog is still on screen.
