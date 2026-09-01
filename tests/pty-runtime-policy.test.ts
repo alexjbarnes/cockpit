@@ -42,7 +42,7 @@ vi.mock("@/server/cli-init-fetch", () => ({
   fetchCliInitData: vi.fn().mockResolvedValue(null),
 }));
 
-function makeRuntime(expected: "default" | "plan" | "bypassPermissions") {
+function makeRuntime(expected: "manual" | "plan" | "bypassPermissions") {
   const events: ParsedEvent[] = [];
   const runtime = new PtyRuntime({
     sessionId: "s-policy-test",
@@ -134,7 +134,7 @@ describe("TUI-only permission dialog rescue", () => {
   // The rescue is only for a dialog cockpit has no hook channel for, so a
   // request still waiting on its hook resolver is proof this is not that.
   it("does not raise a second request while a hook request for the same tool is pending", () => {
-    const { runtime, events } = makeRuntime("default");
+    const { runtime, events } = makeRuntime("manual");
     const handler = (runtime as never as { buildHandler(): Record<string, (p: Record<string, unknown>) => unknown> }).buildHandler();
     const toolInput = { questions: [{ question: "Which?", header: "Pick", options: [] }] };
 
@@ -148,7 +148,7 @@ describe("TUI-only permission dialog rescue", () => {
   });
 
   it("still rescues the dialog once the hook request has been answered", () => {
-    const { runtime, events } = makeRuntime("default");
+    const { runtime, events } = makeRuntime("manual");
     const handler = (runtime as never as { buildHandler(): Record<string, (p: Record<string, unknown>) => unknown> }).buildHandler();
     const preToolUse = { permission_mode: "default", tool_name: "Write", tool_input: { file_path: "/x/.claude/skills/a/SKILL.md" } };
 
@@ -191,7 +191,7 @@ describe("background work: status gate and reported count", () => {
   const task = (id: string, status = "running") => ({ id, status, agent_type: "general-purpose", description: "work" });
 
   it("mid-turn, a tool call always drives status, agent running or not", () => {
-    const { runtime, events } = makeRuntime("default");
+    const { runtime, events } = makeRuntime("manual");
     const handler = handlerFor(runtime);
 
     handler.onPreToolUse(preToolUse);
@@ -204,7 +204,7 @@ describe("background work: status gate and reported count", () => {
   });
 
   it("suppresses the status signal after the turn ends while work is still listed", () => {
-    const { runtime, events } = makeRuntime("default");
+    const { runtime, events } = makeRuntime("manual");
     const handler = handlerFor(runtime);
 
     handler.onSubagentStart({ agent_id: "agent-1", agent_type: "general-purpose" });
@@ -217,7 +217,7 @@ describe("background work: status gate and reported count", () => {
   });
 
   it("ignores a SubagentStop whose own payload still lists the agent running", () => {
-    const { runtime, events } = makeRuntime("default");
+    const { runtime, events } = makeRuntime("manual");
     const handler = handlerFor(runtime);
 
     handler.onSubagentStart({ agent_id: "agent-1" });
@@ -233,7 +233,7 @@ describe("background work: status gate and reported count", () => {
   });
 
   it("releases the gate when the list finally comes back empty", () => {
-    const { runtime, events } = makeRuntime("default");
+    const { runtime, events } = makeRuntime("manual");
     const handler = handlerFor(runtime);
 
     handler.onSubagentStart({ agent_id: "agent-1" });
@@ -246,7 +246,7 @@ describe("background work: status gate and reported count", () => {
   });
 
   it("ignores a stop for an agent that never started here", () => {
-    const { runtime, events } = makeRuntime("default");
+    const { runtime, events } = makeRuntime("manual");
     const handler = handlerFor(runtime);
 
     handler.onSubagentStart({ agent_id: "agent-1" });
@@ -260,7 +260,7 @@ describe("background work: status gate and reported count", () => {
   });
 
   it("a payload with no task list leaves the count alone", () => {
-    const { runtime, events } = makeRuntime("default");
+    const { runtime, events } = makeRuntime("manual");
     const handler = handlerFor(runtime);
 
     handler.onSubagentStart({ agent_id: "agent-1" });
@@ -275,7 +275,7 @@ describe("background work: status gate and reported count", () => {
   });
 
   it("reports the count on launch, on change, and never twice for the same value", () => {
-    const { runtime, events } = makeRuntime("default");
+    const { runtime, events } = makeRuntime("manual");
     const handler = handlerFor(runtime);
 
     handler.onSubagentStart({ agent_id: "agent-1" });
@@ -289,7 +289,7 @@ describe("background work: status gate and reported count", () => {
   });
 
   it("keeps the count across a new user turn, but reopens the spinner for it", () => {
-    const { runtime, events } = makeRuntime("default");
+    const { runtime, events } = makeRuntime("manual");
     const handler = handlerFor(runtime);
 
     handler.onSubagentStart({ agent_id: "agent-1" });

@@ -83,6 +83,7 @@ async function sendAndCheckIntact(
 ): Promise<boolean> {
   const workDir = mkdtempSync(path.join(tmpdir(), "cockpit-ml-"));
   mkdirSync(path.join(workDir, ".git"), { recursive: true });
+  harness.trustWorkDir(workDir);
   try {
     harness.mock.setScript([{ events: textResponse("ack from mock") }]);
     const res = await page.request.post(`${harness.cockpitUrl}/api/sessions`, { data: { cwd: workDir, runtime: "pty" } });

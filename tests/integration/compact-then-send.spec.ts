@@ -55,6 +55,7 @@ async function send(page: import("@playwright/test").Page, text: string): Promis
 test("a refused /compact does not wedge the session", async ({ page, harness }) => {
   const workDir = mkdtempSync(path.join(tmpdir(), "cockpit-it-nocompact-"));
   mkdirSync(path.join(workDir, ".git"), { recursive: true });
+  harness.trustWorkDir(workDir);
 
   try {
     harness.mock.setScript([{ events: textResponse("first reply") }, { events: textResponse("second reply") }]);
@@ -82,6 +83,7 @@ test("a refused /compact does not wedge the session", async ({ page, harness }) 
 test("a message sent after a real /compact still reaches the CLI", async ({ page, harness }) => {
   const workDir = mkdtempSync(path.join(tmpdir(), "cockpit-it-compact-"));
   mkdirSync(path.join(workDir, ".git"), { recursive: true });
+  harness.trustWorkDir(workDir);
   const EXCHANGES = 4;
 
   try {

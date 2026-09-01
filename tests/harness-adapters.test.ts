@@ -24,7 +24,13 @@ vi.mock("node:fs", async (importOriginal) => {
   return { ...actual, mkdirSync: vi.fn(), writeFileSync: vi.fn(), unlinkSync: vi.fn() };
 });
 
-vi.mock("@/server/claude-bin", () => ({ getClaudeBin: () => "claude" }));
+const { cliModes } = vi.hoisted(() => ({
+  cliModes: { supported: new Set(["acceptEdits", "auto", "bypassPermissions", "manual", "dontAsk", "plan"]) },
+}));
+vi.mock("@/server/claude-bin", () => ({
+  getClaudeBin: () => "claude",
+  supportedPermissionModes: () => cliModes.supported,
+}));
 
 vi.mock("@/server/debug-logger", () => ({
   debugLog: vi.fn(),
@@ -411,6 +417,53 @@ describe("ClaudePtyAdapter", () => {
 
     adapter.spawn(baseConfig({ willResume: true }));
     expect(mockPtyInstances[1].opts.extraArgs).toContain("--resume");
+  });
+
+  // The CLI's own default became `auto`, whose safety classifier runs on the
+  // SESSION's model: on glm-5.3-flash it timed out and blocked the tool call
+  // outright ("auto-mode safety classifier down"). Permissions are cockpit's
+  // job anyway — its cards answer the PermissionRequest hook — so the mode is
+  // asked for rather than inherited.
+  describe("permission mode", () => {
+    it("asks for manual when neither plan nor bypass applies", () => {
+      adapter.spawn(baseConfig());
+      const args = mockPtyInstances[0].opts.extraArgs as string[];
+      expect(args[args.indexOf("--permission-mode") + 1]).toBe("manual");
+      expect(mockPtyInstances[0].opts.expectedPermissionMode).toBe("manual");
+    });
+
+    it("still prefers plan and bypass over manual", () => {
+      adapter.spawn(baseConfig({ planMode: true }));
+      expect(mockPtyInstances[0].opts.extraArgs).toContain("plan");
+      expect(mockPtyInstances[0].opts.extraArgs).not.toContain("manual");
+
+      adapter.spawn(baseConfig({ bypassAllPermissions: true }));
+      expect(mockPtyInstances[1].opts.extraArgs).toContain("bypassPermissions");
+      expect(mockPtyInstances[1].opts.extraArgs).not.toContain("manual");
+    });
+
+    // The assistant is excluded from bypass, so before this it passed no flag
+    // at all and inherited the user's global defaultMode — which is how it
+    // ended up in auto.
+    it("covers the cockpit assistant, which is excluded from bypass", () => {
+      adapter.spawn(baseConfig({ cockpitAgent: true, bypassAllPermissions: true }));
+      const args = mockPtyInstances[0].opts.extraArgs as string[];
+      expect(args).not.toContain("bypassPermissions");
+      expect(args[args.indexOf("--permission-mode") + 1]).toBe("manual");
+    });
+
+    // The mode names are version-dependent. Passing one an older build does not
+    // know is fatal — it rejects the choice and the spawn dies — so an
+    // unsupported `manual` means no flag, exactly as cockpit behaved before.
+    it("passes no flag at all when the CLI does not know manual", () => {
+      cliModes.supported = new Set(["acceptEdits", "bypassPermissions", "plan"]);
+      try {
+        adapter.spawn(baseConfig());
+        expect(mockPtyInstances[0].opts.extraArgs).not.toContain("--permission-mode");
+      } finally {
+        cliModes.supported = new Set(["acceptEdits", "auto", "bypassPermissions", "manual", "dontAsk", "plan"]);
+      }
+    });
   });
 
   it("passes --model and --effort when supported, and omits --effort when off", () => {

@@ -41,6 +41,7 @@ test.skip(!CLAUDE_AVAILABLE, `claude binary not found at ${CLAUDE_BIN} (set CLAU
 test("the counter keeps counting when the viewing device's clock trails the server's", async ({ page, harness }) => {
   const workDir = mkdtempSync(path.join(tmpdir(), "cockpit-it-skew-"));
   mkdirSync(path.join(workDir, ".git"), { recursive: true });
+  harness.trustWorkDir(workDir);
   const SKEW_MS = 30_000;
 
   try {
@@ -82,6 +83,7 @@ test("the counter keeps counting when the viewing device's clock trails the serv
 test("a running turn shows a ticking elapsed time, and the finished reply shows when it landed", async ({ page, harness }) => {
   const workDir = mkdtempSync(path.join(tmpdir(), "cockpit-it-timing-"));
   mkdirSync(path.join(workDir, ".git"), { recursive: true });
+  harness.trustWorkDir(workDir);
 
   try {
     // Held open long enough to watch the ticker advance several times.

@@ -35,6 +35,7 @@ test.skip(!CLAUDE_AVAILABLE, `claude binary not found at ${CLAUDE_BIN} (set CLAU
 test("a follow-up question renders after the first one is answered", async ({ page, harness }) => {
   const workDir = mkdtempSync(path.join(tmpdir(), "cockpit-it-seqq-"));
   mkdirSync(path.join(workDir, ".git"), { recursive: true });
+  harness.trustWorkDir(workDir);
 
   try {
     harness.mock.setScript([

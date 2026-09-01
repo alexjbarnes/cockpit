@@ -38,6 +38,7 @@ test.skip(!CLAUDE_AVAILABLE, `claude binary not found at ${CLAUDE_BIN} (set CLAU
 test("gauge denominator stays at 1M after a message round-trip in PTY mode", async ({ page, harness }) => {
   const workDir = mkdtempSync(path.join(tmpdir(), "cockpit-it-ctx-"));
   mkdirSync(path.join(workDir, ".git"), { recursive: true });
+  harness.trustWorkDir(workDir);
 
   try {
     harness.mock.setScript([{ events: textResponse("ack") }]);

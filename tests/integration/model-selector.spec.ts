@@ -31,6 +31,7 @@ test.skip(!CLAUDE_AVAILABLE, `claude binary not found at ${CLAUDE_BIN} (set CLAU
 test("session-settings dialog opens for a custom model with no contextSizes", async ({ page, harness }) => {
   const workDir = mkdtempSync(path.join(tmpdir(), "cockpit-it-mscrash-"));
   mkdirSync(path.join(workDir, ".git"), { recursive: true });
+  harness.trustWorkDir(workDir);
 
   try {
     // Session whose current model is the legacy mock model (no contextSizes).
@@ -68,6 +69,7 @@ test("session-settings dialog opens for a custom model with no contextSizes", as
 test("provider dropdown defaults to the current custom provider", async ({ page, harness }) => {
   const workDir = mkdtempSync(path.join(tmpdir(), "cockpit-it-provdflt-"));
   mkdirSync(path.join(workDir, ".git"), { recursive: true });
+  harness.trustWorkDir(workDir);
 
   try {
     // Session with a model that matches the harness mock provider’s modelId.

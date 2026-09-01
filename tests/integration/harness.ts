@@ -13,7 +13,7 @@
 
 import { type ChildProcess, spawn } from "node:child_process";
 import { randomBytes, scryptSync } from "node:crypto";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -22,6 +22,14 @@ import type { ThinkingLevel } from "../../src/types";
 import { createMockApiServer, type MockApiServer } from "../mock-api/server";
 
 export interface Harness {
+  /**
+   * Grant the CLI's workspace trust for `dir`, as a user does once per
+   * directory. Every spec makes a fresh mkdtemp cwd, which the CLI has never
+   * seen, and an untrusted cwd now fails the spawn outright rather than being
+   * typed into (see PtySession.handleTrustDialog) — so without this the CLI
+   * exits at startup and the test sees only "claude exited during startup".
+   */
+  trustWorkDir(dir: string): void;
   mock: MockApiServer;
   cockpitPort: number;
   cockpitUrl: string;
@@ -135,6 +143,12 @@ export async function startHarness(opts: HarnessOptions = {}): Promise<Harness> 
     cockpitToken,
     configDir,
     claudeDir,
+    trustWorkDir(dir: string) {
+      const file = path.join(claudeDir, ".claude.json");
+      const config = JSON.parse(readFileSync(file, "utf-8")) as { projects?: Record<string, unknown> };
+      config.projects = { ...(config.projects ?? {}), [path.resolve(dir)]: { hasTrustDialogAccepted: true } };
+      writeFileSync(file, JSON.stringify(config, null, 2));
+    },
     async stop() {
       if (proc.pid) activeGroups.delete(proc.pid);
       await stopProcess(proc);

@@ -49,6 +49,7 @@ async function createJob(page: import("@playwright/test").Page, cockpitUrl: stri
 test("a job with inboxOutput reaches the inbox tool and the message is delivered", async ({ page, harness }) => {
   const workDir = mkdtempSync(path.join(tmpdir(), "cockpit-it-job-"));
   mkdirSync(path.join(workDir, ".git"), { recursive: true });
+  harness.trustWorkDir(workDir);
 
   try {
     harness.mock.setScript([
@@ -104,6 +105,7 @@ test("a job with inboxOutput reaches the inbox tool and the message is delivered
 test("a job cannot call a config tool even with bypassPermissions", async ({ page, harness }) => {
   const workDir = mkdtempSync(path.join(tmpdir(), "cockpit-it-job-deny-"));
   mkdirSync(path.join(workDir, ".git"), { recursive: true });
+  harness.trustWorkDir(workDir);
 
   try {
     // A job that exists purely so there is something for delete_job to destroy.

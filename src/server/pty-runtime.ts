@@ -35,7 +35,7 @@ export interface PtyRuntimeOptions {
    *  take effect the two diverge, which the runtime records in the debug log
    *  (see noteModeDivergence) because it explains a session raising prompts
    *  while the UI reports bypass as on. */
-  expectedPermissionMode?: "default" | "plan" | "bypassPermissions";
+  expectedPermissionMode?: "manual" | "plan" | "bypassPermissions";
 }
 
 /**

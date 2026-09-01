@@ -61,6 +61,7 @@ async function userPromptReachedApi(
 test("control: a plain message submits to the CLI", async ({ page, harness }) => {
   const workDir = mkdtempSync(path.join(tmpdir(), "cockpit-at-"));
   mkdirSync(path.join(workDir, ".git"), { recursive: true });
+  harness.trustWorkDir(workDir);
   try {
     const landed = await userPromptReachedApi(page, harness, workDir, "summarize the notes ZZMARKERA", "ZZMARKERA");
     expect(landed).toBe(true);
@@ -72,6 +73,7 @@ test("control: a plain message submits to the CLI", async ({ page, harness }) =>
 test("a message with an @ file mention submits (does not hang)", async ({ page, harness }) => {
   const workDir = mkdtempSync(path.join(tmpdir(), "cockpit-at-"));
   mkdirSync(path.join(workDir, ".git"), { recursive: true });
+  harness.trustWorkDir(workDir);
   writeFileSync(path.join(workDir, "notes.md"), "# Notes\nsome content here\n");
   try {
     const landed = await userPromptReachedApi(page, harness, workDir, "@notes.md summarize ZZMARKERB", "ZZMARKERB");
@@ -84,6 +86,7 @@ test("a message with an @ file mention submits (does not hang)", async ({ page, 
 test("a message with an @ agent-style mention submits (does not hang)", async ({ page, harness }) => {
   const workDir = mkdtempSync(path.join(tmpdir(), "cockpit-at-"));
   mkdirSync(path.join(workDir, ".git"), { recursive: true });
+  harness.trustWorkDir(workDir);
   try {
     const landed = await userPromptReachedApi(page, harness, workDir, "@reviewer please review ZZMARKERC", "ZZMARKERC");
     expect(landed).toBe(true);
@@ -95,6 +98,7 @@ test("a message with an @ agent-style mention submits (does not hang)", async ({
 test("the exact reported shape (plugin agent with colon + URL) submits", async ({ page, harness }) => {
   const workDir = mkdtempSync(path.join(tmpdir(), "cockpit-at-"));
   mkdirSync(path.join(workDir, ".git"), { recursive: true });
+  harness.trustWorkDir(workDir);
   try {
     const msg = "@iph-ai-toolkit:adversarial-code-review https://github.com/IPH-ITIPS/AnalystPortal/pull/264 ZZMARKERD";
     const landed = await userPromptReachedApi(page, harness, workDir, msg, "ZZMARKERD");
@@ -113,6 +117,7 @@ test("the exact reported shape (plugin agent with colon + URL) submits", async (
 test("a message ENDING in a matching @ mention still submits (open-menu hang)", async ({ page, harness }) => {
   const workDir = mkdtempSync(path.join(tmpdir(), "cockpit-at-"));
   mkdirSync(path.join(workDir, ".git"), { recursive: true });
+  harness.trustWorkDir(workDir);
   // A real file so the dangling "@notes" matches and the CLI opens its @ menu.
   writeFileSync(path.join(workDir, "notes.md"), "# Notes\nsome content here\n");
   try {

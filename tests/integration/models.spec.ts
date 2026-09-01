@@ -53,6 +53,7 @@ for (const tc of TESTS) {
     mkdirSync(path.join(workDir, ".git"), { recursive: true });
 
     const harness = await startHarness();
+    harness.trustWorkDir(workDir);
 
     try {
       // Skip the full test quickly if no claude binary
