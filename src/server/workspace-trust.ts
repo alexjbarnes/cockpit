@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, fsyncSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
 import path from "node:path";
 import { getClaudeUserConfigFile } from "@/server/paths";
 
@@ -52,6 +52,53 @@ export function trustDirectory(dir: string): boolean {
   return writeTrustEntry(dir);
 }
 
+/**
+ * Replace `file` with `data`, atomically where the filesystem allows it.
+ *
+ * The CLI owns this file and writes it whenever it likes, so cockpit is one of
+ * two uncoordinated writers. A rename is the only way to make cockpit's half
+ * indivisible: a reader sees the old file or the new one, never a half-written
+ * one.
+ *
+ * The fallback exists because rename onto `~/.claude.json` fails EBUSY when the
+ * path is its own mount, which it is inside this project's dev container. There
+ * the write is truncate-then-write, and a reader landing in that window sees a
+ * broken file — which is exactly what happened on 2026-09-01: the quarantined
+ * copy is a complete document with the tail of a longer previous write still
+ * attached, and the CLI reset itself, losing eleven trusted directories. So the
+ * fallback fsyncs and, above all, is only reached when rename genuinely cannot
+ * work rather than being the default it used to be.
+ */
+function writeConfigSafely(file: string, data: string): boolean {
+  const tmp = `${file}.cockpit-tmp-${process.pid}`;
+  try {
+    writeFileSync(tmp, data, { mode: 0o600 });
+    renameSync(tmp, file);
+    return true;
+  } catch {
+    try {
+      unlinkSync(tmp);
+    } catch {
+      /* nothing to clean up */
+    }
+  }
+  // Rename is unavailable (EBUSY on a mount-point config). Write in place and
+  // flush, so the window where a concurrent reader could see a short file is as
+  // small as the platform allows.
+  try {
+    const fd = openSync(file, "w");
+    try {
+      writeSync(fd, data);
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function writeTrustEntry(dir: string): boolean {
   const file = getClaudeUserConfigFile();
   if (!existsSync(file)) return false;
@@ -71,12 +118,7 @@ function writeTrustEntry(dir: string): boolean {
     // stats), and only the trust flag is ours to set.
     projects[key] = { ...(existing ?? {}), hasTrustDialogAccepted: true };
 
-    // Written in place, NOT through writeJsonAtomic: ~/.claude.json can be its
-    // own mount (it is on this developer's box), and a rename onto a mount
-    // point fails with EBUSY. The file is small and this only runs when the
-    // flag is genuinely missing, so the truncate window is narrow and rare.
-    writeFileSync(file, `${JSON.stringify(config, null, 2)}\n`);
-    return true;
+    return writeConfigSafely(file, `${JSON.stringify(config, null, 2)}\n`);
   } catch {
     // A config we cannot read or write is not worth failing a spawn over; the
     // job proceeds and, at worst, hits the dialog as before.

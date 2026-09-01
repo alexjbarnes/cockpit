@@ -3,10 +3,25 @@
 // into it, and the run reported "went idle without producing any assistant
 // message" with no transcript and no mention of trust. Cockpit creates those
 // directories, so it grants the trust up front.
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+// Rename is unavailable when the config path is its own mount (this project's
+// dev container). Everything else stays real so the write is genuinely exercised.
+const { renameFails } = vi.hoisted(() => ({ renameFails: { value: false } }));
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return {
+    ...actual,
+    renameSync: (from: string, to: string) => {
+      if (renameFails.value) throw Object.assign(new Error("EBUSY"), { code: "EBUSY" });
+      return actual.renameSync(from, to);
+    },
+  };
+});
+
 import { isDirectoryTrusted, trustDirectory } from "@/server/workspace-trust";
 
 let root: string;
@@ -115,5 +130,60 @@ describe("trustDirectory and isDirectoryTrusted", () => {
   it("reports untrusted rather than throwing when the config is unreadable", () => {
     writeFileSync(configFile(), "{ not json");
     expect(isDirectoryTrusted("/anything")).toBe(false);
+  });
+});
+
+// The CLI owns ~/.claude.json and writes it whenever it likes, so cockpit is
+// one of two uncoordinated writers. On 2026-09-01 a non-atomic write left the
+// file as a complete document with the tail of a longer previous write still
+// attached; the CLI quarantined it and reset, losing eleven trusted
+// directories. Cockpit's half of the write has to be indivisible.
+describe("the config write cannot be seen half-done", () => {
+  it("replaces the file rather than truncating it in place", () => {
+    const dir = "/home/dev/repos/somewhere";
+    const bulky = {
+      projects: Object.fromEntries(Array.from({ length: 400 }, (_, i) => [`/p/${i}`, { lastCost: i, note: "x".repeat(80) }])),
+    };
+    writeConfig(bulky);
+    const before = statSync(configFile()).ino;
+
+    expect(trustDirectory(dir)).toBe(true);
+
+    // A new inode means rename swapped the file in whole. That is the property
+    // that matters: the CLI reading concurrently holds the OLD complete file
+    // instead of watching this one shrink to nothing and grow back. Truncating
+    // in place keeps the inode and is what left a valid document with the tail
+    // of a longer previous write still attached.
+    expect(statSync(configFile()).ino, "the config is swapped in, not overwritten under readers").not.toBe(before);
+    expect(() => JSON.parse(readFileSync(configFile(), "utf-8"))).not.toThrow();
+    expect(readConfig().projects?.[dir]?.hasTrustDialogAccepted).toBe(true);
+    expect(Object.keys(readConfig().projects ?? {}), "the rest of the config survives").toHaveLength(401);
+  });
+
+  it("leaves no temp file behind", () => {
+    writeConfig({ projects: {} });
+    expect(trustDirectory("/home/dev/repos/somewhere")).toBe(true);
+
+    const strays = readdirSync(claudeHome).filter((f) => f.includes("cockpit-tmp"));
+    expect(strays).toEqual([]);
+  });
+
+  // Rename is unavailable when the config path is its own mount (the dev
+  // container). The write still has to land, and still has to be complete.
+  it("falls back to an in-place write when rename cannot be used, and still writes valid JSON", () => {
+    renameFails.value = true;
+    try {
+      writeConfig({ projects: { "/keep/me": { lastCost: 9 } } });
+      const inoBefore = statSync(configFile()).ino;
+      expect(trustDirectory("/home/dev/repos/somewhere")).toBe(true);
+
+      const cfg = readConfig();
+      expect(cfg.projects?.["/home/dev/repos/somewhere"]?.hasTrustDialogAccepted).toBe(true);
+      expect(cfg.projects?.["/keep/me"]).toEqual({ lastCost: 9 });
+      expect(statSync(configFile()).ino, "same file, written through — the unavoidable case").toBe(inoBefore);
+      expect(readdirSync(claudeHome).filter((f) => f.includes("cockpit-tmp"))).toEqual([]);
+    } finally {
+      renameFails.value = false;
+    }
   });
 });
