@@ -601,6 +601,27 @@ describe("FormatProxy server", () => {
     expect(seen["x-opencode-session"]).toBe("5da71a1d-cb3c-4e37-84c5-08fbdf30f800");
   });
 
+  it("keeps the OpenCode header off a custom provider's endpoint", async () => {
+    let seen: Record<string, string | string[] | undefined> = {};
+    const port = await startUpstream((_body, res) => {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ id: "g", model: "m", choices: [{ message: { content: "ok" }, finish_reason: "stop" }] }));
+    });
+    upstream?.on("request", (req) => {
+      seen = req.headers;
+    });
+    proxy = new FormatProxy(() => ({ baseUrl: `http://127.0.0.1:${port}`, apiKey: "k", modelIds: [] }));
+    await proxy.start();
+
+    await fetch(`${proxy.getUrl("custom-1")}/v1/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Claude-Code-Session-Id": "5da71a1d-cb3c-4e37-84c5-08fbdf30f800" },
+      body: JSON.stringify({ model: "m", max_tokens: 50, messages: [{ role: "user", content: "hi" }] }),
+    });
+
+    expect(seen, "a vendor header must not follow the session id to someone else's endpoint").not.toHaveProperty("x-opencode-session");
+  });
+
   it("sends no session header when the caller had none, rather than inventing one", async () => {
     let seen: Record<string, string | string[] | undefined> = {};
     const port = await startUpstream((_body, res) => {

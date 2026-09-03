@@ -585,16 +585,23 @@ function saturationMessage(peek: string): string {
   return peek.match(/"message"\s*:\s*"([^"]+)"/)?.[1] ?? "Upstream provider is temporarily saturated";
 }
 
+/** The built-in providers served by opencode.ai. Kept as literals rather than
+ *  imported from providers.ts, which imports this module. */
+const OPENCODE_PROVIDER_IDS = new Set(["zen", "zen-go"]);
+
 /** OpenCode groups a conversation's requests by x-opencode-session and warns
  *  that from 2026-09-06 requests without one may be rejected; the grouping is
  *  also what lets their side keep a prompt cache warm across a turn. The CLI
  *  already stamps every request with X-Claude-Code-Session-Id, which is stable
  *  for the life of a conversation and distinct per subagent, so it is the id to
- *  forward. Passthrough upstreams need nothing: they get the CLI's headers
- *  verbatim. Only the translated path rebuilds them from scratch. */
-function conversationHeader(req: IncomingMessage): Record<string, string> {
+ *  forward. Vendor-specific, so it goes to OpenCode alone and not to whatever
+ *  endpoint a custom provider points at. Passthrough upstreams need nothing:
+ *  they get the CLI's headers verbatim. Only the translated path rebuilds them
+ *  from scratch. */
+function conversationHeader(req: IncomingMessage, providerId: string): Record<string, string> {
   const id = req.headers["x-claude-code-session-id"];
-  return typeof id === "string" && id ? { "x-opencode-session": id } : {};
+  if (!OPENCODE_PROVIDER_IDS.has(providerId) || typeof id !== "string" || !id) return {};
+  return { "x-opencode-session": id };
 }
 
 export class FormatProxy {
@@ -891,7 +898,7 @@ export class FormatProxy {
     });
     const init: RequestInit = {
       method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${upstream.apiKey}`, ...conversationHeader(req) },
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${upstream.apiKey}`, ...conversationHeader(req, providerId) },
       body: JSON.stringify(openaiBody),
     };
     let upstreamRes: Response;
