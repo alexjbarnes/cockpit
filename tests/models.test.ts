@@ -457,16 +457,24 @@ describe("describeProviderModel", () => {
   });
 });
 
-describe("Fable 5", () => {
-  it("resolves by alias and by modelId", () => {
-    expect(resolveModel("fable")?.modelId).toBe("claude-fable-5");
-    expect(resolveModel("claude-fable-5")?.alias).toBe("fable");
+describe("Fable 5.1", () => {
+  it("is the default fable, resolvable by alias and modelId", () => {
+    expect(resolveModel("fable")?.modelId).toBe("claude-fable-5-1");
+    expect(resolveModel("claude-fable-5-1")?.alias).toBe("fable");
+    expect(findModelById("claude-fable-5-1")?.displayName).toBe("Fable 5.1");
+    expect(defaultForAlias("fable")?.modelId).toBe("claude-fable-5-1");
+  });
+
+  // Sessions pinned to the older id keep running on it; only the bare alias moves.
+  it("leaves Fable 5 selectable but no longer the default", () => {
     expect(findModelById("claude-fable-5")?.displayName).toBe("Fable 5");
-    expect(defaultForAlias("fable")?.modelId).toBe("claude-fable-5");
+    expect(findModelById("claude-fable-5")?.isDefault).toBeUndefined();
+    expect(versionsForAlias("fable").map((m) => m.version)).toEqual(["5", "5.1"]);
   });
 
   it("supports the full effort range including xhigh and max", () => {
     expect(allowedEffortLevels(resolveModel("fable"))).toEqual(["low", "medium", "high", "xhigh", "max"]);
+    expect(allowedEffortLevels(findModelById("claude-fable-5"))).toEqual(["low", "medium", "high", "xhigh", "max"]);
   });
 });
 
@@ -517,6 +525,7 @@ describe("modelOneMRequiresCredits", () => {
     expect(modelOneMRequiresCredits("claude-opus-4-8")).toBe(false);
     expect(modelOneMRequiresCredits("claude-sonnet-5")).toBe(false);
     expect(modelOneMRequiresCredits("claude-fable-5")).toBe(false);
+    expect(modelOneMRequiresCredits("claude-fable-5-1")).toBe(false);
     expect(modelOneMRequiresCredits("haiku")).toBe(false);
   });
 
@@ -559,7 +568,7 @@ describe('thinking "off"', () => {
 
   it("describeModelSelection shows off for thinking-capable models, nothing for haiku", () => {
     expect(describeModelSelection("opus", "off", "200k", undefined).thinking).toBe("off");
-    expect(describeModelSelection("fable", "off", "1m", undefined)).toEqual({ label: "Fable 5", thinking: "off", context: "1m" });
+    expect(describeModelSelection("fable", "off", "1m", undefined)).toEqual({ label: "Fable 5.1", thinking: "off", context: "1m" });
     expect(describeModelSelection("haiku", "off", "200k", undefined).thinking).toBeNull();
   });
 });
