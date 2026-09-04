@@ -3816,6 +3816,68 @@ describe("SessionManager", () => {
       expect(s.pendingRequests.has("tui-1")).toBe(false);
     });
 
+    // A session already in bypass that starts planning used to get a card for
+    // every tool, and "Bypass All" on that card is a no-op when bypass is
+    // already on — no way to stop them. The CLI enforces plan mode itself, so
+    // anything that reaches here is a tool it had already judged plan-safe.
+    it("keeps bypassing tool prompts once the session enters plan mode", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      s.bypassAllPermissions = true;
+      s.planMode = true;
+
+      const base = {
+        intermediateMessages: [],
+        emit: [],
+        systemMessages: [],
+        errors: [],
+        statusChange: null,
+        compactDone: false,
+        snapshot: null,
+      };
+
+      (manager as any).applyProcessedResult(s, session.id, {
+        ...base,
+        permissionActions: [
+          { type: "store", requestId: "req-mcp", toolName: "mcp__roasta_admin__fetch_url", rawToolInput: {} },
+          { type: "store", requestId: "req-bash", toolName: "Bash", rawToolInput: {} },
+        ],
+      });
+
+      expect(s.pendingRequests.has("req-mcp")).toBe(false);
+      expect(s.pendingRequests.has("req-bash")).toBe(false);
+    });
+
+    // The two that are the user's call, not a tool permission. Signing off a
+    // plan is the whole point of plan mode; bypass must not answer it.
+    it("still asks for ExitPlanMode and AskUserQuestion under bypass", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      s.bypassAllPermissions = true;
+      s.planMode = true;
+
+      const base = {
+        intermediateMessages: [],
+        emit: [],
+        systemMessages: [],
+        errors: [],
+        statusChange: null,
+        compactDone: false,
+        snapshot: null,
+      };
+
+      (manager as any).applyProcessedResult(s, session.id, {
+        ...base,
+        permissionActions: [
+          { type: "store", requestId: "req-exit", toolName: "ExitPlanMode", rawToolInput: {} },
+          { type: "store", requestId: "req-ask", toolName: "AskUserQuestion", rawToolInput: {} },
+        ],
+      });
+
+      expect(s.pendingRequests.has("req-exit"), "approving the plan is the user's decision").toBe(true);
+      expect(s.pendingRequests.has("req-ask")).toBe(true);
+    });
+
     // A reloaded page has no task state: the transcript records an async
     // agent's tool use as done the moment it launches, so the client judged a
     // running agent finished until the next Stop or subagent hook arrived with a

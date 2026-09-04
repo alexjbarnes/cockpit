@@ -203,6 +203,11 @@ export function buildMcpConfigArg(url: string, token: string): { path: string } 
  */
 const AGENT_PROMPTED_TOOLS = new Set(["WebFetch", "mcp__cockpit-config__get_job_transcript"]);
 
+// Decisions bypass must never answer on the user's behalf, because neither is
+// a tool permission: AskUserQuestion is the model asking them something, and
+// ExitPlanMode is them signing off a plan.
+const ALWAYS_ASK_TOOLS = new Set(["AskUserQuestion", "ExitPlanMode"]);
+
 /**
  * Human names for ids that appear in a proposal's arguments, so the approval
  * card can show "Telegram" where the tool sent a uuid. A notifyProviders array
@@ -1914,7 +1919,15 @@ export class SessionManager {
         // standing yes, so cockpit presses the dialog's Yes for them (the
         // respond path answers those with PTY keystrokes). With bypass off
         // they fall through to a real UI dialog like everything else.
-      } else if (session.bypassAllPermissions && !session.planMode && pa.toolName !== "AskUserQuestion") {
+        // Plan mode used to sit in this condition too, which meant a session
+        // already in bypass got a card for every tool once it started planning
+        // — and "Bypass All" on that card is a no-op when bypass is already on,
+        // so there was no way to stop them. It protected nothing: the CLI
+        // enforces plan mode itself and refuses an edit before any hook fires
+        // (tests/integration/plan-mode-permissions.spec.ts), so a request that
+        // reaches cockpit in plan mode is one the CLI had already judged
+        // plan-safe. Approving it by hand was the only thing the gate bought.
+      } else if (session.bypassAllPermissions && !ALWAYS_ASK_TOOLS.has(pa.toolName)) {
         this.respondToPermission(sessionId, pa.requestId, true, pa.rawToolInput);
         bypassedRequestIds.add(pa.requestId);
       } else {
