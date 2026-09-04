@@ -16,6 +16,13 @@ vi.mock("node:child_process", () => ({
   }),
 }));
 
+// Which permission modes exist is version-gated on `claude --help`, and CI has
+// no CLI to ask. Pin it so these tests assert cockpit's logic.
+vi.mock("@/server/claude-bin", () => ({
+  getClaudeBin: vi.fn(() => "claude"),
+  supportedPermissionModes: vi.fn(() => new Set(["acceptEdits", "auto", "bypassPermissions", "manual", "plan"])),
+}));
+
 vi.mock("@/server/debug-logger", () => ({
   debugLog: vi.fn(),
   logRawLine: vi.fn(),
@@ -821,6 +828,25 @@ describe("SessionManager", () => {
       const session = manager.createSession("/tmp");
       manager.clearBypassAllPermissions(session.id);
       expect(manager.isBypassActive(session.id)).toBe(false);
+    });
+
+    // "default" was this mode's name until the CLI dropped the choice in
+    // 2.1.251. Turning bypass off went on asking for it, so a live session was
+    // told to switch to a mode that no longer exists.
+    it("returns a live session to manual, not the retired default mode", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      s.bypassAllPermissions = true;
+      const writeControlRequest = vi.fn((_payload: Record<string, unknown>) => true);
+      s.harnessProcess = { isAlive: true, writeControlRequest, kill: vi.fn() };
+
+      manager.clearBypassAllPermissions(session.id);
+
+      const modes = writeControlRequest.mock.calls
+        .map(([payload]) => (payload as any).request)
+        .filter((r) => r.subtype === "set_permission_mode")
+        .map((r) => r.mode);
+      expect(modes).toEqual(["manual"]);
     });
   });
 

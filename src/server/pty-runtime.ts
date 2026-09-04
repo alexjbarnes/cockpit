@@ -832,7 +832,7 @@ export class PtyRuntime {
       this.opts.expectedPermissionMode === "bypassPermissions" &&
       /Bypass permissions mode was disabled by settings/i.test(clean)
     ) {
-      this.noteModeDivergence("default", "boot-banner");
+      this.noteModeDivergence("disabled-by-settings", "boot-banner");
     }
 
     // A 1M-context request on an account without usage credits (Sonnet 4.6):

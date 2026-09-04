@@ -18,6 +18,7 @@ import {
   resolveModel,
 } from "@/lib/models";
 import { getAssistantSettings, updateAssistantSettings } from "@/server/assistant-settings";
+import { supportedPermissionModes } from "@/server/claude-bin";
 import { getCockpitDir } from "@/server/paths";
 import { ensureCatalogFresh, OPENROUTER_PROVIDER_ID } from "@/server/provider-catalog";
 import { getProvider, isBuiltinCatalogProvider, openRouterModelEnv, resolveProviderModel } from "@/server/providers";
@@ -1086,7 +1087,7 @@ export class SessionManager {
     return session.harnessProcess.respondToPermission(requestId, allowed, toolInput, permissionSuggestions, denyReason);
   }
 
-  private sendPermissionMode(session: Session, sessionId: string, mode: string): void {
+  private sendPermissionMode(session: Session, sessionId: string, mode: "manual" | "bypassPermissions"): void {
     if (!session.harnessProcess?.writeControlRequest) return;
     this.log(sessionId, `sending set_permission_mode: ${mode}`);
     session.harnessProcess.writeControlRequest({
@@ -1115,7 +1116,11 @@ export class SessionManager {
     session.bypassAllPermissions = false;
     setSessionPrefs(sessionId, { bypassAllPermissions: false });
     if (!session.planMode) {
-      this.sendPermissionMode(session, sessionId, "default");
+      // Back to the mode the spawn asks for. "default" was this mode's name
+      // until the CLI dropped it (2.1.251), so the control request had been
+      // naming a choice that no longer exists; only the respawn below was
+      // actually restoring the mode.
+      if (supportedPermissionModes().has("manual")) this.sendPermissionMode(session, sessionId, "manual");
       this.scheduleRespawnForPermissions(session);
     }
     this.emitSystem(session, sessionId, "__bypass_state::off");
