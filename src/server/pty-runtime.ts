@@ -1,4 +1,5 @@
 import { v4 as uuidv4 } from "uuid";
+import type { SandboxConfig } from "@/types";
 import { cleanupHookSettings, prepareHookSettings } from "./claude-settings";
 import { fetchCliInitData } from "./cli-init-fetch";
 import { logDiag } from "./debug-logger";
@@ -28,6 +29,8 @@ export interface PtyRuntimeOptions {
   denyList?: string[];
   /** When false, the CLI spawns with thinking disabled (alwaysThinkingEnabled:false in the settings file). */
   thinkingEnabled?: boolean;
+  /** OS-level Bash sandbox written into the settings file when enabled. */
+  sandbox?: SandboxConfig;
   /** Optional debug callback for raw PTY data chunks. */
   onPtyData?: (chunk: string) => void;
   /** The permission mode the spawn asked for (--permission-mode). Hook
@@ -137,6 +140,7 @@ export class PtyRuntime {
       allowList: this.opts.allowList,
       denyList: this.opts.denyList,
       thinkingEnabled: this.opts.thinkingEnabled,
+      sandbox: this.opts.sandbox,
     });
     this.settingsPath = settingsPath;
     logDiag(sessionId, "pty:hooks-ready", { elapsedMs: Date.now() - startAt });

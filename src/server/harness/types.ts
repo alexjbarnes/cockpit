@@ -1,7 +1,15 @@
 import type { ContextSize } from "@/lib/models";
 import type { ParsedEvent } from "@/server/event-parser";
 import type { SessionRuntime } from "@/server/session-prefs";
-import type { ChatMessage, DocumentAttachment, ImageAttachment, ModelSlots, SessionPermissionMode, ThinkingLevel } from "@/types";
+import type {
+  ChatMessage,
+  DocumentAttachment,
+  ImageAttachment,
+  ModelSlots,
+  SandboxConfig,
+  SessionPermissionMode,
+  ThinkingLevel,
+} from "@/types";
 
 // One member today on purpose: this is the seam a second harness (Codex) plugs
 // into later. Widen the union and add a HARNESS_REGISTRY entry when it lands.
@@ -57,6 +65,8 @@ export interface HarnessSpawnConfig {
   supportsEffort: boolean;
   planMode: boolean;
   permissionMode: SessionPermissionMode;
+  /** OS-level Bash sandbox; applied via the settings file on the PTY runtime. */
+  sandbox?: SandboxConfig;
   cockpitAgent: boolean;
   modelSlots: ModelSlots;
   appendSystemPrompt?: string;

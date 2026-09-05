@@ -12,6 +12,8 @@ import type {
   ImageAttachment,
   InitData,
   PermissionMode,
+  SandboxConfig,
+  SandboxSupport,
   ServerMessage,
   SessionPermissionMode,
   TextFileAttachment,
@@ -71,6 +73,8 @@ interface UseSessionReturn {
   currentContextSize: ContextSize;
   bypassActive: boolean;
   permissionMode: SessionPermissionMode;
+  sandbox: SandboxConfig;
+  sandboxSupport: SandboxSupport | null;
   planMode: boolean;
   thinkingLevel: ThinkingLevel;
   contextUsage: ContextUsage | null;
@@ -104,6 +108,7 @@ interface UseSessionReturn {
   setModelSlot: (slot: "main" | "subagent" | "fast", modelId: string) => void;
   setBypassAll: (enabled: boolean) => void;
   setPermissionMode: (mode: SessionPermissionMode) => void;
+  setSandbox: (config: SandboxConfig) => void;
   setPlanMode: (enabled: boolean) => void;
   setThinkingLevel: (level: ThinkingLevel) => void;
   cancelQueuedMessage: () => void;
@@ -134,6 +139,8 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
   const [currentRuntime, setCurrentRuntime] = useState<"pty" | "stream">("stream");
   const [permissionMode, setPermissionModeState] = useState<SessionPermissionMode>("manual");
   const bypassActive = permissionMode === "bypass";
+  const [sandbox, setSandboxState] = useState<SandboxConfig>({ enabled: false });
+  const [sandboxSupport, setSandboxSupport] = useState<SandboxSupport | null>(null);
   const [planMode, setPlanModeState] = useState(false);
   const [thinkingLevel, setThinkingLevelState] = useState<ThinkingLevel>("high");
   const [historyLoaded, setHistoryLoaded] = useState(false);
@@ -881,6 +888,15 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
             setPermissionModeState(msg.text.slice(permModePrefix.length) as SessionPermissionMode);
             break;
           }
+          const sandboxPrefix = "__sandbox::";
+          if (msg.text.startsWith(sandboxPrefix)) {
+            try {
+              setSandboxState(JSON.parse(msg.text.slice(sandboxPrefix.length)) as SandboxConfig);
+            } catch {
+              /* ignore a malformed sandbox frame rather than crash the message pump */
+            }
+            break;
+          }
           const planPrefix = "__plan_state::";
           if (msg.text.startsWith(planPrefix)) {
             setPlanModeState(msg.text.slice(planPrefix.length) === "on");
@@ -1312,6 +1328,29 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
     [send, sessionId],
   );
 
+  const setSandbox = useCallback(
+    (config: SandboxConfig) => {
+      setSandboxState(config);
+      send({ type: "session:set_sandbox", sessionId, config });
+    },
+    [send, sessionId],
+  );
+
+  // Host sandbox capability is a machine property, fetched once so the settings
+  // panel can gate the toggle instead of offering a sandbox that does nothing.
+  useEffect(() => {
+    let live = true;
+    fetch("/api/sandbox/support", { credentials: "same-origin" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((s) => {
+        if (live && s) setSandboxSupport(s as SandboxSupport);
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, []);
+
   const setPlanMode = useCallback(
     (enabled: boolean) => {
       setPlanModeState(enabled);
@@ -1419,6 +1458,8 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
     currentContextSize,
     bypassActive,
     permissionMode,
+    sandbox,
+    sandboxSupport,
     planMode,
     thinkingLevel,
     contextUsage,
@@ -1449,6 +1490,7 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
     setModelSlot,
     setBypassAll,
     setPermissionMode,
+    setSandbox,
     setPlanMode,
     setThinkingLevel,
     cancelQueuedMessage,

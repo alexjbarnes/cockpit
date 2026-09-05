@@ -2,6 +2,7 @@ import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { getClaudeDir, getCockpitCacheDir } from "@/server/paths";
+import type { SandboxConfig } from "@/types";
 import { resolveHookBridgePath } from "./hook-bridge-path";
 
 const HOOK_EVENTS = [
@@ -34,6 +35,12 @@ export interface HookSettingsOptions {
    * CLI's "thinking off"); true forces it on; undefined leaves the user default.
    */
   thinkingEnabled?: boolean;
+  /**
+   * OS-level Bash sandbox. When enabled, writes a `sandbox` block forcing it on
+   * for this session (plus any network allowlist). When disabled/undefined the
+   * key is left untouched, so the user's own sandbox settings still apply.
+   */
+  sandbox?: SandboxConfig;
 }
 
 export interface HookSettingsArtifact {
@@ -84,6 +91,11 @@ export async function prepareHookSettings(opts: HookSettingsOptions): Promise<Ho
     // Per-session thinking on/off. cockpit's selector is authoritative, so this
     // overrides any user-global alwaysThinkingEnabled when explicitly provided.
     ...(opts.thinkingEnabled !== undefined ? { alwaysThinkingEnabled: opts.thinkingEnabled } : {}),
+    // Bash sandbox. Only forced when the toggle is on: merge onto any user
+    // `sandbox` block so their filesystem/credential tuning survives, set
+    // enabled, and layer the network allowlist under network.allowedDomains.
+    // Left alone when off, so a user's own sandbox settings keep applying.
+    ...(opts.sandbox?.enabled ? { sandbox: buildSandboxBlock(base.sandbox, opts.sandbox) } : {}),
   };
 
   const dir = await resolveSettingsDir();
@@ -168,6 +180,20 @@ function deepMerge(target: Record<string, unknown>, source: Record<string, unkno
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
   return v !== null && typeof v === "object" && !Array.isArray(v);
+}
+
+/** Merge cockpit's per-session sandbox choice onto the user's own `sandbox`
+ *  block: keep their filesystem/credential tuning, force enabled, and set the
+ *  network allowlist only when the session provides one (an empty list leaves
+ *  the user's network policy untouched rather than locking egress to nothing). */
+function buildSandboxBlock(baseSandbox: unknown, sandbox: SandboxConfig): Record<string, unknown> {
+  const base = isPlainObject(baseSandbox) ? baseSandbox : {};
+  const block: Record<string, unknown> = { ...base, enabled: true };
+  if (sandbox.allowedDomains && sandbox.allowedDomains.length > 0) {
+    const baseNetwork = isPlainObject(base.network) ? base.network : {};
+    block.network = { ...baseNetwork, allowedDomains: sandbox.allowedDomains };
+  }
+  return block;
 }
 
 let settingsDirCache: string | null = null;

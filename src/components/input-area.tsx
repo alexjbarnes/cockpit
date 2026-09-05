@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  Box,
   Brain,
   Check,
   ChevronRight,
@@ -58,6 +59,8 @@ import type {
   InitData,
   Provider,
   ProviderModel,
+  SandboxConfig,
+  SandboxSupport,
   SessionPermissionMode,
   TextFileAttachment,
   ThinkingLevel,
@@ -265,6 +268,9 @@ interface InputAreaProps {
   onSetBypass: (enabled: boolean) => void;
   permissionMode: SessionPermissionMode;
   onSetPermissionMode: (mode: SessionPermissionMode) => void;
+  sandbox: SandboxConfig;
+  onSetSandbox: (config: SandboxConfig) => void;
+  sandboxSupport: SandboxSupport | null;
   planMode: boolean;
   onSetPlanMode: (enabled: boolean) => void;
   showPlanToggle?: boolean;
@@ -323,6 +329,9 @@ export function InputArea({
   onSetBypass,
   permissionMode,
   onSetPermissionMode,
+  sandbox,
+  onSetSandbox,
+  sandboxSupport,
   planMode,
   onSetPlanMode,
   showPlanToggle = true,
@@ -1309,6 +1318,73 @@ export function InputArea({
                                     ? "Claude approves safe steps; risky ones still ask."
                                     : "All tool calls are auto-approved."}
                               </p>
+                            </div>
+                          )}
+
+                          {!isCockpitAgent && (
+                            <div className="rounded-lg border border-border px-4 py-3">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  sandboxSupport?.supported &&
+                                  onSetSandbox({ enabled: !sandbox.enabled, allowedDomains: sandbox.allowedDomains })
+                                }
+                                disabled={!sandboxSupport?.supported}
+                                className="flex w-full items-center justify-between text-xs disabled:opacity-60"
+                                data-testid="sandbox-toggle"
+                              >
+                                <div className="flex items-center gap-3">
+                                  <Box className={`h-4 w-4 ${sandbox.enabled ? "text-emerald-500" : "text-muted-foreground"}`} />
+                                  <span className={sandbox.enabled ? "text-emerald-500 font-medium" : "text-muted-foreground"}>
+                                    Sandbox Bash
+                                  </span>
+                                </div>
+                                <span
+                                  className={`inline-flex h-5 w-9 items-center rounded-full transition-colors shrink-0 ${
+                                    sandbox.enabled ? "bg-emerald-500" : "bg-muted-foreground/30"
+                                  }`}
+                                >
+                                  <span
+                                    className={`inline-block h-4 w-4 rounded-full bg-white transition-transform shadow-sm ${
+                                      sandbox.enabled ? "translate-x-4.5" : "translate-x-0.5"
+                                    }`}
+                                  />
+                                </span>
+                              </button>
+                              {!sandboxSupport?.supported ? (
+                                <p className="mt-2 text-[11px] text-muted-foreground">
+                                  {sandboxSupport?.reason ?? "Checking sandbox support…"}
+                                </p>
+                              ) : sandbox.enabled ? (
+                                <div className="mt-3 space-y-1">
+                                  <span className="text-[11px] text-muted-foreground">Allowed network domains (one per line)</span>
+                                  <textarea
+                                    data-testid="sandbox-domains"
+                                    key={String(sandbox.enabled)}
+                                    defaultValue={(sandbox.allowedDomains ?? []).join("\n")}
+                                    placeholder={"github.com\n*.npmjs.org"}
+                                    onBlur={(e) =>
+                                      onSetSandbox({
+                                        enabled: true,
+                                        allowedDomains: e.target.value
+                                          .split("\n")
+                                          .map((d) => d.trim())
+                                          .filter(Boolean),
+                                      })
+                                    }
+                                    rows={3}
+                                    className="w-full rounded border border-border bg-background px-2 py-1 font-mono text-[11px] focus:outline-none focus:ring-1 focus:ring-ring"
+                                  />
+                                  <p className="text-[11px] text-muted-foreground">
+                                    Bash runs isolated and its commands auto-run, even in Manual. Empty list keeps the CLI's default network
+                                    policy.
+                                  </p>
+                                </div>
+                              ) : (
+                                <p className="mt-2 text-[11px] text-muted-foreground">
+                                  Run Bash in an OS sandbox so commands execute without prompts.
+                                </p>
+                              )}
                             </div>
                           )}
 

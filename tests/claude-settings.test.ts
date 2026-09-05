@@ -67,6 +67,30 @@ describe("prepareHookSettings", () => {
     expect((await read("test-think-on", true)).alwaysThinkingEnabled).toBe(true);
   });
 
+  it("writes a sandbox block only when enabled, with the network allowlist", async () => {
+    const read = async (id: string, sandbox: { enabled: boolean; allowedDomains?: string[] }): Promise<Record<string, unknown>> => {
+      cleanupIds.push(id);
+      const { settingsPath } = await prepareHookSettings({
+        sessionId: id,
+        hookUrl: "http://127.0.0.1:1",
+        hookToken: "tok",
+        sandbox,
+      });
+      return JSON.parse(readFileSync(settingsPath, "utf-8")) as Record<string, unknown>;
+    };
+
+    // Disabled: the key is left off entirely so the user's own sandbox settings apply.
+    expect(await read("test-sb-off", { enabled: false })).not.toHaveProperty("sandbox");
+
+    // Enabled with domains: enabled:true plus the network allowlist.
+    const on = await read("test-sb-on", { enabled: true, allowedDomains: ["github.com", "*.npmjs.org"] });
+    expect(on.sandbox).toEqual({ enabled: true, network: { allowedDomains: ["github.com", "*.npmjs.org"] } });
+
+    // Enabled without domains: no network key, so the CLI's default policy stands.
+    const bare = await read("test-sb-bare", { enabled: true });
+    expect(bare.sandbox).toEqual({ enabled: true });
+  });
+
   it("respects allow/deny lists", async () => {
     const sessionId = "test-session-2";
     cleanupIds.push(sessionId);

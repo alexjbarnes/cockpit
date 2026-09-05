@@ -145,6 +145,30 @@ export interface InitData {
 
 export type PermissionMode = "allow" | "allow_always" | "allow_all" | "deny";
 
+/** OS-level Bash isolation, orthogonal to permission mode. When enabled the CLI
+ *  runs Bash (and its children) inside a sandbox and, in its default auto-allow
+ *  mode, without a permission prompt — the OS boundary is the safety net. Only
+ *  the toggle and the network allowlist are cockpit's to set; deeper tuning
+ *  (filesystem paths, credentials) stays in the user's own settings. */
+export interface SandboxConfig {
+  enabled: boolean;
+  /** Domains sandboxed commands may reach. Empty/undefined leaves the CLI's
+   *  default network policy in place. Only enforced where the host has the
+   *  network backend (Linux/WSL2 need socat); ignored on an unsupported host. */
+  allowedDomains?: string[];
+}
+
+/** Whether this host can run the CLI's Bash sandbox, computed server-side. */
+export interface SandboxSupport {
+  supported: boolean;
+  /** Network isolation specifically (Linux/WSL2 need socat); macOS always true
+   *  when supported. Filesystem isolation can work without it. */
+  networkIsolation: boolean;
+  platform: string;
+  /** Short human reason when unsupported or degraded, e.g. "install bubblewrap". */
+  reason?: string;
+}
+
 /** A session's standing permission posture, orthogonal to plan mode:
  *  - manual: every tool call raises a card (cockpit answers the hook).
  *  - auto: the CLI's own safety classifier decides, prompting only on risky
@@ -482,6 +506,7 @@ export type ClientMessage =
     }
   | { type: "permission:set_bypass"; sessionId: string; enabled: boolean }
   | { type: "permission:set_mode"; sessionId: string; mode: SessionPermissionMode }
+  | { type: "session:set_sandbox"; sessionId: string; config: SandboxConfig }
   | { type: "session:set_plan_mode"; sessionId: string; enabled: boolean }
   | { type: "session:set_thinking"; sessionId: string; level: ThinkingLevel }
   | { type: "session:set_model"; sessionId: string; model: string; contextSize?: ContextSize }

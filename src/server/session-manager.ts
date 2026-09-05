@@ -22,6 +22,7 @@ import { supportedPermissionModes } from "@/server/claude-bin";
 import { getCockpitDir } from "@/server/paths";
 import { ensureCatalogFresh, OPENROUTER_PROVIDER_ID } from "@/server/provider-catalog";
 import { getProvider, isBuiltinCatalogProvider, openRouterModelEnv, resolveProviderModel } from "@/server/providers";
+import { sandboxSupport } from "@/server/sandbox";
 import type {
   BackgroundTask,
   ChatMessage,
@@ -31,6 +32,7 @@ import type {
   ImageAttachment,
   InitData,
   ModelSlots,
+  SandboxConfig,
   SessionInfo,
   SessionPermissionMode,
   ThinkingLevel,
@@ -113,6 +115,7 @@ interface Session {
   cliSessionId: string;
   previousCliSessionIds: string[];
   permissionMode: SessionPermissionMode;
+  sandbox: SandboxConfig;
   planMode: boolean;
   pendingPlanReminder?: boolean;
   needsRespawnForPermissions: boolean;
@@ -296,6 +299,7 @@ export class SessionManager {
       cliSessionId: id,
       previousCliSessionIds: [],
       permissionMode: !isCockpitAgent && (options?.bypassPermissions ?? defaults.bypassAllPermissions) ? "bypass" : "manual",
+      sandbox: { enabled: false },
       planMode: false,
       needsRespawnForPermissions: false,
       compacting: false,
@@ -416,6 +420,7 @@ export class SessionManager {
         permissionMode: prefs?.cockpitAgent
           ? "manual"
           : (prefs?.permissionMode ?? ((prefs?.bypassAllPermissions ?? defaults.bypassAllPermissions) ? "bypass" : "manual")),
+        sandbox: prefs?.sandbox ?? { enabled: false },
         planMode: prefs?.planMode ?? false,
         pendingPlanReminder: prefs?.planMode ?? false,
         needsRespawnForPermissions: false,
@@ -1146,6 +1151,32 @@ export class SessionManager {
       this.scheduleRespawnForPermissions(session);
     }
     this.emitSystem(session, sessionId, `__perm_mode::${mode}`);
+  }
+
+  getSandbox(sessionId: string): SandboxConfig {
+    return this.sessions.get(sessionId)?.sandbox ?? { enabled: false };
+  }
+
+  /** Enable/disable the OS-level Bash sandbox and set its network allowlist. The
+   *  config lands in the settings file at spawn, so a change needs a respawn to
+   *  take effect. Enabling is refused on a host that can't enforce it. */
+  setSandbox(sessionId: string, config: SandboxConfig): void {
+    const session = this.sessions.get(sessionId);
+    if (!session) return;
+    const next: SandboxConfig =
+      config.enabled && !sandboxSupport().supported
+        ? { enabled: false }
+        : { enabled: config.enabled, ...(config.allowedDomains?.length ? { allowedDomains: config.allowedDomains } : {}) };
+
+    const same =
+      session.sandbox.enabled === next.enabled &&
+      JSON.stringify(session.sandbox.allowedDomains ?? []) === JSON.stringify(next.allowedDomains ?? []);
+    if (same) return;
+
+    session.sandbox = next;
+    setSessionPrefs(sessionId, { sandbox: next });
+    this.scheduleRespawnForPermissions(session);
+    this.emitSystem(session, sessionId, `__sandbox::${JSON.stringify(next)}`);
   }
 
   setBypassAllPermissions(sessionId: string): void {
@@ -2568,6 +2599,9 @@ Additional Cockpit rules beyond the CLI's defaults:
         : session.permissionMode === "auto" && !this.isAnthropicSession(session)
           ? "manual"
           : session.permissionMode,
+      // Only pass the sandbox through when the host can enforce it, so a pref
+      // enabled on one machine can't write a dead sandbox block on another.
+      sandbox: session.sandbox.enabled && sandboxSupport().supported ? session.sandbox : undefined,
       cockpitAgent: session.cockpitAgent,
       modelSlots: session.modelSlots,
       appendSystemPrompt,

@@ -23,6 +23,13 @@ vi.mock("@/server/claude-bin", () => ({
   supportedPermissionModes: vi.fn(() => new Set(["acceptEdits", "auto", "bypassPermissions", "manual", "plan"])),
 }));
 
+// Sandbox support is a host property (bubblewrap/socat/OS). Pin it so the
+// setSandbox tests exercise cockpit's gate rather than the CI host.
+const { sbSupported } = vi.hoisted(() => ({ sbSupported: { value: true } }));
+vi.mock("@/server/sandbox", () => ({
+  sandboxSupport: () => ({ supported: sbSupported.value, networkIsolation: sbSupported.value, platform: "linux" }),
+}));
+
 vi.mock("@/server/debug-logger", () => ({
   debugLog: vi.fn(),
   logRawLine: vi.fn(),
@@ -1383,6 +1390,41 @@ describe("SessionManager", () => {
       const session = manager.createSession("/tmp", undefined, { cockpitAgent: true });
       manager.setPermissionMode(session.id, "bypass");
       expect(manager.getPermissionMode(session.id)).toBe("manual");
+    });
+  });
+
+  describe("setSandbox", () => {
+    it("enables the sandbox, persists it, and emits the state", () => {
+      sbSupported.value = true;
+      const session = manager.createSession("/tmp");
+      const msgs: string[] = [];
+      manager.onSystem(session.id, (m) => msgs.push(m));
+      expect(manager.getSandbox(session.id).enabled).toBe(false);
+
+      manager.setSandbox(session.id, { enabled: true, allowedDomains: ["github.com"] });
+
+      expect(manager.getSandbox(session.id)).toEqual({ enabled: true, allowedDomains: ["github.com"] });
+      expect(msgs).toContain('__sandbox::{"enabled":true,"allowedDomains":["github.com"]}');
+    });
+
+    it("refuses to enable on a host that cannot enforce it", () => {
+      sbSupported.value = false;
+      try {
+        const session = manager.createSession("/tmp");
+        manager.setSandbox(session.id, { enabled: true });
+        expect(manager.getSandbox(session.id).enabled).toBe(false);
+      } finally {
+        sbSupported.value = true;
+      }
+    });
+
+    it("turns the sandbox back off", () => {
+      sbSupported.value = true;
+      const session = manager.createSession("/tmp");
+      manager.setSandbox(session.id, { enabled: true });
+      expect(manager.getSandbox(session.id).enabled).toBe(true);
+      manager.setSandbox(session.id, { enabled: false });
+      expect(manager.getSandbox(session.id).enabled).toBe(false);
     });
   });
 

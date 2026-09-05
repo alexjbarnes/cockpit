@@ -4,7 +4,7 @@ import type { ContextSize } from "@/lib/models";
 import { splitLegacyModel } from "@/lib/models";
 import { writeJsonAtomic } from "@/server/atomic-write";
 import { getCockpitDir } from "@/server/paths";
-import type { InitData, ModelSlots, SessionPermissionMode, ThinkingLevel } from "@/types";
+import type { InitData, ModelSlots, SandboxConfig, SessionPermissionMode, ThinkingLevel } from "@/types";
 
 export type SessionRuntime = "stream" | "pty";
 
@@ -20,6 +20,7 @@ export interface SessionPrefs {
    *  prefs file (true → "bypass"), never written. */
   bypassAllPermissions?: boolean;
   permissionMode?: SessionPermissionMode;
+  sandbox?: SandboxConfig;
   planMode?: boolean;
   model?: string;
   contextSize?: ContextSize;

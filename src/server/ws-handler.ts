@@ -336,6 +336,9 @@ export function createWebSocketHandler(
                   send(ws, { type: "session:system", sessionId: msg.sessionId, text: `__perm_mode::${pm}` });
                 }
               }
+              if (prefs?.sandbox?.enabled) {
+                send(ws, { type: "session:system", sessionId: msg.sessionId, text: `__sandbox::${JSON.stringify(prefs.sandbox)}` });
+              }
               if (prefs?.planMode) {
                 send(ws, { type: "session:system", sessionId: msg.sessionId, text: "__plan_state::on" });
               }
@@ -521,6 +524,14 @@ export function createWebSocketHandler(
                   type: "session:system",
                   sessionId: msg.sessionId,
                   text: `__perm_mode::${pm}`,
+                });
+              }
+              const sandbox = sessionManager.getSandbox(msg.sessionId);
+              if (sandbox.enabled) {
+                send(ws, {
+                  type: "session:system",
+                  sessionId: msg.sessionId,
+                  text: `__sandbox::${JSON.stringify(sandbox)}`,
                 });
               }
             }
@@ -777,6 +788,11 @@ export function createWebSocketHandler(
 
         case "permission:set_mode": {
           sessionManager.setPermissionMode(msg.sessionId, msg.mode);
+          break;
+        }
+
+        case "session:set_sandbox": {
+          sessionManager.setSandbox(msg.sessionId, msg.config);
           break;
         }
 
