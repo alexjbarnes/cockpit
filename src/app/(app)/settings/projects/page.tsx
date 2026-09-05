@@ -10,7 +10,9 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { useSettings } from "@/hooks/use-settings";
-import type { Issue, Project } from "@/types";
+import { ISSUE_STATUSES, LABEL_COLORS, statusColor } from "@/lib/issue-display";
+import { cn } from "@/lib/utils";
+import type { CustomStatus, Issue, Project } from "@/types";
 
 interface FormState {
   id: string;
@@ -18,12 +20,136 @@ interface FormState {
   prefix: string;
   description: string;
   repoPath: string;
+  disabledStatuses: string[];
+  customStatuses: CustomStatus[];
 }
 
-const emptyForm = (): FormState => ({ id: "", name: "", prefix: "", description: "", repoPath: "" });
+const emptyForm = (): FormState => ({
+  id: "",
+  name: "",
+  prefix: "",
+  description: "",
+  repoPath: "",
+  disabledStatuses: [],
+  customStatuses: [],
+});
 
 function projectToForm(p: Project): FormState {
-  return { id: p.id, name: p.name, prefix: p.prefix, description: p.description || "", repoPath: p.repoPath || "" };
+  return {
+    id: p.id,
+    name: p.name,
+    prefix: p.prefix,
+    description: p.description || "",
+    repoPath: p.repoPath || "",
+    disabledStatuses: p.disabledStatuses ?? [],
+    customStatuses: p.customStatuses ?? [],
+  };
+}
+
+/** Built-in enable/disable toggles + custom status add/remove for the project
+ *  edit dialog. Purely edits the form; the page persists it on Save. */
+function StatusEditor({ form, setForm }: { form: FormState; setForm: (f: FormState) => void }) {
+  const [newName, setNewName] = useState("");
+  const disabled = new Set(form.disabledStatuses);
+  const takenLower = new Set([
+    ...(ISSUE_STATUSES as readonly string[]).map((s) => s.toLowerCase()),
+    ...form.customStatuses.map((s) => s.name.toLowerCase()),
+  ]);
+  const trimmed = newName.trim();
+  const canAdd = trimmed !== "" && !takenLower.has(trimmed.toLowerCase());
+
+  function toggleBuiltin(name: string): void {
+    const next = new Set(disabled);
+    next.has(name) ? next.delete(name) : next.add(name);
+    setForm({ ...form, disabledStatuses: [...next] });
+  }
+  function addCustom(): void {
+    if (!canAdd) return;
+    setForm({ ...form, customStatuses: [...form.customStatuses, { name: trimmed }] });
+    setNewName("");
+  }
+  function removeCustom(name: string): void {
+    setForm({ ...form, customStatuses: form.customStatuses.filter((s) => s.name !== name) });
+  }
+  function setColor(name: string, color: string): void {
+    setForm({ ...form, customStatuses: form.customStatuses.map((s) => (s.name === name ? { ...s, color } : s)) });
+  }
+
+  return (
+    <div className="space-y-3">
+      <div>
+        <span className="text-sm font-medium">Statuses</span>
+        <p className="text-xs text-muted-foreground">
+          Turn off built-in statuses this project doesn't use, or add your own board columns. Built-in statuses drive the automation, so
+          they can't be renamed or removed.
+        </p>
+      </div>
+
+      <div className="grid grid-cols-2 gap-1.5">
+        {ISSUE_STATUSES.map((s) => (
+          <button
+            key={s}
+            type="button"
+            onClick={() => toggleBuiltin(s)}
+            className={cn(
+              "flex items-center gap-2 rounded border px-2 py-1 text-xs transition-colors",
+              disabled.has(s) ? "opacity-40 hover:opacity-70" : "hover:bg-muted/50",
+            )}
+          >
+            <span className={cn("h-2 w-2 shrink-0 rounded-full", statusColor(s))} />
+            <span className="truncate">{s}</span>
+            <span className="ml-auto text-[10px] text-muted-foreground">{disabled.has(s) ? "off" : "on"}</span>
+          </button>
+        ))}
+      </div>
+
+      {form.customStatuses.length > 0 && (
+        <div className="space-y-1.5">
+          {form.customStatuses.map((c) => (
+            <div key={c.name} className="flex items-center gap-2 rounded border px-2 py-1.5">
+              <span
+                className={cn("h-2.5 w-2.5 shrink-0 rounded-full", statusColor(c.name, { customStatuses: form.customStatuses } as Project))}
+              />
+              <span className="truncate text-xs font-medium">{c.name}</span>
+              <div className="ml-auto flex items-center gap-1">
+                {LABEL_COLORS.map((color) => (
+                  <button
+                    key={color}
+                    type="button"
+                    aria-label={`colour ${color}`}
+                    onClick={() => setColor(c.name, color)}
+                    className={cn("h-3.5 w-3.5 rounded-full", color, c.color === color ? "ring-2 ring-offset-1 ring-foreground" : "")}
+                  />
+                ))}
+                <button type="button" onClick={() => removeCustom(c.name)} className="ml-1 text-muted-foreground hover:text-destructive">
+                  <Trash2 className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="flex items-center gap-2">
+        <Input
+          value={newName}
+          onChange={(e) => setNewName(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              addCustom();
+            }
+          }}
+          placeholder="Add a custom status, e.g. Blocked"
+          className="h-8 text-xs"
+        />
+        <Button type="button" size="sm" variant="outline" onClick={addCustom} disabled={!canAdd}>
+          Add
+        </Button>
+      </div>
+      {trimmed !== "" && !canAdd && <p className="text-xs text-destructive">That name is already a status.</p>}
+    </div>
+  );
 }
 
 export default function ProjectsSettingsPage() {
@@ -88,6 +214,8 @@ export default function ProjectsSettingsPage() {
       prefix: editForm.prefix.trim(),
       description: editForm.description.trim() || undefined,
       repoPath: editForm.repoPath.trim() || undefined,
+      disabledStatuses: editForm.disabledStatuses,
+      customStatuses: editForm.customStatuses,
     };
     try {
       const res = await fetch(editForm.id ? `/api/projects/${editForm.id}` : "/api/projects", {
@@ -237,6 +365,10 @@ export default function ProjectsSettingsPage() {
                     />
                   </div>
                 )}
+              </div>
+
+              <div className="border-t pt-3">
+                <StatusEditor form={editForm} setForm={setEditForm} />
               </div>
 
               {formError && <p className="text-sm text-destructive">{formError}</p>}

@@ -280,9 +280,22 @@ describe("saveJob: onIssueStatus schedule validation (phase 4, storage boundary)
     expect(() => saveJob(job)).not.toThrow();
   });
 
+  it("accepts a project's custom status as a trigger when the schedule names that project", () => {
+    const project = buildProject({ name: "Cockpit", prefix: "CK", customStatuses: [{ name: "Blocked" }] });
+    saveProject(project);
+    const job = makeJob("a", { schedules: [{ type: "onIssueStatus", status: "Blocked", project: project.id }] });
+    expect(() => saveJob(job)).not.toThrow();
+  });
+
+  it("refuses a custom status with no project — a custom status is project-scoped", () => {
+    const project = buildProject({ name: "Cockpit", prefix: "CK", customStatuses: [{ name: "Blocked" }] });
+    saveProject(project);
+    const job = makeJob("a", { schedules: [{ type: "onIssueStatus", status: "Blocked" }] });
+    expect(() => saveJob(job)).toThrow(/invalid status/i);
+  });
+
   it("rejects an onIssueStatus schedule with a status outside ISSUE_STATUSES", () => {
     const job = makeJob("a", {
-      // @ts-expect-error deliberately invalid status, mirroring an unvalidated REST/MCP payload
       schedules: [{ type: "onIssueStatus", status: "Definitely Not A Status" }],
     });
     expect(() => saveJob(job)).toThrow(/invalid status/i);

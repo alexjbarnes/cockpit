@@ -1,5 +1,4 @@
 import { EventEmitter } from "node:events";
-import type { IssueStatus } from "@/types";
 
 /**
  * Fired by issue-storage.ts's saveIssue whenever an issue's status changes,
@@ -16,9 +15,10 @@ import type { IssueStatus } from "@/types";
 export interface IssueStatusChangeEvent {
   key: string;
   projectId: string;
-  /** Absent for a newly created issue — there is no "previous" status. */
-  from?: IssueStatus;
-  to: IssueStatus;
+  /** Absent for a newly created issue — there is no "previous" status. A
+   *  built-in status or a project custom status (string, not IssueStatus). */
+  from?: string;
+  to: string;
 }
 
 const emitter = new EventEmitter();

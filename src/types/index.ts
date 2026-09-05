@@ -252,7 +252,9 @@ export interface CronSchedule {
  */
 export interface IssueStatusSchedule {
   type: "onIssueStatus";
-  status: IssueStatus;
+  // A built-in status, or a custom status of the named project. Validated at
+  // save time against that project's allowed set (job-storage.ts).
+  status: string;
   /** Project id; absent means any project. */
   project?: string;
 }
@@ -373,6 +375,16 @@ export interface NotificationSettings {
 
 // Issues and projects (native issue tracker, see docs/internal/issue-tracker-spec.md)
 
+/** A project-defined status, additive to the built-in lifecycle. The name is
+ *  its identity (unique per project, never a built-in name); color is a token
+ *  key from STATUS_COLORS (see issue-display.ts), optional. The pipeline skills
+ *  never move an issue into a custom status on their own, but a custom status
+ *  can be an onIssueStatus job trigger. */
+export interface CustomStatus {
+  name: string;
+  color?: string;
+}
+
 export interface Project {
   id: string;
   name: string;
@@ -383,6 +395,10 @@ export interface Project {
   createdAt: number;
   updatedAt: number;
   nextNumber: number; // per-project counter, so keys are CK-1, CK-2
+  // Per-project status config; both optional, absent = the full built-in
+  // lifecycle in canonical order (i.e. today's behaviour, no migration needed).
+  disabledStatuses?: string[]; // built-in statuses this project hides
+  customStatuses?: CustomStatus[]; // additive columns, order = array order
 }
 
 /**
@@ -473,7 +489,10 @@ export interface Issue {
   projectId: string;
   title: string;
   description: string; // markdown, the refine skill overwrites this wholesale
-  status: IssueStatus;
+  // A built-in IssueStatus, or one of the issue's project customStatuses. Typed
+  // as string because custom statuses are runtime values validated per project;
+  // IssueStatus stays the union the automation (skills, onIssueStatus) keys off.
+  status: string;
   priority?: 0 | 1 | 2 | 3 | 4; // Linear's scale, so imports map cleanly
   labels?: string[];
   createdAt: number;

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { validateSession } from "@/server/auth";
-import { applyIssueUpdate, deleteIssue, getIssue, saveIssue } from "@/server/issue-storage";
+import { allowedStatusesFor, applyIssueUpdate, deleteIssue, getIssue, getProject, saveIssue } from "@/server/issue-storage";
 
 function authenticate(req: NextRequest): boolean {
   const token = req.cookies.get("cockpit_session")?.value || req.headers.get("authorization")?.replace("Bearer ", "");
@@ -40,7 +40,8 @@ export function PUT(req: NextRequest, { params }: { params: Promise<{ key: strin
       // (status/priority/labels/title/description) and throws on a bad
       // value, so it has to be inside this try too, not just saveIssue —
       // otherwise a bad value would 500 instead of 400.
-      const updated = applyIssueUpdate(existing, body, { kind: "user" });
+      const allowed = allowedStatusesFor(getProject(existing.projectId));
+      const updated = applyIssueUpdate(existing, body, { kind: "user" }, allowed);
       saveIssue(updated);
       return NextResponse.json({ issue: updated });
     } catch (err) {

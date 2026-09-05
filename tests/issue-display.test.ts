@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   actorHref,
   actorLabel,
+  boardColumns,
   describeActivity,
   describeActivityAction,
   filterByQuickFilter,
@@ -13,6 +14,9 @@ import {
   labelColor,
   NO_LABEL_GROUP,
   priorityLabel,
+  resolveProjectStatuses,
+  STATUS_COLORS,
+  statusColor,
 } from "@/lib/issue-display";
 import type { Issue, IssueActivity, IssueActor, Project } from "@/types";
 
@@ -45,6 +49,8 @@ function makeProject(overrides: Partial<Project> = {}): Project {
     createdAt: overrides.createdAt ?? 1,
     updatedAt: overrides.updatedAt ?? 1,
     nextNumber: overrides.nextNumber ?? 1,
+    disabledStatuses: overrides.disabledStatuses,
+    customStatuses: overrides.customStatuses,
   };
 }
 
@@ -435,5 +441,62 @@ describe("describeActivityAction", () => {
     for (const e of entries) {
       expect(describeActivity(e)).toBe(`You ${describeActivityAction(e)}`);
     }
+  });
+});
+
+describe("resolveProjectStatuses", () => {
+  it("with no project, returns the full built-in lifecycle in order, all built-in", () => {
+    const resolved = resolveProjectStatuses();
+    expect(resolved.map((s) => s.name)).toEqual([...ISSUE_STATUSES]);
+    expect(resolved.every((s) => s.builtin)).toBe(true);
+  });
+
+  it("drops disabled built-ins and appends customs in order after the built-ins", () => {
+    const project = makeProject({
+      disabledStatuses: ["Refining", "Plan Review"],
+      customStatuses: [{ name: "Blocked" }, { name: "Waiting" }],
+    });
+    const names = resolveProjectStatuses(project).map((s) => s.name);
+    expect(names).not.toContain("Refining");
+    expect(names).not.toContain("Plan Review");
+    // customs come after every built-in
+    expect(names.slice(-2)).toEqual(["Blocked", "Waiting"]);
+    const custom = resolveProjectStatuses(project)
+      .filter((s) => !s.builtin)
+      .map((s) => s.name);
+    expect(custom).toEqual(["Blocked", "Waiting"]);
+  });
+});
+
+describe("statusColor", () => {
+  it("uses the built-in palette for a built-in status", () => {
+    expect(statusColor("Backlog")).toBe(STATUS_COLORS.Backlog);
+  });
+  it("prefers a custom status's stored colour, else a stable hashed fallback", () => {
+    const project = makeProject({ customStatuses: [{ name: "Blocked", color: "bg-red-500" }, { name: "Waiting" }] });
+    expect(statusColor("Blocked", project)).toBe("bg-red-500");
+    // no stored colour -> deterministic, and non-empty
+    expect(statusColor("Waiting", project)).toBe(statusColor("Waiting", project));
+    expect(statusColor("Waiting", project)).toMatch(/^bg-/);
+  });
+});
+
+describe("boardColumns", () => {
+  it("is the project's resolved statuses plus any status that still has issues", () => {
+    const project = makeProject({ disabledStatuses: ["Backlog"], customStatuses: [{ name: "Blocked" }] });
+    // an issue is stranded in the disabled Backlog column
+    const issues = [makeIssue({ status: "Backlog" }), makeIssue({ id: "b", status: "Done" })];
+    const names = boardColumns(issues, project).map((c) => c.name);
+    // Backlog is disabled but still present because it holds an issue
+    expect(names).toContain("Backlog");
+    expect(names).toContain("Blocked");
+    expect(names).toContain("Done");
+  });
+});
+
+describe("groupIssuesByStatus with a custom status", () => {
+  it("lists built-in groups first, then custom-status groups", () => {
+    const groups = groupIssuesByStatus([makeIssue({ id: "a", status: "Blocked" }), makeIssue({ id: "b", status: "Backlog" })]);
+    expect(groups.map((g) => g.status)).toEqual(["Backlog", "Blocked"]);
   });
 });

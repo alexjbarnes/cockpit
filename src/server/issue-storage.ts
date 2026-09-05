@@ -4,7 +4,7 @@ import { extname, join, resolve, sep } from "node:path";
 import { writeJsonAtomic } from "@/server/atomic-write";
 import { emitIssueStatusChange } from "@/server/issue-events";
 import { getCockpitDir, getIssueAttachmentsRoot } from "@/server/paths";
-import type { Issue, IssueActivity, IssueActor, IssueAttachment, IssueComment, IssueStatus, Project } from "@/types";
+import type { CustomStatus, Issue, IssueActivity, IssueActor, IssueAttachment, IssueComment, Project } from "@/types";
 import { ISSUE_STATUSES } from "@/types";
 
 function cockpitDir(): string {
@@ -109,9 +109,16 @@ function assertBoolean(value: unknown, field: string): asserts value is boolean 
   }
 }
 
-function assertValidStatus(value: unknown): asserts value is IssueStatus {
-  if (typeof value !== "string" || !(ISSUE_STATUSES as readonly string[]).includes(value)) {
-    throw new Error(`status must be one of: ${ISSUE_STATUSES.join(", ")}`);
+/** The status names a project accepts: the built-in lifecycle plus its own
+ *  custom statuses. A project with no custom statuses (or no project context)
+ *  accepts exactly the built-ins, matching the old behaviour. */
+export function allowedStatusesFor(project?: Project): string[] {
+  return [...ISSUE_STATUSES, ...(project?.customStatuses ?? []).map((s) => s.name)];
+}
+
+function assertValidStatus(value: unknown, allowed: readonly string[] = ISSUE_STATUSES): asserts value is string {
+  if (typeof value !== "string" || !allowed.includes(value)) {
+    throw new Error(`status must be one of: ${allowed.join(", ")}`);
   }
 }
 
@@ -171,12 +178,59 @@ export type ProjectInput = Partial<Omit<Project, "id" | "createdAt" | "updatedAt
  * normalisation, so a bad value can never reach `.trim()`/`.toUpperCase()`
  * and surface as an unrelated TypeError instead of a clear message.
  */
+/** Validate the per-project status config. Built-ins named to disable must be
+ *  real built-ins; custom statuses must be non-empty, unique among themselves
+ *  (case-insensitive), and must not shadow a built-in name. Returns cleaned
+ *  copies (trimmed names) so storage never holds stray whitespace. */
+function validateStatusConfig(
+  disabledStatuses: unknown,
+  customStatuses: unknown,
+): { disabledStatuses?: string[]; customStatuses?: CustomStatus[] } {
+  const out: { disabledStatuses?: string[]; customStatuses?: CustomStatus[] } = {};
+  const builtinLower = new Set((ISSUE_STATUSES as readonly string[]).map((s) => s.toLowerCase()));
+
+  if (disabledStatuses !== undefined) {
+    if (!Array.isArray(disabledStatuses) || !disabledStatuses.every((s) => typeof s === "string")) {
+      throw new Error("disabledStatuses must be an array of strings");
+    }
+    for (const s of disabledStatuses) {
+      if (!(ISSUE_STATUSES as readonly string[]).includes(s)) {
+        throw new Error(`disabledStatuses may only name built-in statuses; "${s}" is not one of: ${ISSUE_STATUSES.join(", ")}`);
+      }
+    }
+    out.disabledStatuses = [...disabledStatuses];
+  }
+
+  if (customStatuses !== undefined) {
+    if (!Array.isArray(customStatuses)) throw new Error("customStatuses must be an array");
+    const seen = new Set<string>();
+    const cleaned: CustomStatus[] = [];
+    for (const entry of customStatuses) {
+      if (typeof entry !== "object" || entry === null) throw new Error("each custom status must be an object with a name");
+      const name = (entry as { name?: unknown }).name;
+      const color = (entry as { color?: unknown }).color;
+      if (typeof name !== "string" || name.trim() === "") throw new Error("each custom status needs a non-empty name");
+      const trimmed = name.trim();
+      const lower = trimmed.toLowerCase();
+      if (builtinLower.has(lower)) throw new Error(`custom status "${trimmed}" collides with a built-in status name`);
+      if (seen.has(lower)) throw new Error(`duplicate custom status name "${trimmed}"`);
+      seen.add(lower);
+      if (color !== undefined && typeof color !== "string") throw new Error("custom status color must be a string");
+      cleaned.push(color === undefined ? { name: trimmed } : { name: trimmed, color });
+    }
+    out.customStatuses = cleaned;
+  }
+
+  return out;
+}
+
 export function buildProject(input: ProjectInput): Project {
   assertNonEmptyString(input.name, "name");
   assertNonEmptyString(input.prefix, "prefix");
   if (input.description !== undefined) assertString(input.description, "description");
   if (input.repoPath !== undefined) assertString(input.repoPath, "repoPath");
   if (input.archived !== undefined) assertBoolean(input.archived, "archived");
+  const statusConfig = validateStatusConfig(input.disabledStatuses, input.customStatuses);
 
   const now = Date.now();
   return {
@@ -189,10 +243,13 @@ export function buildProject(input: ProjectInput): Project {
     createdAt: now,
     updatedAt: now,
     nextNumber: 1,
+    ...statusConfig,
   };
 }
 
-export type ProjectUpdateInput = Partial<Pick<Project, "name" | "prefix" | "description" | "repoPath" | "archived">>;
+export type ProjectUpdateInput = Partial<
+  Pick<Project, "name" | "prefix" | "description" | "repoPath" | "archived" | "disabledStatuses" | "customStatuses">
+>;
 
 /**
  * Apply a patch to an existing project. Pure — does not persist; the caller
@@ -206,9 +263,19 @@ export function applyProjectUpdate(project: Project, patch: ProjectUpdateInput):
   if (patch.description !== undefined) assertString(patch.description, "description");
   if (patch.repoPath !== undefined) assertString(patch.repoPath, "repoPath");
   if (patch.archived !== undefined) assertBoolean(patch.archived, "archived");
+  const statusConfig = validateStatusConfig(patch.disabledStatuses, patch.customStatuses);
 
   const next: Project = { ...project };
   let changed = false;
+
+  if (patch.disabledStatuses !== undefined && JSON.stringify(statusConfig.disabledStatuses) !== JSON.stringify(next.disabledStatuses)) {
+    next.disabledStatuses = statusConfig.disabledStatuses;
+    changed = true;
+  }
+  if (patch.customStatuses !== undefined && JSON.stringify(statusConfig.customStatuses) !== JSON.stringify(next.customStatuses)) {
+    next.customStatuses = statusConfig.customStatuses;
+    changed = true;
+  }
 
   if (patch.name !== undefined && patch.name !== next.name) {
     next.name = patch.name;
@@ -577,10 +644,15 @@ function sameLabels(a: string[] | undefined, b: string[] | undefined): boolean {
  * priority: "critical", labels: "not-an-array", title: 12345 }` used to be
  * stored verbatim.
  */
-export function applyIssueUpdate(issue: Issue, patch: IssueUpdateInput, actor: IssueActor): Issue {
+export function applyIssueUpdate(
+  issue: Issue,
+  patch: IssueUpdateInput,
+  actor: IssueActor,
+  allowedStatuses: readonly string[] = ISSUE_STATUSES,
+): Issue {
   if (patch.title !== undefined) assertNonEmptyString(patch.title, "title");
   if (patch.description !== undefined) assertString(patch.description, "description");
-  if (patch.status !== undefined) assertValidStatus(patch.status);
+  if (patch.status !== undefined) assertValidStatus(patch.status, allowedStatuses);
   if ("priority" in patch && patch.priority !== undefined) assertValidPriority(patch.priority);
   if ("labels" in patch && patch.labels !== undefined) assertValidLabels(patch.labels);
 

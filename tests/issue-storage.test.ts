@@ -13,6 +13,7 @@ import { onIssueStatusChange } from "@/server/issue-events";
 import {
   addIssueAttachment,
   addIssueComment,
+  allowedStatusesFor,
   applyIssueUpdate,
   applyProjectUpdate,
   buildIssue,
@@ -800,7 +801,6 @@ describe("applyIssueUpdate", () => {
 
     it("rejects an invalid status", () => {
       const issue = freshIssue();
-      // @ts-expect-error deliberately wrong-typed, mirroring an unvalidated REST body
       expect(() => applyIssueUpdate(issue, { status: "Definitely Not A Status" }, USER)).toThrow(/status must be one of/i);
     });
 
@@ -850,7 +850,6 @@ describe("applyIssueUpdate", () => {
 
     it("validates the whole patch before mutating anything: one bad field rejects the entire update, including its otherwise-valid fields", () => {
       const issue = freshIssue();
-      // @ts-expect-error deliberately wrong-typed, mirroring an unvalidated REST body
       expect(() => applyIssueUpdate(issue, { title: "New valid title", status: "nonsense" }, USER)).toThrow();
       // Confirm no partial application: title must still be untouched.
       expect(issue.title).toBe("Original");
@@ -1004,5 +1003,48 @@ describe("deleteIssue", () => {
 
     expect(deleteIssue(doomed.key)).toBe(true);
     expect(existsSync(keeperFile)).toBe(true);
+  });
+});
+
+describe("per-project status config", () => {
+  it("buildProject validates custom statuses: non-empty, unique, no built-in collision, trimmed", () => {
+    expect(() => buildProject({ name: "x", prefix: "CK", customStatuses: [{ name: "  " }] })).toThrow(/non-empty/);
+    expect(() => buildProject({ name: "x", prefix: "CK", customStatuses: [{ name: "Backlog" }] })).toThrow(/collides/);
+    expect(() => buildProject({ name: "x", prefix: "CK", customStatuses: [{ name: "Blocked" }, { name: "blocked" }] })).toThrow(
+      /duplicate/i,
+    );
+    const p = buildProject({ name: "x", prefix: "CK", customStatuses: [{ name: " Blocked ", color: "bg-red-500" }] });
+    expect(p.customStatuses).toEqual([{ name: "Blocked", color: "bg-red-500" }]);
+  });
+
+  it("buildProject validates disabledStatuses only names built-ins", () => {
+    expect(() => buildProject({ name: "x", prefix: "CK", disabledStatuses: ["Nope"] })).toThrow(/built-in/);
+    expect(buildProject({ name: "x", prefix: "CK", disabledStatuses: ["Refining"] }).disabledStatuses).toEqual(["Refining"]);
+  });
+
+  it("allowedStatusesFor is the built-ins plus the project's customs", () => {
+    const p = buildProject({ name: "x", prefix: "CK", customStatuses: [{ name: "Blocked" }] });
+    expect(allowedStatusesFor(p)).toEqual(expect.arrayContaining(["Backlog", "Done", "Blocked"]));
+    expect(allowedStatusesFor(undefined)).not.toContain("Blocked");
+  });
+
+  it("applyIssueUpdate accepts a project custom status but refuses an unknown one, and defaults to built-ins only", () => {
+    const project = makeProject("CK", { customStatuses: [{ name: "Blocked" }] });
+    const issue = buildIssue({ projectId: project.id, title: "t" }, USER);
+    const allowed = allowedStatusesFor(project);
+
+    expect(applyIssueUpdate(issue, { status: "Blocked" }, USER, allowed).status).toBe("Blocked");
+    expect(() => applyIssueUpdate(issue, { status: "Nonsense" }, USER, allowed)).toThrow(/must be one of/);
+    // Back-compat: with no allowed set, only built-ins pass.
+    expect(() => applyIssueUpdate(issue, { status: "Blocked" }, USER)).toThrow(/must be one of/);
+  });
+
+  it("applyProjectUpdate adds/removes customs and toggles built-ins", () => {
+    const p = makeProject("CK");
+    const updated = applyProjectUpdate(p, { customStatuses: [{ name: "Blocked" }], disabledStatuses: ["Refining"] });
+    expect(updated.customStatuses).toEqual([{ name: "Blocked" }]);
+    expect(updated.disabledStatuses).toEqual(["Refining"]);
+    const cleared = applyProjectUpdate(updated, { customStatuses: [] });
+    expect(cleared.customStatuses).toEqual([]);
   });
 });

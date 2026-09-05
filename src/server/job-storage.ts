@@ -3,10 +3,10 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync
 import { join, resolve, sep } from "node:path";
 import { splitLegacyModel } from "@/lib/models";
 import { assertValidCronExpression } from "@/server/cron-utils";
-import { getProject } from "@/server/issue-storage";
+import { allowedStatusesFor, getProject } from "@/server/issue-storage";
 import { getCockpitDir, getJobsScratchpadRoot } from "@/server/paths";
-import type { JobRun, JobSchedule, ScheduledJob } from "@/types";
-import { ISSUE_STATUSES, SIMPLE_SCHEDULE_FREQUENCIES } from "@/types";
+import type { JobRun, JobSchedule, Project, ScheduledJob } from "@/types";
+import { SIMPLE_SCHEDULE_FREQUENCIES } from "@/types";
 
 /** Everything a caller may supply when creating a job. */
 export type JobInput = Partial<Omit<ScheduledJob, "id" | "createdAt" | "updatedAt">>;
@@ -140,11 +140,17 @@ function assertValidSchedules(schedules: JobSchedule[] | undefined): void {
       }
       assertValidCronExpression(s.expression);
     } else if (s.type === "onIssueStatus") {
-      if (!(ISSUE_STATUSES as readonly string[]).includes(s.status)) {
-        throw new Error(`onIssueStatus schedule has an invalid status "${s.status}"; must be one of: ${ISSUE_STATUSES.join(", ")}`);
+      // A project's custom statuses are valid triggers too, but only when the
+      // schedule names that project — a custom status is project-scoped, so an
+      // any-project trigger can only fire on a built-in.
+      let project: Project | undefined;
+      if (s.project !== undefined) {
+        project = getProject(s.project);
+        if (!project) throw new Error(`onIssueStatus schedule references unknown project "${s.project}"`);
       }
-      if (s.project !== undefined && !getProject(s.project)) {
-        throw new Error(`onIssueStatus schedule references unknown project "${s.project}"`);
+      const allowed = allowedStatusesFor(project);
+      if (!allowed.includes(s.status)) {
+        throw new Error(`onIssueStatus schedule has an invalid status "${s.status}"; must be one of: ${allowed.join(", ")}`);
       }
     } else {
       throw new Error(`schedule has unknown type "${(s as { type?: string }).type}"; must be one of: simple, cron, onIssueStatus`);

@@ -1,4 +1,4 @@
-import type { Issue, IssueActivity, IssueActor, IssueStatus, Project } from "@/types";
+import type { Issue, IssueActivity, IssueActor, Project } from "@/types";
 import { ISSUE_STATUSES } from "@/types";
 
 // Re-exported for this module's existing consumers (the detail page's status
@@ -10,7 +10,7 @@ export { ISSUE_STATUSES };
 
 export interface IssueFilter {
   projectId?: string;
-  status?: IssueStatus;
+  status?: string;
 }
 
 /**
@@ -27,25 +27,32 @@ export function filterIssues(issues: Issue[], filter: IssueFilter): Issue[] {
 }
 
 export interface IssueStatusGroup {
-  status: IssueStatus;
+  status: string;
   issues: Issue[];
 }
 
 /**
- * Groups issues by status in the canonical lifecycle order (ISSUE_STATUSES),
- * not insertion order, and drops any status with zero issues so the list
- * page never renders an empty group heading.
+ * Groups issues by status: built-in statuses first in canonical lifecycle order
+ * (ISSUE_STATUSES), then any custom status present in the input (in first-seen
+ * order), and drops any status with zero issues so the list page never renders
+ * an empty heading. The shared "By status" list spans every project, so it can't
+ * key off one project's status config — a custom status shows wherever it has
+ * issues; the per-project column set lives in resolveProjectStatuses / the board.
  */
 export function groupIssuesByStatus(issues: Issue[]): IssueStatusGroup[] {
-  const byStatus = new Map<IssueStatus, Issue[]>();
+  const byStatus = new Map<string, Issue[]>();
+  const customOrder: string[] = [];
   for (const issue of issues) {
     const list = byStatus.get(issue.status);
     if (list) list.push(issue);
-    else byStatus.set(issue.status, [issue]);
+    else {
+      byStatus.set(issue.status, [issue]);
+      if (!(ISSUE_STATUSES as readonly string[]).includes(issue.status)) customOrder.push(issue.status);
+    }
   }
 
   const groups: IssueStatusGroup[] = [];
-  for (const status of ISSUE_STATUSES) {
+  for (const status of [...ISSUE_STATUSES, ...customOrder]) {
     const list = byStatus.get(status);
     if (list && list.length > 0) groups.push({ status, issues: list });
   }
@@ -184,6 +191,81 @@ export function labelColor(label: string): string {
   let hash = 0;
   for (let i = 0; i < label.length; i++) hash = (hash * 31 + label.charCodeAt(i)) | 0;
   return LABEL_COLORS[Math.abs(hash) % LABEL_COLORS.length];
+}
+
+/**
+ * Default dot colour per built-in status, tracking the lifecycle: greys for the
+ * not-started/terminal ends, warmer/cooler mid-tones through the active middle.
+ * A custom status without a stored colour falls back to a hashed LABEL_COLORS
+ * swatch (statusColor), so every column always has a stable dot.
+ */
+export const STATUS_COLORS: Record<string, string> = {
+  Backlog: "bg-slate-400",
+  "Needs Detail": "bg-amber-500",
+  "Refine Ready": "bg-yellow-500",
+  Refining: "bg-lime-500",
+  "Plan Review": "bg-teal-500",
+  "Implementation Ready": "bg-sky-500",
+  Implementation: "bg-blue-500",
+  "Code Review": "bg-violet-500",
+  Accepted: "bg-fuchsia-500",
+  Done: "bg-emerald-500",
+  Cancelled: "bg-slate-500",
+};
+
+export interface ResolvedStatus {
+  name: string;
+  builtin: boolean;
+  color: string;
+}
+
+/** The dot colour for a status name: a stored custom colour wins, then the
+ *  built-in default, then a deterministic hashed swatch so a custom status with
+ *  no colour still renders a stable dot. */
+export function statusColor(name: string, project?: Project): string {
+  const custom = project?.customStatuses?.find((s) => s.name === name);
+  if (custom?.color) return custom.color;
+  return STATUS_COLORS[name] ?? labelColor(name);
+}
+
+/**
+ * The ordered status columns for a project: built-in statuses in canonical
+ * lifecycle order minus the project's disabledStatuses, then its customStatuses
+ * in array order. With no project (the All-Projects board) it's the full
+ * built-in lifecycle. This is the single source of truth for a project's column
+ * set and their order — the board, the detail-page status picker, and the
+ * settings editor all read it rather than hand-rolling the merge.
+ */
+export function resolveProjectStatuses(project?: Project): ResolvedStatus[] {
+  const disabled = new Set(project?.disabledStatuses ?? []);
+  const builtins = ISSUE_STATUSES.filter((s) => !disabled.has(s)).map((name) => ({
+    name,
+    builtin: true,
+    color: statusColor(name, project),
+  }));
+  const customs = (project?.customStatuses ?? []).map((c) => ({
+    name: c.name,
+    builtin: false,
+    color: statusColor(c.name, project),
+  }));
+  return [...builtins, ...customs];
+}
+
+/**
+ * The Kanban board's column set: a project's resolved statuses, then any status
+ * that currently has issues but isn't already a column — so disabling a status,
+ * or an issue left in a removed/unknown one, never hides work off the board.
+ */
+export function boardColumns(issues: Issue[], project?: Project): { name: string; color: string }[] {
+  const columns = resolveProjectStatuses(project).map((s) => ({ name: s.name, color: s.color }));
+  const known = new Set(columns.map((c) => c.name));
+  for (const issue of issues) {
+    if (!known.has(issue.status)) {
+      known.add(issue.status);
+      columns.push({ name: issue.status, color: statusColor(issue.status, project) });
+    }
+  }
+  return columns;
 }
 
 /**

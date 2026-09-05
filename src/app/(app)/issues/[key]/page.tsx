@@ -11,8 +11,9 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { useSettings } from "@/hooks/use-settings";
-import { actorHref, actorLabel, describeActivityAction, ISSUE_STATUSES } from "@/lib/issue-display";
-import type { Issue, IssueActor, IssueStatus, Project } from "@/types";
+import { actorHref, actorLabel, describeActivityAction, resolveProjectStatuses, statusColor } from "@/lib/issue-display";
+import { cn } from "@/lib/utils";
+import type { Issue, IssueActor, Project } from "@/types";
 
 const SELECT_CLASS = "rounded-md border bg-background px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring";
 
@@ -133,7 +134,7 @@ export default function IssueDetailPage() {
     setSavingDetails(false);
   }
 
-  async function changeStatus(status: IssueStatus) {
+  async function changeStatus(status: string) {
     if (!issue || status === issue.status) return;
     setSavingStatus(true);
     setStatusError(null);
@@ -251,6 +252,10 @@ export default function IssueDetailPage() {
   }
 
   const project = projects.find((p) => p.id === issue.projectId);
+  // The project's enabled statuses, plus the issue's current status if it sits
+  // in a disabled/removed one — so it's always visible and changeable.
+  const statusNames = resolveProjectStatuses(project).map((s) => s.name);
+  const statusOptions = statusNames.includes(issue.status) ? statusNames : [issue.status, ...statusNames];
 
   return (
     <div className="flex-1 min-h-0 overflow-y-auto p-4">
@@ -289,13 +294,9 @@ export default function IssueDetailPage() {
             )}
 
             <div className="flex flex-wrap items-center gap-2">
-              <select
-                value={issue.status}
-                disabled={savingStatus}
-                onChange={(e) => changeStatus(e.target.value as IssueStatus)}
-                className={SELECT_CLASS}
-              >
-                {ISSUE_STATUSES.map((s) => (
+              <span className={cn("h-2.5 w-2.5 shrink-0 rounded-full", statusColor(issue.status, project))} />
+              <select value={issue.status} disabled={savingStatus} onChange={(e) => changeStatus(e.target.value)} className={SELECT_CLASS}>
+                {statusOptions.map((s) => (
                   <option key={s} value={s}>
                     {s}
                   </option>
