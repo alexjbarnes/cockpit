@@ -2141,7 +2141,7 @@ describe("WebSocket handler", () => {
       });
     }
 
-    it("sends bypass_state::on when bypass is active", async () => {
+    it("sends __perm_mode::bypass when bypass is active", async () => {
       const session = manager.createSession("/tmp");
       manager.setBypassAllPermissions(session.id);
       const ws = await connectWs();
@@ -2151,7 +2151,7 @@ describe("WebSocket handler", () => {
       const msgs = await msgsPromise;
 
       const systemMsgs = msgs.filter((m) => m.type === "session:system");
-      expect(systemMsgs.some((m) => m.text === "__bypass_state::on")).toBe(true);
+      expect(systemMsgs.some((m) => m.text === "__perm_mode::bypass")).toBe(true);
       ws.close();
     });
 

@@ -138,8 +138,17 @@ export class ClaudePtyAdapter implements HarnessAdapter {
     }
     if (config.planMode) {
       extraArgs.push("--permission-mode", "plan");
-    } else if (config.bypassAllPermissions && !config.cockpitAgent) {
+    } else if (config.permissionMode === "bypass" && !config.cockpitAgent) {
       extraArgs.push("--permission-mode", "bypassPermissions");
+    } else if (config.permissionMode === "auto" && supportedPermissionModes().has("auto")) {
+      // Auto hands permission judgement to the CLI's own safety classifier: it
+      // runs on the session's model, auto-approves plan-safe calls, and fires
+      // the PermissionRequest hook (cockpit's cards) only for the rest. The
+      // session-manager only offers this for Anthropic models — the classifier
+      // is unreliable and slow on non-Anthropic ones — and downgrades to manual
+      // otherwise, so an "auto" reaching here is already Anthropic-gated. When
+      // the CLI build has no "auto" choice, fall through to manual.
+      extraArgs.push("--permission-mode", "auto");
     } else if (supportedPermissionModes().has("manual")) {
       // Ask for manual explicitly rather than letting the CLI pick. Its default
       // is now `auto`, whose safety classifier runs on the SESSION's model — on
@@ -188,9 +197,11 @@ export class ClaudePtyAdapter implements HarnessAdapter {
       // CLI silently running in a different mode than requested.
       expectedPermissionMode: config.planMode
         ? "plan"
-        : config.bypassAllPermissions && !config.cockpitAgent
+        : config.permissionMode === "bypass" && !config.cockpitAgent
           ? "bypassPermissions"
-          : "manual",
+          : config.permissionMode === "auto" && supportedPermissionModes().has("auto")
+            ? "auto"
+            : "manual",
       onEvents: (events) => config.callbacks.onParsedEvents(events),
       onError: (err) => config.callbacks.onError(err),
       onExit: ({ exitCode, signal }) => {

@@ -330,8 +330,11 @@ export function createWebSocketHandler(
               if (prefs?.thinkingLevel && prefs.thinkingLevel !== "high") {
                 send(ws, { type: "session:system", sessionId: msg.sessionId, text: `__thinking_level::${prefs.thinkingLevel}` });
               }
-              if (prefs?.bypassAllPermissions) {
-                send(ws, { type: "session:system", sessionId: msg.sessionId, text: "__bypass_state::on" });
+              {
+                const pm = prefs?.cockpitAgent ? "manual" : (prefs?.permissionMode ?? (prefs?.bypassAllPermissions ? "bypass" : "manual"));
+                if (pm !== "manual") {
+                  send(ws, { type: "session:system", sessionId: msg.sessionId, text: `__perm_mode::${pm}` });
+                }
               }
               if (prefs?.planMode) {
                 send(ws, { type: "session:system", sessionId: msg.sessionId, text: "__plan_state::on" });
@@ -511,12 +514,15 @@ export function createWebSocketHandler(
               status: correctedStatus,
             });
 
-            if (sessionManager.isBypassActive(msg.sessionId)) {
-              send(ws, {
-                type: "session:system",
-                sessionId: msg.sessionId,
-                text: "__bypass_state::on",
-              });
+            {
+              const pm = sessionManager.getPermissionMode(msg.sessionId);
+              if (pm !== "manual") {
+                send(ws, {
+                  type: "session:system",
+                  sessionId: msg.sessionId,
+                  text: `__perm_mode::${pm}`,
+                });
+              }
             }
 
             if (sessionManager.isPlanModeActive(msg.sessionId)) {
@@ -766,6 +772,11 @@ export function createWebSocketHandler(
           } else {
             sessionManager.clearBypassAllPermissions(msg.sessionId);
           }
+          break;
+        }
+
+        case "permission:set_mode": {
+          sessionManager.setPermissionMode(msg.sessionId, msg.mode);
           break;
         }
 

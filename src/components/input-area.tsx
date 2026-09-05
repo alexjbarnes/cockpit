@@ -47,6 +47,7 @@ import {
   type ModelAlias,
   type ModelEntry,
   modelOneMRequiresCredits,
+  resolveProviderId,
   versionsForAlias,
 } from "@/lib/models";
 import { detectLanguage, extensionForLabel, shouldCollapsePaste } from "@/lib/paste-detect";
@@ -57,6 +58,7 @@ import type {
   InitData,
   Provider,
   ProviderModel,
+  SessionPermissionMode,
   TextFileAttachment,
   ThinkingLevel,
 } from "@/types";
@@ -261,6 +263,8 @@ interface InputAreaProps {
   isResponding: boolean;
   bypassActive: boolean;
   onSetBypass: (enabled: boolean) => void;
+  permissionMode: SessionPermissionMode;
+  onSetPermissionMode: (mode: SessionPermissionMode) => void;
   planMode: boolean;
   onSetPlanMode: (enabled: boolean) => void;
   showPlanToggle?: boolean;
@@ -317,6 +321,8 @@ export function InputArea({
   isResponding,
   bypassActive,
   onSetBypass,
+  permissionMode,
+  onSetPermissionMode,
   planMode,
   onSetPlanMode,
   showPlanToggle = true,
@@ -826,6 +832,10 @@ export function InputArea({
   const effectiveContextSize: ContextSize =
     currentContextSize === "1m" && modelOneMRequiresCredits(currentModel) && !allowSonnet1m ? "200k" : currentContextSize;
   const modelSelection = describeModelSelection(currentModel, thinkingLevel, effectiveContextSize, providers);
+  // Auto hands permission judgement to the CLI's own safety classifier, which
+  // runs on the session's model — reliable only on Anthropic models, so it is
+  // offered only for those. The server enforces the same gate.
+  const autoModeAvailable = !isCockpitAgent && resolveProviderId(currentModel, providers) === "anthropic";
   const thinkingLabel = modelSelection.thinking ? (thinkingLevels.find((t) => t.value === modelSelection.thinking)?.label ?? null) : null;
   const contextLabel = modelSelection.context ? CONTEXT_SIZES[modelSelection.context].label : null;
 
@@ -1226,36 +1236,81 @@ export function InputArea({
                             Restart agent harness
                           </button>
 
-                          <button
-                            onClick={() => onSetBypass(!bypassActive)}
-                            className="flex w-full items-center justify-between rounded-lg border border-border px-4 py-3 text-xs hover:bg-muted/50 transition-colors"
-                            data-testid="bypass-toggle"
-                          >
-                            <div className="flex items-center gap-3">
-                              {bypassActive ? (
-                                <ShieldOff className="h-4 w-4 text-orange-500" />
-                              ) : (
-                                <ShieldCheck className="h-4 w-4 text-muted-foreground" />
-                              )}
-                              <span className={bypassActive ? "text-orange-500 font-medium" : "text-muted-foreground"}>
-                                {/* In the assistant it covers tool calls only: config
-                                    changes always keep their approval card, so the
-                                    blanket wording would overpromise. */}
-                                {isCockpitAgent ? "Bypass tool prompts" : "Bypass all permissions"}
-                              </span>
-                            </div>
-                            <span
-                              className={`inline-flex h-5 w-9 items-center rounded-full transition-colors shrink-0 ${
-                                bypassActive ? "bg-orange-500" : "bg-muted-foreground/30"
-                              }`}
+                          {isCockpitAgent ? (
+                            // The assistant stays a two-state toggle: bypass here
+                            // covers its tool calls only (config writes keep their
+                            // approval card), and auto never applies to it.
+                            <button
+                              onClick={() => onSetBypass(!bypassActive)}
+                              className="flex w-full items-center justify-between rounded-lg border border-border px-4 py-3 text-xs hover:bg-muted/50 transition-colors"
+                              data-testid="bypass-toggle"
                             >
+                              <div className="flex items-center gap-3">
+                                {bypassActive ? (
+                                  <ShieldOff className="h-4 w-4 text-orange-500" />
+                                ) : (
+                                  <ShieldCheck className="h-4 w-4 text-muted-foreground" />
+                                )}
+                                <span className={bypassActive ? "text-orange-500 font-medium" : "text-muted-foreground"}>
+                                  Bypass tool prompts
+                                </span>
+                              </div>
                               <span
-                                className={`inline-block h-4 w-4 rounded-full bg-white transition-transform shadow-sm ${
-                                  bypassActive ? "translate-x-4.5" : "translate-x-0.5"
+                                className={`inline-flex h-5 w-9 items-center rounded-full transition-colors shrink-0 ${
+                                  bypassActive ? "bg-orange-500" : "bg-muted-foreground/30"
                                 }`}
-                              />
-                            </span>
-                          </button>
+                              >
+                                <span
+                                  className={`inline-block h-4 w-4 rounded-full bg-white transition-transform shadow-sm ${
+                                    bypassActive ? "translate-x-4.5" : "translate-x-0.5"
+                                  }`}
+                                />
+                              </span>
+                            </button>
+                          ) : (
+                            <div className="rounded-lg border border-border px-4 py-3">
+                              <div className="mb-2 flex items-center gap-3">
+                                {permissionMode === "bypass" ? (
+                                  <ShieldOff className="h-4 w-4 text-orange-500" />
+                                ) : (
+                                  <ShieldCheck className="h-4 w-4 text-muted-foreground" />
+                                )}
+                                <span
+                                  className={`text-xs font-medium ${permissionMode === "bypass" ? "text-orange-500" : "text-muted-foreground"}`}
+                                >
+                                  Permissions
+                                </span>
+                              </div>
+                              <div className="flex gap-1" data-testid="permission-mode-selector">
+                                {(["manual", "auto", "bypass"] as const)
+                                  .filter((m) => m !== "auto" || autoModeAvailable)
+                                  .map((m) => {
+                                    const active = permissionMode === m;
+                                    const label = m === "manual" ? "Manual" : m === "auto" ? "Auto" : "Bypass";
+                                    const activeClass = m === "bypass" ? "bg-orange-500 text-white" : "bg-primary text-primary-foreground";
+                                    return (
+                                      <button
+                                        key={m}
+                                        onClick={() => onSetPermissionMode(m)}
+                                        data-testid={`perm-mode-${m}`}
+                                        className={`flex-1 rounded px-2 py-1 text-xs transition-colors ${
+                                          active ? activeClass : "bg-muted text-muted-foreground hover:text-foreground"
+                                        }`}
+                                      >
+                                        {label}
+                                      </button>
+                                    );
+                                  })}
+                              </div>
+                              <p className="mt-2 text-[11px] text-muted-foreground">
+                                {permissionMode === "manual"
+                                  ? "Every tool call asks first."
+                                  : permissionMode === "auto"
+                                    ? "Claude approves safe steps; risky ones still ask."
+                                    : "All tool calls are auto-approved."}
+                              </p>
+                            </div>
+                          )}
 
                           {initData?.mcpServers && initData.mcpServers.length > 0 && (
                             <button

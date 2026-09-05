@@ -1,7 +1,7 @@
 import type { ContextSize } from "@/lib/models";
 import type { ParsedEvent } from "@/server/event-parser";
 import type { SessionRuntime } from "@/server/session-prefs";
-import type { ChatMessage, DocumentAttachment, ImageAttachment, ModelSlots, ThinkingLevel } from "@/types";
+import type { ChatMessage, DocumentAttachment, ImageAttachment, ModelSlots, SessionPermissionMode, ThinkingLevel } from "@/types";
 
 // One member today on purpose: this is the seam a second harness (Codex) plugs
 // into later. Widen the union and add a HARNESS_REGISTRY entry when it lands.
@@ -56,7 +56,7 @@ export interface HarnessSpawnConfig {
   thinkingLevel: ThinkingLevel;
   supportsEffort: boolean;
   planMode: boolean;
-  bypassAllPermissions: boolean;
+  permissionMode: SessionPermissionMode;
   cockpitAgent: boolean;
   modelSlots: ModelSlots;
   appendSystemPrompt?: string;

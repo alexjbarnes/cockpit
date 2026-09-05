@@ -4,7 +4,7 @@ import type { ContextSize } from "@/lib/models";
 import { splitLegacyModel } from "@/lib/models";
 import { writeJsonAtomic } from "@/server/atomic-write";
 import { getCockpitDir } from "@/server/paths";
-import type { InitData, ModelSlots, ThinkingLevel } from "@/types";
+import type { InitData, ModelSlots, SessionPermissionMode, ThinkingLevel } from "@/types";
 
 export type SessionRuntime = "stream" | "pty";
 
@@ -16,7 +16,10 @@ export interface PersistedTab {
 export interface SessionPrefs {
   name?: string;
   thinkingLevel?: ThinkingLevel;
+  /** Legacy: superseded by permissionMode. Still read when migrating an old
+   *  prefs file (true → "bypass"), never written. */
   bypassAllPermissions?: boolean;
+  permissionMode?: SessionPermissionMode;
   planMode?: boolean;
   model?: string;
   contextSize?: ContextSize;

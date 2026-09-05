@@ -155,7 +155,11 @@ export class ClaudeStreamAdapter implements HarnessAdapter {
 
     if (config.planMode) {
       args.push("--permission-mode", "plan");
-    } else if (config.bypassAllPermissions && !config.cockpitAgent) {
+    } else if (config.permissionMode === "bypass" && !config.cockpitAgent) {
+      // Auto has no dedicated branch here: the stream runtime already runs with
+      // --allow-dangerously-skip-permissions outside plan mode, so auto behaves
+      // like manual (cockpit's cards still gate). Auto's real home is the PTY
+      // runtime, which is the default.
       // Never native bypass for the assistant, even when its own bypass toggle
       // is on: the CLI would stop emitting permission requests, and cockpit
       // needs them to keep raising the config-write approval cards. Its bypass

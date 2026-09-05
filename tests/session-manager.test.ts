@@ -836,7 +836,7 @@ describe("SessionManager", () => {
     it("returns a live session to manual, not the retired default mode", () => {
       const session = manager.createSession("/tmp");
       const s = (manager as any).sessions.get(session.id)!;
-      s.bypassAllPermissions = true;
+      s.permissionMode = "bypass";
       const writeControlRequest = vi.fn((_payload: Record<string, unknown>) => true);
       s.harnessProcess = { isAlive: true, writeControlRequest, kill: vi.fn() };
 
@@ -1286,7 +1286,7 @@ describe("SessionManager", () => {
       const systemMessages: string[] = [];
       manager.onSystem(session.id, (msg) => systemMessages.push(msg));
       manager.setBypassAllPermissions(session.id);
-      expect(systemMessages.some((msg) => msg.includes("__bypass_state::on"))).toBe(true);
+      expect(systemMessages.some((msg) => msg.includes("__perm_mode::bypass"))).toBe(true);
     });
 
     it("deactivates bypass via clearBypassAllPermissions", () => {
@@ -1303,7 +1303,7 @@ describe("SessionManager", () => {
       const systemMessages: string[] = [];
       manager.onSystem(session.id, (msg) => systemMessages.push(msg));
       manager.clearBypassAllPermissions(session.id);
-      expect(systemMessages.some((msg) => msg.includes("__bypass_state::off"))).toBe(true);
+      expect(systemMessages.some((msg) => msg.includes("__perm_mode::manual"))).toBe(true);
     });
 
     it("handles multiple activations gracefully", () => {
@@ -1318,6 +1318,71 @@ describe("SessionManager", () => {
       manager.clearBypassAllPermissions(session.id);
       manager.clearBypassAllPermissions(session.id);
       expect(manager.isBypassActive(session.id)).toBe(false);
+    });
+  });
+
+  describe("setPermissionMode (manual | auto | bypass)", () => {
+    const zenProvider = JSON.stringify([
+      {
+        id: "zen",
+        name: "OpenCode Zen",
+        isBuiltin: true,
+        envVars: {},
+        models: [{ modelId: "ds-free", displayName: "ds", effortLevels: [], contextSizes: ["200k"] }],
+        enabledModels: ["ds-free"],
+      },
+    ]);
+    async function seedZen() {
+      const { writeFileSync } = await import("node:fs");
+      const { join } = await import("node:path");
+      writeFileSync(join(process.env.COCKPIT_CONFIG_DIR!, "providers.json"), zenProvider);
+    }
+
+    it("moves between the three modes on an Anthropic session and emits each", () => {
+      const session = manager.createSession("/tmp"); // default "sonnet" resolves as Anthropic
+      const msgs: string[] = [];
+      manager.onSystem(session.id, (m) => msgs.push(m));
+      expect(manager.getPermissionMode(session.id)).toBe("manual");
+
+      manager.setPermissionMode(session.id, "auto");
+      expect(manager.getPermissionMode(session.id)).toBe("auto");
+      expect(manager.isBypassActive(session.id)).toBe(false);
+
+      manager.setPermissionMode(session.id, "bypass");
+      expect(manager.getPermissionMode(session.id)).toBe("bypass");
+      expect(manager.isBypassActive(session.id)).toBe(true);
+
+      manager.setPermissionMode(session.id, "manual");
+      expect(manager.getPermissionMode(session.id)).toBe("manual");
+
+      expect(msgs).toContain("__perm_mode::auto");
+      expect(msgs).toContain("__perm_mode::bypass");
+      expect(msgs).toContain("__perm_mode::manual");
+    });
+
+    it("clamps auto to manual on a non-Anthropic model, whose classifier would hang", async () => {
+      await seedZen();
+      const session = manager.createSession("/tmp");
+      manager.setModel(session.id, "zen:ds-free");
+
+      manager.setPermissionMode(session.id, "auto");
+      expect(manager.getPermissionMode(session.id)).toBe("manual");
+    });
+
+    it("drops auto back to manual when the session switches onto a non-Anthropic model", async () => {
+      await seedZen();
+      const session = manager.createSession("/tmp"); // Anthropic
+      manager.setPermissionMode(session.id, "auto");
+      expect(manager.getPermissionMode(session.id)).toBe("auto");
+
+      manager.setModel(session.id, "zen:ds-free");
+      expect(manager.getPermissionMode(session.id)).toBe("manual");
+    });
+
+    it("refuses bypass for a cockpit agent, whose bypass is applied server-side", () => {
+      const session = manager.createSession("/tmp", undefined, { cockpitAgent: true });
+      manager.setPermissionMode(session.id, "bypass");
+      expect(manager.getPermissionMode(session.id)).toBe("manual");
     });
   });
 
@@ -2073,16 +2138,17 @@ describe("SessionManager", () => {
       const systemMessages: string[] = [];
       manager.onSystem(session.id, (msg) => systemMessages.push(msg));
       manager.clearPlanMode(session.id);
-      expect(systemMessages.some((msg) => msg.includes("__bypass_state::on"))).toBe(true);
+      expect(systemMessages.some((msg) => msg.includes("__perm_mode::bypass"))).toBe(true);
     });
 
-    it("clearing plan mode without bypass does not re-emit bypass", () => {
+    it("clearing plan mode re-syncs the permission mode, which is manual by default", () => {
       const session = manager.createSession("/tmp");
       manager.setPlanMode(session.id);
       const systemMessages: string[] = [];
       manager.onSystem(session.id, (msg) => systemMessages.push(msg));
       manager.clearPlanMode(session.id);
-      expect(systemMessages.some((msg) => msg.includes("__bypass_state"))).toBe(false);
+      expect(systemMessages).toContain("__perm_mode::manual");
+      expect(systemMessages.some((msg) => msg.includes("__perm_mode::bypass"))).toBe(false);
     });
   });
 
@@ -2494,9 +2560,9 @@ describe("SessionManager", () => {
       const messages: string[] = [];
       manager.onSystem(session.id, (msg) => messages.push(msg));
       manager.setBypassAllPermissions(session.id);
-      expect(messages).toContain("__bypass_state::on");
+      expect(messages).toContain("__perm_mode::bypass");
       manager.clearBypassAllPermissions(session.id);
-      expect(messages).toContain("__bypass_state::off");
+      expect(messages).toContain("__perm_mode::manual");
     });
 
     it("does nothing for unknown session", () => {
@@ -3790,7 +3856,7 @@ describe("SessionManager", () => {
     it("bypass auto-approves stored permissions, interactiveOnly ones included (user decision)", () => {
       const session = manager.createSession("/tmp");
       const s = (manager as any).sessions.get(session.id)!;
-      s.bypassAllPermissions = true;
+      s.permissionMode = "bypass";
 
       const base = {
         intermediateMessages: [],
@@ -3823,7 +3889,7 @@ describe("SessionManager", () => {
     it("keeps bypassing tool prompts once the session enters plan mode", () => {
       const session = manager.createSession("/tmp");
       const s = (manager as any).sessions.get(session.id)!;
-      s.bypassAllPermissions = true;
+      s.permissionMode = "bypass";
       s.planMode = true;
 
       const base = {
@@ -3853,7 +3919,7 @@ describe("SessionManager", () => {
     it("still asks for ExitPlanMode and AskUserQuestion under bypass", () => {
       const session = manager.createSession("/tmp");
       const s = (manager as any).sessions.get(session.id)!;
-      s.bypassAllPermissions = true;
+      s.permissionMode = "bypass";
       s.planMode = true;
 
       const base = {
@@ -3972,7 +4038,7 @@ describe("SessionManager", () => {
     it("without bypass, an interactiveOnly permission surfaces as a real dialog", () => {
       const session = manager.createSession("/tmp");
       const s = (manager as any).sessions.get(session.id)!;
-      s.bypassAllPermissions = false;
+      s.permissionMode = "manual";
 
       (manager as any).applyProcessedResult(s, session.id, {
         intermediateMessages: [],
@@ -4148,7 +4214,7 @@ describe("SessionManager", () => {
     it("auto-approves when bypass active and not plan mode", () => {
       const session = manager.createSession("/tmp");
       const s = (manager as any).sessions.get(session.id)!;
-      s.bypassAllPermissions = true;
+      s.permissionMode = "bypass";
       s.planMode = false;
       const respondToPermission = vi.fn(() => true);
       s.harnessProcess = { isAlive: true, respondToPermission };
@@ -4370,7 +4436,7 @@ describe("SessionManager", () => {
       const mockSpawn = vi.mocked(spawn);
       const session = manager.createSession("/tmp");
       const s = (manager as any).sessions.get(session.id)!;
-      s.bypassAllPermissions = true;
+      s.permissionMode = "bypass";
       s.planMode = false;
 
       (manager as any).spawnProcess(s, session.id);
@@ -4905,7 +4971,7 @@ describe("SessionManager", () => {
       const s = (manager as any).sessions.get(session.id);
       expect(s.cockpitAgent).toBe(true);
       expect(session.name).toBe("Cockpit Assistant");
-      expect(s.bypassAllPermissions).toBe(false);
+      expect(s.permissionMode).not.toBe("bypass");
     });
 
     it("creates session with cockpitAgent=false by default", () => {
@@ -4917,14 +4983,14 @@ describe("SessionManager", () => {
     it("forces bypassAllPermissions to false for cockpitAgent sessions", () => {
       const session = manager.createSession("/tmp", undefined, { cockpitAgent: true, bypassPermissions: true });
       const s = (manager as any).sessions.get(session.id);
-      expect(s.bypassAllPermissions).toBe(false);
+      expect(s.permissionMode).not.toBe("bypass");
     });
 
     it("setBypassAllPermissions is a no-op for cockpitAgent sessions", () => {
       const session = manager.createSession("/tmp", undefined, { cockpitAgent: true });
       manager.setBypassAllPermissions(session.id);
       const s = (manager as any).sessions.get(session.id);
-      expect(s.bypassAllPermissions).toBe(false);
+      expect(s.permissionMode).not.toBe("bypass");
       expect(s.cockpitAgent).toBe(true);
     });
   });
@@ -5505,7 +5571,7 @@ describe("SessionManager", () => {
     it("lets a bypassed assistant session skip the tool prompts", () => {
       const session = manager.createSession("/tmp", undefined, { cockpitAgent: true });
       const s = (manager as any).sessions.get(session.id);
-      s.bypassAllPermissions = true;
+      s.permissionMode = "bypass";
       const respondToPermission = vi.spyOn(manager, "respondToPermission" as any);
 
       (manager as any).applyProcessedResult(s, session.id, {
@@ -5534,7 +5600,7 @@ describe("SessionManager", () => {
     it("still raises the approval card for a config write when bypass is on", () => {
       const session = manager.createSession("/tmp", undefined, { cockpitAgent: true });
       const s = (manager as any).sessions.get(session.id);
-      s.bypassAllPermissions = true;
+      s.permissionMode = "bypass";
       const respondToPermission = vi.spyOn(manager, "respondToPermission" as any);
 
       (manager as any).applyProcessedResult(s, session.id, {

@@ -145,6 +145,14 @@ export interface InitData {
 
 export type PermissionMode = "allow" | "allow_always" | "allow_all" | "deny";
 
+/** A session's standing permission posture, orthogonal to plan mode:
+ *  - manual: every tool call raises a card (cockpit answers the hook).
+ *  - auto: the CLI's own safety classifier decides, prompting only on risky
+ *    calls. Anthropic models only — the classifier runs on the session's model,
+ *    and a slow non-Anthropic one times out and blocks the call.
+ *  - bypass: cockpit auto-approves everything (its standing yes). */
+export type SessionPermissionMode = "manual" | "auto" | "bypass";
+
 export interface PermissionSuggestion {
   type: string;
   rules?: { toolName: string; ruleContent?: string }[];
@@ -473,6 +481,7 @@ export type ClientMessage =
       suggestionIndex?: number;
     }
   | { type: "permission:set_bypass"; sessionId: string; enabled: boolean }
+  | { type: "permission:set_mode"; sessionId: string; mode: SessionPermissionMode }
   | { type: "session:set_plan_mode"; sessionId: string; enabled: boolean }
   | { type: "session:set_thinking"; sessionId: string; level: ThinkingLevel }
   | { type: "session:set_model"; sessionId: string; model: string; contextSize?: ContextSize }

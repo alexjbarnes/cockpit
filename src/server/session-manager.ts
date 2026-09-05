@@ -32,6 +32,7 @@ import type {
   InitData,
   ModelSlots,
   SessionInfo,
+  SessionPermissionMode,
   ThinkingLevel,
   TodoItem,
   ToolUse,
@@ -111,7 +112,7 @@ interface Session {
   emitter: EventEmitter;
   cliSessionId: string;
   previousCliSessionIds: string[];
-  bypassAllPermissions: boolean;
+  permissionMode: SessionPermissionMode;
   planMode: boolean;
   pendingPlanReminder?: boolean;
   needsRespawnForPermissions: boolean;
@@ -294,7 +295,7 @@ export class SessionManager {
       emitter: new EventEmitter(),
       cliSessionId: id,
       previousCliSessionIds: [],
-      bypassAllPermissions: isCockpitAgent ? false : (options?.bypassPermissions ?? defaults.bypassAllPermissions),
+      permissionMode: !isCockpitAgent && (options?.bypassPermissions ?? defaults.bypassAllPermissions) ? "bypass" : "manual",
       planMode: false,
       needsRespawnForPermissions: false,
       compacting: false,
@@ -412,7 +413,9 @@ export class SessionManager {
         emitter: new EventEmitter(),
         cliSessionId: cliId,
         previousCliSessionIds: prevIds,
-        bypassAllPermissions: (prefs?.cockpitAgent ? false : prefs?.bypassAllPermissions) ?? defaults.bypassAllPermissions,
+        permissionMode: prefs?.cockpitAgent
+          ? "manual"
+          : (prefs?.permissionMode ?? ((prefs?.bypassAllPermissions ?? defaults.bypassAllPermissions) ? "bypass" : "manual")),
         planMode: prefs?.planMode ?? false,
         pendingPlanReminder: prefs?.planMode ?? false,
         needsRespawnForPermissions: false,
@@ -1092,7 +1095,7 @@ export class SessionManager {
     return session.harnessProcess.respondToPermission(requestId, allowed, toolInput, permissionSuggestions, denyReason);
   }
 
-  private sendPermissionMode(session: Session, sessionId: string, mode: "manual" | "bypassPermissions"): void {
+  private sendPermissionMode(session: Session, sessionId: string, mode: "manual" | "auto" | "bypassPermissions"): void {
     if (!session.harnessProcess?.writeControlRequest) return;
     this.log(sessionId, `sending set_permission_mode: ${mode}`);
     session.harnessProcess.writeControlRequest({
@@ -1102,33 +1105,55 @@ export class SessionManager {
     });
   }
 
-  setBypassAllPermissions(sessionId: string): void {
+  /** A model whose safety classifier auto mode can rely on: the native
+   *  Anthropic provider. A bare alias ("opus"/"sonnet"/…) doesn't resolve to a
+   *  provider model but is Anthropic, so an unresolved id counts as Anthropic. */
+  private isAnthropicSession(session: Session): boolean {
+    const resolved = resolveProviderModel(session.info.model ?? "");
+    return !resolved || resolved.provider.id === "anthropic";
+  }
+
+  getPermissionMode(sessionId: string): SessionPermissionMode {
+    return this.sessions.get(sessionId)?.permissionMode ?? "manual";
+  }
+
+  /** The single mutator for the permission axis (manual | auto | bypass), which
+   *  is orthogonal to plan mode. The old bypass on/off methods delegate here. */
+  setPermissionMode(sessionId: string, mode: SessionPermissionMode): void {
     const session = this.sessions.get(sessionId);
-    if (!session || session.bypassAllPermissions || session.cockpitAgent) return;
-    session.bypassAllPermissions = true;
-    setSessionPrefs(sessionId, { bypassAllPermissions: true });
-    // Don't change CLI mode while in plan mode; bypass will restore on plan exit
+    if (!session) return;
+    // Auto is Anthropic-only: its classifier runs on the session's model, and a
+    // slow non-Anthropic one times out and blocks the call. Clamp rather than
+    // reject, so a stale pref or a later model switch can never spawn auto on a
+    // model that will hang.
+    if (mode === "auto" && !this.isAnthropicSession(session)) mode = "manual";
+    // A cockpit agent never drives the CLI into native bypass — its bypass is
+    // applied server-side in applyProcessedResult. The previous
+    // setBypassAllPermissions refused it outright; keep refusing.
+    if (mode === "bypass" && session.cockpitAgent) return;
+    if (session.permissionMode === mode) return;
+
+    session.permissionMode = mode;
+    setSessionPrefs(sessionId, { permissionMode: mode });
+    // Don't change CLI mode while in plan mode; the mode is restored on plan
+    // exit. A live set_permission_mode is unreliable when the CLI was spawned
+    // in another mode, so it is paired with a respawn that re-reads state.
     if (!session.planMode) {
-      this.sendPermissionMode(session, sessionId, "bypassPermissions");
+      const cliMode = mode === "bypass" ? "bypassPermissions" : mode;
+      if (cliMode === "manual" ? supportedPermissionModes().has("manual") : true) {
+        this.sendPermissionMode(session, sessionId, cliMode);
+      }
       this.scheduleRespawnForPermissions(session);
     }
-    this.emitSystem(session, sessionId, "__bypass_state::on");
+    this.emitSystem(session, sessionId, `__perm_mode::${mode}`);
+  }
+
+  setBypassAllPermissions(sessionId: string): void {
+    this.setPermissionMode(sessionId, "bypass");
   }
 
   clearBypassAllPermissions(sessionId: string): void {
-    const session = this.sessions.get(sessionId);
-    if (!session?.bypassAllPermissions) return;
-    session.bypassAllPermissions = false;
-    setSessionPrefs(sessionId, { bypassAllPermissions: false });
-    if (!session.planMode) {
-      // Back to the mode the spawn asks for. "default" was this mode's name
-      // until the CLI dropped it (2.1.251), so the control request had been
-      // naming a choice that no longer exists; only the respawn below was
-      // actually restoring the mode.
-      if (supportedPermissionModes().has("manual")) this.sendPermissionMode(session, sessionId, "manual");
-      this.scheduleRespawnForPermissions(session);
-    }
-    this.emitSystem(session, sessionId, "__bypass_state::off");
+    this.setPermissionMode(sessionId, "manual");
   }
 
   // Runtime set_permission_mode is unreliable when the CLI was spawned without
@@ -1157,7 +1182,7 @@ export class SessionManager {
 
   isBypassActive(sessionId: string): boolean {
     const session = this.sessions.get(sessionId);
-    return session?.bypassAllPermissions ?? false;
+    return session?.permissionMode === "bypass";
   }
 
   setPlanMode(sessionId: string): void {
@@ -1195,11 +1220,9 @@ export class SessionManager {
     session.pendingRequests.clear();
     this.notifyPendingChanged(session, sessionId);
     this.emitSystem(session, sessionId, "__plan_state::off");
-    // Re-sync bypass state with the client so the UI reflects it correctly
-    // after the plan-mode process is torn down.
-    if (session.bypassAllPermissions) {
-      this.emitSystem(session, sessionId, "__bypass_state::on");
-    }
+    // Re-sync the permission mode with the client so the selector reflects it
+    // correctly after the plan-mode process is torn down.
+    this.emitSystem(session, sessionId, `__perm_mode::${session.permissionMode}`);
   }
 
   isPlanModeActive(sessionId: string): boolean {
@@ -1249,6 +1272,13 @@ export class SessionManager {
     session.info.contextSize = resolvedSize;
     session.modelSlots = { ...session.modelSlots, main: model, mainContext: resolvedSize };
     setSessionPrefs(sessionId, { model, contextSize: resolvedSize, modelSlots: session.modelSlots });
+
+    // Auto is Anthropic-only. Switching onto a non-Anthropic model drops it back
+    // to manual so the selector and the next spawn agree, rather than leaving a
+    // stored "auto" the spawn would silently downgrade anyway.
+    if (session.permissionMode === "auto" && !this.isAnthropicSession(session)) {
+      this.setPermissionMode(sessionId, "manual");
+    }
 
     const nextEntry = resolveModel(model);
     const coerced = nextEntry
@@ -1927,7 +1957,7 @@ export class SessionManager {
         // (tests/integration/plan-mode-permissions.spec.ts), so a request that
         // reaches cockpit in plan mode is one the CLI had already judged
         // plan-safe. Approving it by hand was the only thing the gate bought.
-      } else if (session.bypassAllPermissions && !ALWAYS_ASK_TOOLS.has(pa.toolName)) {
+      } else if (session.permissionMode === "bypass" && !ALWAYS_ASK_TOOLS.has(pa.toolName)) {
         this.respondToPermission(sessionId, pa.requestId, true, pa.rawToolInput);
         bypassedRequestIds.add(pa.requestId);
       } else {
@@ -2529,7 +2559,15 @@ Additional Cockpit rules beyond the CLI's defaults:
       thinkingLevel: session.thinkingLevel,
       supportsEffort: this.modelEffortLevels(session.info.model).length > 0,
       planMode: session.planMode,
-      bypassAllPermissions: session.bypassAllPermissions && !session.cockpitAgent,
+      // Auto is enforced Anthropic-only here too, not just in the UI and the
+      // setter: a model switch can leave a stored "auto" on a non-Anthropic
+      // model, and spawning that hangs the classifier. A cockpit agent's bypass
+      // is applied server-side, so the CLI is never spawned in it.
+      permissionMode: session.cockpitAgent
+        ? "manual"
+        : session.permissionMode === "auto" && !this.isAnthropicSession(session)
+          ? "manual"
+          : session.permissionMode,
       cockpitAgent: session.cockpitAgent,
       modelSlots: session.modelSlots,
       appendSystemPrompt,

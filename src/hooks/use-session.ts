@@ -13,6 +13,7 @@ import type {
   InitData,
   PermissionMode,
   ServerMessage,
+  SessionPermissionMode,
   TextFileAttachment,
   ThinkingLevel,
   TodoItem,
@@ -69,6 +70,7 @@ interface UseSessionReturn {
   currentModel: string;
   currentContextSize: ContextSize;
   bypassActive: boolean;
+  permissionMode: SessionPermissionMode;
   planMode: boolean;
   thinkingLevel: ThinkingLevel;
   contextUsage: ContextUsage | null;
@@ -101,6 +103,7 @@ interface UseSessionReturn {
   setModel: (model: string, contextSize?: ContextSize) => void;
   setModelSlot: (slot: "main" | "subagent" | "fast", modelId: string) => void;
   setBypassAll: (enabled: boolean) => void;
+  setPermissionMode: (mode: SessionPermissionMode) => void;
   setPlanMode: (enabled: boolean) => void;
   setThinkingLevel: (level: ThinkingLevel) => void;
   cancelQueuedMessage: () => void;
@@ -129,7 +132,8 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
   const [currentModel, setCurrentModel] = useState("sonnet");
   const [currentContextSize, setCurrentContextSize] = useState<ContextSize>(DEFAULT_CONTEXT_SIZE);
   const [currentRuntime, setCurrentRuntime] = useState<"pty" | "stream">("stream");
-  const [bypassActive, setBypassActive] = useState(false);
+  const [permissionMode, setPermissionModeState] = useState<SessionPermissionMode>("manual");
+  const bypassActive = permissionMode === "bypass";
   const [planMode, setPlanModeState] = useState(false);
   const [thinkingLevel, setThinkingLevelState] = useState<ThinkingLevel>("high");
   const [historyLoaded, setHistoryLoaded] = useState(false);
@@ -872,9 +876,9 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
             setCurrentModel(msg.text.slice(modelPrefix.length));
             break;
           }
-          const bypassPrefix = "__bypass_state::";
-          if (msg.text.startsWith(bypassPrefix)) {
-            setBypassActive(msg.text.slice(bypassPrefix.length) === "on");
+          const permModePrefix = "__perm_mode::";
+          if (msg.text.startsWith(permModePrefix)) {
+            setPermissionModeState(msg.text.slice(permModePrefix.length) as SessionPermissionMode);
             break;
           }
           const planPrefix = "__plan_state::";
@@ -1294,8 +1298,16 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
 
   const setBypassAll = useCallback(
     (enabled: boolean) => {
-      setBypassActive(enabled);
+      setPermissionModeState(enabled ? "bypass" : "manual");
       send({ type: "permission:set_bypass", sessionId, enabled });
+    },
+    [send, sessionId],
+  );
+
+  const setPermissionMode = useCallback(
+    (mode: SessionPermissionMode) => {
+      setPermissionModeState(mode);
+      send({ type: "permission:set_mode", sessionId, mode });
     },
     [send, sessionId],
   );
@@ -1406,6 +1418,7 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
     currentModel,
     currentContextSize,
     bypassActive,
+    permissionMode,
     planMode,
     thinkingLevel,
     contextUsage,
@@ -1435,6 +1448,7 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
     setModel,
     setModelSlot,
     setBypassAll,
+    setPermissionMode,
     setPlanMode,
     setThinkingLevel,
     cancelQueuedMessage,

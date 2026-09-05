@@ -58,6 +58,7 @@ export function ChatView({
     currentModel,
     currentContextSize,
     bypassActive,
+    permissionMode,
     planMode,
     thinkingLevel,
     contextUsage,
@@ -85,6 +86,7 @@ export function ChatView({
     respondToQuestion,
     setModel,
     setBypassAll,
+    setPermissionMode,
     setPlanMode,
     setThinkingLevel,
     cancelQueuedMessage,
@@ -715,6 +717,8 @@ export function ChatView({
           isResponding={isResponding || errorActive}
           bypassActive={bypassActive}
           onSetBypass={setBypassAll}
+          permissionMode={permissionMode}
+          onSetPermissionMode={setPermissionMode}
           planMode={planMode}
           onSetPlanMode={setPlanMode}
           showPlanToggle={showPlanToggle}

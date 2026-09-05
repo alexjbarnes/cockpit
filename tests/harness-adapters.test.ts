@@ -112,7 +112,7 @@ function baseConfig(overrides: Partial<HarnessSpawnConfig> = {}): HarnessSpawnCo
     thinkingLevel: "high",
     supportsEffort: true,
     planMode: false,
-    bypassAllPermissions: false,
+    permissionMode: "manual",
     cockpitAgent: false,
     modelSlots: { main: "sonnet" },
     callbacks,
@@ -173,7 +173,7 @@ describe("ClaudeStreamAdapter", () => {
   });
 
   it("sets bypassPermissions mode when bypass is active outside plan mode", () => {
-    spawnHandle({ bypassAllPermissions: true });
+    spawnHandle({ permissionMode: "bypass" });
     const args = vi.mocked(spawn).mock.calls[0][1] as string[];
     expect(args).toContain("bypassPermissions");
   });
@@ -437,7 +437,7 @@ describe("ClaudePtyAdapter", () => {
       expect(mockPtyInstances[0].opts.extraArgs).toContain("plan");
       expect(mockPtyInstances[0].opts.extraArgs).not.toContain("manual");
 
-      adapter.spawn(baseConfig({ bypassAllPermissions: true }));
+      adapter.spawn(baseConfig({ permissionMode: "bypass" }));
       expect(mockPtyInstances[1].opts.extraArgs).toContain("bypassPermissions");
       expect(mockPtyInstances[1].opts.extraArgs).not.toContain("manual");
     });
@@ -446,10 +446,31 @@ describe("ClaudePtyAdapter", () => {
     // at all and inherited the user's global defaultMode — which is how it
     // ended up in auto.
     it("covers the cockpit assistant, which is excluded from bypass", () => {
-      adapter.spawn(baseConfig({ cockpitAgent: true, bypassAllPermissions: true }));
+      adapter.spawn(baseConfig({ cockpitAgent: true, permissionMode: "bypass" }));
       const args = mockPtyInstances[0].opts.extraArgs as string[];
       expect(args).not.toContain("bypassPermissions");
       expect(args[args.indexOf("--permission-mode") + 1]).toBe("manual");
+    });
+
+    it("passes --permission-mode auto when the mode is auto", () => {
+      adapter.spawn(baseConfig({ permissionMode: "auto" }));
+      const args = mockPtyInstances[0].opts.extraArgs as string[];
+      expect(args[args.indexOf("--permission-mode") + 1]).toBe("auto");
+      expect(mockPtyInstances[0].opts.expectedPermissionMode).toBe("auto");
+    });
+
+    // The session-manager only ever sends auto for an Anthropic model, but an
+    // older CLI may not offer the choice; falling through to manual keeps the
+    // spawn alive rather than dying on a rejected flag.
+    it("falls back to manual when the CLI does not know auto", () => {
+      cliModes.supported = new Set(["acceptEdits", "bypassPermissions", "manual", "plan"]);
+      try {
+        adapter.spawn(baseConfig({ permissionMode: "auto" }));
+        const args = mockPtyInstances[0].opts.extraArgs as string[];
+        expect(args[args.indexOf("--permission-mode") + 1]).toBe("manual");
+      } finally {
+        cliModes.supported = new Set(["acceptEdits", "auto", "bypassPermissions", "manual", "dontAsk", "plan"]);
+      }
     });
 
     // The mode names are version-dependent. Passing one an older build does not
@@ -478,10 +499,10 @@ describe("ClaudePtyAdapter", () => {
   });
 
   it("sets plan and bypass permission modes exclusively", () => {
-    adapter.spawn(baseConfig({ planMode: true, bypassAllPermissions: true }));
+    adapter.spawn(baseConfig({ planMode: true, permissionMode: "bypass" }));
     expect(mockPtyInstances[0].opts.extraArgs).toContain("plan");
 
-    adapter.spawn(baseConfig({ planMode: false, bypassAllPermissions: true, cockpitAgent: false }));
+    adapter.spawn(baseConfig({ planMode: false, permissionMode: "bypass", cockpitAgent: false }));
     expect(mockPtyInstances[1].opts.extraArgs).toContain("bypassPermissions");
   });
 
