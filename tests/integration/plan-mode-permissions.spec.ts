@@ -23,7 +23,6 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { textResponse, toolUseResponse } from "../mock-api/builder";
 import { expect, test } from "./fixtures";
-import type { Harness } from "./harness";
 
 const CLAUDE_BIN = process.env.CLAUDE_BIN ?? "claude";
 const CLAUDE_AVAILABLE = (() => {
