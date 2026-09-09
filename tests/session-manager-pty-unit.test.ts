@@ -270,6 +270,72 @@ describe("SessionManager PTY runtime (unit)", () => {
       expect(manager.getQueuedCount(session.id)).toBeGreaterThan(0);
     });
 
+    // A message queued behind a manual /compact used to be typed at the instant
+    // PostCompact fired — into a REPL still rendering the compaction, which
+    // swallowed it, while sendUserText's transcript-growth confirmation
+    // false-positived on the compaction's own lines and never retried. The flush
+    // is deferred to the next transcript update, once the compaction has landed.
+    describe("a manual /compact with a message queued behind it", () => {
+      function queueBehindCompact(sessionId: string): void {
+        manager.sendMessage(sessionId, "first");
+        emitMessageDone();
+        watcherMock.emit?.(
+          [
+            { id: "m1", role: "user" },
+            { id: "m2", role: "assistant" },
+          ],
+          null,
+        );
+        manager.sendMessage(sessionId, "/compact");
+        expect(manager.isCompacting(sessionId)).toBe(true);
+        manager.sendMessage(sessionId, "after the compact");
+        expect(manager.getQueuedCount(sessionId)).toBe(1);
+      }
+
+      it("does not flush at the PostCompact hook, but delivers on the next transcript update", () => {
+        const session = manager.createSession("/tmp", undefined, { runtime: "pty" });
+        queueBehindCompact(session.id);
+        ptyMocks.sendUserText.mockClear();
+
+        // PostCompact fires. The message must NOT be typed yet.
+        ptyMocks.capturedOpts!.onEvents([{ type: "system_message", text: "__compact::hook_done::manual" } as ParsedEvent]);
+        expect(manager.isCompacting(session.id)).toBe(false);
+        expect(ptyMocks.sendUserText).not.toHaveBeenCalledWith("after the compact");
+        expect(manager.getQueuedCount(session.id)).toBe(1);
+
+        // The compaction lands in the transcript: now deliver it.
+        watcherMock.emit?.(
+          [
+            { id: "m1", role: "user" },
+            { id: "m2", role: "assistant" },
+            { id: "m3", role: "assistant", content: "Summary." },
+          ],
+          null,
+        );
+        expect(ptyMocks.sendUserText).toHaveBeenCalledWith("after the compact");
+        expect(manager.getQueuedCount(session.id)).toBe(0);
+      });
+
+      it("does not deliver a deferred flush after the user interrupts", () => {
+        const session = manager.createSession("/tmp", undefined, { runtime: "pty" });
+        queueBehindCompact(session.id);
+        ptyMocks.capturedOpts!.onEvents([{ type: "system_message", text: "__compact::hook_done::manual" } as ParsedEvent]);
+        ptyMocks.sendUserText.mockClear();
+
+        manager.interrupt(session.id); // user changes their mind mid-compaction
+        watcherMock.emit?.(
+          [
+            { id: "m1", role: "user" },
+            { id: "m2", role: "assistant" },
+            { id: "m3", role: "assistant" },
+          ],
+          null,
+        );
+
+        expect(ptyMocks.sendUserText).not.toHaveBeenCalledWith("after the compact");
+      });
+    });
+
     // The CLI can accept a /compact, fire PreCompact, then decline it outright
     // ("Not enough messages to compact.") with NO PostCompact and no Stop hook
     // — verified against CLI 2.1.233 in the integration spec of the same name.

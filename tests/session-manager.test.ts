@@ -482,7 +482,7 @@ describe("SessionManager", () => {
       expect(s.info.status).toBe("idle");
     });
 
-    it("flushes a message queued during compacting once __compact::hook_done clears the flag", () => {
+    it("defers a message queued during a manual compaction past the PostCompact hook", () => {
       const session = manager.createSession("/tmp");
       const s = (manager as any).sessions.get(session.id)!;
       s.compacting = true;
@@ -504,9 +504,12 @@ describe("SessionManager", () => {
       (manager as any).applyProcessedResult(s, session.id, result);
 
       expect(s.compacting).toBe(false);
-      // flushQueuedMessage shifted the queued message back through
-      // sendMessage, which (compacting now false) proceeds to spawn.
-      expect(s.queuedMessages).toHaveLength(0);
+      // Not flushed at the hook: typing now would land in a REPL still rendering
+      // the compaction (the message would be swallowed and lost). The flush is
+      // deferred to the next transcript update — the delivery half is covered in
+      // tests/session-manager-pty-unit.test.ts.
+      expect(s.pendingCompactFlush).toBe(true);
+      expect(s.queuedMessages).toHaveLength(1);
     });
 
     // An auto-compact fires mid-turn when the context fills (verified: it fires

@@ -120,6 +120,17 @@ interface Session {
   pendingPlanReminder?: boolean;
   needsRespawnForPermissions: boolean;
   compacting: boolean;
+  /**
+   * A manual /compact finished with a message queued, and its flush was deferred
+   * to the next transcript update. Flushing at the PostCompact hook types into a
+   * REPL still rendering the compaction (the keystrokes are swallowed), and
+   * sendUserText's transcript-growth confirmation then false-positives on the
+   * compaction's own appended lines — so its resend loop never retries and the
+   * message is silently lost. Delivering on the next transcript update instead
+   * means the compaction has landed, the REPL is ready, and the send baseline is
+   * taken past the compaction's lines.
+   */
+  pendingCompactFlush: boolean;
   /** Message count from the most recent transcript update, so a compaction can
    *  snapshot where the conversation stood before it was requested. */
   lastTranscriptLength: number;
@@ -303,6 +314,7 @@ export class SessionManager {
       planMode: false,
       needsRespawnForPermissions: false,
       compacting: false,
+      pendingCompactFlush: false,
       lastTranscriptLength: 0,
       compactTranscriptBaseline: 0,
       thinkingLevel: defaults.thinkingLevel,
@@ -425,6 +437,7 @@ export class SessionManager {
         pendingPlanReminder: prefs?.planMode ?? false,
         needsRespawnForPermissions: false,
         compacting: false,
+        pendingCompactFlush: false,
         lastTranscriptLength: 0,
         compactTranscriptBaseline: 0,
         // modelSlots.main, not prefs.model: setModelSlot persists modelSlots on
@@ -1027,6 +1040,9 @@ export class SessionManager {
     if (session.queuedMessages.length > 0) {
       session.queuePaused = true;
     }
+    // Cancel any compaction-deferred flush too: the user has taken the session
+    // somewhere else, so a queued message must not be typed in later.
+    session.pendingCompactFlush = false;
 
     if (!session.harnessProcess?.isAlive) {
       logDiag(id, "interrupt:no-process", { hasSession: true });
@@ -1880,10 +1896,19 @@ export class SessionManager {
           if (!auto) {
             session.info.status = "idle";
             session.emitter.emit("status", sessionId, "idle");
-            // Flushing after an auto-compact would inject the queued message
-            // into the turn the CLI is about to resume. message_done flushes it
-            // at the real end of the turn instead.
-            this.flushQueuedMessage(session, sessionId);
+            // A queued message must NOT be typed at this instant: the CLI is
+            // still rendering the compaction and writing its transcript, so the
+            // REPL swallows the keystrokes and sendUserText's transcript-growth
+            // confirmation false-positives on the compaction's own lines (the
+            // resend loop then never retries — the message is silently lost).
+            // Defer to onTranscriptUpdate, which fires once the compaction has
+            // landed. An empty queue just flushes to a no-op as before.
+            if (session.queuedMessages.length > 0) {
+              logDiag(sessionId, "compact:defer-flush", { queued: session.queuedMessages.length });
+              session.pendingCompactFlush = true;
+            } else {
+              this.flushQueuedMessage(session, sessionId);
+            }
           }
         }
         continue;
@@ -2724,6 +2749,9 @@ Additional Cockpit rules beyond the CLI's defaults:
           session.emitter.emit("todos", sessionId, []);
         }
 
+        // The process is gone, so there will be no transcript update to carry a
+        // deferred flush; clear the flag (the flush below covers the queue).
+        session.pendingCompactFlush = false;
         if (!streamState.flushedOnMessageDone) {
           this.flushQueuedMessage(session, sessionId);
         }
@@ -2735,6 +2763,16 @@ Additional Cockpit rules beyond the CLI's defaults:
           const usage: ContextUsage = { used: lastUsage.used, total: session.contextWindowSize };
           session.contextUsage = usage;
           session.emitter.emit("usage", sessionId, usage);
+        }
+        // The compaction deferred at its PostCompact hook (see the manual
+        // hook_done branch) has now landed in the transcript, so the REPL is
+        // input-ready and the send baseline is past the compaction's own lines:
+        // deliver the queued message. flushQueuedMessage is a no-op if the user
+        // interrupted (queuePaused) or the queue was cleared meanwhile.
+        if (session.pendingCompactFlush) {
+          session.pendingCompactFlush = false;
+          logDiag(sessionId, "compact:flush-on-transcript", { queued: session.queuedMessages.length });
+          this.flushQueuedMessage(session, sessionId);
         }
         if (session.compacting && messages.some((m) => m.content === "__compacted__")) {
           logDiag(sessionId, "compact:done-on-transcript");
