@@ -51,6 +51,7 @@ export function OpenRouterCard({ provider, onChanged, onManage }: { provider: Pr
   const [key, setKey] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [replacing, setReplacing] = useState(false);
   const connected = !!provider.envVars.ANTHROPIC_AUTH_TOKEN;
   const freeCount = provider.models.filter((m) => m.free).length;
   const enabledCount = provider.enabledModels?.length ?? 0;
@@ -70,6 +71,7 @@ export function OpenRouterCard({ provider, onChanged, onManage }: { provider: Pr
         throw new Error(body.error || `HTTP ${res.status}`);
       }
       setKey("");
+      setReplacing(false);
       onChanged();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -91,29 +93,58 @@ export function OpenRouterCard({ provider, onChanged, onManage }: { provider: Pr
           {provider.models.length > 0 ? `${provider.models.length} models` : "no catalog yet"}
         </span>
       </div>
-      {connected ? (
+      {connected && (
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
           <span className="text-green-600 dark:text-green-400 font-medium">{freeCount} free</span>
           <span>·</span>
           <span>{enabledCount} enabled for pickers</span>
-          <Button variant="outline" size="sm" className="ml-auto h-7 text-xs" onClick={onManage}>
-            Manage models
-            <ChevronRight className="h-3 w-3 ml-1" />
-          </Button>
+          <div className="ml-auto flex items-center gap-2">
+            {!replacing && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 text-xs"
+                onClick={() => setReplacing(true)}
+                data-testid="openrouter-replace-key"
+              >
+                Replace key
+              </Button>
+            )}
+            <Button variant="outline" size="sm" className="h-7 text-xs" onClick={onManage}>
+              Manage models
+              <ChevronRight className="h-3 w-3 ml-1" />
+            </Button>
+          </div>
         </div>
-      ) : (
+      )}
+      {(!connected || replacing) && (
         <div className="flex items-center gap-2">
           <Input
             type="password"
-            placeholder="sk-or-…"
+            placeholder={connected ? "New key…" : "sk-or-…"}
             value={key}
             onChange={(e) => setKey(e.target.value)}
             className="h-8 text-xs"
             data-testid="openrouter-key-input"
+            autoFocus={replacing}
           />
           <Button size="sm" className="h-8 text-xs" onClick={connect} disabled={busy || !key.trim()} data-testid="openrouter-connect">
-            {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Connect"}
+            {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : connected ? "Replace" : "Connect"}
           </Button>
+          {replacing && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-8 text-xs"
+              onClick={() => {
+                setReplacing(false);
+                setKey("");
+                setError(null);
+              }}
+            >
+              Cancel
+            </Button>
+          )}
         </div>
       )}
       {error && <p className="text-xs text-destructive">{error}</p>}
@@ -382,6 +413,7 @@ export function BuiltinKeyCard({
   const [key, setKey] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [replacing, setReplacing] = useState(false);
   const connected = !!provider.envVars[keyEnvVar];
   const freeCount = provider.models.filter((m) => m.free).length;
 
@@ -400,6 +432,7 @@ export function BuiltinKeyCard({
         throw new Error(body.error || `HTTP ${res.status}`);
       }
       setKey("");
+      setReplacing(false);
       onChanged();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -427,26 +460,54 @@ export function BuiltinKeyCard({
           {connected && freeCount > 0 && <span>·</span>}
           {connected && <span>{provider.enabledModels?.length ?? 0} enabled for pickers</span>}
           {connected && (
-            <Button variant="outline" size="sm" className="ml-auto h-7 text-xs" onClick={onManage}>
-              Manage models
-              <ChevronRight className="h-3 w-3 ml-1" />
-            </Button>
+            <div className="ml-auto flex items-center gap-2">
+              {!replacing && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-7 text-xs"
+                  onClick={() => setReplacing(true)}
+                  data-testid={`${provider.id}-replace-key`}
+                >
+                  Replace key
+                </Button>
+              )}
+              <Button variant="outline" size="sm" className="h-7 text-xs" onClick={onManage}>
+                Manage models
+                <ChevronRight className="h-3 w-3 ml-1" />
+              </Button>
+            </div>
           )}
         </div>
       )}
-      {!connected && (
+      {(!connected || replacing) && (
         <div className="flex items-center gap-2">
           <Input
             type="password"
-            placeholder={keyPlaceholder}
+            placeholder={connected ? "New key…" : keyPlaceholder}
             value={key}
             onChange={(e) => setKey(e.target.value)}
             className="h-8 text-xs"
             data-testid={`${provider.id}-key-input`}
+            autoFocus={replacing}
           />
           <Button size="sm" className="h-8 text-xs" onClick={connect} disabled={busy || !key.trim()} data-testid={`${provider.id}-connect`}>
-            {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Connect"}
+            {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : connected ? "Replace" : "Connect"}
           </Button>
+          {replacing && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-8 text-xs"
+              onClick={() => {
+                setReplacing(false);
+                setKey("");
+                setError(null);
+              }}
+            >
+              Cancel
+            </Button>
+          )}
         </div>
       )}
       {error && <p className="text-xs text-destructive">{error}</p>}
