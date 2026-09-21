@@ -532,4 +532,50 @@ describe("PtyRuntime API error scanning", () => {
     expect(onError).toHaveBeenCalledTimes(1);
     expect(onError.mock.calls[0][0]).toContain("529");
   });
+
+  // Live sequence, session cd45ba16 on 2026-09-21: the format proxy relayed an
+  // upstream 400 from OpenCode Go, the CLI printed the provider's sentence, and
+  // 40ms later the StopFailure hook arrived with nothing in it. Cockpit reported
+  // "Unknown error (unknown)" and the one actionable line was never shown.
+  it("reports the screen's API error when StopFailure arrives with an empty payload", () => {
+    const { runtime, onError, onEvents } = runtimeWithSpies();
+    const handler: SessionHookHandler = (runtime as any).buildHandler();
+    (runtime as any).scanForErrors(
+      "API Error: 400 Upstream request failed: This Go model requires Global regions. Select Global in your workspace's Privacy settings to use it.",
+    );
+
+    handler.onStopFailure?.({ error_type: "unknown", error_message: "Unknown error" });
+
+    expect(onError).toHaveBeenCalledTimes(1);
+    const reported = onError.mock.calls[0][0] as string;
+    expect(reported).toContain("This Go model requires Global regions");
+    expect(reported).toContain("(HTTP 400)");
+    expect(reported).not.toContain("Unknown error");
+    expect(reported).not.toContain("(unknown)");
+    // The transcript's system line carries the same text, not the placeholder.
+    const texts = onEvents.mock.calls
+      .flatMap((c) => c[0] as { type: string; text?: string }[])
+      .filter((e) => e.type === "system_message")
+      .map((e) => e.text ?? "");
+    expect(texts.some((t) => t.includes("This Go model requires Global regions"))).toBe(true);
+  });
+
+  it("keeps a StopFailure payload that does say something, screen or no screen", () => {
+    const { runtime, onError } = runtimeWithSpies();
+    const handler: SessionHookHandler = (runtime as any).buildHandler();
+    (runtime as any).scanForErrors("API Error: 400 stale text from an earlier turn");
+
+    handler.onStopFailure?.({ error_type: "auth_error", error_message: "Invalid API key" });
+
+    expect(onError).toHaveBeenCalledWith("Invalid API key (auth_error)");
+  });
+
+  it("falls back to the placeholder when neither the payload nor the screen has an error", () => {
+    const { runtime, onError } = runtimeWithSpies();
+    const handler: SessionHookHandler = (runtime as any).buildHandler();
+
+    handler.onStopFailure?.({});
+
+    expect(onError).toHaveBeenCalledWith("Unknown error (unknown)");
+  });
 });

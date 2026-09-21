@@ -619,14 +619,33 @@ export class PtyRuntime {
         this.emit(events);
       },
       onStopFailure: (payload) => {
+        const errorType = typeof payload.error_type === "string" ? payload.error_type : "unknown";
+        const hookMessage = typeof payload.error_message === "string" ? payload.error_message : "";
+        // The hook reports plenty of failures it has no words for: an upstream
+        // 4xx relayed by the format proxy arrives as error_type "unknown" with
+        // error_message "Unknown error", while the CLI has already printed the
+        // provider's own sentence to the screen ("API Error: 400 This Go model
+        // requires Global regions. Select Global in your workspace's Privacy
+        // settings to use it." — measured live 2026-09-21, and the only text
+        // that said what to actually do). Passing the payload through verbatim
+        // surfaces "Unknown error (unknown)" and throws that away twice over,
+        // since cancelling the debounce below also drops the scraped copy
+        // scanForErrors was holding. So when the payload says nothing, read the
+        // screen before clearing it.
+        const screenError = hookMessage && hookMessage !== "Unknown error" ? null : this.apiErrorOnScreen();
+        const errorMessage = screenError ?? (hookMessage || "Unknown error");
         this.cancelErrorDebounce();
         this.ptyOutputBuffer = "";
-        const errorType = typeof payload.error_type === "string" ? payload.error_type : "unknown";
-        const errorMessage = typeof payload.error_message === "string" ? payload.error_message : "Unknown error";
-        logDiag(this.opts.sessionId, "hook:StopFailure", { errorType, errorMessage: errorMessage.slice(0, 200) });
+        logDiag(this.opts.sessionId, "hook:StopFailure", {
+          errorType,
+          errorMessage: errorMessage.slice(0, 200),
+          fromScreen: !!screenError,
+        });
         console.log(`[pty-runtime] StopFailure hook for session ${this.opts.sessionId.slice(0, 8)}: ${errorType} - ${errorMessage}`);
-        this.emit(translateHookEvent("StopFailure", payload));
-        this.opts.onError(`${errorMessage} (${errorType})`);
+        this.emit(translateHookEvent("StopFailure", { ...payload, error_message: errorMessage }));
+        // A scraped message already carries its own "(HTTP nnn)"; tacking the
+        // hook's placeholder type onto it would only re-add the noise.
+        this.opts.onError(screenError ?? `${errorMessage} (${errorType})`);
       },
       onUserPromptSubmit: (payload) => {
         this.cancelErrorDebounce();
@@ -851,13 +870,27 @@ export class PtyRuntime {
     }
 
     if (this.errorDebounce) return;
-    const match = clean.match(/API\s*Error:\s*(\d+)\s*([^✓✗❯]*)/) || clean.match(/APIError:\s*(\d+)\s*(.*)/);
-    if (!match) return;
-
-    const httpCode = match[1];
-    const detail = match[2].trim().slice(0, 200);
-    const errMsg = detail ? `${detail} (HTTP ${httpCode})` : `API Error (HTTP ${httpCode})`;
+    const errMsg = this.apiErrorOnScreen();
+    if (!errMsg) return;
     this.errorDebounce = setTimeout(() => this.emitApiError(errMsg), 10_000);
+  }
+
+  /**
+   * The coded API error the CLI has printed to the screen, formatted for the
+   * user, or null when there is none.
+   *
+   * Reads the same buffer scanForErrors accumulates, so it is also what a hook
+   * consults when its own payload carries no usable message. The CLI prints the
+   * upstream's sentence verbatim after the code, which for a proxied provider is
+   * the only place that text appears at all.
+   */
+  private apiErrorOnScreen(): string | null {
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: strip terminal control chars
+    const clean = this.ptyOutputBuffer.replace(ANSI_RE, "").replace(/[\x00-\x1f]/g, "");
+    const match = clean.match(/API\s*Error:\s*(\d+)\s*([^✓✗❯]*)/) || clean.match(/APIError:\s*(\d+)\s*(.*)/);
+    if (!match) return null;
+    const detail = match[2].trim().slice(0, 200);
+    return detail ? `${detail} (HTTP ${match[1]})` : `API Error (HTTP ${match[1]})`;
   }
 
   /**
