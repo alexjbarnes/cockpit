@@ -1437,6 +1437,29 @@ describe("transcript module", () => {
       expect(result.messages[0].content).toBe("/analyze");
     });
 
+    // CLI 2.1.281 stores a bracketed paste wrapped in <pasted_content> tags, and
+    // cockpit types every multi-line message as one. The bubble showed the tags
+    // and stopped matching the optimistic copy of what was sent.
+    it("shows a multi-line message as typed, not in the CLI's paste wrapper", async () => {
+      (existsSync as any).mockReturnValue(true);
+      const typed = "Why is this failing?\n$ docker ps\nCONTAINER ID   IMAGE";
+      const content = jsonl({
+        type: "user",
+        message: {
+          id: "u1",
+          content: [{ type: "text", text: `\n\n<pasted_content id="6dca">\n${typed}\n</pasted_content id="6dca">\n` }],
+        },
+        timestamp: "2024-01-01T00:00:00Z",
+        cwd: "/tmp",
+      });
+      (readFile as any).mockResolvedValue(content);
+
+      const result = await loadTranscript("session-123", "/tmp");
+
+      expect(result.messages).toHaveLength(1);
+      expect(result.messages[0].content).toBe(typed);
+    });
+
     it("reconstructs a slash command with its args so it matches the optimistic bubble", async () => {
       (existsSync as any).mockReturnValue(true);
       const content = jsonl({
@@ -2133,6 +2156,37 @@ describe("transcript module", () => {
       const result = await scanAllSessions();
       expect(result).toHaveLength(1);
       expect(result[0].sessions[0].name).toBe("array content title");
+    });
+
+    it("names a session after its first message as typed, not the CLI's paste wrapper", async () => {
+      (existsSync as any).mockReturnValue(true);
+      const { createInterface } = await import("node:readline");
+      (readdir as any).mockResolvedValueOnce(["project1"]).mockResolvedValueOnce(["sess1.jsonl"]);
+      (stat as any).mockResolvedValue({ mtimeMs: 1700000000000 });
+
+      const mockRl = {
+        [Symbol.asyncIterator]: async function* () {
+          yield JSON.stringify({
+            type: "user",
+            cwd: "/home/test",
+            message: {
+              content: [
+                {
+                  type: "text",
+                  text: '\n\n<pasted_content id="ab12">\nFix the login bug\nstack trace here\n</pasted_content id="ab12">\n',
+                },
+              ],
+            },
+            timestamp: "2024-01-01T00:00:00Z",
+          });
+        },
+        close: vi.fn(),
+      };
+      (createInterface as any).mockReturnValue(mockRl);
+
+      const result = await scanAllSessions();
+      expect(result[0].sessions[0].name.startsWith("Fix the login bug")).toBe(true);
+      expect(result[0].sessions[0].name).not.toContain("pasted_content");
     });
 
     it("skips system-generated messages starting with [", async () => {

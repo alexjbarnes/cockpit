@@ -4,6 +4,7 @@ import path from "node:path";
 import { createInterface } from "node:readline";
 import { v4 as uuidv4 } from "uuid";
 import { extractTextFiles } from "@/lib/paste-detect";
+import { unwrapPastedContent } from "@/lib/pasted-content";
 import { getClaudeDir } from "@/server/paths";
 import type {
   ChatMessage,
@@ -94,7 +95,11 @@ export function countTranscriptMessages(sessionId: string, cwd: string): number 
 const CLI_XML_RE =
   /<(?:task-notification|local-command-caveat|local-command-stdout|system-reminder)[^>]*>[\s\S]*?<\/(?:task-notification|local-command-caveat|local-command-stdout|system-reminder)>[\s\S]*/g;
 
-function stripCommandXml(text: string): string {
+function stripCommandXml(raw: string): string {
+  // A multi-line message is typed into the CLI as a bracketed paste, which it
+  // may store wrapped in <pasted_content> tags. Every caller here wants the
+  // text as the user typed it, so the wrapper comes off before anything else.
+  const text = unwrapPastedContent(raw);
   const trimmed = text.trimStart();
   if (trimmed.startsWith("<task-notification>")) return "";
   if (trimmed.startsWith("<local-command-caveat>")) return "";
@@ -896,6 +901,7 @@ async function extractSessionMeta(filePath: string): Promise<SessionMeta | null>
           const textBlock = content.find((b) => b.type === "text" && b.text);
           if (textBlock?.text) candidate = textBlock.text;
         }
+        candidate = unwrapPastedContent(candidate);
         // Skip system-generated messages like [Request interrupted...] and XML tags
         if (candidate && !candidate.startsWith("[") && !candidate.startsWith("<")) {
           title = candidate.slice(0, 120);
@@ -1300,6 +1306,7 @@ export async function globalSearch(
             const tb = content.find((b: TranscriptBlock) => b.type === "text" && b.text);
             if (tb?.text) candidate = tb.text;
           }
+          candidate = unwrapPastedContent(candidate);
           if (candidate && !candidate.startsWith("[") && !candidate.startsWith("<")) {
             sessionTitle = candidate.slice(0, 120);
           }
