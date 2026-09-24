@@ -318,7 +318,7 @@ function seedConfig(opts: SeedOpts): void {
 
   // defaults.json: pick the mock model so new sessions use it by default.
   // The qualified form provider:modelId is what resolveProviderModel expects.
-  // bypassAllPermissions mirrors how most cockpit users configure their setup;
+  // A bypass default mirrors how most cockpit users configure their setup;
   // the resulting CLI bypass-mode dialog is suppressed via cockpit's per-session
   // settings.json (skipDangerousModePermissionPrompt).
   writeFileSync(
@@ -327,7 +327,7 @@ function seedConfig(opts: SeedOpts): void {
       {
         modelSlots: { main: "mock:claude-sonnet-4-6", mainContext: "200k" },
         thinkingLevel: opts.thinkingLevel ?? "high",
-        bypassAllPermissions: true,
+        permissionMode: "bypass",
       },
       null,
       2,

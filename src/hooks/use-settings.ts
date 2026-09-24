@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { splitLegacyModel } from "@/lib/models";
-import type { ModelSlots } from "@/types";
+import type { ModelSlots, SessionPermissionMode } from "@/types";
 
 export type DiffStyle = "split" | "unified";
 export type ThinkingLevel = "off" | "low" | "medium" | "high" | "xhigh" | "max";
@@ -22,7 +22,7 @@ export interface Settings {
   diffStyle: DiffStyle;
   dismissKeyboardOnSend: boolean;
   thinkingLevel: ThinkingLevel;
-  bypassAllPermissions: boolean;
+  permissionMode: SessionPermissionMode;
   thinkingExpanded: boolean;
   readExpanded: boolean;
   editExpanded: boolean;
@@ -41,7 +41,7 @@ const defaultSettings: Settings = {
   diffStyle: "split",
   dismissKeyboardOnSend: true,
   thinkingLevel: "high",
-  bypassAllPermissions: false,
+  permissionMode: "manual",
   thinkingExpanded: false,
   readExpanded: false,
   editExpanded: false,

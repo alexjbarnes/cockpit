@@ -51,7 +51,7 @@ vi.mock("@/server/assistant-settings", () => ({
 vi.mock("@/server/defaults", () => ({
   getDefaults: () => ({
     thinkingLevel: "high",
-    bypassAllPermissions: false,
+    permissionMode: "manual",
     diffStyle: "split",
     dismissKeyboardOnSend: true,
     thinkingExpanded: false,

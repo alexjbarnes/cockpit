@@ -24,7 +24,7 @@ describe("defaults", () => {
 
     expect(defaults).toEqual({
       thinkingLevel: "high",
-      bypassAllPermissions: false,
+      permissionMode: "manual",
       diffStyle: "split",
       dismissKeyboardOnSend: true,
       thinkingExpanded: false,
@@ -53,7 +53,7 @@ describe("defaults", () => {
 
     expect(defaults).toEqual({
       thinkingLevel: "low",
-      bypassAllPermissions: false,
+      permissionMode: "manual",
       diffStyle: "split",
       dismissKeyboardOnSend: true,
       thinkingExpanded: false,
@@ -102,6 +102,71 @@ describe("defaults", () => {
     expect(result.thinkingExpanded).toBe(true);
     expect(fs.mkdirSync).toHaveBeenCalled();
     expect(fs.writeFileSync).toHaveBeenCalled();
+  });
+
+  describe("permissionMode, and the bypassAllPermissions boolean it replaces", () => {
+    async function readWith(file: Record<string, unknown>) {
+      const fs = await import("node:fs");
+      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(file));
+      const { getDefaults } = await import("@/server/defaults");
+      return getDefaults() as ReturnType<typeof getDefaults> & Record<string, unknown>;
+    }
+
+    it("reads an older file's bypassAllPermissions as the mode it meant", async () => {
+      expect((await readWith({ bypassAllPermissions: true })).permissionMode).toBe("bypass");
+      vi.resetModules();
+      expect((await readWith({ bypassAllPermissions: false })).permissionMode).toBe("manual");
+    });
+
+    it("lets a stored mode win over a legacy flag in the same file, and drops the flag", async () => {
+      const d = await readWith({ permissionMode: "auto", bypassAllPermissions: true });
+      expect(d.permissionMode).toBe("auto");
+      expect(d.bypassAllPermissions).toBeUndefined();
+    });
+
+    it("reads an unknown stored mode as manual", async () => {
+      expect((await readWith({ permissionMode: "yolo" })).permissionMode).toBe("manual");
+    });
+
+    it("never writes the legacy key back, so it cannot outlive the next save", async () => {
+      const fs = await import("node:fs");
+      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify({ bypassAllPermissions: true }));
+      vi.mocked(fs.writeFileSync).mockImplementation(() => {});
+      vi.mocked(fs.mkdirSync).mockImplementation(() => "");
+
+      const { setDefaults } = await import("@/server/defaults");
+      setDefaults({ thinkingExpanded: true });
+
+      const written = JSON.parse(vi.mocked(fs.writeFileSync).mock.calls[0][1] as string);
+      expect(written.permissionMode).toBe("bypass");
+      expect(written).not.toHaveProperty("bypassAllPermissions");
+    });
+
+    // A browser tab opened before the upgrade still sends the old toggle.
+    it("stores a legacy boolean from a client as the mode it meant", async () => {
+      const fs = await import("node:fs");
+      vi.mocked(fs.readFileSync).mockImplementation(() => {
+        throw new Error("ENOENT");
+      });
+      vi.mocked(fs.writeFileSync).mockImplementation(() => {});
+      vi.mocked(fs.mkdirSync).mockImplementation(() => "");
+
+      const { setDefaults } = await import("@/server/defaults");
+      expect(setDefaults({ bypassAllPermissions: true }).permissionMode).toBe("bypass");
+      expect(setDefaults({ bypassAllPermissions: false }).permissionMode).toBe("manual");
+      expect(setDefaults({ permissionMode: "auto", bypassAllPermissions: true }).permissionMode).toBe("auto");
+    });
+
+    it("refuses to store an unknown mode", async () => {
+      const fs = await import("node:fs");
+      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify({ permissionMode: "auto" }));
+      vi.mocked(fs.writeFileSync).mockImplementation(() => {});
+      vi.mocked(fs.mkdirSync).mockImplementation(() => "");
+
+      const { setDefaults } = await import("@/server/defaults");
+      const result = setDefaults({ permissionMode: "yolo" as never });
+      expect(result.permissionMode).toBe("auto");
+    });
   });
 
   it("issuesEnabled defaults to false and round-trips through setDefaults", async () => {

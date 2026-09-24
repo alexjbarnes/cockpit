@@ -1189,10 +1189,10 @@ describe("cockpit-config MCP server (in-process HTTP)", () => {
       expect(result.after.thinkingLevel).toBe("low");
     });
 
-    it("update_settings allows bypassAllPermissions", async () => {
-      await callTool("update_settings", { bypassAllPermissions: true });
-      const settings = (await callToolParsed("get_settings")) as { bypassAllPermissions?: boolean };
-      expect(settings.bypassAllPermissions).toBe(true);
+    it("update_settings sets the default permission mode", async () => {
+      await callTool("update_settings", { permissionMode: "auto" });
+      const settings = (await callToolParsed("get_settings")) as { permissionMode?: string };
+      expect(settings.permissionMode).toBe("auto");
     });
 
     it("update_settings allows issuesEnabled", async () => {

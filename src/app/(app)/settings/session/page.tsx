@@ -15,6 +15,14 @@ import {
   resolveModel,
   versionsForAlias,
 } from "@/lib/models";
+import type { SessionPermissionMode } from "@/types";
+
+// Bypass keeps the orange the session panel uses for it, as a warning.
+const permissionOptions: { value: SessionPermissionMode; label: string; activeClassName?: string }[] = [
+  { value: "manual", label: "Manual" },
+  { value: "auto", label: "Auto" },
+  { value: "bypass", label: "Bypass", activeClassName: "bg-orange-500 text-white hover:bg-orange-500/90" },
+];
 
 const thinkingOptions: { value: ThinkingLevel; label: string }[] = [
   { value: "off", label: "Off" },
@@ -52,14 +60,20 @@ function ButtonGroup<T extends string>({
   value,
   onChange,
 }: {
-  options: { value: T; label: string }[];
+  options: { value: T; label: string; activeClassName?: string }[];
   value: T;
   onChange: (v: T) => void;
 }) {
   return (
     <div className="flex flex-wrap gap-1 justify-end">
       {options.map((opt) => (
-        <Button key={opt.value} variant={value === opt.value ? "default" : "outline"} size="sm" onClick={() => onChange(opt.value)}>
+        <Button
+          key={opt.value}
+          variant={value === opt.value ? "default" : "outline"}
+          size="sm"
+          className={value === opt.value ? opt.activeClassName : undefined}
+          onClick={() => onChange(opt.value)}
+        >
           {opt.label}
         </Button>
       ))}
@@ -166,13 +180,12 @@ export default function SessionSettingsPage() {
             <ButtonGroup options={visibleThinking} value={settings.thinkingLevel} onChange={(v) => updateSetting("thinkingLevel", v)} />
           </SettingRow>
         )}
-        <SettingRow label="Bypass all permissions">
-          <Toggle
-            enabled={settings.bypassAllPermissions}
-            color="bg-orange-500"
-            onToggle={() => updateSetting("bypassAllPermissions", !settings.bypassAllPermissions)}
-          />
+        <SettingRow label="Permission mode">
+          <ButtonGroup options={permissionOptions} value={settings.permissionMode} onChange={(v) => updateSetting("permissionMode", v)} />
         </SettingRow>
+        {settings.permissionMode === "auto" && (
+          <p className="-mt-1 pb-2 text-xs text-muted-foreground">Anthropic models only. A session on another provider starts in Manual.</p>
+        )}
         <SettingRow label="Sonnet 4.6 1M context (needs usage credits)">
           <Toggle enabled={settings.allowSonnet1m} onToggle={() => updateSetting("allowSonnet1m", !settings.allowSonnet1m)} />
         </SettingRow>

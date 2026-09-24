@@ -73,7 +73,7 @@ describe("pagination with message stitching", () => {
     manager = new SessionManager();
     mockGetDefaults.mockReturnValue({
       thinkingLevel: "high",
-      bypassAllPermissions: false,
+      permissionMode: "manual",
       diffStyle: "split",
       dismissKeyboardOnSend: true,
       thinkingExpanded: false,
@@ -191,7 +191,7 @@ describe("pagination with message stitching", () => {
     it("loads current session WITH tailLines when stitching disabled", async () => {
       mockGetDefaults.mockReturnValue({
         thinkingLevel: "high",
-        bypassAllPermissions: false,
+        permissionMode: "manual",
         diffStyle: "split",
         dismissKeyboardOnSend: true,
         thinkingExpanded: false,

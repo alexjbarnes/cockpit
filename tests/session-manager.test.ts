@@ -79,7 +79,7 @@ vi.mock("@/server/session-prefs", () => ({
 vi.mock("@/server/defaults", () => ({
   getDefaults: () => ({
     thinkingLevel: "high",
-    bypassAllPermissions: false,
+    permissionMode: "manual",
     diffStyle: "split",
     dismissKeyboardOnSend: true,
     thinkingExpanded: false,
@@ -162,7 +162,7 @@ describe("SessionManager", () => {
       const orig = defaultsMod.getDefaults;
       (defaultsMod as { getDefaults: () => unknown }).getDefaults = () => ({
         thinkingLevel: "high",
-        bypassAllPermissions: false,
+        permissionMode: "manual",
         diffStyle: "split",
         dismissKeyboardOnSend: true,
         thinkingExpanded: false,
@@ -267,7 +267,7 @@ describe("SessionManager", () => {
       const origPrefs = prefsMod.getSessionPrefs;
       (defaultsMod as { getDefaults: () => unknown }).getDefaults = () => ({
         thinkingLevel: "high",
-        bypassAllPermissions: false,
+        permissionMode: "manual",
         diffStyle: "split",
         dismissKeyboardOnSend: true,
         thinkingExpanded: false,
@@ -294,7 +294,7 @@ describe("SessionManager", () => {
       const origPrefs = prefsMod.getSessionPrefs;
       (defaultsMod as { getDefaults: () => unknown }).getDefaults = () => ({
         thinkingLevel: "high",
-        bypassAllPermissions: false,
+        permissionMode: "manual",
         diffStyle: "split",
         dismissKeyboardOnSend: true,
         thinkingExpanded: false,
@@ -1393,6 +1393,110 @@ describe("SessionManager", () => {
       const session = manager.createSession("/tmp", undefined, { cockpitAgent: true });
       manager.setPermissionMode(session.id, "bypass");
       expect(manager.getPermissionMode(session.id)).toBe("manual");
+    });
+  });
+
+  describe("default permission mode for new and restored sessions", () => {
+    const zenProvider = JSON.stringify([
+      {
+        id: "zen",
+        name: "OpenCode Zen",
+        isBuiltin: true,
+        envVars: {},
+        models: [{ modelId: "ds-free", displayName: "ds", effortLevels: [], contextSizes: ["200k"] }],
+        enabledModels: ["ds-free"],
+      },
+    ]);
+    async function seedZen() {
+      const { writeFileSync } = await import("node:fs");
+      const { join } = await import("node:path");
+      writeFileSync(join(process.env.COCKPIT_CONFIG_DIR!, "providers.json"), zenProvider);
+    }
+    async function withDefaults(overrides: Record<string, unknown>, fn: () => void | Promise<void>) {
+      const defaultsMod = await import("@/server/defaults");
+      const orig = defaultsMod.getDefaults;
+      (defaultsMod as { getDefaults: () => unknown }).getDefaults = () => ({
+        thinkingLevel: "high",
+        permissionMode: "manual",
+        diffStyle: "split",
+        dismissKeyboardOnSend: true,
+        thinkingExpanded: false,
+        modelSlots: { main: "sonnet" },
+        ...overrides,
+      });
+      try {
+        await fn();
+      } finally {
+        (defaultsMod as { getDefaults: () => unknown }).getDefaults = orig;
+      }
+    }
+    async function withPrefs(prefs: Record<string, unknown>, fn: () => void | Promise<void>) {
+      const prefsMod = await import("@/server/session-prefs");
+      const orig = prefsMod.getSessionPrefs;
+      (prefsMod as { getSessionPrefs: (id: string) => unknown }).getSessionPrefs = () => prefs;
+      try {
+        await fn();
+      } finally {
+        (prefsMod as { getSessionPrefs: (id: string) => unknown }).getSessionPrefs = orig;
+      }
+    }
+
+    // Stored at creation, like the model and thinking level, so a later change
+    // to the default cannot move an existing session on its next restart.
+    it("starts a new session in the default mode, and stores it", async () => {
+      const prefsMod = await import("@/server/session-prefs");
+      await withDefaults({ permissionMode: "auto" }, () => {
+        const session = manager.createSession("/tmp");
+        expect(manager.getPermissionMode(session.id)).toBe("auto");
+        expect(vi.mocked(prefsMod.setSessionPrefs)).toHaveBeenCalledWith(session.id, expect.objectContaining({ permissionMode: "auto" }));
+      });
+    });
+
+    it("starts in manual when the default is auto but the default model is not Anthropic", async () => {
+      await seedZen();
+      await withDefaults({ permissionMode: "auto", modelSlots: { main: "zen:ds-free" } }, () => {
+        const session = manager.createSession("/tmp");
+        expect(manager.getPermissionMode(session.id)).toBe("manual");
+      });
+    });
+
+    // A job always passes its own flag, so it never inherits the default: an
+    // unattended run has nobody to answer the cards auto still raises.
+    it("lets an explicit flag override the default, as a scheduled job's does", async () => {
+      await withDefaults({ permissionMode: "bypass" }, () => {
+        const job = manager.createSession("/tmp", "[job] nightly", { bypassPermissions: false });
+        expect(manager.getPermissionMode(job.id)).toBe("manual");
+      });
+      await withDefaults({ permissionMode: "auto" }, () => {
+        const session = manager.createSession("/tmp", undefined, { bypassPermissions: true });
+        expect(manager.getPermissionMode(session.id)).toBe("bypass");
+      });
+    });
+
+    it("keeps a cockpit agent in manual whatever the default", async () => {
+      await withDefaults({ permissionMode: "bypass" }, () => {
+        const session = manager.createSession("/tmp", undefined, { cockpitAgent: true });
+        expect(manager.getPermissionMode(session.id)).toBe("manual");
+      });
+    });
+
+    it("restores a session with no stored mode on the default, and honours a legacy flag", async () => {
+      await withDefaults({ permissionMode: "auto" }, async () => {
+        await withPrefs({ modelSlots: { main: "sonnet" } }, () => {
+          expect(manager.getPermissionMode(manager.ensureSession("restored-no-mode", "/tmp").info.id)).toBe("auto");
+        });
+        await withPrefs({ modelSlots: { main: "sonnet" }, bypassAllPermissions: true }, () => {
+          expect(manager.getPermissionMode(manager.ensureSession("restored-legacy", "/tmp").info.id)).toBe("bypass");
+        });
+      });
+    });
+
+    it("restores a stored auto as manual on a non-Anthropic model", async () => {
+      await seedZen();
+      await withPrefs({ modelSlots: { main: "zen:ds-free" }, permissionMode: "auto" }, () => {
+        const session = manager.ensureSession("restored-auto-zen", "/tmp");
+        expect(manager.getPermissionMode(session.info.id)).toBe("manual");
+      });
     });
   });
 

@@ -1,13 +1,19 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { getCockpitDir } from "@/server/paths";
-import type { ModelSlots, ThinkingLevel } from "@/types";
+import type { ModelSlots, SessionPermissionMode, ThinkingLevel } from "@/types";
 
 export type DiffStyle = "split" | "unified";
 
 export interface AppDefaults {
   thinkingLevel: ThinkingLevel;
-  bypassAllPermissions: boolean;
+  /**
+   * The permission mode a new session starts in. Replaces the two-state
+   * bypassAllPermissions, which an older defaults.json may still hold and
+   * getDefaults() reads as bypass or manual. Auto is Anthropic-only, so a
+   * session created on another provider's model starts in manual regardless.
+   */
+  permissionMode: SessionPermissionMode;
   diffStyle: DiffStyle;
   dismissKeyboardOnSend: boolean;
   thinkingExpanded: boolean;
@@ -42,7 +48,7 @@ function defaultsFile(): string {
 
 const fallback: AppDefaults = {
   thinkingLevel: "high",
-  bypassAllPermissions: false,
+  permissionMode: "manual",
   diffStyle: "split",
   dismissKeyboardOnSend: true,
   thinkingExpanded: false,
@@ -70,6 +76,21 @@ function issuesEnabledOverride(): boolean | undefined {
   return undefined;
 }
 
+const PERMISSION_MODES: readonly string[] = ["manual", "auto", "bypass"] satisfies SessionPermissionMode[];
+
+function isPermissionMode(v: unknown): v is SessionPermissionMode {
+  return typeof v === "string" && PERMISSION_MODES.includes(v);
+}
+
+/** Settle the permission-mode default on a raw defaults object: a valid mode
+ *  stands, otherwise the legacy boolean decides, otherwise manual. The legacy
+ *  key goes either way, so it never outlives the next write. */
+function normalisePermissionMode(raw: Record<string, unknown>): void {
+  const legacy = raw.bypassAllPermissions;
+  delete raw.bypassAllPermissions;
+  if (!isPermissionMode(raw.permissionMode)) raw.permissionMode = legacy === true ? "bypass" : fallback.permissionMode;
+}
+
 export function getDefaults(): AppDefaults {
   const override = issuesEnabledOverride();
   const withOverride = (d: AppDefaults): AppDefaults => (override === undefined ? d : { ...d, issuesEnabled: override });
@@ -79,15 +100,26 @@ export function getDefaults(): AppDefaults {
       raw.modelSlots = { main: raw.model };
       delete raw.model;
     }
+    normalisePermissionMode(raw);
     return withOverride({ ...fallback, ...raw });
   } catch {
     return withOverride({ ...fallback });
   }
 }
 
-export function setDefaults(partial: Partial<AppDefaults>): AppDefaults {
+/** `bypassAllPermissions` is accepted for a client still showing the old
+ *  toggle, and stored as the mode it meant unless the same write names one. */
+export function setDefaults(partial: Partial<AppDefaults> & { bypassAllPermissions?: boolean }): AppDefaults {
   const current = getDefaults();
-  const updated = { ...current, ...partial };
+  const next: Record<string, unknown> = { ...partial };
+  if (typeof next.bypassAllPermissions === "boolean" && next.permissionMode === undefined) {
+    next.permissionMode = next.bypassAllPermissions ? "bypass" : "manual";
+  }
+  delete next.bypassAllPermissions;
+  // The route hands its body straight through, so an unknown mode is dropped
+  // here rather than written and then silently read back as manual.
+  if (next.permissionMode !== undefined && !isPermissionMode(next.permissionMode)) delete next.permissionMode;
+  const updated = { ...current, ...next } as AppDefaults;
   try {
     mkdirSync(prefsDir(), { recursive: true });
     writeFileSync(defaultsFile(), JSON.stringify(updated, null, 2) + "\n");

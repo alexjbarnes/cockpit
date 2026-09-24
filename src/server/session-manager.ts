@@ -247,6 +247,24 @@ function proposalIdNames(rawInput: unknown): Record<string, string> | undefined 
   return Object.keys(names).length > 0 ? names : undefined;
 }
 
+/** Whether `model` runs on Anthropic, which auto permission mode needs: its
+ *  classifier runs on the session's own model. An id no provider claims counts
+ *  as Anthropic, as it always has. */
+function isAnthropicModel(model: string | undefined): boolean {
+  const resolved = resolveProviderModel(model ?? "");
+  return !resolved || resolved.provider.id === "anthropic";
+}
+
+/** The mode a new or restored session starts in. A cockpit agent is always
+ *  manual (its bypass is applied server-side), and auto drops to manual on a
+ *  model that cannot run it: the clamp setPermissionMode and the spawn apply,
+ *  applied before the selector ever shows a mode the session will not use. */
+function startingPermissionMode(mode: SessionPermissionMode, model: string | undefined, cockpitAgent: boolean): SessionPermissionMode {
+  if (cockpitAgent) return "manual";
+  if (mode === "auto" && !isAnthropicModel(model)) return "manual";
+  return mode;
+}
+
 export class SessionManager {
   private sessions = new Map<string, Session>();
   private _cockpitAgentSessionPromise: Promise<string> | null = null;
@@ -290,6 +308,13 @@ export class SessionManager {
     const isCockpitAgent = options?.cockpitAgent === true;
     const rt = options?.runtime ?? this.defaultRuntime;
     const sessionName = isCockpitAgent ? "Cockpit Assistant" : name || path.basename(cwd) || cwd;
+    // An explicit flag (a job's own bypass setting, a review session's false,
+    // the new-session dialog's true) wins over the default mode.
+    const permissionMode = startingPermissionMode(
+      options?.bypassPermissions !== undefined ? (options.bypassPermissions ? "bypass" : "manual") : defaults.permissionMode,
+      modelSlots.main,
+      isCockpitAgent,
+    );
     const info: SessionInfo = {
       id,
       name: sessionName,
@@ -309,7 +334,7 @@ export class SessionManager {
       emitter: new EventEmitter(),
       cliSessionId: id,
       previousCliSessionIds: [],
-      permissionMode: !isCockpitAgent && (options?.bypassPermissions ?? defaults.bypassAllPermissions) ? "bypass" : "manual",
+      permissionMode,
       sandbox: { enabled: false },
       planMode: false,
       needsRespawnForPermissions: false,
@@ -355,6 +380,7 @@ export class SessionManager {
       modelSlots,
       thinkingLevel: defaults.thinkingLevel,
       runtime: rt,
+      permissionMode,
       ...(isCockpitAgent ? { cockpitAgent: true } : {}),
     });
 
@@ -429,9 +455,12 @@ export class SessionManager {
         emitter: new EventEmitter(),
         cliSessionId: cliId,
         previousCliSessionIds: prevIds,
-        permissionMode: prefs?.cockpitAgent
-          ? "manual"
-          : (prefs?.permissionMode ?? ((prefs?.bypassAllPermissions ?? defaults.bypassAllPermissions) ? "bypass" : "manual")),
+        permissionMode: startingPermissionMode(
+          prefs?.permissionMode ??
+            (prefs?.bypassAllPermissions !== undefined ? (prefs.bypassAllPermissions ? "bypass" : "manual") : defaults.permissionMode),
+          modelSlots.main,
+          prefs?.cockpitAgent === true,
+        ),
         sandbox: prefs?.sandbox ?? { enabled: false },
         planMode: prefs?.planMode ?? false,
         pendingPlanReminder: prefs?.planMode ?? false,
@@ -1130,8 +1159,7 @@ export class SessionManager {
    *  Anthropic provider. A bare alias ("opus"/"sonnet"/…) doesn't resolve to a
    *  provider model but is Anthropic, so an unresolved id counts as Anthropic. */
   private isAnthropicSession(session: Session): boolean {
-    const resolved = resolveProviderModel(session.info.model ?? "");
-    return !resolved || resolved.provider.id === "anthropic";
+    return isAnthropicModel(session.info.model);
   }
 
   getPermissionMode(sessionId: string): SessionPermissionMode {

@@ -515,7 +515,12 @@ const TOOL_DEFINITIONS = [
         messageStitching: { type: "boolean" },
         reviewsEnabled: { type: "boolean" },
         issuesEnabled: { type: "boolean" },
-        bypassAllPermissions: { type: "boolean" },
+        permissionMode: {
+          type: "string",
+          enum: ["manual", "auto", "bypass"],
+          description:
+            "Permission mode new sessions start in. auto applies to Anthropic models only; a session on another provider starts in manual.",
+        },
         modelSlots: {
           type: "object",
           properties: {
@@ -1103,7 +1108,7 @@ async function handleToolCall(
           "messageStitching",
           "reviewsEnabled",
           "issuesEnabled",
-          "bypassAllPermissions",
+          "permissionMode",
           "modelSlots",
         ];
         const safe = Object.fromEntries(
