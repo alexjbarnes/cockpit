@@ -74,6 +74,7 @@ describe("pagination with message stitching", () => {
     mockGetDefaults.mockReturnValue({
       thinkingLevel: "high",
       permissionMode: "manual",
+      sandbox: { enabled: false },
       diffStyle: "split",
       dismissKeyboardOnSend: true,
       thinkingExpanded: false,
@@ -192,6 +193,7 @@ describe("pagination with message stitching", () => {
       mockGetDefaults.mockReturnValue({
         thinkingLevel: "high",
         permissionMode: "manual",
+        sandbox: { enabled: false },
         diffStyle: "split",
         dismissKeyboardOnSend: true,
         thinkingExpanded: false,

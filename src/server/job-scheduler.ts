@@ -556,6 +556,9 @@ export class JobScheduler {
     }
     const sessionInfo = this.sessionManager.createSession(jobCwd, `[job] ${job.name}`, {
       bypassPermissions: !!job.bypassPermissions,
+      // Never the session default: a job's editor has no sandbox setting, so a
+      // default switched on for interactive work must not reach its Bash.
+      sandbox: { enabled: false },
       runtime: job.runtime,
       // Only an inbox-reporting job gets a run context, and only a run context
       // gets the cockpit MCP server. A job that never reports keeps no reach

@@ -265,6 +265,13 @@ function startingPermissionMode(mode: SessionPermissionMode, model: string | und
   return mode;
 }
 
+/** A sandbox config as this host can run it: enabling is refused where the
+ *  sandbox cannot be enforced, and an empty allowlist is dropped. */
+function enforceableSandbox(config: SandboxConfig): SandboxConfig {
+  if (config.enabled && !sandboxSupport().supported) return { enabled: false };
+  return { enabled: config.enabled, ...(config.allowedDomains?.length ? { allowedDomains: config.allowedDomains } : {}) };
+}
+
 export class SessionManager {
   private sessions = new Map<string, Session>();
   private _cockpitAgentSessionPromise: Promise<string> | null = null;
@@ -299,7 +306,13 @@ export class SessionManager {
   createSession(
     cwd: string,
     name?: string,
-    options?: { bypassPermissions?: boolean; runtime?: SessionRuntime; cockpitAgent?: boolean; runContext?: RunContext },
+    options?: {
+      bypassPermissions?: boolean;
+      sandbox?: SandboxConfig;
+      runtime?: SessionRuntime;
+      cockpitAgent?: boolean;
+      runContext?: RunContext;
+    },
   ): SessionInfo {
     const id = uuidv4();
     const now = Date.now();
@@ -315,6 +328,10 @@ export class SessionManager {
       modelSlots.main,
       isCockpitAgent,
     );
+    // The assistant has no sandbox control. A job passes its own (off): its
+    // editor has no such setting, and a sandbox nobody configured for it would
+    // fail any Bash that reaches a domain outside the list.
+    const sandbox: SandboxConfig = isCockpitAgent ? { enabled: false } : enforceableSandbox(options?.sandbox ?? defaults.sandbox);
     const info: SessionInfo = {
       id,
       name: sessionName,
@@ -335,7 +352,7 @@ export class SessionManager {
       cliSessionId: id,
       previousCliSessionIds: [],
       permissionMode,
-      sandbox: { enabled: false },
+      sandbox,
       planMode: false,
       needsRespawnForPermissions: false,
       compacting: false,
@@ -381,6 +398,7 @@ export class SessionManager {
       thinkingLevel: defaults.thinkingLevel,
       runtime: rt,
       permissionMode,
+      sandbox,
       ...(isCockpitAgent ? { cockpitAgent: true } : {}),
     });
 
@@ -461,6 +479,9 @@ export class SessionManager {
           modelSlots.main,
           prefs?.cockpitAgent === true,
         ),
+        // Not the app default: a session older than that default never stored
+        // a sandbox and ran without one, so turning the default on must not
+        // sandbox every existing session on its next restart.
         sandbox: prefs?.sandbox ?? { enabled: false },
         planMode: prefs?.planMode ?? false,
         pendingPlanReminder: prefs?.planMode ?? false,
@@ -1207,10 +1228,7 @@ export class SessionManager {
   setSandbox(sessionId: string, config: SandboxConfig): void {
     const session = this.sessions.get(sessionId);
     if (!session) return;
-    const next: SandboxConfig =
-      config.enabled && !sandboxSupport().supported
-        ? { enabled: false }
-        : { enabled: config.enabled, ...(config.allowedDomains?.length ? { allowedDomains: config.allowedDomains } : {}) };
+    const next = enforceableSandbox(config);
 
     const same =
       session.sandbox.enabled === next.enabled &&

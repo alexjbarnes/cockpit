@@ -521,6 +521,16 @@ const TOOL_DEFINITIONS = [
           description:
             "Permission mode new sessions start in. auto applies to Anthropic models only; a session on another provider starts in manual.",
         },
+        sandbox: {
+          type: "object",
+          properties: {
+            enabled: { type: "boolean" },
+            allowedDomains: { type: "array", items: { type: "string" }, description: "Domains sandboxed Bash may reach" },
+          },
+          required: ["enabled"],
+          description:
+            "Bash sandbox new sessions start with. Not applied to scheduled jobs, the cockpit assistant, or on a host that cannot enforce it.",
+        },
         modelSlots: {
           type: "object",
           properties: {
@@ -1109,6 +1119,7 @@ async function handleToolCall(
           "reviewsEnabled",
           "issuesEnabled",
           "permissionMode",
+          "sandbox",
           "modelSlots",
         ];
         const safe = Object.fromEntries(

@@ -1,7 +1,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { getCockpitDir } from "@/server/paths";
-import type { ModelSlots, SessionPermissionMode, ThinkingLevel } from "@/types";
+import type { ModelSlots, SandboxConfig, SessionPermissionMode, ThinkingLevel } from "@/types";
 
 export type DiffStyle = "split" | "unified";
 
@@ -14,6 +14,12 @@ export interface AppDefaults {
    * session created on another provider's model starts in manual regardless.
    */
   permissionMode: SessionPermissionMode;
+  /**
+   * The Bash sandbox a new session starts with. Scheduled jobs and the cockpit
+   * assistant do not take it, and on a host that cannot enforce a sandbox a
+   * session starts without one whatever this says.
+   */
+  sandbox: SandboxConfig;
   diffStyle: DiffStyle;
   dismissKeyboardOnSend: boolean;
   thinkingExpanded: boolean;
@@ -49,6 +55,7 @@ function defaultsFile(): string {
 const fallback: AppDefaults = {
   thinkingLevel: "high",
   permissionMode: "manual",
+  sandbox: { enabled: false },
   diffStyle: "split",
   dismissKeyboardOnSend: true,
   thinkingExpanded: false,
@@ -91,6 +98,22 @@ function normalisePermissionMode(raw: Record<string, unknown>): void {
   if (!isPermissionMode(raw.permissionMode)) raw.permissionMode = legacy === true ? "bypass" : fallback.permissionMode;
 }
 
+/** A sandbox config as it may be stored or sent: `enabled` must be a boolean,
+ *  and the allowlist keeps only non-empty strings, trimmed. Anything else is
+ *  not a config, and the caller falls back rather than guessing. */
+function parseSandbox(v: unknown): SandboxConfig | undefined {
+  if (typeof v !== "object" || v === null) return undefined;
+  const { enabled, allowedDomains } = v as Record<string, unknown>;
+  if (typeof enabled !== "boolean") return undefined;
+  const domains = Array.isArray(allowedDomains)
+    ? allowedDomains
+        .filter((d): d is string => typeof d === "string")
+        .map((d) => d.trim())
+        .filter(Boolean)
+    : [];
+  return domains.length > 0 ? { enabled, allowedDomains: domains } : { enabled };
+}
+
 export function getDefaults(): AppDefaults {
   const override = issuesEnabledOverride();
   const withOverride = (d: AppDefaults): AppDefaults => (override === undefined ? d : { ...d, issuesEnabled: override });
@@ -101,6 +124,7 @@ export function getDefaults(): AppDefaults {
       delete raw.model;
     }
     normalisePermissionMode(raw);
+    raw.sandbox = parseSandbox(raw.sandbox) ?? fallback.sandbox;
     return withOverride({ ...fallback, ...raw });
   } catch {
     return withOverride({ ...fallback });
@@ -119,6 +143,11 @@ export function setDefaults(partial: Partial<AppDefaults> & { bypassAllPermissio
   // The route hands its body straight through, so an unknown mode is dropped
   // here rather than written and then silently read back as manual.
   if (next.permissionMode !== undefined && !isPermissionMode(next.permissionMode)) delete next.permissionMode;
+  if (next.sandbox !== undefined) {
+    const sandbox = parseSandbox(next.sandbox);
+    if (sandbox) next.sandbox = sandbox;
+    else delete next.sandbox;
+  }
   const updated = { ...current, ...next } as AppDefaults;
   try {
     mkdirSync(prefsDir(), { recursive: true });

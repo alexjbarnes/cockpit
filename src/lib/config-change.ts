@@ -33,6 +33,7 @@ const DOMAIN_LABELS: Record<string, Record<string, string>> = {
     issuesEnabled: "Issues enabled",
     bypassAllPermissions: "Bypass all permissions",
     permissionMode: "Default permission mode",
+    sandbox: "Default sandbox",
     modelSlots: "Model",
   },
   provider: {

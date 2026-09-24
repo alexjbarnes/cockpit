@@ -1189,6 +1189,12 @@ describe("cockpit-config MCP server (in-process HTTP)", () => {
       expect(result.after.thinkingLevel).toBe("low");
     });
 
+    it("update_settings sets the default sandbox", async () => {
+      await callTool("update_settings", { sandbox: { enabled: true, allowedDomains: ["github.com"] } });
+      const settings = (await callToolParsed("get_settings")) as { sandbox?: unknown };
+      expect(settings.sandbox).toEqual({ enabled: true, allowedDomains: ["github.com"] });
+    });
+
     it("update_settings sets the default permission mode", async () => {
       await callTool("update_settings", { permissionMode: "auto" });
       const settings = (await callToolParsed("get_settings")) as { permissionMode?: string };

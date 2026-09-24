@@ -25,6 +25,7 @@ describe("defaults", () => {
     expect(defaults).toEqual({
       thinkingLevel: "high",
       permissionMode: "manual",
+      sandbox: { enabled: false },
       diffStyle: "split",
       dismissKeyboardOnSend: true,
       thinkingExpanded: false,
@@ -54,6 +55,7 @@ describe("defaults", () => {
     expect(defaults).toEqual({
       thinkingLevel: "low",
       permissionMode: "manual",
+      sandbox: { enabled: false },
       diffStyle: "split",
       dismissKeyboardOnSend: true,
       thinkingExpanded: false,
@@ -166,6 +168,46 @@ describe("defaults", () => {
       const { setDefaults } = await import("@/server/defaults");
       const result = setDefaults({ permissionMode: "yolo" as never });
       expect(result.permissionMode).toBe("auto");
+    });
+  });
+
+  describe("sandbox", () => {
+    async function readWith(file: Record<string, unknown>) {
+      const fs = await import("node:fs");
+      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(file));
+      const { getDefaults } = await import("@/server/defaults");
+      return getDefaults();
+    }
+
+    it("reads a stored sandbox, keeping only real domains, trimmed", async () => {
+      const d = await readWith({ sandbox: { enabled: true, allowedDomains: [" github.com ", "", 7, "*.npmjs.org"] } });
+      expect(d.sandbox).toEqual({ enabled: true, allowedDomains: ["github.com", "*.npmjs.org"] });
+    });
+
+    it("drops an allowlist that is empty once cleaned, or not a list at all", async () => {
+      expect((await readWith({ sandbox: { enabled: true, allowedDomains: ["  "] } })).sandbox).toEqual({ enabled: true });
+      vi.resetModules();
+      expect((await readWith({ sandbox: { enabled: true, allowedDomains: "github.com" } })).sandbox).toEqual({ enabled: true });
+    });
+
+    it("reads a malformed sandbox as off", async () => {
+      expect((await readWith({ sandbox: { enabled: "yes" } })).sandbox).toEqual({ enabled: false });
+      vi.resetModules();
+      expect((await readWith({ sandbox: "on" })).sandbox).toEqual({ enabled: false });
+    });
+
+    it("stores a valid sandbox, cleaned, and refuses a malformed one", async () => {
+      const fs = await import("node:fs");
+      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify({ sandbox: { enabled: true, allowedDomains: ["a.com"] } }));
+      vi.mocked(fs.writeFileSync).mockImplementation(() => {});
+      vi.mocked(fs.mkdirSync).mockImplementation(() => "");
+
+      const { setDefaults } = await import("@/server/defaults");
+      expect(setDefaults({ sandbox: { enabled: true, allowedDomains: [" b.com "] } }).sandbox).toEqual({
+        enabled: true,
+        allowedDomains: ["b.com"],
+      });
+      expect(setDefaults({ sandbox: { enabled: "yes" } as never }).sandbox).toEqual({ enabled: true, allowedDomains: ["a.com"] });
     });
   });
 

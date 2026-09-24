@@ -45,6 +45,7 @@ vi.mock("@/server/defaults", () => ({
   getDefaults: () => ({
     thinkingLevel: "high",
     permissionMode: "manual",
+    sandbox: { enabled: false },
     diffStyle: "split",
     dismissKeyboardOnSend: true,
     thinkingExpanded: false,

@@ -316,7 +316,10 @@ describe("JobScheduler", () => {
       sm.emitStatus("idle");
       await promise;
 
-      expect(sm.createSession).toHaveBeenCalledWith(expect.any(String), "[job] Test Job", { bypassPermissions: true });
+      expect(sm.createSession).toHaveBeenCalledWith(expect.any(String), "[job] Test Job", {
+        bypassPermissions: true,
+        sandbox: { enabled: false },
+      });
     });
 
     it("disables MCP servers not in the job's allowed list", async () => {

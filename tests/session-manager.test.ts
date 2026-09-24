@@ -80,6 +80,7 @@ vi.mock("@/server/defaults", () => ({
   getDefaults: () => ({
     thinkingLevel: "high",
     permissionMode: "manual",
+    sandbox: { enabled: false },
     diffStyle: "split",
     dismissKeyboardOnSend: true,
     thinkingExpanded: false,
@@ -163,6 +164,7 @@ describe("SessionManager", () => {
       (defaultsMod as { getDefaults: () => unknown }).getDefaults = () => ({
         thinkingLevel: "high",
         permissionMode: "manual",
+        sandbox: { enabled: false },
         diffStyle: "split",
         dismissKeyboardOnSend: true,
         thinkingExpanded: false,
@@ -268,6 +270,7 @@ describe("SessionManager", () => {
       (defaultsMod as { getDefaults: () => unknown }).getDefaults = () => ({
         thinkingLevel: "high",
         permissionMode: "manual",
+        sandbox: { enabled: false },
         diffStyle: "split",
         dismissKeyboardOnSend: true,
         thinkingExpanded: false,
@@ -295,6 +298,7 @@ describe("SessionManager", () => {
       (defaultsMod as { getDefaults: () => unknown }).getDefaults = () => ({
         thinkingLevel: "high",
         permissionMode: "manual",
+        sandbox: { enabled: false },
         diffStyle: "split",
         dismissKeyboardOnSend: true,
         thinkingExpanded: false,
@@ -1396,7 +1400,7 @@ describe("SessionManager", () => {
     });
   });
 
-  describe("default permission mode for new and restored sessions", () => {
+  describe("session defaults for new and restored sessions", () => {
     const zenProvider = JSON.stringify([
       {
         id: "zen",
@@ -1418,6 +1422,7 @@ describe("SessionManager", () => {
       (defaultsMod as { getDefaults: () => unknown }).getDefaults = () => ({
         thinkingLevel: "high",
         permissionMode: "manual",
+        sandbox: { enabled: false },
         diffStyle: "split",
         dismissKeyboardOnSend: true,
         thinkingExpanded: false,
@@ -1487,6 +1492,49 @@ describe("SessionManager", () => {
         });
         await withPrefs({ modelSlots: { main: "sonnet" }, bypassAllPermissions: true }, () => {
           expect(manager.getPermissionMode(manager.ensureSession("restored-legacy", "/tmp").info.id)).toBe("bypass");
+        });
+      });
+    });
+
+    it("starts a new session with the default sandbox, and stores it", async () => {
+      const prefsMod = await import("@/server/session-prefs");
+      sbSupported.value = true;
+      await withDefaults({ sandbox: { enabled: true, allowedDomains: ["github.com"] } }, () => {
+        const session = manager.createSession("/tmp");
+        expect(manager.getSandbox(session.id)).toEqual({ enabled: true, allowedDomains: ["github.com"] });
+        expect(vi.mocked(prefsMod.setSessionPrefs)).toHaveBeenCalledWith(
+          session.id,
+          expect.objectContaining({ sandbox: { enabled: true, allowedDomains: ["github.com"] } }),
+        );
+      });
+    });
+
+    it("starts without a sandbox on a host that cannot enforce one", async () => {
+      sbSupported.value = false;
+      try {
+        await withDefaults({ sandbox: { enabled: true } }, () => {
+          expect(manager.getSandbox(manager.createSession("/tmp").id).enabled).toBe(false);
+        });
+      } finally {
+        sbSupported.value = true;
+      }
+    });
+
+    it("never sandboxes the assistant, or a session whose creator passes its own as a job does", async () => {
+      sbSupported.value = true;
+      await withDefaults({ sandbox: { enabled: true } }, () => {
+        expect(manager.getSandbox(manager.createSession("/tmp", undefined, { cockpitAgent: true }).id).enabled).toBe(false);
+        expect(manager.getSandbox(manager.createSession("/tmp", "[job] nightly", { sandbox: { enabled: false } }).id).enabled).toBe(false);
+      });
+    });
+
+    // Sessions made before the default existed stored no sandbox and ran
+    // without one; switching the default on must not change that on restart.
+    it("keeps a restored session that never stored a sandbox unsandboxed, whatever the default", async () => {
+      sbSupported.value = true;
+      await withDefaults({ sandbox: { enabled: true } }, async () => {
+        await withPrefs({ modelSlots: { main: "sonnet" } }, () => {
+          expect(manager.getSandbox(manager.ensureSession("restored-no-sandbox", "/tmp").info.id).enabled).toBe(false);
         });
       });
     });
