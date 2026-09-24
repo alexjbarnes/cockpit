@@ -432,6 +432,12 @@ export function createWebSocketHandler(
               send(ws, { type: "session:task_sync", sessionId: msg.sessionId, tasks: tasksOnConnect });
             }
 
+            // A page arriving mid-turn resumes the turn counter from the user's
+            // message instead of restarting it from now, which is what leaving
+            // a long turn and coming back used to do.
+            const turnElapsed = correctedStatus === "running" ? sessionManager.getTurnElapsedMs(msg.sessionId) : undefined;
+            const turnTiming = turnElapsed !== undefined ? { turnElapsedMs: turnElapsed } : {};
+
             // If client already has messages, send only the delta to avoid
             // re-sending 1000+ messages on every mobile reconnect.
             // Uses the last known server message ID instead of a count, since
@@ -451,6 +457,7 @@ export function createWebSocketHandler(
                   delta: true,
                   status: correctedStatus,
                   hasMore: session.hasMore,
+                  ...turnTiming,
                 });
               } else {
                 // ID not found - client has stale state, send full history
@@ -462,6 +469,7 @@ export function createWebSocketHandler(
                   status: correctedStatus,
                   hasMore: session.hasMore,
                   promptHistory: session.promptHistory,
+                  ...turnTiming,
                 });
               }
             } else {
@@ -472,6 +480,7 @@ export function createWebSocketHandler(
                 status: correctedStatus,
                 hasMore: session.hasMore,
                 promptHistory: session.promptHistory,
+                ...turnTiming,
               });
             }
 

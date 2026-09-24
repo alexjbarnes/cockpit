@@ -116,6 +116,12 @@ interface Session {
   previousCliSessionIds: string[];
   permissionMode: SessionPermissionMode;
   sandbox: SandboxConfig;
+  /** When the latest user message was delivered to the CLI, on this machine's
+   *  clock. What a page arriving mid-turn times the turn from: it has no bubble
+   *  of its own, and the message may be outside the history it is sent. Not
+   *  cleared at turn end, so a turn the CLI resumes on its own still counts
+   *  from the user's message, as the live counter does. */
+  turnStartedAt?: number;
   planMode: boolean;
   pendingPlanReminder?: boolean;
   needsRespawnForPermissions: boolean;
@@ -1705,6 +1711,16 @@ export class SessionManager {
     return this.sessions.get(sessionId)?.backgroundTasks ?? [];
   }
 
+  /** How long the running turn has gone since its user message was delivered,
+   *  for a page that connects mid-turn. Undefined when the session is idle, or
+   *  when no message was delivered by this process (a restart mid-turn): the
+   *  page then falls back to timing from the messages it has. */
+  getTurnElapsedMs(sessionId: string): number | undefined {
+    const session = this.sessions.get(sessionId);
+    if (session?.info.status !== "running" || session.turnStartedAt === undefined) return undefined;
+    return Math.max(0, Date.now() - session.turnStartedAt);
+  }
+
   /** Keep the session's task list in step with what is being emitted, so a
    *  client connecting later can be handed the same picture. task_sync carries
    *  the whole list (an empty one means nothing is running); task_update carries
@@ -2483,6 +2499,7 @@ Additional Cockpit rules beyond the CLI's defaults:
       alive: !!session.harnessProcess?.isAlive,
     });
     session.info.status = "running";
+    session.turnStartedAt = Date.now();
     console.log(`[sm] emit status running for ${sessionId.slice(0, 8)} (runtime=${session.runtime})`);
     session.emitter.emit("status", sessionId, "running");
 

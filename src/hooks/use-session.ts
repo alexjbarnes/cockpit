@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { deriveAgentTasks } from "@/lib/agent-tasks";
 import { type ContextSize, DEFAULT_CONTEXT_SIZE, resolveModel } from "@/lib/models";
+import { turnStartFromElapsed } from "@/lib/turn-anchor";
 import type {
   BackgroundTask,
   ChatMessage,
@@ -65,6 +66,9 @@ interface UseSessionReturn {
   messages: ChatMessage[];
   historyLoaded: boolean;
   isResponding: boolean;
+  /** Turn start on this device's clock, supplied by the server to a page that
+   *  connected mid-turn; null otherwise. */
+  serverTurnStartedAt: number | null;
   errorActive: boolean;
   pendingPermissions: PendingPermission[];
   pendingQuestions: PendingQuestion[];
@@ -131,6 +135,9 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
   const { send, subscribe, connected } = useWebSocket();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isResponding, setIsResponding] = useState(false);
+  // Turn start on this device's clock, when the server supplied one on connect.
+  // Only a page that arrives mid-turn gets it; see turnStartAnchor.
+  const [serverTurnStartedAt, setServerTurnStartedAt] = useState<number | null>(null);
   const [pendingPermissions, setPendingPermissions] = useState<PendingPermission[]>([]);
   const [pendingQuestions, setPendingQuestions] = useState<PendingQuestion[]>([]);
   const [modelPicker, setModelPicker] = useState<string | null>(null);
@@ -309,6 +316,9 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
             const nowRunning = msg.status === "running";
             setIsResponding(nowRunning);
             isRespondingRef.current = nowRunning;
+            setServerTurnStartedAt(
+              nowRunning && typeof msg.turnElapsedMs === "number" ? turnStartFromElapsed(msg.turnElapsedMs, Date.now()) : null,
+            );
             if (msg.status === "idle") {
               streamingRef.current = null;
               agentStackRef.current = [];
@@ -773,6 +783,7 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
           const nowRunning = msg.status === "running";
           setIsResponding(nowRunning);
           isRespondingRef.current = nowRunning;
+          if (!nowRunning) setServerTurnStartedAt(null);
           if (nowRunning) {
             setApiError(null);
             // A session that reached "running" is trusted by definition.
@@ -1199,6 +1210,7 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
       // consecutive newlines (the transcript collapses them, so the keys differed).
       const userMsg = buildUserMessage(text, "user-" + Date.now(), Date.now(), { images, documents, textFiles });
       setMessages((prev) => [...prev, userMsg]);
+      setServerTurnStartedAt(null);
       setSuggestions([]);
 
       const cleaned = text.replace(/^\[Attached [^\]]+\]\n*/gm, "").trim();
@@ -1450,6 +1462,7 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
     messages,
     historyLoaded,
     isResponding,
+    serverTurnStartedAt,
     errorActive,
     pendingPermissions,
     pendingQuestions,

@@ -588,6 +588,10 @@ export type ServerMessage =
       status?: "idle" | "running";
       hasMore?: boolean;
       promptHistory?: string[];
+      /** How long the running turn has gone since its user message was
+       *  delivered, measured on the server. Elapsed rather than a timestamp, so
+       *  no difference between the server's clock and the device's can skew it. */
+      turnElapsedMs?: number;
     }
   | { type: "history:more"; sessionId: string; messages: ChatMessage[]; hasMore: boolean }
   | { type: "session:transcript"; sessionId: string; messages: ChatMessage[] }

@@ -1548,6 +1548,41 @@ describe("SessionManager", () => {
     });
   });
 
+  describe("turn timing for a page connecting mid-turn", () => {
+    it("records when a user message is delivered, and reports the elapsed time while running", () => {
+      const session = manager.createSession("/tmp");
+      expect(manager.getTurnElapsedMs(session.id), "nothing sent yet").toBeUndefined();
+
+      manager.sendMessage(session.id, "go");
+      const s = (manager as any).sessions.get(session.id)!;
+      expect(Math.abs(s.turnStartedAt - Date.now())).toBeLessThan(1000);
+
+      s.turnStartedAt = Date.now() - 42_000;
+      const elapsed = manager.getTurnElapsedMs(session.id)!;
+      expect(elapsed).toBeGreaterThanOrEqual(42_000);
+      expect(elapsed).toBeLessThan(43_000);
+    });
+
+    it("reports nothing once the session is idle", () => {
+      const session = manager.createSession("/tmp");
+      manager.sendMessage(session.id, "go");
+      (manager as any).sessions.get(session.id)!.info.status = "idle";
+      expect(manager.getTurnElapsedMs(session.id)).toBeUndefined();
+    });
+
+    // Restored after a restart mid-turn: this process delivered no message, so
+    // it has no start to report and the page times from what it holds.
+    it("reports nothing for a turn this process did not start", () => {
+      const restored = manager.ensureSession("restored-mid-turn", "/tmp");
+      restored.info.status = "running";
+      expect(manager.getTurnElapsedMs(restored.info.id)).toBeUndefined();
+    });
+
+    it("reports nothing for a session it does not know", () => {
+      expect(manager.getTurnElapsedMs("no-such-session")).toBeUndefined();
+    });
+  });
+
   describe("setSandbox", () => {
     it("enables the sandbox, persists it, and emits the state", () => {
       sbSupported.value = true;

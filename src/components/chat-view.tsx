@@ -10,6 +10,7 @@ import { useWebSocket } from "@/hooks/use-websocket";
 import { formatDuration } from "@/lib/format-time";
 import { pathBasename } from "@/lib/path";
 import { pairQuestionBlocks, splitAtQuestion } from "@/lib/split-question-blocks";
+import { turnStartAnchor } from "@/lib/turn-anchor";
 import { cn } from "@/lib/utils";
 import type { Provider } from "@/types";
 import { useShell, useShellSessionModel } from "./app-shell";
@@ -51,6 +52,7 @@ export function ChatView({
     messages,
     historyLoaded,
     isResponding,
+    serverTurnStartedAt,
     errorActive,
     pendingPermissions,
     pendingQuestions,
@@ -181,12 +183,14 @@ export function ChatView({
   // Live "how long has this been going" beside the spinner. Turn start is the
   // last user message, the same anchor workedByMessageId uses above, so the
   // counter and the "Worked for" it settles into measure the same span.
+  // Scans everything the page holds, not just the rendered window: a long turn
+  // pushes its user message out of the last 50 while the counter still needs it.
   const turnStartedAt = useMemo(() => {
-    for (let i = visibleMessages.length - 1; i >= 0; i--) {
-      if (visibleMessages[i].role === "user") return visibleMessages[i].timestamp;
+    for (let i = uniqueMessages.length - 1; i >= 0; i--) {
+      if (uniqueMessages[i].role === "user") return uniqueMessages[i].timestamp;
     }
     return null;
-  }, [visibleMessages]);
+  }, [uniqueMessages]);
 
   // Stopping a session whose turn is already idle changes nothing on screen, so
   // the click needs its own acknowledgement. 2.5s covers the server's bounded
@@ -201,8 +205,8 @@ export function ChatView({
   // later and — on a phone talking to a desktop — subject to device clock skew.
   // Re-reading it made the counter sit on "1s" (a negative elapsed floors
   // there) until real time caught up with the skew, then start counting.
-  // Clamped to now for the same reason on a reload mid-turn, where there is no
-  // client-clocked bubble left to anchor to.
+  // A page opened mid-turn has no client-clocked bubble either, so it takes the
+  // server's measure of the turn when there is one (turnStartAnchor).
   const turnStartRef = useRef<number | null>(null);
   useEffect(() => {
     if (!isResponding) {
@@ -211,15 +215,14 @@ export function ChatView({
       return;
     }
     if (turnStartRef.current == null) {
-      const now = Date.now();
-      turnStartRef.current = turnStartedAt != null && turnStartedAt <= now ? turnStartedAt : now;
+      turnStartRef.current = turnStartAnchor(serverTurnStartedAt, turnStartedAt, Date.now());
     }
     const startedAt = turnStartRef.current;
     const tick = () => setElapsedMs(Date.now() - startedAt);
     tick();
     const id = setInterval(tick, 1000);
     return () => clearInterval(id);
-  }, [isResponding, turnStartedAt]);
+  }, [isResponding, turnStartedAt, serverTurnStartedAt]);
 
   // Reset window on session change
   useEffect(() => {
