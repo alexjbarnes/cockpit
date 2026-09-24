@@ -34,11 +34,9 @@ export interface PtyRuntimeOptions {
   /** Optional debug callback for raw PTY data chunks. */
   onPtyData?: (chunk: string) => void;
   /** The permission mode the spawn asked for (--permission-mode). Hook
-   *  payloads report the CLI's ACTUAL mode; when a requested bypass does not
-   *  take effect the two diverge, which the runtime records in the debug log
-   *  (see noteModeDivergence) because it explains a session raising prompts
-   *  while the UI reports bypass as on. */
-  expectedPermissionMode?: "manual" | "auto" | "plan" | "bypassPermissions";
+   *  payloads report the mode the CLI is actually in, which need not be the
+   *  one asked for; notePayloadMode passes it out for the UI to show. */
+  expectedPermissionMode?: "manual" | "auto" | "plan";
 }
 
 /**
@@ -69,7 +67,8 @@ export class PtyRuntime {
   /** Synthetic requests for TUI-only dialogs (see onNotification): answered
    *  with keystrokes into the PTY, not through the hook response channel. */
   private readonly pendingTuiDialogs = new Set<string>();
-  private modeDivergenceWarned = false;
+  /** The permission mode the CLI last reported in a hook payload. */
+  private cliPermissionMode: string | undefined;
   private lastPreToolUse: { tool: string; input?: Record<string, unknown> } | null = null;
   /**
    * Background work still running, by task id, taken from the CLI's own
@@ -505,33 +504,24 @@ export class PtyRuntime {
   }
 
   /**
-   * The CLI runs in a different permission mode than the spawn asked for —
-   * seen when a requested bypass does not take effect (the CLI reports
-   * "Bypass permissions mode was disabled by settings").
-   *
-   * Logged once per process, and deliberately not shown in the chat: cockpit
-   * answers the prompts that result, so the divergence changes nothing the user
-   * needs to act on, and a banner on every affected session was just noise.
-   * The detection stays because it is the one signal that explains a session
-   * raising prompts while the UI reports bypass as on.
+   * Record the permission mode a hook payload reports, which is the truth
+   * about what governs the CLI's tool calls: it can differ from the mode the
+   * spawn asked for, and the CLI changes it itself (plan mode, the auto
+   * classifier's fallback to prompting). Every change is reported out as
+   * `__cli_perm_mode::<mode>` so the UI shows what is really happening rather
+   * than what was requested, and logged beside the expected mode, since a
+   * mismatch is what explains a session behaving unlike its selector.
    */
-  private noteModeDivergence(actualMode: string, source: string): void {
-    if (this.modeDivergenceWarned) return;
-    this.modeDivergenceWarned = true;
-    logDiag(this.opts.sessionId, "pty:permission-mode-divergence", {
+  private notePayloadMode(payload: Record<string, unknown>, source: string): void {
+    const actual = payload.permission_mode;
+    if (typeof actual !== "string" || !actual || actual === this.cliPermissionMode) return;
+    this.cliPermissionMode = actual;
+    logDiag(this.opts.sessionId, "pty:cli-permission-mode", {
+      mode: actual,
       expected: this.opts.expectedPermissionMode,
-      actual: actualMode,
       source,
     });
-  }
-
-  /** Compare a hook payload's reported permission_mode against the spawn's request. */
-  private checkPayloadMode(payload: Record<string, unknown>, source: string): void {
-    if (this.opts.expectedPermissionMode !== "bypassPermissions") return;
-    const actual = payload.permission_mode;
-    if (typeof actual === "string" && actual !== "bypassPermissions") {
-      this.noteModeDivergence(actual, source);
-    }
+    this.emit([{ type: "system_message", text: `__cli_perm_mode::${actual}` }]);
   }
 
   /** Called by SessionManager.respondToPermission when this session is on the pty runtime. */
@@ -573,7 +563,7 @@ export class PtyRuntime {
         const toolUseId = typeof payload.tool_use_id === "string" ? payload.tool_use_id.slice(0, 12) : "none";
         logDiag(this.opts.sessionId, "hook:PreToolUse", { tool: toolName, toolUseId });
         console.log(`[pty-runtime] PreToolUse: tool=${toolName} cli_session=${cliSession} tool_use_id=${toolUseId}`);
-        this.checkPayloadMode(payload, "PreToolUse");
+        this.notePayloadMode(payload, "PreToolUse");
         // Remembered so a later TUI-only permission dialog (see onNotification)
         // can name the tool it is actually gating.
         this.lastPreToolUse = { tool: toolName, input: payload.tool_input as Record<string, unknown> | undefined };
@@ -596,7 +586,15 @@ export class PtyRuntime {
         console.log(`[pty-runtime] PostToolUse: tool=${toolName} cli_session=${cliSession} tool_use_id=${toolUseId}`);
         this.emit(translateHookEvent("PostToolUse", payload));
       },
+      // Fires as the CLI starts (and on resume, /clear and compaction). It is
+      // here for one thing: its payload carries the permission mode, so it is
+      // known before any message is sent. Returns nothing, so no context is
+      // added to the session.
+      onSessionStart: (payload) => {
+        this.notePayloadMode(payload, "SessionStart");
+      },
       onStop: (payload) => {
+        this.notePayloadMode(payload, "Stop");
         this.cancelErrorDebounce();
         this.ptyOutputBuffer = "";
         const lastMsg = typeof payload.last_assistant_message === "string" ? payload.last_assistant_message : "";
@@ -654,7 +652,7 @@ export class PtyRuntime {
           armed: !!this.promptAccepted,
           runningTasks: this.runningTasks.size,
         });
-        this.checkPayloadMode(payload, "UserPromptSubmit");
+        this.notePayloadMode(payload, "UserPromptSubmit");
         this.promptAccepted?.();
         // A parent turn is starting, so the gate closes: this turn's tool calls
         // are the user's, whatever background work is still going. The CLI
@@ -783,7 +781,7 @@ export class PtyRuntime {
     const toolInput = payload.tool_input as Record<string, unknown> | undefined;
     // A PermissionRequest under an intended bypass is itself divergence — a
     // CLI genuinely in bypass mode never consults this hook.
-    this.checkPayloadMode(payload, "PermissionRequest");
+    this.notePayloadMode(payload, "PermissionRequest");
 
     const event: ParsedEvent = {
       type: "permission_request",
@@ -847,16 +845,6 @@ export class PtyRuntime {
     }
     // biome-ignore lint/suspicious/noControlCharactersInRegex: strip terminal control chars
     const clean = this.ptyOutputBuffer.replace(ANSI_RE, "").replace(/[\x00-\x1f]/g, "");
-
-    // The CLI announces an overridden bypass in its boot banner before any
-    // hook fires — earliest possible detection of the divergence.
-    if (
-      !this.modeDivergenceWarned &&
-      this.opts.expectedPermissionMode === "bypassPermissions" &&
-      /Bypass permissions mode was disabled by settings/i.test(clean)
-    ) {
-      this.noteModeDivergence("disabled-by-settings", "boot-banner");
-    }
 
     // A 1M-context request on an account without usage credits (Sonnet 4.6):
     // the CLI prints this and the turn fails. It carries no HTTP code, so the

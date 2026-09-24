@@ -61,6 +61,7 @@ export function ChatView({
     currentContextSize,
     bypassActive,
     permissionMode,
+    cliPermissionMode,
     sandbox,
     sandboxSupport,
     planMode,
@@ -724,6 +725,7 @@ export function ChatView({
           bypassActive={bypassActive}
           onSetBypass={setBypassAll}
           permissionMode={permissionMode}
+          cliPermissionMode={cliPermissionMode}
           onSetPermissionMode={setPermissionMode}
           sandbox={sandbox}
           onSetSandbox={setSandbox}

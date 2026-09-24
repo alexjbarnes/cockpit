@@ -432,14 +432,21 @@ describe("ClaudePtyAdapter", () => {
       expect(mockPtyInstances[0].opts.expectedPermissionMode).toBe("manual");
     });
 
-    it("still prefers plan and bypass over manual", () => {
+    it("still prefers plan over manual", () => {
       adapter.spawn(baseConfig({ planMode: true }));
       expect(mockPtyInstances[0].opts.extraArgs).toContain("plan");
       expect(mockPtyInstances[0].opts.extraArgs).not.toContain("manual");
+    });
 
+    // Cockpit owns permissions on a bypass session: the CLI runs in manual and
+    // cockpit answers every prompt itself, so nothing is left to the CLI's own
+    // judgement.
+    it("never asks the CLI for native bypass: bypass runs manual", () => {
       adapter.spawn(baseConfig({ permissionMode: "bypass" }));
-      expect(mockPtyInstances[1].opts.extraArgs).toContain("bypassPermissions");
-      expect(mockPtyInstances[1].opts.extraArgs).not.toContain("manual");
+      const args = mockPtyInstances[0].opts.extraArgs as string[];
+      expect(args).not.toContain("bypassPermissions");
+      expect(args[args.indexOf("--permission-mode") + 1]).toBe("manual");
+      expect(mockPtyInstances[0].opts.expectedPermissionMode).toBe("manual");
     });
 
     // The assistant is excluded from bypass, so before this it passed no flag
@@ -498,12 +505,10 @@ describe("ClaudePtyAdapter", () => {
     expect(mockPtyInstances[1].opts.thinkingEnabled).toBe(false);
   });
 
-  it("sets plan and bypass permission modes exclusively", () => {
+  it("lets plan mode win over bypass", () => {
     adapter.spawn(baseConfig({ planMode: true, permissionMode: "bypass" }));
     expect(mockPtyInstances[0].opts.extraArgs).toContain("plan");
-
-    adapter.spawn(baseConfig({ planMode: false, permissionMode: "bypass", cockpitAgent: false }));
-    expect(mockPtyInstances[1].opts.extraArgs).toContain("bypassPermissions");
+    expect(mockPtyInstances[0].opts.extraArgs).not.toContain("bypassPermissions");
   });
 
   it("appends the cockpit-agent system prompt and mcp config only for cockpitAgent sessions", () => {

@@ -13,7 +13,8 @@ export type HookEventName =
   | "Notification"
   | "PermissionRequest"
   | "PreCompact"
-  | "PostCompact";
+  | "PostCompact"
+  | "SessionStart";
 
 export interface HookResponse {
   stdout?: string;
@@ -42,6 +43,7 @@ export interface SessionHookHandler {
   onNotification?: HookCallback;
   onPreCompact?: HookCallback;
   onPostCompact?: HookCallback;
+  onSessionStart?: HookCallback;
   /** Must resolve with the permission decision. The promise can take as long as needed. */
   onPermissionRequest?: (payload: Record<string, unknown>) => Promise<PermissionDecision>;
 }
@@ -188,6 +190,7 @@ export class HookRouter {
       Notification: handler.onNotification,
       PreCompact: handler.onPreCompact,
       PostCompact: handler.onPostCompact,
+      SessionStart: handler.onSessionStart,
     };
     const fn = handlerMap[eventName];
 

@@ -446,14 +446,16 @@ describe("SessionManager PTY runtime (unit)", () => {
       expect(ptyMocks.capturedOpts?.extraArgs).toContain("plan");
     });
 
-    it("includes --permission-mode bypassPermissions when bypass active", () => {
+    // Bypass is cockpit answering every prompt; the CLI itself stays in manual.
+    it("spawns the CLI in manual when bypass is active, never native bypass", () => {
       const session = manager.createSession("/tmp", undefined, { runtime: "pty" });
       // Set bypass before any spawn so the next spawn picks it up
       manager.setBypassAllPermissions(session.id);
       manager.sendMessage(session.id, "hello");
 
-      expect(ptyMocks.capturedOpts?.extraArgs).toContain("--permission-mode");
-      expect(ptyMocks.capturedOpts?.extraArgs).toContain("bypassPermissions");
+      const args = ptyMocks.capturedOpts?.extraArgs as string[];
+      expect(args).not.toContain("bypassPermissions");
+      expect(args[args.indexOf("--permission-mode") + 1]).toBe("manual");
     });
   });
 
@@ -468,6 +470,22 @@ describe("SessionManager PTY runtime (unit)", () => {
       ptyMocks.capturedOpts!.onExit({ exitCode: 0 });
       expect(statuses).toContain("idle");
       expect(manager.listKnownSessions().find((s) => s.id === session.id)?.status).toBe("idle");
+    });
+
+    // A process that is gone reports nothing: the page shows the requested
+    // mode until the next process reports.
+    it("onExit forgets the mode the CLI reported, and tells the page", () => {
+      const session = manager.createSession("/tmp", undefined, { runtime: "pty" });
+      manager.sendMessage(session.id, "hello");
+      const s = (manager as any).sessions.get(session.id)!;
+      s.cliPermissionMode = "auto";
+      const emitted: string[] = [];
+      manager.onSystem(session.id, (m) => emitted.push(m));
+
+      ptyMocks.capturedOpts!.onExit({ exitCode: 0 });
+
+      expect(manager.getCliPermissionMode(session.id)).toBeUndefined();
+      expect(emitted).toContain("__cli_perm_mode::");
     });
 
     it("onExit flushes a queued message by spawning again", () => {
@@ -680,15 +698,20 @@ describe("SessionManager PTY runtime (unit)", () => {
   });
 
   describe("scheduleRespawnForPermissions", () => {
-    it("kills the PTY when session goes idle and bypass is toggled", () => {
+    // Bypass is cockpit answering prompts while the CLI stays in manual, so
+    // toggling it has nothing to restart. A change the CLI must be spawned
+    // for (auto) still kills the idle process so the next send respawns it.
+    it("kills the idle PTY for a CLI mode change, but not for bypass", () => {
       const session = manager.createSession("/tmp", undefined, { runtime: "pty" });
       manager.sendMessage(session.id, "hello");
       // Drive status to idle via message_done while keeping ptyRuntime alive
       emitMessageDone();
       ptyMocks.kill.mockClear();
 
-      // Now session is idle and ptyRuntime is alive → scheduleRespawnForPermissions should kill it
       manager.setBypassAllPermissions(session.id);
+      expect(ptyMocks.kill).not.toHaveBeenCalled();
+
+      manager.setPermissionMode(session.id, "auto");
       expect(ptyMocks.kill).toHaveBeenCalled();
     });
   });

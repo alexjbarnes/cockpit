@@ -18,6 +18,9 @@ const HOOK_EVENTS = [
   "PermissionRequest",
   "PreCompact",
   "PostCompact",
+  // Registered for its payload's permission_mode, so the mode the CLI really
+  // runs in is known the moment it starts rather than at the first message.
+  "SessionStart",
 ] as const;
 type HookEvent = (typeof HOOK_EVENTS)[number];
 

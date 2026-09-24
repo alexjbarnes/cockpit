@@ -2,6 +2,12 @@ import { describe, expect, it } from "vitest";
 import { newPermissionRequestId, translateHookEvent } from "@/server/hook-event-translator";
 
 describe("translateHookEvent", () => {
+  // SessionStart is registered only for its payload's permission_mode, which
+  // pty-runtime reads itself; it must add nothing to the chat.
+  it("renders nothing for SessionStart", () => {
+    expect(translateHookEvent("SessionStart", { permission_mode: "manual", source: "startup" })).toEqual([]);
+  });
+
   describe("PreToolUse", () => {
     it("maps a Read tool_use payload to tool_use_start with stringified input", () => {
       const events = translateHookEvent("PreToolUse", {

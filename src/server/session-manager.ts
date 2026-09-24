@@ -122,6 +122,9 @@ interface Session {
    *  cleared at turn end, so a turn the CLI resumes on its own still counts
    *  from the user's message, as the live counter does. */
   turnStartedAt?: number;
+  /** The permission mode the CLI reports in its hook payloads; undefined until
+   *  the running process reports one. Kept for a page that connects later. */
+  cliPermissionMode?: string;
   planMode: boolean;
   pendingPlanReminder?: boolean;
   needsRespawnForPermissions: boolean;
@@ -268,6 +271,15 @@ function isAnthropicModel(model: string | undefined): boolean {
 function startingPermissionMode(mode: SessionPermissionMode, model: string | undefined, cockpitAgent: boolean): SessionPermissionMode {
   if (cockpitAgent) return "manual";
   if (mode === "auto" && !isAnthropicModel(model)) return "manual";
+  return mode;
+}
+
+/** The mode the CLI itself is spawned in for a cockpit permission mode. On the
+ *  PTY runtime bypass is applied by cockpit over the PermissionRequest hook,
+ *  so the CLI runs manual (see claude-pty-adapter); the deprecated stream
+ *  runtime still asks for native bypass. */
+function cliSpawnMode(mode: SessionPermissionMode, runtime: SessionRuntime): string {
+  if (mode === "bypass") return runtime === "pty" ? "manual" : "bypassPermissions";
   return mode;
 }
 
@@ -1193,6 +1205,11 @@ export class SessionManager {
     return this.sessions.get(sessionId)?.permissionMode ?? "manual";
   }
 
+  /** The mode the running CLI reports it is in; undefined until it has. */
+  getCliPermissionMode(sessionId: string): string | undefined {
+    return this.sessions.get(sessionId)?.cliPermissionMode;
+  }
+
   /** The single mutator for the permission axis (manual | auto | bypass), which
    *  is orthogonal to plan mode. The old bypass on/off methods delegate here. */
   setPermissionMode(sessionId: string, mode: SessionPermissionMode): void {
@@ -1209,6 +1226,7 @@ export class SessionManager {
     if (mode === "bypass" && session.cockpitAgent) return;
     if (session.permissionMode === mode) return;
 
+    const previous = session.permissionMode;
     session.permissionMode = mode;
     setSessionPrefs(sessionId, { permissionMode: mode });
     // Don't change CLI mode while in plan mode; the mode is restored on plan
@@ -1219,7 +1237,13 @@ export class SessionManager {
       if (cliMode === "manual" ? supportedPermissionModes().has("manual") : true) {
         this.sendPermissionMode(session, sessionId, cliMode);
       }
-      this.scheduleRespawnForPermissions(session);
+      // On the PTY runtime bypass is cockpit answering every prompt while the
+      // CLI stays in manual, so manual <-> bypass changes nothing the CLI was
+      // spawned with and takes effect at once: restarting it would only cost
+      // the user a respawn at their next message.
+      if (cliSpawnMode(previous, session.runtime) !== cliSpawnMode(mode, session.runtime)) {
+        this.scheduleRespawnForPermissions(session);
+      }
     }
     this.emitSystem(session, sessionId, `__perm_mode::${mode}`);
   }
@@ -1988,6 +2012,9 @@ export class SessionManager {
           session.needsRespawnForPermissions = true;
           this.emitSystem(session, sessionId, "__plan_state::off");
         }
+      } else if (sysMsg.startsWith("__cli_perm_mode::")) {
+        session.cliPermissionMode = sysMsg.slice("__cli_perm_mode::".length) || undefined;
+        this.emitSystem(session, sessionId, sysMsg);
       } else {
         this.emitSystem(session, sessionId, sysMsg);
       }
@@ -2791,6 +2818,12 @@ Additional Cockpit rules beyond the CLI's defaults:
         session.harnessProcess = null;
         session.spawning = false;
         session.streamingSnapshot = null;
+        // Whatever mode that process ran in, it is gone: until the next one
+        // reports, the page shows the requested mode rather than a stale one.
+        if (session.cliPermissionMode !== undefined) {
+          session.cliPermissionMode = undefined;
+          this.emitSystem(session, sessionId, "__cli_perm_mode::");
+        }
         logDiag(sessionId, "idle:harness-exit", { code, signal: signal ?? null, flushedOnMessageDone: streamState.flushedOnMessageDone });
         session.info.status = "idle";
         session.emitter.emit("status", sessionId, "idle");

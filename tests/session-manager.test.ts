@@ -1393,6 +1393,20 @@ describe("SessionManager", () => {
       expect(manager.getPermissionMode(session.id)).toBe("manual");
     });
 
+    // On the PTY runtime bypass is cockpit answering prompts while the CLI
+    // stays manual, so the CLI has nothing to restart for.
+    it("switches between manual and bypass on a PTY session without restarting the CLI", () => {
+      const session = manager.createSession("/tmp", undefined, { runtime: "pty" });
+      const respawn = vi.spyOn(manager as any, "scheduleRespawnForPermissions");
+      manager.setPermissionMode(session.id, "bypass");
+      manager.setPermissionMode(session.id, "manual");
+      expect(respawn).not.toHaveBeenCalled();
+
+      manager.setPermissionMode(session.id, "auto");
+      expect(respawn, "auto is a different CLI mode, so that one restarts").toHaveBeenCalledTimes(1);
+      respawn.mockRestore();
+    });
+
     it("refuses bypass for a cockpit agent, whose bypass is applied server-side", () => {
       const session = manager.createSession("/tmp", undefined, { cockpitAgent: true });
       manager.setPermissionMode(session.id, "bypass");
@@ -4284,6 +4298,28 @@ describe("SessionManager", () => {
       });
       expect(s.pendingRequests.has("tui-2")).toBe(true);
       expect(s.pendingRequests.get("tui-2")?.type).toBe("permission");
+    });
+
+    it("keeps the mode the CLI reports and passes it to the page", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      const emitted: string[] = [];
+      s.emitter.on("system", (_id: string, text: string) => emitted.push(text));
+      expect(manager.getCliPermissionMode(session.id)).toBeUndefined();
+
+      (manager as any).applyProcessedResult(s, session.id, {
+        intermediateMessages: [],
+        emit: [],
+        systemMessages: ["__cli_perm_mode::auto"],
+        errors: [],
+        permissionActions: [],
+        statusChange: null,
+        compactDone: false,
+        snapshot: null,
+      });
+
+      expect(manager.getCliPermissionMode(session.id)).toBe("auto");
+      expect(emitted).toContain("__cli_perm_mode::auto");
     });
 
     it("handles permission mode change to plan", () => {

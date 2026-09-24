@@ -535,6 +535,12 @@ export function createWebSocketHandler(
                   text: `__perm_mode::${pm}`,
                 });
               }
+              // The mode the CLI reports, so a page connecting mid-session
+              // shows that rather than only the requested one.
+              const cliMode = sessionManager.getCliPermissionMode(msg.sessionId);
+              if (cliMode) {
+                send(ws, { type: "session:system", sessionId: msg.sessionId, text: `__cli_perm_mode::${cliMode}` });
+              }
               const sandbox = sessionManager.getSandbox(msg.sessionId);
               if (sandbox.enabled) {
                 send(ws, {

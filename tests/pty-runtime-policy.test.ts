@@ -1,11 +1,10 @@
-// A requested bypass that does not take effect, as seen from the PTY runtime
-// (discovered live 2026-08-08): the CLI silently runs in default mode despite
-// --permission-mode bypassPermissions, and frontier models refuse a
-// PermissionRequest-hook allow for self-modifying writes, hanging on a
-// TUI-only dialog cockpit can't see. These tests pin the divergence detectors
-// staying SILENT in the chat (cockpit answers the prompts, so the user has
-// nothing to act on) and the Notification-hook dialog rescue with its keystroke
-// answer path.
+// The PTY runtime's view of permissions. The CLI reports the mode it is in on
+// every hook payload, which need not be the one cockpit spawned it in: cockpit
+// applies bypass itself by keeping the CLI in manual, and answers every prompt
+// that mode raises. These tests pin that reported mode reaching the session as
+// `__cli_perm_mode::` and never as chat text, and the Notification-hook rescue
+// of TUI-only dialogs (frontier models refuse a PermissionRequest-hook allow
+// for self-modifying writes) with its keystroke answer path.
 import { describe, expect, it, vi } from "vitest";
 import type { ParsedEvent } from "@/server/event-parser";
 import { PtyRuntime } from "@/server/pty-runtime";
@@ -42,7 +41,7 @@ vi.mock("@/server/cli-init-fetch", () => ({
   fetchCliInitData: vi.fn().mockResolvedValue(null),
 }));
 
-function makeRuntime(expected: "manual" | "plan" | "bypassPermissions") {
+function makeRuntime(expected: "manual" | "plan" | "auto") {
   const events: ParsedEvent[] = [];
   const runtime = new PtyRuntime({
     sessionId: "s-policy-test",
@@ -57,31 +56,47 @@ function makeRuntime(expected: "manual" | "plan" | "bypassPermissions") {
   return { runtime, events };
 }
 
-function divergenceWarnings(events: ParsedEvent[]): ParsedEvent[] {
-  return events.filter((e) => e.type === "system_message" && /requested bypass did not take effect/i.test(e.text ?? ""));
+function cliModeReports(events: ParsedEvent[]): string[] {
+  return events
+    .filter((e) => e.type === "system_message" && (e.text ?? "").startsWith("__cli_perm_mode::"))
+    .map((e) => (e.text as string).slice("__cli_perm_mode::".length));
 }
 
-describe("permission-mode divergence stays out of the chat", () => {
-  // The banner used to be emitted as a system_message on every affected
-  // session. Since cockpit answers the resulting prompts itself, it told the
-  // user about something they could not act on, so it is a debug-log note now.
-  it("emits nothing when a hook payload reports default under an intended bypass", () => {
-    const { runtime, events } = makeRuntime("bypassPermissions");
-    const handler = (runtime as never as { buildHandler(): Record<string, (p: Record<string, unknown>) => unknown> }).buildHandler();
+describe("the CLI's real permission mode", () => {
+  function handlerOf(runtime: PtyRuntime) {
+    return (runtime as never as { buildHandler(): Record<string, (p: Record<string, unknown>) => unknown> }).buildHandler();
+  }
 
-    handler.onUserPromptSubmit({ permission_mode: "default", prompt: "hi" });
-    handler.onPreToolUse({ permission_mode: "default", tool_name: "Bash", tool_input: {} });
-
-    expect(divergenceWarnings(events), "no banner, whatever the payload says").toHaveLength(0);
-    expect(events.filter((e) => e.type === "system_message" && /bypass/i.test(e.text ?? ""))).toHaveLength(0);
+  it("reports the mode from SessionStart, before any message is sent", () => {
+    const { runtime, events } = makeRuntime("manual");
+    handlerOf(runtime).onSessionStart({ permission_mode: "manual", source: "startup" });
+    expect(cliModeReports(events)).toEqual(["manual"]);
   });
 
-  it("emits nothing for the boot banner either", () => {
-    const { runtime, events } = makeRuntime("bypassPermissions");
-    (runtime as never as { scanForErrors(chunk: string): void }).scanForErrors(
-      "some output\nBypass permissions mode was disabled by settings\nmore output",
-    );
-    expect(events.filter((e) => e.type === "system_message")).toHaveLength(0);
+  // Spawned for manual (cockpit's bypass), and reporting something else.
+  it("reports each change once, whichever hook carries it", () => {
+    const { runtime, events } = makeRuntime("manual");
+    const handler = handlerOf(runtime);
+    handler.onSessionStart({ permission_mode: "manual" });
+    handler.onUserPromptSubmit({ permission_mode: "manual", prompt: "hi" });
+    handler.onPreToolUse({ permission_mode: "auto", tool_name: "Bash", tool_input: {} });
+    handler.onStop({ permission_mode: "auto" });
+    expect(cliModeReports(events)).toEqual(["manual", "auto"]);
+  });
+
+  it("ignores a payload that carries no mode", () => {
+    const { runtime, events } = makeRuntime("manual");
+    handlerOf(runtime).onSessionStart({ source: "startup" });
+    expect(cliModeReports(events)).toEqual([]);
+  });
+
+  it("never puts the mode in the chat as text", () => {
+    const { runtime, events } = makeRuntime("manual");
+    const handler = handlerOf(runtime);
+    handler.onSessionStart({ permission_mode: "auto" });
+    handler.onPreToolUse({ permission_mode: "auto", tool_name: "Bash", tool_input: {} });
+    const visible = events.filter((e) => e.type === "system_message" && !(e.text ?? "").startsWith("__"));
+    expect(visible).toHaveLength(0);
   });
 });
 
@@ -94,7 +109,7 @@ describe("TUI-only permission dialog rescue", () => {
   }
 
   it("turns the needs-your-permission notification into an interactive-only request naming the last tool", () => {
-    const { runtime, events } = makeRuntime("bypassPermissions");
+    const { runtime, events } = makeRuntime("manual");
     const req = fire(events, runtime);
     expect(req).toBeDefined();
     expect(req?.interactiveOnly).toBe(true);
@@ -104,7 +119,7 @@ describe("TUI-only permission dialog rescue", () => {
   });
 
   it("answers the dialog with keystrokes: '1' for allow, Esc for deny", () => {
-    const { runtime, events } = makeRuntime("bypassPermissions");
+    const { runtime, events } = makeRuntime("manual");
     const req = fire(events, runtime);
     const sendKey = vi.fn();
     (runtime as never as { pty: unknown }).pty = { sendKey } as never;
@@ -112,7 +127,7 @@ describe("TUI-only permission dialog rescue", () => {
     expect(runtime.notifyPermissionDecision(req?.requestId as string, { behavior: "allow" })).toBe(true);
     expect(sendKey).toHaveBeenCalledWith("1");
 
-    const second = makeRuntime("bypassPermissions");
+    const second = makeRuntime("manual");
     const req2 = fire(second.events, second.runtime);
     const sendKey2 = vi.fn();
     (second.runtime as never as { pty: unknown }).pty = { sendKey: sendKey2 } as never;
@@ -121,7 +136,7 @@ describe("TUI-only permission dialog rescue", () => {
   });
 
   it("ignores unrelated notifications", () => {
-    const { runtime, events } = makeRuntime("bypassPermissions");
+    const { runtime, events } = makeRuntime("manual");
     const handler = (runtime as never as { buildHandler(): Record<string, (p: Record<string, unknown>) => unknown> }).buildHandler();
     handler.onNotification({ message: "Claude is waiting for your input" });
     expect(events.find((e) => e.type === "permission_request")).toBeUndefined();

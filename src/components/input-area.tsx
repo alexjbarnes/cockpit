@@ -52,6 +52,7 @@ import {
   versionsForAlias,
 } from "@/lib/models";
 import { detectLanguage, extensionForLabel, shouldCollapsePaste } from "@/lib/paste-detect";
+import { effectivePermissionMode, permissionModeMismatch } from "@/lib/permission-mode";
 import type {
   ContextUsage,
   DocumentAttachment,
@@ -267,6 +268,8 @@ interface InputAreaProps {
   bypassActive: boolean;
   onSetBypass: (enabled: boolean) => void;
   permissionMode: SessionPermissionMode;
+  /** The mode the CLI reports; null until it has. */
+  cliPermissionMode?: string | null;
   onSetPermissionMode: (mode: SessionPermissionMode) => void;
   sandbox: SandboxConfig;
   onSetSandbox: (config: SandboxConfig) => void;
@@ -328,6 +331,7 @@ export function InputArea({
   bypassActive,
   onSetBypass,
   permissionMode,
+  cliPermissionMode = null,
   onSetPermissionMode,
   sandbox,
   onSetSandbox,
@@ -845,6 +849,13 @@ export function InputArea({
   // runs on the session's model — reliable only on Anthropic models, so it is
   // offered only for those. The server enforces the same gate.
   const autoModeAvailable = !isCockpitAgent && resolveProviderId(currentModel, providers) === "anthropic";
+  // Cockpit owns the permissions on this session: the CLI runs in manual and
+  // cockpit answers every prompt itself. The icon shows the mode the CLI
+  // reports, which need not be the one chosen, and the selector keeps the
+  // choice, with a note when the two part. The assistant's bypass is cockpit's
+  // alone, so the CLI's mode does not speak for it.
+  const effectiveMode = isCockpitAgent ? permissionMode : effectivePermissionMode(permissionMode, cliPermissionMode);
+  const modeMismatch = isCockpitAgent ? null : permissionModeMismatch(permissionMode, cliPermissionMode);
   const thinkingLabel = modelSelection.thinking ? (thinkingLevels.find((t) => t.value === modelSelection.thinking)?.label ?? null) : null;
   const contextLabel = modelSelection.context ? CONTEXT_SIZES[modelSelection.context].label : null;
 
@@ -1315,9 +1326,14 @@ export function InputArea({
                                 {permissionMode === "manual"
                                   ? "Every tool call asks first."
                                   : permissionMode === "auto"
-                                    ? "Claude approves safe steps; risky ones still ask."
+                                    ? "Safe steps run; risky ones are blocked until you agree in chat."
                                     : "All tool calls are auto-approved."}
                               </p>
+                              {modeMismatch && (
+                                <p className="mt-1 text-[11px] text-amber-600 dark:text-amber-400" data-testid="permission-mode-mismatch">
+                                  {modeMismatch}
+                                </p>
+                              )}
                             </div>
                           )}
 
@@ -1525,7 +1541,13 @@ export function InputArea({
               size="icon"
               variant="ghost"
               data-testid="btn-session-settings"
-              className={`h-8 w-8 ${bypassActive ? "text-orange-500" : permissionMode === "auto" ? "text-green-500" : ""}`}
+              className={`h-8 w-8 ${
+                (isCockpitAgent ? bypassActive : effectiveMode === "bypass")
+                  ? "text-orange-500"
+                  : effectiveMode === "auto"
+                    ? "text-green-500"
+                    : ""
+              }`}
               onClick={() => setOptionsOpen((v) => !v)}
             >
               <Settings2 className="h-4 w-4" />

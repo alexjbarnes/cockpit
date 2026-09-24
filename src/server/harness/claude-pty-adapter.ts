@@ -138,8 +138,6 @@ export class ClaudePtyAdapter implements HarnessAdapter {
     }
     if (config.planMode) {
       extraArgs.push("--permission-mode", "plan");
-    } else if (config.permissionMode === "bypass" && !config.cockpitAgent) {
-      extraArgs.push("--permission-mode", "bypassPermissions");
     } else if (config.permissionMode === "auto" && supportedPermissionModes().has("auto")) {
       // Auto hands permission judgement to the CLI's own safety classifier: it
       // runs on the session's model, auto-approves plan-safe calls, and fires
@@ -150,6 +148,12 @@ export class ClaudePtyAdapter implements HarnessAdapter {
       // the CLI build has no "auto" choice, fall through to manual.
       extraArgs.push("--permission-mode", "auto");
     } else if (supportedPermissionModes().has("manual")) {
+      // Bypass lands here too. Cockpit owns permissions on a bypass session:
+      // the CLI runs in manual and cockpit answers every PermissionRequest hook
+      // (and every rescued TUI dialog) with allow, so nothing is left to the
+      // CLI's own judgement. Asking for the CLI's native bypass instead would
+      // hand that decision back to whatever mode it settles on.
+      //
       // Ask for manual explicitly rather than letting the CLI pick. Its default
       // is now `auto`, whose safety classifier runs on the SESSION's model — on
       // a slow non-Anthropic one it times out and blocks the tool call outright
@@ -198,11 +202,9 @@ export class ClaudePtyAdapter implements HarnessAdapter {
       // CLI silently running in a different mode than requested.
       expectedPermissionMode: config.planMode
         ? "plan"
-        : config.permissionMode === "bypass" && !config.cockpitAgent
-          ? "bypassPermissions"
-          : config.permissionMode === "auto" && supportedPermissionModes().has("auto")
-            ? "auto"
-            : "manual",
+        : config.permissionMode === "auto" && supportedPermissionModes().has("auto")
+          ? "auto"
+          : "manual",
       onEvents: (events) => config.callbacks.onParsedEvents(events),
       onError: (err) => config.callbacks.onError(err),
       onExit: ({ exitCode, signal }) => {
