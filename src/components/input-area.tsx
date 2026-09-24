@@ -1525,7 +1525,7 @@ export function InputArea({
               size="icon"
               variant="ghost"
               data-testid="btn-session-settings"
-              className={`h-8 w-8 ${bypassActive ? "text-orange-500" : ""}`}
+              className={`h-8 w-8 ${bypassActive ? "text-orange-500" : permissionMode === "auto" ? "text-green-500" : ""}`}
               onClick={() => setOptionsOpen((v) => !v)}
             >
               <Settings2 className="h-4 w-4" />
