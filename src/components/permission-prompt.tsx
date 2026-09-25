@@ -1,9 +1,10 @@
 "use client";
 
-import { ShieldAlert } from "lucide-react";
+import { Globe, ShieldAlert } from "lucide-react";
 import { useEffect, useMemo, useRef } from "react";
 import type { PendingPermission } from "@/hooks/use-session";
 import { pathBasename, shortPath } from "@/lib/path";
+import { isSandboxEscape, NETWORK_ACCESS_TOOL } from "@/lib/sandbox-requests";
 import type { PermissionMode, PermissionSuggestion } from "@/types";
 
 function formatToolSummary(toolName: string, input: Record<string, unknown>): string {
@@ -92,9 +93,14 @@ export function PermissionPrompt({ permission, onRespond }: PermissionPromptProp
     }
   }, [permission.input]);
 
+  if (permission.toolName === NETWORK_ACCESS_TOOL) {
+    return <NetworkAccessPrompt permission={permission} input={parsed} onRespond={onRespond} />;
+  }
+
   const summary = formatToolSummary(permission.toolName, parsed);
   const suggestions = permission.suggestions;
   const hasSuggestions = suggestions && suggestions.length > 0;
+  const escapesSandbox = isSandboxEscape(parsed);
 
   return (
     <div className="mx-auto max-w-3xl" data-testid="permission-prompt">
@@ -106,6 +112,11 @@ export function PermissionPrompt({ permission, onRespond }: PermissionPromptProp
               Permission requested: <span className="font-mono">{permission.toolName}</span>
             </div>
             {summary && <div className="font-mono text-xs text-muted-foreground truncate">{summary}</div>}
+            {escapesSandbox && (
+              <div className="text-xs font-medium text-orange-600 dark:text-orange-400" data-testid="sandbox-escape-warning">
+                Runs outside the sandbox, with no file or network limits.
+              </div>
+            )}
             {permission.input && (
               <pre className="overflow-x-auto rounded bg-black/10 dark:bg-white/5 p-2 text-[11px] leading-relaxed max-h-32 overflow-y-auto">
                 {permission.input.length > 500 ? permission.input.slice(0, 500) + "\n... (truncated)" : permission.input}
@@ -148,6 +159,77 @@ export function PermissionPrompt({ permission, onRespond }: PermissionPromptProp
               <button
                 onClick={() => onRespond(permission.requestId, false, "deny")}
                 className="rounded bg-muted px-3 py-1 text-xs font-medium text-muted-foreground hover:bg-muted/80"
+              >
+                Deny
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The CLI's "Network request outside of sandbox" question: a sandboxed command
+ * wants a host that is not on the allowed list. The CLI's "Yes" allows the host
+ * for the rest of the session; "Always" is its "don't ask again for <host>",
+ * which saves a WebFetch(domain:...) allow rule in the project's local settings.
+ */
+function NetworkAccessPrompt({
+  permission,
+  input,
+  onRespond,
+}: {
+  permission: PendingPermission;
+  input: Record<string, unknown>;
+  onRespond: PermissionPromptProps["onRespond"];
+}) {
+  const allowRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    allowRef.current?.focus();
+  }, []);
+  const host = typeof input.host === "string" ? input.host : "";
+  const command = typeof input.command === "string" ? input.command : "";
+
+  return (
+    <div className="mx-auto max-w-3xl" data-testid="network-access-prompt">
+      <div className="rounded-lg border border-yellow-500/50 bg-yellow-500/10 p-4">
+        <div className="flex items-start gap-3">
+          <Globe className="h-5 w-5 shrink-0 text-yellow-500 mt-0.5" />
+          <div className="flex-1 min-w-0 space-y-2">
+            <div className="text-sm font-medium">
+              Network access requested
+              {host && (
+                <>
+                  : <span className="font-mono">{host}</span>
+                </>
+              )}
+            </div>
+            <div className="text-xs text-muted-foreground">
+              A sandboxed command wants to reach a host that isn&apos;t on the allowed list.
+            </div>
+            {command && <div className="font-mono text-xs text-muted-foreground truncate">{command}</div>}
+            <div className="flex flex-wrap gap-2 pt-1">
+              <button
+                ref={allowRef}
+                onClick={() => onRespond(permission.requestId, true, "allow")}
+                className="rounded bg-primary px-3 py-1 text-xs font-medium text-primary-foreground hover:bg-primary/90"
+                data-testid="btn-network-allow"
+              >
+                Allow for this session
+              </button>
+              <button
+                onClick={() => onRespond(permission.requestId, true, "allow_always", 0)}
+                className="rounded bg-primary/70 px-3 py-1 text-xs font-medium text-primary-foreground hover:bg-primary/60"
+                data-testid="btn-network-always"
+              >
+                {host ? `Always allow ${host}` : "Always allow this host"}
+              </button>
+              <button
+                onClick={() => onRespond(permission.requestId, false, "deny")}
+                className="rounded bg-muted px-3 py-1 text-xs font-medium text-muted-foreground hover:bg-muted/80"
+                data-testid="btn-network-deny"
               >
                 Deny
               </button>

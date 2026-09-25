@@ -1373,7 +1373,9 @@ export function InputArea({
                                 </p>
                               ) : sandbox.enabled ? (
                                 <div className="mt-3 space-y-1">
-                                  <span className="text-[11px] text-muted-foreground">Allowed network domains (one per line)</span>
+                                  <span className="text-[11px] text-muted-foreground">
+                                    Extra allowed domains for this session (one per line)
+                                  </span>
                                   <textarea
                                     data-testid="sandbox-domains"
                                     key={String(sandbox.enabled)}
@@ -1392,8 +1394,8 @@ export function InputArea({
                                     className="w-full rounded border border-border bg-background px-2 py-1 font-mono text-[11px] focus:outline-none focus:ring-1 focus:ring-ring"
                                   />
                                   <p className="text-[11px] text-muted-foreground">
-                                    Bash runs isolated and its commands auto-run, even in Manual. Empty list keeps the CLI's default network
-                                    policy.
+                                    Bash runs isolated and its commands auto-run, even in Manual. These add to the shared rules in Settings
+                                    → Sandbox, and changing them restarts the session.
                                   </p>
                                 </div>
                               ) : (

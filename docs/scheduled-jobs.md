@@ -62,6 +62,8 @@ Two consequences worth planning around:
 
 Bypass all permissions disables the allowlist for the job. Use only for trusted internal automation.
 
+Sandbox Bash runs the job's Bash in the OS sandbox under the shared rules in [Settings: Sandbox](settings.md#sandbox). Off by default, and independent of the session default, so a job only gets it when its own switch is on. A sandboxed job can only reach the domains those rules allow, and nobody is watching a scheduled run to answer a network request.
+
 ### MCP server filters
 
 Each job opts into specific MCP servers. Servers not enabled for a job are unavailable to that run.

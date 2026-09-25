@@ -39,6 +39,7 @@ export function buildJob(input: JobInput): ScheduledJob {
     mcpServers: input.mcpServers,
     mcpToolFilters: input.mcpToolFilters,
     bypassPermissions: input.bypassPermissions ?? false,
+    sandbox: input.sandbox ?? false,
     maxDurationMinutes: input.maxDurationMinutes ?? 30,
     maxRetries: input.maxRetries,
     retentionDays: input.retentionDays ?? 90,

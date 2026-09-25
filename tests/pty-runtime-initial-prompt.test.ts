@@ -289,6 +289,25 @@ describe("PtyRuntime interactive user send (sendUserText)", () => {
     logSpy.mockRestore();
   });
 
+  it("does not type into the CLI's network dialog, and points at its card instead", async () => {
+    vi.useFakeTimers();
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const { runtime, onError } = await startedRuntime();
+    transcriptMock.count = 5;
+    // Recorded from the real CLI (2.1.282). Its footer is "(esc)", neither of
+    // the phrases the generic dialog check looks for, and Enter picks "Yes".
+    (runtime as unknown as { scanForErrors(chunk: string): void }).scanForErrors(
+      "Network request outside of sandbox\nHost: example.net\nDo you want to allow this connection?\n❯ 1. Yes\n" +
+        "2. Yes, and don't ask again for example.net\n3. No, and tell Claude what to do differently (esc)\n",
+    );
+
+    await runtime.sendUserText("carry on");
+
+    expect(ptySessionMock.sendText, "Enter here would allow the connection").not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledWith(expect.stringContaining("network access request"));
+    logSpy.mockRestore();
+  });
+
   it("stops retrying when a dialog opens under the first attempt", async () => {
     vi.useFakeTimers();
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});

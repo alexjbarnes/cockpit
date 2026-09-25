@@ -284,6 +284,7 @@ describe("cockpit-config MCP server (in-process HTTP)", () => {
         contextSize: "1m",
         thinkingLevel: "max",
         bypassPermissions: true,
+        sandbox: true,
         maxDurationMinutes: 45,
         maxRetries: 3,
         retentionDays: 30,
@@ -321,6 +322,7 @@ describe("cockpit-config MCP server (in-process HTTP)", () => {
       expect(created.created.maxDurationMinutes).toBe(30);
       expect(created.created.retentionDays).toBe(90);
       expect(created.created.bypassPermissions).toBe(false);
+      expect(created.created.sandbox).toBe(false);
       expect(created.created.inboxOutput).toBe(false);
       expect(created.created.skipIfMissed).toBe(false);
       expect(created.created.enabled).toBe(true);

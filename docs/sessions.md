@@ -62,6 +62,7 @@ Each session has its own settings, separate from the defaults you set globally. 
 - Thinking level. Low, Medium, High, XHigh, Max. Only the levels the model supports are shown.
 - Runtime. Switch this session between Stream and PTY (see [Runtime mode](#runtime-mode)).
 - Permission bypass for this session.
+- Sandbox Bash, with extra allowed domains for this session on top of the shared rules (see [Settings: Sandbox](settings.md#sandbox)). Changing either restarts the CLI.
 
 Changes apply on the next turn. A context-size change restarts the underlying CLI, since the 1M switch is applied when the process spawns.
 
@@ -105,6 +106,11 @@ Tool calls that need approval show an inline prompt. Each prompt names the tool,
 - Deny
 
 Permissions are scoped per session, project, or globally. The Settings page has a bypass toggle for power users. Off by default with an orange warning when on.
+
+Two requests about the Bash sandbox always reach you, whatever the permission mode:
+
+- A command retried outside the sandbox. Its card says it runs with no file or network limits, and neither bypass nor plan mode answers it for you.
+- A sandboxed command reaching a host that isn't allowed. Claude Code asks this in its terminal, and cockpit shows it as a network access card naming the host: Allow for this session, Always allow (Claude Code saves a rule for the host in the project's local settings), or Deny. A message typed while one is waiting is held back, since the terminal would take it as the answer.
 
 ## Slash commands
 

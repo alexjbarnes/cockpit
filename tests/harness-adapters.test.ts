@@ -600,10 +600,25 @@ describe("ClaudePtyAdapter", () => {
       const handle = adapter.spawn(baseConfig());
       const runtime = mockPtyInstances[0];
       handle.respondToPermission("req-1", true, { command: "ls" });
-      expect(runtime.notifyPermissionDecision).toHaveBeenCalledWith("req-1", { behavior: "allow", updatedInput: { command: "ls" } });
+      expect(runtime.notifyPermissionDecision).toHaveBeenCalledWith(
+        "req-1",
+        { behavior: "allow", updatedInput: { command: "ls" } },
+        { always: false },
+      );
 
       handle.respondToPermission("req-2", false, undefined, undefined, "no");
-      expect(runtime.notifyPermissionDecision).toHaveBeenCalledWith("req-2", { behavior: "deny", message: "no" });
+      expect(runtime.notifyPermissionDecision).toHaveBeenCalledWith("req-2", { behavior: "deny", message: "no" }, { always: false });
+    });
+
+    it("passes a chosen suggestion on as the card's always answer", () => {
+      const handle = adapter.spawn(baseConfig());
+      const runtime = mockPtyInstances[0];
+      handle.respondToPermission("tui-net", true, { host: "example.com" }, [{ type: "addRules" }]);
+      expect(runtime.notifyPermissionDecision).toHaveBeenCalledWith(
+        "tui-net",
+        { behavior: "allow", updatedInput: { host: "example.com" } },
+        { always: true },
+      );
     });
 
     it("onExit stops the watcher and forwards code/signal to the callback", () => {

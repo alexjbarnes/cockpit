@@ -1,7 +1,7 @@
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { getClaudeDir, getCockpitCacheDir } from "@/server/paths";
+import { getClaudeDir, getCockpitCacheDir, getCockpitDir } from "@/server/paths";
 import type { SandboxConfig } from "@/types";
 import { resolveHookBridgePath } from "./hook-bridge-path";
 
@@ -39,9 +39,9 @@ export interface HookSettingsOptions {
    */
   thinkingEnabled?: boolean;
   /**
-   * OS-level Bash sandbox. When enabled, writes a `sandbox` block forcing it on
-   * for this session (plus any network allowlist). When disabled/undefined the
-   * key is left untouched, so the user's own sandbox settings still apply.
+   * OS-level Bash sandbox for this session: whether it is on and the domains
+   * this session adds. Undefined means off. The shared rules stay in the user's
+   * own ~/.claude/settings.json (see buildSessionSandboxBlock).
    */
   sandbox?: SandboxConfig;
 }
@@ -78,8 +78,14 @@ export async function prepareHookSettings(opts: HookSettingsOptions): Promise<Ho
     ? (base.permissions as Record<string, string[]>).deny
     : [];
 
+  // The user's sandbox block is not copied: the CLI reads it from their own
+  // settings file, merges its lists with this file's, and reloads it when it
+  // changes. A copy frozen in here at spawn would keep a rule the user has
+  // since removed alive until the session restarts.
+  const { sandbox: _userSandbox, ...userSettings } = base;
+
   const settings = {
-    ...base,
+    ...userSettings,
     hooks,
     permissions: {
       ...((base.permissions as Record<string, unknown>) ?? {}),
@@ -94,11 +100,7 @@ export async function prepareHookSettings(opts: HookSettingsOptions): Promise<Ho
     // Per-session thinking on/off. cockpit's selector is authoritative, so this
     // overrides any user-global alwaysThinkingEnabled when explicitly provided.
     ...(opts.thinkingEnabled !== undefined ? { alwaysThinkingEnabled: opts.thinkingEnabled } : {}),
-    // Bash sandbox. Only forced when the toggle is on: merge onto any user
-    // `sandbox` block so their filesystem/credential tuning survives, set
-    // enabled, and layer the network allowlist under network.allowedDomains.
-    // Left alone when off, so a user's own sandbox settings keep applying.
-    ...(opts.sandbox?.enabled ? { sandbox: buildSandboxBlock(base.sandbox, opts.sandbox) } : {}),
+    sandbox: buildSessionSandboxBlock(opts.sandbox),
   };
 
   const dir = await resolveSettingsDir();
@@ -185,17 +187,23 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
   return v !== null && typeof v === "object" && !Array.isArray(v);
 }
 
-/** Merge cockpit's per-session sandbox choice onto the user's own `sandbox`
- *  block: keep their filesystem/credential tuning, force enabled, and set the
- *  network allowlist only when the session provides one (an empty list leaves
- *  the user's network policy untouched rather than locking egress to nothing). */
-function buildSandboxBlock(baseSandbox: unknown, sandbox: SandboxConfig): Record<string, unknown> {
-  const base = isPlainObject(baseSandbox) ? baseSandbox : {};
-  const block: Record<string, unknown> = { ...base, enabled: true };
-  if (sandbox.allowedDomains && sandbox.allowedDomains.length > 0) {
-    const baseNetwork = isPlainObject(base.network) ? base.network : {};
-    block.network = { ...baseNetwork, allowedDomains: sandbox.allowedDomains };
-  }
+/**
+ * The sandbox block of a session's own settings file: only what cockpit decides
+ * for that session. `enabled` is always written, so the session's toggle decides
+ * whether its Bash is sandboxed. The session's domains are its additions; the
+ * CLI merges them with the lists in the user's settings. An empty list adds
+ * nothing, rather than locking egress to nothing.
+ *
+ * Cockpit's own directory is fenced from sandboxed reads whether or not this
+ * file switches the sandbox on, since another settings source can. It holds the
+ * key cockpit signs its login tokens with and the providers' API keys, and a
+ * sandboxed command that could read the one and reach cockpit's port could sign
+ * itself in and open a terminal outside the sandbox.
+ */
+function buildSessionSandboxBlock(sandbox: SandboxConfig | undefined): Record<string, unknown> {
+  const enabled = sandbox?.enabled === true;
+  const block: Record<string, unknown> = { enabled, filesystem: { denyRead: [getCockpitDir()] } };
+  if (enabled && sandbox?.allowedDomains?.length) block.network = { allowedDomains: sandbox.allowedDomains };
   return block;
 }
 

@@ -102,7 +102,7 @@ class ClaudePtyProcess implements HarnessProcess {
     requestId: string,
     allowed: boolean,
     toolInput?: Record<string, unknown>,
-    _permissionSuggestions?: unknown,
+    permissionSuggestions?: unknown,
     denyReason?: string,
   ): boolean {
     return this.runtime.notifyPermissionDecision(
@@ -110,6 +110,9 @@ class ClaudePtyProcess implements HarnessProcess {
       allowed
         ? { behavior: "allow", ...(toolInput ? { updatedInput: toolInput } : {}) }
         : { behavior: "deny", message: denyReason ?? "User denied" },
+      // A chosen suggestion is the card's "always" answer. Only a TUI dialog
+      // that has a "don't ask again" key of its own does anything with it.
+      { always: Array.isArray(permissionSuggestions) && permissionSuggestions.length > 0 },
     );
   }
 

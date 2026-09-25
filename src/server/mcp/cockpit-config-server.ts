@@ -62,6 +62,7 @@ const JOB_UPDATE_FIELDS = [
   "mcpServers",
   "mcpToolFilters",
   "bypassPermissions",
+  "sandbox",
   "maxDurationMinutes",
   "maxRetries",
   "retentionDays",
@@ -409,6 +410,11 @@ const TOOL_DEFINITIONS = [
             "Disable the allowlist entirely and approve every prompt. Defaults to false, and should normally stay false: list what the job needs in allowedTools instead. " +
             "Reserve this for automation whose unrestricted tool use the user has accepted in advance — it is a decision for them, not a way around a refusal.",
         },
+        sandbox: {
+          type: "boolean",
+          description:
+            "Run the job's Bash in the OS sandbox under the shared sandbox rules. Defaults to false. A sandboxed job's commands can only reach the domains those rules allow, so leave it off for a job that needs other network access.",
+        },
         maxDurationMinutes: { type: "number", description: "Kill the run after this long. Defaults to 30." },
         maxRetries: { type: "number", description: "Extra attempts after a failure run (not timeout/stopped). Defaults to 1." },
         retentionDays: { type: "number", description: "How long run records are kept. Defaults to 90." },
@@ -472,6 +478,7 @@ const TOOL_DEFINITIONS = [
             "Disable the allowlist entirely and approve every prompt. Switching this on to clear a permission failure trades a narrow allowlist for unrestricted tool use, which is rarely what the failure called for: " +
             "a refusal is usually one missing or too-narrow allowedTools entry, so fix that entry instead. Turn this on only when the user asked for it.",
         },
+        sandbox: { type: "boolean", description: "Run the job's Bash in the OS sandbox under the shared sandbox rules." },
         maxDurationMinutes: { type: "number" },
         maxRetries: { type: "number", description: "Extra attempts after a failure run (not timeout/stopped). Defaults to 1." },
         retentionDays: { type: "number" },
@@ -529,7 +536,7 @@ const TOOL_DEFINITIONS = [
           },
           required: ["enabled"],
           description:
-            "Bash sandbox new sessions start with. Not applied to scheduled jobs, the cockpit assistant, or on a host that cannot enforce it.",
+            "Bash sandbox new sessions start with. Not applied to scheduled jobs (each has its own sandbox switch), the cockpit assistant, or on a host that cannot enforce it.",
         },
         modelSlots: {
           type: "object",

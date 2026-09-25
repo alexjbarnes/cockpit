@@ -1,11 +1,13 @@
 import { v4 as uuidv4 } from "uuid";
+import { isSandboxEscape, NETWORK_ACCESS_TOOL } from "@/lib/sandbox-requests";
 import type { SandboxConfig } from "@/types";
+import { sandboxEscapePossible } from "./claude-sandbox-rules";
 import { cleanupHookSettings, prepareHookSettings } from "./claude-settings";
 import { fetchCliInitData } from "./cli-init-fetch";
 import { logDiag } from "./debug-logger";
 import { ONE_M_CREDITS_REQUIRED, type ParsedEvent } from "./event-parser";
 import { newPermissionRequestId, translateHookEvent } from "./hook-event-translator";
-import type { HookRouter, PermissionDecision, SessionHookHandler } from "./hook-router";
+import type { HookResponse, HookRouter, PermissionDecision, SessionHookHandler } from "./hook-router";
 import { PtySession } from "./pty-session";
 import { countTranscriptMessages } from "./transcript";
 
@@ -51,6 +53,7 @@ export interface PtyRuntimeOptions {
  */
 // biome-ignore lint/suspicious/noControlCharactersInRegex: strip ANSI escape sequences
 const ANSI_RE = /\x1b\[[0-9;]*[a-zA-Z]/g;
+const NETWORK_DIALOG_TITLE = "Network request outside of sandbox";
 
 function stringOrEmpty(value: unknown): string {
   return typeof value === "string" ? value : "";
@@ -64,9 +67,10 @@ export class PtyRuntime {
    *  along so onNotification can tell whether a rendered dialog belongs to a
    *  request the user already has a card for. */
   private readonly pendingPermissions = new Map<string, { resolve: (decision: PermissionDecision) => void; toolName: string }>();
-  /** Synthetic requests for TUI-only dialogs (see onNotification): answered
-   *  with keystrokes into the PTY, not through the hook response channel. */
-  private readonly pendingTuiDialogs = new Set<string>();
+  /** Synthetic requests for TUI-only dialogs (see onNotification), by id:
+   *  answered with keystrokes into the PTY, not through the hook response
+   *  channel. A network dialog also carries the host it asks about. */
+  private readonly pendingTuiDialogs = new Map<string, { kind: "permission" } | { kind: "network"; host?: string; command?: string }>();
   /** The permission mode the CLI last reported in a hook payload. */
   private cliPermissionMode: string | undefined;
   private lastPreToolUse: { tool: string; input?: Record<string, unknown> } | null = null;
@@ -109,6 +113,9 @@ export class PtyRuntime {
   /** Bumped by every send, and by interrupt/kill, so sendUserText's retry loop
    *  can tell its own delivery is still the current one. */
   private sendEpoch = 0;
+  /** Bumped by interrupt() and kill(), which dismiss every dialog on screen, so
+   *  a network request still being raised knows its dialog is gone. */
+  private dialogEpoch = 0;
   private ptyOutputBuffer = "";
   private errorDebounce: ReturnType<typeof setTimeout> | null = null;
   /** Fire the 1M-credits error at most once per spawn. */
@@ -326,8 +333,10 @@ export class PtyRuntime {
         logDiag(sessionId, "pty:user-send-blocked-by-dialog", { attempt, dialog });
         console.log(`[pty-runtime] refusing to type into a CLI dialog for ${sessionId.slice(0, 8)}: ${dialog}`);
         this.emitApiError(
-          `Your message was not sent. The CLI is waiting on a dialog that has to be answered in the terminal: "${dialog}". ` +
-            "Stop the session to dismiss it, then send again.",
+          dialog === NETWORK_DIALOG_TITLE
+            ? "Your message was not sent. A sandboxed command is waiting on a network access request: answer its card, then send again."
+            : `Your message was not sent. The CLI is waiting on a dialog that has to be answered in the terminal: "${dialog}". ` +
+                "Stop the session to dismiss it, then send again.",
           { keepScreen: true },
         );
         return;
@@ -388,6 +397,7 @@ export class PtyRuntime {
     // Stop any in-flight delivery retry: the user asked for this turn to end, so
     // retyping the message they interrupted would restart it behind their back.
     this.sendEpoch++;
+    this.dialogEpoch++;
     this.pty.sendKey("\x1b");
     for (const [, pending] of this.pendingPermissions) {
       pending.resolve({ behavior: "deny", message: "interrupted" });
@@ -458,6 +468,7 @@ export class PtyRuntime {
   async kill(signal?: string): Promise<void> {
     this.cancelErrorDebounce();
     this.sendEpoch++;
+    this.dialogEpoch++;
     if (this.pty) {
       this.pty.kill(signal);
       this.pty = null;
@@ -524,18 +535,54 @@ export class PtyRuntime {
     this.emit([{ type: "system_message", text: `__cli_perm_mode::${actual}` }]);
   }
 
-  /** Called by SessionManager.respondToPermission when this session is on the pty runtime. */
-  notifyPermissionDecision(requestId: string, decision: PermissionDecision): boolean {
+  /** Called by SessionManager.respondToPermission when this session is on the
+   *  pty runtime. `always` is the user's "don't ask again" choice. */
+  notifyPermissionDecision(requestId: string, decision: PermissionDecision, opts?: { always?: boolean }): boolean {
     // A TUI-only dialog has no hook response channel — the CLI refused the
     // hook's allow (frontier models require interactive confirmation for
-    // self-modifying writes) and is sitting on a rendered dialog. The only
-    // way to answer is keystrokes into the PTY cockpit owns: "1" selects the
-    // dialog's Yes option, Esc cancels it.
-    if (this.pendingTuiDialogs.has(requestId)) {
+    // self-modifying writes), or the dialog is one the CLI never routes
+    // through a hook (network access), and it is sitting on a rendered dialog.
+    // The only way to answer is keystrokes into the PTY cockpit owns: "1"
+    // selects the dialog's Yes option, Esc cancels it, and on the network
+    // dialog "2" is its "Yes, and don't ask again for <host>".
+    const dialog = this.pendingTuiDialogs.get(requestId);
+    if (dialog) {
+      if (!this.pty) {
+        this.pendingTuiDialogs.delete(requestId);
+        return false;
+      }
+      if (dialog.kind === "network" && !this.networkDialogShows(dialog.host)) {
+        // Keystrokes answer whichever dialog is on screen, so an answer meant
+        // for one host must not land on a dialog about another. A no needs no
+        // keys: the host it refuses is not being asked about, so the card just
+        // goes. A yes is raised again, to answer once the screen shows its host.
+        if (decision.behavior !== "allow") {
+          this.pendingTuiDialogs.delete(requestId);
+          logDiag(this.opts.sessionId, "pty:network-dialog-deny-not-shown", { requestId, host: dialog.host ?? null });
+          return true;
+        }
+        logDiag(this.opts.sessionId, "pty:network-dialog-host-mismatch", { requestId, host: dialog.host ?? null });
+        this.emit([
+          {
+            type: "system_message",
+            text: `Not allowing ${dialog.host}: the CLI is asking about a different host right now. Answer that request first.`,
+          },
+        ]);
+        this.emitNetworkRequest(requestId, dialog.host, dialog.command);
+        return false;
+      }
       this.pendingTuiDialogs.delete(requestId);
-      logDiag(this.opts.sessionId, "pty:tui-dialog-decision", { requestId, behavior: decision.behavior });
-      if (!this.pty) return false;
-      this.pty.sendKey(decision.behavior === "allow" ? "1" : "\x1b");
+      const key = decision.behavior !== "allow" ? "\x1b" : dialog.kind === "network" && opts?.always ? "2" : "1";
+      logDiag(this.opts.sessionId, "pty:tui-dialog-decision", {
+        requestId,
+        kind: dialog.kind,
+        behavior: decision.behavior,
+        always: !!opts?.always,
+      });
+      this.pty.sendKey(key);
+      // The answered dialog's frames are still in the append-only buffer, and
+      // blockingDialogOnScreen would read them as a dialog still waiting.
+      if (dialog.kind === "network") this.ptyOutputBuffer = "";
       return true;
     }
     const pending = this.pendingPermissions.get(requestId);
@@ -555,7 +602,7 @@ export class PtyRuntime {
 
   private buildHandler(): SessionHookHandler {
     return {
-      onPreToolUse: (payload) => {
+      onPreToolUse: async (payload) => {
         this.cancelErrorDebounce();
         this.ptyOutputBuffer = "";
         const toolName = typeof payload.tool_name === "string" ? payload.tool_name : "unknown";
@@ -575,6 +622,7 @@ export class PtyRuntime {
           events = events.filter((e) => !(e.type === "system_message" && e.text === "__tool_use_start"));
         }
         this.emit(events);
+        return this.sandboxEscapeAsk(toolName, payload.tool_input);
       },
       onPostToolUse: (payload) => {
         this.cancelErrorDebounce();
@@ -740,6 +788,10 @@ export class PtyRuntime {
         // Surface it as a real permission request; the decision comes back via
         // notifyPermissionDecision, which answers with PTY keystrokes.
         const message = typeof payload.message === "string" ? payload.message : "";
+        if (/sandboxed command needs network access/i.test(message)) {
+          void this.raiseNetworkAccessRequest();
+          return;
+        }
         if (/needs your permission/i.test(message)) {
           const tool = this.lastPreToolUse?.tool ?? "unknown";
           // The CLI notifies for a dialog it rendered itself AND for one it is
@@ -757,7 +809,7 @@ export class PtyRuntime {
             return;
           }
           const requestId = `tui-${newPermissionRequestId()}`;
-          this.pendingTuiDialogs.add(requestId);
+          this.pendingTuiDialogs.set(requestId, { kind: "permission" });
           logDiag(this.opts.sessionId, "pty:tui-dialog-detected", { requestId, lastTool: this.lastPreToolUse?.tool ?? null });
           this.emit([
             {
@@ -772,6 +824,111 @@ export class PtyRuntime {
         }
       },
       onPermissionRequest: (payload) => this.handlePermissionRequest(payload),
+    };
+  }
+
+  /**
+   * The CLI's network dialog ("Network request outside of sandbox") is drawn in
+   * the terminal only: no PermissionRequest reaches cockpit, and the sandboxed
+   * command's connection waits on it. It is raised here as a request whose
+   * answer goes back as the dialog's own keys. Its host is read off the screen,
+   * given a moment to paint, since the notification can arrive first.
+   */
+  private async raiseNetworkAccessRequest(): Promise<void> {
+    const epoch = this.dialogEpoch;
+    let host = this.networkDialogHost();
+    for (let i = 0; !host && i < 5; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      // Stop dismissed the dialog while its host was being read: raising a
+      // card now would ask about nothing, and block every send behind it.
+      if (this.exited || this.dialogEpoch !== epoch) return;
+      host = this.networkDialogHost();
+    }
+    // A repeat notification for a dialog that already has a card would give the
+    // user two cards the client cannot merge. Only a host no pending card names
+    // is a new request.
+    const pending = [...this.pendingTuiDialogs.values()].filter((d) => d.kind === "network");
+    if (pending.some((d) => !host || !d.host || d.host === host)) {
+      logDiag(this.opts.sessionId, "pty:network-dialog-already-raised", { host: host ?? null });
+      return;
+    }
+    const requestId = `tui-${newPermissionRequestId()}`;
+    const lastCommand = this.lastPreToolUse?.tool === "Bash" ? this.lastPreToolUse.input?.command : undefined;
+    const command = typeof lastCommand === "string" ? lastCommand : undefined;
+    this.pendingTuiDialogs.set(requestId, { kind: "network", host, command });
+    logDiag(this.opts.sessionId, "pty:network-dialog-detected", { requestId, host: host ?? null });
+    this.emitNetworkRequest(requestId, host, command);
+  }
+
+  private emitNetworkRequest(requestId: string, host: string | undefined, command: string | undefined): void {
+    const input: Record<string, unknown> = { ...(host ? { host } : {}), ...(command ? { command } : {}) };
+    this.emit([
+      {
+        type: "permission_request",
+        requestId,
+        toolName: NETWORK_ACCESS_TOOL,
+        toolInput: JSON.stringify(input),
+        rawToolInput: input,
+        interactiveOnly: true,
+        // Carries the card's "always" choice back to notifyPermissionDecision.
+        permissionSuggestions: [
+          {
+            type: "addRules",
+            rules: [{ toolName: NETWORK_ACCESS_TOOL, ruleContent: host ?? "" }],
+            behavior: "allow",
+            destination: "localSettings",
+          },
+        ],
+      },
+    ]);
+  }
+
+  /**
+   * The host the network dialog on screen asks about. The TUI repaints the
+   * dialog in pieces, so a single frame can come out with characters missing;
+   * over the frames in the buffer the true name is the most common reading.
+   */
+  private networkDialogHost(): string | undefined {
+    const counts = new Map<string, number>();
+    for (const m of this.recentScreen(4000).matchAll(/Host:\s*([A-Za-z0-9.*[\]:-]+)/g)) {
+      counts.set(m[1], (counts.get(m[1]) ?? 0) + 1);
+    }
+    let best: string | undefined;
+    for (const [host, n] of counts) {
+      const bestN = best ? (counts.get(best) ?? 0) : 0;
+      if (n > bestN || (n === bestN && best && host.length > best.length)) best = host;
+    }
+    return best;
+  }
+
+  /** Whether the screen is showing the network dialog for `host`. Unknown on
+   *  either side counts as a match: only a readable, different host refuses. */
+  private networkDialogShows(host: string | undefined): boolean {
+    const onScreen = this.networkDialogHost();
+    return !host || !onScreen || onScreen === host;
+  }
+
+  /**
+   * A Bash call asking to leave the sandbox is answered "ask", which makes the
+   * CLI raise a permission prompt for it in every mode, auto included, instead
+   * of deciding it without one. The prompt arrives as an ordinary
+   * PermissionRequest, and cockpit never auto-approves an escape. Calls that
+   * cannot actually leave (no sandbox, or unsandboxed commands disallowed) get
+   * no answer, so they are not held up by a prompt about nothing.
+   */
+  private async sandboxEscapeAsk(toolName: string, input: unknown): Promise<HookResponse | undefined> {
+    if (toolName !== "Bash" || !isSandboxEscape(input)) return undefined;
+    if (!(await sandboxEscapePossible(this.opts.cwd, this.opts.sandbox?.enabled === true))) return undefined;
+    logDiag(this.opts.sessionId, "pty:sandbox-escape-ask", {});
+    return {
+      stdout: JSON.stringify({
+        hookSpecificOutput: {
+          hookEventName: "PreToolUse",
+          permissionDecision: "ask",
+          permissionDecisionReason: "Runs outside the sandbox",
+        },
+      }),
+      exitCode: 0,
     };
   }
 
@@ -910,8 +1067,18 @@ export class PtyRuntime {
    * blocks every message the session will ever send.
    */
   private blockingDialogOnScreen(): string | null {
+    // The network dialog has neither footer phrase (it offers "(esc)"), and a
+    // message typed into it would answer it: Enter picks "Yes". While one is
+    // pending it blocks outright, until its card is answered or Stop clears it.
+    if ([...this.pendingTuiDialogs.values()].some((d) => d.kind === "network")) return NETWORK_DIALOG_TITLE;
     const screen = this.recentScreen(1500);
     const flat = screen.replace(/\s+/g, "");
+    // Without a pending request (Stop has just cleared them), the dialog is read
+    // off the screen: its title and its question both, with no prompt footer
+    // painted after them, since a reply merely quoting one of them is not it.
+    const lower = flat.toLowerCase();
+    const networkDialogAt = Math.min(lower.lastIndexOf("outsideofsandbox"), lower.lastIndexOf("allowthisconnection"));
+    if (networkDialogAt >= 0 && !/(shift\+tabtocycle|forshortcuts)/i.test(flat.slice(networkDialogAt))) return NETWORK_DIALOG_TITLE;
     const lastFooter = flat.toLowerCase().lastIndexOf("esctocancel");
     if (lastFooter < 0 || !/enterto\w/i.test(flat)) return null;
     // A dialog that is still open is the last thing on screen. The REPL's own

@@ -147,15 +147,41 @@ export type PermissionMode = "allow" | "allow_always" | "allow_all" | "deny";
 
 /** OS-level Bash isolation, orthogonal to permission mode. When enabled the CLI
  *  runs Bash (and its children) inside a sandbox and, in its default auto-allow
- *  mode, without a permission prompt — the OS boundary is the safety net. Only
- *  the toggle and the network allowlist are cockpit's to set; deeper tuning
- *  (filesystem paths, credentials) stays in the user's own settings. */
+ *  mode, without a permission prompt — the OS boundary is the safety net. The
+ *  rules every sandboxed session shares are SandboxRules, kept in the user's own
+ *  Claude settings; this is the per-session switch plus the domains that session
+ *  adds on top. */
 export interface SandboxConfig {
   enabled: boolean;
-  /** Domains sandboxed commands may reach. Empty/undefined leaves the CLI's
-   *  default network policy in place. Only enforced where the host has the
-   *  network backend (Linux/WSL2 need socat); ignored on an unsupported host. */
+  /** Domains this session may reach on top of the shared list. Only enforced
+   *  where the host has the network backend (Linux/WSL2 need socat). */
   allowedDomains?: string[];
+}
+
+/** The Bash sandbox rules cockpit edits in the user's own Claude settings
+ *  (~/.claude/settings.json), which apply to every sandboxed Claude session.
+ *  Lists are empty when unset; a flag left undefined takes the CLI's default. */
+export interface SandboxRules {
+  /** network.allowedDomains: hosts sandboxed commands may reach. */
+  allowedDomains: string[];
+  /** network.deniedDomains: always blocked, even when allowed elsewhere. */
+  deniedDomains: string[];
+  /** network.allowUnixSockets: socket paths sandboxed commands may connect to (macOS). */
+  allowUnixSockets: string[];
+  /** network.allowLocalBinding: lets sandboxed commands bind and reach local ports (macOS). */
+  allowLocalBinding?: boolean;
+  /** filesystem.allowWrite: paths writable beyond the working directory. */
+  allowWrite: string[];
+  /** filesystem.denyWrite: paths never writable. */
+  denyWrite: string[];
+  /** filesystem.denyRead: paths never readable. */
+  denyRead: string[];
+  /** filesystem.allowRead: paths readable again inside a denied one. */
+  allowRead: string[];
+  /** excludedCommands: commands that run outside the sandbox, after the usual permission check. */
+  excludedCommands: string[];
+  /** allowUnsandboxedCommands: whether a command may ask to run outside the sandbox (default true). */
+  allowUnsandboxedCommands?: boolean;
 }
 
 /** Whether this host can run the CLI's Bash sandbox, computed server-side. */
@@ -277,6 +303,8 @@ export interface ScheduledJob {
   mcpServers?: string[];
   mcpToolFilters?: Record<string, string[]>;
   bypassPermissions?: boolean;
+  /** Runs the job's Bash in the sandbox, under the shared SandboxRules. Off by default. */
+  sandbox?: boolean;
   maxDurationMinutes?: number;
   /** Extra attempts after a `failure` run (not `timeout`/`stopped`). Defaults to 1. */
   maxRetries?: number;

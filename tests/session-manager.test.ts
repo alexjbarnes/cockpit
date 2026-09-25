@@ -4128,6 +4128,38 @@ describe("SessionManager", () => {
       expect(s.pendingRequests.has("tui-1")).toBe(false);
     });
 
+    it("bypass never answers a request whose yes would widen the sandbox", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      s.permissionMode = "bypass";
+
+      (manager as any).applyProcessedResult(s, session.id, {
+        intermediateMessages: [],
+        emit: [],
+        systemMessages: [],
+        errors: [],
+        statusChange: null,
+        compactDone: false,
+        snapshot: null,
+        permissionActions: [
+          { type: "store", requestId: "req-plain", toolName: "Bash", rawToolInput: { command: "ls" } },
+          { type: "store", requestId: "req-escape", toolName: "Bash", rawToolInput: { command: "ls", dangerouslyDisableSandbox: true } },
+          {
+            type: "store",
+            requestId: "tui-net",
+            toolName: "SandboxNetworkAccess",
+            rawToolInput: { host: "x.example.com" },
+            interactiveOnly: true,
+          },
+        ],
+      });
+      // The ordinary call is bypass's to answer; the escape and the network
+      // access each wait for the user as a card.
+      expect(s.pendingRequests.has("req-plain")).toBe(false);
+      expect(s.pendingRequests.has("req-escape")).toBe(true);
+      expect(s.pendingRequests.has("tui-net")).toBe(true);
+    });
+
     // A session already in bypass that starts planning used to get a card for
     // every tool, and "Bypass All" on that card is a no-op when bypass is
     // already on — no way to stop them. The CLI enforces plan mode itself, so

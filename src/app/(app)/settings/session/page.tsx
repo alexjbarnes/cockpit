@@ -228,7 +228,12 @@ export default function SessionSettingsPage() {
               className="w-full rounded border border-border bg-background px-2 py-1 font-mono text-xs focus:outline-none focus:ring-1 focus:ring-ring"
             />
             <p className="text-xs text-muted-foreground">
-              New sessions run Bash isolated, and its commands run without prompts even in Manual. Scheduled jobs are not sandboxed.
+              New sessions run Bash isolated, and its commands run without prompts even in Manual. These domains are added to the shared
+              rules in{" "}
+              <button type="button" className="underline underline-offset-2" onClick={() => router.push("/settings/sandbox")}>
+                Sandbox settings
+              </button>
+              . Scheduled jobs have their own switch.
             </p>
           </div>
         ) : null}

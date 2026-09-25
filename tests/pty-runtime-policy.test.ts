@@ -41,6 +41,12 @@ vi.mock("@/server/cli-init-fetch", () => ({
   fetchCliInitData: vi.fn().mockResolvedValue(null),
 }));
 
+// Whether an escape can happen depends on settings files; here it is just the
+// session's own switch.
+vi.mock("@/server/claude-sandbox-rules", () => ({
+  sandboxEscapePossible: vi.fn(async (_cwd: string, enabled: boolean) => enabled),
+}));
+
 function makeRuntime(expected: "manual" | "plan" | "auto") {
   const events: ParsedEvent[] = [];
   const runtime = new PtyRuntime({
@@ -319,5 +325,180 @@ describe("background work: status gate and reported count", () => {
     events.length = 0;
     handler.onPreToolUse(preToolUse);
     expect(statusSignals(events), "this turn's tool calls are the user's").toHaveLength(1);
+  });
+});
+
+// The CLI's "Network request outside of sandbox" question is drawn in the
+// terminal only: no PermissionRequest reaches cockpit and the command's
+// connection waits on it. Screens as recorded from the real CLI (2.1.282),
+// including a frame whose partial repaint dropped a letter from the host.
+const NETWORK_DIALOG = [
+  "Network request outside of sandbox",
+  "Host: example.net",
+  "Do you want to allow this connection?",
+  "❯ 1. Yes",
+  "2. Yes, and don't ask again for example.net",
+  "3. No, and tell Claude what to do differently (esc)",
+].join("\n");
+const GARBLED_FRAME = "Network request outside of sandbox\nHost: exmple.net\nDo you want to alow this connectin?";
+const OTHER_HOST_DIALOG = NETWORK_DIALOG.replaceAll("example.net", "other.example.org");
+
+describe("the CLI's network access dialog", () => {
+  type Internals = {
+    buildHandler(): Record<string, (p: Record<string, unknown>) => unknown>;
+    scanForErrors(chunk: string): void;
+    blockingDialogOnScreen(): string | null;
+    pty: unknown;
+    ptyOutputBuffer: string;
+  };
+
+  function raise() {
+    const { runtime, events } = makeRuntime("manual");
+    const internals = runtime as never as Internals;
+    const handler = internals.buildHandler();
+    handler.onPreToolUse({ permission_mode: "default", tool_name: "Bash", tool_input: { command: "curl https://example.net/" } });
+    internals.scanForErrors(NETWORK_DIALOG);
+    internals.scanForErrors(GARBLED_FRAME);
+    internals.scanForErrors(NETWORK_DIALOG);
+    handler.onNotification({ message: "A sandboxed command needs network access", notification_type: "permission_prompt" });
+    const sendKey = vi.fn();
+    internals.pty = { sendKey };
+    return { runtime, events, internals, sendKey, request: () => events.filter((e) => e.type === "permission_request").at(-1) };
+  }
+
+  it("raises it as a request for the host on screen, reading past a garbled frame", async () => {
+    const { request } = raise();
+    await vi.waitFor(() => expect(request()).toBeDefined());
+    expect(request()).toMatchObject({
+      toolName: "SandboxNetworkAccess",
+      interactiveOnly: true,
+      rawToolInput: { host: "example.net", command: "curl https://example.net/" },
+    });
+    expect(request()?.requestId?.startsWith("tui-")).toBe(true);
+    expect(request()?.permissionSuggestions).toHaveLength(1);
+  });
+
+  it("answers with the dialog's own keys: 1 allows once, 2 allows always, Esc refuses", async () => {
+    for (const [decision, opts, key] of [
+      [{ behavior: "allow" }, undefined, "1"],
+      [{ behavior: "allow" }, { always: true }, "2"],
+      [{ behavior: "deny", message: "no" }, { always: true }, "\x1b"],
+    ] as const) {
+      const { runtime, sendKey, request } = raise();
+      await vi.waitFor(() => expect(request()).toBeDefined());
+      expect(runtime.notifyPermissionDecision(request()?.requestId as string, decision, opts)).toBe(true);
+      expect(sendKey).toHaveBeenCalledWith(key);
+    }
+  });
+
+  it("refuses a typed message while the dialog waits, and lets messages through once it is answered", async () => {
+    const { runtime, internals, request } = raise();
+    await vi.waitFor(() => expect(request()).toBeDefined());
+    // Enter would pick "Yes", so typing into it would answer it.
+    expect(internals.blockingDialogOnScreen()).toBe("Network request outside of sandbox");
+    runtime.notifyPermissionDecision(request()?.requestId as string, { behavior: "deny", message: "no" });
+    expect(internals.blockingDialogOnScreen()).toBeNull();
+  });
+
+  it("reads the dialog off the screen even without a pending request, until the prompt's footer is back", () => {
+    const { runtime } = makeRuntime("manual");
+    const internals = runtime as never as Internals;
+    internals.scanForErrors(NETWORK_DIALOG);
+    expect(internals.blockingDialogOnScreen()).toBe("Network request outside of sandbox");
+    internals.scanForErrors("\n❯ \n⏸ manual mode on · ? for shortcuts · ← for agents");
+    expect(internals.blockingDialogOnScreen()).toBeNull();
+  });
+
+  it("will not press yes on a dialog about another host, and raises the card again", async () => {
+    const { runtime, internals, sendKey, events, request } = raise();
+    await vi.waitFor(() => expect(request()).toBeDefined());
+    const id = request()?.requestId as string;
+    internals.ptyOutputBuffer = "";
+    internals.scanForErrors(OTHER_HOST_DIALOG);
+
+    expect(runtime.notifyPermissionDecision(id, { behavior: "allow" })).toBe(false);
+    expect(sendKey).not.toHaveBeenCalled();
+    expect(events.filter((e) => e.type === "permission_request" && e.requestId === id)).toHaveLength(2);
+    expect(events.some((e) => e.type === "system_message" && (e.text ?? "").includes("different host"))).toBe(true);
+  });
+
+  it("raises nothing for a dialog Stop dismissed while its host was still being read", async () => {
+    const { runtime, events } = makeRuntime("manual");
+    const internals = runtime as never as Internals;
+    internals.pty = { sendKey: vi.fn() };
+    // Nothing on screen yet, so the runtime waits for the host to paint.
+    internals.buildHandler().onNotification({ message: "A sandboxed command needs network access" });
+    runtime.interrupt();
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    expect(events.find((e) => e.type === "permission_request")).toBeUndefined();
+    // No phantom request is left holding every later message back.
+    internals.ptyOutputBuffer = "";
+    expect(internals.blockingDialogOnScreen()).toBeNull();
+  });
+
+  it("raises one card for a dialog the CLI notifies about twice", async () => {
+    const { internals, events, request } = raise();
+    await vi.waitFor(() => expect(request()).toBeDefined());
+    internals.buildHandler().onNotification({ message: "A sandboxed command needs network access" });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(events.filter((e) => e.type === "permission_request")).toHaveLength(1);
+  });
+
+  it("drops a deny meant for a host the screen is not asking about, pressing nothing", async () => {
+    const { runtime, internals, sendKey, events, request } = raise();
+    await vi.waitFor(() => expect(request()).toBeDefined());
+    internals.ptyOutputBuffer = "";
+    internals.scanForErrors(OTHER_HOST_DIALOG);
+
+    // Esc would refuse the other host's request instead.
+    expect(runtime.notifyPermissionDecision(request()?.requestId as string, { behavior: "deny", message: "no" })).toBe(true);
+    expect(sendKey).not.toHaveBeenCalled();
+    expect(events.filter((e) => e.type === "permission_request")).toHaveLength(1);
+  });
+
+  it("does not take a reply that merely quotes the dialog's question for the dialog", () => {
+    const { runtime } = makeRuntime("manual");
+    const internals = runtime as never as Internals;
+    internals.scanForErrors('● The prompt asks "Do you want to allow this connection?" and offers three answers.');
+    expect(internals.blockingDialogOnScreen()).toBeNull();
+  });
+
+  it("names no host when none can be read, rather than guessing", async () => {
+    const { runtime, events } = makeRuntime("manual");
+    const handler = (runtime as never as Internals).buildHandler();
+    handler.onNotification({ message: "A sandboxed command needs network access" });
+    await vi.waitFor(() => expect(events.find((e) => e.type === "permission_request")).toBeDefined(), { timeout: 2000 });
+    expect(events.find((e) => e.type === "permission_request")?.rawToolInput).toEqual({});
+  });
+});
+
+describe("a Bash call asking to leave the sandbox", () => {
+  function runtimeWith(sandboxEnabled: boolean) {
+    const runtime = new PtyRuntime({
+      sessionId: "s-escape-test",
+      cwd: "/tmp",
+      cliSessionId: "cli-1",
+      hookRouter: { register: vi.fn(), unregister: vi.fn() } as never,
+      onEvents: () => {},
+      onError: () => {},
+      onExit: () => {},
+      sandbox: { enabled: sandboxEnabled },
+    });
+    return (runtime as never as { buildHandler(): Record<string, (p: Record<string, unknown>) => unknown> }).buildHandler();
+  }
+  const escapeCall = { tool_name: "Bash", tool_input: { command: "npm test", dangerouslyDisableSandbox: true } };
+
+  it("is answered ask, so the CLI prompts for it in every mode", async () => {
+    const response = (await runtimeWith(true).onPreToolUse(escapeCall)) as { stdout: string; exitCode: number };
+    expect(response.exitCode).toBe(0);
+    expect(JSON.parse(response.stdout)).toEqual({
+      hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "ask", permissionDecisionReason: "Runs outside the sandbox" },
+    });
+  });
+
+  it("gets no answer when there is no sandbox to leave, and neither does an ordinary call", async () => {
+    expect(await runtimeWith(false).onPreToolUse(escapeCall)).toBeUndefined();
+    expect(await runtimeWith(true).onPreToolUse({ tool_name: "Bash", tool_input: { command: "npm test" } })).toBeUndefined();
+    expect(await runtimeWith(true).onPreToolUse({ tool_name: "Read", tool_input: { dangerouslyDisableSandbox: true } })).toBeUndefined();
   });
 });

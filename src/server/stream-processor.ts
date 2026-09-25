@@ -1,3 +1,4 @@
+import { widensSandbox } from "@/lib/sandbox-requests";
 import type { ChatMessage, ContentBlock, ToolUse } from "@/types";
 import type { ParsedEvent } from "./event-parser";
 
@@ -107,6 +108,8 @@ function isReadOnlyGhCommand(cmd: string): boolean {
 }
 
 const WRITE_TOOLS = new Set(["Edit", "Write", "Bash", "NotebookEdit"]);
+const PLAN_MODE_BASH_DENY =
+  "Cockpit plan mode: Bash is restricted to read-only commands (ls, cat, head, tail, wc, grep, rg, find, stat, file, du, df, tree, git status/log/diff/show/blame, etc.). Shell operators ';', '&&', '||', '>', '<', '$(...)', backticks are not allowed. Use Read/Grep/Glob for file access, or call ExitPlanMode when ready to implement.";
 const USER_FACING_TOOLS = new Set(["ExitPlanMode", "AskUserQuestion", "EnterPlanMode"]);
 
 export function isReadOnlyBashCommand(cmd: string): boolean {
@@ -419,7 +422,30 @@ export function processEvents(
           toolName,
           toolInput: event.toolInput,
           rawToolInput: event.rawToolInput,
+          permissionSuggestions: event.permissionSuggestions,
           interactiveOnly: true,
+        });
+        result.emit.push(event);
+        result.snapshot = buildSnapshot(state);
+        continue;
+      }
+      // A yes that widens the sandbox (a command leaving it, or network access)
+      // is the user's to give, so none of the shortcuts below may answer one.
+      // Plan mode still refuses an escape whose command is not read-only, as
+      // it refuses any such command.
+      if (widensSandbox(toolName, event.rawToolInput)) {
+        const cmd = (event.rawToolInput as { command?: string })?.command ?? "";
+        if (options.planMode && toolName === "Bash" && !isReadOnlyBashCommand(cmd)) {
+          result.permissionActions.push({ type: "auto_deny", requestId: event.requestId, toolName, denyReason: PLAN_MODE_BASH_DENY });
+          continue;
+        }
+        result.permissionActions.push({
+          type: "store",
+          requestId: event.requestId,
+          toolName,
+          toolInput: event.toolInput,
+          rawToolInput: event.rawToolInput,
+          permissionSuggestions: event.permissionSuggestions,
         });
         result.emit.push(event);
         result.snapshot = buildSnapshot(state);
@@ -432,12 +458,7 @@ export function processEvents(
             result.permissionActions.push({ type: "auto_approve", requestId: event.requestId, toolName, rawToolInput: event.rawToolInput });
             continue;
           }
-          result.permissionActions.push({
-            type: "auto_deny",
-            requestId: event.requestId,
-            toolName,
-            denyReason: `Cockpit plan mode: Bash is restricted to read-only commands (ls, cat, head, tail, wc, grep, rg, find, stat, file, du, df, tree, git status/log/diff/show/blame, etc.). Shell operators ';', '&&', '||', '>', '<', '$(...)', backticks are not allowed. Use Read/Grep/Glob for file access, or call ExitPlanMode when ready to implement.`,
-          });
+          result.permissionActions.push({ type: "auto_deny", requestId: event.requestId, toolName, denyReason: PLAN_MODE_BASH_DENY });
           continue;
         }
         if (WRITE_TOOLS.has(toolName)) {

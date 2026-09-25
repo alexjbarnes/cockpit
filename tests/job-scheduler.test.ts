@@ -322,6 +322,19 @@ describe("JobScheduler", () => {
       });
     });
 
+    it("sandboxes a job's Bash only when the job's own switch is on", async () => {
+      const job = makeJob({ sandbox: true });
+      const promise = scheduler.executeJob(job);
+      await vi.waitFor(() => expect(sm.sendMessage).toHaveBeenCalled());
+      sm.emitStatus("idle");
+      await promise;
+
+      expect(sm.createSession).toHaveBeenCalledWith(expect.any(String), "[job] Test Job", {
+        bypassPermissions: false,
+        sandbox: { enabled: true },
+      });
+    });
+
     it("disables MCP servers not in the job's allowed list", async () => {
       const job = makeJob({ mcpServers: ["allowed-server"] });
       const promise = scheduler.executeJob(job);

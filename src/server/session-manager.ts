@@ -17,6 +17,7 @@ import {
   recommendedEffort,
   resolveModel,
 } from "@/lib/models";
+import { widensSandbox } from "@/lib/sandbox-requests";
 import { getAssistantSettings, updateAssistantSettings } from "@/server/assistant-settings";
 import { supportedPermissionModes } from "@/server/claude-bin";
 import { getCockpitDir } from "@/server/paths";
@@ -346,9 +347,8 @@ export class SessionManager {
       modelSlots.main,
       isCockpitAgent,
     );
-    // The assistant has no sandbox control. A job passes its own (off): its
-    // editor has no such setting, and a sandbox nobody configured for it would
-    // fail any Bash that reaches a domain outside the list.
+    // The assistant has no sandbox control. A job passes its own switch, so
+    // the default for interactive sessions never decides a job's sandbox.
     const sandbox: SandboxConfig = isCockpitAgent ? { enabled: false } : enforceableSandbox(options?.sandbox ?? defaults.sandbox);
     const info: SessionInfo = {
       id,
@@ -2102,7 +2102,13 @@ export class SessionManager {
         // (tests/integration/plan-mode-permissions.spec.ts), so a request that
         // reaches cockpit in plan mode is one the CLI had already judged
         // plan-safe. Approving it by hand was the only thing the gate bought.
-      } else if (session.permissionMode === "bypass" && !ALWAYS_ASK_TOOLS.has(pa.toolName)) {
+        // Bypass answers ordinary tool calls, never one whose yes would widen the
+        // sandbox (see widensSandbox): those always reach the user.
+      } else if (
+        session.permissionMode === "bypass" &&
+        !ALWAYS_ASK_TOOLS.has(pa.toolName) &&
+        !widensSandbox(pa.toolName, pa.rawToolInput)
+      ) {
         this.respondToPermission(sessionId, pa.requestId, true, pa.rawToolInput);
         bypassedRequestIds.add(pa.requestId);
       } else {
