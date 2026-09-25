@@ -26,6 +26,13 @@ const mockHookRouter = vi.hoisted(() => ({
   getUrl: vi.fn().mockReturnValue("http://localhost:9999/hooks"),
 }));
 
+// Which permission modes exist is version-gated on `claude --help`, and CI has
+// no CLI to ask. Pin it so these tests assert cockpit's logic.
+vi.mock("@/server/claude-bin", () => ({
+  getClaudeBin: vi.fn(() => "claude"),
+  supportedPermissionModes: vi.fn(() => new Set(["acceptEdits", "auto", "bypassPermissions", "manual", "plan"])),
+}));
+
 vi.mock("@/server/pty-runtime", () => ({
   PtyRuntime: class {
     constructor(opts: Record<string, unknown>) {
