@@ -11,7 +11,7 @@ export class TranscriptWatcher {
   private timer: ReturnType<typeof setTimeout> | null = null;
   private lastSize = 0;
   private stopped = false;
-  private readonly filePath: string;
+  private filePath: string;
 
   constructor(
     private readonly sessionId: string,
@@ -67,6 +67,22 @@ export class TranscriptWatcher {
     });
   }
 
+  private follow(filePath: string): void {
+    if (this.watcher) {
+      this.watcher.close();
+      this.watcher = null;
+    }
+    if (this.polling) {
+      unwatchFile(this.filePath);
+      this.polling = false;
+    }
+    this.filePath = filePath;
+    this.lastSize = -1;
+    if (this.stopped) return;
+    if (existsSync(filePath)) this.watchWithInotify();
+    else this.watchWithPoll();
+  }
+
   private scheduleReload(): void {
     if (this.stopped) return;
     if (this.timer) clearTimeout(this.timer);
@@ -75,6 +91,16 @@ export class TranscriptWatcher {
 
   private async reload(): Promise<void> {
     try {
+      // The CLI can move the transcript (entering a worktree does), and
+      // getTranscriptPath follows it: watch the file where it now is. While it
+      // is missing there is nothing new to say, so look again shortly rather
+      // than report an empty conversation.
+      const current = getTranscriptPath(this.sessionId, this.cwd);
+      if (current !== this.filePath) this.follow(current);
+      if (!existsSync(current)) {
+        if (!this.stopped) this.timer = setTimeout(() => this.reload(), POLL_INTERVAL_MS);
+        return;
+      }
       const result = await loadTranscript(this.sessionId, this.cwd, { tailLines: 150 });
       if (result.totalSize !== this.lastSize) {
         this.lastSize = result.totalSize;

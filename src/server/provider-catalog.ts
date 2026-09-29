@@ -82,7 +82,11 @@ function saveCatalog(state: CatalogState): void {
 }
 
 export function catalogModels(): ProviderModel[] {
-  return loadCatalog()?.models ?? [];
+  // Also filtered here, not only in the mapper above, so a catalog synced by an
+  // earlier version stops offering tool-incapable models immediately rather
+  // than at the next daily resync. `undefined` is not `false`: a provider whose
+  // metadata never carried the flag keeps its models.
+  return (loadCatalog()?.models ?? []).filter((m) => m.supportsTools !== false);
 }
 
 export function hasCatalogModel(bareModelId: string): boolean {
@@ -92,10 +96,22 @@ export function hasCatalogModel(bareModelId: string): boolean {
 const PER_TOKEN_TO_PER_M = 1e6;
 
 /** Map one raw catalog entry to cockpit's ProviderModel. Returns null for
- *  entries cockpit cannot use (no text output). */
+ *  entries cockpit cannot use: no text output, or no tool calling. */
 export function mapOpenRouterModel(raw: OpenRouterRawModel): ProviderModel | null {
   const out = raw.architecture?.output_modalities;
   if (out && !out.includes("text")) return null;
+  // The CLI sends its tool definitions on every request, so a model whose
+  // endpoint will not accept them cannot run a session at all: OpenRouter
+  // answers 404 "no endpoints found that support tool use", which the CLI
+  // reports as "There's an issue with the selected model ... It may not exist
+  // or you may not have access to it" — a message that sends you looking at
+  // your key and your model id, neither of which is wrong.
+  //
+  // Note this is per model VARIANT, not per family. z-ai/glm-5.2 routes to
+  // several tool-capable endpoints; z-ai/glm-5.2:free routes to exactly one
+  // (Decart) that is not, so the family's page reads as tool-enabled while the
+  // free variant can never work. 68 of 414 entries were in this state.
+  if (!(raw.supported_parameters ?? []).includes("tools")) return null;
   const prompt = Number(raw.pricing?.prompt ?? 0);
   const completion = Number(raw.pricing?.completion ?? 0);
   // Zero prompt/completion alone is not "free": media-output models bill on

@@ -61,7 +61,8 @@ Each session has its own settings, separate from the defaults you set globally. 
 - Context size. 200K or 1M, shown as pills for models that support both.
 - Thinking level. Low, Medium, High, XHigh, Max. Only the levels the model supports are shown.
 - Runtime. Switch this session between Stream and PTY (see [Runtime mode](#runtime-mode)).
-- Permission bypass for this session.
+- Permission mode: Manual, Auto (Anthropic models only) or Bypass. The settings icon is green in Auto and orange in Bypass. It turns red when Claude Code reports a mode other than the one chosen, and the panel says which mode it is in and what that means.
+- Sandbox Bash, with extra allowed domains for this session on top of the shared rules (see [Settings: Sandbox](settings.md#sandbox)). Changing either restarts the CLI.
 
 Changes apply on the next turn. A context-size change restarts the underlying CLI, since the 1M switch is applied when the process spawns.
 
@@ -105,6 +106,11 @@ Tool calls that need approval show an inline prompt. Each prompt names the tool,
 - Deny
 
 Permissions are scoped per session, project, or globally. The Settings page has a bypass toggle for power users. Off by default with an orange warning when on.
+
+Two requests about the Bash sandbox always reach you, whatever the permission mode:
+
+- A command retried outside the sandbox. Its card says it runs with no file or network limits, and neither bypass nor plan mode answers it for you.
+- A sandboxed command reaching a host that isn't allowed. Claude Code asks this in its terminal, and cockpit shows it as a network access card naming the host: Allow for this session, Always allow (Claude Code saves a rule for the host in the project's local settings), or Deny. A message typed while one is waiting is held back, since the terminal would take it as the answer.
 
 ## Slash commands
 
@@ -165,6 +171,7 @@ The queue:
 - Surfaces a queue indicator in the chat. Tap it to open the queue modal.
 - Lets you edit (moves the message back to the input area), delete, or reorder queued messages.
 - Auto-pauses when you interrupt Claude, so a half-finished thought does not get sent on resume. The modal has a Resume button to release the paused queue.
+- Waits behind a compaction, and is delivered once it finishes. Interrupting a compaction cancels it: the chat shows "Compaction cancelled, context not reduced", and the paused queue can be resumed as usual.
 
 ## Side questions (/btw)
 

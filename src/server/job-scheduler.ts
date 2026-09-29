@@ -1,6 +1,7 @@
 import { mkdirSync } from "node:fs";
 import { v4 as uuidv4 } from "uuid";
 import { getJobScratchpadDir } from "@/server/paths";
+import { trustDirectory } from "@/server/workspace-trust";
 import type { IssueStatusSchedule, JobRun, JobRunToolUse, ScheduledJob } from "@/types";
 import { findMissedRun, getJobSchedules, matchesCron, scheduleToCron } from "./cron-utils";
 import { logDiag } from "./debug-logger";
@@ -544,8 +545,20 @@ export class JobScheduler {
 
     const jobCwd = job.cwd || getJobScratchpadDir(job.id);
     mkdirSync(getJobScratchpadDir(job.id), { recursive: true });
+    // The CLI's trust dialog is one cockpit cannot answer — it would type the
+    // prompt into it and die, reporting only "went idle without producing any
+    // assistant message". A job runs unattended, so there is nobody to answer
+    // it either: whichever directory the job's author pointed it at, that
+    // choice is the trust decision, and it is a smaller grant than the agent
+    // and tools they already scheduled to run there.
+    if (trustDirectory(jobCwd)) {
+      logDiag(job.id, "job:scratchpad-trusted", { runId, cwd: jobCwd });
+    }
     const sessionInfo = this.sessionManager.createSession(jobCwd, `[job] ${job.name}`, {
       bypassPermissions: !!job.bypassPermissions,
+      // The job's own switch, never the session default: a default switched on
+      // for interactive work must not reach a job whose author left it off.
+      sandbox: { enabled: job.sandbox === true },
       runtime: job.runtime,
       // Only an inbox-reporting job gets a run context, and only a run context
       // gets the cockpit MCP server. A job that never reports keeps no reach

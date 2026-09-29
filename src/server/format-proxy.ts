@@ -218,6 +218,62 @@ export function anthropicToOpenAIRequest(body: AnthropicRequest, opts?: { effort
   return out;
 }
 
+// ── Usage, including prompt caching ─────────────────────────────────────
+
+/**
+ * The upstream's usage block. Cached prompt tokens are reported under two
+ * different names depending on the door: `prompt_tokens_details.cached_tokens`
+ * is the OpenAI-compatible field most gateways use, and DeepSeek reports
+ * `prompt_cache_hit_tokens` / `prompt_cache_miss_tokens` instead. Read both.
+ *
+ * Worth knowing: caching on these providers is automatic prefix caching, not
+ * the Anthropic `cache_control` breakpoints the CLI sends. Those breakpoints do
+ * not survive translation (the request builder keeps only a block's type/text),
+ * which costs nothing here because the upstream never wanted them — but it does
+ * mean nothing in a translated request can influence what gets cached.
+ */
+interface OpenAIUsage {
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  prompt_tokens_details?: { cached_tokens?: number } | null;
+  prompt_cache_hit_tokens?: number;
+  prompt_cache_miss_tokens?: number;
+}
+
+/** Prompt tokens served from the upstream's cache, whichever name it used. */
+function cachedPromptTokens(usage: OpenAIUsage | null | undefined): number {
+  return usage?.prompt_tokens_details?.cached_tokens ?? usage?.prompt_cache_hit_tokens ?? 0;
+}
+
+/**
+ * Usage in Anthropic's shape, with the cache hit split out.
+ *
+ * Anthropic's `input_tokens` EXCLUDES cache reads while OpenAI-style
+ * `prompt_tokens` includes them, so the cached part has to be subtracted or
+ * every consumer that sums the three fields — the context gauge, the session
+ * token report — double-counts it.
+ */
+function anthropicUsage(usage: OpenAIUsage | null | undefined): {
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_input_tokens: number;
+} {
+  const prompt = usage?.prompt_tokens ?? 0;
+  const cached = Math.min(cachedPromptTokens(usage), prompt);
+  return { input_tokens: prompt - cached, output_tokens: usage?.completion_tokens ?? 0, cache_read_input_tokens: cached };
+}
+
+/** Cache fields for the proxy log, so hit rate is answerable from debug.jsonl. */
+function cacheLogFields(usage: OpenAIUsage | null | undefined): Record<string, number | null> {
+  const prompt = usage?.prompt_tokens ?? 0;
+  const cached = cachedPromptTokens(usage);
+  return {
+    cachedInputTokens: cached,
+    cacheMissTokens: usage?.prompt_cache_miss_tokens ?? (prompt ? prompt - cached : 0),
+    cacheHitRatio: prompt > 0 ? Math.round((cached / prompt) * 100) / 100 : null,
+  };
+}
+
 // ── Response translation (OpenAI → Anthropic) ───────────────────────────
 
 const STOP_REASON: Record<string, string> = {
@@ -248,7 +304,7 @@ interface OpenAIResponse {
     };
     finish_reason?: string;
   }>;
-  usage?: { prompt_tokens?: number; completion_tokens?: number };
+  usage?: OpenAIUsage;
   error?: { message?: string };
 }
 
@@ -272,10 +328,7 @@ export function openAIToAnthropicResponse(body: OpenAIResponse): Record<string, 
     content,
     stop_reason: STOP_REASON[choice?.finish_reason ?? "stop"] ?? "end_turn",
     stop_sequence: null,
-    usage: {
-      input_tokens: body.usage?.prompt_tokens ?? 0,
-      output_tokens: body.usage?.completion_tokens ?? 0,
-    },
+    usage: anthropicUsage(body.usage),
   };
 }
 
@@ -293,7 +346,7 @@ interface OpenAIChunk {
     };
     finish_reason?: string | null;
   }>;
-  usage?: { prompt_tokens?: number; completion_tokens?: number } | null;
+  usage?: OpenAIUsage | null;
 }
 
 /** Stateful translator: feed OpenAI SSE lines, collect Anthropic SSE text.
@@ -305,7 +358,7 @@ export class StreamTranslator {
   private openBlock: "none" | "text" | "tool" | "thinking" = "none";
   private openToolIndex = -1;
   private finishReason: string | null = null;
-  private usage: { prompt_tokens?: number; completion_tokens?: number } | null = null;
+  private usage: OpenAIUsage | null = null;
   private buffer = "";
 
   private event(name: string, data: Record<string, unknown>): string {
@@ -420,7 +473,7 @@ export class StreamTranslator {
 
   /** Usage from the final OpenAI chunk (stream_options.include_usage), for
    *  metering after the stream closes. */
-  getUsage(): { prompt_tokens?: number; completion_tokens?: number } | null {
+  getUsage(): OpenAIUsage | null {
     return this.usage;
   }
 
@@ -435,7 +488,9 @@ export class StreamTranslator {
       // message_start went out with zeros. The CLI merges message_delta usage
       // into its transcript record; without input_tokens the context gauge
       // reads 0 forever and the UI hides the indicator.
-      usage: { input_tokens: this.usage?.prompt_tokens ?? 0, output_tokens: this.usage?.completion_tokens ?? 0 },
+      // Cache reads ride along as cache_read_input_tokens, which is what makes
+      // a proxied session's cache figures anything other than zero.
+      usage: anthropicUsage(this.usage),
     });
     out += this.event("message_stop", {});
     this.started = false;
@@ -513,6 +568,13 @@ function is200Saturation(peek: string, emptyBody: boolean): boolean {
   const t = peek.trimStart();
   if (t.startsWith("event: error")) return true;
   if (t.startsWith("{") && t.slice(0, 200).includes('"type":"error"')) return true;
+  // OpenRouter also refuses through a plain {"error":{...}} object with HTTP
+  // 200 — moderation on :free models, or "no endpoints found that support X".
+  // Measured live (2026-08-23): the CLI's streaming attempt received zero
+  // events and its non-streaming retry received exactly this shape, which it
+  // reports as "body is JSON but not a Message". Anthropic Messages never
+  // carry an "error" key, so its presence in a 200 body is always an error.
+  if (t.startsWith("{") && t.slice(0, 200).includes('"error"')) return true;
   return false;
 }
 
@@ -521,6 +583,25 @@ function is200Saturation(peek: string, emptyBody: boolean): boolean {
  *  error than the CLI's generic one. */
 function saturationMessage(peek: string): string {
   return peek.match(/"message"\s*:\s*"([^"]+)"/)?.[1] ?? "Upstream provider is temporarily saturated";
+}
+
+/** The built-in providers served by opencode.ai. Kept as literals rather than
+ *  imported from providers.ts, which imports this module. */
+const OPENCODE_PROVIDER_IDS = new Set(["zen", "zen-go"]);
+
+/** OpenCode groups a conversation's requests by x-opencode-session and warns
+ *  that from 2026-09-06 requests without one may be rejected; the grouping is
+ *  also what lets their side keep a prompt cache warm across a turn. The CLI
+ *  already stamps every request with X-Claude-Code-Session-Id, which is stable
+ *  for the life of a conversation and distinct per subagent, so it is the id to
+ *  forward. Vendor-specific, so it goes to OpenCode alone and not to whatever
+ *  endpoint a custom provider points at. Passthrough upstreams need nothing:
+ *  they get the CLI's headers verbatim. Only the translated path rebuilds them
+ *  from scratch. */
+function conversationHeader(req: IncomingMessage, providerId: string): Record<string, string> {
+  const id = req.headers["x-claude-code-session-id"];
+  if (!OPENCODE_PROVIDER_IDS.has(providerId) || typeof id !== "string" || !id) return {};
+  return { "x-opencode-session": id };
 }
 
 export class FormatProxy {
@@ -767,6 +848,15 @@ export class FormatProxy {
       status: upstreamRes.status,
       contentType: upstreamRes.headers.get("content-type"),
       streamed: !!reader,
+      // A JSON 200 is the shape that slips past saturation detection when a new
+      // refusal appears; logging its start makes any such case answerable from
+      // debug.jsonl instead of ending at the CLI's "malformed response" again.
+      bodyPeek:
+        reader && (upstreamRes.headers.get("content-type") ?? "").includes("json")
+          ? firstChunk
+            ? new TextDecoder().decode(firstChunk).slice(0, 256)
+            : ""
+          : undefined,
     });
     res.writeHead(upstreamRes.status, { "Content-Type": upstreamRes.headers.get("content-type") ?? "application/json" });
     if (!reader) {
@@ -808,7 +898,7 @@ export class FormatProxy {
     });
     const init: RequestInit = {
       method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${upstream.apiKey}` },
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${upstream.apiKey}`, ...conversationHeader(req, providerId) },
       body: JSON.stringify(openaiBody),
     };
     let upstreamRes: Response;
@@ -879,6 +969,7 @@ export class FormatProxy {
         finishReason: body.choices?.[0]?.finish_reason ?? null,
         inputTokens: body.usage?.prompt_tokens ?? null,
         outputTokens: body.usage?.completion_tokens ?? null,
+        ...cacheLogFields(body.usage),
       });
       if (body.usage) {
         this.onUsage?.({
@@ -921,6 +1012,7 @@ export class FormatProxy {
       aborted,
       inputTokens: usage?.prompt_tokens ?? null,
       outputTokens: usage?.completion_tokens ?? null,
+      ...cacheLogFields(usage),
     });
     if (usage) {
       this.onUsage?.({

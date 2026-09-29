@@ -44,7 +44,8 @@ vi.mock("@/server/session-prefs", () => ({
 vi.mock("@/server/defaults", () => ({
   getDefaults: () => ({
     thinkingLevel: "high",
-    bypassAllPermissions: false,
+    permissionMode: "manual",
+    sandbox: { enabled: false },
     diffStyle: "split",
     dismissKeyboardOnSend: true,
     thinkingExpanded: false,

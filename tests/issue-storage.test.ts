@@ -13,10 +13,12 @@ import { onIssueStatusChange } from "@/server/issue-events";
 import {
   addIssueAttachment,
   addIssueComment,
+  allowedStatusesFor,
   applyIssueUpdate,
   applyProjectUpdate,
   buildIssue,
   buildProject,
+  deleteIssue,
   deleteProject,
   getIssue,
   getProject,
@@ -799,7 +801,6 @@ describe("applyIssueUpdate", () => {
 
     it("rejects an invalid status", () => {
       const issue = freshIssue();
-      // @ts-expect-error deliberately wrong-typed, mirroring an unvalidated REST body
       expect(() => applyIssueUpdate(issue, { status: "Definitely Not A Status" }, USER)).toThrow(/status must be one of/i);
     });
 
@@ -849,7 +850,6 @@ describe("applyIssueUpdate", () => {
 
     it("validates the whole patch before mutating anything: one bad field rejects the entire update, including its otherwise-valid fields", () => {
       const issue = freshIssue();
-      // @ts-expect-error deliberately wrong-typed, mirroring an unvalidated REST body
       expect(() => applyIssueUpdate(issue, { title: "New valid title", status: "nonsense" }, USER)).toThrow();
       // Confirm no partial application: title must still be untouched.
       expect(issue.title).toBe("Original");
@@ -948,5 +948,103 @@ describe("persistAttachmentFile", () => {
     const src = path.join(dir, "case.jpg");
     writeFileSync(src, "bytes");
     expect(persistAttachmentFile("ck-9", src)).toContain(path.join(getIssueAttachmentsRoot(), "CK-9"));
+  });
+});
+
+describe("deleteIssue", () => {
+  it("removes only the named issue from its project's file", () => {
+    const project = buildProject({ name: "Delete", prefix: "DL" });
+    saveProject(project);
+    const a = buildIssue({ projectId: project.id, title: "a" }, { kind: "user" });
+    const b = buildIssue({ projectId: project.id, title: "b" }, { kind: "user" });
+    saveIssue(a);
+    saveIssue(b);
+
+    expect(deleteIssue(a.key)).toBe(true);
+    expect(loadIssues(project.id).map((i) => i.key)).toEqual([b.key]);
+  });
+
+  it("returns false for a key that matches nothing, so a caller can 404", () => {
+    const project = buildProject({ name: "Empty", prefix: "EM" });
+    saveProject(project);
+
+    expect(deleteIssue("EM-404"), "real project, no such issue").toBe(false);
+    expect(deleteIssue("GONE-1"), "no such project").toBe(false);
+    expect(deleteIssue("nonsense"), "not a key at all").toBe(false);
+    expect(deleteIssue(""), "empty key").toBe(false);
+  });
+
+  it("takes the issue's attachment files with it", () => {
+    const project = buildProject({ name: "Files", prefix: "FL" });
+    saveProject(project);
+    const issue = buildIssue({ projectId: project.id, title: "with a screenshot" }, { kind: "user" });
+    saveIssue(issue);
+
+    const source = path.join(dir, "shot.png");
+    writeFileSync(source, "not really a png");
+    const stored = persistAttachmentFile(issue.key, source);
+    expect(existsSync(stored), "the file is copied into cockpit's own store").toBe(true);
+
+    expect(deleteIssue(issue.key)).toBe(true);
+    expect(existsSync(stored), "an issue's attachments must not outlive it").toBe(false);
+  });
+
+  it("leaves another issue's attachments alone", () => {
+    const project = buildProject({ name: "Files2", prefix: "FT" });
+    saveProject(project);
+    const doomed = buildIssue({ projectId: project.id, title: "goes" }, { kind: "user" });
+    const keeper = buildIssue({ projectId: project.id, title: "stays" }, { kind: "user" });
+    saveIssue(doomed);
+    saveIssue(keeper);
+
+    const source = path.join(dir, "keep.png");
+    writeFileSync(source, "keep me");
+    const keeperFile = persistAttachmentFile(keeper.key, source);
+
+    expect(deleteIssue(doomed.key)).toBe(true);
+    expect(existsSync(keeperFile)).toBe(true);
+  });
+});
+
+describe("per-project status config", () => {
+  it("buildProject validates custom statuses: non-empty, unique, no built-in collision, trimmed", () => {
+    expect(() => buildProject({ name: "x", prefix: "CK", customStatuses: [{ name: "  " }] })).toThrow(/non-empty/);
+    expect(() => buildProject({ name: "x", prefix: "CK", customStatuses: [{ name: "Backlog" }] })).toThrow(/collides/);
+    expect(() => buildProject({ name: "x", prefix: "CK", customStatuses: [{ name: "Blocked" }, { name: "blocked" }] })).toThrow(
+      /duplicate/i,
+    );
+    const p = buildProject({ name: "x", prefix: "CK", customStatuses: [{ name: " Blocked ", color: "bg-red-500" }] });
+    expect(p.customStatuses).toEqual([{ name: "Blocked", color: "bg-red-500" }]);
+  });
+
+  it("buildProject validates disabledStatuses only names built-ins", () => {
+    expect(() => buildProject({ name: "x", prefix: "CK", disabledStatuses: ["Nope"] })).toThrow(/built-in/);
+    expect(buildProject({ name: "x", prefix: "CK", disabledStatuses: ["Refining"] }).disabledStatuses).toEqual(["Refining"]);
+  });
+
+  it("allowedStatusesFor is the built-ins plus the project's customs", () => {
+    const p = buildProject({ name: "x", prefix: "CK", customStatuses: [{ name: "Blocked" }] });
+    expect(allowedStatusesFor(p)).toEqual(expect.arrayContaining(["Backlog", "Done", "Blocked"]));
+    expect(allowedStatusesFor(undefined)).not.toContain("Blocked");
+  });
+
+  it("applyIssueUpdate accepts a project custom status but refuses an unknown one, and defaults to built-ins only", () => {
+    const project = makeProject("CK", { customStatuses: [{ name: "Blocked" }] });
+    const issue = buildIssue({ projectId: project.id, title: "t" }, USER);
+    const allowed = allowedStatusesFor(project);
+
+    expect(applyIssueUpdate(issue, { status: "Blocked" }, USER, allowed).status).toBe("Blocked");
+    expect(() => applyIssueUpdate(issue, { status: "Nonsense" }, USER, allowed)).toThrow(/must be one of/);
+    // Back-compat: with no allowed set, only built-ins pass.
+    expect(() => applyIssueUpdate(issue, { status: "Blocked" }, USER)).toThrow(/must be one of/);
+  });
+
+  it("applyProjectUpdate adds/removes customs and toggles built-ins", () => {
+    const p = makeProject("CK");
+    const updated = applyProjectUpdate(p, { customStatuses: [{ name: "Blocked" }], disabledStatuses: ["Refining"] });
+    expect(updated.customStatuses).toEqual([{ name: "Blocked" }]);
+    expect(updated.disabledStatuses).toEqual(["Refining"]);
+    const cleared = applyProjectUpdate(updated, { customStatuses: [] });
+    expect(cleared.customStatuses).toEqual([]);
   });
 });

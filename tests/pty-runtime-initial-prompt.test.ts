@@ -7,6 +7,7 @@ import type { HookRouter, SessionHookHandler } from "@/server/hook-router";
 const ptySessionMock = vi.hoisted(() => ({
   start: vi.fn().mockResolvedValue(undefined),
   sendText: vi.fn().mockResolvedValue(undefined),
+  sendKey: vi.fn(),
   kill: vi.fn(),
 }));
 
@@ -24,7 +25,9 @@ vi.mock("@/server/pty-session", () => ({
     }
     resize() {}
     sendSlash() {}
-    sendKey() {}
+    sendKey(key: string) {
+      return ptySessionMock.sendKey(key);
+    }
   },
 }));
 
@@ -48,7 +51,12 @@ vi.mock("@/server/transcript", () => ({
 import { ONE_M_CREDITS_REQUIRED } from "@/server/event-parser";
 import { PtyRuntime } from "@/server/pty-runtime";
 
-function makeRuntime(): { runtime: PtyRuntime; getHandler: () => SessionHookHandler | null } {
+function makeRuntime(): {
+  runtime: PtyRuntime;
+  getHandler: () => SessionHookHandler | null;
+  onError: ReturnType<typeof vi.fn>;
+  onEvents: ReturnType<typeof vi.fn>;
+} {
   let handler: SessionHookHandler | null = null;
   const router = {
     register: vi.fn((_sessionId: string, h: SessionHookHandler) => {
@@ -59,17 +67,19 @@ function makeRuntime(): { runtime: PtyRuntime; getHandler: () => SessionHookHand
     getUrl: vi.fn(() => "http://localhost:9999/hook"),
   } as unknown as HookRouter;
 
+  const onError = vi.fn();
+  const onEvents = vi.fn();
   const runtime = new PtyRuntime({
     sessionId: "sess-1",
     cwd: "/tmp/job",
     cliSessionId: "sess-1",
     hookRouter: router,
-    onEvents: () => {},
-    onError: () => {},
+    onEvents,
+    onError,
     onExit: () => {},
   });
 
-  return { runtime, getHandler: () => handler };
+  return { runtime, getHandler: () => handler, onError, onEvents };
 }
 
 describe("PtyRuntime initial-prompt delivery", () => {
@@ -158,6 +168,7 @@ describe("PtyRuntime interactive user send (sendUserText)", () => {
   beforeEach(() => {
     ptySessionMock.start.mockClear().mockResolvedValue(undefined);
     ptySessionMock.sendText.mockClear().mockResolvedValue(undefined);
+    ptySessionMock.sendKey.mockClear();
     transcriptMock.count = 0;
   });
 
@@ -168,41 +179,323 @@ describe("PtyRuntime interactive user send (sendUserText)", () => {
   // Start a runtime and confirm its initial prompt so we reach a live REPL, then
   // clear the spy so assertions see only the interactive send.
   async function startedRuntime() {
-    const { runtime, getHandler } = makeRuntime();
-    const started = runtime.start("init");
+    const made = makeRuntime();
+    const started = made.runtime.start("init");
     await vi.advanceTimersByTimeAsync(0);
-    getHandler()?.onUserPromptSubmit?.({ prompt: "init" });
+    made.getHandler()?.onUserPromptSubmit?.({ prompt: "init" });
     await started;
     ptySessionMock.sendText.mockClear();
-    return runtime;
+    made.onEvents.mockClear();
+    made.onError.mockClear();
+    return made;
   }
 
-  it("logs 'NO turn' when an interactive send writes no transcript turn (swallowed input)", async () => {
+  it("types the message once when the CLI confirms it", async () => {
+    vi.useFakeTimers();
+    const { runtime, getHandler } = await startedRuntime();
+    transcriptMock.count = 5;
+
+    const sent = runtime.sendUserText("hello");
+    await vi.advanceTimersByTimeAsync(0);
+    getHandler()?.onUserPromptSubmit?.({ prompt: "hello" });
+    await sent;
+
+    expect(ptySessionMock.sendText).toHaveBeenCalledTimes(1);
+    expect(ptySessionMock.sendText).toHaveBeenCalledWith("hello");
+  });
+
+  // The reported bug: the REPL swallows the keystrokes, so the message is never
+  // sent while the session sits there showing a spinner. It is retyped now.
+  it("retypes the message when the REPL swallows it", async () => {
     vi.useFakeTimers();
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
-    const runtime = await startedRuntime();
-    transcriptMock.count = 5; // baseline at send time
+    const { runtime, getHandler } = await startedRuntime();
+    transcriptMock.count = 5;
 
-    await runtime.sendUserText("@reviewer take a look");
-    expect(ptySessionMock.sendText).toHaveBeenCalledWith("@reviewer take a look");
+    const sent = runtime.sendUserText("@reviewer take a look");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(ptySessionMock.sendText).toHaveBeenCalledTimes(1);
 
-    // Transcript never grows in the window -> the send produced no turn.
-    await vi.advanceTimersByTimeAsync(12000);
+    // No hook, no transcript growth: swallowed. The window lapses and it retries.
+    await vi.advanceTimersByTimeAsync(4000);
+    expect(ptySessionMock.sendText).toHaveBeenCalledTimes(2);
     expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("produced NO turn"));
+
+    getHandler()?.onUserPromptSubmit?.({ prompt: "@reviewer take a look" });
+    await sent;
+    expect(ptySessionMock.sendText).toHaveBeenCalledTimes(2);
     logSpy.mockRestore();
   });
 
-  it("stays quiet when the interactive send starts a turn (transcript grows)", async () => {
+  it("does not retype a message that landed when the hook is lost", async () => {
     vi.useFakeTimers();
-    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
-    const runtime = await startedRuntime();
+    const { runtime } = await startedRuntime();
     transcriptMock.count = 5;
 
-    await runtime.sendUserText("hello");
-    transcriptMock.count = 6; // a user turn was written
+    const sent = runtime.sendUserText("hello");
+    await vi.advanceTimersByTimeAsync(0);
+    transcriptMock.count = 6; // the CLI wrote the user turn; the hook never arrived
 
-    await vi.advanceTimersByTimeAsync(12000);
-    expect(logSpy).not.toHaveBeenCalledWith(expect.stringContaining("produced NO turn"));
+    await vi.advanceTimersByTimeAsync(4000);
+    await sent;
+    expect(ptySessionMock.sendText, "resending here would double-submit the message").toHaveBeenCalledTimes(1);
+  });
+
+  it("gives up after three attempts, tells the user, and unsticks the spinner", async () => {
+    vi.useFakeTimers();
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const { runtime, onError, onEvents } = await startedRuntime();
+    transcriptMock.count = 5;
+
+    const sent = runtime.sendUserText("hello");
+    await vi.advanceTimersByTimeAsync(4000 * 3 + 50);
+    await sent;
+
+    expect(ptySessionMock.sendText).toHaveBeenCalledTimes(3);
+    expect(onError).toHaveBeenCalledWith(expect.stringContaining("never reached Claude"));
+    // The empty message_done is what drives the session back to idle, so the
+    // session does not sit "running" on a message the CLI never received.
+    expect(onEvents.mock.calls.some((c) => c[0][0]?.type === "message_done")).toBe(true);
+    logSpy.mockRestore();
+  });
+
+  // Verbatim from a user's debug log (Mac, 2026-08-18, label
+  // pty:user-send-no-turn): the CLI's /auto-mode-setup wizard, which cockpit
+  // could not see and typed three messages into. The footer arrives with its
+  // spaces already eaten by the TUI's per-character cursor moves, which is why
+  // the detector matches whitespace-blind — keep this sample as recorded.
+  // The healthy REPL footer, verbatim from the same log: no "Esc to cancel", so
+  // it must read as a clear screen.
+  const IDLE_FOOTER =
+    "\\r\u276f \\r\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\\r\u23f5\u23f5automodeon (shift+tabtocycle)\u00b7\u2190foragents71125tokens\\r\\n";
+
+  const AUTO_MODE_DIALOG =
+    "\r❯ /auto-mode-setup \r\r────────────────────────\rSet up auto mode for your environment?\r\n" +
+    "ClaudeCodereadsthisproject,yourrecentClaudesessions,andoptionallyyourshellhistoryandotherrepositories.\r\n" +
+    "HowyouuseClaudehere◀Mixed ▶\r\n❯Alsoscanshellhistory[✔]\r\nAlsoscanyourotherrepos[]\r\n\r\nContinue\r\n" +
+    "\r\n←/→tochangeusage·Entertocontinue·Esctocancel\r\n";
+
+  it("does not type into a CLI dialog, and names it", async () => {
+    vi.useFakeTimers();
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const { runtime, onError } = await startedRuntime();
+    transcriptMock.count = 5;
+    (runtime as unknown as { scanForErrors(chunk: string): void }).scanForErrors(AUTO_MODE_DIALOG);
+
+    await runtime.sendUserText("That branch doesn't exist, we've already merged.");
+
+    expect(ptySessionMock.sendText, "keystrokes here answer the dialog, they do not send the message").not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledWith(expect.stringContaining("Set up auto mode for your environment?"));
+    logSpy.mockRestore();
+  });
+
+  it("does not type into the CLI's network dialog, and points at its card instead", async () => {
+    vi.useFakeTimers();
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const { runtime, onError } = await startedRuntime();
+    transcriptMock.count = 5;
+    // Recorded from the real CLI (2.1.282). Its footer is "(esc)", neither of
+    // the phrases the generic dialog check looks for, and Enter picks "Yes".
+    (runtime as unknown as { scanForErrors(chunk: string): void }).scanForErrors(
+      "Network request outside of sandbox\nHost: example.net\nDo you want to allow this connection?\n❯ 1. Yes\n" +
+        "2. Yes, and don't ask again for example.net\n3. No, and tell Claude what to do differently (esc)\n",
+    );
+
+    await runtime.sendUserText("carry on");
+
+    expect(ptySessionMock.sendText, "Enter here would allow the connection").not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledWith(expect.stringContaining("network access request"));
+    logSpy.mockRestore();
+  });
+
+  it("stops retrying when a dialog opens under the first attempt", async () => {
+    vi.useFakeTimers();
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const { runtime } = await startedRuntime();
+    transcriptMock.count = 5;
+
+    const sent = runtime.sendUserText("hello");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(ptySessionMock.sendText).toHaveBeenCalledTimes(1);
+
+    // The send opened a dialog rather than starting a turn. Retyping would drive
+    // it — a checkbox per attempt, in the reported case.
+    (runtime as unknown as { scanForErrors(chunk: string): void }).scanForErrors(AUTO_MODE_DIALOG);
+    await vi.advanceTimersByTimeAsync(4000 * 3 + 50);
+    await sent;
+
+    expect(ptySessionMock.sendText).toHaveBeenCalledTimes(1);
+    logSpy.mockRestore();
+  });
+
+  it("still retries when the screen is an ordinary idle REPL", async () => {
+    vi.useFakeTimers();
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const { runtime } = await startedRuntime();
+    transcriptMock.count = 5;
+    // The healthy footer must not read as a dialog, or every send on an idle
+    // session would be refused.
+    (runtime as unknown as { scanForErrors(chunk: string): void }).scanForErrors(IDLE_FOOTER);
+
+    const sent = runtime.sendUserText("hello");
+    await vi.advanceTimersByTimeAsync(4000 + 50);
+    expect(ptySessionMock.sendText).toHaveBeenCalledTimes(2);
+
+    transcriptMock.count = 6;
+    await vi.advanceTimersByTimeAsync(4000 + 50);
+    await sent;
+    logSpy.mockRestore();
+  });
+
+  // The CLI puts "esc to cancel" on its ordinary busy line too, so matching that
+  // alone refused every send while the CLI was merely working — shipped in
+  // 04281d0 and caught by tests/integration/turn-timing.spec.ts, which could not
+  // get a turn to start at all. A spinner offers no way to commit a decision,
+  // which is what separates it from a dialog.
+  const BUSY_LINE = "\r⠋ Accessing workspace: /tmp/demo\r\n\r\n esc to cancel\r\n";
+
+  it("does not mistake the CLI's busy line for a dialog", async () => {
+    vi.useFakeTimers();
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const { runtime, onError } = await startedRuntime();
+    transcriptMock.count = 5;
+    (runtime as unknown as { scanForErrors(chunk: string): void }).scanForErrors(BUSY_LINE);
+
+    const sent = runtime.sendUserText("hello");
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(ptySessionMock.sendText, "the CLI is working, not waiting on an answer").toHaveBeenCalledTimes(1);
+    expect(onError).not.toHaveBeenCalled();
+
+    transcriptMock.count = 6;
+    await vi.advanceTimersByTimeAsync(4000 + 50);
+    await sent;
+    logSpy.mockRestore();
+  });
+
+  // Verbatim from the harness against CLI 2.1.240: the spawn-time trust dialog,
+  // already auto-answered by handleTrustDialog, followed by the REPL banner it
+  // returns to. Nothing cleared the output buffer between spawn and the first
+  // hook, so this stale dialog read as live and refused the session's very first
+  // message. The idle footer painted after the dialog is the proof it is gone.
+  const ANSWERED_TRUST_DIALOG =
+    "\rAccessing workspace: /tmp/demo\r\nQuick safety check: Is this a project you created or one you trust?\r\n" +
+    "❯ 1. Yes, I trust this folder\r\n  2. No, exit\r\nEnter to confirm · Esc to cancel\r\n" +
+    "╭─── Claude Code v2.1.240 ───╮\r\n│ Welcome back! │\r\n╰────╯\r\n" +
+    "⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents\r\n";
+
+  it("does not mistake an already-answered spawn dialog for a live one", async () => {
+    vi.useFakeTimers();
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const { runtime, onError } = await startedRuntime();
+    transcriptMock.count = 5;
+    (runtime as unknown as { scanForErrors(chunk: string): void }).scanForErrors(ANSWERED_TRUST_DIALOG);
+
+    const sent = runtime.sendUserText("hello");
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(ptySessionMock.sendText, "the prompt is back; the dialog was answered at spawn").toHaveBeenCalledTimes(1);
+    expect(onError).not.toHaveBeenCalled();
+
+    transcriptMock.count = 6;
+    await vi.advanceTimersByTimeAsync(4000 + 50);
+    await sent;
+    logSpy.mockRestore();
+  });
+
+  it("stops retrying once the user interrupts", async () => {
+    vi.useFakeTimers();
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const { runtime, onError } = await startedRuntime();
+    transcriptMock.count = 5;
+
+    const sent = runtime.sendUserText("hello");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(ptySessionMock.sendText).toHaveBeenCalledTimes(1);
+
+    runtime.interrupt();
+    await vi.advanceTimersByTimeAsync(4000 * 3 + 50);
+    await sent;
+
+    expect(ptySessionMock.sendText, "the user ended the turn; do not type into it again").toHaveBeenCalledTimes(1);
+    expect(onError, "an abandoned send is not a delivery failure").not.toHaveBeenCalled();
+    logSpy.mockRestore();
+  });
+
+  // Stopping has to leave the CLI at an input box. One Esc only backs a wizard
+  // out by one step, and until the screen is clear every send is refused while
+  // the session is already idle, i.e. the user has nothing left to press.
+  const systemTexts = (onEvents: ReturnType<typeof vi.fn>) =>
+    onEvents.mock.calls.flatMap((c) =>
+      (c[0] as { type: string; text?: string }[]).filter((e) => e.type === "system_message").map((e) => e.text),
+    );
+
+  it("keeps pressing Esc until the CLI screen is clear", async () => {
+    vi.useFakeTimers();
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const { runtime, onEvents } = await startedRuntime();
+    const feed = (chunk: string) => (runtime as unknown as { scanForErrors(c: string): void }).scanForErrors(chunk);
+    feed(AUTO_MODE_DIALOG);
+
+    runtime.interrupt();
+    expect(ptySessionMock.sendKey).toHaveBeenCalledTimes(1);
+    expect(ptySessionMock.sendKey).toHaveBeenLastCalledWith("\x1b");
+
+    // The wizard answers that Esc with its previous step, so the repaint the
+    // check reads is still a dialog.
+    await vi.advanceTimersByTimeAsync(100);
+    feed(AUTO_MODE_DIALOG);
+    await vi.advanceTimersByTimeAsync(400);
+    expect(ptySessionMock.sendKey, "a dialog still on the fresh screen gets another Esc").toHaveBeenCalledTimes(2);
+
+    // That one lands: the repaint is an ordinary REPL footer.
+    await vi.advanceTimersByTimeAsync(100);
+    feed(IDLE_FOOTER);
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(ptySessionMock.sendKey, "screen is clear, stop pressing keys").toHaveBeenCalledTimes(2);
+    // Stopping an already-idle session changes nothing else on screen, so the
+    // outcome has to be said out loud, naming the dialog that went.
+    // The title carries the CLI's own echoed "> /auto-mode-setup" prompt with it,
+    // which is what blockingDialogOnScreen already reports on the refusal path.
+    const said = systemTexts(onEvents);
+    expect(said).toHaveLength(1);
+    expect(said[0]).toContain("Cleared the CLI");
+    expect(said[0]).toContain("Set up auto mode for your environment?");
+    logSpy.mockRestore();
+  });
+
+  it("presses Esc once when nothing modal is on screen", async () => {
+    vi.useFakeTimers();
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const { runtime, onEvents } = await startedRuntime();
+    (runtime as unknown as { scanForErrors(c: string): void }).scanForErrors(IDLE_FOOTER);
+
+    runtime.interrupt();
+    // Well past every pass. A blind repeat here would open the CLI's own rewind
+    // picker, so an idle screen must cost exactly the interrupt's own Esc.
+    await vi.advanceTimersByTimeAsync(400 * 4);
+    expect(ptySessionMock.sendKey).toHaveBeenCalledTimes(1);
+    // Every ordinary stop goes through here. Nothing was blocking, so nothing is
+    // reported — the turn ending is its own feedback.
+    expect(systemTexts(onEvents), "an ordinary stop must not narrate itself").toEqual([]);
+    logSpy.mockRestore();
+  });
+
+  it("gives up rather than spinning on a dialog that ignores Esc", async () => {
+    vi.useFakeTimers();
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const { runtime, onEvents } = await startedRuntime();
+    const feed = (chunk: string) => (runtime as unknown as { scanForErrors(c: string): void }).scanForErrors(chunk);
+
+    runtime.interrupt();
+    for (let i = 0; i < 6; i++) {
+      await vi.advanceTimersByTimeAsync(100);
+      feed(AUTO_MODE_DIALOG);
+      await vi.advanceTimersByTimeAsync(400);
+    }
+    // The interrupt's own Esc plus one per bounded pass, then it stops.
+    expect(ptySessionMock.sendKey).toHaveBeenCalledTimes(4);
+    expect(systemTexts(onEvents)).toContainEqual(expect.stringContaining("has to be answered in the terminal"));
     logSpy.mockRestore();
   });
 });
@@ -257,5 +550,51 @@ describe("PtyRuntime API error scanning", () => {
     vi.advanceTimersByTime(10_000);
     expect(onError).toHaveBeenCalledTimes(1);
     expect(onError.mock.calls[0][0]).toContain("529");
+  });
+
+  // Live sequence, session cd45ba16 on 2026-09-21: the format proxy relayed an
+  // upstream 400 from OpenCode Go, the CLI printed the provider's sentence, and
+  // 40ms later the StopFailure hook arrived with nothing in it. Cockpit reported
+  // "Unknown error (unknown)" and the one actionable line was never shown.
+  it("reports the screen's API error when StopFailure arrives with an empty payload", () => {
+    const { runtime, onError, onEvents } = runtimeWithSpies();
+    const handler: SessionHookHandler = (runtime as any).buildHandler();
+    (runtime as any).scanForErrors(
+      "API Error: 400 Upstream request failed: This Go model requires Global regions. Select Global in your workspace's Privacy settings to use it.",
+    );
+
+    handler.onStopFailure?.({ error_type: "unknown", error_message: "Unknown error" });
+
+    expect(onError).toHaveBeenCalledTimes(1);
+    const reported = onError.mock.calls[0][0] as string;
+    expect(reported).toContain("This Go model requires Global regions");
+    expect(reported).toContain("(HTTP 400)");
+    expect(reported).not.toContain("Unknown error");
+    expect(reported).not.toContain("(unknown)");
+    // The transcript's system line carries the same text, not the placeholder.
+    const texts = onEvents.mock.calls
+      .flatMap((c) => c[0] as { type: string; text?: string }[])
+      .filter((e) => e.type === "system_message")
+      .map((e) => e.text ?? "");
+    expect(texts.some((t) => t.includes("This Go model requires Global regions"))).toBe(true);
+  });
+
+  it("keeps a StopFailure payload that does say something, screen or no screen", () => {
+    const { runtime, onError } = runtimeWithSpies();
+    const handler: SessionHookHandler = (runtime as any).buildHandler();
+    (runtime as any).scanForErrors("API Error: 400 stale text from an earlier turn");
+
+    handler.onStopFailure?.({ error_type: "auth_error", error_message: "Invalid API key" });
+
+    expect(onError).toHaveBeenCalledWith("Invalid API key (auth_error)");
+  });
+
+  it("falls back to the placeholder when neither the payload nor the screen has an error", () => {
+    const { runtime, onError } = runtimeWithSpies();
+    const handler: SessionHookHandler = (runtime as any).buildHandler();
+
+    handler.onStopFailure?.({});
+
+    expect(onError).toHaveBeenCalledWith("Unknown error (unknown)");
   });
 });

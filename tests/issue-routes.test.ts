@@ -17,7 +17,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { NextRequest } from "next/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { buildIssue, buildProject, saveIssue, saveProject } from "@/server/issue-storage";
+import { buildIssue, buildProject, getIssue, saveIssue, saveProject } from "@/server/issue-storage";
 import type { Project } from "@/types";
 
 vi.mock("@/server/auth", () => ({
@@ -160,5 +160,82 @@ describe("POST /api/issues", () => {
 
     expect(res.status).toBe(201);
     expect((await res.json()).issue.title).toBe("A real issue");
+  });
+});
+
+// Deleting an issue is permanent and only reachable from the UI, so the
+// route is the whole guard: a key that resolves to nothing must not read as a
+// successful deletion, and a delete must not take anything else with it.
+describe("DELETE /api/issues/[key]", () => {
+  it("removes the issue and leaves its siblings alone", async () => {
+    const { DELETE } = await import("@/app/api/issues/[key]/route");
+    const project = makeProject("DEL");
+    const doomed = buildIssue({ projectId: project.id, title: "goes" }, { kind: "user" });
+    const keeper = buildIssue({ projectId: project.id, title: "stays" }, { kind: "user" });
+    saveIssue(doomed);
+    saveIssue(keeper);
+
+    const res = await DELETE(authedReq(`http://localhost/api/issues/${doomed.key}`, { method: "DELETE" }), {
+      params: Promise.resolve({ key: doomed.key }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(getIssue(doomed.key)).toBeUndefined();
+    expect(getIssue(keeper.key)?.title).toBe("stays");
+  });
+
+  it("answers 404 for a key that resolves to nothing, rather than a cheerful ok", async () => {
+    const { DELETE } = await import("@/app/api/issues/[key]/route");
+    makeProject("NOPE");
+    for (const key of ["NOPE-99", "MISSING-1", "not-a-key", ""]) {
+      const res = await DELETE(authedReq(`http://localhost/api/issues/${key}`, { method: "DELETE" }), {
+        params: Promise.resolve({ key }),
+      });
+      expect(res.status, `key "${key}"`).toBe(404);
+    }
+  });
+
+  it("refuses an unauthenticated delete", async () => {
+    const { DELETE } = await import("@/app/api/issues/[key]/route");
+    const project = makeProject("AUTH");
+    const issue = buildIssue({ projectId: project.id, title: "keep me" }, { kind: "user" });
+    saveIssue(issue);
+
+    const unauthed = new NextRequest(`http://localhost/api/issues/${issue.key}`, { method: "DELETE" });
+    const res = await DELETE(unauthed, { params: Promise.resolve({ key: issue.key }) });
+
+    expect(res.status).toBe(401);
+    expect(getIssue(issue.key), "the issue must survive a rejected request").toBeDefined();
+  });
+
+  it("matches the key case-insensitively, the way getIssue does", async () => {
+    const { DELETE } = await import("@/app/api/issues/[key]/route");
+    const project = makeProject("CASE");
+    const issue = buildIssue({ projectId: project.id, title: "lower" }, { kind: "user" });
+    saveIssue(issue);
+
+    const res = await DELETE(authedReq(`http://localhost/api/issues/${issue.key.toLowerCase()}`, { method: "DELETE" }), {
+      params: Promise.resolve({ key: issue.key.toLowerCase() }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(getIssue(issue.key)).toBeUndefined();
+  });
+
+  it("does not rewind the key counter, so a deleted key is never reused", async () => {
+    const { DELETE } = await import("@/app/api/issues/[key]/route");
+    // The key is how an issue is named in branches, PR titles, worktree paths
+    // and other issues' comments. Handing it to a different issue later would
+    // silently repoint all of them.
+    const project = makeProject("KEEP");
+    const first = buildIssue({ projectId: project.id, title: "first" }, { kind: "user" });
+    saveIssue(first);
+
+    await DELETE(authedReq(`http://localhost/api/issues/${first.key}`, { method: "DELETE" }), {
+      params: Promise.resolve({ key: first.key }),
+    });
+
+    const next = buildIssue({ projectId: project.id, title: "second" }, { kind: "user" });
+    expect(next.key).not.toBe(first.key);
   });
 });

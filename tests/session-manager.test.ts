@@ -16,6 +16,20 @@ vi.mock("node:child_process", () => ({
   }),
 }));
 
+// Which permission modes exist is version-gated on `claude --help`, and CI has
+// no CLI to ask. Pin it so these tests assert cockpit's logic.
+vi.mock("@/server/claude-bin", () => ({
+  getClaudeBin: vi.fn(() => "claude"),
+  supportedPermissionModes: vi.fn(() => new Set(["acceptEdits", "auto", "bypassPermissions", "manual", "plan"])),
+}));
+
+// Sandbox support is a host property (bubblewrap/socat/OS). Pin it so the
+// setSandbox tests exercise cockpit's gate rather than the CI host.
+const { sbSupported } = vi.hoisted(() => ({ sbSupported: { value: true } }));
+vi.mock("@/server/sandbox", () => ({
+  sandboxSupport: () => ({ supported: sbSupported.value, networkIsolation: sbSupported.value, platform: "linux" }),
+}));
+
 vi.mock("@/server/debug-logger", () => ({
   debugLog: vi.fn(),
   logRawLine: vi.fn(),
@@ -34,6 +48,7 @@ vi.mock("@/server/transcript", () => ({
   findSessionCwd: () => Promise.resolve(null),
   getTranscriptPath: () => "/tmp/fake-transcript.jsonl",
   loadPromptHistory: () => Promise.resolve([]),
+  sumTranscriptUsage: () => Promise.resolve({ input: 0, output: 0, cacheRead: 0, cacheCreate: 0 }),
 }));
 
 // session-manager pulls only getJob from job-storage, to label config proposals.
@@ -64,7 +79,8 @@ vi.mock("@/server/session-prefs", () => ({
 vi.mock("@/server/defaults", () => ({
   getDefaults: () => ({
     thinkingLevel: "high",
-    bypassAllPermissions: false,
+    permissionMode: "manual",
+    sandbox: { enabled: false },
     diffStyle: "split",
     dismissKeyboardOnSend: true,
     thinkingExpanded: false,
@@ -147,7 +163,8 @@ describe("SessionManager", () => {
       const orig = defaultsMod.getDefaults;
       (defaultsMod as { getDefaults: () => unknown }).getDefaults = () => ({
         thinkingLevel: "high",
-        bypassAllPermissions: false,
+        permissionMode: "manual",
+        sandbox: { enabled: false },
         diffStyle: "split",
         dismissKeyboardOnSend: true,
         thinkingExpanded: false,
@@ -252,7 +269,8 @@ describe("SessionManager", () => {
       const origPrefs = prefsMod.getSessionPrefs;
       (defaultsMod as { getDefaults: () => unknown }).getDefaults = () => ({
         thinkingLevel: "high",
-        bypassAllPermissions: false,
+        permissionMode: "manual",
+        sandbox: { enabled: false },
         diffStyle: "split",
         dismissKeyboardOnSend: true,
         thinkingExpanded: false,
@@ -279,7 +297,8 @@ describe("SessionManager", () => {
       const origPrefs = prefsMod.getSessionPrefs;
       (defaultsMod as { getDefaults: () => unknown }).getDefaults = () => ({
         thinkingLevel: "high",
-        bypassAllPermissions: false,
+        permissionMode: "manual",
+        sandbox: { enabled: false },
         diffStyle: "split",
         dismissKeyboardOnSend: true,
         thinkingExpanded: false,
@@ -467,7 +486,7 @@ describe("SessionManager", () => {
       expect(s.info.status).toBe("idle");
     });
 
-    it("flushes a message queued during compacting once __compact::hook_done clears the flag", () => {
+    it("defers a message queued during a manual compaction past the PostCompact hook", () => {
       const session = manager.createSession("/tmp");
       const s = (manager as any).sessions.get(session.id)!;
       s.compacting = true;
@@ -489,9 +508,12 @@ describe("SessionManager", () => {
       (manager as any).applyProcessedResult(s, session.id, result);
 
       expect(s.compacting).toBe(false);
-      // flushQueuedMessage shifted the queued message back through
-      // sendMessage, which (compacting now false) proceeds to spawn.
-      expect(s.queuedMessages).toHaveLength(0);
+      // Not flushed at the hook: typing now would land in a REPL still rendering
+      // the compaction (the message would be swallowed and lost). The flush is
+      // deferred to the next transcript update — the delivery half is covered in
+      // tests/session-manager-pty-unit.test.ts.
+      expect(s.pendingCompactFlush).toBe(true);
+      expect(s.queuedMessages).toHaveLength(1);
     });
 
     // An auto-compact fires mid-turn when the context fills (verified: it fires
@@ -704,6 +726,40 @@ describe("SessionManager", () => {
     });
   });
 
+  describe("spawning on a model that no longer resolves", () => {
+    it("refuses, and says why, instead of sending a foreign id to Anthropic", async () => {
+      // The provider's base URL and key ride on the resolved model. When a
+      // model is delisted — or filtered out as unusable, which is what happens
+      // to a model whose endpoint refuses tool calls — spawning anyway would
+      // send "openrouter:whatever" to Anthropic with Anthropic's credentials.
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      const systems: string[] = [];
+      s.emitter.on("system", (_id: string, text: string) => systems.push(text));
+
+      s.info.model = "openrouter:z-ai/glm-5.2:free";
+
+      (manager as any).spawnProcess(s, session.id);
+
+      expect(s.harnessProcess, "nothing may be spawned").toBeFalsy();
+      const message = systems.find((t) => t.includes("no longer available"));
+      expect(message).toBeTruthy();
+      expect(message).toContain("tool calls");
+    });
+
+    it("still spawns for an unqualified Anthropic model", async () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      const systems: string[] = [];
+      s.emitter.on("system", (_id: string, text: string) => systems.push(text));
+
+      s.info.model = "sonnet";
+      (manager as any).spawnProcess(s, session.id);
+
+      expect(systems.find((t) => t.includes("no longer available"))).toBeUndefined();
+    });
+  });
+
   describe("setThinkingLevel", () => {
     it("sets thinking level on session", () => {
       const session = manager.createSession("/tmp");
@@ -786,6 +842,25 @@ describe("SessionManager", () => {
       const session = manager.createSession("/tmp");
       manager.clearBypassAllPermissions(session.id);
       expect(manager.isBypassActive(session.id)).toBe(false);
+    });
+
+    // "default" was this mode's name until the CLI dropped the choice in
+    // 2.1.251. Turning bypass off went on asking for it, so a live session was
+    // told to switch to a mode that no longer exists.
+    it("returns a live session to manual, not the retired default mode", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      s.permissionMode = "bypass";
+      const writeControlRequest = vi.fn((_payload: Record<string, unknown>) => true);
+      s.harnessProcess = { isAlive: true, writeControlRequest, kill: vi.fn() };
+
+      manager.clearBypassAllPermissions(session.id);
+
+      const modes = writeControlRequest.mock.calls
+        .map(([payload]) => (payload as any).request)
+        .filter((r) => r.subtype === "set_permission_mode")
+        .map((r) => r.mode);
+      expect(modes).toEqual(["manual"]);
     });
   });
 
@@ -1225,7 +1300,7 @@ describe("SessionManager", () => {
       const systemMessages: string[] = [];
       manager.onSystem(session.id, (msg) => systemMessages.push(msg));
       manager.setBypassAllPermissions(session.id);
-      expect(systemMessages.some((msg) => msg.includes("__bypass_state::on"))).toBe(true);
+      expect(systemMessages.some((msg) => msg.includes("__perm_mode::bypass"))).toBe(true);
     });
 
     it("deactivates bypass via clearBypassAllPermissions", () => {
@@ -1242,7 +1317,7 @@ describe("SessionManager", () => {
       const systemMessages: string[] = [];
       manager.onSystem(session.id, (msg) => systemMessages.push(msg));
       manager.clearBypassAllPermissions(session.id);
-      expect(systemMessages.some((msg) => msg.includes("__bypass_state::off"))).toBe(true);
+      expect(systemMessages.some((msg) => msg.includes("__perm_mode::manual"))).toBe(true);
     });
 
     it("handles multiple activations gracefully", () => {
@@ -1257,6 +1332,303 @@ describe("SessionManager", () => {
       manager.clearBypassAllPermissions(session.id);
       manager.clearBypassAllPermissions(session.id);
       expect(manager.isBypassActive(session.id)).toBe(false);
+    });
+  });
+
+  describe("setPermissionMode (manual | auto | bypass)", () => {
+    const zenProvider = JSON.stringify([
+      {
+        id: "zen",
+        name: "OpenCode Zen",
+        isBuiltin: true,
+        envVars: {},
+        models: [{ modelId: "ds-free", displayName: "ds", effortLevels: [], contextSizes: ["200k"] }],
+        enabledModels: ["ds-free"],
+      },
+    ]);
+    async function seedZen() {
+      const { writeFileSync } = await import("node:fs");
+      const { join } = await import("node:path");
+      writeFileSync(join(process.env.COCKPIT_CONFIG_DIR!, "providers.json"), zenProvider);
+    }
+
+    it("moves between the three modes on an Anthropic session and emits each", () => {
+      const session = manager.createSession("/tmp"); // default "sonnet" resolves as Anthropic
+      const msgs: string[] = [];
+      manager.onSystem(session.id, (m) => msgs.push(m));
+      expect(manager.getPermissionMode(session.id)).toBe("manual");
+
+      manager.setPermissionMode(session.id, "auto");
+      expect(manager.getPermissionMode(session.id)).toBe("auto");
+      expect(manager.isBypassActive(session.id)).toBe(false);
+
+      manager.setPermissionMode(session.id, "bypass");
+      expect(manager.getPermissionMode(session.id)).toBe("bypass");
+      expect(manager.isBypassActive(session.id)).toBe(true);
+
+      manager.setPermissionMode(session.id, "manual");
+      expect(manager.getPermissionMode(session.id)).toBe("manual");
+
+      expect(msgs).toContain("__perm_mode::auto");
+      expect(msgs).toContain("__perm_mode::bypass");
+      expect(msgs).toContain("__perm_mode::manual");
+    });
+
+    it("clamps auto to manual on a non-Anthropic model, whose classifier would hang", async () => {
+      await seedZen();
+      const session = manager.createSession("/tmp");
+      manager.setModel(session.id, "zen:ds-free");
+
+      manager.setPermissionMode(session.id, "auto");
+      expect(manager.getPermissionMode(session.id)).toBe("manual");
+    });
+
+    it("drops auto back to manual when the session switches onto a non-Anthropic model", async () => {
+      await seedZen();
+      const session = manager.createSession("/tmp"); // Anthropic
+      manager.setPermissionMode(session.id, "auto");
+      expect(manager.getPermissionMode(session.id)).toBe("auto");
+
+      manager.setModel(session.id, "zen:ds-free");
+      expect(manager.getPermissionMode(session.id)).toBe("manual");
+    });
+
+    // On the PTY runtime bypass is cockpit answering prompts while the CLI
+    // stays manual, so the CLI has nothing to restart for.
+    it("switches between manual and bypass on a PTY session without restarting the CLI", () => {
+      const session = manager.createSession("/tmp", undefined, { runtime: "pty" });
+      const respawn = vi.spyOn(manager as any, "scheduleRespawnForPermissions");
+      manager.setPermissionMode(session.id, "bypass");
+      manager.setPermissionMode(session.id, "manual");
+      expect(respawn).not.toHaveBeenCalled();
+
+      manager.setPermissionMode(session.id, "auto");
+      expect(respawn, "auto is a different CLI mode, so that one restarts").toHaveBeenCalledTimes(1);
+      respawn.mockRestore();
+    });
+
+    it("refuses bypass for a cockpit agent, whose bypass is applied server-side", () => {
+      const session = manager.createSession("/tmp", undefined, { cockpitAgent: true });
+      manager.setPermissionMode(session.id, "bypass");
+      expect(manager.getPermissionMode(session.id)).toBe("manual");
+    });
+  });
+
+  describe("session defaults for new and restored sessions", () => {
+    const zenProvider = JSON.stringify([
+      {
+        id: "zen",
+        name: "OpenCode Zen",
+        isBuiltin: true,
+        envVars: {},
+        models: [{ modelId: "ds-free", displayName: "ds", effortLevels: [], contextSizes: ["200k"] }],
+        enabledModels: ["ds-free"],
+      },
+    ]);
+    async function seedZen() {
+      const { writeFileSync } = await import("node:fs");
+      const { join } = await import("node:path");
+      writeFileSync(join(process.env.COCKPIT_CONFIG_DIR!, "providers.json"), zenProvider);
+    }
+    async function withDefaults(overrides: Record<string, unknown>, fn: () => void | Promise<void>) {
+      const defaultsMod = await import("@/server/defaults");
+      const orig = defaultsMod.getDefaults;
+      (defaultsMod as { getDefaults: () => unknown }).getDefaults = () => ({
+        thinkingLevel: "high",
+        permissionMode: "manual",
+        sandbox: { enabled: false },
+        diffStyle: "split",
+        dismissKeyboardOnSend: true,
+        thinkingExpanded: false,
+        modelSlots: { main: "sonnet" },
+        ...overrides,
+      });
+      try {
+        await fn();
+      } finally {
+        (defaultsMod as { getDefaults: () => unknown }).getDefaults = orig;
+      }
+    }
+    async function withPrefs(prefs: Record<string, unknown>, fn: () => void | Promise<void>) {
+      const prefsMod = await import("@/server/session-prefs");
+      const orig = prefsMod.getSessionPrefs;
+      (prefsMod as { getSessionPrefs: (id: string) => unknown }).getSessionPrefs = () => prefs;
+      try {
+        await fn();
+      } finally {
+        (prefsMod as { getSessionPrefs: (id: string) => unknown }).getSessionPrefs = orig;
+      }
+    }
+
+    // Stored at creation, like the model and thinking level, so a later change
+    // to the default cannot move an existing session on its next restart.
+    it("starts a new session in the default mode, and stores it", async () => {
+      const prefsMod = await import("@/server/session-prefs");
+      await withDefaults({ permissionMode: "auto" }, () => {
+        const session = manager.createSession("/tmp");
+        expect(manager.getPermissionMode(session.id)).toBe("auto");
+        expect(vi.mocked(prefsMod.setSessionPrefs)).toHaveBeenCalledWith(session.id, expect.objectContaining({ permissionMode: "auto" }));
+      });
+    });
+
+    it("starts in manual when the default is auto but the default model is not Anthropic", async () => {
+      await seedZen();
+      await withDefaults({ permissionMode: "auto", modelSlots: { main: "zen:ds-free" } }, () => {
+        const session = manager.createSession("/tmp");
+        expect(manager.getPermissionMode(session.id)).toBe("manual");
+      });
+    });
+
+    // A job always passes its own flag, so it never inherits the default: an
+    // unattended run has nobody to answer the cards auto still raises.
+    it("lets an explicit flag override the default, as a scheduled job's does", async () => {
+      await withDefaults({ permissionMode: "bypass" }, () => {
+        const job = manager.createSession("/tmp", "[job] nightly", { bypassPermissions: false });
+        expect(manager.getPermissionMode(job.id)).toBe("manual");
+      });
+      await withDefaults({ permissionMode: "auto" }, () => {
+        const session = manager.createSession("/tmp", undefined, { bypassPermissions: true });
+        expect(manager.getPermissionMode(session.id)).toBe("bypass");
+      });
+    });
+
+    it("keeps a cockpit agent in manual whatever the default", async () => {
+      await withDefaults({ permissionMode: "bypass" }, () => {
+        const session = manager.createSession("/tmp", undefined, { cockpitAgent: true });
+        expect(manager.getPermissionMode(session.id)).toBe("manual");
+      });
+    });
+
+    it("restores a session with no stored mode on the default, and honours a legacy flag", async () => {
+      await withDefaults({ permissionMode: "auto" }, async () => {
+        await withPrefs({ modelSlots: { main: "sonnet" } }, () => {
+          expect(manager.getPermissionMode(manager.ensureSession("restored-no-mode", "/tmp").info.id)).toBe("auto");
+        });
+        await withPrefs({ modelSlots: { main: "sonnet" }, bypassAllPermissions: true }, () => {
+          expect(manager.getPermissionMode(manager.ensureSession("restored-legacy", "/tmp").info.id)).toBe("bypass");
+        });
+      });
+    });
+
+    it("starts a new session with the default sandbox, and stores it", async () => {
+      const prefsMod = await import("@/server/session-prefs");
+      sbSupported.value = true;
+      await withDefaults({ sandbox: { enabled: true, allowedDomains: ["github.com"] } }, () => {
+        const session = manager.createSession("/tmp");
+        expect(manager.getSandbox(session.id)).toEqual({ enabled: true, allowedDomains: ["github.com"] });
+        expect(vi.mocked(prefsMod.setSessionPrefs)).toHaveBeenCalledWith(
+          session.id,
+          expect.objectContaining({ sandbox: { enabled: true, allowedDomains: ["github.com"] } }),
+        );
+      });
+    });
+
+    it("starts without a sandbox on a host that cannot enforce one", async () => {
+      sbSupported.value = false;
+      try {
+        await withDefaults({ sandbox: { enabled: true } }, () => {
+          expect(manager.getSandbox(manager.createSession("/tmp").id).enabled).toBe(false);
+        });
+      } finally {
+        sbSupported.value = true;
+      }
+    });
+
+    it("never sandboxes the assistant, or a session whose creator passes its own as a job does", async () => {
+      sbSupported.value = true;
+      await withDefaults({ sandbox: { enabled: true } }, () => {
+        expect(manager.getSandbox(manager.createSession("/tmp", undefined, { cockpitAgent: true }).id).enabled).toBe(false);
+        expect(manager.getSandbox(manager.createSession("/tmp", "[job] nightly", { sandbox: { enabled: false } }).id).enabled).toBe(false);
+      });
+    });
+
+    // Sessions made before the default existed stored no sandbox and ran
+    // without one; switching the default on must not change that on restart.
+    it("keeps a restored session that never stored a sandbox unsandboxed, whatever the default", async () => {
+      sbSupported.value = true;
+      await withDefaults({ sandbox: { enabled: true } }, async () => {
+        await withPrefs({ modelSlots: { main: "sonnet" } }, () => {
+          expect(manager.getSandbox(manager.ensureSession("restored-no-sandbox", "/tmp").info.id).enabled).toBe(false);
+        });
+      });
+    });
+
+    it("restores a stored auto as manual on a non-Anthropic model", async () => {
+      await seedZen();
+      await withPrefs({ modelSlots: { main: "zen:ds-free" }, permissionMode: "auto" }, () => {
+        const session = manager.ensureSession("restored-auto-zen", "/tmp");
+        expect(manager.getPermissionMode(session.info.id)).toBe("manual");
+      });
+    });
+  });
+
+  describe("turn timing for a page connecting mid-turn", () => {
+    it("records when a user message is delivered, and reports the elapsed time while running", () => {
+      const session = manager.createSession("/tmp");
+      expect(manager.getTurnElapsedMs(session.id), "nothing sent yet").toBeUndefined();
+
+      manager.sendMessage(session.id, "go");
+      const s = (manager as any).sessions.get(session.id)!;
+      expect(Math.abs(s.turnStartedAt - Date.now())).toBeLessThan(1000);
+
+      s.turnStartedAt = Date.now() - 42_000;
+      const elapsed = manager.getTurnElapsedMs(session.id)!;
+      expect(elapsed).toBeGreaterThanOrEqual(42_000);
+      expect(elapsed).toBeLessThan(43_000);
+    });
+
+    it("reports nothing once the session is idle", () => {
+      const session = manager.createSession("/tmp");
+      manager.sendMessage(session.id, "go");
+      (manager as any).sessions.get(session.id)!.info.status = "idle";
+      expect(manager.getTurnElapsedMs(session.id)).toBeUndefined();
+    });
+
+    // Restored after a restart mid-turn: this process delivered no message, so
+    // it has no start to report and the page times from what it holds.
+    it("reports nothing for a turn this process did not start", () => {
+      const restored = manager.ensureSession("restored-mid-turn", "/tmp");
+      restored.info.status = "running";
+      expect(manager.getTurnElapsedMs(restored.info.id)).toBeUndefined();
+    });
+
+    it("reports nothing for a session it does not know", () => {
+      expect(manager.getTurnElapsedMs("no-such-session")).toBeUndefined();
+    });
+  });
+
+  describe("setSandbox", () => {
+    it("enables the sandbox, persists it, and emits the state", () => {
+      sbSupported.value = true;
+      const session = manager.createSession("/tmp");
+      const msgs: string[] = [];
+      manager.onSystem(session.id, (m) => msgs.push(m));
+      expect(manager.getSandbox(session.id).enabled).toBe(false);
+
+      manager.setSandbox(session.id, { enabled: true, allowedDomains: ["github.com"] });
+
+      expect(manager.getSandbox(session.id)).toEqual({ enabled: true, allowedDomains: ["github.com"] });
+      expect(msgs).toContain('__sandbox::{"enabled":true,"allowedDomains":["github.com"]}');
+    });
+
+    it("refuses to enable on a host that cannot enforce it", () => {
+      sbSupported.value = false;
+      try {
+        const session = manager.createSession("/tmp");
+        manager.setSandbox(session.id, { enabled: true });
+        expect(manager.getSandbox(session.id).enabled).toBe(false);
+      } finally {
+        sbSupported.value = true;
+      }
+    });
+
+    it("turns the sandbox back off", () => {
+      sbSupported.value = true;
+      const session = manager.createSession("/tmp");
+      manager.setSandbox(session.id, { enabled: true });
+      expect(manager.getSandbox(session.id).enabled).toBe(true);
+      manager.setSandbox(session.id, { enabled: false });
+      expect(manager.getSandbox(session.id).enabled).toBe(false);
     });
   });
 
@@ -2012,16 +2384,17 @@ describe("SessionManager", () => {
       const systemMessages: string[] = [];
       manager.onSystem(session.id, (msg) => systemMessages.push(msg));
       manager.clearPlanMode(session.id);
-      expect(systemMessages.some((msg) => msg.includes("__bypass_state::on"))).toBe(true);
+      expect(systemMessages.some((msg) => msg.includes("__perm_mode::bypass"))).toBe(true);
     });
 
-    it("clearing plan mode without bypass does not re-emit bypass", () => {
+    it("clearing plan mode re-syncs the permission mode, which is manual by default", () => {
       const session = manager.createSession("/tmp");
       manager.setPlanMode(session.id);
       const systemMessages: string[] = [];
       manager.onSystem(session.id, (msg) => systemMessages.push(msg));
       manager.clearPlanMode(session.id);
-      expect(systemMessages.some((msg) => msg.includes("__bypass_state"))).toBe(false);
+      expect(systemMessages).toContain("__perm_mode::manual");
+      expect(systemMessages.some((msg) => msg.includes("__perm_mode::bypass"))).toBe(false);
     });
   });
 
@@ -2433,9 +2806,9 @@ describe("SessionManager", () => {
       const messages: string[] = [];
       manager.onSystem(session.id, (msg) => messages.push(msg));
       manager.setBypassAllPermissions(session.id);
-      expect(messages).toContain("__bypass_state::on");
+      expect(messages).toContain("__perm_mode::bypass");
       manager.clearBypassAllPermissions(session.id);
-      expect(messages).toContain("__bypass_state::off");
+      expect(messages).toContain("__perm_mode::manual");
     });
 
     it("does nothing for unknown session", () => {
@@ -2628,6 +3001,126 @@ describe("SessionManager", () => {
       // so the stale 1m request cannot leak into the window).
       manager.setModel(session.id, "zen:kimi", "1m");
       expect(s.contextWindowSize).toBe(262_144);
+    });
+
+    // The CLI is told its window once, at spawn (CLAUDE_CODE_MAX_CONTEXT_TOKENS),
+    // so a switch that changes the window has to restart it. Comparing only the
+    // 200k/1m enum missed this entirely for foreign models, which carry their
+    // window in contextLength: seen live, a session switched onto a 128k model
+    // kept filling to 439k because the CLI still enforced the window it started
+    // with, and the automatic compaction that should have saved it failed too —
+    // compacting sends the whole conversation, which is the request being
+    // refused.
+    async function twoForeignModels() {
+      const { utimesSync, writeFileSync } = await import("node:fs");
+      const { join } = await import("node:path");
+      const file = join(process.env.COCKPIT_CONFIG_DIR!, "providers.json");
+      writeFileSync(
+        file,
+        JSON.stringify([
+          {
+            // zen, not openrouter: the openrouter built-in derives its model
+            // list from the synced catalog rather than this file, so a stored
+            // entry for it is ignored. The defect is provider-agnostic.
+            id: "zen",
+            name: "OpenCode Zen",
+            isBuiltin: true,
+            envVars: {},
+            models: [
+              { modelId: "big", displayName: "big", effortLevels: [], contextSizes: [], contextLength: 1_000_000 },
+              { modelId: "big2", displayName: "big2", effortLevels: [], contextSizes: [], contextLength: 1_000_000 },
+              { modelId: "small", displayName: "small", effortLevels: [], contextSizes: [], contextLength: 128_000 },
+            ],
+            enabledModels: ["big", "big2", "small"],
+          },
+        ]),
+      );
+      // The provider cache reloads on the file's mtime, and another test in
+      // this file writes the same path; two writes in the same millisecond
+      // would leave the cache holding that one's providers.
+      const future = Date.now() / 1000 + 60;
+      utimesSync(file, future, future);
+    }
+
+    it("restarts the CLI when the switch changes the window, even at the same context size", async () => {
+      await twoForeignModels();
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+
+      manager.setModel(session.id, "zen:big");
+      expect(s.contextWindowSize).toBe(1_000_000);
+
+      // A live process that COULD take a set_model control request. The window
+      // change must kill it anyway, because the env it was spawned with is the
+      // only place the CLI reads its window from.
+      const control = vi.fn();
+      let killed = false;
+      s.harnessProcess = {
+        writeControlRequest: control,
+        isAlive: true,
+        kill: () => {
+          killed = true;
+        },
+      };
+
+      manager.setModel(session.id, "zen:small");
+
+      expect(s.contextWindowSize).toBe(128_000);
+      expect(control, "a live set_model cannot change the spawn-time window").not.toHaveBeenCalled();
+      expect(killed, "so the process has to be restarted instead").toBe(true);
+    });
+
+    it("still switches live when the window is unchanged", async () => {
+      await twoForeignModels();
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      manager.setModel(session.id, "zen:big");
+
+      const control = vi.fn();
+      let killed = false;
+      s.harnessProcess = {
+        writeControlRequest: control,
+        isAlive: true,
+        kill: () => {
+          killed = true;
+        },
+      };
+
+      // Same catalog window, different model: no reason to pay for a restart.
+      manager.setModel(session.id, "zen:big2");
+      expect(killed).toBe(false);
+    });
+
+    it("says so when the conversation is already bigger than the model being chosen", async () => {
+      await twoForeignModels();
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      const systems: string[] = [];
+      s.emitter.on("system", (_id: string, text: string) => systems.push(text));
+
+      manager.setModel(session.id, "zen:big");
+      s.contextUsage = { used: 439_341, total: 1_000_000 };
+
+      manager.setModel(session.id, "zen:small");
+
+      const warning = systems.find((t) => t.includes("more than this model"));
+      expect(warning, "the CLI's own error blames the model, so cockpit has to explain").toBeTruthy();
+      expect(warning).toContain("439k");
+      expect(warning).toContain("128k");
+    });
+
+    it("says nothing when the conversation still fits", async () => {
+      await twoForeignModels();
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      const systems: string[] = [];
+      s.emitter.on("system", (_id: string, text: string) => systems.push(text));
+
+      manager.setModel(session.id, "zen:big");
+      s.contextUsage = { used: 10_000, total: 1_000_000 };
+      manager.setModel(session.id, "zen:small");
+
+      expect(systems.find((t) => t.includes("more than this model"))).toBeUndefined();
     });
   });
 
@@ -3609,7 +4102,7 @@ describe("SessionManager", () => {
     it("bypass auto-approves stored permissions, interactiveOnly ones included (user decision)", () => {
       const session = manager.createSession("/tmp");
       const s = (manager as any).sessions.get(session.id)!;
-      s.bypassAllPermissions = true;
+      s.permissionMode = "bypass";
 
       const base = {
         intermediateMessages: [],
@@ -3633,6 +4126,100 @@ describe("SessionManager", () => {
       // in the respond path). Neither surfaces to the UI.
       expect(s.pendingRequests.has("req-normal")).toBe(false);
       expect(s.pendingRequests.has("tui-1")).toBe(false);
+    });
+
+    it("bypass never answers a request whose yes would widen the sandbox", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      s.permissionMode = "bypass";
+
+      (manager as any).applyProcessedResult(s, session.id, {
+        intermediateMessages: [],
+        emit: [],
+        systemMessages: [],
+        errors: [],
+        statusChange: null,
+        compactDone: false,
+        snapshot: null,
+        permissionActions: [
+          { type: "store", requestId: "req-plain", toolName: "Bash", rawToolInput: { command: "ls" } },
+          { type: "store", requestId: "req-escape", toolName: "Bash", rawToolInput: { command: "ls", dangerouslyDisableSandbox: true } },
+          {
+            type: "store",
+            requestId: "tui-net",
+            toolName: "SandboxNetworkAccess",
+            rawToolInput: { host: "x.example.com" },
+            interactiveOnly: true,
+          },
+        ],
+      });
+      // The ordinary call is bypass's to answer; the escape and the network
+      // access each wait for the user as a card.
+      expect(s.pendingRequests.has("req-plain")).toBe(false);
+      expect(s.pendingRequests.has("req-escape")).toBe(true);
+      expect(s.pendingRequests.has("tui-net")).toBe(true);
+    });
+
+    // A session already in bypass that starts planning used to get a card for
+    // every tool, and "Bypass All" on that card is a no-op when bypass is
+    // already on — no way to stop them. The CLI enforces plan mode itself, so
+    // anything that reaches here is a tool it had already judged plan-safe.
+    it("keeps bypassing tool prompts once the session enters plan mode", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      s.permissionMode = "bypass";
+      s.planMode = true;
+
+      const base = {
+        intermediateMessages: [],
+        emit: [],
+        systemMessages: [],
+        errors: [],
+        statusChange: null,
+        compactDone: false,
+        snapshot: null,
+      };
+
+      (manager as any).applyProcessedResult(s, session.id, {
+        ...base,
+        permissionActions: [
+          { type: "store", requestId: "req-mcp", toolName: "mcp__roasta_admin__fetch_url", rawToolInput: {} },
+          { type: "store", requestId: "req-bash", toolName: "Bash", rawToolInput: {} },
+        ],
+      });
+
+      expect(s.pendingRequests.has("req-mcp")).toBe(false);
+      expect(s.pendingRequests.has("req-bash")).toBe(false);
+    });
+
+    // The two that are the user's call, not a tool permission. Signing off a
+    // plan is the whole point of plan mode; bypass must not answer it.
+    it("still asks for ExitPlanMode and AskUserQuestion under bypass", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      s.permissionMode = "bypass";
+      s.planMode = true;
+
+      const base = {
+        intermediateMessages: [],
+        emit: [],
+        systemMessages: [],
+        errors: [],
+        statusChange: null,
+        compactDone: false,
+        snapshot: null,
+      };
+
+      (manager as any).applyProcessedResult(s, session.id, {
+        ...base,
+        permissionActions: [
+          { type: "store", requestId: "req-exit", toolName: "ExitPlanMode", rawToolInput: {} },
+          { type: "store", requestId: "req-ask", toolName: "AskUserQuestion", rawToolInput: {} },
+        ],
+      });
+
+      expect(s.pendingRequests.has("req-exit"), "approving the plan is the user's decision").toBe(true);
+      expect(s.pendingRequests.has("req-ask")).toBe(true);
     });
 
     // A reloaded page has no task state: the transcript records an async
@@ -3729,7 +4316,7 @@ describe("SessionManager", () => {
     it("without bypass, an interactiveOnly permission surfaces as a real dialog", () => {
       const session = manager.createSession("/tmp");
       const s = (manager as any).sessions.get(session.id)!;
-      s.bypassAllPermissions = false;
+      s.permissionMode = "manual";
 
       (manager as any).applyProcessedResult(s, session.id, {
         intermediateMessages: [],
@@ -3743,6 +4330,28 @@ describe("SessionManager", () => {
       });
       expect(s.pendingRequests.has("tui-2")).toBe(true);
       expect(s.pendingRequests.get("tui-2")?.type).toBe("permission");
+    });
+
+    it("keeps the mode the CLI reports and passes it to the page", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      const emitted: string[] = [];
+      s.emitter.on("system", (_id: string, text: string) => emitted.push(text));
+      expect(manager.getCliPermissionMode(session.id)).toBeUndefined();
+
+      (manager as any).applyProcessedResult(s, session.id, {
+        intermediateMessages: [],
+        emit: [],
+        systemMessages: ["__cli_perm_mode::auto"],
+        errors: [],
+        permissionActions: [],
+        statusChange: null,
+        compactDone: false,
+        snapshot: null,
+      });
+
+      expect(manager.getCliPermissionMode(session.id)).toBe("auto");
+      expect(emitted).toContain("__cli_perm_mode::auto");
     });
 
     it("handles permission mode change to plan", () => {
@@ -3905,7 +4514,7 @@ describe("SessionManager", () => {
     it("auto-approves when bypass active and not plan mode", () => {
       const session = manager.createSession("/tmp");
       const s = (manager as any).sessions.get(session.id)!;
-      s.bypassAllPermissions = true;
+      s.permissionMode = "bypass";
       s.planMode = false;
       const respondToPermission = vi.fn(() => true);
       s.harnessProcess = { isAlive: true, respondToPermission };
@@ -4127,7 +4736,7 @@ describe("SessionManager", () => {
       const mockSpawn = vi.mocked(spawn);
       const session = manager.createSession("/tmp");
       const s = (manager as any).sessions.get(session.id)!;
-      s.bypassAllPermissions = true;
+      s.permissionMode = "bypass";
       s.planMode = false;
 
       (manager as any).spawnProcess(s, session.id);
@@ -4395,33 +5004,45 @@ describe("SessionManager", () => {
     });
   });
 
-  describe("extractUsage totalTokens accumulation", () => {
-    it("accumulates input, output, cacheCreate, and cacheRead across calls", () => {
+  // The in-memory totalTokens counter this used to assert is gone: it only ever
+  // filled on the stream runtime, so /cost reported zeros on the default one.
+  // Cumulative spend comes from sumTranscriptUsage now. What extractUsage still
+  // owns is the live context gauge, which reads all three prompt categories.
+  describe("extractUsage drives the context gauge", () => {
+    it("sums input, cache write and cache read into the gauge reading", () => {
       const session = manager.createSession("/tmp");
       const s = (manager as any).sessions.get(session.id)!;
+      const seen: Array<{ used: number; total: number }> = [];
+      s.emitter.on("usage", (_id: string, u: { used: number; total: number }) => seen.push(u));
 
-      const line1 = JSON.stringify({
-        type: "assistant",
-        message: {
-          usage: { input_tokens: 100, output_tokens: 50, cache_creation_input_tokens: 20, cache_read_input_tokens: 10 },
-          model: "claude-4",
-        },
-      });
-      const line2 = JSON.stringify({
-        type: "assistant",
-        message: {
-          usage: { input_tokens: 200, output_tokens: 30, cache_creation_input_tokens: 0, cache_read_input_tokens: 40 },
-          model: "claude-4",
-        },
-      });
+      (manager as any).extractUsage(
+        s,
+        session.id,
+        JSON.stringify({
+          type: "assistant",
+          message: {
+            usage: { input_tokens: 100, output_tokens: 50, cache_creation_input_tokens: 20, cache_read_input_tokens: 10 },
+            model: "claude-4",
+          },
+        }),
+      );
 
-      (manager as any).extractUsage(s, session.id, line1);
-      (manager as any).extractUsage(s, session.id, line2);
+      expect(seen.at(-1)?.used, "a cached prompt token still occupies the window").toBe(130);
+    });
 
-      expect(s.totalTokens.input).toBe(300);
-      expect(s.totalTokens.output).toBe(80);
-      expect(s.totalTokens.cacheCreate).toBe(20);
-      expect(s.totalTokens.cacheRead).toBe(50);
+    it("ignores an all-zero reading rather than wiping the gauge", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      const seen: Array<{ used: number }> = [];
+      s.emitter.on("usage", (_id: string, u: { used: number }) => seen.push(u));
+
+      (manager as any).extractUsage(
+        s,
+        session.id,
+        JSON.stringify({ type: "assistant", message: { usage: { input_tokens: 0, output_tokens: 0 }, model: "claude-4" } }),
+      );
+
+      expect(seen).toHaveLength(0);
     });
   });
 
@@ -4650,7 +5271,7 @@ describe("SessionManager", () => {
       const s = (manager as any).sessions.get(session.id);
       expect(s.cockpitAgent).toBe(true);
       expect(session.name).toBe("Cockpit Assistant");
-      expect(s.bypassAllPermissions).toBe(false);
+      expect(s.permissionMode).not.toBe("bypass");
     });
 
     it("creates session with cockpitAgent=false by default", () => {
@@ -4662,14 +5283,14 @@ describe("SessionManager", () => {
     it("forces bypassAllPermissions to false for cockpitAgent sessions", () => {
       const session = manager.createSession("/tmp", undefined, { cockpitAgent: true, bypassPermissions: true });
       const s = (manager as any).sessions.get(session.id);
-      expect(s.bypassAllPermissions).toBe(false);
+      expect(s.permissionMode).not.toBe("bypass");
     });
 
     it("setBypassAllPermissions is a no-op for cockpitAgent sessions", () => {
       const session = manager.createSession("/tmp", undefined, { cockpitAgent: true });
       manager.setBypassAllPermissions(session.id);
       const s = (manager as any).sessions.get(session.id);
-      expect(s.bypassAllPermissions).toBe(false);
+      expect(s.permissionMode).not.toBe("bypass");
       expect(s.cockpitAgent).toBe(true);
     });
   });
@@ -5250,7 +5871,7 @@ describe("SessionManager", () => {
     it("lets a bypassed assistant session skip the tool prompts", () => {
       const session = manager.createSession("/tmp", undefined, { cockpitAgent: true });
       const s = (manager as any).sessions.get(session.id);
-      s.bypassAllPermissions = true;
+      s.permissionMode = "bypass";
       const respondToPermission = vi.spyOn(manager, "respondToPermission" as any);
 
       (manager as any).applyProcessedResult(s, session.id, {
@@ -5279,7 +5900,7 @@ describe("SessionManager", () => {
     it("still raises the approval card for a config write when bypass is on", () => {
       const session = manager.createSession("/tmp", undefined, { cockpitAgent: true });
       const s = (manager as any).sessions.get(session.id);
-      s.bypassAllPermissions = true;
+      s.permissionMode = "bypass";
       const respondToPermission = vi.spyOn(manager, "respondToPermission" as any);
 
       (manager as any).applyProcessedResult(s, session.id, {

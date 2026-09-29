@@ -125,6 +125,7 @@ test("a plain session's add_inbox_message is attributed to the session, not a jo
 }) => {
   const workDir = mkdtempSync(path.join(tmpdir(), "cockpit-it-session-inbox-"));
   mkdirSync(path.join(workDir, ".git"), { recursive: true });
+  harness.trustWorkDir(workDir);
 
   try {
     const notifRes = await page.request.put(`${harness.cockpitUrl}/api/notifications`, {
@@ -169,6 +170,7 @@ test("a plain session's add_inbox_message is attributed to the session, not a jo
 test("a plain session's add_inbox_message with no notifyProviders still delivers, attributed to the session", async ({ page, harness }) => {
   const workDir = mkdtempSync(path.join(tmpdir(), "cockpit-it-session-inbox-quiet-"));
   mkdirSync(path.join(workDir, ".git"), { recursive: true });
+  harness.trustWorkDir(workDir);
 
   try {
     const notifRes = await page.request.put(`${harness.cockpitUrl}/api/notifications`, {
@@ -205,6 +207,7 @@ test("an interactive session can push through the tool ten separate times; the i
 
   const workDir = mkdtempSync(path.join(tmpdir(), "cockpit-it-session-inbox-rl-"));
   mkdirSync(path.join(workDir, ".git"), { recursive: true });
+  harness.trustWorkDir(workDir);
 
   try {
     const notifRes = await page.request.put(`${harness.cockpitUrl}/api/notifications`, {

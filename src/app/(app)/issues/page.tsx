@@ -4,6 +4,7 @@ import { ChevronRight, ClipboardList, Loader2, Plus, X } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { usePageHeader } from "@/components/app-shell";
+import { KanbanBoard } from "@/components/issues/kanban-board";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -21,9 +22,12 @@ import {
   labelColor,
   NO_LABEL_GROUP,
   priorityLabel,
+  statusColor,
 } from "@/lib/issue-display";
 import { cn } from "@/lib/utils";
 import type { Issue, IssueStatus, Project } from "@/types";
+
+type IssueView = "status" | "project" | "board";
 
 const SELECT_CLASS = "rounded-md border bg-background px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring";
 // This was a fourth hand-written copy of the nine status strings until now —
@@ -44,6 +48,7 @@ const QUICK_FILTERS: { value: QuickFilter; label: string }[] = [
 // — same shape, separate storage key since these are unrelated collapse
 // namespaces (nav sections vs. issue project groups).
 const VIEW_KEY = "cockpit_issues_view";
+const FILTERS_KEY = "cockpit_issues_filters";
 const PROJECT_OPEN_KEY = "cockpit_issues_projects_open";
 
 function getProjectOpen(id: string): boolean {
@@ -350,13 +355,39 @@ export default function IssuesPage() {
   const [projectFilter, setProjectFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState<IssueStatus | "">("");
   const [newOpen, setNewOpen] = useState(false);
-  const [view, setView] = useState<"status" | "project">("status");
+  const [view, setView] = useState<IssueView>("status");
   const [quickFilter, setQuickFilter] = useState<QuickFilter>("all");
+  const [filtersHydrated, setFiltersHydrated] = useState(false);
+  const [moveError, setMoveError] = useState<string | null>(null);
 
   useEffect(() => {
     const stored = localStorage.getItem(VIEW_KEY);
-    if (stored === "status" || stored === "project") setView(stored);
+    if (stored === "status" || stored === "project" || stored === "board") setView(stored);
+    try {
+      const raw = localStorage.getItem(FILTERS_KEY);
+      if (raw) {
+        const saved = JSON.parse(raw);
+        if (typeof saved.projectFilter === "string") setProjectFilter(saved.projectFilter);
+        if (
+          saved.statusFilter === "" ||
+          (typeof saved.statusFilter === "string" && (ISSUE_STATUSES as readonly string[]).includes(saved.statusFilter))
+        ) {
+          setStatusFilter(saved.statusFilter);
+        }
+        if (saved.quickFilter === "active" || saved.quickFilter === "backlog" || saved.quickFilter === "all") {
+          setQuickFilter(saved.quickFilter);
+        }
+      }
+    } catch {}
+    setFiltersHydrated(true);
   }, []);
+
+  useEffect(() => {
+    if (!filtersHydrated) return;
+    try {
+      localStorage.setItem(FILTERS_KEY, JSON.stringify({ projectFilter, statusFilter, quickFilter }));
+    } catch {}
+  }, [projectFilter, statusFilter, quickFilter, filtersHydrated]);
 
   // Experimental and off by default (see defaults.ts's issuesEnabled) — a
   // stale bookmark or typed URL must not land on a working page. Gated on
@@ -367,11 +398,33 @@ export default function IssuesPage() {
     if (settingsLoaded && !settings.issuesEnabled) router.replace("/");
   }, [settingsLoaded, settings.issuesEnabled, router]);
 
-  const changeView = useCallback((next: "status" | "project") => {
+  const changeView = useCallback((next: IssueView) => {
     setView(next);
     try {
       localStorage.setItem(VIEW_KEY, next);
     } catch {}
+  }, []);
+
+  // Drag-to-move on the board: apply optimistically so the card lands in the
+  // new column immediately, PUT the status, and roll back with a message if the
+  // server refuses (e.g. a status the project no longer allows).
+  const moveIssue = useCallback(async (issue: Issue, toStatus: string) => {
+    const previous = issue.status;
+    setMoveError(null);
+    setIssues((list) => list.map((i) => (i.id === issue.id ? { ...i, status: toStatus } : i)));
+    try {
+      const res = await fetch(`/api/issues/${encodeURIComponent(issue.key)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: toStatus }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to move issue");
+      setIssues((list) => list.map((i) => (i.id === issue.id ? data.issue : i)));
+    } catch (err) {
+      setIssues((list) => list.map((i) => (i.id === issue.id ? { ...i, status: previous } : i)));
+      setMoveError(err instanceof Error ? err.message : "Failed to move issue");
+    }
   }, []);
 
   const fetchAll = useCallback(async () => {
@@ -404,6 +457,10 @@ export default function IssuesPage() {
     return filterByQuickFilter(byDropdowns, quickFilter);
   }, [issues, projectFilter, statusFilter, quickFilter, view]);
 
+  // The board's columns are a single project's statuses; with All Projects it
+  // falls back to the built-in lifecycle (selectedProject undefined).
+  const selectedProject = useMemo(() => projects.find((p) => p.id === projectFilter), [projects, projectFilter]);
+
   const statusGroups = useMemo(() => groupIssuesByStatus(filtered), [filtered]);
   const projectGroups = useMemo(() => groupIssuesByProject(filtered, projects), [filtered, projects]);
 
@@ -415,18 +472,18 @@ export default function IssuesPage() {
     <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto p-4 pb-24 space-y-4">
       <div className="flex items-center gap-2 flex-wrap">
         <div className="inline-flex shrink-0 gap-0.5 rounded-md border p-0.5">
-          {(["status", "project"] as const).map((v) => (
+          {(["status", "project", "board"] as const).map((v) => (
             <button
               key={v}
               type="button"
               onClick={() => changeView(v)}
               aria-pressed={view === v}
               className={cn(
-                "rounded px-2.5 py-1 text-xs font-medium transition-colors",
+                "rounded-sm px-2.5 py-1 text-xs font-medium transition-colors",
                 view === v ? "bg-secondary text-secondary-foreground" : "text-muted-foreground hover:text-foreground",
               )}
             >
-              {v === "status" ? "By status" : "By project"}
+              {v === "status" ? "By status" : v === "project" ? "By project" : "Board"}
             </button>
           ))}
         </div>
@@ -495,15 +552,29 @@ export default function IssuesPage() {
         </div>
       )}
 
-      {!loading && issues.length > 0 && filtered.length === 0 && (
+      {!loading && issues.length > 0 && filtered.length === 0 && view !== "board" && (
         <p className="text-sm text-muted-foreground py-8 text-center">No issues match these filters.</p>
       )}
 
-      {view === "status" ? (
+      {moveError && (
+        <div className="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive">{moveError}</div>
+      )}
+
+      {view === "board" ? (
+        <KanbanBoard
+          issues={filtered}
+          project={selectedProject}
+          projectNames={projectNames}
+          showProject={!projectFilter}
+          onIssueClick={(issue) => router.push(`/issues/${encodeURIComponent(issue.key)}`)}
+          onMove={moveIssue}
+        />
+      ) : view === "status" ? (
         <div className="space-y-4">
           {statusGroups.map((group) => (
             <div key={group.status}>
               <div className="flex items-center gap-2 mb-1.5 px-1">
+                <span className={cn("h-2.5 w-2.5 shrink-0 rounded-full", statusColor(group.status, selectedProject))} />
                 <h2 className="text-sm font-semibold">{group.status}</h2>
                 <Badge variant="secondary">{group.issues.length}</Badge>
               </div>

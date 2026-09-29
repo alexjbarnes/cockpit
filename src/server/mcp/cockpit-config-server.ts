@@ -11,9 +11,11 @@ import { addInboxMessage } from "@/server/inbox";
 import {
   addIssueAttachment,
   addIssueComment,
+  allowedStatusesFor,
   applyIssueUpdate,
   buildIssue,
   getIssue,
+  getProject,
   type IssueUpdateInput,
   loadIssues,
   loadProjects,
@@ -27,7 +29,7 @@ import { getClaudeUserConfigFile } from "@/server/paths";
 import { addProvider, deleteProvider, getProviders, updateProvider } from "@/server/providers";
 import { getJobScheduler } from "@/server/singleton";
 import { findSessionCwd, loadTranscript } from "@/server/transcript";
-import type { InboxPriority, Issue, IssueActor, IssueStatus, JobRun, NotificationProviderEntry, Project, ScheduledJob } from "@/types";
+import type { InboxPriority, Issue, IssueActor, JobRun, NotificationProviderEntry, Project, ScheduledJob } from "@/types";
 import { ISSUE_STATUSES, SIMPLE_SCHEDULE_FREQUENCIES } from "@/types";
 import { isValidToken, lookupCaller, type McpCaller } from "./run-context";
 
@@ -60,6 +62,7 @@ const JOB_UPDATE_FIELDS = [
   "mcpServers",
   "mcpToolFilters",
   "bypassPermissions",
+  "sandbox",
   "maxDurationMinutes",
   "maxRetries",
   "retentionDays",
@@ -338,7 +341,10 @@ const JOB_SCHEDULE_SCHEMA = {
     {
       properties: {
         type: { const: "onIssueStatus" },
-        status: { type: "string", enum: [...ISSUE_STATUSES], description: "Fires when an issue enters this status" },
+        status: {
+          type: "string",
+          description: `Fires when an issue enters this status. A built-in (${ISSUE_STATUSES.join(", ")}) or, when this schedule names a project, one of that project's custom statuses.`,
+        },
         project: { type: "string", description: "Project id to scope to; omit for any project" },
       },
       required: ["type", "status"],
@@ -404,6 +410,11 @@ const TOOL_DEFINITIONS = [
             "Disable the allowlist entirely and approve every prompt. Defaults to false, and should normally stay false: list what the job needs in allowedTools instead. " +
             "Reserve this for automation whose unrestricted tool use the user has accepted in advance — it is a decision for them, not a way around a refusal.",
         },
+        sandbox: {
+          type: "boolean",
+          description:
+            "Run the job's Bash in the OS sandbox under the shared sandbox rules. Defaults to false. A sandboxed job's commands can only reach the domains those rules allow, so leave it off for a job that needs other network access.",
+        },
         maxDurationMinutes: { type: "number", description: "Kill the run after this long. Defaults to 30." },
         maxRetries: { type: "number", description: "Extra attempts after a failure run (not timeout/stopped). Defaults to 1." },
         retentionDays: { type: "number", description: "How long run records are kept. Defaults to 90." },
@@ -467,6 +478,7 @@ const TOOL_DEFINITIONS = [
             "Disable the allowlist entirely and approve every prompt. Switching this on to clear a permission failure trades a narrow allowlist for unrestricted tool use, which is rarely what the failure called for: " +
             "a refusal is usually one missing or too-narrow allowedTools entry, so fix that entry instead. Turn this on only when the user asked for it.",
         },
+        sandbox: { type: "boolean", description: "Run the job's Bash in the OS sandbox under the shared sandbox rules." },
         maxDurationMinutes: { type: "number" },
         maxRetries: { type: "number", description: "Extra attempts after a failure run (not timeout/stopped). Defaults to 1." },
         retentionDays: { type: "number" },
@@ -510,7 +522,22 @@ const TOOL_DEFINITIONS = [
         messageStitching: { type: "boolean" },
         reviewsEnabled: { type: "boolean" },
         issuesEnabled: { type: "boolean" },
-        bypassAllPermissions: { type: "boolean" },
+        permissionMode: {
+          type: "string",
+          enum: ["manual", "auto", "bypass"],
+          description:
+            "Permission mode new sessions start in. auto applies to Anthropic models only; a session on another provider starts in manual.",
+        },
+        sandbox: {
+          type: "object",
+          properties: {
+            enabled: { type: "boolean" },
+            allowedDomains: { type: "array", items: { type: "string" }, description: "Domains sandboxed Bash may reach" },
+          },
+          required: ["enabled"],
+          description:
+            "Bash sandbox new sessions start with. Not applied to scheduled jobs (each has its own sandbox switch), the cockpit assistant, or on a host that cannot enforce it.",
+        },
         modelSlots: {
           type: "object",
           properties: {
@@ -705,7 +732,7 @@ const TOOL_DEFINITIONS = [
       type: "object",
       properties: {
         project: { type: "string", description: 'Project id or prefix (e.g. "CK"). Omit to search every project.' },
-        status: { type: "string", enum: [...ISSUE_STATUSES], description: "Filter to one status." },
+        status: { type: "string", description: "Filter to one status (a built-in or a project custom status)." },
         label: { type: "string", description: "Filter to issues carrying exactly this label." },
       },
       required: [],
@@ -747,7 +774,11 @@ const TOOL_DEFINITIONS = [
         key: { type: "string", description: 'Issue key, e.g. "CK-12".' },
         title: { type: "string" },
         description: { type: "string" },
-        status: { type: "string", enum: [...ISSUE_STATUSES] },
+        status: {
+          type: "string",
+          description:
+            "A built-in status or one of the issue's project custom statuses (from list_projects). An unknown value is refused with the valid list.",
+        },
         priority: { type: "number", enum: [...PRIORITIES] },
         labels: { type: "array", items: { type: "string" } },
       },
@@ -959,7 +990,7 @@ async function handleToolCall(
             "bypassPermissions is not the remedy for a refused tool — it removes the allowlist rather than correcting it. Read the refused command, add or widen the one allowedTools entry it needed, and leave bypass alone unless the user asked for unrestricted automation.",
             'mcpToolFilters: { "<serverName>": ["tool", ...] } limits an enabled server; omitted servers expose all tools.',
             "inboxOutput posts the final message to the cockpit inbox; notifyProviders pushes it to the named notifyTargets ids.",
-            "onIssueStatus schedules: statuses are enumerated in the schedule schema; project ids come from list_projects.",
+            "onIssueStatus schedules: status is a built-in, or a custom status of the named project (from list_projects); project ids come from list_projects.",
           ],
         };
         return { content: [{ type: "text", text: JSON.stringify(options, null, 2) }] };
@@ -1094,7 +1125,8 @@ async function handleToolCall(
           "messageStitching",
           "reviewsEnabled",
           "issuesEnabled",
-          "bypassAllPermissions",
+          "permissionMode",
+          "sandbox",
           "modelSlots",
         ];
         const safe = Object.fromEntries(
@@ -1347,20 +1379,24 @@ async function handleToolCall(
         return { content: [{ type: "text", text: JSON.stringify(projects, null, 2) }] };
       }
       case "list_issues": {
-        let statusFilter: IssueStatus | undefined;
+        // A status filter may be a built-in or any project's custom status;
+        // validate against the union across every project so a real custom
+        // status is accepted, and an unknown one is still refused loudly.
+        let statusFilter: string | undefined;
         if (args.status !== undefined) {
-          if (typeof args.status !== "string" || !ISSUE_STATUSES.includes(args.status as IssueStatus)) {
+          const known = new Set<string>([...ISSUE_STATUSES, ...loadProjects().flatMap((p) => (p.customStatuses ?? []).map((s) => s.name))]);
+          if (typeof args.status !== "string" || !known.has(args.status)) {
             return {
               content: [
                 {
                   type: "text",
-                  text: JSON.stringify({ error: `Unknown status "${args.status}". Valid statuses: ${ISSUE_STATUSES.join(", ")}` }),
+                  text: JSON.stringify({ error: `Unknown status "${args.status}". Valid statuses: ${[...known].join(", ")}` }),
                 },
               ],
               isError: true,
             };
           }
-          statusFilter = args.status as IssueStatus;
+          statusFilter = args.status;
         }
         const labelFilter = typeof args.label === "string" && args.label.length > 0 ? args.label : undefined;
         const projectArg = typeof args.project === "string" ? args.project.trim() : "";
@@ -1470,19 +1506,20 @@ async function handleToolCall(
           }
           patch.description = args.description;
         }
+        const allowedStatuses = allowedStatusesFor(getProject(issue.projectId));
         if (args.status !== undefined) {
-          if (typeof args.status !== "string" || !ISSUE_STATUSES.includes(args.status as IssueStatus)) {
+          if (typeof args.status !== "string" || !allowedStatuses.includes(args.status)) {
             return {
               content: [
                 {
                   type: "text",
-                  text: JSON.stringify({ error: `Unknown status "${args.status}". Valid statuses: ${ISSUE_STATUSES.join(", ")}` }),
+                  text: JSON.stringify({ error: `Unknown status "${args.status}". Valid statuses: ${allowedStatuses.join(", ")}` }),
                 },
               ],
               isError: true,
             };
           }
-          patch.status = args.status as IssueStatus;
+          patch.status = args.status;
         }
         if (args.priority !== undefined) {
           if (typeof args.priority !== "number" || !PRIORITIES.includes(args.priority as (typeof PRIORITIES)[number])) {
@@ -1503,7 +1540,7 @@ async function handleToolCall(
         // The actor comes from the token, never from args (no field in the
         // schema could even carry one) — same discipline as create_issue.
         const actor = actorFromCaller(caller);
-        const updated = applyIssueUpdate(issue, patch, actor);
+        const updated = applyIssueUpdate(issue, patch, actor, allowedStatuses);
         // applyIssueUpdate returns the *same* object reference for a no-op
         // patch (see its own comment in issue-storage.ts), so this skips an
         // unnecessary write rather than re-saving unchanged data.

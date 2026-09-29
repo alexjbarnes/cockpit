@@ -32,6 +32,7 @@ test.use({ harnessOptions: { openRouterViaMock: true } });
 test("a session on an openrouter catalog model completes a turn with the full env set", async ({ page, harness }) => {
   const workDir = mkdtempSync(path.join(tmpdir(), "cockpit-it-or-"));
   mkdirSync(path.join(workDir, ".git"), { recursive: true });
+  harness.trustWorkDir(workDir);
 
   try {
     harness.mock.setScript([{ events: textResponse("Hello from openrouter mock", "end_turn", { model: OR_TEST_MODEL }) }]);

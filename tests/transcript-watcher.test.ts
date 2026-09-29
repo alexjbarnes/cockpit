@@ -182,4 +182,62 @@ describe("TranscriptWatcher", () => {
     expect(mockWatch).toHaveBeenCalled();
     await watcher.stop();
   });
+  // Entering a worktree makes the CLI move the transcript to another project
+  // folder, and getTranscriptPath follows it there.
+  it("watches the transcript where it moved to, and reports it from there", async () => {
+    mockExistsSync.mockReturnValue(true);
+    const callbacks = new Map<string, () => void>();
+    const closed: string[] = [];
+    mockWatch.mockImplementation((p: string, cb: () => void) => {
+      callbacks.set(p, cb);
+      return { close: () => closed.push(p) };
+    });
+    mockGetTranscriptPath.mockReturnValue("/tmp/old/sess.jsonl");
+    const onUpdate = vi.fn();
+    const messages = [{ id: "1", role: "user" }];
+    mockLoadTranscript.mockResolvedValue({ messages, totalSize: 100, lastUsage: null });
+    const { TranscriptWatcher } = await import("@/server/transcript-watcher");
+    const watcher = new TranscriptWatcher("sess-1", "/tmp", onUpdate);
+    watcher.start();
+    callbacks.get("/tmp/old/sess.jsonl")!();
+    await vi.advanceTimersByTimeAsync(300);
+    expect(onUpdate).toHaveBeenCalledTimes(1);
+
+    // Same size at the new home still counts: it is a different file.
+    mockGetTranscriptPath.mockReturnValue("/tmp/new/sess.jsonl");
+    callbacks.get("/tmp/old/sess.jsonl")!();
+    await vi.advanceTimersByTimeAsync(300);
+
+    expect(closed).toContain("/tmp/old/sess.jsonl");
+    expect(callbacks.has("/tmp/new/sess.jsonl")).toBe(true);
+    expect(onUpdate).toHaveBeenCalledTimes(2);
+    await watcher.stop();
+    mockGetTranscriptPath.mockReturnValue("/tmp/test-transcript.jsonl");
+  });
+
+  it("reports nothing while the transcript is missing, and looks again", async () => {
+    let changeCallback: () => void;
+    mockExistsSync.mockReturnValue(true);
+    mockWatch.mockImplementation((_p: string, cb: () => void) => {
+      changeCallback = cb;
+      return { close: vi.fn() };
+    });
+    const onUpdate = vi.fn();
+    mockLoadTranscript.mockResolvedValue({ messages: [], totalSize: 0, lastUsage: null });
+    const { TranscriptWatcher } = await import("@/server/transcript-watcher");
+    const watcher = new TranscriptWatcher("sess-1", "/tmp", onUpdate);
+    watcher.start();
+
+    mockExistsSync.mockReturnValue(false);
+    changeCallback!();
+    await vi.advanceTimersByTimeAsync(300);
+    expect(onUpdate).not.toHaveBeenCalled();
+    expect(mockLoadTranscript).not.toHaveBeenCalled();
+
+    mockExistsSync.mockReturnValue(true);
+    mockLoadTranscript.mockResolvedValue({ messages: [{ id: "1" }], totalSize: 50, lastUsage: null });
+    await vi.advanceTimersByTimeAsync(600);
+    expect(onUpdate).toHaveBeenCalledTimes(1);
+    await watcher.stop();
+  });
 });

@@ -23,7 +23,16 @@ import {
 import { isPositiveNumberField, parseNumberField } from "@/lib/number-field";
 import { cn } from "@/lib/utils";
 import { describeSchedule, getJobSchedules } from "@/server/cron-utils";
-import type { IssueStatus, JobSchedule, Provider, ProviderModel, ScheduledJob, SimpleScheduleFrequency, ThinkingLevel } from "@/types";
+import type {
+  IssueStatus,
+  JobSchedule,
+  Provider,
+  ProviderModel,
+  SandboxSupport,
+  ScheduledJob,
+  SimpleScheduleFrequency,
+  ThinkingLevel,
+} from "@/types";
 import { ISSUE_STATUSES } from "@/types";
 
 const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
@@ -43,14 +52,15 @@ const DEFAULT_MODEL_ID = defaultForAlias("sonnet")?.modelId || "";
 
 const SELECT_CLASS = "w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring";
 
-function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean) => void }) {
+function Toggle({ checked, onChange, disabled }: { checked: boolean; onChange: (v: boolean) => void; disabled?: boolean }) {
   return (
     <button
       type="button"
       role="switch"
       aria-checked={checked}
+      disabled={disabled}
       onClick={() => onChange(!checked)}
-      className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${checked ? "bg-primary" : "bg-muted"}`}
+      className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${checked ? "bg-primary" : "bg-muted"}`}
     >
       <span
         className={`pointer-events-none inline-block h-4 w-4 rounded-full bg-background shadow-lg transition-transform ${checked ? "translate-x-4" : "translate-x-0"}`}
@@ -226,6 +236,10 @@ export default function JobEditPage() {
   const [maxDuration, setMaxDuration] = useState<number | "">(30);
   const [maxRetries, setMaxRetries] = useState<number | "">(1);
   const [bypassPermissions, setBypassPermissions] = useState(false);
+  const [sandbox, setSandbox] = useState(false);
+  // Gates the sandbox switch on whether this host can enforce one, as the
+  // session panel and session defaults do.
+  const [sandboxSupport, setSandboxSupport] = useState<SandboxSupport | null>(null);
   const [allowedTools, setAllowedTools] = useState<string[]>([]);
   const [toolInput, setToolInput] = useState("");
 
@@ -266,6 +280,15 @@ export default function JobEditPage() {
       setContextSize(contextSizes[0] ?? "200k");
     }
   }, [contextSizes, contextSize]);
+
+  useEffect(() => {
+    fetch("/api/sandbox/support")
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+      .then((data: SandboxSupport) => setSandboxSupport(data))
+      .catch(() =>
+        setSandboxSupport({ supported: false, networkIsolation: false, platform: "", reason: "Could not check sandbox support" }),
+      );
+  }, []);
 
   const effortLevels = (() => {
     if (!isBuiltinProvider && customProviderModel) return customProviderModel.effortLevels;
@@ -402,6 +425,7 @@ export default function JobEditPage() {
     setMaxDuration(job.maxDurationMinutes ?? 30);
     setMaxRetries(job.maxRetries ?? 1);
     setBypassPermissions(job.bypassPermissions ?? false);
+    setSandbox(job.sandbox ?? false);
     setAllowedTools(job.allowedTools || []);
     setMcpServers(job.mcpServers || []);
     setMcpToolFilters(job.mcpToolFilters || {});
@@ -492,6 +516,7 @@ export default function JobEditPage() {
       maxDurationMinutes: maxDuration,
       maxRetries: maxRetries === "" ? undefined : maxRetries,
       bypassPermissions,
+      sandbox,
       allowedTools,
       mcpServers,
       mcpToolFilters,
@@ -748,6 +773,22 @@ export default function JobEditPage() {
                 {bypassPermissions && <p className="text-xs text-muted-foreground">All tool permissions will be auto-approved</p>}
               </div>
               <Toggle checked={bypassPermissions} onChange={setBypassPermissions} />
+            </div>
+
+            <div className="flex items-center justify-between gap-4" data-testid="job-sandbox-row">
+              <div>
+                <label className="text-sm font-medium">Sandbox Bash</label>
+                <p className="text-xs text-muted-foreground">
+                  {!sandboxSupport
+                    ? "Checking sandbox support…"
+                    : !sandboxSupport.supported
+                      ? sandboxSupport.reason
+                      : sandbox
+                        ? "Bash runs isolated under the shared sandbox rules, so it can only reach the domains they allow."
+                        : "Bash runs without the sandbox."}
+                </p>
+              </div>
+              <Toggle checked={sandbox} onChange={setSandbox} disabled={!sandboxSupport?.supported} />
             </div>
 
             {!bypassPermissions && (

@@ -33,6 +33,7 @@ for (const runtime of ["stream", "pty"] as const) {
   test(`cockpit agent survives /clear and can send again (${runtime})`, async ({ page, harness }) => {
     const workDir = mkdtempSync(path.join(tmpdir(), "cockpit-it-clear-"));
     mkdirSync(path.join(workDir, ".git"), { recursive: true });
+    harness.trustWorkDir(workDir);
 
     try {
       harness.mock.setScript([{ events: textResponse("Reply before clear") }, { events: textResponse("Reply after clear") }]);

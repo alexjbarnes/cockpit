@@ -31,6 +31,7 @@ test.use({ harnessOptions: { zenViaMock: true } });
 test("a session on a zen model reaches the OpenAI door through the format proxy", async ({ page, harness }) => {
   const workDir = mkdtempSync(path.join(tmpdir(), "cockpit-it-zen-"));
   mkdirSync(path.join(workDir, ".git"), { recursive: true });
+  harness.trustWorkDir(workDir);
 
   try {
     const createRes = await page.request.post(`${harness.cockpitUrl}/api/sessions`, {

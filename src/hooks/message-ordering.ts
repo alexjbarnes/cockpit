@@ -120,6 +120,14 @@ export function applyMessageDone(prev: ChatMessage[], finalMessage: ChatMessage)
  * Uses transcript order as the source of truth for transcript messages,
  * then slots local-only messages (system, optimistic user) into their
  * approximate positions relative to surrounding transcript messages.
+ *
+ * The transcript is only its last lines: a PTY session's watcher reads a
+ * tail. What prev holds before the first message the two share is older than
+ * the tail, not gone, so it is kept. Dropping it would leave only the tail on
+ * the page after every update, taking away the messages being read. A tail
+ * that shares nothing with prev follows all of it: more lines than the tail
+ * holds landed at once, or the CLI started a new transcript after a clear,
+ * whose divider keeps the earlier conversation in view.
  */
 export function applyTranscript(prev: ChatMessage[], transcriptMsgsRaw: ChatMessage[]): ChatMessage[] {
   // Defensive: collapse duplicate transcript entries by id (keep the first). A
@@ -164,9 +172,16 @@ export function applyTranscript(prev: ChatMessage[], transcriptMsgsRaw: ChatMess
     if (match) optimisticToTranscript.set(p.id, match.id);
   }
 
+  const cut = prev.findIndex((m) => transcriptIds.has(m.id) || optimisticToTranscript.has(m.id));
+  const olderEnd = cut === -1 ? prev.length : cut;
+  // A compaction's placeholder marker stands in until the transcript's own
+  // marker arrives, as an optimistic user message does for its turn.
+  const tailHasCompaction = transcriptSystemContent.has("__compacted__");
+  const older = prev.slice(0, olderEnd).filter((m) => m.id !== "streaming" && !(tailHasCompaction && m.id.startsWith("compact-done-")));
+
   // Collect local-only messages (not in transcript) with their prev index
   const localMessages: Array<{ msg: ChatMessage; prevIdx: number }> = [];
-  for (let i = 0; i < prev.length; i++) {
+  for (let i = olderEnd; i < prev.length; i++) {
     const m = prev[i];
     if (m.id === "streaming") continue;
     if (transcriptIds.has(m.id)) continue;
@@ -180,6 +195,12 @@ export function applyTranscript(prev: ChatMessage[], transcriptMsgsRaw: ChatMess
 
   // Start with transcript messages in transcript order (the source of truth)
   const result: ChatMessage[] = transcriptMsgs.map((m) => enrichedById.get(m.id)!);
+
+  // A tail can start partway through its first message, which then parses
+  // with only its later blocks. Keep the fuller copy prev already has.
+  const first = result[0];
+  const prevFirst = first ? prev.find((m) => m.id === first.id) : undefined;
+  if (prevFirst && prevFirst.blocks.length > first.blocks.length) result[0] = prevFirst;
 
   // Slot local-only messages into approximate positions.
   // Find the nearest preceding transcript message in prev and insert after
@@ -198,5 +219,5 @@ export function applyTranscript(prev: ChatMessage[], transcriptMsgsRaw: ChatMess
     result.splice(insertAfter + 1, 0, msg);
   }
 
-  return result;
+  return older.length > 0 ? [...older, ...result] : result;
 }

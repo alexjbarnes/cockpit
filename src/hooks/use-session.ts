@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { deriveAgentTasks } from "@/lib/agent-tasks";
 import { type ContextSize, DEFAULT_CONTEXT_SIZE, resolveModel } from "@/lib/models";
+import { turnStartFromElapsed } from "@/lib/turn-anchor";
 import type {
   BackgroundTask,
   ChatMessage,
@@ -12,7 +13,10 @@ import type {
   ImageAttachment,
   InitData,
   PermissionMode,
+  SandboxConfig,
+  SandboxSupport,
   ServerMessage,
+  SessionPermissionMode,
   TextFileAttachment,
   ThinkingLevel,
   TodoItem,
@@ -62,6 +66,9 @@ interface UseSessionReturn {
   messages: ChatMessage[];
   historyLoaded: boolean;
   isResponding: boolean;
+  /** Turn start on this device's clock, supplied by the server to a page that
+   *  connected mid-turn; null otherwise. */
+  serverTurnStartedAt: number | null;
   errorActive: boolean;
   pendingPermissions: PendingPermission[];
   pendingQuestions: PendingQuestion[];
@@ -69,11 +76,26 @@ interface UseSessionReturn {
   currentModel: string;
   currentContextSize: ContextSize;
   bypassActive: boolean;
+  permissionMode: SessionPermissionMode;
+  /** The mode the server last said it applied. permissionMode moves as soon
+   *  as a mode is picked; this waits for the server to act on it. */
+  appliedPermissionMode: SessionPermissionMode;
+  /** The mode the CLI reports, from its hook payloads; null until the
+   *  running process has reported one. */
+  cliPermissionMode: string | null;
+  sandbox: SandboxConfig;
+  sandboxSupport: SandboxSupport | null;
   planMode: boolean;
   thinkingLevel: ThinkingLevel;
   contextUsage: ContextUsage | null;
   rateLimitStatus: string | null;
   apiError: string | null;
+  /** Directory the CLI refuses to open until trust is granted, or null. */
+  untrustedDir: string | null;
+  /** Re-attach and spawn the CLI, e.g. after granting trust for the cwd. */
+  connectSession: () => void;
+  /** Dismiss the untrusted-directory card once its trust has been granted. */
+  clearUntrustedDir: () => void;
   suggestions: string[];
   sessionName: string | null;
   initData: InitData | null;
@@ -95,6 +117,8 @@ interface UseSessionReturn {
   setModel: (model: string, contextSize?: ContextSize) => void;
   setModelSlot: (slot: "main" | "subagent" | "fast", modelId: string) => void;
   setBypassAll: (enabled: boolean) => void;
+  setPermissionMode: (mode: SessionPermissionMode) => void;
+  setSandbox: (config: SandboxConfig) => void;
   setPlanMode: (enabled: boolean) => void;
   setThinkingLevel: (level: ThinkingLevel) => void;
   cancelQueuedMessage: () => void;
@@ -117,19 +141,29 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
   const { send, subscribe, connected } = useWebSocket();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isResponding, setIsResponding] = useState(false);
+  // Turn start on this device's clock, when the server supplied one on connect.
+  // Only a page that arrives mid-turn gets it; see turnStartAnchor.
+  const [serverTurnStartedAt, setServerTurnStartedAt] = useState<number | null>(null);
   const [pendingPermissions, setPendingPermissions] = useState<PendingPermission[]>([]);
   const [pendingQuestions, setPendingQuestions] = useState<PendingQuestion[]>([]);
   const [modelPicker, setModelPicker] = useState<string | null>(null);
   const [currentModel, setCurrentModel] = useState("sonnet");
   const [currentContextSize, setCurrentContextSize] = useState<ContextSize>(DEFAULT_CONTEXT_SIZE);
   const [currentRuntime, setCurrentRuntime] = useState<"pty" | "stream">("stream");
-  const [bypassActive, setBypassActive] = useState(false);
+  const [permissionMode, setPermissionModeState] = useState<SessionPermissionMode>("manual");
+  const [appliedPermissionMode, setAppliedPermissionMode] = useState<SessionPermissionMode>("manual");
+  // The mode the CLI reports; null until it has.
+  const [cliPermissionMode, setCliPermissionMode] = useState<string | null>(null);
+  const bypassActive = permissionMode === "bypass";
+  const [sandbox, setSandboxState] = useState<SandboxConfig>({ enabled: false });
+  const [sandboxSupport, setSandboxSupport] = useState<SandboxSupport | null>(null);
   const [planMode, setPlanModeState] = useState(false);
   const [thinkingLevel, setThinkingLevelState] = useState<ThinkingLevel>("high");
   const [historyLoaded, setHistoryLoaded] = useState(false);
   const [contextUsage, setContextUsage] = useState<ContextUsage | null>(null);
   const [rateLimitStatus, setRateLimitStatus] = useState<string | null>(null);
   const [apiError, setApiError] = useState<string | null>(null);
+  const [untrustedDir, setUntrustedDir] = useState<string | null>(null);
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const [sessionName, setSessionName] = useState<string | null>(null);
   const [initData, setInitData] = useState<InitData | null>(null);
@@ -192,24 +226,37 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
     currentModelRef.current = currentModel;
   }, [currentModel]);
 
+  /**
+   * Ask the server to (re)attach and spawn the CLI. `session:connect` is what
+   * calls ensureProcess, so this is also how a spawn that failed is retried —
+   * without inventing a prompt for a session that never ran one.
+   */
+  const connectSession = useCallback(() => {
+    // Clear stale client-side state before server re-sends current state
+    setPendingPermissions([]);
+    setPendingQuestions([]);
+    const isReconnect = loadedSessionRef.current === sessionId;
+    console.log(`[session] sending session:connect for ${sessionId.slice(0, 8)}`);
+    (window as unknown as Record<string, unknown>).__sessionConnectTime = performance.now();
+    send({
+      type: "session:connect",
+      sessionId,
+      cwd: cwd || undefined,
+      lastMessageId: isReconnect ? lastServerMsgIdRef.current : undefined,
+      historyView: historyView || undefined,
+    });
+  }, [sessionId, cwd, historyView, send]);
+
+  // Dismissed on the user's grant rather than on reaching "running": a spawn
+  // with no message to send stops at an idle REPL, so waiting for a turn would
+  // leave the card up over a session that had already started fine. If the
+  // directory is somehow still refused, the server re-emits and it comes back.
+  const clearUntrustedDir = useCallback(() => setUntrustedDir(null), []);
+
   // Send session:connect whenever WS (re)connects
   useEffect(() => {
-    if (connected) {
-      // Clear stale client-side state before server re-sends current state
-      setPendingPermissions([]);
-      setPendingQuestions([]);
-      const isReconnect = loadedSessionRef.current === sessionId;
-      console.log(`[session] sending session:connect for ${sessionId.slice(0, 8)}`);
-      (window as unknown as Record<string, unknown>).__sessionConnectTime = performance.now();
-      send({
-        type: "session:connect",
-        sessionId,
-        cwd: cwd || undefined,
-        lastMessageId: isReconnect ? lastServerMsgIdRef.current : undefined,
-        historyView: historyView || undefined,
-      });
-    }
-  }, [connected, sessionId, cwd, historyView, send]);
+    if (connected) connectSession();
+  }, [connected, connectSession]);
 
   useEffect(() => {
     const unsub = subscribe((msg: ServerMessage) => {
@@ -278,6 +325,9 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
             const nowRunning = msg.status === "running";
             setIsResponding(nowRunning);
             isRespondingRef.current = nowRunning;
+            setServerTurnStartedAt(
+              nowRunning && typeof msg.turnElapsedMs === "number" ? turnStartFromElapsed(msg.turnElapsedMs, Date.now()) : null,
+            );
             if (msg.status === "idle") {
               streamingRef.current = null;
               agentStackRef.current = [];
@@ -742,8 +792,11 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
           const nowRunning = msg.status === "running";
           setIsResponding(nowRunning);
           isRespondingRef.current = nowRunning;
+          if (!nowRunning) setServerTurnStartedAt(null);
           if (nowRunning) {
             setApiError(null);
+            // A session that reached "running" is trusted by definition.
+            setUntrustedDir(null);
             setErrorActive(false);
             clearTimeout(errorTimerRef.current);
           }
@@ -850,9 +903,25 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
             setCurrentModel(msg.text.slice(modelPrefix.length));
             break;
           }
-          const bypassPrefix = "__bypass_state::";
-          if (msg.text.startsWith(bypassPrefix)) {
-            setBypassActive(msg.text.slice(bypassPrefix.length) === "on");
+          const permModePrefix = "__perm_mode::";
+          if (msg.text.startsWith(permModePrefix)) {
+            const mode = msg.text.slice(permModePrefix.length) as SessionPermissionMode;
+            setPermissionModeState(mode);
+            setAppliedPermissionMode(mode);
+            break;
+          }
+          const cliModePrefix = "__cli_perm_mode::";
+          if (msg.text.startsWith(cliModePrefix)) {
+            setCliPermissionMode(msg.text.slice(cliModePrefix.length) || null);
+            break;
+          }
+          const sandboxPrefix = "__sandbox::";
+          if (msg.text.startsWith(sandboxPrefix)) {
+            try {
+              setSandboxState(JSON.parse(msg.text.slice(sandboxPrefix.length)) as SandboxConfig);
+            } catch {
+              /* ignore a malformed sandbox frame rather than crash the message pump */
+            }
             break;
           }
           const planPrefix = "__plan_state::";
@@ -864,6 +933,11 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
           if (msg.text.startsWith(thinkingPrefix)) {
             const level = msg.text.slice(thinkingPrefix.length) as ThinkingLevel;
             setThinkingLevelState(level);
+            break;
+          }
+          const untrustedPrefix = "__untrusted_dir::";
+          if (msg.text.startsWith(untrustedPrefix)) {
+            setUntrustedDir(msg.text.slice(untrustedPrefix.length));
             break;
           }
           const runtimePrefix = "__runtime::";
@@ -913,6 +987,12 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
             } else if (state === "done") {
               setMessages((prev) =>
                 prev.map((m) => (m.id === "compact-progress" ? { ...m, id: "compact-done-" + Date.now(), content: "__compacted__" } : m)),
+              );
+            } else if (state === "cancelled") {
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === "compact-progress" ? { ...m, id: "compact-cancelled-" + Date.now(), content: "__compact_cancelled__" } : m,
+                ),
               );
             }
             break;
@@ -1152,6 +1232,7 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
       // consecutive newlines (the transcript collapses them, so the keys differed).
       const userMsg = buildUserMessage(text, "user-" + Date.now(), Date.now(), { images, documents, textFiles });
       setMessages((prev) => [...prev, userMsg]);
+      setServerTurnStartedAt(null);
       setSuggestions([]);
 
       const cleaned = text.replace(/^\[Attached [^\]]+\]\n*/gm, "").trim();
@@ -1267,11 +1348,42 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
 
   const setBypassAll = useCallback(
     (enabled: boolean) => {
-      setBypassActive(enabled);
+      setPermissionModeState(enabled ? "bypass" : "manual");
       send({ type: "permission:set_bypass", sessionId, enabled });
     },
     [send, sessionId],
   );
+
+  const setPermissionMode = useCallback(
+    (mode: SessionPermissionMode) => {
+      setPermissionModeState(mode);
+      send({ type: "permission:set_mode", sessionId, mode });
+    },
+    [send, sessionId],
+  );
+
+  const setSandbox = useCallback(
+    (config: SandboxConfig) => {
+      setSandboxState(config);
+      send({ type: "session:set_sandbox", sessionId, config });
+    },
+    [send, sessionId],
+  );
+
+  // Host sandbox capability is a machine property, fetched once so the settings
+  // panel can gate the toggle instead of offering a sandbox that does nothing.
+  useEffect(() => {
+    let live = true;
+    fetch("/api/sandbox/support", { credentials: "same-origin" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((s) => {
+        if (live && s) setSandboxSupport(s as SandboxSupport);
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, []);
 
   const setPlanMode = useCallback(
     (enabled: boolean) => {
@@ -1372,6 +1484,7 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
     messages,
     historyLoaded,
     isResponding,
+    serverTurnStartedAt,
     errorActive,
     pendingPermissions,
     pendingQuestions,
@@ -1379,11 +1492,19 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
     currentModel,
     currentContextSize,
     bypassActive,
+    permissionMode,
+    appliedPermissionMode,
+    cliPermissionMode,
+    sandbox,
+    sandboxSupport,
     planMode,
     thinkingLevel,
     contextUsage,
     rateLimitStatus,
     apiError,
+    untrustedDir,
+    connectSession,
+    clearUntrustedDir,
     suggestions,
     sessionName,
     initData,
@@ -1405,6 +1526,8 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
     setModel,
     setModelSlot,
     setBypassAll,
+    setPermissionMode,
+    setSandbox,
     setPlanMode,
     setThinkingLevel,
     cancelQueuedMessage,

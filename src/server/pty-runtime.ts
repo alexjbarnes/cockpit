@@ -1,10 +1,13 @@
 import { v4 as uuidv4 } from "uuid";
+import { isSandboxEscape, NETWORK_ACCESS_TOOL } from "@/lib/sandbox-requests";
+import type { SandboxConfig } from "@/types";
+import { sandboxEscapePossible } from "./claude-sandbox-rules";
 import { cleanupHookSettings, prepareHookSettings } from "./claude-settings";
 import { fetchCliInitData } from "./cli-init-fetch";
 import { logDiag } from "./debug-logger";
 import { ONE_M_CREDITS_REQUIRED, type ParsedEvent } from "./event-parser";
 import { newPermissionRequestId, translateHookEvent } from "./hook-event-translator";
-import type { HookRouter, PermissionDecision, SessionHookHandler } from "./hook-router";
+import type { HookResponse, HookRouter, PermissionDecision, SessionHookHandler } from "./hook-router";
 import { PtySession } from "./pty-session";
 import { countTranscriptMessages } from "./transcript";
 
@@ -28,14 +31,14 @@ export interface PtyRuntimeOptions {
   denyList?: string[];
   /** When false, the CLI spawns with thinking disabled (alwaysThinkingEnabled:false in the settings file). */
   thinkingEnabled?: boolean;
+  /** OS-level Bash sandbox written into the settings file when enabled. */
+  sandbox?: SandboxConfig;
   /** Optional debug callback for raw PTY data chunks. */
   onPtyData?: (chunk: string) => void;
   /** The permission mode the spawn asked for (--permission-mode). Hook
-   *  payloads report the CLI's ACTUAL mode; when a requested bypass does not
-   *  take effect the two diverge, which the runtime records in the debug log
-   *  (see noteModeDivergence) because it explains a session raising prompts
-   *  while the UI reports bypass as on. */
-  expectedPermissionMode?: "default" | "plan" | "bypassPermissions";
+   *  payloads report the mode the CLI is actually in, which need not be the
+   *  one asked for; notePayloadMode passes it out for the UI to show. */
+  expectedPermissionMode?: "manual" | "auto" | "plan";
 }
 
 /**
@@ -50,6 +53,7 @@ export interface PtyRuntimeOptions {
  */
 // biome-ignore lint/suspicious/noControlCharactersInRegex: strip ANSI escape sequences
 const ANSI_RE = /\x1b\[[0-9;]*[a-zA-Z]/g;
+const NETWORK_DIALOG_TITLE = "Network request outside of sandbox";
 
 function stringOrEmpty(value: unknown): string {
   return typeof value === "string" ? value : "";
@@ -63,10 +67,12 @@ export class PtyRuntime {
    *  along so onNotification can tell whether a rendered dialog belongs to a
    *  request the user already has a card for. */
   private readonly pendingPermissions = new Map<string, { resolve: (decision: PermissionDecision) => void; toolName: string }>();
-  /** Synthetic requests for TUI-only dialogs (see onNotification): answered
-   *  with keystrokes into the PTY, not through the hook response channel. */
-  private readonly pendingTuiDialogs = new Set<string>();
-  private modeDivergenceWarned = false;
+  /** Synthetic requests for TUI-only dialogs (see onNotification), by id:
+   *  answered with keystrokes into the PTY, not through the hook response
+   *  channel. A network dialog also carries the host it asks about. */
+  private readonly pendingTuiDialogs = new Map<string, { kind: "permission" } | { kind: "network"; host?: string; command?: string }>();
+  /** The permission mode the CLI last reported in a hook payload. */
+  private cliPermissionMode: string | undefined;
   private lastPreToolUse: { tool: string; input?: Record<string, unknown> } | null = null;
   /**
    * Background work still running, by task id, taken from the CLI's own
@@ -102,8 +108,14 @@ export class PtyRuntime {
   private turnEnded = false;
   private exited = false;
   private cleaned = false;
-  /** Resolver armed by deliverInitialPrompt; fired when UserPromptSubmit confirms the first prompt landed. */
+  /** Resolver armed by a delivery attempt; fired when UserPromptSubmit confirms the prompt landed. */
   private promptAccepted: (() => void) | null = null;
+  /** Bumped by every send, and by interrupt/kill, so sendUserText's retry loop
+   *  can tell its own delivery is still the current one. */
+  private sendEpoch = 0;
+  /** Bumped by interrupt() and kill(), which dismiss every dialog on screen, so
+   *  a network request still being raised knows its dialog is gone. */
+  private dialogEpoch = 0;
   private ptyOutputBuffer = "";
   private errorDebounce: ReturnType<typeof setTimeout> | null = null;
   /** Fire the 1M-credits error at most once per spawn. */
@@ -134,6 +146,7 @@ export class PtyRuntime {
       allowList: this.opts.allowList,
       denyList: this.opts.denyList,
       thinkingEnabled: this.opts.thinkingEnabled,
+      sandbox: this.opts.sandbox,
     });
     this.settingsPath = settingsPath;
     logDiag(sessionId, "pty:hooks-ready", { elapsedMs: Date.now() - startAt });
@@ -166,6 +179,11 @@ export class PtyRuntime {
       throw err;
     }
     logDiag(sessionId, "pty:process-started", { pid: this.pid, elapsedMs: Date.now() - startAt });
+    // The REPL is up, so everything painted getting here is history — including
+    // the trust dialog handleTrustDialog already answered. Left in the buffer it
+    // reads as a live dialog to blockingDialogOnScreen for the whole window
+    // before the first hook clears it, which refused the session's first message.
+    this.ptyOutputBuffer = "";
 
     if (initialText) {
       await this.deliverInitialPrompt(initialText);
@@ -268,46 +286,96 @@ export class PtyRuntime {
   }
 
   /**
-   * Deliver an interactive (live) user message, then confirm a turn actually
-   * started. Unlike the initial prompt, interactive sends were fire-and-forget:
-   * sendMessage flips the session to "running" and types the keystrokes, but if
-   * the REPL swallows them (no turn written) the session hangs "running" with the
-   * bubble vanishing on reload and no diagnostic. This logs the outcome: a turn
-   * started (transcript grew), or NO turn after the window — in which case it
-   * captures the REPL screen so the stuck case is explainable from the logs.
-   * Diagnostic only; it does not resend or change status.
+   * Deliver an interactive (live) user message, confirming a turn actually
+   * started and retyping it if not.
+   *
+   * Typing into a TUI is blind: there is no ready signal and no ack, so the same
+   * swallow deliverInitialPrompt guards against happens on live sends too, and
+   * was measured happening on a real Mac (two `pty:user-send-no-turn` records in
+   * one session, one right after an Esc dismissed an AskUserQuestion dialog).
+   * The cost was worse here than at spawn, because nothing recovered: the
+   * session hung "running" on a message the CLI never saw, the optimistic bubble
+   * vanished on reload, and the only way out was interrupting and sending again
+   * by hand. So this is now the same confirm-and-resend loop as the initial
+   * prompt — which is exactly that manual workaround, done automatically.
+   *
+   * Resending cannot double-submit a message that was merely slow: sendText
+   * opens with \x15 (kill-line), so a retype clears anything still sitting
+   * unsubmitted in the input box before typing over it. And a submitted prompt
+   * writes its user turn to the JSONL immediately, so the end-of-window
+   * transcript check catches a landed message even when the hook is lost, and
+   * returns rather than resending into it.
    */
   async sendUserText(text: string): Promise<void> {
     if (!this.pty) throw new Error("PtyRuntime not started");
     const { sessionId, cliSessionId, cwd } = this.opts;
+    const MAX_ATTEMPTS = 3;
+    // Shorter than the initial prompt's 8s: a live REPL that accepts input does
+    // so within a few hundred ms, and three windows here add up to the 12s this
+    // used to spend just watching the failure happen.
+    const CONFIRM_MS = 4000;
     const baselineMsgs = countTranscriptMessages(cliSessionId, cwd);
+    const turnStarted = () => countTranscriptMessages(cliSessionId, cwd) > baselineMsgs;
+    // Interrupting or killing the session, or superseding this send with
+    // another, invalidates the retry: keystrokes must not keep arriving at a
+    // REPL the user has since taken somewhere else.
+    const epoch = ++this.sendEpoch;
     logDiag(sessionId, "pty:user-send", { textLen: text.length, head: text.slice(0, 80), baselineMsgs, screenBefore: this.recentScreen() });
-    await this.pty.sendText(text);
 
-    const CONFIRM_MS = 12000;
-    setTimeout(() => {
-      if (this.exited) return;
-      const nowMsgs = countTranscriptMessages(cliSessionId, cwd);
-      if (nowMsgs > baselineMsgs) {
-        logDiag(sessionId, "pty:user-send-confirmed", { waitedMs: CONFIRM_MS, baselineMsgs, nowMsgs });
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      const pty = this.pty;
+      if (this.exited || !pty || this.sendEpoch !== epoch) {
+        logDiag(sessionId, "pty:user-send-abandoned", { attempt, exited: this.exited, superseded: this.sendEpoch !== epoch });
         return;
       }
-      // A submitted prompt writes a user turn to the JSONL at submit time, so no
-      // growth in this window means the keystrokes never produced a turn — the
-      // "sent but stuck, nothing happens, gone on reload" report. Surface it
-      // unconditionally (matches the other [pty-runtime] logs the user watches),
-      // and dump the REPL screen via the debug gate to show what swallowed it.
+      const dialog = this.blockingDialogOnScreen();
+      if (dialog) {
+        logDiag(sessionId, "pty:user-send-blocked-by-dialog", { attempt, dialog });
+        console.log(`[pty-runtime] refusing to type into a CLI dialog for ${sessionId.slice(0, 8)}: ${dialog}`);
+        this.emitApiError(
+          dialog === NETWORK_DIALOG_TITLE
+            ? "Your message was not sent. A sandboxed command is waiting on a network access request: answer its card, then send again."
+            : `Your message was not sent. The CLI is waiting on a dialog that has to be answered in the terminal: "${dialog}". ` +
+                "Stop the session to dismiss it, then send again.",
+          { keepScreen: true },
+        );
+        return;
+      }
+      let timer: ReturnType<typeof setTimeout> | null = null;
+      const accepted = new Promise<boolean>((resolve) => {
+        this.promptAccepted = () => resolve(true);
+        timer = setTimeout(() => resolve(false), CONFIRM_MS);
+      });
+      const attemptAt = Date.now();
+      await pty.sendText(text);
+      const ok = await accepted;
+      if (timer) clearTimeout(timer);
+      this.promptAccepted = null;
+
+      if (ok || turnStarted()) {
+        logDiag(sessionId, "pty:user-send-confirmed", { attempt, waitedMs: Date.now() - attemptAt, viaHook: ok });
+        return;
+      }
       console.log(
-        `[pty-runtime] user message produced NO turn after ${CONFIRM_MS}ms for ${sessionId.slice(0, 8)} (textLen=${text.length}); input may have been swallowed by the REPL. Set COCKPIT_DEBUG=1 for the screen.`,
+        `[pty-runtime] user message produced NO turn after ${CONFIRM_MS}ms for ${sessionId.slice(0, 8)} (attempt ${attempt}/${MAX_ATTEMPTS}, textLen=${text.length}); input was swallowed by the REPL, resending.`,
       );
       logDiag(sessionId, "pty:user-send-no-turn", {
-        waitedMs: CONFIRM_MS,
+        attempt,
+        waitedMs: Date.now() - attemptAt,
         baselineMsgs,
-        nowMsgs,
         head: text.slice(0, 80),
         screenAfter: this.recentScreen(),
       });
-    }, CONFIRM_MS);
+    }
+
+    if (this.exited || this.sendEpoch !== epoch) return;
+    // Every attempt was swallowed, so the message is provably not in the CLI.
+    // Say so and force the turn idle: leaving it "running" is the hang this set
+    // out to fix, and a stuck-running session also holds back its queue.
+    logDiag(sessionId, "pty:user-send-failed", { attempts: MAX_ATTEMPTS });
+    this.emitApiError(
+      `Your message never reached Claude — it was typed in ${MAX_ATTEMPTS} times and the CLI never started a turn. Nothing was sent. Send it again; if that fails too, stop the session first.`,
+    );
   }
 
   sendSlash(command: string): void {
@@ -320,9 +388,16 @@ export class PtyRuntime {
     this.pty.sendKey(key);
   }
 
-  /** Sends Esc to claude — the interactive REPL treats it as interrupt. */
+  /**
+   * Sends Esc to claude — the interactive REPL treats it as interrupt — and then
+   * keeps pressing until nothing modal is left on screen (clearBlockingDialogs).
+   */
   interrupt(): void {
     if (!this.pty) return;
+    // Stop any in-flight delivery retry: the user asked for this turn to end, so
+    // retyping the message they interrupted would restart it behind their back.
+    this.sendEpoch++;
+    this.dialogEpoch++;
     this.pty.sendKey("\x1b");
     for (const [, pending] of this.pendingPermissions) {
       pending.resolve({ behavior: "deny", message: "interrupted" });
@@ -330,6 +405,60 @@ export class PtyRuntime {
     this.pendingPermissions.clear();
     // The Esc above dismissed any rendered TUI dialog with it.
     this.pendingTuiDialogs.clear();
+    void this.clearBlockingDialogs();
+  }
+
+  /**
+   * Press Esc until no dialog is left on screen, so stopping really does clear
+   * the CLI.
+   *
+   * One Esc cancels one dialog. A multi-step wizard (the /auto-mode-setup case
+   * in 04281d0) puts up the next step instead, and cockpit then refuses every
+   * send with "the CLI is waiting on a dialog" while the user, whose session is
+   * already idle, has nothing left to press.
+   *
+   * Each pass wipes the screen buffer first and waits for the repaint an Esc
+   * always triggers, so the check reads the CURRENT screen. That wipe is what
+   * makes this safe rather than blind: the buffer is append-only, so a dismissed
+   * dialog's own footer is still in its tail and an unwiped check would press
+   * again forever. Blind repeats are the thing to avoid here — a second Esc at
+   * an idle REPL opens the CLI's own rewind picker, i.e. a loop that did not
+   * look would toggle a dialog rather than clear one. Bounded, so a dialog that
+   * ignores Esc costs three keystrokes and not a spin.
+   */
+  private async clearBlockingDialogs(): Promise<void> {
+    const MAX_PASSES = 3;
+    const REPAINT_MS = 400;
+    // Named so the report can say WHICH dialog went, and so a stop that had
+    // nothing to clear stays silent — the common case is stopping a live turn,
+    // where the spinner stopping is already the feedback.
+    let cleared: string | null = null;
+    for (let pass = 1; pass <= MAX_PASSES; pass++) {
+      this.ptyOutputBuffer = "";
+      await new Promise((resolve) => setTimeout(resolve, REPAINT_MS));
+      if (this.exited || !this.pty) return;
+      const dialog = this.blockingDialogOnScreen();
+      if (!dialog) {
+        if (cleared) {
+          logDiag(this.opts.sessionId, "pty:dialog-clear-done", { passes: pass - 1, dialog: cleared });
+          this.emit([{ type: "system_message", text: `Cleared the CLI's "${cleared}" dialog. Send your message again.` }]);
+        }
+        return;
+      }
+      cleared = dialog;
+      logDiag(this.opts.sessionId, "pty:dialog-cleared", { pass, dialog });
+      console.log(`[pty-runtime] clearing a CLI dialog for ${this.opts.sessionId.slice(0, 8)} (pass ${pass}): ${dialog}`);
+      this.pty.sendKey("\x1b");
+    }
+    logDiag(this.opts.sessionId, "pty:dialog-clear-gave-up", { passes: MAX_PASSES, screen: this.recentScreen() });
+    // Silence here would read as "stop did nothing", which is exactly what the
+    // user sees anyway — say that Esc was refused so the terminal is the answer.
+    this.emit([
+      {
+        type: "system_message",
+        text: `The CLI is still showing its "${cleared}" dialog after ${MAX_PASSES} attempts to dismiss it. It has to be answered in the terminal.`,
+      },
+    ]);
   }
 
   resize(cols: number, rows: number): void {
@@ -338,6 +467,8 @@ export class PtyRuntime {
 
   async kill(signal?: string): Promise<void> {
     this.cancelErrorDebounce();
+    this.sendEpoch++;
+    this.dialogEpoch++;
     if (this.pty) {
       this.pty.kill(signal);
       this.pty = null;
@@ -384,47 +515,74 @@ export class PtyRuntime {
   }
 
   /**
-   * The CLI runs in a different permission mode than the spawn asked for —
-   * seen when a requested bypass does not take effect (the CLI reports
-   * "Bypass permissions mode was disabled by settings").
-   *
-   * Logged once per process, and deliberately not shown in the chat: cockpit
-   * answers the prompts that result, so the divergence changes nothing the user
-   * needs to act on, and a banner on every affected session was just noise.
-   * The detection stays because it is the one signal that explains a session
-   * raising prompts while the UI reports bypass as on.
+   * Record the permission mode a hook payload reports, which is the truth
+   * about what governs the CLI's tool calls: it can differ from the mode the
+   * spawn asked for, and the CLI changes it itself (plan mode, the auto
+   * classifier's fallback to prompting). Every change is reported out as
+   * `__cli_perm_mode::<mode>` so the UI shows what is really happening rather
+   * than what was requested, and logged beside the expected mode, since a
+   * mismatch is what explains a session behaving unlike its selector.
    */
-  private noteModeDivergence(actualMode: string, source: string): void {
-    if (this.modeDivergenceWarned) return;
-    this.modeDivergenceWarned = true;
-    logDiag(this.opts.sessionId, "pty:permission-mode-divergence", {
+  private notePayloadMode(payload: Record<string, unknown>, source: string): void {
+    const actual = payload.permission_mode;
+    if (typeof actual !== "string" || !actual || actual === this.cliPermissionMode) return;
+    this.cliPermissionMode = actual;
+    logDiag(this.opts.sessionId, "pty:cli-permission-mode", {
+      mode: actual,
       expected: this.opts.expectedPermissionMode,
-      actual: actualMode,
       source,
     });
+    this.emit([{ type: "system_message", text: `__cli_perm_mode::${actual}` }]);
   }
 
-  /** Compare a hook payload's reported permission_mode against the spawn's request. */
-  private checkPayloadMode(payload: Record<string, unknown>, source: string): void {
-    if (this.opts.expectedPermissionMode !== "bypassPermissions") return;
-    const actual = payload.permission_mode;
-    if (typeof actual === "string" && actual !== "bypassPermissions") {
-      this.noteModeDivergence(actual, source);
-    }
-  }
-
-  /** Called by SessionManager.respondToPermission when this session is on the pty runtime. */
-  notifyPermissionDecision(requestId: string, decision: PermissionDecision): boolean {
+  /** Called by SessionManager.respondToPermission when this session is on the
+   *  pty runtime. `always` is the user's "don't ask again" choice. */
+  notifyPermissionDecision(requestId: string, decision: PermissionDecision, opts?: { always?: boolean }): boolean {
     // A TUI-only dialog has no hook response channel — the CLI refused the
     // hook's allow (frontier models require interactive confirmation for
-    // self-modifying writes) and is sitting on a rendered dialog. The only
-    // way to answer is keystrokes into the PTY cockpit owns: "1" selects the
-    // dialog's Yes option, Esc cancels it.
-    if (this.pendingTuiDialogs.has(requestId)) {
+    // self-modifying writes), or the dialog is one the CLI never routes
+    // through a hook (network access), and it is sitting on a rendered dialog.
+    // The only way to answer is keystrokes into the PTY cockpit owns: "1"
+    // selects the dialog's Yes option, Esc cancels it, and on the network
+    // dialog "2" is its "Yes, and don't ask again for <host>".
+    const dialog = this.pendingTuiDialogs.get(requestId);
+    if (dialog) {
+      if (!this.pty) {
+        this.pendingTuiDialogs.delete(requestId);
+        return false;
+      }
+      if (dialog.kind === "network" && !this.networkDialogShows(dialog.host)) {
+        // Keystrokes answer whichever dialog is on screen, so an answer meant
+        // for one host must not land on a dialog about another. A no needs no
+        // keys: the host it refuses is not being asked about, so the card just
+        // goes. A yes is raised again, to answer once the screen shows its host.
+        if (decision.behavior !== "allow") {
+          this.pendingTuiDialogs.delete(requestId);
+          logDiag(this.opts.sessionId, "pty:network-dialog-deny-not-shown", { requestId, host: dialog.host ?? null });
+          return true;
+        }
+        logDiag(this.opts.sessionId, "pty:network-dialog-host-mismatch", { requestId, host: dialog.host ?? null });
+        this.emit([
+          {
+            type: "system_message",
+            text: `Not allowing ${dialog.host}: the CLI is asking about a different host right now. Answer that request first.`,
+          },
+        ]);
+        this.emitNetworkRequest(requestId, dialog.host, dialog.command);
+        return false;
+      }
       this.pendingTuiDialogs.delete(requestId);
-      logDiag(this.opts.sessionId, "pty:tui-dialog-decision", { requestId, behavior: decision.behavior });
-      if (!this.pty) return false;
-      this.pty.sendKey(decision.behavior === "allow" ? "1" : "\x1b");
+      const key = decision.behavior !== "allow" ? "\x1b" : dialog.kind === "network" && opts?.always ? "2" : "1";
+      logDiag(this.opts.sessionId, "pty:tui-dialog-decision", {
+        requestId,
+        kind: dialog.kind,
+        behavior: decision.behavior,
+        always: !!opts?.always,
+      });
+      this.pty.sendKey(key);
+      // The answered dialog's frames are still in the append-only buffer, and
+      // blockingDialogOnScreen would read them as a dialog still waiting.
+      if (dialog.kind === "network") this.ptyOutputBuffer = "";
       return true;
     }
     const pending = this.pendingPermissions.get(requestId);
@@ -444,7 +602,7 @@ export class PtyRuntime {
 
   private buildHandler(): SessionHookHandler {
     return {
-      onPreToolUse: (payload) => {
+      onPreToolUse: async (payload) => {
         this.cancelErrorDebounce();
         this.ptyOutputBuffer = "";
         const toolName = typeof payload.tool_name === "string" ? payload.tool_name : "unknown";
@@ -452,7 +610,7 @@ export class PtyRuntime {
         const toolUseId = typeof payload.tool_use_id === "string" ? payload.tool_use_id.slice(0, 12) : "none";
         logDiag(this.opts.sessionId, "hook:PreToolUse", { tool: toolName, toolUseId });
         console.log(`[pty-runtime] PreToolUse: tool=${toolName} cli_session=${cliSession} tool_use_id=${toolUseId}`);
-        this.checkPayloadMode(payload, "PreToolUse");
+        this.notePayloadMode(payload, "PreToolUse");
         // Remembered so a later TUI-only permission dialog (see onNotification)
         // can name the tool it is actually gating.
         this.lastPreToolUse = { tool: toolName, input: payload.tool_input as Record<string, unknown> | undefined };
@@ -464,6 +622,7 @@ export class PtyRuntime {
           events = events.filter((e) => !(e.type === "system_message" && e.text === "__tool_use_start"));
         }
         this.emit(events);
+        return this.sandboxEscapeAsk(toolName, payload.tool_input);
       },
       onPostToolUse: (payload) => {
         this.cancelErrorDebounce();
@@ -475,7 +634,15 @@ export class PtyRuntime {
         console.log(`[pty-runtime] PostToolUse: tool=${toolName} cli_session=${cliSession} tool_use_id=${toolUseId}`);
         this.emit(translateHookEvent("PostToolUse", payload));
       },
+      // Fires as the CLI starts (and on resume, /clear and compaction). It is
+      // here for one thing: its payload carries the permission mode, so it is
+      // known before any message is sent. Returns nothing, so no context is
+      // added to the session.
+      onSessionStart: (payload) => {
+        this.notePayloadMode(payload, "SessionStart");
+      },
       onStop: (payload) => {
+        this.notePayloadMode(payload, "Stop");
         this.cancelErrorDebounce();
         this.ptyOutputBuffer = "";
         const lastMsg = typeof payload.last_assistant_message === "string" ? payload.last_assistant_message : "";
@@ -498,14 +665,33 @@ export class PtyRuntime {
         this.emit(events);
       },
       onStopFailure: (payload) => {
+        const errorType = typeof payload.error_type === "string" ? payload.error_type : "unknown";
+        const hookMessage = typeof payload.error_message === "string" ? payload.error_message : "";
+        // The hook reports plenty of failures it has no words for: an upstream
+        // 4xx relayed by the format proxy arrives as error_type "unknown" with
+        // error_message "Unknown error", while the CLI has already printed the
+        // provider's own sentence to the screen ("API Error: 400 This Go model
+        // requires Global regions. Select Global in your workspace's Privacy
+        // settings to use it." — measured live 2026-09-21, and the only text
+        // that said what to actually do). Passing the payload through verbatim
+        // surfaces "Unknown error (unknown)" and throws that away twice over,
+        // since cancelling the debounce below also drops the scraped copy
+        // scanForErrors was holding. So when the payload says nothing, read the
+        // screen before clearing it.
+        const screenError = hookMessage && hookMessage !== "Unknown error" ? null : this.apiErrorOnScreen();
+        const errorMessage = screenError ?? (hookMessage || "Unknown error");
         this.cancelErrorDebounce();
         this.ptyOutputBuffer = "";
-        const errorType = typeof payload.error_type === "string" ? payload.error_type : "unknown";
-        const errorMessage = typeof payload.error_message === "string" ? payload.error_message : "Unknown error";
-        logDiag(this.opts.sessionId, "hook:StopFailure", { errorType, errorMessage: errorMessage.slice(0, 200) });
+        logDiag(this.opts.sessionId, "hook:StopFailure", {
+          errorType,
+          errorMessage: errorMessage.slice(0, 200),
+          fromScreen: !!screenError,
+        });
         console.log(`[pty-runtime] StopFailure hook for session ${this.opts.sessionId.slice(0, 8)}: ${errorType} - ${errorMessage}`);
-        this.emit(translateHookEvent("StopFailure", payload));
-        this.opts.onError(`${errorMessage} (${errorType})`);
+        this.emit(translateHookEvent("StopFailure", { ...payload, error_message: errorMessage }));
+        // A scraped message already carries its own "(HTTP nnn)"; tacking the
+        // hook's placeholder type onto it would only re-add the noise.
+        this.opts.onError(screenError ?? `${errorMessage} (${errorType})`);
       },
       onUserPromptSubmit: (payload) => {
         this.cancelErrorDebounce();
@@ -514,7 +700,7 @@ export class PtyRuntime {
           armed: !!this.promptAccepted,
           runningTasks: this.runningTasks.size,
         });
-        this.checkPayloadMode(payload, "UserPromptSubmit");
+        this.notePayloadMode(payload, "UserPromptSubmit");
         this.promptAccepted?.();
         // A parent turn is starting, so the gate closes: this turn's tool calls
         // are the user's, whatever background work is still going. The CLI
@@ -602,6 +788,10 @@ export class PtyRuntime {
         // Surface it as a real permission request; the decision comes back via
         // notifyPermissionDecision, which answers with PTY keystrokes.
         const message = typeof payload.message === "string" ? payload.message : "";
+        if (/sandboxed command needs network access/i.test(message)) {
+          void this.raiseNetworkAccessRequest();
+          return;
+        }
         if (/needs your permission/i.test(message)) {
           const tool = this.lastPreToolUse?.tool ?? "unknown";
           // The CLI notifies for a dialog it rendered itself AND for one it is
@@ -619,7 +809,7 @@ export class PtyRuntime {
             return;
           }
           const requestId = `tui-${newPermissionRequestId()}`;
-          this.pendingTuiDialogs.add(requestId);
+          this.pendingTuiDialogs.set(requestId, { kind: "permission" });
           logDiag(this.opts.sessionId, "pty:tui-dialog-detected", { requestId, lastTool: this.lastPreToolUse?.tool ?? null });
           this.emit([
             {
@@ -637,13 +827,118 @@ export class PtyRuntime {
     };
   }
 
+  /**
+   * The CLI's network dialog ("Network request outside of sandbox") is drawn in
+   * the terminal only: no PermissionRequest reaches cockpit, and the sandboxed
+   * command's connection waits on it. It is raised here as a request whose
+   * answer goes back as the dialog's own keys. Its host is read off the screen,
+   * given a moment to paint, since the notification can arrive first.
+   */
+  private async raiseNetworkAccessRequest(): Promise<void> {
+    const epoch = this.dialogEpoch;
+    let host = this.networkDialogHost();
+    for (let i = 0; !host && i < 5; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      // Stop dismissed the dialog while its host was being read: raising a
+      // card now would ask about nothing, and block every send behind it.
+      if (this.exited || this.dialogEpoch !== epoch) return;
+      host = this.networkDialogHost();
+    }
+    // A repeat notification for a dialog that already has a card would give the
+    // user two cards the client cannot merge. Only a host no pending card names
+    // is a new request.
+    const pending = [...this.pendingTuiDialogs.values()].filter((d) => d.kind === "network");
+    if (pending.some((d) => !host || !d.host || d.host === host)) {
+      logDiag(this.opts.sessionId, "pty:network-dialog-already-raised", { host: host ?? null });
+      return;
+    }
+    const requestId = `tui-${newPermissionRequestId()}`;
+    const lastCommand = this.lastPreToolUse?.tool === "Bash" ? this.lastPreToolUse.input?.command : undefined;
+    const command = typeof lastCommand === "string" ? lastCommand : undefined;
+    this.pendingTuiDialogs.set(requestId, { kind: "network", host, command });
+    logDiag(this.opts.sessionId, "pty:network-dialog-detected", { requestId, host: host ?? null });
+    this.emitNetworkRequest(requestId, host, command);
+  }
+
+  private emitNetworkRequest(requestId: string, host: string | undefined, command: string | undefined): void {
+    const input: Record<string, unknown> = { ...(host ? { host } : {}), ...(command ? { command } : {}) };
+    this.emit([
+      {
+        type: "permission_request",
+        requestId,
+        toolName: NETWORK_ACCESS_TOOL,
+        toolInput: JSON.stringify(input),
+        rawToolInput: input,
+        interactiveOnly: true,
+        // Carries the card's "always" choice back to notifyPermissionDecision.
+        permissionSuggestions: [
+          {
+            type: "addRules",
+            rules: [{ toolName: NETWORK_ACCESS_TOOL, ruleContent: host ?? "" }],
+            behavior: "allow",
+            destination: "localSettings",
+          },
+        ],
+      },
+    ]);
+  }
+
+  /**
+   * The host the network dialog on screen asks about. The TUI repaints the
+   * dialog in pieces, so a single frame can come out with characters missing;
+   * over the frames in the buffer the true name is the most common reading.
+   */
+  private networkDialogHost(): string | undefined {
+    const counts = new Map<string, number>();
+    for (const m of this.recentScreen(4000).matchAll(/Host:\s*([A-Za-z0-9.*[\]:-]+)/g)) {
+      counts.set(m[1], (counts.get(m[1]) ?? 0) + 1);
+    }
+    let best: string | undefined;
+    for (const [host, n] of counts) {
+      const bestN = best ? (counts.get(best) ?? 0) : 0;
+      if (n > bestN || (n === bestN && best && host.length > best.length)) best = host;
+    }
+    return best;
+  }
+
+  /** Whether the screen is showing the network dialog for `host`. Unknown on
+   *  either side counts as a match: only a readable, different host refuses. */
+  private networkDialogShows(host: string | undefined): boolean {
+    const onScreen = this.networkDialogHost();
+    return !host || !onScreen || onScreen === host;
+  }
+
+  /**
+   * A Bash call asking to leave the sandbox is answered "ask", which makes the
+   * CLI raise a permission prompt for it in every mode, auto included, instead
+   * of deciding it without one. The prompt arrives as an ordinary
+   * PermissionRequest, and cockpit never auto-approves an escape. Calls that
+   * cannot actually leave (no sandbox, or unsandboxed commands disallowed) get
+   * no answer, so they are not held up by a prompt about nothing.
+   */
+  private async sandboxEscapeAsk(toolName: string, input: unknown): Promise<HookResponse | undefined> {
+    if (toolName !== "Bash" || !isSandboxEscape(input)) return undefined;
+    if (!(await sandboxEscapePossible(this.opts.cwd, this.opts.sandbox?.enabled === true))) return undefined;
+    logDiag(this.opts.sessionId, "pty:sandbox-escape-ask", {});
+    return {
+      stdout: JSON.stringify({
+        hookSpecificOutput: {
+          hookEventName: "PreToolUse",
+          permissionDecision: "ask",
+          permissionDecisionReason: "Runs outside the sandbox",
+        },
+      }),
+      exitCode: 0,
+    };
+  }
+
   private handlePermissionRequest(payload: Record<string, unknown>): Promise<PermissionDecision> {
     const requestId = newPermissionRequestId();
     const toolName = typeof payload.tool_name === "string" ? payload.tool_name : "unknown";
     const toolInput = payload.tool_input as Record<string, unknown> | undefined;
     // A PermissionRequest under an intended bypass is itself divergence — a
     // CLI genuinely in bypass mode never consults this hook.
-    this.checkPayloadMode(payload, "PermissionRequest");
+    this.notePayloadMode(payload, "PermissionRequest");
 
     const event: ParsedEvent = {
       type: "permission_request",
@@ -708,16 +1003,6 @@ export class PtyRuntime {
     // biome-ignore lint/suspicious/noControlCharactersInRegex: strip terminal control chars
     const clean = this.ptyOutputBuffer.replace(ANSI_RE, "").replace(/[\x00-\x1f]/g, "");
 
-    // The CLI announces an overridden bypass in its boot banner before any
-    // hook fires — earliest possible detection of the divergence.
-    if (
-      !this.modeDivergenceWarned &&
-      this.opts.expectedPermissionMode === "bypassPermissions" &&
-      /Bypass permissions mode was disabled by settings/i.test(clean)
-    ) {
-      this.noteModeDivergence("default", "boot-banner");
-    }
-
     // A 1M-context request on an account without usage credits (Sonnet 4.6):
     // the CLI prints this and the turn fails. It carries no HTTP code, so the
     // coded match below misses it, and it is genuinely fatal, so fire it
@@ -730,19 +1015,94 @@ export class PtyRuntime {
     }
 
     if (this.errorDebounce) return;
-    const match = clean.match(/API\s*Error:\s*(\d+)\s*([^✓✗❯]*)/) || clean.match(/APIError:\s*(\d+)\s*(.*)/);
-    if (!match) return;
-
-    const httpCode = match[1];
-    const detail = match[2].trim().slice(0, 200);
-    const errMsg = detail ? `${detail} (HTTP ${httpCode})` : `API Error (HTTP ${httpCode})`;
+    const errMsg = this.apiErrorOnScreen();
+    if (!errMsg) return;
     this.errorDebounce = setTimeout(() => this.emitApiError(errMsg), 10_000);
   }
 
+  /**
+   * The coded API error the CLI has printed to the screen, formatted for the
+   * user, or null when there is none.
+   *
+   * Reads the same buffer scanForErrors accumulates, so it is also what a hook
+   * consults when its own payload carries no usable message. The CLI prints the
+   * upstream's sentence verbatim after the code, which for a proxied provider is
+   * the only place that text appears at all.
+   */
+  private apiErrorOnScreen(): string | null {
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: strip terminal control chars
+    const clean = this.ptyOutputBuffer.replace(ANSI_RE, "").replace(/[\x00-\x1f]/g, "");
+    const match = clean.match(/API\s*Error:\s*(\d+)\s*([^✓✗❯]*)/) || clean.match(/APIError:\s*(\d+)\s*(.*)/);
+    if (!match) return null;
+    const detail = match[2].trim().slice(0, 200);
+    return detail ? `${detail} (HTTP ${match[1]})` : `API Error (HTTP ${match[1]})`;
+  }
+
+  /**
+   * A modal TUI dialog the CLI is waiting on, by title, or null.
+   *
+   * Cockpit types blind, so a dialog it cannot see eats the keystrokes: the
+   * message never becomes a turn, and worse, the text drives the dialog. Caught
+   * live (Mac, 2026-08-18) with the CLI's `/auto-mode-setup` wizard — the recorded
+   * screens show a checkbox flipping from [ ] to [✔] between delivery attempts,
+   * i.e. cockpit's own retry answering a consent dialog about scanning shell
+   * history and other repositories on the user's behalf.
+   *
+   * The discriminator is an "Esc to cancel" AND an "Enter to <verb>" affordance
+   * together, matched whitespace-blind because the TUI writes those footers a
+   * character at a time with cursor moves in between, so the stripped screen has
+   * no spaces left in them.
+   *
+   * "Esc to cancel" ALONE is not enough, though it looks like it should be: the
+   * CLI puts it on its ordinary busy line too ("Accessing workspace… esc to
+   * cancel"), and matching that refused every send while the CLI was merely
+   * working — caught by tests/integration/turn-timing.spec.ts against the real
+   * CLI, having shipped in 04281d0. Only something waiting on a decision offers
+   * a way to commit one, so requiring the Enter half separates a dialog from a
+   * spinner. The idle REPL footer has neither; it reads "auto mode on
+   * (shift+tab to cycle) · ← for agents".
+   *
+   * The failure modes are not symmetric, which is why this errs strict: a false
+   * negative costs a lost message (the pre-04281d0 behaviour), a false positive
+   * blocks every message the session will ever send.
+   */
+  private blockingDialogOnScreen(): string | null {
+    // The network dialog has neither footer phrase (it offers "(esc)"), and a
+    // message typed into it would answer it: Enter picks "Yes". While one is
+    // pending it blocks outright, until its card is answered or Stop clears it.
+    if ([...this.pendingTuiDialogs.values()].some((d) => d.kind === "network")) return NETWORK_DIALOG_TITLE;
+    const screen = this.recentScreen(1500);
+    const flat = screen.replace(/\s+/g, "");
+    // Without a pending request (Stop has just cleared them), the dialog is read
+    // off the screen: its title and its question both, with no prompt footer
+    // painted after them, since a reply merely quoting one of them is not it.
+    const lower = flat.toLowerCase();
+    const networkDialogAt = Math.min(lower.lastIndexOf("outsideofsandbox"), lower.lastIndexOf("allowthisconnection"));
+    if (networkDialogAt >= 0 && !/(shift\+tabtocycle|forshortcuts)/i.test(flat.slice(networkDialogAt))) return NETWORK_DIALOG_TITLE;
+    const lastFooter = flat.toLowerCase().lastIndexOf("esctocancel");
+    if (lastFooter < 0 || !/enterto\w/i.test(flat)) return null;
+    // A dialog that is still open is the last thing on screen. The REPL's own
+    // idle footer painted after it means it has been answered and the prompt is
+    // back — which is how a spawn's trust dialog, auto-answered seconds earlier,
+    // otherwise reads as live.
+    if (/shift\+tabtocycle/i.test(flat.slice(lastFooter))) return null;
+    // The first line that is neither blank nor box-drawing is the dialog's
+    // question — worth quoting back, since which dialog it is decides what the
+    // user should do about it.
+    const title = screen
+      .split("\n")
+      .map((line) => line.replace(/[─━│┌┐└┘]/g, "").trim())
+      .find((line) => line.length > 3);
+    return title ? title.slice(0, 120) : "an interactive prompt";
+  }
+
   /** Force the turn idle and surface `errMsg`. Shared by the coded-error debounce and the 1M-credits path. */
-  private emitApiError(errMsg: string): void {
+  private emitApiError(errMsg: string, opts?: { keepScreen?: boolean }): void {
     this.errorDebounce = null;
-    this.ptyOutputBuffer = "";
+    // A dialog the user has not dismissed is still on screen, and clearing the
+    // buffer would blind the next send to it — which is how the keystrokes got
+    // into it in the first place.
+    if (!opts?.keepScreen) this.ptyOutputBuffer = "";
 
     console.log(`[pty-runtime] API error detected for session ${this.opts.sessionId.slice(0, 8)}: ${errMsg}`);
 

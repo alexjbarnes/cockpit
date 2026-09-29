@@ -7,7 +7,16 @@ import type { ContextUsage } from "@/types";
 
 interface ContextIndicatorProps {
   usage: ContextUsage;
+  sessionId: string;
+  cwd?: string;
   onCompact?: () => void;
+}
+
+interface TokenTotals {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheCreate: number;
 }
 
 function formatTokens(n: number): string {
@@ -15,8 +24,9 @@ function formatTokens(n: number): string {
   return String(n);
 }
 
-export function ContextIndicator({ usage, onCompact }: ContextIndicatorProps) {
+export function ContextIndicator({ usage, sessionId, cwd, onCompact }: ContextIndicatorProps) {
   const [open, setOpen] = useState(false);
+  const [totals, setTotals] = useState<TokenTotals | null>(null);
   useEffect(() => {
     if (!open) return;
     const h = (e: KeyboardEvent) => {
@@ -25,6 +35,33 @@ export function ContextIndicator({ usage, onCompact }: ContextIndicatorProps) {
     window.addEventListener("keydown", h);
     return () => window.removeEventListener("keydown", h);
   }, [open]);
+
+  // Fetched on open, not pushed: it costs a full transcript scan, and nothing
+  // outside this panel wants it. Re-fetched each time so it reflects the turns
+  // since it was last looked at.
+  useEffect(() => {
+    if (!open) return;
+    let live = true;
+    const qs = cwd ? `?cwd=${encodeURIComponent(cwd)}` : "";
+    fetch(`/api/sessions/${sessionId}/usage${qs}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((t: TokenTotals | null) => {
+        if (live) setTotals(t);
+      })
+      .catch(() => {
+        if (live) setTotals(null);
+      });
+    return () => {
+      live = false;
+    };
+  }, [open, sessionId, cwd]);
+
+  // Share of the prompt tokens this session has paid for that were served from
+  // the provider's cache. The denominator is every prompt token — Anthropic
+  // reports cache reads and writes outside input_tokens, so summing all three
+  // is what "the whole prompt" means.
+  const promptTokens = totals ? totals.input + totals.cacheRead + totals.cacheCreate : 0;
+  const hitRate = promptTokens > 0 ? Math.round(((totals?.cacheRead ?? 0) / promptTokens) * 100) : null;
 
   const pct = Math.round((usage.used / usage.total) * 100);
   const strokeColor = pct > 80 ? "#ef4444" : pct > 50 ? "#f97316" : "#22c55e";
@@ -94,6 +131,37 @@ export function ContextIndicator({ usage, onCompact }: ContextIndicatorProps) {
               <span data-testid="context-used">{formatTokens(usage.used)} used</span>
               <span data-testid="context-total">{formatTokens(usage.total)} total</span>
             </div>
+            {totals && (
+              <div className="mt-5 pt-4 border-t" data-testid="session-totals">
+                <div className="flex items-baseline justify-between mb-2">
+                  <h3 className="text-sm font-medium">Session totals</h3>
+                  {hitRate !== null && (
+                    <span className="text-xs text-muted-foreground" data-testid="cache-hit-rate">
+                      {hitRate}% from cache
+                    </span>
+                  )}
+                </div>
+                <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                  <dt>Input</dt>
+                  <dd className="text-right tabular-nums" data-testid="total-input">
+                    {formatTokens(totals.input)}
+                  </dd>
+                  <dt>Output</dt>
+                  <dd className="text-right tabular-nums" data-testid="total-output">
+                    {formatTokens(totals.output)}
+                  </dd>
+                  <dt>Cache read</dt>
+                  <dd className="text-right tabular-nums" data-testid="total-cache-read">
+                    {formatTokens(totals.cacheRead)}
+                  </dd>
+                  <dt>Cache write</dt>
+                  <dd className="text-right tabular-nums" data-testid="total-cache-write">
+                    {formatTokens(totals.cacheCreate)}
+                  </dd>
+                </dl>
+                {hitRate === null && <p className="mt-2 text-xs text-muted-foreground">No completed turns yet.</p>}
+              </div>
+            )}
             {onCompact && (
               <Button
                 variant="outline"

@@ -145,6 +145,64 @@ export interface InitData {
 
 export type PermissionMode = "allow" | "allow_always" | "allow_all" | "deny";
 
+/** OS-level Bash isolation, orthogonal to permission mode. When enabled the CLI
+ *  runs Bash (and its children) inside a sandbox and, in its default auto-allow
+ *  mode, without a permission prompt — the OS boundary is the safety net. The
+ *  rules every sandboxed session shares are SandboxRules, kept in the user's own
+ *  Claude settings; this is the per-session switch plus the domains that session
+ *  adds on top. */
+export interface SandboxConfig {
+  enabled: boolean;
+  /** Domains this session may reach on top of the shared list. Only enforced
+   *  where the host has the network backend (Linux/WSL2 need socat). */
+  allowedDomains?: string[];
+}
+
+/** The Bash sandbox rules cockpit edits in the user's own Claude settings
+ *  (~/.claude/settings.json), which apply to every sandboxed Claude session.
+ *  Lists are empty when unset; a flag left undefined takes the CLI's default. */
+export interface SandboxRules {
+  /** network.allowedDomains: hosts sandboxed commands may reach. */
+  allowedDomains: string[];
+  /** network.deniedDomains: always blocked, even when allowed elsewhere. */
+  deniedDomains: string[];
+  /** network.allowUnixSockets: socket paths sandboxed commands may connect to (macOS). */
+  allowUnixSockets: string[];
+  /** network.allowLocalBinding: lets sandboxed commands bind and reach local ports (macOS). */
+  allowLocalBinding?: boolean;
+  /** filesystem.allowWrite: paths writable beyond the working directory. */
+  allowWrite: string[];
+  /** filesystem.denyWrite: paths never writable. */
+  denyWrite: string[];
+  /** filesystem.denyRead: paths never readable. */
+  denyRead: string[];
+  /** filesystem.allowRead: paths readable again inside a denied one. */
+  allowRead: string[];
+  /** excludedCommands: commands that run outside the sandbox, after the usual permission check. */
+  excludedCommands: string[];
+  /** allowUnsandboxedCommands: whether a command may ask to run outside the sandbox (default true). */
+  allowUnsandboxedCommands?: boolean;
+}
+
+/** Whether this host can run the CLI's Bash sandbox, computed server-side. */
+export interface SandboxSupport {
+  supported: boolean;
+  /** Network isolation specifically (Linux/WSL2 need socat); macOS always true
+   *  when supported. Filesystem isolation can work without it. */
+  networkIsolation: boolean;
+  platform: string;
+  /** Short human reason when unsupported or degraded, e.g. "install bubblewrap". */
+  reason?: string;
+}
+
+/** A session's standing permission posture, orthogonal to plan mode:
+ *  - manual: every tool call raises a card (cockpit answers the hook).
+ *  - auto: the CLI's own safety classifier decides, prompting only on risky
+ *    calls. Anthropic models only — the classifier runs on the session's model,
+ *    and a slow non-Anthropic one times out and blocks the call.
+ *  - bypass: cockpit auto-approves everything (its standing yes). */
+export type SessionPermissionMode = "manual" | "auto" | "bypass";
+
 export interface PermissionSuggestion {
   type: string;
   rules?: { toolName: string; ruleContent?: string }[];
@@ -220,7 +278,9 @@ export interface CronSchedule {
  */
 export interface IssueStatusSchedule {
   type: "onIssueStatus";
-  status: IssueStatus;
+  // A built-in status, or a custom status of the named project. Validated at
+  // save time against that project's allowed set (job-storage.ts).
+  status: string;
   /** Project id; absent means any project. */
   project?: string;
 }
@@ -243,6 +303,8 @@ export interface ScheduledJob {
   mcpServers?: string[];
   mcpToolFilters?: Record<string, string[]>;
   bypassPermissions?: boolean;
+  /** Runs the job's Bash in the sandbox, under the shared SandboxRules. Off by default. */
+  sandbox?: boolean;
   maxDurationMinutes?: number;
   /** Extra attempts after a `failure` run (not `timeout`/`stopped`). Defaults to 1. */
   maxRetries?: number;
@@ -341,6 +403,16 @@ export interface NotificationSettings {
 
 // Issues and projects (native issue tracker, see docs/internal/issue-tracker-spec.md)
 
+/** A project-defined status, additive to the built-in lifecycle. The name is
+ *  its identity (unique per project, never a built-in name); color is a token
+ *  key from STATUS_COLORS (see issue-display.ts), optional. The pipeline skills
+ *  never move an issue into a custom status on their own, but a custom status
+ *  can be an onIssueStatus job trigger. */
+export interface CustomStatus {
+  name: string;
+  color?: string;
+}
+
 export interface Project {
   id: string;
   name: string;
@@ -351,6 +423,10 @@ export interface Project {
   createdAt: number;
   updatedAt: number;
   nextNumber: number; // per-project counter, so keys are CK-1, CK-2
+  // Per-project status config; both optional, absent = the full built-in
+  // lifecycle in canonical order (i.e. today's behaviour, no migration needed).
+  disabledStatuses?: string[]; // built-in statuses this project hides
+  customStatuses?: CustomStatus[]; // additive columns, order = array order
 }
 
 /**
@@ -441,7 +517,10 @@ export interface Issue {
   projectId: string;
   title: string;
   description: string; // markdown, the refine skill overwrites this wholesale
-  status: IssueStatus;
+  // A built-in IssueStatus, or one of the issue's project customStatuses. Typed
+  // as string because custom statuses are runtime values validated per project;
+  // IssueStatus stays the union the automation (skills, onIssueStatus) keys off.
+  status: string;
   priority?: 0 | 1 | 2 | 3 | 4; // Linear's scale, so imports map cleanly
   labels?: string[];
   createdAt: number;
@@ -473,6 +552,8 @@ export type ClientMessage =
       suggestionIndex?: number;
     }
   | { type: "permission:set_bypass"; sessionId: string; enabled: boolean }
+  | { type: "permission:set_mode"; sessionId: string; mode: SessionPermissionMode }
+  | { type: "session:set_sandbox"; sessionId: string; config: SandboxConfig }
   | { type: "session:set_plan_mode"; sessionId: string; enabled: boolean }
   | { type: "session:set_thinking"; sessionId: string; level: ThinkingLevel }
   | { type: "session:set_model"; sessionId: string; model: string; contextSize?: ContextSize }
@@ -535,6 +616,10 @@ export type ServerMessage =
       status?: "idle" | "running";
       hasMore?: boolean;
       promptHistory?: string[];
+      /** How long the running turn has gone since its user message was
+       *  delivered, measured on the server. Elapsed rather than a timestamp, so
+       *  no difference between the server's clock and the device's can skew it. */
+      turnElapsedMs?: number;
     }
   | { type: "history:more"; sessionId: string; messages: ChatMessage[]; hasMore: boolean }
   | { type: "session:transcript"; sessionId: string; messages: ChatMessage[] }

@@ -35,6 +35,7 @@ test.use({ harnessOptions: { deepseekViaMock: true } });
 test("a session on a deepseek model reaches the anthropic door with its own key and effort", async ({ page, harness }) => {
   const workDir = mkdtempSync(path.join(tmpdir(), "cockpit-it-deepseek-"));
   mkdirSync(path.join(workDir, ".git"), { recursive: true });
+  harness.trustWorkDir(workDir);
 
   try {
     const createRes = await page.request.post(`${harness.cockpitUrl}/api/sessions`, {

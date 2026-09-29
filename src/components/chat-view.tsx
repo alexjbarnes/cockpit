@@ -1,14 +1,17 @@
 "use client";
 
-import { AlertTriangle, ArrowDown, Loader2, RotateCcw } from "lucide-react";
+import { AlertTriangle, ArrowDown, Loader2, RotateCcw, ShieldCheck, Square } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useMessageSelection } from "@/hooks/use-message-selection";
 import { useSession } from "@/hooks/use-session";
 import { useSettings } from "@/hooks/use-settings";
 import { useWebSocket } from "@/hooks/use-websocket";
+import { formatDuration } from "@/lib/format-time";
 import { pathBasename } from "@/lib/path";
+import { grownRenderWindow, type ListShape } from "@/lib/render-window";
 import { pairQuestionBlocks, splitAtQuestion } from "@/lib/split-question-blocks";
+import { turnStartAnchor } from "@/lib/turn-anchor";
 import { cn } from "@/lib/utils";
 import type { Provider } from "@/types";
 import { useShell, useShellSessionModel } from "./app-shell";
@@ -50,6 +53,7 @@ export function ChatView({
     messages,
     historyLoaded,
     isResponding,
+    serverTurnStartedAt,
     errorActive,
     pendingPermissions,
     pendingQuestions,
@@ -57,11 +61,19 @@ export function ChatView({
     currentModel,
     currentContextSize,
     bypassActive,
+    permissionMode,
+    appliedPermissionMode,
+    cliPermissionMode,
+    sandbox,
+    sandboxSupport,
     planMode,
     thinkingLevel,
     contextUsage,
     rateLimitStatus,
     apiError,
+    untrustedDir,
+    connectSession,
+    clearUntrustedDir,
     sessionName,
     initData,
     activeModelId,
@@ -81,6 +93,8 @@ export function ChatView({
     respondToQuestion,
     setModel,
     setBypassAll,
+    setPermissionMode,
+    setSandbox,
     setPlanMode,
     setThinkingLevel,
     cancelQueuedMessage,
@@ -136,6 +150,15 @@ export function ChatView({
   }, [messages]);
 
   const totalMessages = uniqueMessages.length;
+  // Adjusted during render, not in an effect, so the window never commits
+  // with its top messages unmounted.
+  const firstMessageId = uniqueMessages[0]?.id ?? null;
+  const [windowSeen, setWindowSeen] = useState<ListShape>({ total: totalMessages, firstId: firstMessageId });
+  if (windowSeen.total !== totalMessages || windowSeen.firstId !== firstMessageId) {
+    const next = { total: totalMessages, firstId: firstMessageId };
+    setWindowSeen(next);
+    setRenderWindow((w) => grownRenderWindow(w, windowSeen, next, stickToBottom.current));
+  }
   const startIndex = Math.max(0, totalMessages - renderWindow);
   const visibleMessages = useMemo(() => uniqueMessages.slice(startIndex), [uniqueMessages, startIndex]);
   const hasMoreAbove = startIndex > 0;
@@ -169,6 +192,50 @@ export function ChatView({
     return map;
   }, [visibleMessages, isResponding]);
 
+  // Live "how long has this been going" beside the spinner. Turn start is the
+  // last user message, the same anchor workedByMessageId uses above, so the
+  // counter and the "Worked for" it settles into measure the same span.
+  // Scans everything the page holds, not just the rendered window: a long turn
+  // pushes its user message out of the last 50 while the counter still needs it.
+  const turnStartedAt = useMemo(() => {
+    for (let i = uniqueMessages.length - 1; i >= 0; i--) {
+      if (uniqueMessages[i].role === "user") return uniqueMessages[i].timestamp;
+    }
+    return null;
+  }, [uniqueMessages]);
+
+  // Stopping a session whose turn is already idle changes nothing on screen, so
+  // the click needs its own acknowledgement. 2.5s covers the server's bounded
+  // clear (3 passes x 400ms) plus the round trip; the outcome itself arrives as
+  // a system message in the chat.
+  const [clearingCli, setClearingCli] = useState(false);
+
+  const [elapsedMs, setElapsedMs] = useState<number | null>(null);
+  // Latched once per turn, because the anchor moves underneath it. The bubble
+  // rendered on click carries the CLIENT clock; the transcript's copy that
+  // replaces it moments later carries the CLI's clock at submit, which is both
+  // later and — on a phone talking to a desktop — subject to device clock skew.
+  // Re-reading it made the counter sit on "1s" (a negative elapsed floors
+  // there) until real time caught up with the skew, then start counting.
+  // A page opened mid-turn has no client-clocked bubble either, so it takes the
+  // server's measure of the turn when there is one (turnStartAnchor).
+  const turnStartRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (!isResponding) {
+      turnStartRef.current = null;
+      setElapsedMs(null);
+      return;
+    }
+    if (turnStartRef.current == null) {
+      turnStartRef.current = turnStartAnchor(serverTurnStartedAt, turnStartedAt, Date.now());
+    }
+    const startedAt = turnStartRef.current;
+    const tick = () => setElapsedMs(Date.now() - startedAt);
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [isResponding, turnStartedAt, serverTurnStartedAt]);
+
   // Reset window on session change
   useEffect(() => {
     setRenderWindow(INITIAL_WINDOW);
@@ -176,6 +243,37 @@ export function ChatView({
 
   // Update header with session name
   const { send: wsSend } = useWebSocket();
+  // The one spawn failure the user can fix from here: grant the CLI's
+  // workspace trust for this directory, then start the session that could not.
+  const [trusting, setTrusting] = useState(false);
+  const [trustError, setTrustError] = useState<string | null>(null);
+  const grantTrust = useCallback(async () => {
+    if (!untrustedDir) return;
+    setTrusting(true);
+    setTrustError(null);
+    try {
+      const res = await fetch("/api/trust", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cwd: untrustedDir }),
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => null)) as { error?: string } | null;
+        setTrustError(body?.error ?? `Could not trust the directory (HTTP ${res.status})`);
+        return;
+      }
+      // Re-attach so the server spawns the CLI again. NOT a message: this
+      // session never ran a turn, so "continue where you left off" would be a
+      // prompt invented out of nothing. The card clears when it reaches
+      // "running", or comes back if the directory is somehow still refused.
+      clearUntrustedDir();
+      connectSession();
+    } catch (err) {
+      setTrustError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setTrusting(false);
+    }
+  }, [untrustedDir, connectSession, clearUntrustedDir]);
   const handleRename = useCallback(
     (name: string) => {
       wsSend({ type: "message:send", sessionId, text: `/rename ${name}` });
@@ -483,8 +581,38 @@ export function ChatView({
           {(isResponding || errorActive) && pendingPermissions.length === 0 && !pendingQuestions.some((q) => !q.answered) && (
             <div className="flex items-center gap-2 text-muted-foreground">
               <Loader2 className="h-4 w-4 animate-spin" />
+              {elapsedMs != null && (
+                <span className="text-xs tabular-nums" data-testid="turn-elapsed">
+                  {formatDuration(elapsedMs)}
+                </span>
+              )}
               {errorActive && !isResponding && <span className="text-xs text-red-500">API error, retrying...</span>}
               {rateLimitStatus && <span className="text-xs">Rate limited, retrying...</span>}
+            </div>
+          )}
+          {untrustedDir && !isResponding && (
+            <div className="flex w-full justify-start" data-testid="untrusted-dir-card">
+              <div className="max-w-[85%] rounded-lg border border-amber-500/30 bg-amber-500/5 px-4 py-3">
+                <div className="mb-1 flex items-center gap-2 text-amber-500">
+                  <AlertTriangle className="h-4 w-4 shrink-0" />
+                  <span className="text-sm font-medium">Directory not trusted</span>
+                </div>
+                <p className="mb-1 text-xs text-muted-foreground">
+                  The Claude CLI will not open <span className="font-mono break-all">{untrustedDir}</span> until you say you trust it. It
+                  asks in the terminal, which cockpit cannot answer for you.
+                </p>
+                <p className="mb-3 text-xs text-muted-foreground">Only trust a directory whose contents you know.</p>
+                <button
+                  type="button"
+                  disabled={trusting}
+                  onClick={grantTrust}
+                  className="flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs transition-colors hover:bg-muted disabled:opacity-60"
+                >
+                  {trusting ? <Loader2 className="h-3 w-3 animate-spin" /> : <ShieldCheck className="h-3 w-3" />}
+                  Trust this directory and start
+                </button>
+                {trustError && <p className="mt-2 text-xs text-red-500">{trustError}</p>}
+              </div>
             </div>
           )}
           {apiError && !isResponding && !errorActive && (
@@ -495,13 +623,33 @@ export function ChatView({
                   <span className="text-sm font-medium">API Error</span>
                 </div>
                 <p className="text-xs text-muted-foreground mb-3">{apiError}</p>
-                <button
-                  onClick={retry}
-                  className="flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs hover:bg-muted transition-colors"
-                >
-                  <RotateCcw className="h-3 w-3" />
-                  Retry
-                </button>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    onClick={retry}
+                    className="flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs hover:bg-muted transition-colors"
+                  >
+                    <RotateCcw className="h-3 w-3" />
+                    Retry
+                  </button>
+                  {/* The composer's Stop button only exists while a turn runs, and an
+                      error like "the CLI is waiting on a dialog" arrives with the
+                      session already idle — so this is the only way to reach the
+                      interrupt that clears the CLI screen. */}
+                  <button
+                    onClick={() => {
+                      interrupt();
+                      setClearingCli(true);
+                      setTimeout(() => setClearingCli(false), 2500);
+                    }}
+                    disabled={clearingCli}
+                    data-testid="btn-clear-cli"
+                    title="Stop the CLI and clear whatever dialog is on its screen"
+                    className="flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs hover:bg-muted transition-colors disabled:opacity-60"
+                  >
+                    {clearingCli ? <Loader2 className="h-3 w-3 animate-spin" /> : <Square className="h-3 w-3" />}
+                    {clearingCli ? "Clearing..." : "Clear the CLI"}
+                  </button>
+                </div>
               </div>
             </div>
           )}
@@ -587,6 +735,13 @@ export function ChatView({
           isResponding={isResponding || errorActive}
           bypassActive={bypassActive}
           onSetBypass={setBypassAll}
+          permissionMode={permissionMode}
+          appliedPermissionMode={appliedPermissionMode}
+          cliPermissionMode={cliPermissionMode}
+          onSetPermissionMode={setPermissionMode}
+          sandbox={sandbox}
+          onSetSandbox={setSandbox}
+          sandboxSupport={sandboxSupport}
           planMode={planMode}
           onSetPlanMode={setPlanMode}
           showPlanToggle={showPlanToggle}

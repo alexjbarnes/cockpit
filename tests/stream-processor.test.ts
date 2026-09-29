@@ -701,6 +701,67 @@ describe("processEvents", () => {
       }
     });
 
+    it("keeps a request that widens the sandbox away from every auto-answer shortcut", () => {
+      // A yes to either widens the sandbox, so it is the user's to give: the
+      // read-only shortcuts that approve ordinary commands must not reach it.
+      const cases: { planMode: boolean; toolName: string; rawToolInput: Record<string, unknown> }[] = [
+        { planMode: false, toolName: "Bash", rawToolInput: { command: "gh pr list", dangerouslyDisableSandbox: true } },
+        { planMode: true, toolName: "Bash", rawToolInput: { command: "ls -la", dangerouslyDisableSandbox: true } },
+        { planMode: true, toolName: "SandboxNetworkAccess", rawToolInput: { host: "example.com" } },
+      ];
+      for (const c of cases) {
+        const state = makeState();
+        const events: ParsedEvent[] = [
+          makeEvent({
+            type: "permission_request",
+            requestId: "req-1",
+            toolName: c.toolName,
+            rawToolInput: c.rawToolInput,
+            permissionSuggestions: [{ type: "addRules" }],
+          }),
+        ];
+        const result = processEvents(events, state, { planMode: c.planMode, compacting: false });
+        expect(result.permissionActions[0].type, JSON.stringify(c)).toBe("store");
+        expect(result.permissionActions[0].permissionSuggestions).toEqual([{ type: "addRules" }]);
+        expect(result.emit).toHaveLength(1);
+      }
+    });
+
+    it("still refuses, in plan mode, an escape whose command is not read-only", () => {
+      const state = makeState();
+      const events: ParsedEvent[] = [
+        makeEvent({
+          type: "permission_request",
+          requestId: "req-1",
+          toolName: "Bash",
+          rawToolInput: { command: "rm -rf build", dangerouslyDisableSandbox: true },
+        }),
+      ];
+      const result = processEvents(events, state, { planMode: true, compacting: false });
+      expect(result.permissionActions[0].type).toBe("auto_deny");
+      expect(result.permissionActions[0].denyReason).toContain("Cockpit plan mode");
+    });
+
+    it("carries a TUI dialog's suggestions through, so its card can offer 'always'", () => {
+      const state = makeState();
+      const events: ParsedEvent[] = [
+        makeEvent({
+          type: "permission_request",
+          requestId: "tui-net",
+          toolName: "SandboxNetworkAccess",
+          rawToolInput: { host: "example.com" },
+          interactiveOnly: true,
+          permissionSuggestions: [{ type: "addRules" }],
+        }),
+      ];
+      const result = processEvents(events, state, defaults);
+      expect(result.permissionActions[0]).toMatchObject({
+        type: "store",
+        interactiveOnly: true,
+        permissionSuggestions: [{ type: "addRules" }],
+      });
+    });
+
     it("auto-approves read-only gh commands", () => {
       const state = makeState();
       const events: ParsedEvent[] = [

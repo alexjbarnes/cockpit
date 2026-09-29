@@ -2,6 +2,7 @@
 
 import { ArrowLeft } from "lucide-react";
 import { useRouter } from "next/navigation";
+import { useEffect, useState } from "react";
 import { usePageHeader } from "@/components/app-shell";
 import { Button } from "@/components/ui/button";
 import { type ThinkingLevel, useSettings } from "@/hooks/use-settings";
@@ -15,6 +16,14 @@ import {
   resolveModel,
   versionsForAlias,
 } from "@/lib/models";
+import type { SandboxSupport, SessionPermissionMode } from "@/types";
+
+// Bypass keeps the orange the session panel uses for it, as a warning.
+const permissionOptions: { value: SessionPermissionMode; label: string; activeClassName?: string }[] = [
+  { value: "manual", label: "Manual" },
+  { value: "auto", label: "Auto" },
+  { value: "bypass", label: "Bypass", activeClassName: "bg-orange-500 text-white hover:bg-orange-500/90" },
+];
 
 const thinkingOptions: { value: ThinkingLevel; label: string }[] = [
   { value: "off", label: "Off" },
@@ -25,10 +34,10 @@ const thinkingOptions: { value: ThinkingLevel; label: string }[] = [
   { value: "max", label: "Max" },
 ];
 
-function Toggle({ enabled, color, onToggle }: { enabled: boolean; color?: string; onToggle: () => void }) {
+function Toggle({ enabled, color, disabled, onToggle }: { enabled: boolean; color?: string; disabled?: boolean; onToggle: () => void }) {
   const bg = enabled ? color || "bg-green-500" : "bg-muted-foreground/30";
   return (
-    <button onClick={onToggle} className="shrink-0">
+    <button onClick={onToggle} disabled={disabled} className="shrink-0 disabled:opacity-60">
       <span className={`inline-flex h-7 w-12 items-center rounded-full transition-colors ${bg}`}>
         <span
           className={`inline-block h-5 w-5 rounded-full bg-white shadow transition-transform ${enabled ? "translate-x-6" : "translate-x-1"}`}
@@ -52,14 +61,20 @@ function ButtonGroup<T extends string>({
   value,
   onChange,
 }: {
-  options: { value: T; label: string }[];
+  options: { value: T; label: string; activeClassName?: string }[];
   value: T;
   onChange: (v: T) => void;
 }) {
   return (
     <div className="flex flex-wrap gap-1 justify-end">
       {options.map((opt) => (
-        <Button key={opt.value} variant={value === opt.value ? "default" : "outline"} size="sm" onClick={() => onChange(opt.value)}>
+        <Button
+          key={opt.value}
+          variant={value === opt.value ? "default" : "outline"}
+          size="sm"
+          className={value === opt.value ? opt.activeClassName : undefined}
+          onClick={() => onChange(opt.value)}
+        >
           {opt.label}
         </Button>
       ))}
@@ -71,6 +86,17 @@ export default function SessionSettingsPage() {
   usePageHeader("Session Defaults", { hideActions: true });
   const router = useRouter();
   const { settings, updateSetting } = useSettings();
+  // Gate the sandbox toggle on whether this host can enforce one, as the
+  // session panel does, rather than offer a default that would do nothing.
+  const [sandboxSupport, setSandboxSupport] = useState<SandboxSupport | null>(null);
+  useEffect(() => {
+    fetch("/api/sandbox/support")
+      .then((res) => res.json())
+      .then((data: SandboxSupport) => setSandboxSupport(data))
+      .catch(() =>
+        setSandboxSupport({ supported: false, networkIsolation: false, platform: "", reason: "Could not check sandbox support" }),
+      );
+  }, []);
 
   const mainModel = settings.modelSlots?.main ?? "sonnet";
   const mainContext: ContextSize = settings.modelSlots?.mainContext ?? "200k";
@@ -166,13 +192,51 @@ export default function SessionSettingsPage() {
             <ButtonGroup options={visibleThinking} value={settings.thinkingLevel} onChange={(v) => updateSetting("thinkingLevel", v)} />
           </SettingRow>
         )}
-        <SettingRow label="Bypass all permissions">
+        <SettingRow label="Permission mode">
+          <ButtonGroup options={permissionOptions} value={settings.permissionMode} onChange={(v) => updateSetting("permissionMode", v)} />
+        </SettingRow>
+        {settings.permissionMode === "auto" && (
+          <p className="-mt-1 pb-2 text-xs text-muted-foreground">Anthropic models only. A session on another provider starts in Manual.</p>
+        )}
+        <SettingRow label="Sandbox Bash">
           <Toggle
-            enabled={settings.bypassAllPermissions}
-            color="bg-orange-500"
-            onToggle={() => updateSetting("bypassAllPermissions", !settings.bypassAllPermissions)}
+            enabled={settings.sandbox.enabled}
+            color="bg-emerald-500"
+            disabled={!sandboxSupport?.supported}
+            onToggle={() => updateSetting("sandbox", { ...settings.sandbox, enabled: !settings.sandbox.enabled })}
           />
         </SettingRow>
+        {!sandboxSupport?.supported ? (
+          <p className="-mt-1 pb-2 text-xs text-muted-foreground">{sandboxSupport?.reason ?? "Checking sandbox support…"}</p>
+        ) : settings.sandbox.enabled ? (
+          <div className="-mt-1 space-y-1 pb-2">
+            <span className="text-xs text-muted-foreground">Allowed network domains (one per line)</span>
+            <textarea
+              key={(settings.sandbox.allowedDomains ?? []).join("\n")}
+              defaultValue={(settings.sandbox.allowedDomains ?? []).join("\n")}
+              placeholder={"github.com\n*.npmjs.org"}
+              onBlur={(e) =>
+                updateSetting("sandbox", {
+                  enabled: true,
+                  allowedDomains: e.target.value
+                    .split("\n")
+                    .map((d) => d.trim())
+                    .filter(Boolean),
+                })
+              }
+              rows={3}
+              className="w-full rounded border border-border bg-background px-2 py-1 font-mono text-xs focus:outline-none focus:ring-1 focus:ring-ring"
+            />
+            <p className="text-xs text-muted-foreground">
+              New sessions run Bash isolated, and its commands run without prompts even in Manual. These domains are added to the shared
+              rules in{" "}
+              <button type="button" className="underline underline-offset-2" onClick={() => router.push("/settings/sandbox")}>
+                Sandbox settings
+              </button>
+              . Scheduled jobs have their own switch.
+            </p>
+          </div>
+        ) : null}
         <SettingRow label="Sonnet 4.6 1M context (needs usage credits)">
           <Toggle enabled={settings.allowSonnet1m} onToggle={() => updateSetting("allowSonnet1m", !settings.allowSonnet1m)} />
         </SettingRow>

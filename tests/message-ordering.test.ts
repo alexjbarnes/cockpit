@@ -187,6 +187,76 @@ describe("applyTranscript", () => {
     expect(ids.indexOf("server-u2")).toBeGreaterThan(ids.indexOf("compact-done-123"));
   });
 
+  // A PTY session's watcher sends only the transcript's last lines. What the
+  // page holds before the tail is older, not gone.
+  it("keeps messages older than a transcript tail, in order", () => {
+    const prev = [msg("a", "user", "one"), msg("b", "assistant", "two"), msg("c", "user", "three"), msg("d", "assistant", "four")];
+    const tail = [msg("c", "user", "three"), msg("d", "assistant", "four"), msg("e", "user", "five")];
+
+    expect(applyTranscript(prev, tail).map((m) => m.id)).toEqual(["a", "b", "c", "d", "e"]);
+  });
+
+  it("keeps older messages loaded by scrolling up", () => {
+    const prev = [msg("h1", "user", "old"), msg("h2", "assistant", "older reply"), msg("a", "user", "one"), msg("b", "assistant", "two")];
+    const tail = [msg("b", "assistant", "two"), msg("c", "user", "three")];
+
+    expect(applyTranscript(prev, tail).map((m) => m.id)).toEqual(["h1", "h2", "a", "b", "c"]);
+  });
+
+  it("keeps what came before a tail that starts at the optimistic copy of a message", () => {
+    const prev = [msg("a", "assistant", "earlier"), msg("user-1", "user", "hi")];
+    const tail = [msg("srv-u1", "user", "hi"), msg("r", "assistant", "hello")];
+
+    expect(applyTranscript(prev, tail).map((m) => m.id)).toEqual(["a", "srv-u1", "r"]);
+  });
+
+  it("drops a streaming placeholder left among the older messages", () => {
+    const prev = [msg("a", "user", "one"), msg("streaming", "assistant", "partial"), msg("b", "assistant", "two")];
+    const tail = [msg("b", "assistant", "two")];
+
+    expect(applyTranscript(prev, tail).map((m) => m.id)).toEqual(["a", "b"]);
+  });
+
+  it("keeps the fuller copy of a message the tail starts partway through", () => {
+    const full = {
+      ...msg("b", "assistant", "two"),
+      blocks: [
+        { type: "text", text: "x" },
+        { type: "text", text: "y" },
+      ] as ChatMessage["blocks"],
+    };
+    const cutShort = { ...msg("b", "assistant", "two"), blocks: [{ type: "text", text: "y" }] as ChatMessage["blocks"] };
+    const prev = [msg("a", "user", "one"), full];
+
+    const result = applyTranscript(prev, [cutShort, msg("c", "user", "three")]);
+
+    expect(result.map((m) => m.id)).toEqual(["a", "b", "c"]);
+    expect(result[1].blocks).toHaveLength(2);
+  });
+
+  it("follows the whole list with a tail that shares nothing with it", () => {
+    // More lines landed at once than the tail holds, or a clear started a new
+    // transcript below its divider.
+    const prev = [msg("x", "user", "earlier"), msg("y", "assistant", "earlier reply"), msg("clear-1", "system", "__context_reset__")];
+    const tail = [msg("p", "user", "later"), msg("q", "assistant", "later reply")];
+
+    expect(applyTranscript(prev, tail).map((m) => m.id)).toEqual(["x", "y", "clear-1", "p", "q"]);
+  });
+
+  it("drops a compaction placeholder among the older messages once the tail has the marker", () => {
+    const prev = [msg("a", "assistant", "before"), msg("compact-done-1", "system", "__compacted__"), msg("user-2", "user", "after")];
+    const tail = [msg("compact-cb1", "system", "__compacted__"), msg("srv-u2", "user", "after")];
+
+    expect(applyTranscript(prev, tail).map((m) => m.id)).toEqual(["a", "compact-cb1", "srv-u2"]);
+  });
+
+  it("keeps an older compaction marker when a later one is in the tail", () => {
+    const prev = [msg("compact-cb0", "system", "__compacted__"), msg("a", "assistant", "between"), msg("b", "user", "next")];
+    const tail = [msg("b", "user", "next"), msg("compact-cb1", "system", "__compacted__")];
+
+    expect(applyTranscript(prev, tail).map((m) => m.id)).toEqual(["compact-cb0", "a", "b", "compact-cb1"]);
+  });
+
   it("does not duplicate messages present in both prev and transcript", () => {
     const prev = [msg("server-u1", "user", "hello"), msg("server-a1", "assistant", "hi")];
     const transcript = [msg("server-u1", "user", "hello"), msg("server-a1", "assistant", "hi")];

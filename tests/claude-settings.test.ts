@@ -1,9 +1,15 @@
-import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanupHookSettings, prepareHookSettings } from "@/server/claude-settings";
 import { resolveHookBridgePath } from "@/server/hook-bridge-path";
+import { getCockpitDir } from "@/server/paths";
+
+// The user's own Claude settings feed every session file, so each run gets a
+// throwaway one instead of the developer's real ~/.claude.
+const claudeDir = mkdtempSync(join(tmpdir(), "cockpit-claude-settings-"));
+process.env.CLAUDE_CONFIG_DIR = claudeDir;
 
 describe("prepareHookSettings", () => {
   const cleanupIds: string[] = [];
@@ -67,6 +73,64 @@ describe("prepareHookSettings", () => {
     expect((await read("test-think-on", true)).alwaysThinkingEnabled).toBe(true);
   });
 
+  it("writes the session's own sandbox block: its switch, its domains and a read fence on cockpit's directory", async () => {
+    const read = async (id: string, sandbox?: { enabled: boolean; allowedDomains?: string[] }): Promise<Record<string, unknown>> => {
+      cleanupIds.push(id);
+      const { settingsPath } = await prepareHookSettings({
+        sessionId: id,
+        hookUrl: "http://127.0.0.1:1",
+        hookToken: "tok",
+        sandbox,
+      });
+      return JSON.parse(readFileSync(settingsPath, "utf-8")) as Record<string, unknown>;
+    };
+    const fence = { denyRead: [getCockpitDir()] };
+
+    // Off is written as off, so the session's switch decides even when another
+    // source turns the sandbox on; the fence is there for exactly that case.
+    expect((await read("test-sb-off", { enabled: false })).sandbox).toEqual({ enabled: false, filesystem: fence });
+    expect((await read("test-sb-none")).sandbox).toEqual({ enabled: false, filesystem: fence });
+
+    const on = await read("test-sb-on", { enabled: true, allowedDomains: ["github.com", "*.npmjs.org"] });
+    expect(on.sandbox).toEqual({ enabled: true, filesystem: fence, network: { allowedDomains: ["github.com", "*.npmjs.org"] } });
+
+    // No domains of its own: no network key, so it adds nothing to the shared list.
+    const bare = await read("test-sb-bare", { enabled: true });
+    expect(bare.sandbox).toEqual({ enabled: true, filesystem: fence });
+  });
+
+  it("leaves the user's sandbox rules in their own file instead of copying them in", async () => {
+    writeFileSync(
+      join(claudeDir, "settings.json"),
+      JSON.stringify({
+        env: { KEEP: "1" },
+        sandbox: { enabled: true, excludedCommands: ["docker *"], network: { allowedDomains: ["user.example.com"] } },
+      }),
+    );
+    try {
+      const id = "test-sb-user-rules";
+      cleanupIds.push(id);
+      const { settingsPath } = await prepareHookSettings({
+        sessionId: id,
+        hookUrl: "http://127.0.0.1:1",
+        hookToken: "tok",
+        sandbox: { enabled: true, allowedDomains: ["session.example.com"] },
+      });
+      const parsed = JSON.parse(readFileSync(settingsPath, "utf-8")) as Record<string, unknown>;
+      // The CLI merges the user's lists with these itself and reloads their file
+      // when it changes, so a copy here would only go stale.
+      expect(parsed.sandbox).toEqual({
+        enabled: true,
+        filesystem: { denyRead: [getCockpitDir()] },
+        network: { allowedDomains: ["session.example.com"] },
+      });
+      // Everything else in the user's settings is still carried over.
+      expect(parsed.env).toEqual({ KEEP: "1" });
+    } finally {
+      unlinkSync(join(claudeDir, "settings.json"));
+    }
+  });
+
   it("respects allow/deny lists", async () => {
     const sessionId = "test-session-2";
     cleanupIds.push(sessionId);
@@ -126,12 +190,11 @@ describe("prepareHookSettings", () => {
     const sessionId = "test-session-5";
     cleanupIds.push(sessionId);
 
-    const fixtureDir = join(homedir(), ".claude");
-    const fixturePath = join(fixtureDir, "settings.local.json");
+    const fixturePath = join(claudeDir, "settings.local.json");
     const hadFixture = existsSync(fixturePath);
     const originalContent = hadFixture ? readFileSync(fixturePath, "utf-8") : null;
 
-    mkdirSync(fixtureDir, { recursive: true });
+    mkdirSync(claudeDir, { recursive: true });
     writeFileSync(fixturePath, JSON.stringify({ env: { TEST_MERGE: "1" } }));
 
     try {

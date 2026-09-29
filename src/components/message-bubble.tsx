@@ -119,6 +119,16 @@ export const MessageBubble = memo(function MessageBubble({
       );
     }
 
+    if (message.content === "__compact_cancelled__") {
+      return (
+        <div className="flex w-full items-center gap-3 py-2" data-testid="compact-cancelled">
+          <div className="flex-1 border-t border-border" />
+          <div className="text-[10px] text-muted-foreground uppercase tracking-wider">Compaction cancelled, context not reduced</div>
+          <div className="flex-1 border-t border-border" />
+        </div>
+      );
+    }
+
     if (message.content === "__context_reset__") {
       return (
         <div className="flex w-full items-center gap-3 py-2">
@@ -308,7 +318,12 @@ function MessageActions({ message, isUser, workedMs }: { message: ChatMessage; i
     [text],
   );
 
-  const meta = isUser ? formatMessageTime(message.timestamp) : workedMs != null ? formatWorkedFor(workedMs) : null;
+  // Assistant turns carry a clock time as well as their duration: "Worked for
+  // 2m" alone said how long it took but never when it landed, which is the
+  // thing you want when you come back to a session and scroll up.
+  const meta = isUser
+    ? formatMessageTime(message.timestamp)
+    : [workedMs != null ? formatWorkedFor(workedMs) : null, formatMessageTime(message.timestamp)].filter(Boolean).join(" · ");
   if (!text && !meta) return null;
 
   const copyBtn = text ? <CopyButton copied={copied} onCopy={handleCopy} /> : null;

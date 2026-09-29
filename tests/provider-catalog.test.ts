@@ -67,8 +67,10 @@ describe("catalog mapping", () => {
 
     // meta-router: zero-priced but never badged free
     expect(byId.get("openrouter/free")?.free).toBe(false);
-    // media model: zero prompt/completion but bills on audio pricing
-    expect(byId.get("google/lyria-3-pro-preview")?.free).toBe(false);
+    // The audio model is gone entirely now, not merely unbadged: it lists no
+    // "tools" parameter, and the CLI sends tool definitions on every request,
+    // so a session on it can only ever fail. See the tool filter below.
+    expect(byId.get("google/lyria-3-pro-preview")).toBeUndefined();
 
     expect(byId.get("poolside/laguna-m.1:free")?.expirationDate).toBe("2026-07-28");
     expect(byId.get("nvidia/nemotron-nano-12b-v2-vl:free")?.supportsImageInput).toBe(true);
@@ -99,6 +101,66 @@ describe("catalog mapping", () => {
       architecture: { output_modalities: ["audio"] },
     });
     expect(mapped).toBeNull();
+  });
+
+  // The reported failure: a session on z-ai/glm-5.2:free died with "There's an
+  // issue with the selected model ... It may not exist or you may not have
+  // access to it". The model existed and the key was fine. Its one endpoint
+  // (Decart) does not accept tools, and the CLI sends tool definitions on every
+  // request, so OpenRouter answered 404 and the CLI blamed the model. 68 of the
+  // 414 synced entries were in that state.
+  it("drops a model whose endpoint will not accept tools", async () => {
+    const cat = await loadModule();
+    const mapped = cat.mapOpenRouterModel({
+      id: "z-ai/glm-5.2:free",
+      name: "Z.ai: GLM 5.2 (free)",
+      context_length: 128000,
+      pricing: { prompt: "0", completion: "0" },
+      supported_parameters: ["max_tokens", "reasoning", "temperature", "top_p"],
+      architecture: { input_modalities: ["text"], output_modalities: ["text"] },
+    });
+    expect(mapped).toBeNull();
+  });
+
+  it("keeps the tool-capable variant of the same family", async () => {
+    // Per variant, not per family: the paid z-ai/glm-5.2 routes to several
+    // tool-capable endpoints, which is why the family's page reads as
+    // tool-enabled while the free slice cannot work.
+    const cat = await loadModule();
+    const mapped = cat.mapOpenRouterModel({
+      id: "z-ai/glm-5.2",
+      context_length: 1048576,
+      pricing: { prompt: "0.0000004", completion: "0.0000016" },
+      supported_parameters: ["tools", "reasoning", "temperature"],
+      architecture: { output_modalities: ["text"] },
+    });
+    expect(mapped?.modelId).toBe("z-ai/glm-5.2");
+    expect(mapped?.supportsTools).toBe(true);
+  });
+
+  it("hides an already-synced tool-incapable model without waiting for a resync", async () => {
+    const cat = await loadModule();
+    const { writeFileSync } = await import("node:fs");
+    const { join: joinPath } = await import("node:path");
+    // A catalog written by a version that had no tool filter.
+    writeFileSync(
+      joinPath(dir, "provider-catalog.json"),
+      JSON.stringify({
+        syncedAt: Date.now(),
+        consecutiveFailures: 0,
+        delisted: [],
+        models: [
+          { modelId: "vendor/works", displayName: "works", effortLevels: [], contextSizes: [], contextLength: 1000, supportsTools: true },
+          { modelId: "vendor/no-tools", displayName: "no", effortLevels: [], contextSizes: [], contextLength: 1000, supportsTools: false },
+          { modelId: "vendor/unknown", displayName: "unk", effortLevels: [], contextSizes: [], contextLength: 1000 },
+        ],
+      }),
+    );
+
+    const ids = cat.catalogModels().map((m) => m.modelId);
+    expect(ids).toContain("vendor/works");
+    expect(ids, "the pickers must stop offering it immediately").not.toContain("vendor/no-tools");
+    expect(ids, "undefined is not false: metadata that never carried the flag keeps its models").toContain("vendor/unknown");
   });
 
   it("exposes effort levels only for reasoning-capable models", async () => {

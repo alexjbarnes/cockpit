@@ -26,6 +26,13 @@ const mockHookRouter = vi.hoisted(() => ({
   getUrl: vi.fn().mockReturnValue("http://localhost:9999/hooks"),
 }));
 
+// Which permission modes exist is version-gated on `claude --help`, and CI has
+// no CLI to ask. Pin it so these tests assert cockpit's logic.
+vi.mock("@/server/claude-bin", () => ({
+  getClaudeBin: vi.fn(() => "claude"),
+  supportedPermissionModes: vi.fn(() => new Set(["acceptEdits", "auto", "bypassPermissions", "manual", "plan"])),
+}));
+
 vi.mock("@/server/pty-runtime", () => ({
   PtyRuntime: class {
     constructor(opts: Record<string, unknown>) {
@@ -63,6 +70,23 @@ vi.mock("@/server/pty-runtime", () => ({
   },
 }));
 
+// The adapter builds a real TranscriptWatcher. Capture its callback so a test
+// can drive transcript updates, which is the only channel that tells
+// session-manager a compaction the CLI declined has resolved.
+const watcherMock = vi.hoisted(() => ({
+  emit: null as null | ((messages: unknown[], lastUsage: { used: number } | null) => void),
+}));
+
+vi.mock("@/server/transcript-watcher", () => ({
+  TranscriptWatcher: class {
+    constructor(_id: string, _cwd: string, cb: (messages: unknown[], lastUsage: { used: number } | null) => void) {
+      watcherMock.emit = cb;
+    }
+    start() {}
+    stop() {}
+  },
+}));
+
 vi.mock("@/server/singleton", () => ({
   getHookRouter: vi.fn(() => mockHookRouter),
   setHookRouter: vi.fn(),
@@ -96,6 +120,7 @@ vi.mock("@/server/transcript", () => ({
   loadLastAssistantMessage: vi.fn().mockResolvedValue(null),
   getTranscriptPath: vi.fn().mockReturnValue("/tmp/fake-transcript.jsonl"),
   loadPromptHistory: vi.fn().mockResolvedValue([]),
+  sumTranscriptUsage: vi.fn().mockResolvedValue({ input: 0, output: 0, cacheRead: 0, cacheCreate: 0 }),
 }));
 
 vi.mock("@/server/session-prefs", () => ({
@@ -108,7 +133,8 @@ vi.mock("@/server/session-prefs", () => ({
 vi.mock("@/server/defaults", () => ({
   getDefaults: () => ({
     thinkingLevel: "high",
-    bypassAllPermissions: false,
+    permissionMode: "manual",
+    sandbox: { enabled: false },
     diffStyle: "split",
     dismissKeyboardOnSend: true,
     thinkingExpanded: false,
@@ -150,6 +176,7 @@ describe("SessionManager PTY runtime (unit)", () => {
     ptyMocks.kill.mockClear().mockResolvedValue(undefined);
     ptyMocks.interrupt.mockClear();
     ptyMocks.notifyPermissionDecision.mockClear().mockReturnValue(true);
+    watcherMock.emit = null;
   });
 
   describe("createSession", () => {
@@ -251,6 +278,272 @@ describe("SessionManager PTY runtime (unit)", () => {
       expect(manager.getQueuedCount(session.id)).toBeGreaterThan(0);
     });
 
+    // A message queued behind a manual /compact used to be typed at the instant
+    // PostCompact fired — into a REPL still rendering the compaction, which
+    // swallowed it, while sendUserText's transcript-growth confirmation
+    // false-positived on the compaction's own lines and never retried. The flush
+    // is deferred to the next transcript update, once the compaction has landed.
+    describe("a manual /compact with a message queued behind it", () => {
+      function queueBehindCompact(sessionId: string): void {
+        manager.sendMessage(sessionId, "first");
+        emitMessageDone();
+        watcherMock.emit?.(
+          [
+            { id: "m1", role: "user" },
+            { id: "m2", role: "assistant" },
+          ],
+          null,
+        );
+        manager.sendMessage(sessionId, "/compact");
+        expect(manager.isCompacting(sessionId)).toBe(true);
+        manager.sendMessage(sessionId, "after the compact");
+        expect(manager.getQueuedCount(sessionId)).toBe(1);
+      }
+
+      it("does not flush at the PostCompact hook, but delivers on the next transcript update", () => {
+        const session = manager.createSession("/tmp", undefined, { runtime: "pty" });
+        queueBehindCompact(session.id);
+        ptyMocks.sendUserText.mockClear();
+
+        // PostCompact fires. The message must NOT be typed yet.
+        ptyMocks.capturedOpts!.onEvents([{ type: "system_message", text: "__compact::hook_done::manual" } as ParsedEvent]);
+        expect(manager.isCompacting(session.id)).toBe(false);
+        expect(ptyMocks.sendUserText).not.toHaveBeenCalledWith("after the compact");
+        expect(manager.getQueuedCount(session.id)).toBe(1);
+
+        // The compaction lands in the transcript: now deliver it.
+        watcherMock.emit?.(
+          [
+            { id: "m1", role: "user" },
+            { id: "m2", role: "assistant" },
+            { id: "m3", role: "assistant", content: "Summary." },
+          ],
+          null,
+        );
+        expect(ptyMocks.sendUserText).toHaveBeenCalledWith("after the compact");
+        expect(manager.getQueuedCount(session.id)).toBe(0);
+      });
+
+      it("does not deliver a deferred flush after the user interrupts", () => {
+        const session = manager.createSession("/tmp", undefined, { runtime: "pty" });
+        queueBehindCompact(session.id);
+        ptyMocks.capturedOpts!.onEvents([{ type: "system_message", text: "__compact::hook_done::manual" } as ParsedEvent]);
+        ptyMocks.sendUserText.mockClear();
+
+        manager.interrupt(session.id); // user changes their mind mid-compaction
+        watcherMock.emit?.(
+          [
+            { id: "m1", role: "user" },
+            { id: "m2", role: "assistant" },
+            { id: "m3", role: "assistant" },
+          ],
+          null,
+        );
+
+        expect(ptyMocks.sendUserText).not.toHaveBeenCalledWith("after the compact");
+      });
+    });
+
+    // The CLI can accept a /compact, fire PreCompact, then decline it outright
+    // ("Not enough messages to compact.") with NO PostCompact and no Stop hook
+    // — verified against CLI 2.1.233 in the integration spec of the same name.
+    // The refusal reaches cockpit only as a transcript update, so that is the
+    // one place the flag can be released. Without this the session compacts
+    // forever and every later message queues behind it.
+    describe("a compaction the CLI declines", () => {
+      // Get to a live idle PTY with one exchange already on the transcript,
+      // then ask for a compaction the CLI will refuse.
+      function requestCompact(sessionId: string) {
+        manager.sendMessage(sessionId, "first");
+        emitMessageDone();
+        watcherMock.emit?.(
+          [
+            { id: "m1", role: "user" },
+            { id: "m2", role: "assistant" },
+          ],
+          null,
+        );
+        manager.sendMessage(sessionId, "/compact");
+        expect(manager.isCompacting(sessionId)).toBe(true);
+      }
+
+      it("releases the flag when the CLI answers instead of compacting", () => {
+        const session = manager.createSession("/tmp", undefined, { runtime: "pty" });
+        const systems: string[] = [];
+        manager.onSystem(session.id, (text) => systems.push(text));
+        requestCompact(session.id);
+
+        watcherMock.emit?.(
+          [
+            { id: "m1", role: "user" },
+            { id: "m2", role: "assistant" },
+            { id: "m3", role: "user", content: "/compact", timestamp: Date.now() },
+            { id: "m4", role: "assistant", content: "Not enough messages to compact.", timestamp: Date.now() },
+          ],
+          null,
+        );
+
+        expect(manager.isCompacting(session.id)).toBe(false);
+        expect(systems).toContain("__compact::done");
+      });
+
+      it("delivers the message that queued behind it", () => {
+        const session = manager.createSession("/tmp", undefined, { runtime: "pty" });
+        requestCompact(session.id);
+        manager.sendMessage(session.id, "after");
+        expect(manager.getQueuedCount(session.id)).toBe(1);
+
+        watcherMock.emit?.(
+          [
+            { id: "m1", role: "user" },
+            { id: "m2", role: "assistant" },
+            { id: "m3", role: "assistant", content: "Not enough messages to compact.", timestamp: Date.now() },
+          ],
+          null,
+        );
+
+        expect(ptyMocks.sendUserText).toHaveBeenCalledWith("after");
+        expect(manager.getQueuedCount(session.id)).toBe(0);
+      });
+
+      it("leaves a compaction that is genuinely in flight alone", () => {
+        const session = manager.createSession("/tmp", undefined, { runtime: "pty" });
+        requestCompact(session.id);
+
+        // The user's own "/compact" line reaching the transcript is not the CLI
+        // answering, so it must not release the flag.
+        watcherMock.emit?.(
+          [
+            { id: "m1", role: "user" },
+            { id: "m2", role: "assistant" },
+            { id: "m3", role: "user", content: "/compact" },
+          ],
+          null,
+        );
+
+        expect(manager.isCompacting(session.id)).toBe(true);
+      });
+
+      it("still takes the compaction marker as the real thing", () => {
+        const session = manager.createSession("/tmp", undefined, { runtime: "pty" });
+        requestCompact(session.id);
+
+        watcherMock.emit?.(
+          [
+            { id: "m1", role: "user" },
+            { id: "m2", role: "assistant" },
+            { id: "c1", role: "assistant", content: "__compacted__", timestamp: Date.now() },
+          ],
+          null,
+        );
+
+        expect(manager.isCompacting(session.id)).toBe(false);
+        // The marker path estimates post-compact usage; the declined path must
+        // not, because nothing was compacted.
+        expect(manager.getContextUsage(session.id)?.used).toBeGreaterThan(0);
+      });
+
+      // The watcher sends the transcript's last lines, so an earlier
+      // compaction's marker and replies are still in them.
+      it("takes neither an earlier compaction's marker nor an earlier reply as this one's outcome", () => {
+        const session = manager.createSession("/tmp", undefined, { runtime: "pty" });
+        requestCompact(session.id);
+        manager.sendMessage(session.id, "after");
+
+        watcherMock.emit?.(
+          [
+            { id: "c0", role: "system", content: "__compacted__", timestamp: Date.now() - 60_000 },
+            { id: "m1", role: "user", timestamp: Date.now() - 50_000 },
+            { id: "m2", role: "assistant", timestamp: Date.now() - 40_000 },
+          ],
+          null,
+        );
+
+        expect(manager.isCompacting(session.id)).toBe(true);
+        expect(ptyMocks.sendUserText).not.toHaveBeenCalledWith("after");
+        expect(manager.getQueuedCount(session.id)).toBe(1);
+      });
+    });
+
+    describe("a compaction cancelled with Esc", () => {
+      function compactWithQueued(sessionId: string) {
+        manager.sendMessage(sessionId, "first");
+        emitMessageDone();
+        manager.sendMessage(sessionId, "/compact");
+        ptyMocks.capturedOpts!.onEvents([{ type: "system_message", text: "__compact::hook_start" } as ParsedEvent]);
+        manager.sendMessage(sessionId, "queued during compaction");
+        expect(manager.getQueuedCount(sessionId)).toBe(1);
+      }
+
+      // The CLI answers Esc with nothing but its screen: no PostCompact, no
+      // Stop, no transcript line the parse keeps.
+      it("drops the flag and says so, so a resumed queue sends", () => {
+        const session = manager.createSession("/tmp", undefined, { runtime: "pty" });
+        const systems: string[] = [];
+        manager.onSystem(session.id, (t) => systems.push(t));
+        compactWithQueued(session.id);
+
+        manager.interrupt(session.id);
+
+        expect(manager.isCompacting(session.id)).toBe(false);
+        expect(systems).toContain("__compact::cancelled");
+        expect(systems).not.toContain("__compact::done");
+        manager.resumeQueue(session.id);
+        expect(ptyMocks.sendUserText).toHaveBeenCalledWith("queued during compaction");
+        expect(manager.getQueuedCount(session.id)).toBe(0);
+      });
+
+      it("ignores a PostCompact that arrives after the Esc", () => {
+        const session = manager.createSession("/tmp", undefined, { runtime: "pty" });
+        compactWithQueued(session.id);
+        manager.interrupt(session.id);
+        const before = manager.getContextUsage(session.id);
+
+        ptyMocks.capturedOpts!.onEvents([{ type: "system_message", text: "__compact::hook_done::manual" } as ParsedEvent]);
+
+        expect(manager.isCompacting(session.id)).toBe(false);
+        expect(manager.getContextUsage(session.id)).toEqual(before);
+        manager.sendMessage(session.id, "next");
+        expect(ptyMocks.sendUserText).toHaveBeenCalledWith("next");
+      });
+
+      it("drops the flag when the CLI is stopped mid-compaction", () => {
+        const session = manager.createSession("/tmp", undefined, { runtime: "pty" });
+        const systems: string[] = [];
+        manager.onSystem(session.id, (t) => systems.push(t));
+        compactWithQueued(session.id);
+
+        expect(manager.restartSession(session.id)).toBe(false); // running: refused
+        manager.setPlanMode(session.id); // kills the CLI
+
+        expect(manager.isCompacting(session.id)).toBe(false);
+        expect(systems).toContain("__compact::cancelled");
+      });
+    });
+
+    // PostCompact fires just before the CLI writes the boundary. An update in
+    // that gap carries the pre-compaction reading.
+    it("keeps the post-compact estimate once the boundary lands with no reading after it", () => {
+      const session = manager.createSession("/tmp", undefined, { runtime: "pty" });
+      manager.sendMessage(session.id, "first");
+      emitMessageDone();
+      manager.sendMessage(session.id, "/compact");
+      ptyMocks.capturedOpts!.onEvents([{ type: "system_message", text: "__compact::hook_done::manual" } as ParsedEvent]);
+      const estimate = manager.getContextUsage(session.id)!.used;
+
+      watcherMock.emit?.([{ id: "m2", role: "assistant", timestamp: Date.now() - 1000 }], { used: 150_000 });
+      expect(manager.getContextUsage(session.id)!.used).toBe(150_000);
+
+      watcherMock.emit?.(
+        [
+          { id: "m2", role: "assistant", timestamp: Date.now() - 1000 },
+          { id: "c1", role: "system", content: "__compacted__", timestamp: Date.now() },
+        ],
+        null,
+      );
+      expect(manager.getContextUsage(session.id)!.used).toBe(estimate);
+    });
+
     it("includes --permission-mode plan when plan mode active", () => {
       const session = manager.createSession("/tmp", undefined, { runtime: "pty" });
       manager.setPlanMode(session.id);
@@ -260,14 +553,16 @@ describe("SessionManager PTY runtime (unit)", () => {
       expect(ptyMocks.capturedOpts?.extraArgs).toContain("plan");
     });
 
-    it("includes --permission-mode bypassPermissions when bypass active", () => {
+    // Bypass is cockpit answering every prompt; the CLI itself stays in manual.
+    it("spawns the CLI in manual when bypass is active, never native bypass", () => {
       const session = manager.createSession("/tmp", undefined, { runtime: "pty" });
       // Set bypass before any spawn so the next spawn picks it up
       manager.setBypassAllPermissions(session.id);
       manager.sendMessage(session.id, "hello");
 
-      expect(ptyMocks.capturedOpts?.extraArgs).toContain("--permission-mode");
-      expect(ptyMocks.capturedOpts?.extraArgs).toContain("bypassPermissions");
+      const args = ptyMocks.capturedOpts?.extraArgs as string[];
+      expect(args).not.toContain("bypassPermissions");
+      expect(args[args.indexOf("--permission-mode") + 1]).toBe("manual");
     });
   });
 
@@ -282,6 +577,22 @@ describe("SessionManager PTY runtime (unit)", () => {
       ptyMocks.capturedOpts!.onExit({ exitCode: 0 });
       expect(statuses).toContain("idle");
       expect(manager.listKnownSessions().find((s) => s.id === session.id)?.status).toBe("idle");
+    });
+
+    // A process that is gone reports nothing: the page shows the requested
+    // mode until the next process reports.
+    it("onExit forgets the mode the CLI reported, and tells the page", () => {
+      const session = manager.createSession("/tmp", undefined, { runtime: "pty" });
+      manager.sendMessage(session.id, "hello");
+      const s = (manager as any).sessions.get(session.id)!;
+      s.cliPermissionMode = "auto";
+      const emitted: string[] = [];
+      manager.onSystem(session.id, (m) => emitted.push(m));
+
+      ptyMocks.capturedOpts!.onExit({ exitCode: 0 });
+
+      expect(manager.getCliPermissionMode(session.id)).toBeUndefined();
+      expect(emitted).toContain("__cli_perm_mode::");
     });
 
     it("onExit flushes a queued message by spawning again", () => {
@@ -494,16 +805,67 @@ describe("SessionManager PTY runtime (unit)", () => {
   });
 
   describe("scheduleRespawnForPermissions", () => {
-    it("kills the PTY when session goes idle and bypass is toggled", () => {
+    // Bypass is cockpit answering prompts while the CLI stays in manual, so
+    // toggling it has nothing to restart. A change the CLI must be spawned
+    // for (auto) still kills the idle process so the next send respawns it.
+    it("kills the idle PTY for a CLI mode change, but not for bypass", () => {
       const session = manager.createSession("/tmp", undefined, { runtime: "pty" });
       manager.sendMessage(session.id, "hello");
       // Drive status to idle via message_done while keeping ptyRuntime alive
       emitMessageDone();
       ptyMocks.kill.mockClear();
 
-      // Now session is idle and ptyRuntime is alive → scheduleRespawnForPermissions should kill it
       manager.setBypassAllPermissions(session.id);
+      expect(ptyMocks.kill).not.toHaveBeenCalled();
+
+      manager.setPermissionMode(session.id, "auto");
       expect(ptyMocks.kill).toHaveBeenCalled();
+    });
+
+    // The exit handler skips a process cockpit killed, so the kill itself must
+    // drop the mode that process reported. The page hears it before the new
+    // mode, so the switch never reads as the CLI refusing it.
+    it("forgets the reported mode when it kills the idle PTY, before echoing the new mode", () => {
+      const session = manager.createSession("/tmp", undefined, { runtime: "pty" });
+      manager.sendMessage(session.id, "hello");
+      emitMessageDone();
+      const s = (manager as any).sessions.get(session.id)!;
+      s.cliPermissionMode = "manual";
+      const emitted: string[] = [];
+      manager.onSystem(session.id, (m) => emitted.push(m));
+
+      manager.setPermissionMode(session.id, "auto");
+
+      expect(manager.getCliPermissionMode(session.id)).toBeUndefined();
+      expect(emitted.indexOf("__cli_perm_mode::")).toBeGreaterThanOrEqual(0);
+      expect(emitted.indexOf("__cli_perm_mode::")).toBeLessThan(emitted.indexOf("__perm_mode::auto"));
+    });
+
+    // Mid-turn the respawn waits for message_done, and until then the CLI
+    // really is still in its old mode.
+    it("keeps the reported mode through a deferred respawn until the turn ends", () => {
+      const session = manager.createSession("/tmp", undefined, { runtime: "pty" });
+      manager.sendMessage(session.id, "hello");
+      const s = (manager as any).sessions.get(session.id)!;
+      s.cliPermissionMode = "manual";
+
+      manager.setPermissionMode(session.id, "auto");
+      expect(manager.getCliPermissionMode(session.id)).toBe("manual");
+
+      emitMessageDone();
+      expect(manager.getCliPermissionMode(session.id)).toBeUndefined();
+    });
+
+    it("says nothing on a kill when no mode was reported", () => {
+      const session = manager.createSession("/tmp", undefined, { runtime: "pty" });
+      manager.sendMessage(session.id, "hello");
+      emitMessageDone();
+      const emitted: string[] = [];
+      manager.onSystem(session.id, (m) => emitted.push(m));
+
+      manager.setPermissionMode(session.id, "auto");
+
+      expect(emitted).not.toContain("__cli_perm_mode::");
     });
   });
 
@@ -535,12 +897,34 @@ describe("SessionManager PTY runtime (unit)", () => {
   });
 
   describe("PTY-handled slash commands", () => {
-    it("/cost emits token usage without throwing", () => {
+    // /cost reads the transcript now. It used to read an in-memory counter fed
+    // by onRawLine, which the PTY adapter never calls — so on the default
+    // runtime it reported four zeros for every session, however much the
+    // session had actually spent.
+    it("/cost reports the transcript's totals, including the cache hit rate", async () => {
+      const { sumTranscriptUsage } = await import("@/server/transcript");
+      vi.mocked(sumTranscriptUsage).mockResolvedValue({ input: 250, output: 400, cacheRead: 750, cacheCreate: 0 });
       const session = manager.createSession("/tmp", undefined, { runtime: "pty" });
       const msgs: string[] = [];
       manager.onSystem(session.id, (m) => msgs.push(m));
+
       expect(manager.sendMessage(session.id, "/cost")).toBe(true);
-      expect(msgs.some((m) => m.includes("Input tokens"))).toBe(true);
+      await vi.waitFor(() => expect(msgs.some((m) => m.includes("Input tokens"))).toBe(true));
+
+      const report = msgs.find((m) => m.includes("Input tokens")) ?? "";
+      expect(report).toContain("Cache read tokens:  750");
+      expect(report, "750 of 1,000 prompt tokens came from cache").toContain("Cache hit rate:     75%");
+    });
+
+    it("/cost says so rather than throwing when the transcript cannot be read", async () => {
+      const { sumTranscriptUsage } = await import("@/server/transcript");
+      vi.mocked(sumTranscriptUsage).mockRejectedValue(new Error("EACCES"));
+      const session = manager.createSession("/tmp", undefined, { runtime: "pty" });
+      const msgs: string[] = [];
+      manager.onSystem(session.id, (m) => msgs.push(m));
+
+      expect(manager.sendMessage(session.id, "/cost")).toBe(true);
+      await vi.waitFor(() => expect(msgs.some((m) => m.includes("Could not read"))).toBe(true));
     });
 
     it("/context emits context usage without throwing", () => {

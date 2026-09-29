@@ -284,6 +284,7 @@ describe("cockpit-config MCP server (in-process HTTP)", () => {
         contextSize: "1m",
         thinkingLevel: "max",
         bypassPermissions: true,
+        sandbox: true,
         maxDurationMinutes: 45,
         maxRetries: 3,
         retentionDays: 30,
@@ -321,6 +322,7 @@ describe("cockpit-config MCP server (in-process HTTP)", () => {
       expect(created.created.maxDurationMinutes).toBe(30);
       expect(created.created.retentionDays).toBe(90);
       expect(created.created.bypassPermissions).toBe(false);
+      expect(created.created.sandbox).toBe(false);
       expect(created.created.inboxOutput).toBe(false);
       expect(created.created.skipIfMissed).toBe(false);
       expect(created.created.enabled).toBe(true);
@@ -1189,10 +1191,16 @@ describe("cockpit-config MCP server (in-process HTTP)", () => {
       expect(result.after.thinkingLevel).toBe("low");
     });
 
-    it("update_settings allows bypassAllPermissions", async () => {
-      await callTool("update_settings", { bypassAllPermissions: true });
-      const settings = (await callToolParsed("get_settings")) as { bypassAllPermissions?: boolean };
-      expect(settings.bypassAllPermissions).toBe(true);
+    it("update_settings sets the default sandbox", async () => {
+      await callTool("update_settings", { sandbox: { enabled: true, allowedDomains: ["github.com"] } });
+      const settings = (await callToolParsed("get_settings")) as { sandbox?: unknown };
+      expect(settings.sandbox).toEqual({ enabled: true, allowedDomains: ["github.com"] });
+    });
+
+    it("update_settings sets the default permission mode", async () => {
+      await callTool("update_settings", { permissionMode: "auto" });
+      const settings = (await callToolParsed("get_settings")) as { permissionMode?: string };
+      expect(settings.permissionMode).toBe("auto");
     });
 
     it("update_settings allows issuesEnabled", async () => {

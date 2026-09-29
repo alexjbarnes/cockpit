@@ -183,6 +183,21 @@ describe("transcript module", () => {
       });
     });
 
+    // The page keeps messages older than a transcript tail by id, so the marker
+    // must keep its id from one parse to the next or it is shown twice.
+    it("gives a compaction marker the same id on every parse", async () => {
+      (existsSync as any).mockReturnValue(true);
+      (readFile as any).mockResolvedValue(
+        jsonl({ type: "system", subtype: "compact_boundary", timestamp: "2024-01-01T00:00:00Z", uuid: "sys-1" }),
+      );
+
+      const first = await loadTranscript("session-123", "/tmp");
+      const second = await loadTranscript("session-123", "/tmp");
+
+      expect(first.messages[0].id).toBe("compact-sys-1");
+      expect(second.messages[0].id).toBe(first.messages[0].id);
+    });
+
     it("handles local_command system events", async () => {
       (existsSync as any).mockReturnValue(true);
       const content = jsonl({
@@ -1036,6 +1051,71 @@ describe("transcript module", () => {
     });
   });
 
+  // Cumulative spend for /cost and the session-usage panel. SessionManager's
+  // in-memory counter only ever filled on the stream runtime (it is fed by
+  // onRawLine, which the PTY adapter never calls), so the transcript is the one
+  // record that has these numbers whatever the runtime — and it survives a
+  // restart, which the counter did not.
+  describe("sumTranscriptUsage", () => {
+    it("returns zeros when the transcript does not exist", async () => {
+      const { sumTranscriptUsage } = await import("@/server/transcript");
+      (existsSync as any).mockReturnValue(false);
+
+      expect(await sumTranscriptUsage("session-123", "/tmp")).toEqual({ input: 0, output: 0, cacheRead: 0, cacheCreate: 0 });
+    });
+
+    it("sums every assistant turn's four categories", async () => {
+      const { sumTranscriptUsage } = await import("@/server/transcript");
+      (existsSync as any).mockReturnValue(true);
+      (readFile as any).mockResolvedValue(
+        jsonl(
+          { type: "user", message: { content: "hi" } },
+          {
+            type: "assistant",
+            message: {
+              model: "m",
+              usage: { input_tokens: 100, output_tokens: 50, cache_creation_input_tokens: 20, cache_read_input_tokens: 10 },
+            },
+          },
+          { type: "assistant", message: { model: "m", usage: { input_tokens: 200, output_tokens: 30, cache_read_input_tokens: 40 } } },
+        ),
+      );
+
+      expect(await sumTranscriptUsage("session-123", "/tmp")).toEqual({ input: 300, output: 80, cacheRead: 50, cacheCreate: 20 });
+    });
+
+    it("keeps counting across a compaction boundary", async () => {
+      const { sumTranscriptUsage } = await import("@/server/transcript");
+      (existsSync as any).mockReturnValue(true);
+      (readFile as any).mockResolvedValue(
+        jsonl(
+          { type: "assistant", message: { model: "m", usage: { input_tokens: 100, output_tokens: 10 } } },
+          { type: "system", subtype: "compact_boundary" },
+          { type: "assistant", message: { model: "m", usage: { input_tokens: 5, output_tokens: 1 } } },
+        ),
+      );
+
+      // Unlike the live-window reading, spend before a compaction was still
+      // paid for, so it must not be discarded at the boundary.
+      expect(await sumTranscriptUsage("session-123", "/tmp")).toMatchObject({ input: 105, output: 11 });
+    });
+
+    it("skips synthetic turns and unparseable lines", async () => {
+      const { sumTranscriptUsage } = await import("@/server/transcript");
+      (existsSync as any).mockReturnValue(true);
+      (readFile as any).mockResolvedValue(
+        [
+          JSON.stringify({ type: "assistant", message: { model: "<synthetic>", usage: { input_tokens: 999, output_tokens: 999 } } }),
+          "{ truncated",
+          "",
+          JSON.stringify({ type: "assistant", message: { model: "m", usage: { input_tokens: 7, output_tokens: 3 } } }),
+        ].join("\n"),
+      );
+
+      expect(await sumTranscriptUsage("session-123", "/tmp")).toEqual({ input: 7, output: 3, cacheRead: 0, cacheCreate: 0 });
+    });
+  });
+
   describe("loadLastUsage", () => {
     it("returns null when file does not exist", async () => {
       const { loadLastUsage } = await import("@/server/transcript");
@@ -1370,6 +1450,29 @@ describe("transcript module", () => {
 
       expect(result.messages).toHaveLength(1);
       expect(result.messages[0].content).toBe("/analyze");
+    });
+
+    // CLI 2.1.281 stores a bracketed paste wrapped in <pasted_content> tags, and
+    // cockpit types every multi-line message as one. The bubble showed the tags
+    // and stopped matching the optimistic copy of what was sent.
+    it("shows a multi-line message as typed, not in the CLI's paste wrapper", async () => {
+      (existsSync as any).mockReturnValue(true);
+      const typed = "Why is this failing?\n$ docker ps\nCONTAINER ID   IMAGE";
+      const content = jsonl({
+        type: "user",
+        message: {
+          id: "u1",
+          content: [{ type: "text", text: `\n\n<pasted_content id="6dca">\n${typed}\n</pasted_content id="6dca">\n` }],
+        },
+        timestamp: "2024-01-01T00:00:00Z",
+        cwd: "/tmp",
+      });
+      (readFile as any).mockResolvedValue(content);
+
+      const result = await loadTranscript("session-123", "/tmp");
+
+      expect(result.messages).toHaveLength(1);
+      expect(result.messages[0].content).toBe(typed);
     });
 
     it("reconstructs a slash command with its args so it matches the optimistic bubble", async () => {
@@ -2068,6 +2171,37 @@ describe("transcript module", () => {
       const result = await scanAllSessions();
       expect(result).toHaveLength(1);
       expect(result[0].sessions[0].name).toBe("array content title");
+    });
+
+    it("names a session after its first message as typed, not the CLI's paste wrapper", async () => {
+      (existsSync as any).mockReturnValue(true);
+      const { createInterface } = await import("node:readline");
+      (readdir as any).mockResolvedValueOnce(["project1"]).mockResolvedValueOnce(["sess1.jsonl"]);
+      (stat as any).mockResolvedValue({ mtimeMs: 1700000000000 });
+
+      const mockRl = {
+        [Symbol.asyncIterator]: async function* () {
+          yield JSON.stringify({
+            type: "user",
+            cwd: "/home/test",
+            message: {
+              content: [
+                {
+                  type: "text",
+                  text: '\n\n<pasted_content id="ab12">\nFix the login bug\nstack trace here\n</pasted_content id="ab12">\n',
+                },
+              ],
+            },
+            timestamp: "2024-01-01T00:00:00Z",
+          });
+        },
+        close: vi.fn(),
+      };
+      (createInterface as any).mockReturnValue(mockRl);
+
+      const result = await scanAllSessions();
+      expect(result[0].sessions[0].name.startsWith("Fix the login bug")).toBe(true);
+      expect(result[0].sessions[0].name).not.toContain("pasted_content");
     });
 
     it("skips system-generated messages starting with [", async () => {

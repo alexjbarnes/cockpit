@@ -17,8 +17,23 @@ The Settings page picks the defaults for new sessions:
 - Thinking level. Low, Medium, High, XHigh, Max. Trades latency for depth of reasoning. Only the levels the model supports are offered.
 - Default runtime is Stream; choose Stream or PTY per session (see [Sessions: runtime mode](sessions.md#runtime-mode)).
 - Permission bypass. Off by default. When on, Claude skips permission prompts. An orange warning is shown when active.
+- Sandbox Bash. Off by default. When on, new sessions run Bash in the OS sandbox, with any domains listed here added to the shared rules below.
 
 Existing sessions keep their own settings. Defaults only apply to new sessions.
+
+## Sandbox
+
+Settings → Sandbox edits Claude Code's own sandbox rules, the `sandbox` block of `~/.claude/settings.json`. They apply to every sandboxed Claude session, in cockpit or not, and a running session picks up a change straight away, so saving needs no restart. Everything else in that file is left as it was.
+
+- Allowed and denied domains for sandboxed network access.
+- Commands run outside the sandbox (`excludedCommands`), matched like Bash permission rules. They still go through the usual permission check.
+- Extra writable paths, paths never writable, paths never readable, and paths readable again inside a denied one.
+- Unix sockets and local ports (macOS). Allowing local ports lets sandboxed commands start and reach servers on localhost, and opens every local port to them.
+- Whether a command the sandbox blocks may ask to be retried outside it.
+
+Whether a session is sandboxed at all is its own switch: the session panel, the default above, and a switch per scheduled job. A session's own domains are added to these rules rather than replacing them.
+
+Cockpit's own directory (`~/.cockpit`) is always unreadable to sandboxed commands, since it holds the key cockpit's login tokens are signed with and the providers' API keys.
 
 ## Providers
 

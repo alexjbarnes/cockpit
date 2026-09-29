@@ -330,8 +330,14 @@ export function createWebSocketHandler(
               if (prefs?.thinkingLevel && prefs.thinkingLevel !== "high") {
                 send(ws, { type: "session:system", sessionId: msg.sessionId, text: `__thinking_level::${prefs.thinkingLevel}` });
               }
-              if (prefs?.bypassAllPermissions) {
-                send(ws, { type: "session:system", sessionId: msg.sessionId, text: "__bypass_state::on" });
+              {
+                const pm = prefs?.cockpitAgent ? "manual" : (prefs?.permissionMode ?? (prefs?.bypassAllPermissions ? "bypass" : "manual"));
+                if (pm !== "manual") {
+                  send(ws, { type: "session:system", sessionId: msg.sessionId, text: `__perm_mode::${pm}` });
+                }
+              }
+              if (prefs?.sandbox?.enabled) {
+                send(ws, { type: "session:system", sessionId: msg.sessionId, text: `__sandbox::${JSON.stringify(prefs.sandbox)}` });
               }
               if (prefs?.planMode) {
                 send(ws, { type: "session:system", sessionId: msg.sessionId, text: "__plan_state::on" });
@@ -426,6 +432,12 @@ export function createWebSocketHandler(
               send(ws, { type: "session:task_sync", sessionId: msg.sessionId, tasks: tasksOnConnect });
             }
 
+            // A page arriving mid-turn resumes the turn counter from the user's
+            // message instead of restarting it from now, which is what leaving
+            // a long turn and coming back used to do.
+            const turnElapsed = correctedStatus === "running" ? sessionManager.getTurnElapsedMs(msg.sessionId) : undefined;
+            const turnTiming = turnElapsed !== undefined ? { turnElapsedMs: turnElapsed } : {};
+
             // If client already has messages, send only the delta to avoid
             // re-sending 1000+ messages on every mobile reconnect.
             // Uses the last known server message ID instead of a count, since
@@ -445,6 +457,7 @@ export function createWebSocketHandler(
                   delta: true,
                   status: correctedStatus,
                   hasMore: session.hasMore,
+                  ...turnTiming,
                 });
               } else {
                 // ID not found - client has stale state, send full history
@@ -456,6 +469,7 @@ export function createWebSocketHandler(
                   status: correctedStatus,
                   hasMore: session.hasMore,
                   promptHistory: session.promptHistory,
+                  ...turnTiming,
                 });
               }
             } else {
@@ -466,6 +480,7 @@ export function createWebSocketHandler(
                 status: correctedStatus,
                 hasMore: session.hasMore,
                 promptHistory: session.promptHistory,
+                ...turnTiming,
               });
             }
 
@@ -511,12 +526,29 @@ export function createWebSocketHandler(
               status: correctedStatus,
             });
 
-            if (sessionManager.isBypassActive(msg.sessionId)) {
-              send(ws, {
-                type: "session:system",
-                sessionId: msg.sessionId,
-                text: "__bypass_state::on",
-              });
+            {
+              const pm = sessionManager.getPermissionMode(msg.sessionId);
+              if (pm !== "manual") {
+                send(ws, {
+                  type: "session:system",
+                  sessionId: msg.sessionId,
+                  text: `__perm_mode::${pm}`,
+                });
+              }
+              // The mode the CLI reports, so a page connecting mid-session
+              // shows that rather than only the requested one.
+              const cliMode = sessionManager.getCliPermissionMode(msg.sessionId);
+              if (cliMode) {
+                send(ws, { type: "session:system", sessionId: msg.sessionId, text: `__cli_perm_mode::${cliMode}` });
+              }
+              const sandbox = sessionManager.getSandbox(msg.sessionId);
+              if (sandbox.enabled) {
+                send(ws, {
+                  type: "session:system",
+                  sessionId: msg.sessionId,
+                  text: `__sandbox::${JSON.stringify(sandbox)}`,
+                });
+              }
             }
 
             if (sessionManager.isPlanModeActive(msg.sessionId)) {
@@ -766,6 +798,16 @@ export function createWebSocketHandler(
           } else {
             sessionManager.clearBypassAllPermissions(msg.sessionId);
           }
+          break;
+        }
+
+        case "permission:set_mode": {
+          sessionManager.setPermissionMode(msg.sessionId, msg.mode);
+          break;
+        }
+
+        case "session:set_sandbox": {
+          sessionManager.setSandbox(msg.sessionId, msg.config);
           break;
         }
 

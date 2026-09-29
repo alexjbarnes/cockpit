@@ -45,6 +45,9 @@ export function translateHookEvent(eventName: HookEventName, payload: Record<str
       return [{ type: "system_message", text: "__turn_start" }];
     case "UserPromptExpansion":
       return [];
+    // Carries nothing to render: pty-runtime reads its permission_mode.
+    case "SessionStart":
+      return [];
   }
 }
 

@@ -1,9 +1,10 @@
-import { createReadStream, existsSync, readFileSync } from "node:fs";
+import { createReadStream, existsSync, readdirSync, readFileSync } from "node:fs";
 import { open, readdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import { v4 as uuidv4 } from "uuid";
 import { extractTextFiles } from "@/lib/paste-detect";
+import { unwrapPastedContent } from "@/lib/pasted-content";
 import { getClaudeDir } from "@/server/paths";
 import type {
   ChatMessage,
@@ -58,9 +59,54 @@ interface TranscriptEntry {
   };
 }
 
-export function getTranscriptPath(sessionId: string, cwd: string): string {
+function projectTranscriptPath(sessionId: string, cwd: string): string {
   const projectKey = cwd.replace(/[/.]/g, "-");
   return path.join(getClaudeDir(), "projects", projectKey, `${sessionId}.jsonl`);
+}
+
+/**
+ * The file a session's transcript is in: the project folder for `cwd`, unless
+ * the CLI has moved it. Entering a worktree moves the session's transcript to
+ * the worktree's project folder, so a transcript missing from its folder is
+ * looked for by its file name, which is the session id.
+ */
+export function getTranscriptPath(sessionId: string, cwd: string): string {
+  const expected = projectTranscriptPath(sessionId, cwd);
+  if (existsSync(expected)) return expected;
+  return findMovedTranscript(sessionId) ?? expected;
+}
+
+// Keyed by Claude directory and session id. A search that found nothing is
+// not repeated for a moment, since a new session's transcript is missing
+// until its first turn and callers poll for it.
+const movedTranscripts = new Map<string, string>();
+const missingAt = new Map<string, number>();
+const MISSING_RECHECK_MS = 2000;
+
+function findMovedTranscript(sessionId: string): string | null {
+  const projectsDir = path.join(getClaudeDir(), "projects");
+  const key = `${projectsDir}\0${sessionId}`;
+  const known = movedTranscripts.get(key);
+  if (known !== undefined) {
+    if (existsSync(known)) return known;
+    movedTranscripts.delete(key);
+  }
+  const missedAt = missingAt.get(key);
+  if (missedAt !== undefined && Date.now() - missedAt < MISSING_RECHECK_MS) return null;
+  let dirs: string[] = [];
+  try {
+    dirs = readdirSync(projectsDir);
+  } catch {}
+  for (const dir of dirs) {
+    const candidate = path.join(projectsDir, dir, `${sessionId}.jsonl`);
+    if (existsSync(candidate)) {
+      movedTranscripts.set(key, candidate);
+      missingAt.delete(key);
+      return candidate;
+    }
+  }
+  missingAt.set(key, Date.now());
+  return null;
 }
 
 export function transcriptExists(sessionId: string, cwd: string): boolean {
@@ -94,7 +140,11 @@ export function countTranscriptMessages(sessionId: string, cwd: string): number 
 const CLI_XML_RE =
   /<(?:task-notification|local-command-caveat|local-command-stdout|system-reminder)[^>]*>[\s\S]*?<\/(?:task-notification|local-command-caveat|local-command-stdout|system-reminder)>[\s\S]*/g;
 
-function stripCommandXml(text: string): string {
+function stripCommandXml(raw: string): string {
+  // A multi-line message is typed into the CLI as a bracketed paste, which it
+  // may store wrapped in <pasted_content> tags. Every caller here wants the
+  // text as the user typed it, so the wrapper comes off before anything else.
+  const text = unwrapPastedContent(raw);
   const trimmed = text.trimStart();
   if (trimmed.startsWith("<task-notification>")) return "";
   if (trimmed.startsWith("<local-command-caveat>")) return "";
@@ -272,6 +322,51 @@ export async function loadLastUsage(sessionId: string, cwd: string): Promise<{ u
   return lastUsage;
 }
 
+/** Cumulative token spend for a session, in Anthropic's four categories. */
+export interface TokenTotals {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheCreate: number;
+}
+
+/**
+ * Sum a session's whole token spend from its transcript.
+ *
+ * SessionManager keeps a running `totalTokens`, but it only ever filled for
+ * stream-runtime sessions — it is driven by onRawLine, which the PTY adapter
+ * never calls — so /cost reported four zeros for every session on the default
+ * runtime. The transcript is the one record that has the numbers regardless of
+ * runtime, and it survives a restart, which an in-memory counter does not.
+ *
+ * Deliberately NOT reset at a compaction boundary: those tokens were still paid
+ * for, unlike the live window that lastUsage tracks. Subagent turns live in
+ * their own files under `<session>/subagents/`, so this is main-thread spend.
+ */
+export async function sumTranscriptUsage(sessionId: string, cwd: string): Promise<TokenTotals> {
+  const totals: TokenTotals = { input: 0, output: 0, cacheRead: 0, cacheCreate: 0 };
+  const fp = getTranscriptPath(sessionId, cwd);
+  if (!existsSync(fp)) return totals;
+  const raw = await readFile(fp, "utf-8");
+  for (const line of raw.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    try {
+      const entry = JSON.parse(line);
+      if (entry.type !== "assistant" || !entry.message?.usage) continue;
+      // Synthetic turns (a local command like /context) carry all-zero usage.
+      if (entry.message.model === "<synthetic>") continue;
+      const u = entry.message.usage;
+      totals.input += u.input_tokens || 0;
+      totals.output += u.output_tokens || 0;
+      totals.cacheRead += u.cache_read_input_tokens || 0;
+      totals.cacheCreate += u.cache_creation_input_tokens || 0;
+    } catch {
+      // not valid JSON, ignore
+    }
+  }
+  return totals;
+}
+
 export interface TranscriptResult {
   messages: ChatMessage[];
   byteOffset: number;
@@ -418,7 +513,8 @@ function parseLines(lines: string[]): { messages: ChatMessage[]; lastUsage: { us
       // total and clobbers the post-compact estimate.
       lastUsage = null;
       messages.push({
-        id: "compact-" + uuidv4(),
+        // Stable across parses, so a page that keeps older messages holds one marker.
+        id: "compact-" + (entry.uuid || uuidv4()),
         role: "system",
         content: "__compacted__",
         toolUses: [],
@@ -851,6 +947,7 @@ async function extractSessionMeta(filePath: string): Promise<SessionMeta | null>
           const textBlock = content.find((b) => b.type === "text" && b.text);
           if (textBlock?.text) candidate = textBlock.text;
         }
+        candidate = unwrapPastedContent(candidate);
         // Skip system-generated messages like [Request interrupted...] and XML tags
         if (candidate && !candidate.startsWith("[") && !candidate.startsWith("<")) {
           title = candidate.slice(0, 120);
@@ -1255,6 +1352,7 @@ export async function globalSearch(
             const tb = content.find((b: TranscriptBlock) => b.type === "text" && b.text);
             if (tb?.text) candidate = tb.text;
           }
+          candidate = unwrapPastedContent(candidate);
           if (candidate && !candidate.startsWith("[") && !candidate.startsWith("<")) {
             sessionTitle = candidate.slice(0, 120);
           }

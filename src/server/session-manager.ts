@@ -17,10 +17,13 @@ import {
   recommendedEffort,
   resolveModel,
 } from "@/lib/models";
+import { widensSandbox } from "@/lib/sandbox-requests";
 import { getAssistantSettings, updateAssistantSettings } from "@/server/assistant-settings";
+import { supportedPermissionModes } from "@/server/claude-bin";
 import { getCockpitDir } from "@/server/paths";
 import { ensureCatalogFresh, OPENROUTER_PROVIDER_ID } from "@/server/provider-catalog";
 import { getProvider, isBuiltinCatalogProvider, openRouterModelEnv, resolveProviderModel } from "@/server/providers";
+import { sandboxSupport } from "@/server/sandbox";
 import type {
   BackgroundTask,
   ChatMessage,
@@ -30,7 +33,9 @@ import type {
   ImageAttachment,
   InitData,
   ModelSlots,
+  SandboxConfig,
   SessionInfo,
+  SessionPermissionMode,
   ThinkingLevel,
   TodoItem,
   ToolUse,
@@ -45,11 +50,12 @@ import { COCKPIT_AGENT_SYSTEM_PROMPT } from "./mcp/cockpit-agent-prompt";
 import { clearToken, type RunContext, registerAuthToken, registerRunContext, registerSessionContext } from "./mcp/run-context";
 import { getNotificationSettings } from "./notification-settings";
 import { findLatestPlanFile, readPlanFile } from "./plans";
+import { UntrustedWorkspaceError } from "./pty-session";
 import { findChainForCliSession, getSessionPrefs, type SessionRuntime, setSessionPrefs } from "./session-prefs";
 import { getCockpitMcp } from "./singleton";
 import { createStreamState, processEvents, type StreamState } from "./stream-processor";
 import { TodoWatcher } from "./todo-watcher";
-import { findSessionCwd, loadMoreMessages, loadPromptHistory, loadTranscript, transcriptExists } from "./transcript";
+import { findSessionCwd, loadMoreMessages, loadPromptHistory, loadTranscript, sumTranscriptUsage, transcriptExists } from "./transcript";
 
 export type { SessionRuntime };
 
@@ -109,11 +115,48 @@ interface Session {
   emitter: EventEmitter;
   cliSessionId: string;
   previousCliSessionIds: string[];
-  bypassAllPermissions: boolean;
+  permissionMode: SessionPermissionMode;
+  sandbox: SandboxConfig;
+  /** When the latest user message was delivered to the CLI, on this machine's
+   *  clock. What a page arriving mid-turn times the turn from: it has no bubble
+   *  of its own, and the message may be outside the history it is sent. Not
+   *  cleared at turn end, so a turn the CLI resumes on its own still counts
+   *  from the user's message, as the live counter does. */
+  turnStartedAt?: number;
+  /** The permission mode the CLI reports in its hook payloads; undefined until
+   *  the running process reports one. Kept for a page that connects later. */
+  cliPermissionMode?: string;
   planMode: boolean;
   pendingPlanReminder?: boolean;
   needsRespawnForPermissions: boolean;
   compacting: boolean;
+  /**
+   * A manual /compact finished with a message queued, and its flush was deferred
+   * to the next transcript update. Flushing at the PostCompact hook types into a
+   * REPL still rendering the compaction (the keystrokes are swallowed), and
+   * sendUserText's transcript-growth confirmation then false-positives on the
+   * compaction's own appended lines — so its resend loop never retries and the
+   * message is silently lost. Delivering on the next transcript update instead
+   * means the compaction has landed, the REPL is ready, and the send baseline is
+   * taken past the compaction's lines.
+   */
+  pendingCompactFlush: boolean;
+  /**
+   * When the pending compaction was requested (ms since epoch). A compaction
+   * marker or reply in the transcript is this compaction's outcome only if it
+   * is at least this recent.
+   *
+   * The watcher sends the transcript's last lines, so a marker an earlier
+   * compaction left there is still in them. Taking it would release this
+   * compaction at once and type a queued message into a CLI still compacting.
+   * The CLI can also accept a /compact, fire PreCompact, and then decline it
+   * ("Not enough messages to compact.") with no PostCompact and no Stop hook
+   * at all (verified against CLI 2.1.233 in
+   * tests/integration/compact-then-send.spec.ts): an assistant message this
+   * recent with no marker is that refusal. The message count cannot tell new
+   * messages from old, since the tail slides.
+   */
+  compactRequestedAt: number;
   thinkingLevel: ThinkingLevel;
   streamState: StreamState | null;
   contextUsage: ContextUsage | null;
@@ -153,7 +196,6 @@ interface Session {
   spawning?: boolean;
   todoWatcher: TodoWatcher | null;
   /** Cumulative token counts for the current session (used by /cost). */
-  totalTokens: { input: number; output: number; cacheCreate: number; cacheRead: number };
 }
 
 export function buildMcpConfigArg(url: string, token: string): { path: string } {
@@ -187,6 +229,11 @@ export function buildMcpConfigArg(url: string, token: string): { path: string } 
  */
 const AGENT_PROMPTED_TOOLS = new Set(["WebFetch", "mcp__cockpit-config__get_job_transcript"]);
 
+// Decisions bypass must never answer on the user's behalf, because neither is
+// a tool permission: AskUserQuestion is the model asking them something, and
+// ExitPlanMode is them signing off a plan.
+const ALWAYS_ASK_TOOLS = new Set(["AskUserQuestion", "ExitPlanMode"]);
+
 /**
  * Human names for ids that appear in a proposal's arguments, so the approval
  * card can show "Telegram" where the tool sent a uuid. A notifyProviders array
@@ -209,6 +256,40 @@ function proposalIdNames(rawInput: unknown): Record<string, string> | undefined 
     if (provider.id && serialised.includes(provider.id)) names[provider.id] = provider.name || provider.type;
   }
   return Object.keys(names).length > 0 ? names : undefined;
+}
+
+/** Whether `model` runs on Anthropic, which auto permission mode needs: its
+ *  classifier runs on the session's own model. An id no provider claims counts
+ *  as Anthropic, as it always has. */
+function isAnthropicModel(model: string | undefined): boolean {
+  const resolved = resolveProviderModel(model ?? "");
+  return !resolved || resolved.provider.id === "anthropic";
+}
+
+/** The mode a new or restored session starts in. A cockpit agent is always
+ *  manual (its bypass is applied server-side), and auto drops to manual on a
+ *  model that cannot run it: the clamp setPermissionMode and the spawn apply,
+ *  applied before the selector ever shows a mode the session will not use. */
+function startingPermissionMode(mode: SessionPermissionMode, model: string | undefined, cockpitAgent: boolean): SessionPermissionMode {
+  if (cockpitAgent) return "manual";
+  if (mode === "auto" && !isAnthropicModel(model)) return "manual";
+  return mode;
+}
+
+/** The mode the CLI itself is spawned in for a cockpit permission mode. On the
+ *  PTY runtime bypass is applied by cockpit over the PermissionRequest hook,
+ *  so the CLI runs manual (see claude-pty-adapter); the deprecated stream
+ *  runtime still asks for native bypass. */
+function cliSpawnMode(mode: SessionPermissionMode, runtime: SessionRuntime): string {
+  if (mode === "bypass") return runtime === "pty" ? "manual" : "bypassPermissions";
+  return mode;
+}
+
+/** A sandbox config as this host can run it: enabling is refused where the
+ *  sandbox cannot be enforced, and an empty allowlist is dropped. */
+function enforceableSandbox(config: SandboxConfig): SandboxConfig {
+  if (config.enabled && !sandboxSupport().supported) return { enabled: false };
+  return { enabled: config.enabled, ...(config.allowedDomains?.length ? { allowedDomains: config.allowedDomains } : {}) };
 }
 
 export class SessionManager {
@@ -245,7 +326,13 @@ export class SessionManager {
   createSession(
     cwd: string,
     name?: string,
-    options?: { bypassPermissions?: boolean; runtime?: SessionRuntime; cockpitAgent?: boolean; runContext?: RunContext },
+    options?: {
+      bypassPermissions?: boolean;
+      sandbox?: SandboxConfig;
+      runtime?: SessionRuntime;
+      cockpitAgent?: boolean;
+      runContext?: RunContext;
+    },
   ): SessionInfo {
     const id = uuidv4();
     const now = Date.now();
@@ -254,6 +341,16 @@ export class SessionManager {
     const isCockpitAgent = options?.cockpitAgent === true;
     const rt = options?.runtime ?? this.defaultRuntime;
     const sessionName = isCockpitAgent ? "Cockpit Assistant" : name || path.basename(cwd) || cwd;
+    // An explicit flag (a job's own bypass setting, a review session's false,
+    // the new-session dialog's true) wins over the default mode.
+    const permissionMode = startingPermissionMode(
+      options?.bypassPermissions !== undefined ? (options.bypassPermissions ? "bypass" : "manual") : defaults.permissionMode,
+      modelSlots.main,
+      isCockpitAgent,
+    );
+    // The assistant has no sandbox control. A job passes its own switch, so
+    // the default for interactive sessions never decides a job's sandbox.
+    const sandbox: SandboxConfig = isCockpitAgent ? { enabled: false } : enforceableSandbox(options?.sandbox ?? defaults.sandbox);
     const info: SessionInfo = {
       id,
       name: sessionName,
@@ -273,10 +370,13 @@ export class SessionManager {
       emitter: new EventEmitter(),
       cliSessionId: id,
       previousCliSessionIds: [],
-      bypassAllPermissions: isCockpitAgent ? false : (options?.bypassPermissions ?? defaults.bypassAllPermissions),
+      permissionMode,
+      sandbox,
       planMode: false,
       needsRespawnForPermissions: false,
       compacting: false,
+      pendingCompactFlush: false,
+      compactRequestedAt: 0,
       thinkingLevel: defaults.thinkingLevel,
       streamState: null,
       contextUsage: null,
@@ -295,7 +395,6 @@ export class SessionManager {
       paginationPrevIds: [],
       runtime: rt,
       todoWatcher: null,
-      totalTokens: { input: 0, output: 0, cacheCreate: 0, cacheRead: 0 },
       cockpitAgent: isCockpitAgent,
       cockpitAgentCleanups: [],
       // Present only for a scheduled job that reports to the inbox. It is what
@@ -316,6 +415,8 @@ export class SessionManager {
       modelSlots,
       thinkingLevel: defaults.thinkingLevel,
       runtime: rt,
+      permissionMode,
+      sandbox,
       ...(isCockpitAgent ? { cockpitAgent: true } : {}),
     });
 
@@ -390,11 +491,22 @@ export class SessionManager {
         emitter: new EventEmitter(),
         cliSessionId: cliId,
         previousCliSessionIds: prevIds,
-        bypassAllPermissions: (prefs?.cockpitAgent ? false : prefs?.bypassAllPermissions) ?? defaults.bypassAllPermissions,
+        permissionMode: startingPermissionMode(
+          prefs?.permissionMode ??
+            (prefs?.bypassAllPermissions !== undefined ? (prefs.bypassAllPermissions ? "bypass" : "manual") : defaults.permissionMode),
+          modelSlots.main,
+          prefs?.cockpitAgent === true,
+        ),
+        // Not the app default: a session older than that default never stored
+        // a sandbox and ran without one, so turning the default on must not
+        // sandbox every existing session on its next restart.
+        sandbox: prefs?.sandbox ?? { enabled: false },
         planMode: prefs?.planMode ?? false,
         pendingPlanReminder: prefs?.planMode ?? false,
         needsRespawnForPermissions: false,
         compacting: false,
+        pendingCompactFlush: false,
+        compactRequestedAt: 0,
         // modelSlots.main, not prefs.model: setModelSlot persists modelSlots on
         // its own, so a session whose model was last changed through the slots
         // editor has no top-level `model` field, and reading that field alone
@@ -420,7 +532,6 @@ export class SessionManager {
         paginationPrevIds: [],
         runtime: restoredRuntime,
         todoWatcher: null,
-        totalTokens: { input: 0, output: 0, cacheCreate: 0, cacheRead: 0 },
         cockpitAgent: prefs?.cockpitAgent ?? false,
         cockpitAgentCleanups: [],
       };
@@ -996,6 +1107,9 @@ export class SessionManager {
     if (session.queuedMessages.length > 0) {
       session.queuePaused = true;
     }
+    // Cancel any compaction-deferred flush too: the user has taken the session
+    // somewhere else, so a queued message must not be typed in later.
+    session.pendingCompactFlush = false;
 
     if (!session.harnessProcess?.isAlive) {
       logDiag(id, "interrupt:no-process", { hasSession: true });
@@ -1004,6 +1118,10 @@ export class SessionManager {
 
     logDiag(id, "interrupt:send");
     session.harnessProcess.interrupt();
+    // Esc cancels a compaction in flight, and the CLI reports that only on its
+    // screen: no PostCompact, no Stop, nothing the transcript parse keeps. Left
+    // raised, the flag would queue every later message behind it.
+    if (session.compacting) this.cancelCompaction(session, id, "interrupt");
 
     // PTY's Esc cancels the claude TUI turn but may not produce a Stop hook if
     // it arrived before any response. Force-idle so the UI unsticks; the PTY
@@ -1069,7 +1187,7 @@ export class SessionManager {
     return session.harnessProcess.respondToPermission(requestId, allowed, toolInput, permissionSuggestions, denyReason);
   }
 
-  private sendPermissionMode(session: Session, sessionId: string, mode: string): void {
+  private sendPermissionMode(session: Session, sessionId: string, mode: "manual" | "auto" | "bypassPermissions"): void {
     if (!session.harnessProcess?.writeControlRequest) return;
     this.log(sessionId, `sending set_permission_mode: ${mode}`);
     session.harnessProcess.writeControlRequest({
@@ -1079,29 +1197,89 @@ export class SessionManager {
     });
   }
 
-  setBypassAllPermissions(sessionId: string): void {
+  /** A model whose safety classifier auto mode can rely on: the native
+   *  Anthropic provider. A bare alias ("opus"/"sonnet"/…) doesn't resolve to a
+   *  provider model but is Anthropic, so an unresolved id counts as Anthropic. */
+  private isAnthropicSession(session: Session): boolean {
+    return isAnthropicModel(session.info.model);
+  }
+
+  getPermissionMode(sessionId: string): SessionPermissionMode {
+    return this.sessions.get(sessionId)?.permissionMode ?? "manual";
+  }
+
+  /** The mode the running CLI reports it is in; undefined until it has. */
+  getCliPermissionMode(sessionId: string): string | undefined {
+    return this.sessions.get(sessionId)?.cliPermissionMode;
+  }
+
+  /** The single mutator for the permission axis (manual | auto | bypass), which
+   *  is orthogonal to plan mode. The old bypass on/off methods delegate here. */
+  setPermissionMode(sessionId: string, mode: SessionPermissionMode): void {
     const session = this.sessions.get(sessionId);
-    if (!session || session.bypassAllPermissions || session.cockpitAgent) return;
-    session.bypassAllPermissions = true;
-    setSessionPrefs(sessionId, { bypassAllPermissions: true });
-    // Don't change CLI mode while in plan mode; bypass will restore on plan exit
+    if (!session) return;
+    // Auto is Anthropic-only: its classifier runs on the session's model, and a
+    // slow non-Anthropic one times out and blocks the call. Clamp rather than
+    // reject, so a stale pref or a later model switch can never spawn auto on a
+    // model that will hang.
+    if (mode === "auto" && !this.isAnthropicSession(session)) mode = "manual";
+    // A cockpit agent never drives the CLI into native bypass — its bypass is
+    // applied server-side in applyProcessedResult. The previous
+    // setBypassAllPermissions refused it outright; keep refusing.
+    if (mode === "bypass" && session.cockpitAgent) return;
+    if (session.permissionMode === mode) return;
+
+    const previous = session.permissionMode;
+    session.permissionMode = mode;
+    setSessionPrefs(sessionId, { permissionMode: mode });
+    // Don't change CLI mode while in plan mode; the mode is restored on plan
+    // exit. A live set_permission_mode is unreliable when the CLI was spawned
+    // in another mode, so it is paired with a respawn that re-reads state.
     if (!session.planMode) {
-      this.sendPermissionMode(session, sessionId, "bypassPermissions");
-      this.scheduleRespawnForPermissions(session);
+      const cliMode = mode === "bypass" ? "bypassPermissions" : mode;
+      if (cliMode === "manual" ? supportedPermissionModes().has("manual") : true) {
+        this.sendPermissionMode(session, sessionId, cliMode);
+      }
+      // On the PTY runtime bypass is cockpit answering every prompt while the
+      // CLI stays in manual, so manual <-> bypass changes nothing the CLI was
+      // spawned with and takes effect at once: restarting it would only cost
+      // the user a respawn at their next message.
+      if (cliSpawnMode(previous, session.runtime) !== cliSpawnMode(mode, session.runtime)) {
+        this.scheduleRespawnForPermissions(session);
+      }
     }
-    this.emitSystem(session, sessionId, "__bypass_state::on");
+    this.emitSystem(session, sessionId, `__perm_mode::${mode}`);
+  }
+
+  getSandbox(sessionId: string): SandboxConfig {
+    return this.sessions.get(sessionId)?.sandbox ?? { enabled: false };
+  }
+
+  /** Enable/disable the OS-level Bash sandbox and set its network allowlist. The
+   *  config lands in the settings file at spawn, so a change needs a respawn to
+   *  take effect. Enabling is refused on a host that can't enforce it. */
+  setSandbox(sessionId: string, config: SandboxConfig): void {
+    const session = this.sessions.get(sessionId);
+    if (!session) return;
+    const next = enforceableSandbox(config);
+
+    const same =
+      session.sandbox.enabled === next.enabled &&
+      JSON.stringify(session.sandbox.allowedDomains ?? []) === JSON.stringify(next.allowedDomains ?? []);
+    if (same) return;
+
+    session.sandbox = next;
+    setSessionPrefs(sessionId, { sandbox: next });
+    this.scheduleRespawnForPermissions(session);
+    this.emitSystem(session, sessionId, `__sandbox::${JSON.stringify(next)}`);
+  }
+
+  setBypassAllPermissions(sessionId: string): void {
+    this.setPermissionMode(sessionId, "bypass");
   }
 
   clearBypassAllPermissions(sessionId: string): void {
-    const session = this.sessions.get(sessionId);
-    if (!session?.bypassAllPermissions) return;
-    session.bypassAllPermissions = false;
-    setSessionPrefs(sessionId, { bypassAllPermissions: false });
-    if (!session.planMode) {
-      this.sendPermissionMode(session, sessionId, "default");
-      this.scheduleRespawnForPermissions(session);
-    }
-    this.emitSystem(session, sessionId, "__bypass_state::off");
+    this.setPermissionMode(sessionId, "manual");
   }
 
   // Runtime set_permission_mode is unreliable when the CLI was spawned without
@@ -1130,7 +1308,7 @@ export class SessionManager {
 
   isBypassActive(sessionId: string): boolean {
     const session = this.sessions.get(sessionId);
-    return session?.bypassAllPermissions ?? false;
+    return session?.permissionMode === "bypass";
   }
 
   setPlanMode(sessionId: string): void {
@@ -1168,11 +1346,9 @@ export class SessionManager {
     session.pendingRequests.clear();
     this.notifyPendingChanged(session, sessionId);
     this.emitSystem(session, sessionId, "__plan_state::off");
-    // Re-sync bypass state with the client so the UI reflects it correctly
-    // after the plan-mode process is torn down.
-    if (session.bypassAllPermissions) {
-      this.emitSystem(session, sessionId, "__bypass_state::on");
-    }
+    // Re-sync the permission mode with the client so the selector reflects it
+    // correctly after the plan-mode process is torn down.
+    this.emitSystem(session, sessionId, `__perm_mode::${session.permissionMode}`);
   }
 
   isPlanModeActive(sessionId: string): boolean {
@@ -1197,9 +1373,21 @@ export class SessionManager {
       if (!sizes || sizes.length === 0) return requestedSize;
       return sizes.includes(requestedSize) ? requestedSize : sizes[0];
     })();
-    // CLAUDE_CODE_DISABLE_1M_CONTEXT is applied at spawn, so a context-size
-    // change mid-session requires a CLI restart to take effect.
-    const contextChanged = currentSize !== resolvedSize;
+    // CLAUDE_CODE_DISABLE_1M_CONTEXT and CLAUDE_CODE_MAX_CONTEXT_TOKENS are
+    // both applied at spawn, so any change to the window the CLI enforces
+    // requires a restart to take effect.
+    //
+    // Comparing the ContextSize enum alone was not enough. A foreign model
+    // carries its window in `contextLength`, not in the 200k/1m enum, so
+    // switching between two models that both sit at the enum's default looked
+    // unchanged and took the live-switch path below. The CLI then kept the
+    // window it was spawned with while cockpit's gauge moved to the new
+    // model's: seen live, a session switched onto a 128k model kept filling to
+    // 439k, and when the upstream finally refused the prompt the CLI's
+    // automatic compaction — which has to send that same oversized prompt —
+    // failed too, reporting it as "there's an issue with the selected model".
+    const nextWindow = this.resolveContextWindow(model, resolvedSize);
+    const contextChanged = currentSize !== resolvedSize || nextWindow !== session.contextWindowSize;
 
     if (session.info.model === model && !contextChanged) {
       this.log(sessionId, `setModel: skipping (already ${model} with size ${resolvedSize})`);
@@ -1210,6 +1398,13 @@ export class SessionManager {
     session.info.contextSize = resolvedSize;
     session.modelSlots = { ...session.modelSlots, main: model, mainContext: resolvedSize };
     setSessionPrefs(sessionId, { model, contextSize: resolvedSize, modelSlots: session.modelSlots });
+
+    // Auto is Anthropic-only. Switching onto a non-Anthropic model drops it back
+    // to manual so the selector and the next spawn agree, rather than leaving a
+    // stored "auto" the spawn would silently downgrade anyway.
+    if (session.permissionMode === "auto" && !this.isAnthropicSession(session)) {
+      this.setPermissionMode(sessionId, "manual");
+    }
 
     const nextEntry = resolveModel(model);
     const coerced = nextEntry
@@ -1263,8 +1458,20 @@ export class SessionManager {
       session.emitter.emit("status", sessionId, "idle");
     }
     this.emitInfoUpdated(session, sessionId);
-    session.contextWindowSize = this.resolveContextWindow(model, resolvedSize);
+    session.contextWindowSize = nextWindow;
     const cur = session.contextUsage;
+    // A conversation that is already larger than the model just chosen cannot
+    // be rescued by the restart above: the CLI has to send the whole history to
+    // compact it, and that request is the one the upstream refuses. Say so,
+    // because the error the user would otherwise meet blames the model.
+    if (cur && cur.used > nextWindow) {
+      this.emitSystem(
+        session,
+        sessionId,
+        `This conversation holds about ${Math.round(cur.used / 1000)}k tokens, more than this model's ${Math.round(nextWindow / 1000)}k window. ` +
+          "It cannot compact its way back under, because compacting sends the whole conversation. Start a new session, or switch back to a model with a larger window.",
+      );
+    }
     if (cur) {
       // Assign, not just emit. shouldPreCompact reads contextUsage.total, so
       // telling the client the new window while leaving the server on the old
@@ -1531,6 +1738,16 @@ export class SessionManager {
     return this.sessions.get(sessionId)?.backgroundTasks ?? [];
   }
 
+  /** How long the running turn has gone since its user message was delivered,
+   *  for a page that connects mid-turn. Undefined when the session is idle, or
+   *  when no message was delivered by this process (a restart mid-turn): the
+   *  page then falls back to timing from the messages it has. */
+  getTurnElapsedMs(sessionId: string): number | undefined {
+    const session = this.sessions.get(sessionId);
+    if (session?.info.status !== "running" || session.turnStartedAt === undefined) return undefined;
+    return Math.max(0, Date.now() - session.turnStartedAt);
+  }
+
   /** Keep the session's task list in step with what is being emitted, so a
    *  client connecting later can be handed the same picture. task_sync carries
    *  the whole list (an empty one means nothing is running); task_update carries
@@ -1650,10 +1867,6 @@ export class SessionManager {
         });
         session.emitter.emit("usage", sessionId, usage);
       }
-      session.totalTokens.input += u.input_tokens || 0;
-      session.totalTokens.output += u.output_tokens || 0;
-      session.totalTokens.cacheCreate += u.cache_creation_input_tokens || 0;
-      session.totalTokens.cacheRead += u.cache_read_input_tokens || 0;
     } catch {
       // not valid JSON, ignore
     }
@@ -1665,11 +1878,27 @@ export class SessionManager {
       session.harnessProcess = null;
       handle.kill("session_reset");
     }
+    // The exit handler skips a process killed here, so the mode it reported is
+    // forgotten now. Otherwise the page would show it until the next process
+    // reports, and a mode change that respawns would read as a mismatch.
+    if (session.cliPermissionMode !== undefined) {
+      session.cliPermissionMode = undefined;
+      this.emitSystem(session, session.info.id, "__cli_perm_mode::");
+    }
     // A kill ends any in-flight spawn, so clear the ensureProcess guard now. A
     // deliberate kill-then-respawn (settings change, /clear, restart) must not
     // be blocked until the dying runtime's start() promise happens to settle.
     session.spawning = false;
+    if (session.compacting) this.cancelCompaction(session, session.info.id, "kill");
+  }
+
+  /** The compaction in flight will not finish, so nothing was compacted: drop
+   *  the flag and tell the page. A PostCompact arriving later finds the flag
+   *  down and does nothing. */
+  private cancelCompaction(session: Session, sessionId: string, reason: "interrupt" | "kill"): void {
+    logDiag(sessionId, "compact:cancelled", { reason });
     session.compacting = false;
+    this.emitSystem(session, sessionId, "__compact::cancelled");
   }
 
   private emitSystem(session: Session, sessionId: string, text: string): void {
@@ -1744,6 +1973,7 @@ export class SessionManager {
         if (!session.compacting) {
           logDiag(sessionId, "compact:hook-start");
           session.compacting = true;
+          session.compactRequestedAt = Date.now();
           this.emitSystem(session, sessionId, "__compact::start");
         }
         continue;
@@ -1772,10 +2002,19 @@ export class SessionManager {
           if (!auto) {
             session.info.status = "idle";
             session.emitter.emit("status", sessionId, "idle");
-            // Flushing after an auto-compact would inject the queued message
-            // into the turn the CLI is about to resume. message_done flushes it
-            // at the real end of the turn instead.
-            this.flushQueuedMessage(session, sessionId);
+            // A queued message must NOT be typed at this instant: the CLI is
+            // still rendering the compaction and writing its transcript, so the
+            // REPL swallows the keystrokes and sendUserText's transcript-growth
+            // confirmation false-positives on the compaction's own lines (the
+            // resend loop then never retries — the message is silently lost).
+            // Defer to onTranscriptUpdate, which fires once the compaction has
+            // landed. An empty queue just flushes to a no-op as before.
+            if (session.queuedMessages.length > 0) {
+              logDiag(sessionId, "compact:defer-flush", { queued: session.queuedMessages.length });
+              session.pendingCompactFlush = true;
+            } else {
+              this.flushQueuedMessage(session, sessionId);
+            }
           }
         }
         continue;
@@ -1793,6 +2032,9 @@ export class SessionManager {
           session.needsRespawnForPermissions = true;
           this.emitSystem(session, sessionId, "__plan_state::off");
         }
+      } else if (sysMsg.startsWith("__cli_perm_mode::")) {
+        session.cliPermissionMode = sysMsg.slice("__cli_perm_mode::".length) || undefined;
+        this.emitSystem(session, sessionId, sysMsg);
       } else {
         this.emitSystem(session, sessionId, sysMsg);
       }
@@ -1872,7 +2114,21 @@ export class SessionManager {
         // standing yes, so cockpit presses the dialog's Yes for them (the
         // respond path answers those with PTY keystrokes). With bypass off
         // they fall through to a real UI dialog like everything else.
-      } else if (session.bypassAllPermissions && !session.planMode && pa.toolName !== "AskUserQuestion") {
+        // Plan mode used to sit in this condition too, which meant a session
+        // already in bypass got a card for every tool once it started planning
+        // — and "Bypass All" on that card is a no-op when bypass is already on,
+        // so there was no way to stop them. It protected nothing: the CLI
+        // enforces plan mode itself and refuses an edit before any hook fires
+        // (tests/integration/plan-mode-permissions.spec.ts), so a request that
+        // reaches cockpit in plan mode is one the CLI had already judged
+        // plan-safe. Approving it by hand was the only thing the gate bought.
+        // Bypass answers ordinary tool calls, never one whose yes would widen the
+        // sandbox (see widensSandbox): those always reach the user.
+      } else if (
+        session.permissionMode === "bypass" &&
+        !ALWAYS_ASK_TOOLS.has(pa.toolName) &&
+        !widensSandbox(pa.toolName, pa.rawToolInput)
+      ) {
         this.respondToPermission(sessionId, pa.requestId, true, pa.rawToolInput);
         bypassedRequestIds.add(pa.requestId);
       } else {
@@ -2064,14 +2320,22 @@ export class SessionManager {
       }
 
       case "/cost": {
-        const t = session.totalTokens;
-        const lines = [
-          `Input tokens:       ${t.input.toLocaleString()}`,
-          `Output tokens:      ${t.output.toLocaleString()}`,
-          `Cache write tokens: ${t.cacheCreate.toLocaleString()}`,
-          `Cache read tokens:  ${t.cacheRead.toLocaleString()}`,
-        ];
-        this.emitSystem(session, sessionId, lines.join("\n"));
+        // Read from the transcript, not a running counter: the counter only
+        // ever filled on the stream runtime (onRawLine never fires on PTY), so
+        // this reported four zeros for every session on the default runtime.
+        sumTranscriptUsage(session.cliSessionId, session.info.cwd)
+          .then((t) => {
+            const prompt = t.input + t.cacheRead + t.cacheCreate;
+            const lines = [
+              `Input tokens:       ${t.input.toLocaleString()}`,
+              `Output tokens:      ${t.output.toLocaleString()}`,
+              `Cache write tokens: ${t.cacheCreate.toLocaleString()}`,
+              `Cache read tokens:  ${t.cacheRead.toLocaleString()}`,
+              `Cache hit rate:     ${prompt > 0 ? `${Math.round((t.cacheRead / prompt) * 100)}%` : "n/a"}`,
+            ];
+            this.emitSystem(session, sessionId, lines.join("\n"));
+          })
+          .catch(() => this.emitSystem(session, sessionId, "Could not read this session's token usage."));
         return true;
       }
 
@@ -2219,6 +2483,7 @@ Additional Cockpit rules beyond the CLI's defaults:
       if (text.trim().toLowerCase().startsWith("/compact")) {
         logDiag(sessionId, "compact:start");
         session.compacting = true;
+        session.compactRequestedAt = Date.now();
         isCompactTrigger = true;
         this.emitSystem(session, sessionId, "__compact::start");
       }
@@ -2232,6 +2497,7 @@ Additional Cockpit rules beyond the CLI's defaults:
       session.queuedMessages.push({ id: `q-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, text, images, documents });
       session.emitter.emit("queued", sessionId, session.queuedMessages.length);
       session.compacting = true;
+      session.compactRequestedAt = Date.now();
       this.emitSystem(session, sessionId, "__compact::start");
       session.info.status = "running";
       session.emitter.emit("status", sessionId, "running");
@@ -2286,6 +2552,7 @@ Additional Cockpit rules beyond the CLI's defaults:
       alive: !!session.harnessProcess?.isAlive,
     });
     session.info.status = "running";
+    session.turnStartedAt = Date.now();
     console.log(`[sm] emit status running for ${sessionId.slice(0, 8)} (runtime=${session.runtime})`);
     session.emitter.emit("status", sessionId, "running");
 
@@ -2339,6 +2606,25 @@ Additional Cockpit rules beyond the CLI's defaults:
     this.log(sessionId, `spawning CLI process (resume=${willResume}, model=${session.info.model || "sonnet"}, runtime=${session.runtime})`);
 
     const resolved = resolveProviderModel(session.info.model ?? "sonnet");
+
+    // A provider-qualified model that no longer resolves has been delisted, or
+    // filtered out as unusable (a model whose endpoint refuses tool calls is
+    // dropped from the catalog — see provider-catalog.ts). Spawning anyway is
+    // the worst option available: `resolved` carries the provider's base URL
+    // and key, so without it the CLI would send a foreign model id to
+    // Anthropic. Say what happened and leave the session idle for the user to
+    // pick another model.
+    if (!resolved && session.info.model && this.slotProviderId(session.info.model) !== "anthropic") {
+      const message =
+        `${session.info.model} is no longer available from its provider. ` +
+        "It was either delisted, or it cannot accept tool calls, which a session needs. Pick another model to carry on.";
+      this.log(sessionId, `spawn: refusing, model does not resolve (${session.info.model})`);
+      this.emitSystem(session, sessionId, message);
+      session.info.status = "idle";
+      session.emitter.emit("status", sessionId, "idle");
+      return;
+    }
+
     const baseCliModel = resolved ? resolved.model.modelId : session.info.model;
     // A credit-gated model (Sonnet 4.6) at 1M only requests its 1M window when
     // the id carries a [1m] suffix, and only if the user opted in. Everything
@@ -2445,7 +2731,18 @@ Additional Cockpit rules beyond the CLI's defaults:
       thinkingLevel: session.thinkingLevel,
       supportsEffort: this.modelEffortLevels(session.info.model).length > 0,
       planMode: session.planMode,
-      bypassAllPermissions: session.bypassAllPermissions && !session.cockpitAgent,
+      // Auto is enforced Anthropic-only here too, not just in the UI and the
+      // setter: a model switch can leave a stored "auto" on a non-Anthropic
+      // model, and spawning that hangs the classifier. A cockpit agent's bypass
+      // is applied server-side, so the CLI is never spawned in it.
+      permissionMode: session.cockpitAgent
+        ? "manual"
+        : session.permissionMode === "auto" && !this.isAnthropicSession(session)
+          ? "manual"
+          : session.permissionMode,
+      // Only pass the sandbox through when the host can enforce it, so a pref
+      // enabled on one machine can't write a dead sandbox block on another.
+      sandbox: session.sandbox.enabled && sandboxSupport().supported ? session.sandbox : undefined,
       cockpitAgent: session.cockpitAgent,
       modelSlots: session.modelSlots,
       appendSystemPrompt,
@@ -2488,6 +2785,16 @@ Additional Cockpit rules beyond the CLI's defaults:
         const msg = err instanceof Error ? err.message : String(err);
         this.log(sessionId, `runtime start failed: ${msg}`);
         if (session.harnessProcess === handle) session.harnessProcess = null;
+        // A workspace the CLI will not open is the one spawn failure the user
+        // can fix from here, so it goes out as its own signal and the client
+        // offers the grant. Everything else is just an error.
+        if (err instanceof UntrustedWorkspaceError) {
+          logDiag(sessionId, "spawn:untrusted-workspace", { cwd: err.cwd });
+          this.emitSystem(session, sessionId, `__untrusted_dir::${err.cwd}`);
+          session.info.status = "idle";
+          session.emitter.emit("status", sessionId, "idle");
+          return;
+        }
         // Emit error BEFORE idle: a job's onStatus("idle") maps to success, so an
         // idle-first order would mark a failed spawn as a successful empty run.
         session.emitter.emit("error", sessionId, msg);
@@ -2537,6 +2844,12 @@ Additional Cockpit rules beyond the CLI's defaults:
         session.harnessProcess = null;
         session.spawning = false;
         session.streamingSnapshot = null;
+        // Whatever mode that process ran in, it is gone: until the next one
+        // reports, the page shows the requested mode rather than a stale one.
+        if (session.cliPermissionMode !== undefined) {
+          session.cliPermissionMode = undefined;
+          this.emitSystem(session, sessionId, "__cli_perm_mode::");
+        }
         logDiag(sessionId, "idle:harness-exit", { code, signal: signal ?? null, flushedOnMessageDone: streamState.flushedOnMessageDone });
         session.info.status = "idle";
         session.emitter.emit("status", sessionId, "idle");
@@ -2558,18 +2871,43 @@ Additional Cockpit rules beyond the CLI's defaults:
           session.emitter.emit("todos", sessionId, []);
         }
 
+        // The process is gone, so there will be no transcript update to carry a
+        // deferred flush; clear the flag (the flush below covers the queue).
+        session.pendingCompactFlush = false;
         if (!streamState.flushedOnMessageDone) {
           this.flushQueuedMessage(session, sessionId);
         }
       },
       onTranscriptUpdate: (messages, lastUsage) => {
         session.emitter.emit("transcript", sessionId, messages);
+        // The latest compaction's marker, not one an earlier compaction left in the tail.
+        const compacted = messages.some((m) => m.content === "__compacted__" && m.timestamp >= session.compactRequestedAt);
         if (lastUsage) {
           const usage: ContextUsage = { used: lastUsage.used, total: session.contextWindowSize };
           session.contextUsage = usage;
           session.emitter.emit("usage", sessionId, usage);
+        } else if (compacted && !session.compacting) {
+          // No reading since that compaction, so the post-compact estimate
+          // stands. PostCompact fires just before the CLI writes the boundary,
+          // and an update in between carries the old reading, which would
+          // otherwise stay until the next turn and trip the pre-send compaction.
+          const estimate = Math.round(session.contextWindowSize * 0.1);
+          if ((session.contextUsage?.used ?? 0) > estimate) {
+            session.contextUsage = { used: estimate, total: session.contextWindowSize };
+            session.emitter.emit("usage", sessionId, session.contextUsage);
+          }
         }
-        if (session.compacting && messages.some((m) => m.content === "__compacted__")) {
+        // The compaction deferred at its PostCompact hook (see the manual
+        // hook_done branch) has now landed in the transcript, so the REPL is
+        // input-ready and the send baseline is past the compaction's own lines:
+        // deliver the queued message. flushQueuedMessage is a no-op if the user
+        // interrupted (queuePaused) or the queue was cleared meanwhile.
+        if (session.pendingCompactFlush) {
+          session.pendingCompactFlush = false;
+          logDiag(sessionId, "compact:flush-on-transcript", { queued: session.queuedMessages.length });
+          this.flushQueuedMessage(session, sessionId);
+        }
+        if (session.compacting && compacted) {
           logDiag(sessionId, "compact:done-on-transcript");
           session.compacting = false;
           this.emitSystem(session, sessionId, "__compact::done");
@@ -2582,6 +2920,24 @@ Additional Cockpit rules beyond the CLI's defaults:
           session.info.status = "idle";
           session.emitter.emit("status", sessionId, "idle");
           this.flushQueuedMessage(session, sessionId);
+        } else if (session.compacting) {
+          // No compaction marker, but the CLI answered: it took the /compact,
+          // fired PreCompact, then declined ("Not enough messages to compact.")
+          // and emitted an ordinary assistant message instead. That path fires
+          // no PostCompact and no Stop, so this transcript update is the only
+          // notice cockpit gets that the compaction resolved. Without it the
+          // flag stays raised for the life of the session and every later
+          // message queues behind it — the session looks like it is compacting
+          // forever. No usage estimate here: nothing was actually compacted.
+          const last = messages[messages.length - 1];
+          if (last?.role === "assistant" && last.timestamp >= session.compactRequestedAt) {
+            logDiag(sessionId, "compact:declined-by-cli", { at: last.timestamp, requestedAt: session.compactRequestedAt });
+            session.compacting = false;
+            this.emitSystem(session, sessionId, "__compact::done");
+            session.info.status = "idle";
+            session.emitter.emit("status", sessionId, "idle");
+            this.flushQueuedMessage(session, sessionId);
+          }
         }
       },
     };

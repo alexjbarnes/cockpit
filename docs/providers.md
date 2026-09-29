@@ -12,7 +12,7 @@ Settings, then Model Providers, shows a card per gateway. Paste an API key to co
 - **OpenCode Zen.** Model list from zen's public endpoint, enriched with pricing, context windows, and capability flags from models.dev. Zen's model list needs no key, so the key is only truly verified on the first turn.
 - **DeepSeek.** Their Anthropic-native endpoint. Connect validates the key against their authenticated model list, so a bad key is rejected immediately.
 
-Model lists refresh keylessly at startup and daily, so the cards show model and free-model counts before you connect. **Manage models** opens a browser with search, filters (All, Free, Tools, Enabled), and per-model toggles. Only enabled models appear in pickers: a fresh connect enables everything, bulk actions narrow it down.
+Model lists refresh keylessly at startup and daily, so the cards show model and free-model counts before you connect. **Manage models** opens a browser with search, filters (All, Free, Tools, Enabled), and per-model toggles. Only enabled models appear in pickers: a fresh connect enables everything, bulk actions narrow it down. A connected card also offers **Replace key**, which swaps the stored key in place, validating it the same way a fresh connect does and keeping the provider's enabled model set.
 
 **Free models.** OpenRouter and Zen both carry free models. They get a FREE badge in the picker and browser, and paid models show their per-million pricing. Free status and pricing are always derived from the latest sync and never stored on sessions or jobs, so one resync corrects every surface, including a promo model that stops being free. When OpenRouter declares an expiry date, the badge shows it.
 

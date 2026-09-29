@@ -2,7 +2,7 @@ import { mkdirSync, unlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { v4 as uuidv4 } from "uuid";
 import { CONTEXT_SIZES, DEFAULT_CONTEXT_SIZE } from "@/lib/models";
-import { getClaudeBin } from "@/server/claude-bin";
+import { getClaudeBin, supportedPermissionModes } from "@/server/claude-bin";
 import { getCockpitCacheDir } from "@/server/paths";
 import { PtyRuntime } from "@/server/pty-runtime";
 import { getHookRouter } from "@/server/singleton";
@@ -102,7 +102,7 @@ class ClaudePtyProcess implements HarnessProcess {
     requestId: string,
     allowed: boolean,
     toolInput?: Record<string, unknown>,
-    _permissionSuggestions?: unknown,
+    permissionSuggestions?: unknown,
     denyReason?: string,
   ): boolean {
     return this.runtime.notifyPermissionDecision(
@@ -110,6 +110,9 @@ class ClaudePtyProcess implements HarnessProcess {
       allowed
         ? { behavior: "allow", ...(toolInput ? { updatedInput: toolInput } : {}) }
         : { behavior: "deny", message: denyReason ?? "User denied" },
+      // A chosen suggestion is the card's "always" answer. Only a TUI dialog
+      // that has a "don't ask again" key of its own does anything with it.
+      { always: Array.isArray(permissionSuggestions) && permissionSuggestions.length > 0 },
     );
   }
 
@@ -138,8 +141,35 @@ export class ClaudePtyAdapter implements HarnessAdapter {
     }
     if (config.planMode) {
       extraArgs.push("--permission-mode", "plan");
-    } else if (config.bypassAllPermissions && !config.cockpitAgent) {
-      extraArgs.push("--permission-mode", "bypassPermissions");
+    } else if (config.permissionMode === "auto" && supportedPermissionModes().has("auto")) {
+      // Auto hands permission judgement to the CLI's own safety classifier: it
+      // runs on the session's model, auto-approves plan-safe calls, and fires
+      // the PermissionRequest hook (cockpit's cards) only for the rest. The
+      // session-manager only offers this for Anthropic models — the classifier
+      // is unreliable and slow on non-Anthropic ones — and downgrades to manual
+      // otherwise, so an "auto" reaching here is already Anthropic-gated. When
+      // the CLI build has no "auto" choice, fall through to manual.
+      extraArgs.push("--permission-mode", "auto");
+    } else if (supportedPermissionModes().has("manual")) {
+      // Bypass lands here too. Cockpit owns permissions on a bypass session:
+      // the CLI runs in manual and cockpit answers every PermissionRequest hook
+      // (and every rescued TUI dialog) with allow, so nothing is left to the
+      // CLI's own judgement. Asking for the CLI's native bypass instead would
+      // hand that decision back to whatever mode it settles on.
+      //
+      // Ask for manual explicitly rather than letting the CLI pick. Its default
+      // is now `auto`, whose safety classifier runs on the SESSION's model — on
+      // a slow non-Anthropic one it times out and blocks the tool call outright
+      // ("Update blocked five times running: auto-mode safety classifier down"
+      // on glm-5.3-flash). Manual is also simply the right mode for cockpit:
+      // permissions are its own job, answered through its cards over the
+      // PermissionRequest hook, not delegated to a classifier that bypasses
+      // that UI entirely.
+      //
+      // Guarded on support because the name is version-dependent — an older
+      // build rejects the choice and the spawn dies. Unsupported means no flag,
+      // which is exactly what cockpit did before.
+      extraArgs.push("--permission-mode", "manual");
     }
     if (config.cockpitAgent && config.appendSystemPrompt) {
       extraArgs.push("--append-system-prompt", config.appendSystemPrompt);
@@ -170,13 +200,14 @@ export class ClaudePtyAdapter implements HarnessAdapter {
       extraArgs,
       extraEnv,
       thinkingEnabled: config.thinkingLevel !== "off",
+      sandbox: config.sandbox,
       // Mirrors the --permission-mode arg above, so the runtime can spot the
       // CLI silently running in a different mode than requested.
       expectedPermissionMode: config.planMode
         ? "plan"
-        : config.bypassAllPermissions && !config.cockpitAgent
-          ? "bypassPermissions"
-          : "default",
+        : config.permissionMode === "auto" && supportedPermissionModes().has("auto")
+          ? "auto"
+          : "manual",
       onEvents: (events) => config.callbacks.onParsedEvents(events),
       onError: (err) => config.callbacks.onError(err),
       onExit: ({ exitCode, signal }) => {

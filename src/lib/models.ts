@@ -83,6 +83,16 @@ export const MODELS: ModelEntry[] = [
     version: "5",
     modelId: "claude-sonnet-5",
     displayName: "Sonnet 5",
+    description: "Previous generation",
+    contextSizes: ["200k", "1m"],
+    contextWindow: 200_000,
+    supportsXhigh: true,
+  },
+  {
+    alias: "sonnet",
+    version: "5.5",
+    modelId: "claude-sonnet-5-5",
+    displayName: "Sonnet 5.5",
     description: "Balanced",
     contextSizes: ["200k", "1m"],
     contextWindow: 200_000,
@@ -123,6 +133,16 @@ export const MODELS: ModelEntry[] = [
     version: "5",
     modelId: "claude-opus-5",
     displayName: "Opus 5",
+    description: "Previous generation",
+    contextSizes: ["200k", "1m"],
+    contextWindow: 200_000,
+    supportsXhigh: true,
+  },
+  {
+    alias: "opus",
+    version: "5.5",
+    modelId: "claude-opus-5-5",
+    displayName: "Opus 5.5",
     description: "Most capable",
     contextSizes: ["200k", "1m"],
     contextWindow: 200_000,
@@ -134,6 +154,16 @@ export const MODELS: ModelEntry[] = [
     version: "5",
     modelId: "claude-fable-5",
     displayName: "Fable 5",
+    description: "Previous generation",
+    contextSizes: ["200k", "1m"],
+    contextWindow: 200_000,
+    supportsXhigh: true,
+  },
+  {
+    alias: "fable",
+    version: "5.1",
+    modelId: "claude-fable-5-1",
+    displayName: "Fable 5.1",
     description: "Most powerful",
     contextSizes: ["200k", "1m"],
     contextWindow: 200_000,
@@ -255,4 +285,33 @@ export function describeModelSelection(
     }
   }
   return { label: base.replace(/^[^:]+:/, "") || base, thinking: null, context: null };
+}
+
+/**
+ * Provider and model display names for a stored model id, for somewhere that
+ * wants to name both rather than show one pill (the job cards).
+ *
+ * A stored id is either a bare Anthropic id/alias or `provider:modelId`, with an
+ * optional `[1m]` suffix — the same encoding the job editor decodes on load.
+ * Falls back to the raw ids when a provider has been disconnected or a model
+ * delisted, so a job still says what it is set to run rather than going blank.
+ *
+ * Returns null for an unset model: the run would fall back to a default this has
+ * no way to know, and naming the wrong model is worse than naming none.
+ */
+export function describeProviderModel(
+  model: string | undefined | null,
+  providers: { id: string; name?: string; models: ProviderModel[] }[] | undefined,
+): { provider: string; model: string } | null {
+  if (!model) return null;
+  const base = model.replace(/\[.*\]$/, "");
+  const entry = resolveModel(base);
+  if (entry) return { provider: "Anthropic", model: entry.displayName };
+
+  const colon = base.indexOf(":");
+  const providerId = colon > 0 ? base.slice(0, colon) : "";
+  const modelId = colon > 0 ? base.slice(colon + 1) : base;
+  const provider = (providers ?? []).find((p) => p.id === providerId);
+  const found = provider?.models.find((m) => m.modelId === modelId);
+  return { provider: provider?.name || providerId || "Anthropic", model: found?.displayName || modelId };
 }
