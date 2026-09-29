@@ -61,9 +61,10 @@ describe("versionsForAlias", () => {
 
   it("returns sonnet versions", () => {
     const versions = versionsForAlias("sonnet");
-    expect(versions).toHaveLength(2);
+    expect(versions).toHaveLength(3);
     expect(versions[0].version).toBe("4.6");
     expect(versions[1].version).toBe("5");
+    expect(versions[2].version).toBe("5.5");
   });
 
   it("returns multiple opus versions", () => {
@@ -368,7 +369,7 @@ describe("describeModelSelection", () => {
 
   it("strips a [context] suffix before resolving", () => {
     expect(describeModelSelection("sonnet[1m]", "medium", "200k", undefined)).toEqual({
-      label: "Sonnet 5",
+      label: "Sonnet 5.5",
       thinking: "medium",
       context: "200k",
     });
@@ -428,7 +429,7 @@ describe("describeProviderModel", () => {
   ];
 
   it("names Anthropic for an alias and for an exact model id", () => {
-    expect(describeProviderModel("sonnet", undefined)).toEqual({ provider: "Anthropic", model: "Sonnet 5" });
+    expect(describeProviderModel("sonnet", undefined)).toEqual({ provider: "Anthropic", model: "Sonnet 5.5" });
     expect(describeProviderModel("claude-opus-4-7", undefined)).toEqual({ provider: "Anthropic", model: "Opus 4.7" });
   });
 
@@ -440,7 +441,7 @@ describe("describeProviderModel", () => {
   });
 
   it("strips a [1m] suffix before resolving", () => {
-    expect(describeProviderModel("sonnet[1m]", undefined)).toEqual({ provider: "Anthropic", model: "Sonnet 5" });
+    expect(describeProviderModel("sonnet[1m]", undefined)).toEqual({ provider: "Anthropic", model: "Sonnet 5.5" });
   });
 
   // A job outlives the provider it was set up against, and a card that goes
@@ -479,18 +480,25 @@ describe("Fable 5.1", () => {
   });
 });
 
-describe("Sonnet 5", () => {
+describe("Sonnet 5.5", () => {
   it("is the default sonnet, resolvable by alias and modelId", () => {
-    expect(resolveModel("sonnet")?.modelId).toBe("claude-sonnet-5");
-    expect(resolveModel("claude-sonnet-5")?.alias).toBe("sonnet");
-    expect(findModelById("claude-sonnet-5")?.displayName).toBe("Sonnet 5");
-    expect(defaultForAlias("sonnet")?.modelId).toBe("claude-sonnet-5");
+    expect(resolveModel("sonnet")?.modelId).toBe("claude-sonnet-5-5");
+    expect(resolveModel("claude-sonnet-5-5")?.alias).toBe("sonnet");
+    expect(findModelById("claude-sonnet-5-5")?.displayName).toBe("Sonnet 5.5");
+    expect(defaultForAlias("sonnet")?.modelId).toBe("claude-sonnet-5-5");
   });
 
-  it("supports xhigh and max effort, unlike Sonnet 4.6", () => {
+  // Sonnet 5's id is a prefix of it, so a loose match would take one for the other.
+  it("keeps Sonnet 5 selectable as its own entry", () => {
+    expect(findModelById("claude-sonnet-5")?.displayName).toBe("Sonnet 5");
+    expect(resolveModel("claude-sonnet-5")?.description).toBe("Previous generation");
+    expect(resolveModel("claude-sonnet-5[1m]")?.modelId).toBe("claude-sonnet-5");
+  });
+
+  it("supports xhigh and max effort, as Sonnet 5 does and Sonnet 4.6 does not", () => {
+    expect(allowedEffortLevels(resolveModel("claude-sonnet-5-5"))).toEqual(["low", "medium", "high", "xhigh", "max"]);
+    expect(recommendedEffort(resolveModel("claude-sonnet-5-5"))).toBe("xhigh");
     expect(allowedEffortLevels(resolveModel("claude-sonnet-5"))).toEqual(["low", "medium", "high", "xhigh", "max"]);
-    expect(recommendedEffort(resolveModel("claude-sonnet-5"))).toBe("xhigh");
-    // Sonnet 4.6 stays available and still lacks xhigh.
     expect(allowedEffortLevels(resolveModel("claude-sonnet-4-6"))).toEqual(["low", "medium", "high", "max"]);
   });
 });
@@ -535,6 +543,7 @@ describe("modelOneMRequiresCredits", () => {
     expect(modelOneMRequiresCredits("claude-sonnet-4-6")).toBe(true);
     expect(modelOneMRequiresCredits("claude-opus-4-8")).toBe(false);
     expect(modelOneMRequiresCredits("claude-sonnet-5")).toBe(false);
+    expect(modelOneMRequiresCredits("claude-sonnet-5-5")).toBe(false);
     expect(modelOneMRequiresCredits("claude-fable-5")).toBe(false);
     expect(modelOneMRequiresCredits("claude-fable-5-1")).toBe(false);
     expect(modelOneMRequiresCredits("haiku")).toBe(false);
@@ -560,9 +569,10 @@ describe("cliModelWithContext", () => {
     expect(cliModelWithContext("claude-sonnet-4-6", "200k", true)).toBe("claude-sonnet-4-6");
   });
 
-  it("never appends [1m] for models whose 1M is free (Opus 4.8, Sonnet 5)", () => {
+  it("never appends [1m] for models whose 1M is free (Opus 4.8, Sonnet 5, Sonnet 5.5)", () => {
     expect(cliModelWithContext("claude-opus-4-8", "1m", true)).toBe("claude-opus-4-8");
     expect(cliModelWithContext("claude-sonnet-5", "1m", true)).toBe("claude-sonnet-5");
+    expect(cliModelWithContext("claude-sonnet-5-5", "1m", true)).toBe("claude-sonnet-5-5");
   });
 
   it("leaves custom-provider ids untouched", () => {
