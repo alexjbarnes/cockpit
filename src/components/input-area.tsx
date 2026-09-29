@@ -268,6 +268,8 @@ interface InputAreaProps {
   bypassActive: boolean;
   onSetBypass: (enabled: boolean) => void;
   permissionMode: SessionPermissionMode;
+  /** The mode the server last said it applied; permissionMode until it has. */
+  appliedPermissionMode?: SessionPermissionMode;
   /** The mode the CLI reports; null until it has. */
   cliPermissionMode?: string | null;
   onSetPermissionMode: (mode: SessionPermissionMode) => void;
@@ -331,6 +333,7 @@ export function InputArea({
   bypassActive,
   onSetBypass,
   permissionMode,
+  appliedPermissionMode = permissionMode,
   cliPermissionMode = null,
   onSetPermissionMode,
   sandbox,
@@ -852,10 +855,13 @@ export function InputArea({
   // Cockpit owns the permissions on this session: the CLI runs in manual and
   // cockpit answers every prompt itself. The icon shows the mode the CLI
   // reports, which need not be the one chosen, and the selector keeps the
-  // choice, with a note when the two part. The assistant's bypass is cockpit's
-  // alone, so the CLI's mode does not speak for it.
+  // choice. When the two part the icon turns red and the panel says why. The
+  // mismatch is judged against the mode the server applied, not the pick, so
+  // a switch reads as one only if the CLI is still in the old mode once the
+  // server has acted. The assistant's bypass is cockpit's alone, so the CLI's
+  // mode does not speak for it.
   const effectiveMode = isCockpitAgent ? permissionMode : effectivePermissionMode(permissionMode, cliPermissionMode);
-  const modeMismatch = isCockpitAgent ? null : permissionModeMismatch(permissionMode, cliPermissionMode);
+  const modeMismatch = isCockpitAgent ? null : permissionModeMismatch(appliedPermissionMode, cliPermissionMode);
   const thinkingLabel = modelSelection.thinking ? (thinkingLevels.find((t) => t.value === modelSelection.thinking)?.label ?? null) : null;
   const contextLabel = modelSelection.context ? CONTEXT_SIZES[modelSelection.context].label : null;
 
@@ -1543,12 +1549,15 @@ export function InputArea({
               size="icon"
               variant="ghost"
               data-testid="btn-session-settings"
+              data-mode-mismatch={modeMismatch ? "true" : undefined}
               className={`h-8 w-8 ${
-                (isCockpitAgent ? bypassActive : effectiveMode === "bypass")
-                  ? "text-orange-500"
-                  : effectiveMode === "auto"
-                    ? "text-green-500"
-                    : ""
+                modeMismatch
+                  ? "text-red-500"
+                  : (isCockpitAgent ? bypassActive : effectiveMode === "bypass")
+                    ? "text-orange-500"
+                    : effectiveMode === "auto"
+                      ? "text-green-500"
+                      : ""
               }`}
               onClick={() => setOptionsOpen((v) => !v)}
             >

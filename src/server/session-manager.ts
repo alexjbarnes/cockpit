@@ -1875,6 +1875,13 @@ export class SessionManager {
       session.harnessProcess = null;
       handle.kill("session_reset");
     }
+    // The exit handler skips a process killed here, so the mode it reported is
+    // forgotten now. Otherwise the page would show it until the next process
+    // reports, and a mode change that respawns would read as a mismatch.
+    if (session.cliPermissionMode !== undefined) {
+      session.cliPermissionMode = undefined;
+      this.emitSystem(session, session.info.id, "__cli_perm_mode::");
+    }
     // A kill ends any in-flight spawn, so clear the ensureProcess guard now. A
     // deliberate kill-then-respawn (settings change, /clear, restart) must not
     // be blocked until the dying runtime's start() promise happens to settle.

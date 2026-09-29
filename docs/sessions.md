@@ -61,7 +61,7 @@ Each session has its own settings, separate from the defaults you set globally. 
 - Context size. 200K or 1M, shown as pills for models that support both.
 - Thinking level. Low, Medium, High, XHigh, Max. Only the levels the model supports are shown.
 - Runtime. Switch this session between Stream and PTY (see [Runtime mode](#runtime-mode)).
-- Permission bypass for this session.
+- Permission mode: Manual, Auto (Anthropic models only) or Bypass. The settings icon is green in Auto and orange in Bypass. It turns red when Claude Code reports a mode other than the one chosen, and the panel says which mode it is in and what that means.
 - Sandbox Bash, with extra allowed domains for this session on top of the shared rules (see [Settings: Sandbox](settings.md#sandbox)). Changing either restarts the CLI.
 
 Changes apply on the next turn. A context-size change restarts the underlying CLI, since the 1M switch is applied when the process spawns.

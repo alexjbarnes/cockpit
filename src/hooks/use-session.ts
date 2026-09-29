@@ -77,6 +77,9 @@ interface UseSessionReturn {
   currentContextSize: ContextSize;
   bypassActive: boolean;
   permissionMode: SessionPermissionMode;
+  /** The mode the server last said it applied. permissionMode moves as soon
+   *  as a mode is picked; this waits for the server to act on it. */
+  appliedPermissionMode: SessionPermissionMode;
   /** The mode the CLI reports, from its hook payloads; null until the
    *  running process has reported one. */
   cliPermissionMode: string | null;
@@ -148,6 +151,7 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
   const [currentContextSize, setCurrentContextSize] = useState<ContextSize>(DEFAULT_CONTEXT_SIZE);
   const [currentRuntime, setCurrentRuntime] = useState<"pty" | "stream">("stream");
   const [permissionMode, setPermissionModeState] = useState<SessionPermissionMode>("manual");
+  const [appliedPermissionMode, setAppliedPermissionMode] = useState<SessionPermissionMode>("manual");
   // The mode the CLI reports; null until it has.
   const [cliPermissionMode, setCliPermissionMode] = useState<string | null>(null);
   const bypassActive = permissionMode === "bypass";
@@ -901,7 +905,9 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
           }
           const permModePrefix = "__perm_mode::";
           if (msg.text.startsWith(permModePrefix)) {
-            setPermissionModeState(msg.text.slice(permModePrefix.length) as SessionPermissionMode);
+            const mode = msg.text.slice(permModePrefix.length) as SessionPermissionMode;
+            setPermissionModeState(mode);
+            setAppliedPermissionMode(mode);
             break;
           }
           const cliModePrefix = "__cli_perm_mode::";
@@ -1481,6 +1487,7 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
     currentContextSize,
     bypassActive,
     permissionMode,
+    appliedPermissionMode,
     cliPermissionMode,
     sandbox,
     sandboxSupport,

@@ -721,6 +721,52 @@ describe("SessionManager PTY runtime (unit)", () => {
       manager.setPermissionMode(session.id, "auto");
       expect(ptyMocks.kill).toHaveBeenCalled();
     });
+
+    // The exit handler skips a process cockpit killed, so the kill itself must
+    // drop the mode that process reported. The page hears it before the new
+    // mode, so the switch never reads as the CLI refusing it.
+    it("forgets the reported mode when it kills the idle PTY, before echoing the new mode", () => {
+      const session = manager.createSession("/tmp", undefined, { runtime: "pty" });
+      manager.sendMessage(session.id, "hello");
+      emitMessageDone();
+      const s = (manager as any).sessions.get(session.id)!;
+      s.cliPermissionMode = "manual";
+      const emitted: string[] = [];
+      manager.onSystem(session.id, (m) => emitted.push(m));
+
+      manager.setPermissionMode(session.id, "auto");
+
+      expect(manager.getCliPermissionMode(session.id)).toBeUndefined();
+      expect(emitted.indexOf("__cli_perm_mode::")).toBeGreaterThanOrEqual(0);
+      expect(emitted.indexOf("__cli_perm_mode::")).toBeLessThan(emitted.indexOf("__perm_mode::auto"));
+    });
+
+    // Mid-turn the respawn waits for message_done, and until then the CLI
+    // really is still in its old mode.
+    it("keeps the reported mode through a deferred respawn until the turn ends", () => {
+      const session = manager.createSession("/tmp", undefined, { runtime: "pty" });
+      manager.sendMessage(session.id, "hello");
+      const s = (manager as any).sessions.get(session.id)!;
+      s.cliPermissionMode = "manual";
+
+      manager.setPermissionMode(session.id, "auto");
+      expect(manager.getCliPermissionMode(session.id)).toBe("manual");
+
+      emitMessageDone();
+      expect(manager.getCliPermissionMode(session.id)).toBeUndefined();
+    });
+
+    it("says nothing on a kill when no mode was reported", () => {
+      const session = manager.createSession("/tmp", undefined, { runtime: "pty" });
+      manager.sendMessage(session.id, "hello");
+      emitMessageDone();
+      const emitted: string[] = [];
+      manager.onSystem(session.id, (m) => emitted.push(m));
+
+      manager.setPermissionMode(session.id, "auto");
+
+      expect(emitted).not.toContain("__cli_perm_mode::");
+    });
   });
 
   describe("ensureProcess", () => {
