@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.7.0] - 2026-09-29
 
 ### Added
 - **Auto permission mode.** Sessions get a Manual / Auto / Bypass selector in place of the bypass toggle. Auto hands each decision to the CLI's own safety classifier, which approves plan-safe calls and still raises cockpit's card for the rest. It is offered for Anthropic models only, because the classifier runs on the session's own model and a slow one times out and blocks the call outright; moving a session onto a non-Anthropic model drops it back to Manual. While Auto is on, the session settings icon turns green, as it turns orange for Bypass.
@@ -57,7 +57,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Internal
 - A `publish-release` skill writes down the release steps: changelog, release PR into `main`, tag, `make publish`, then proving the published tarball installs and boots.
 - Turning bypass off on the stream runtime asked the CLI for a permission mode it has since retired; the argument is now typed to the two modes it can be.
-- Two CI failures that passed locally: a test rejection landing before its handler attached (every file green, exit code 1), and a lint error that biome reports but the pre-commit hook does not run.
+- Three CI failures that passed locally: a test rejection landing before its handler attached (every file green, exit code 1), a lint error that biome reports but the pre-commit hook does not run, and a test asserting a spawn flag that depends on `claude --help`, on a CI runner with no CLI to ask.
 
 ## [0.6.0] - 2026-08-13
 
