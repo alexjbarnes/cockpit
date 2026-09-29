@@ -1,4 +1,4 @@
-import { createReadStream, existsSync, readFileSync } from "node:fs";
+import { createReadStream, existsSync, readdirSync, readFileSync } from "node:fs";
 import { open, readdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { createInterface } from "node:readline";
@@ -59,9 +59,54 @@ interface TranscriptEntry {
   };
 }
 
-export function getTranscriptPath(sessionId: string, cwd: string): string {
+function projectTranscriptPath(sessionId: string, cwd: string): string {
   const projectKey = cwd.replace(/[/.]/g, "-");
   return path.join(getClaudeDir(), "projects", projectKey, `${sessionId}.jsonl`);
+}
+
+/**
+ * The file a session's transcript is in: the project folder for `cwd`, unless
+ * the CLI has moved it. Entering a worktree moves the session's transcript to
+ * the worktree's project folder, so a transcript missing from its folder is
+ * looked for by its file name, which is the session id.
+ */
+export function getTranscriptPath(sessionId: string, cwd: string): string {
+  const expected = projectTranscriptPath(sessionId, cwd);
+  if (existsSync(expected)) return expected;
+  return findMovedTranscript(sessionId) ?? expected;
+}
+
+// Keyed by Claude directory and session id. A search that found nothing is
+// not repeated for a moment, since a new session's transcript is missing
+// until its first turn and callers poll for it.
+const movedTranscripts = new Map<string, string>();
+const missingAt = new Map<string, number>();
+const MISSING_RECHECK_MS = 2000;
+
+function findMovedTranscript(sessionId: string): string | null {
+  const projectsDir = path.join(getClaudeDir(), "projects");
+  const key = `${projectsDir}\0${sessionId}`;
+  const known = movedTranscripts.get(key);
+  if (known !== undefined) {
+    if (existsSync(known)) return known;
+    movedTranscripts.delete(key);
+  }
+  const missedAt = missingAt.get(key);
+  if (missedAt !== undefined && Date.now() - missedAt < MISSING_RECHECK_MS) return null;
+  let dirs: string[] = [];
+  try {
+    dirs = readdirSync(projectsDir);
+  } catch {}
+  for (const dir of dirs) {
+    const candidate = path.join(projectsDir, dir, `${sessionId}.jsonl`);
+    if (existsSync(candidate)) {
+      movedTranscripts.set(key, candidate);
+      missingAt.delete(key);
+      return candidate;
+    }
+  }
+  missingAt.set(key, Date.now());
+  return null;
 }
 
 export function transcriptExists(sessionId: string, cwd: string): boolean {
