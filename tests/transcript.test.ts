@@ -183,6 +183,21 @@ describe("transcript module", () => {
       });
     });
 
+    // The page keeps messages older than a transcript tail by id, so the marker
+    // must keep its id from one parse to the next or it is shown twice.
+    it("gives a compaction marker the same id on every parse", async () => {
+      (existsSync as any).mockReturnValue(true);
+      (readFile as any).mockResolvedValue(
+        jsonl({ type: "system", subtype: "compact_boundary", timestamp: "2024-01-01T00:00:00Z", uuid: "sys-1" }),
+      );
+
+      const first = await loadTranscript("session-123", "/tmp");
+      const second = await loadTranscript("session-123", "/tmp");
+
+      expect(first.messages[0].id).toBe("compact-sys-1");
+      expect(second.messages[0].id).toBe(first.messages[0].id);
+    });
+
     it("handles local_command system events", async () => {
       (existsSync as any).mockReturnValue(true);
       const content = jsonl({

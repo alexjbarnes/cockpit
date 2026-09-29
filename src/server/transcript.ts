@@ -468,7 +468,8 @@ function parseLines(lines: string[]): { messages: ChatMessage[]; lastUsage: { us
       // total and clobbers the post-compact estimate.
       lastUsage = null;
       messages.push({
-        id: "compact-" + uuidv4(),
+        // Stable across parses, so a page that keeps older messages holds one marker.
+        id: "compact-" + (entry.uuid || uuidv4()),
         role: "system",
         content: "__compacted__",
         toolUses: [],

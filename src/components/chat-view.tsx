@@ -9,6 +9,7 @@ import { useSettings } from "@/hooks/use-settings";
 import { useWebSocket } from "@/hooks/use-websocket";
 import { formatDuration } from "@/lib/format-time";
 import { pathBasename } from "@/lib/path";
+import { grownRenderWindow, type ListShape } from "@/lib/render-window";
 import { pairQuestionBlocks, splitAtQuestion } from "@/lib/split-question-blocks";
 import { turnStartAnchor } from "@/lib/turn-anchor";
 import { cn } from "@/lib/utils";
@@ -149,6 +150,15 @@ export function ChatView({
   }, [messages]);
 
   const totalMessages = uniqueMessages.length;
+  // Adjusted during render, not in an effect, so the window never commits
+  // with its top messages unmounted.
+  const firstMessageId = uniqueMessages[0]?.id ?? null;
+  const [windowSeen, setWindowSeen] = useState<ListShape>({ total: totalMessages, firstId: firstMessageId });
+  if (windowSeen.total !== totalMessages || windowSeen.firstId !== firstMessageId) {
+    const next = { total: totalMessages, firstId: firstMessageId };
+    setWindowSeen(next);
+    setRenderWindow((w) => grownRenderWindow(w, windowSeen, next, stickToBottom.current));
+  }
   const startIndex = Math.max(0, totalMessages - renderWindow);
   const visibleMessages = useMemo(() => uniqueMessages.slice(startIndex), [uniqueMessages, startIndex]);
   const hasMoreAbove = startIndex > 0;
