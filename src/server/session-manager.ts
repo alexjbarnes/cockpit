@@ -141,21 +141,22 @@ interface Session {
    * taken past the compaction's lines.
    */
   pendingCompactFlush: boolean;
-  /** Message count from the most recent transcript update, so a compaction can
-   *  snapshot where the conversation stood before it was requested. */
-  lastTranscriptLength: number;
   /**
-   * Transcript length when the pending compaction was requested.
+   * When the pending compaction was requested (ms since epoch). A compaction
+   * marker or reply in the transcript is this compaction's outcome only if it
+   * is at least this recent.
    *
-   * The CLI can accept a /compact, fire PreCompact, and then decline it —
-   * "Not enough messages to compact." — with NO PostCompact and no Stop hook
+   * The watcher sends the transcript's last lines, so a marker an earlier
+   * compaction left there is still in them. Taking it would release this
+   * compaction at once and type a queued message into a CLI still compacting.
+   * The CLI can also accept a /compact, fire PreCompact, and then decline it
+   * ("Not enough messages to compact.") with no PostCompact and no Stop hook
    * at all (verified against CLI 2.1.233 in
-   * tests/integration/compact-then-send.spec.ts). Nothing else clears
-   * `compacting` in that case, so every later message queues behind a
-   * compaction that already resolved by refusing. An assistant message past
-   * this baseline with no compaction marker is that refusal.
+   * tests/integration/compact-then-send.spec.ts): an assistant message this
+   * recent with no marker is that refusal. The message count cannot tell new
+   * messages from old, since the tail slides.
    */
-  compactTranscriptBaseline: number;
+  compactRequestedAt: number;
   thinkingLevel: ThinkingLevel;
   streamState: StreamState | null;
   contextUsage: ContextUsage | null;
@@ -375,8 +376,7 @@ export class SessionManager {
       needsRespawnForPermissions: false,
       compacting: false,
       pendingCompactFlush: false,
-      lastTranscriptLength: 0,
-      compactTranscriptBaseline: 0,
+      compactRequestedAt: 0,
       thinkingLevel: defaults.thinkingLevel,
       streamState: null,
       contextUsage: null,
@@ -506,8 +506,7 @@ export class SessionManager {
         needsRespawnForPermissions: false,
         compacting: false,
         pendingCompactFlush: false,
-        lastTranscriptLength: 0,
-        compactTranscriptBaseline: 0,
+        compactRequestedAt: 0,
         // modelSlots.main, not prefs.model: setModelSlot persists modelSlots on
         // its own, so a session whose model was last changed through the slots
         // editor has no top-level `model` field, and reading that field alone
@@ -1119,6 +1118,10 @@ export class SessionManager {
 
     logDiag(id, "interrupt:send");
     session.harnessProcess.interrupt();
+    // Esc cancels a compaction in flight, and the CLI reports that only on its
+    // screen: no PostCompact, no Stop, nothing the transcript parse keeps. Left
+    // raised, the flag would queue every later message behind it.
+    if (session.compacting) this.cancelCompaction(session, id, "interrupt");
 
     // PTY's Esc cancels the claude TUI turn but may not produce a Stop hook if
     // it arrived before any response. Force-idle so the UI unsticks; the PTY
@@ -1886,7 +1889,16 @@ export class SessionManager {
     // deliberate kill-then-respawn (settings change, /clear, restart) must not
     // be blocked until the dying runtime's start() promise happens to settle.
     session.spawning = false;
+    if (session.compacting) this.cancelCompaction(session, session.info.id, "kill");
+  }
+
+  /** The compaction in flight will not finish, so nothing was compacted: drop
+   *  the flag and tell the page. A PostCompact arriving later finds the flag
+   *  down and does nothing. */
+  private cancelCompaction(session: Session, sessionId: string, reason: "interrupt" | "kill"): void {
+    logDiag(sessionId, "compact:cancelled", { reason });
     session.compacting = false;
+    this.emitSystem(session, sessionId, "__compact::cancelled");
   }
 
   private emitSystem(session: Session, sessionId: string, text: string): void {
@@ -1961,6 +1973,7 @@ export class SessionManager {
         if (!session.compacting) {
           logDiag(sessionId, "compact:hook-start");
           session.compacting = true;
+          session.compactRequestedAt = Date.now();
           this.emitSystem(session, sessionId, "__compact::start");
         }
         continue;
@@ -2470,7 +2483,7 @@ Additional Cockpit rules beyond the CLI's defaults:
       if (text.trim().toLowerCase().startsWith("/compact")) {
         logDiag(sessionId, "compact:start");
         session.compacting = true;
-        session.compactTranscriptBaseline = session.lastTranscriptLength;
+        session.compactRequestedAt = Date.now();
         isCompactTrigger = true;
         this.emitSystem(session, sessionId, "__compact::start");
       }
@@ -2484,7 +2497,7 @@ Additional Cockpit rules beyond the CLI's defaults:
       session.queuedMessages.push({ id: `q-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, text, images, documents });
       session.emitter.emit("queued", sessionId, session.queuedMessages.length);
       session.compacting = true;
-      session.compactTranscriptBaseline = session.lastTranscriptLength;
+      session.compactRequestedAt = Date.now();
       this.emitSystem(session, sessionId, "__compact::start");
       session.info.status = "running";
       session.emitter.emit("status", sessionId, "running");
@@ -2867,11 +2880,22 @@ Additional Cockpit rules beyond the CLI's defaults:
       },
       onTranscriptUpdate: (messages, lastUsage) => {
         session.emitter.emit("transcript", sessionId, messages);
-        session.lastTranscriptLength = messages.length;
+        // The latest compaction's marker, not one an earlier compaction left in the tail.
+        const compacted = messages.some((m) => m.content === "__compacted__" && m.timestamp >= session.compactRequestedAt);
         if (lastUsage) {
           const usage: ContextUsage = { used: lastUsage.used, total: session.contextWindowSize };
           session.contextUsage = usage;
           session.emitter.emit("usage", sessionId, usage);
+        } else if (compacted && !session.compacting) {
+          // No reading since that compaction, so the post-compact estimate
+          // stands. PostCompact fires just before the CLI writes the boundary,
+          // and an update in between carries the old reading, which would
+          // otherwise stay until the next turn and trip the pre-send compaction.
+          const estimate = Math.round(session.contextWindowSize * 0.1);
+          if ((session.contextUsage?.used ?? 0) > estimate) {
+            session.contextUsage = { used: estimate, total: session.contextWindowSize };
+            session.emitter.emit("usage", sessionId, session.contextUsage);
+          }
         }
         // The compaction deferred at its PostCompact hook (see the manual
         // hook_done branch) has now landed in the transcript, so the REPL is
@@ -2883,7 +2907,7 @@ Additional Cockpit rules beyond the CLI's defaults:
           logDiag(sessionId, "compact:flush-on-transcript", { queued: session.queuedMessages.length });
           this.flushQueuedMessage(session, sessionId);
         }
-        if (session.compacting && messages.some((m) => m.content === "__compacted__")) {
+        if (session.compacting && compacted) {
           logDiag(sessionId, "compact:done-on-transcript");
           session.compacting = false;
           this.emitSystem(session, sessionId, "__compact::done");
@@ -2905,8 +2929,9 @@ Additional Cockpit rules beyond the CLI's defaults:
           // flag stays raised for the life of the session and every later
           // message queues behind it — the session looks like it is compacting
           // forever. No usage estimate here: nothing was actually compacted.
-          if (messages.length > session.compactTranscriptBaseline && messages[messages.length - 1]?.role === "assistant") {
-            logDiag(sessionId, "compact:declined-by-cli", { messages: messages.length, baseline: session.compactTranscriptBaseline });
+          const last = messages[messages.length - 1];
+          if (last?.role === "assistant" && last.timestamp >= session.compactRequestedAt) {
+            logDiag(sessionId, "compact:declined-by-cli", { at: last.timestamp, requestedAt: session.compactRequestedAt });
             session.compacting = false;
             this.emitSystem(session, sessionId, "__compact::done");
             session.info.status = "idle";

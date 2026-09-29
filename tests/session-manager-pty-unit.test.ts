@@ -377,8 +377,8 @@ describe("SessionManager PTY runtime (unit)", () => {
           [
             { id: "m1", role: "user" },
             { id: "m2", role: "assistant" },
-            { id: "m3", role: "user", content: "/compact" },
-            { id: "m4", role: "assistant", content: "Not enough messages to compact." },
+            { id: "m3", role: "user", content: "/compact", timestamp: Date.now() },
+            { id: "m4", role: "assistant", content: "Not enough messages to compact.", timestamp: Date.now() },
           ],
           null,
         );
@@ -397,7 +397,7 @@ describe("SessionManager PTY runtime (unit)", () => {
           [
             { id: "m1", role: "user" },
             { id: "m2", role: "assistant" },
-            { id: "m3", role: "assistant", content: "Not enough messages to compact." },
+            { id: "m3", role: "assistant", content: "Not enough messages to compact.", timestamp: Date.now() },
           ],
           null,
         );
@@ -432,7 +432,7 @@ describe("SessionManager PTY runtime (unit)", () => {
           [
             { id: "m1", role: "user" },
             { id: "m2", role: "assistant" },
-            { id: "c1", role: "assistant", content: "__compacted__" },
+            { id: "c1", role: "assistant", content: "__compacted__", timestamp: Date.now() },
           ],
           null,
         );
@@ -442,6 +442,106 @@ describe("SessionManager PTY runtime (unit)", () => {
         // not, because nothing was compacted.
         expect(manager.getContextUsage(session.id)?.used).toBeGreaterThan(0);
       });
+
+      // The watcher sends the transcript's last lines, so an earlier
+      // compaction's marker and replies are still in them.
+      it("takes neither an earlier compaction's marker nor an earlier reply as this one's outcome", () => {
+        const session = manager.createSession("/tmp", undefined, { runtime: "pty" });
+        requestCompact(session.id);
+        manager.sendMessage(session.id, "after");
+
+        watcherMock.emit?.(
+          [
+            { id: "c0", role: "system", content: "__compacted__", timestamp: Date.now() - 60_000 },
+            { id: "m1", role: "user", timestamp: Date.now() - 50_000 },
+            { id: "m2", role: "assistant", timestamp: Date.now() - 40_000 },
+          ],
+          null,
+        );
+
+        expect(manager.isCompacting(session.id)).toBe(true);
+        expect(ptyMocks.sendUserText).not.toHaveBeenCalledWith("after");
+        expect(manager.getQueuedCount(session.id)).toBe(1);
+      });
+    });
+
+    describe("a compaction cancelled with Esc", () => {
+      function compactWithQueued(sessionId: string) {
+        manager.sendMessage(sessionId, "first");
+        emitMessageDone();
+        manager.sendMessage(sessionId, "/compact");
+        ptyMocks.capturedOpts!.onEvents([{ type: "system_message", text: "__compact::hook_start" } as ParsedEvent]);
+        manager.sendMessage(sessionId, "queued during compaction");
+        expect(manager.getQueuedCount(sessionId)).toBe(1);
+      }
+
+      // The CLI answers Esc with nothing but its screen: no PostCompact, no
+      // Stop, no transcript line the parse keeps.
+      it("drops the flag and says so, so a resumed queue sends", () => {
+        const session = manager.createSession("/tmp", undefined, { runtime: "pty" });
+        const systems: string[] = [];
+        manager.onSystem(session.id, (t) => systems.push(t));
+        compactWithQueued(session.id);
+
+        manager.interrupt(session.id);
+
+        expect(manager.isCompacting(session.id)).toBe(false);
+        expect(systems).toContain("__compact::cancelled");
+        expect(systems).not.toContain("__compact::done");
+        manager.resumeQueue(session.id);
+        expect(ptyMocks.sendUserText).toHaveBeenCalledWith("queued during compaction");
+        expect(manager.getQueuedCount(session.id)).toBe(0);
+      });
+
+      it("ignores a PostCompact that arrives after the Esc", () => {
+        const session = manager.createSession("/tmp", undefined, { runtime: "pty" });
+        compactWithQueued(session.id);
+        manager.interrupt(session.id);
+        const before = manager.getContextUsage(session.id);
+
+        ptyMocks.capturedOpts!.onEvents([{ type: "system_message", text: "__compact::hook_done::manual" } as ParsedEvent]);
+
+        expect(manager.isCompacting(session.id)).toBe(false);
+        expect(manager.getContextUsage(session.id)).toEqual(before);
+        manager.sendMessage(session.id, "next");
+        expect(ptyMocks.sendUserText).toHaveBeenCalledWith("next");
+      });
+
+      it("drops the flag when the CLI is stopped mid-compaction", () => {
+        const session = manager.createSession("/tmp", undefined, { runtime: "pty" });
+        const systems: string[] = [];
+        manager.onSystem(session.id, (t) => systems.push(t));
+        compactWithQueued(session.id);
+
+        expect(manager.restartSession(session.id)).toBe(false); // running: refused
+        manager.setPlanMode(session.id); // kills the CLI
+
+        expect(manager.isCompacting(session.id)).toBe(false);
+        expect(systems).toContain("__compact::cancelled");
+      });
+    });
+
+    // PostCompact fires just before the CLI writes the boundary. An update in
+    // that gap carries the pre-compaction reading.
+    it("keeps the post-compact estimate once the boundary lands with no reading after it", () => {
+      const session = manager.createSession("/tmp", undefined, { runtime: "pty" });
+      manager.sendMessage(session.id, "first");
+      emitMessageDone();
+      manager.sendMessage(session.id, "/compact");
+      ptyMocks.capturedOpts!.onEvents([{ type: "system_message", text: "__compact::hook_done::manual" } as ParsedEvent]);
+      const estimate = manager.getContextUsage(session.id)!.used;
+
+      watcherMock.emit?.([{ id: "m2", role: "assistant", timestamp: Date.now() - 1000 }], { used: 150_000 });
+      expect(manager.getContextUsage(session.id)!.used).toBe(150_000);
+
+      watcherMock.emit?.(
+        [
+          { id: "m2", role: "assistant", timestamp: Date.now() - 1000 },
+          { id: "c1", role: "system", content: "__compacted__", timestamp: Date.now() },
+        ],
+        null,
+      );
+      expect(manager.getContextUsage(session.id)!.used).toBe(estimate);
     });
 
     it("includes --permission-mode plan when plan mode active", () => {

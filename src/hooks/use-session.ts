@@ -988,6 +988,12 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
               setMessages((prev) =>
                 prev.map((m) => (m.id === "compact-progress" ? { ...m, id: "compact-done-" + Date.now(), content: "__compacted__" } : m)),
               );
+            } else if (state === "cancelled") {
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === "compact-progress" ? { ...m, id: "compact-cancelled-" + Date.now(), content: "__compact_cancelled__" } : m,
+                ),
+              );
             }
             break;
           }

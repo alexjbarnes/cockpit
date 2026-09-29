@@ -171,6 +171,7 @@ The queue:
 - Surfaces a queue indicator in the chat. Tap it to open the queue modal.
 - Lets you edit (moves the message back to the input area), delete, or reorder queued messages.
 - Auto-pauses when you interrupt Claude, so a half-finished thought does not get sent on resume. The modal has a Resume button to release the paused queue.
+- Waits behind a compaction, and is delivered once it finishes. Interrupting a compaction cancels it: the chat shows "Compaction cancelled, context not reduced", and the paused queue can be resumed as usual.
 
 ## Side questions (/btw)
 

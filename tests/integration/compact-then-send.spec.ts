@@ -114,3 +114,48 @@ test("a message sent after a real /compact still reaches the CLI", async ({ page
     rmSync(workDir, { recursive: true, force: true });
   }
 });
+
+// Esc during a compaction cancels it. When the summary request is already
+// under way, Claude Code says so only on its own screen: no PostCompact, no
+// Stop, no transcript line cockpit keeps. The session has to let go of the
+// compaction anyway, or everything sent after it queues behind a compaction
+// that is no longer running.
+test("a message queued behind a /compact cancelled with Esc is delivered on resume", async ({ page, harness }) => {
+  const workDir = mkdtempSync(path.join(tmpdir(), "cockpit-it-compactesc-"));
+  mkdirSync(path.join(workDir, ".git"), { recursive: true });
+  harness.trustWorkDir(workDir);
+  // Built up front: setScript restarts the mock's message ids, and a reply
+  // sharing an earlier one's id would be folded into it.
+  const firstReply = textResponse("first reply");
+  const summary = textResponse("Summary of the conversation so far.");
+  const queuedReply = textResponse("reply to the queued message");
+  const apiCalls = () => harness.mock.getRequests().filter((r) => r.url.split("?")[0] === "/v1/messages").length;
+
+  try {
+    harness.mock.setScript([{ events: firstReply }]);
+    await openSession(page, harness, workDir);
+
+    await send(page, "first message");
+    await expect(page.getByText("first reply")).toBeVisible({ timeout: 30_000 });
+
+    // Hold whatever the compaction asks for, and wait until it has asked.
+    harness.mock.setScript([{ events: summary, delayMs: 60_000 }]);
+    const before = apiCalls();
+    await send(page, "/compact");
+    await expect(page.getByText("Compacting...")).toBeVisible({ timeout: 15_000 });
+    await expect.poll(apiCalls, { timeout: 15_000 }).toBeGreaterThan(before);
+
+    await send(page, "queued message");
+    await expect(page.getByText("1 message queued")).toBeVisible();
+
+    harness.mock.setScript([{ events: queuedReply }]);
+    await page.getByTestId("message-input").press("Escape");
+    await expect(page.getByTestId("compact-cancelled")).toBeVisible({ timeout: 10_000 });
+
+    await page.getByText("1 message paused").click();
+    await page.getByRole("button", { name: "Resume queue" }).click();
+    await expect(page.getByText("reply to the queued message")).toBeVisible({ timeout: 30_000 });
+  } finally {
+    rmSync(workDir, { recursive: true, force: true });
+  }
+});

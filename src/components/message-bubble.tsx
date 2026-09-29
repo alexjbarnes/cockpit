@@ -119,6 +119,16 @@ export const MessageBubble = memo(function MessageBubble({
       );
     }
 
+    if (message.content === "__compact_cancelled__") {
+      return (
+        <div className="flex w-full items-center gap-3 py-2" data-testid="compact-cancelled">
+          <div className="flex-1 border-t border-border" />
+          <div className="text-[10px] text-muted-foreground uppercase tracking-wider">Compaction cancelled, context not reduced</div>
+          <div className="flex-1 border-t border-border" />
+        </div>
+      );
+    }
+
     if (message.content === "__context_reset__") {
       return (
         <div className="flex w-full items-center gap-3 py-2">
