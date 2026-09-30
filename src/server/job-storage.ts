@@ -46,7 +46,8 @@ export function buildJob(input: JobInput): ScheduledJob {
     skipIfMissed: input.skipIfMissed ?? false,
     inboxOutput: input.inboxOutput ?? false,
     notifyProviders: input.notifyProviders,
-    runtime: input.runtime,
+    // Stored, not left to the spawn's fallback, so the job says what it runs on.
+    runtime: input.runtime ?? "pty",
   };
 }
 

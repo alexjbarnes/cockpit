@@ -208,7 +208,8 @@ export default function JobDetailPage() {
                 </>
               )}
               <span className="text-muted-foreground">Runtime</span>
-              <span className="text-right uppercase">{job.runtime || "stream"}</span>
+              {/* A job with no runtime runs on the server default, PTY. */}
+              <span className="text-right uppercase">{job.runtime || "pty"}</span>
               <span className="text-muted-foreground">Max Duration</span>
               <span className="text-right">{job.maxDurationMinutes ?? 30} min</span>
               {job.cwd && (

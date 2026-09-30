@@ -208,6 +208,17 @@ describe("cockpit-config MCP server (in-process HTTP)", () => {
       expect(result.created.id).toBeDefined();
     });
 
+    it("create_job stores the pty runtime when none is given, and keeps one that is", async () => {
+      const base = { schedules: [{ type: "simple", frequency: "hourly" }], prompt: "p", cwd: "/tmp" };
+      const plain = (await callToolParsed("create_job", { ...base, name: "runtime-default" })) as { created: { runtime?: string } };
+      const stream = (await callToolParsed("create_job", { ...base, name: "runtime-stream", runtime: "stream" })) as {
+        created: { runtime?: string };
+      };
+
+      expect(plain.created.runtime).toBe("pty");
+      expect(stream.created.runtime).toBe("stream");
+    });
+
     it("list_jobs returns the created job", async () => {
       const result = (await callToolParsed("list_jobs")) as { name: string }[];
       expect(Array.isArray(result)).toBe(true);
