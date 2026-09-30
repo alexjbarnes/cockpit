@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Select inbox messages to act on together.** A Select button puts a checkbox on each message. Pick them one by one, or all at once from the count, then mark them read or unread or delete them in one go. Before, it was one message at a time, or everything through Mark all read and Clear all.
+
+### Fixed
+- **A scheduled job that has never run catches up a missed run.** When the server starts after a job's time has passed, the job runs within a minute unless it is set to skip missed runs. That only worked for a job with a run behind it, since the check looked back from the last run, so a job due before the server was ever up never ran at all. A job with no runs now counts from when it was last saved.
+- **Jobs created without a runtime run on PTY and say so.** A job created through the assistant's tools without a runtime was saved with none. It ran on PTY, but its page showed Stream. New jobs now store PTY, and a job saved before this shows PTY, the runtime it actually uses.
+
 ## [0.7.0] - 2026-09-29
 
 ### Added
