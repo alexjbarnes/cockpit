@@ -23,7 +23,7 @@ The Jobs page lists your jobs. Add one with:
 - Runtime. Stream (headless, the default) or PTY, the same choice as interactive sessions.
 - Run-time budget. The maximum minutes a run may take before it is stopped (default 30).
 - Retention. How many days of run history and transcripts to keep (default 90).
-- Skip if missed. If the server was down when a run was due, skip the late catch-up rather than firing on startup.
+- Skip if missed. Off by default, so a run that fell due while the server was down fires once, within a minute of the server starting. It looks back up to 24 hours from the job's last run, or from when the job was last saved if it has never run. Turn this on to skip the late catch-up instead.
 - Enabled. Toggle to pause the job without deleting it.
 
 Save and the scheduler picks it up immediately.

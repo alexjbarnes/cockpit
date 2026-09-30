@@ -442,6 +442,10 @@ export class JobScheduler {
       if (this.runningJobs.has(job.id)) continue;
 
       const lastFired = this.lastFiredAt.get(job.id);
+      // A job that has never run counts missed times from when it was last
+      // saved. With nothing to measure from, one whose time always passes
+      // while the server is down would never run at all.
+      const missedSince = lastFired ?? new Date(job.updatedAt || job.createdAt);
       let shouldFire = false;
 
       for (const sched of getJobSchedules(job)) {
@@ -452,7 +456,7 @@ export class JobScheduler {
             shouldFire = true;
             break;
           }
-        } else if (lastFired && findMissedRun(cronExpr, lastFired, now)) {
+        } else if (findMissedRun(cronExpr, missedSince, now)) {
           if (!job.skipIfMissed) {
             shouldFire = true;
             break;

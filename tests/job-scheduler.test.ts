@@ -1345,6 +1345,56 @@ describe("tick: missed run handling", () => {
     scheduler = new JobScheduler(sm as any);
   });
 
+  /** A daily cron for the minute `hours` hours ago. */
+  function dailyCronHoursAgo(hours: number): string {
+    const at = new Date();
+    at.setHours(at.getHours() - hours);
+    return `${at.getMinutes()} ${at.getHours()} * * *`;
+  }
+
+  function spyOnRuns() {
+    return vi.spyOn(scheduler as any, "executeJobWithRetries").mockResolvedValue(undefined);
+  }
+
+  it("catches up a run missed since the last one", () => {
+    const job = makeJob({ schedules: [{ type: "cron", expression: dailyCronHoursAgo(2) }] });
+    vi.mocked(loadJobs).mockReturnValue([job]);
+    const runs = spyOnRuns();
+
+    (scheduler as any).lastFiredAt.set(job.id, new Date(Date.now() - 5 * 3600000));
+    (scheduler as any).tick();
+
+    expect(runs).toHaveBeenCalledWith(job);
+  });
+
+  // A job whose time always passes while the server is down has no run to
+  // measure from, so it counts from when it was last saved.
+  it("catches up a missed run for a job that has never run", () => {
+    const threeDaysAgo = Date.now() - 3 * 86400000;
+    const job = makeJob({
+      createdAt: threeDaysAgo,
+      updatedAt: threeDaysAgo,
+      schedules: [{ type: "cron", expression: dailyCronHoursAgo(2) }],
+    });
+    vi.mocked(loadJobs).mockReturnValue([job]);
+    const runs = spyOnRuns();
+
+    (scheduler as any).tick();
+
+    expect(runs).toHaveBeenCalledWith(job);
+  });
+
+  it("does not count a time from before the job was last saved as missed", () => {
+    const anHourAgo = Date.now() - 3600000;
+    const job = makeJob({ createdAt: anHourAgo, updatedAt: anHourAgo, schedules: [{ type: "cron", expression: dailyCronHoursAgo(2) }] });
+    vi.mocked(loadJobs).mockReturnValue([job]);
+    const runs = spyOnRuns();
+
+    (scheduler as any).tick();
+
+    expect(runs).not.toHaveBeenCalled();
+  });
+
   it("skips missed runs when skipIfMissed is true", () => {
     const pastHour = new Date();
     pastHour.setHours(pastHour.getHours() - 2);
