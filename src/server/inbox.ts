@@ -108,6 +108,30 @@ export function deleteInboxMessage(id: string): boolean {
   return true;
 }
 
+/** Delete these messages in one write. Returns how many were there. */
+export function deleteInboxMessages(ids: string[]): number {
+  const wanted = new Set(ids);
+  const messages = readAll();
+  const kept = messages.filter((m) => !wanted.has(m.id));
+  const removed = messages.length - kept.length;
+  if (removed > 0) writeAll(kept);
+  return removed;
+}
+
+/** Mark these messages read or unread in one write. Returns how many were found. */
+export function markManyRead(ids: string[], read = true): number {
+  const wanted = new Set(ids);
+  const messages = readAll();
+  let found = 0;
+  for (const m of messages) {
+    if (!wanted.has(m.id)) continue;
+    m.read = read;
+    found++;
+  }
+  if (found > 0) writeAll(messages);
+  return found;
+}
+
 export function clearInbox(): void {
   writeAll([]);
 }

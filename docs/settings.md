@@ -120,7 +120,7 @@ Configuration is stored in `~/.cockpit/notifications.json`.
 
 The inbox at `/inbox` collects messages from scheduled job completions and system events. Each message has a title, body, priority level (info, warning, error), and timestamp.
 
-The inbox button in the sidebar shows an unread count badge. From the inbox page you can mark all as read or clear all messages.
+The inbox button in the sidebar shows an unread count badge. From the inbox page you can mark all as read or clear all messages. Select turns on checkboxes: pick messages one by one, or all at once from the count, then mark them read or unread, or delete them together.
 
 Inbox messages are stored in `~/.cockpit/inbox.jsonl`. When a message arrives, it is also dispatched to any configured notification providers.
 
