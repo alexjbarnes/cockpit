@@ -76,6 +76,7 @@ function ScheduleEntry({
   canRemove,
   projects,
   issuesEnabled,
+  otherJobs,
 }: {
   value: JobSchedule;
   onChange: (s: JobSchedule) => void;
@@ -83,7 +84,10 @@ function ScheduleEntry({
   canRemove: boolean;
   projects: { id: string; name: string; prefix: string }[];
   issuesEnabled: boolean;
+  /** The jobs this one could wait on: every job but itself. */
+  otherJobs: { id: string; name: string }[];
 }) {
+  const jobName = (jobId: string) => otherJobs.find((j) => j.id === jobId)?.name;
   return (
     <div className="border rounded-md p-3 space-y-2">
       <div className="flex items-center justify-between">
@@ -114,6 +118,16 @@ function ScheduleEntry({
               onClick={() => onChange({ type: "onIssueStatus", status: ISSUE_STATUSES[0] })}
             >
               On issue status
+            </Button>
+          )}
+          {(otherJobs.length > 0 || value.type === "afterJobs") && (
+            <Button
+              variant={value.type === "afterJobs" ? "default" : "outline"}
+              size="sm"
+              data-testid="schedule-after-jobs"
+              onClick={() => onChange({ type: "afterJobs", jobIds: otherJobs[0] ? [otherJobs[0].id] : [] })}
+            >
+              After jobs
             </Button>
           )}
         </div>
@@ -203,7 +217,31 @@ function ScheduleEntry({
         </div>
       )}
 
-      <p className="text-xs text-muted-foreground">{describeSchedule(value)}</p>
+      {value.type === "afterJobs" && (
+        <div className="space-y-1.5">
+          {otherJobs.map((j) => (
+            <label key={j.id} className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                data-testid="after-job-option"
+                checked={value.jobIds.includes(j.id)}
+                onChange={(e) =>
+                  onChange({
+                    ...value,
+                    jobIds: e.target.checked ? [...value.jobIds, j.id] : value.jobIds.filter((id) => id !== j.id),
+                  })
+                }
+              />
+              <span className="truncate">{j.name}</span>
+            </label>
+          ))}
+          <p className="text-xs text-muted-foreground">
+            Runs once every job ticked here has completed successfully since this job last ran.
+          </p>
+        </div>
+      )}
+
+      <p className="text-xs text-muted-foreground">{describeSchedule(value, jobName)}</p>
     </div>
   );
 }
@@ -257,6 +295,8 @@ export default function JobEditPage() {
   const [availableProviders, setAvailableProviders] = useState<{ id: string; name: string; type: string }[]>([]);
   const [providers, setProviders] = useState<Provider[]>([]);
   const [projects, setProjects] = useState<{ id: string; name: string; prefix: string }[]>([]);
+  const [otherJobs, setOtherJobs] = useState<{ id: string; name: string }[]>([]);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   const [showDirPicker, setShowDirPicker] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -489,6 +529,15 @@ export default function JobEditPage() {
       .catch(() => setProjects([]));
   }, []);
 
+  useEffect(() => {
+    fetch("/api/jobs")
+      .then((r) => r.json())
+      .then((data: { jobs?: { id: string; name: string }[] }) =>
+        setOtherJobs((data.jobs ?? []).filter((j) => isNew || j.id !== id).map((j) => ({ id: j.id, name: j.name }))),
+      )
+      .catch(() => setOtherJobs([]));
+  }, [id, isNew]);
+
   async function handleSave() {
     const durationValid = isPositiveNumberField(maxDuration);
     const retentionValid = isPositiveNumberField(retentionDays);
@@ -499,6 +548,7 @@ export default function JobEditPage() {
     if (!durationValid || !retentionValid) return;
 
     setSaving(true);
+    setSaveError(null);
     let modelStr = modelId;
     if (!isBuiltinProvider && selectedProviderId) {
       modelStr = `${selectedProviderId}:${modelId}`;
@@ -539,6 +589,9 @@ export default function JobEditPage() {
         const data = await res.json();
         const savedId = isNew ? data.job.id : id;
         router.push(`/jobs/${savedId}`);
+      } else {
+        const data = await res.json().catch(() => ({}));
+        setSaveError(data.error || `Could not save the job (HTTP ${res.status})`);
       }
     } finally {
       setSaving(false);
@@ -628,6 +681,7 @@ export default function JobEditPage() {
                 canRemove={schedules.length > 1}
                 projects={projects}
                 issuesEnabled={settings.issuesEnabled}
+                otherJobs={otherJobs}
               />
             ))}
             <button
@@ -1114,6 +1168,11 @@ export default function JobEditPage() {
           </CardContent>
         </Card>
 
+        {saveError && (
+          <p data-testid="job-save-error" className="text-sm text-destructive">
+            {saveError}
+          </p>
+        )}
         <div className="flex gap-2">
           <Button onClick={handleSave} disabled={saving || !name || !prompt}>
             {saving ? "Saving..." : "Save"}

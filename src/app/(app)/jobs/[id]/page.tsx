@@ -104,6 +104,8 @@ export default function JobDetailPage() {
   const [triggering, setTriggering] = useState(false);
   const [stopping, setStopping] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  // Names for a schedule that waits on other jobs.
+  const [jobNames, setJobNames] = useState<Map<string, string>>(new Map());
 
   usePageHeader(job?.name || "Job", { hideActions: true });
 
@@ -126,6 +128,13 @@ export default function JobDetailPage() {
   useEffect(() => {
     loadJob();
   }, [loadJob]);
+
+  useEffect(() => {
+    fetch("/api/jobs")
+      .then((r) => r.json())
+      .then((data: { jobs?: { id: string; name: string }[] }) => setJobNames(new Map((data.jobs ?? []).map((j) => [j.id, j.name]))))
+      .catch(() => {});
+  }, []);
 
   async function handleTrigger() {
     setTriggering(true);
@@ -169,7 +178,7 @@ export default function JobDetailPage() {
               <h2 className="font-semibold truncate">{job.name}</h2>
               {job.enabled ? <Badge variant="default">Enabled</Badge> : <Badge variant="secondary">Disabled</Badge>}
             </div>
-            <p className="text-xs text-muted-foreground">{describeAllSchedules(getJobSchedules(job))}</p>
+            <p className="text-xs text-muted-foreground">{describeAllSchedules(getJobSchedules(job), (jobId) => jobNames.get(jobId))}</p>
           </div>
         </div>
 

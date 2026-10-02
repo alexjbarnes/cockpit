@@ -2,8 +2,8 @@ import { mkdirSync } from "node:fs";
 import { v4 as uuidv4 } from "uuid";
 import { getJobScratchpadDir } from "@/server/paths";
 import { trustDirectory } from "@/server/workspace-trust";
-import type { IssueStatusSchedule, JobRun, JobRunToolUse, ScheduledJob } from "@/types";
-import { findMissedRun, getJobSchedules, matchesCron, scheduleToCron } from "./cron-utils";
+import type { AfterJobsSchedule, IssueStatusSchedule, JobRun, JobRunToolUse, ScheduledJob } from "@/types";
+import { findMissedRun, getJobSchedules, isTimeBasedSchedule, matchesCron, scheduleToCron } from "./cron-utils";
 import { logDiag } from "./debug-logger";
 import { addInboxMessage, parseErrorBlock } from "./inbox";
 import { type IssueStatusChangeEvent, onIssueStatusChange } from "./issue-events";
@@ -234,6 +234,28 @@ function countMatchingIssues(sched: IssueStatusSchedule): number {
   return projects.reduce((n, p) => n + loadIssues(p.id).filter((i) => i.status === sched.status).length, 0);
 }
 
+/** When a job last completed successfully, or 0 if it never has. */
+function lastSuccessAt(jobId: string): number {
+  return loadRuns(jobId).reduce(
+    (latest, r) => (r.status === "success" && (r.completedAt ?? 0) > latest ? (r.completedAt ?? 0) : latest),
+    0,
+  );
+}
+
+/**
+ * Whether a job waiting on others is due: every job one of its afterJobs
+ * schedules lists has completed successfully since this job last started, or
+ * since it was last saved if it has never run. Measured from persisted runs,
+ * not from events, so a completion the scheduler missed (a restart, or this
+ * job still running when its last dependency finished) is still caught.
+ */
+function dependenciesMet(job: ScheduledJob): boolean {
+  const waits = getJobSchedules(job).filter((s): s is AfterJobsSchedule => s.type === "afterJobs");
+  if (waits.length === 0) return false;
+  const since = getLatestRun(job.id)?.startedAt ?? (job.updatedAt || job.createdAt);
+  return waits.some((s) => s.jobIds.length > 0 && s.jobIds.every((id) => lastSuccessAt(id) > since));
+}
+
 export class JobScheduler {
   private sessionManager: SessionManager;
   private timer: ReturnType<typeof setInterval> | null = null;
@@ -337,7 +359,24 @@ export class JobScheduler {
       logDiag(job.id, "job:retry", { attempt: attempt + 1, maxRetries, prevRunId: run.id, error: run.error });
       await new Promise((r) => setTimeout(r, RETRY_BACKOFF_MS));
     }
+    if (run.status === "success") this.startJobsWaitingOn(job);
     return run;
+  }
+
+  /** Start the jobs that were waiting on `finished` and now have everything
+   *  they wait on. One still waiting on another job keeps waiting. */
+  private startJobsWaitingOn(finished: ScheduledJob): void {
+    for (const job of loadJobs()) {
+      if (!job.enabled || this.runningJobs.has(job.id)) continue;
+      const waitsOnFinished = getJobSchedules(job).some((s) => s.type === "afterJobs" && s.jobIds.includes(finished.id));
+      if (!waitsOnFinished || !dependenciesMet(job)) continue;
+      logDiag(job.id, "job:dependencies-met", { after: finished.id });
+      console.log(`[scheduler] starting job ${job.name}: the jobs it waits on have completed`);
+      this.lastFiredAt.set(job.id, new Date());
+      this.executeJobWithRetries(job).catch((err) => {
+        console.error(`[scheduler] failed to execute job ${job.name} after the jobs it waits on:`, err);
+      });
+    }
   }
 
   stopJob(jobId: string): JobRun {
@@ -449,7 +488,7 @@ export class JobScheduler {
       let shouldFire = false;
 
       for (const sched of getJobSchedules(job)) {
-        if (sched.type === "onIssueStatus") continue; // event-triggered; the 60s tick never fires it directly
+        if (!isTimeBasedSchedule(sched)) continue; // event-triggered; handled apart from the clock
         const cronExpr = scheduleToCron(sched);
         if (matchesCron(cronExpr, now)) {
           if (!lastFired || lastFired.getTime() < now.getTime()) {
@@ -463,6 +502,10 @@ export class JobScheduler {
           }
         }
       }
+
+      // Normally started the moment its last dependency succeeds; checked here
+      // too for one that was missed then.
+      if (!shouldFire && dependenciesMet(job)) shouldFire = true;
 
       if (shouldFire) {
         this.lastFiredAt.set(job.id, now);

@@ -154,15 +154,54 @@ function assertValidSchedules(schedules: JobSchedule[] | undefined): void {
       if (!allowed.includes(s.status)) {
         throw new Error(`onIssueStatus schedule has an invalid status "${s.status}"; must be one of: ${allowed.join(", ")}`);
       }
+    } else if (s.type === "afterJobs") {
+      if (!Array.isArray(s.jobIds) || s.jobIds.length === 0 || !s.jobIds.every((id) => typeof id === "string" && id)) {
+        throw new Error("afterJobs schedule needs jobIds: a non-empty list of job ids");
+      }
+      if (new Set(s.jobIds).size !== s.jobIds.length) throw new Error("afterJobs schedule lists the same job more than once");
     } else {
-      throw new Error(`schedule has unknown type "${(s as { type?: string }).type}"; must be one of: simple, cron, onIssueStatus`);
+      throw new Error(
+        `schedule has unknown type "${(s as { type?: string }).type}"; must be one of: simple, cron, onIssueStatus, afterJobs`,
+      );
     }
+  }
+}
+
+function waitsOn(job: ScheduledJob): string[] {
+  return job.schedules.flatMap((s) => (s.type === "afterJobs" ? s.jobIds : []));
+}
+
+/**
+ * The jobs an afterJobs schedule waits on must exist, and the waiting must not
+ * come back round to this job: a job that waits on itself, or on one that
+ * (through others) waits on it, would never start, and after a manual run
+ * would set off each other for ever.
+ */
+function assertValidDependencies(job: ScheduledJob, jobs: ScheduledJob[]): void {
+  const byId = new Map(jobs.map((j) => [j.id, j]));
+  byId.set(job.id, job);
+  for (const id of waitsOn(job)) {
+    if (id === job.id) throw new Error("afterJobs schedule cannot wait on the job itself");
+    if (!byId.has(id)) throw new Error(`afterJobs schedule references unknown job "${id}"`);
+  }
+  const seen = new Set<string>();
+  const stack = [...waitsOn(job)];
+  while (stack.length > 0) {
+    const id = stack.pop()!;
+    if (id === job.id) {
+      throw new Error(`afterJobs schedule makes a loop: "${job.name}" would end up waiting on itself`);
+    }
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const dep = byId.get(id);
+    if (dep) stack.push(...waitsOn(dep));
   }
 }
 
 export function saveJob(job: ScheduledJob): void {
   assertValidSchedules(job.schedules);
   const jobs = loadJobs();
+  assertValidDependencies(job, jobs);
   const idx = jobs.findIndex((j) => j.id === job.id);
   if (idx >= 0) {
     jobs[idx] = job;
@@ -196,6 +235,16 @@ export function deleteJob(id: string): boolean {
   const jobs = loadJobs();
   const filtered = jobs.filter((j) => j.id !== id);
   if (filtered.length === jobs.length) return false;
+  // Jobs that waited on it stop waiting on it, and a schedule left waiting on
+  // nothing goes, rather than naming a job that no longer exists.
+  for (const job of filtered) {
+    if (!waitsOn(job).includes(id)) continue;
+    job.schedules = job.schedules.flatMap((s): JobSchedule[] => {
+      if (s.type !== "afterJobs") return [s];
+      const jobIds = s.jobIds.filter((j) => j !== id);
+      return jobIds.length > 0 ? [{ ...s, jobIds }] : [];
+    });
+  }
   ensureDir(prefsDir());
   writeFileSync(jobsFile(), JSON.stringify({ jobs: filtered }, null, 2) + "\n");
 

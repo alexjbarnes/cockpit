@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Chain scheduled jobs.** A job can now wait on other jobs with an After jobs schedule, and runs once every job it waits on has completed successfully since its own last run. A failed run holds it back until that job next succeeds, a job cannot wait on itself or on a job that waits on it, and the assistant's job tools can set it up too.
 - **Message Claude while it works.** On the PTY runtime, a message sent during a turn goes to Claude straight away. Claude reads it with its next tool result and carries on with it in mind, as the terminal CLI does. A turn that ends first runs the message next without the session going idle in between, and Esc makes Claude take it up at once. Commands, and messages sent while a card is open or a compaction runs, still wait in the queue.
 - **Select inbox messages to act on together.** A Select button puts a checkbox on each message. Pick them one by one, or all at once from the count, then mark them read or unread or delete them in one go. Before, it was one message at a time, or everything through Mark all read and Clear all.
 

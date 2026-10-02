@@ -219,6 +219,25 @@ describe("cockpit-config MCP server (in-process HTTP)", () => {
       expect(stream.created.runtime).toBe("stream");
     });
 
+    it("create_job and update_job set up one job waiting on another, and refuse a loop", async () => {
+      const base = { schedules: [{ type: "simple", frequency: "hourly" }], prompt: "p", cwd: "/tmp" };
+      const first = (await callToolParsed("create_job", { ...base, name: "chain-first" })) as { created: { id: string } };
+      const second = (await callToolParsed("create_job", {
+        ...base,
+        name: "chain-second",
+        schedules: [{ type: "afterJobs", jobIds: [first.created.id] }],
+      })) as { created: { id: string; schedules: unknown } };
+      expect(second.created.schedules).toEqual([{ type: "afterJobs", jobIds: [first.created.id] }]);
+
+      const loop = (await callToolParsed("update_job", {
+        id: first.created.id,
+        schedules: [{ type: "afterJobs", jobIds: [second.created.id] }],
+      })) as { error?: string };
+      expect(loop.error).toMatch(/loop/);
+      const kept = (await callToolParsed("get_job", { id: first.created.id })) as { schedules: unknown };
+      expect(kept.schedules).toEqual(base.schedules);
+    });
+
     it("list_jobs returns the created job", async () => {
       const result = (await callToolParsed("list_jobs")) as { name: string }[];
       expect(Array.isArray(result)).toBe(true);

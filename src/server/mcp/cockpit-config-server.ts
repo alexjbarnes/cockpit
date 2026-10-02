@@ -312,14 +312,14 @@ function issueSummary(issue: Issue): Record<string, unknown> {
   };
 }
 
-/** Schema for one job schedule — the three JobSchedule variants spelled out
+/** Schema for one job schedule — the four JobSchedule variants spelled out
  *  so a caller can construct one from the schema alone, instead of having to
  *  list existing jobs and copy a real one's shape. Kept in lockstep with the
  *  write-boundary validation in job-storage.ts's assertValidSchedules. */
 const JOB_SCHEDULE_SCHEMA = {
   type: "object",
   description:
-    'One schedule; shape depends on `type`. Examples: {"type":"simple","frequency":"daily","time":"09:30"} · {"type":"cron","expression":"*/15 * * * *"} · {"type":"onIssueStatus","status":"Refine Ready"}',
+    'One schedule; shape depends on `type`. Examples: {"type":"simple","frequency":"daily","time":"09:30"} · {"type":"cron","expression":"*/15 * * * *"} · {"type":"onIssueStatus","status":"Refine Ready"} · {"type":"afterJobs","jobIds":["<job id>"]}',
   anyOf: [
     {
       properties: {
@@ -348,6 +348,18 @@ const JOB_SCHEDULE_SCHEMA = {
         project: { type: "string", description: "Project id to scope to; omit for any project" },
       },
       required: ["type", "status"],
+    },
+    {
+      properties: {
+        type: { const: "afterJobs" },
+        jobIds: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "Ids of jobs (from list_jobs) this one waits on. It runs once every one of them has completed successfully since it last ran; a failed run holds it back until that job next succeeds. A job cannot wait on itself or on a job that waits on it.",
+        },
+      },
+      required: ["type", "jobIds"],
     },
   ],
 };
@@ -991,6 +1003,7 @@ async function handleToolCall(
             'mcpToolFilters: { "<serverName>": ["tool", ...] } limits an enabled server; omitted servers expose all tools.',
             "inboxOutput posts the final message to the cockpit inbox; notifyProviders pushes it to the named notifyTargets ids.",
             "onIssueStatus schedules: status is a built-in, or a custom status of the named project (from list_projects); project ids come from list_projects.",
+            "afterJobs schedules: jobIds come from list_jobs. The job runs when all of them have succeeded since its own last run, so it can chain after jobs on any schedule; it can sit alongside a time schedule.",
           ],
         };
         return { content: [{ type: "text", text: JSON.stringify(options, null, 2) }] };

@@ -294,6 +294,34 @@ describe("describeAllSchedules", () => {
   });
 });
 
+describe("afterJobs schedules", () => {
+  const names = new Map([
+    ["a", "Collect"],
+    ["b", "Fetch"],
+    ["c", "Tidy"],
+  ]);
+  const jobName = (id: string) => names.get(id);
+
+  it("names the jobs it waits on", () => {
+    expect(describeSchedule({ type: "afterJobs", jobIds: ["a"] }, jobName)).toBe("After Collect");
+    expect(describeSchedule({ type: "afterJobs", jobIds: ["a", "b"] }, jobName)).toBe("After Collect and Fetch");
+    expect(describeSchedule({ type: "afterJobs", jobIds: ["a", "b", "c"] }, jobName)).toBe("After Collect, Fetch and Tidy");
+  });
+
+  it("falls back to the id for a job it cannot name", () => {
+    expect(describeSchedule({ type: "afterJobs", jobIds: ["a", "zz"] }, jobName)).toBe("After Collect and zz");
+    expect(describeAllSchedules([{ type: "afterJobs", jobIds: ["zz"] }])).toBe("After zz");
+  });
+
+  it("has no clock form", () => {
+    const waiting = { type: "afterJobs" as const, jobIds: ["a"] };
+    expect(hasTimeBasedSchedule([waiting])).toBe(false);
+    expect(hasTimeBasedSchedule([waiting, { type: "cron", expression: "0 9 * * *" }])).toBe(true);
+    const after = new Date(2026, 9, 2, 8, 0);
+    expect(getNextRunTimeAny([waiting, { type: "cron", expression: "0 9 * * *" }], after)).toEqual(new Date(2026, 9, 2, 9, 0));
+  });
+});
+
 describe("getNextRunTimeAny", () => {
   it("returns the earliest next run across multiple schedules", () => {
     const after = new Date(2026, 4, 17, 10, 0, 0);

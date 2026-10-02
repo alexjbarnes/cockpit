@@ -288,7 +288,20 @@ export interface IssueStatusSchedule {
   project?: string;
 }
 
-export type JobSchedule = SimpleSchedule | CronSchedule | IssueStatusSchedule;
+/**
+ * Fires once every listed job has completed successfully since this job last
+ * started, or since it was last saved if it has never run. A failed run of one
+ * of them holds this job back until that job next succeeds. Event-driven like
+ * onIssueStatus, so it has no cron form either. Saving rejects a job that
+ * waits on itself or on a job that (through others) waits on it.
+ */
+export interface AfterJobsSchedule {
+  type: "afterJobs";
+  /** Ids of the jobs this one waits on. */
+  jobIds: string[];
+}
+
+export type JobSchedule = SimpleSchedule | CronSchedule | IssueStatusSchedule | AfterJobsSchedule;
 
 export interface ScheduledJob {
   id: string;
