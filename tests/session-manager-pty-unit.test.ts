@@ -9,6 +9,9 @@ const ptyMocks = vi.hoisted(() => ({
   kill: vi.fn().mockResolvedValue(undefined),
   interrupt: vi.fn(),
   notifyPermissionDecision: vi.fn().mockReturnValue(true),
+  canTakeMidTurn: false,
+  holdsMidTurn: false,
+  sendMidTurnText: vi.fn().mockResolvedValue(true),
   capturedOpts: null as null | {
     sessionId: string;
     cliSessionId: string;
@@ -53,6 +56,15 @@ vi.mock("@/server/pty-runtime", () => ({
     }
     sendUserText(text: string) {
       return ptyMocks.sendUserText(text);
+    }
+    canTakeMidTurnMessage() {
+      return ptyMocks.canTakeMidTurn;
+    }
+    get holdsMidTurnMessages() {
+      return ptyMocks.holdsMidTurn;
+    }
+    sendMidTurnText(text: string) {
+      return ptyMocks.sendMidTurnText(text);
     }
     sendSlash() {}
     sendKey() {}
@@ -142,6 +154,7 @@ vi.mock("@/server/defaults", () => ({
   }),
 }));
 
+import { TURN_CONTINUES } from "@/server/event-parser";
 import { SessionManager } from "@/server/session-manager";
 
 // Drives processEvents to set status=idle without clearing ptyRuntime (unlike onExit).
@@ -176,6 +189,9 @@ describe("SessionManager PTY runtime (unit)", () => {
     ptyMocks.kill.mockClear().mockResolvedValue(undefined);
     ptyMocks.interrupt.mockClear();
     ptyMocks.notifyPermissionDecision.mockClear().mockReturnValue(true);
+    ptyMocks.canTakeMidTurn = false;
+    ptyMocks.holdsMidTurn = false;
+    ptyMocks.sendMidTurnText.mockReset().mockResolvedValue(true);
     watcherMock.emit = null;
   });
 
@@ -629,6 +645,126 @@ describe("SessionManager PTY runtime (unit)", () => {
 
       expect(statuses).toContain("idle");
       expect(errors.length).toBeGreaterThan(0);
+    });
+  });
+
+  describe("a message sent while Claude is working", () => {
+    function runningSession() {
+      const session = manager.createSession("/tmp", undefined, { runtime: "pty" });
+      manager.sendMessage(session.id, "first");
+      return session;
+    }
+
+    function recordQueued(sessionId: string) {
+      const queued: Array<{ count: number; sentText?: string; midTurn?: boolean }> = [];
+      manager.onQueued(sessionId, (count, sentText, midTurn) => queued.push({ count, sentText, midTurn }));
+      return queued;
+    }
+
+    it("goes to the CLI's own queue when the CLI can take it", async () => {
+      const session = runningSession();
+      ptyMocks.canTakeMidTurn = true;
+      const queued = recordQueued(session.id);
+
+      expect(manager.sendMessage(session.id, "also this")).toBe(true);
+
+      expect(ptyMocks.sendMidTurnText).toHaveBeenCalledWith("also this");
+      expect(manager.getQueuedCount(session.id)).toBe(0);
+      await vi.waitFor(() => expect(queued).toEqual([{ count: 0, sentText: "also this", midTurn: true }]));
+      expect(ptyMocks.sendUserText).not.toHaveBeenCalled();
+    });
+
+    it("waits in cockpit's queue when the CLI cannot take it", () => {
+      const session = runningSession();
+      ptyMocks.canTakeMidTurn = false;
+
+      manager.sendMessage(session.id, "later");
+
+      expect(ptyMocks.sendMidTurnText).not.toHaveBeenCalled();
+      expect(manager.getQueuedCount(session.id)).toBe(1);
+    });
+
+    it("waits for the turn's end when it is a command, a card is open, or others are already waiting", () => {
+      const session = runningSession();
+      ptyMocks.canTakeMidTurn = true;
+
+      manager.sendMessage(session.id, "/init");
+      expect(manager.getQueuedCount(session.id)).toBe(1);
+      // Behind the command, so it keeps its place.
+      manager.sendMessage(session.id, "after the command");
+      expect(manager.getQueuedCount(session.id)).toBe(2);
+
+      const other = runningSession();
+      manager.addPendingRequest(other.id, { type: "permission", requestId: "r1", toolName: "Write", toolInput: "{}" });
+      manager.sendMessage(other.id, "while the card is up");
+      expect(manager.getQueuedCount(other.id)).toBe(1);
+
+      expect(ptyMocks.sendMidTurnText).not.toHaveBeenCalled();
+    });
+
+    it("waits in cockpit's queue when it did not go in and the turn is still going", async () => {
+      const session = runningSession();
+      ptyMocks.canTakeMidTurn = true;
+      ptyMocks.sendMidTurnText.mockResolvedValue(false);
+
+      manager.sendMessage(session.id, "also this");
+
+      await vi.waitFor(() => expect(manager.getQueuedCount(session.id)).toBe(1));
+      expect(ptyMocks.sendUserText).not.toHaveBeenCalled();
+    });
+
+    it("is sent the ordinary way when it did not go in and the turn has ended", async () => {
+      const session = runningSession();
+      ptyMocks.canTakeMidTurn = true;
+      let settle: (ok: boolean) => void = () => {};
+      ptyMocks.sendMidTurnText.mockReturnValue(new Promise<boolean>((resolve) => (settle = resolve)));
+
+      const queued = recordQueued(session.id);
+      manager.sendMessage(session.id, "also this");
+      emitMessageDone();
+      settle(false);
+
+      await vi.waitFor(() => expect(ptyMocks.sendUserText).toHaveBeenCalledWith("also this"));
+      expect(manager.getQueuedCount(session.id)).toBe(0);
+      expect(queued).toContainEqual({ count: 0, sentText: "also this", midTurn: undefined });
+    });
+
+    it("keeps the session running through a Stop the CLI goes straight on from", () => {
+      const session = runningSession();
+      ptyMocks.canTakeMidTurn = false;
+      manager.sendMessage(session.id, "held here");
+      const statuses: string[] = [];
+      manager.onStatus(session.id, (s) => statuses.push(s));
+
+      ptyMocks.capturedOpts!.onEvents([
+        {
+          type: "message_done",
+          clearPending: true,
+          message: { id: "m1", role: "assistant", content: "first answer", toolUses: [], blocks: [], timestamp: Date.now() },
+        } as ParsedEvent,
+        { type: "system_message", text: TURN_CONTINUES },
+      ]);
+
+      expect(statuses).not.toContain("idle");
+      // Its queue waits for the end of the turn the CLI goes on to.
+      expect(manager.getQueuedCount(session.id)).toBe(1);
+      expect(ptyMocks.sendUserText).not.toHaveBeenCalled();
+
+      emitMessageDone();
+      expect(statuses).toContain("idle");
+      expect(ptyMocks.sendUserText).toHaveBeenCalledWith("held here");
+    });
+
+    it("stays running after Esc while the CLI takes a queued message up", () => {
+      const session = runningSession();
+      ptyMocks.holdsMidTurn = true;
+      const statuses: string[] = [];
+      manager.onStatus(session.id, (s) => statuses.push(s));
+
+      manager.interrupt(session.id);
+
+      expect(ptyMocks.interrupt).toHaveBeenCalled();
+      expect(statuses).not.toContain("idle");
     });
   });
 

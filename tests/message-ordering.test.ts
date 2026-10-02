@@ -117,6 +117,22 @@ describe("applyMessageDone", () => {
 });
 
 describe("applyTranscript", () => {
+  it("moves a message sent mid-turn to where Claude read it, and drops its waiting mark", () => {
+    const sent = { ...msg("user-queued-1", "user", "Also check the README"), awaitingRead: true };
+    const prev = [msg("u1", "user", "Run the slow command"), msg("a1", "assistant", ""), sent];
+    const transcript = [
+      msg("u1", "user", "Run the slow command"),
+      msg("a1", "assistant", ""),
+      msg("att-1", "user", "Also check the README"),
+      msg("a2", "assistant", "Done, and saw your note."),
+    ];
+
+    const result = applyTranscript(prev, transcript);
+
+    expect(result.map((m) => m.id)).toEqual(["u1", "a1", "att-1", "a2"]);
+    expect(result.some((m) => m.awaitingRead)).toBe(false);
+  });
+
   it("replaces optimistic user message in-place with server version", () => {
     const prev = [msg("user-1", "user", "hello"), msg("server-assistant-1", "assistant", "response")];
     const transcript = [msg("server-user-1", "user", "hello"), msg("server-assistant-1", "assistant", "response")];

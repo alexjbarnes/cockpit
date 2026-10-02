@@ -5,11 +5,11 @@ import { sandboxEscapePossible } from "./claude-sandbox-rules";
 import { cleanupHookSettings, prepareHookSettings } from "./claude-settings";
 import { fetchCliInitData } from "./cli-init-fetch";
 import { logDiag } from "./debug-logger";
-import { ONE_M_CREDITS_REQUIRED, type ParsedEvent } from "./event-parser";
+import { ONE_M_CREDITS_REQUIRED, type ParsedEvent, TURN_CONTINUES } from "./event-parser";
 import { newPermissionRequestId, translateHookEvent } from "./hook-event-translator";
 import type { HookResponse, HookRouter, PermissionDecision, SessionHookHandler } from "./hook-router";
 import { PtySession } from "./pty-session";
-import { countTranscriptMessages } from "./transcript";
+import { countTranscriptMessages, promptMatchKey, TranscriptPromptFollower, type TranscriptPrompts } from "./transcript";
 
 export interface PtyRuntimeOptions {
   sessionId: string;
@@ -53,6 +53,16 @@ export interface PtyRuntimeOptions {
  */
 // biome-ignore lint/suspicious/noControlCharactersInRegex: strip ANSI escape sequences
 const ANSI_RE = /\x1b\[[0-9;]*[a-zA-Z]/g;
+/** How long a message typed mid-turn has to show up as the CLI's
+ *  UserPromptSubmit. The CLI runs that hook the moment Enter queues the
+ *  message, so this is far longer than it needs. */
+const MID_TURN_CONFIRM_MS = 5000;
+/** After a turn ends (or is interrupted) with a mid-turn message not yet seen
+ *  taken up, how long to keep reading the transcript for what became of it.
+ *  The CLI starts the turn for it within milliseconds, and writes the entries
+ *  that say so a moment after the hooks around them. */
+const HELD_TAKE_UP_MS = 5000;
+const HELD_POLL_MS = 250;
 const NETWORK_DIALOG_TITLE = "Network request outside of sandbox";
 
 function stringOrEmpty(value: unknown): string {
@@ -110,6 +120,32 @@ export class PtyRuntime {
   private cleaned = false;
   /** Resolver armed by a delivery attempt; fired when UserPromptSubmit confirms the prompt landed. */
   private promptAccepted: (() => void) | null = null;
+  /** A user turn is under way: its prompt was accepted and its Stop has not
+   *  come. While one is, the CLI takes a typed message into its own queue and
+   *  hands it to the model with the next tool result (see sendMidTurnText). */
+  private turnInProgress = false;
+  /** Initial or live deliveries still confirming. While one is, the CLI is not
+   *  yet known to be in a turn, and a UserPromptSubmit belongs to it. */
+  private deliveriesInFlight = 0;
+  /** Resolver armed by sendMidTurnText, fired with the UserPromptSubmit payload. */
+  private midTurnAccepted: ((payload: Record<string, unknown>) => void) | null = null;
+  /** Mid-turn sends still being typed or confirmed. */
+  private midTurnTyping = 0;
+  /**
+   * Messages typed in mid-turn that the CLI has not taken up yet: each one's
+   * promptMatchKey, when it was typed, and the prompt id of the turn it was
+   * typed into (its UserPromptSubmit carries that turn's id, not one of its
+   * own). The CLI takes one up either at the next tool result of that turn, or
+   * as a turn of its own straight after the turn ends (or is interrupted).
+   */
+  private heldMidTurn: Array<{ key: string; at: number; promptId?: string }> = [];
+  private heldWatch: ReturnType<typeof setTimeout> | null = null;
+  /** Reads the transcript from just before the first held message was typed,
+   *  for what became of each; `heldSeen` keeps what it found not yet matched. */
+  private heldFollower: TranscriptPromptFollower | null = null;
+  private heldSeen: TranscriptPrompts = { queued: [], absorbed: [], opened: [] };
+  /** Mid-turn sends type one at a time: two at once would mix their keystrokes. */
+  private midTurnChain: Promise<unknown> = Promise.resolve();
   /** Bumped by every send, and by interrupt/kill, so sendUserText's retry loop
    *  can tell its own delivery is still the current one. */
   private sendEpoch = 0;
@@ -163,6 +199,7 @@ export class PtyRuntime {
       },
       onExit: (info) => {
         this.exited = true;
+        this.stopHeldWatch();
         this.opts.onExit(info);
         this.cleanup().catch(() => {});
       },
@@ -217,42 +254,47 @@ export class PtyRuntime {
     const baselineMsgs = countTranscriptMessages(this.opts.cliSessionId, this.opts.cwd);
     const turnStarted = () => countTranscriptMessages(this.opts.cliSessionId, this.opts.cwd) > baselineMsgs;
     logDiag(sessionId, "pty:deliver-begin", { textLen: text.length, maxAttempts: MAX_ATTEMPTS, baselineMsgs });
-    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-      const pty = this.pty;
-      if (this.exited || !pty) {
-        logDiag(sessionId, "pty:deliver-aborted", { attempt, exited: this.exited, hasPty: !!pty });
-        throw new Error("claude exited before the initial prompt was delivered");
+    this.deliveriesInFlight++;
+    try {
+      for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+        const pty = this.pty;
+        if (this.exited || !pty) {
+          logDiag(sessionId, "pty:deliver-aborted", { attempt, exited: this.exited, hasPty: !!pty });
+          throw new Error("claude exited before the initial prompt was delivered");
+        }
+        let timer: ReturnType<typeof setTimeout> | null = null;
+        const accepted = new Promise<boolean>((resolve) => {
+          this.promptAccepted = () => resolve(true);
+          timer = setTimeout(() => resolve(false), CONFIRM_TIMEOUT_MS);
+        });
+        const attemptAt = Date.now();
+        logDiag(sessionId, "pty:deliver-attempt", { attempt, screenBefore: this.recentScreen() });
+        await pty.sendText(text);
+        const ok = await accepted;
+        if (timer) clearTimeout(timer);
+        this.promptAccepted = null;
+        if (ok) {
+          logDiag(sessionId, "pty:deliver-accepted", { attempt, waitedMs: Date.now() - attemptAt });
+          return;
+        }
+        // The hook did not fire in this window. It can be lost even though the CLI
+        // accepted the prompt and started working, so before resending or failing,
+        // check whether a turn has actually started. If it has, the prompt landed;
+        // do not resend into a live turn or kill a working run.
+        if (turnStarted()) {
+          logDiag(sessionId, "pty:deliver-accepted-via-transcript", { attempt, waitedMs: Date.now() - attemptAt });
+          return;
+        }
+        logDiag(sessionId, "pty:deliver-timeout", { attempt, waitedMs: Date.now() - attemptAt, screenAfter: this.recentScreen() });
+        console.log(
+          `[pty-runtime] initial prompt not confirmed for ${sessionId.slice(0, 8)} (attempt ${attempt}/${MAX_ATTEMPTS}), resending`,
+        );
       }
-      let timer: ReturnType<typeof setTimeout> | null = null;
-      const accepted = new Promise<boolean>((resolve) => {
-        this.promptAccepted = () => resolve(true);
-        timer = setTimeout(() => resolve(false), CONFIRM_TIMEOUT_MS);
-      });
-      const attemptAt = Date.now();
-      logDiag(sessionId, "pty:deliver-attempt", { attempt, screenBefore: this.recentScreen() });
-      await pty.sendText(text);
-      const ok = await accepted;
-      if (timer) clearTimeout(timer);
-      this.promptAccepted = null;
-      if (ok) {
-        logDiag(sessionId, "pty:deliver-accepted", { attempt, waitedMs: Date.now() - attemptAt });
-        return;
-      }
-      // The hook did not fire in this window. It can be lost even though the CLI
-      // accepted the prompt and started working, so before resending or failing,
-      // check whether a turn has actually started. If it has, the prompt landed;
-      // do not resend into a live turn or kill a working run.
-      if (turnStarted()) {
-        logDiag(sessionId, "pty:deliver-accepted-via-transcript", { attempt, waitedMs: Date.now() - attemptAt });
-        return;
-      }
-      logDiag(sessionId, "pty:deliver-timeout", { attempt, waitedMs: Date.now() - attemptAt, screenAfter: this.recentScreen() });
-      console.log(
-        `[pty-runtime] initial prompt not confirmed for ${sessionId.slice(0, 8)} (attempt ${attempt}/${MAX_ATTEMPTS}), resending`,
-      );
+      logDiag(sessionId, "pty:deliver-failed", { attempts: MAX_ATTEMPTS });
+      throw new Error(`claude did not accept the initial prompt after ${MAX_ATTEMPTS} attempts`);
+    } finally {
+      this.deliveriesInFlight--;
     }
-    logDiag(sessionId, "pty:deliver-failed", { attempts: MAX_ATTEMPTS });
-    throw new Error(`claude did not accept the initial prompt after ${MAX_ATTEMPTS} attempts`);
   }
 
   private fetchInitData(): void {
@@ -308,6 +350,15 @@ export class PtyRuntime {
    */
   async sendUserText(text: string): Promise<void> {
     if (!this.pty) throw new Error("PtyRuntime not started");
+    this.deliveriesInFlight++;
+    try {
+      await this.typeUserText(text);
+    } finally {
+      this.deliveriesInFlight--;
+    }
+  }
+
+  private async typeUserText(text: string): Promise<void> {
     const { sessionId, cliSessionId, cwd } = this.opts;
     const MAX_ATTEMPTS = 3;
     // Shorter than the initial prompt's 8s: a live REPL that accepts input does
@@ -378,6 +429,185 @@ export class PtyRuntime {
     );
   }
 
+  /**
+   * Whether a message typed now would join the CLI's own queue for the turn
+   * under way, which hands it to the model with the next tool result, or runs
+   * it as a turn of its own once this one ends.
+   *
+   * Only while a turn is confirmed under way, and only into the input box: not
+   * while a delivery is still confirming (its UserPromptSubmit would be taken
+   * for this message's), and not while a permission or other dialog is waiting
+   * on the user, since typed keys would answer it.
+   */
+  canTakeMidTurnMessage(): boolean {
+    return (
+      !!this.pty &&
+      !this.exited &&
+      this.turnInProgress &&
+      this.deliveriesInFlight === 0 &&
+      this.pendingPermissions.size === 0 &&
+      this.pendingTuiDialogs.size === 0 &&
+      this.blockingDialogOnScreen() === null
+    );
+  }
+
+  /**
+   * Type a message into the CLI while a turn is under way and leave it to the
+   * CLI's queue. Resolves true once the CLI has queued it, false when the
+   * message did not go in (it is then the caller's to send another way).
+   *
+   * Never retyped: a message the CLI queued but whose hook was lost would then
+   * be queued twice. The transcript's enqueue record stands in for a lost hook.
+   */
+  sendMidTurnText(text: string): Promise<boolean> {
+    const typed = this.midTurnChain.then(() => this.typeMidTurnText(text));
+    this.midTurnChain = typed.catch(() => {});
+    return typed;
+  }
+
+  private async typeMidTurnText(text: string): Promise<boolean> {
+    const { sessionId, cliSessionId, cwd } = this.opts;
+    const pty = this.pty;
+    if (!pty || !this.canTakeMidTurnMessage()) {
+      logDiag(sessionId, "pty:mid-turn-refused", { turnInProgress: this.turnInProgress, deliveries: this.deliveriesInFlight });
+      return false;
+    }
+    // Started before typing, so it reads every entry the message leads to.
+    this.heldFollower ??= new TranscriptPromptFollower(cliSessionId, cwd);
+    this.midTurnTyping++;
+    try {
+      let timer: ReturnType<typeof setTimeout> | null = null;
+      const reported = new Promise<Record<string, unknown> | null>((resolve) => {
+        this.midTurnAccepted = resolve;
+        timer = setTimeout(() => resolve(null), MID_TURN_CONFIRM_MS);
+      });
+      const at = Date.now();
+      logDiag(sessionId, "pty:mid-turn-send", { textLen: text.length, head: text.slice(0, 80), screenBefore: this.recentScreen() });
+      await pty.sendText(text);
+      const payload = await reported;
+      if (timer) clearTimeout(timer);
+      this.midTurnAccepted = null;
+      const prompt = typeof payload?.prompt === "string" && payload.prompt ? payload.prompt : text;
+      const key = promptMatchKey(prompt);
+      this.readHeldFollower();
+      if (!payload && !this.takeSeen("queued", key)) {
+        logDiag(sessionId, "pty:mid-turn-unconfirmed", { waitedMs: Date.now() - at, screenAfter: this.recentScreen() });
+        return false;
+      }
+      const promptId = typeof payload?.prompt_id === "string" ? payload.prompt_id : undefined;
+      this.heldMidTurn.push({ key, at, promptId });
+      logDiag(sessionId, "pty:mid-turn-queued", { waitedMs: Date.now() - at, viaHook: !!payload, held: this.heldMidTurn.length });
+      return true;
+    } finally {
+      this.midTurnTyping--;
+      this.releaseFollower();
+    }
+  }
+
+  /** Whether messages typed mid-turn are still in the CLI's queue. After an
+   *  interrupt, the CLI is starting a turn to take them up. */
+  get holdsMidTurnMessages(): boolean {
+    return this.heldMidTurn.length > 0;
+  }
+
+  /** Remove one `key` from what the follower has seen of `kind`. */
+  private takeSeen(kind: keyof TranscriptPrompts, key: string): boolean {
+    const i = this.heldSeen[kind].indexOf(key);
+    if (i === -1) return false;
+    this.heldSeen[kind].splice(i, 1);
+    return true;
+  }
+
+  private readHeldFollower(): void {
+    if (!this.heldFollower) return;
+    const found = this.heldFollower.readNew();
+    this.heldSeen.queued.push(...found.queued);
+    this.heldSeen.absorbed.push(...found.absorbed);
+    this.heldSeen.opened.push(...found.opened);
+  }
+
+  /** Stop following the transcript once nothing is held or being typed. */
+  private releaseFollower(): void {
+    if (this.heldMidTurn.length > 0 || this.midTurnTyping > 0) return;
+    this.heldFollower = null;
+    this.heldSeen = { queued: [], absorbed: [], opened: [] };
+  }
+
+  /**
+   * Drop the held messages the transcript shows the CLI has taken up, and say
+   * whether any of them opened a turn of their own (rather than being handed
+   * over inside the turn they arrived in).
+   */
+  private reconcileHeld(): { opened: boolean } {
+    if (this.heldMidTurn.length === 0) {
+      this.releaseFollower();
+      return { opened: false };
+    }
+    this.readHeldFollower();
+    let openedTurn = false;
+    this.heldMidTurn = this.heldMidTurn.filter((h) => {
+      if (this.takeSeen("absorbed", h.key)) return false;
+      if (!this.takeSeen("opened", h.key)) return true;
+      openedTurn = true;
+      return false;
+    });
+    this.releaseFollower();
+    return { opened: openedTurn };
+  }
+
+  /**
+   * Follow up a turn that ended (or was interrupted) with held messages not
+   * yet seen taken up. Either the CLI opens a turn for them, and the session
+   * carries on until that turn's Stop, or the transcript catches up to show
+   * them handed over inside the turn that just ended, or nothing shows by the
+   * deadline. In the last two no turn is coming, and the session goes idle
+   * rather than spinning.
+   */
+  private watchHeldTakeUp(): void {
+    this.stopHeldWatch();
+    const armedAt = Date.now();
+    const deadline = armedAt + HELD_TAKE_UP_MS;
+    const check = () => {
+      this.heldWatch = null;
+      if (this.exited) return;
+      if (this.reconcileHeld().opened) {
+        // The CLI empties its queue into the one turn, so what was waiting
+        // when this turn ended went with it. Anything typed since is new.
+        this.heldMidTurn = this.heldMidTurn.filter((h) => h.at > armedAt);
+        this.releaseFollower();
+        logDiag(this.opts.sessionId, "pty:mid-turn-turn-opened", { held: this.heldMidTurn.length });
+        return;
+      }
+      if (this.heldMidTurn.some((h) => h.at <= armedAt) && Date.now() < deadline) {
+        this.heldWatch = setTimeout(check, HELD_POLL_MS);
+        return;
+      }
+      // Typed since the turn ended, so into the CLI between turns, where it
+      // opens a turn of its own: that one is still to be seen.
+      this.heldMidTurn = this.heldMidTurn.filter((h) => h.at > armedAt);
+      if (this.heldMidTurn.length > 0) {
+        this.watchHeldTakeUp();
+        return;
+      }
+      logDiag(this.opts.sessionId, "pty:mid-turn-no-turn");
+      this.releaseFollower();
+      this.turnInProgress = false;
+      this.turnEnded = true;
+      this.emit([
+        {
+          type: "message_done",
+          message: { id: uuidv4(), role: "assistant", content: "", toolUses: [], blocks: [], timestamp: Date.now() },
+        },
+      ]);
+    };
+    this.heldWatch = setTimeout(check, HELD_POLL_MS);
+  }
+
+  private stopHeldWatch(): void {
+    if (this.heldWatch) clearTimeout(this.heldWatch);
+    this.heldWatch = null;
+  }
+
   sendSlash(command: string): void {
     if (!this.pty) throw new Error("PtyRuntime not started");
     this.pty.sendSlash(command);
@@ -405,6 +635,16 @@ export class PtyRuntime {
     this.pendingPermissions.clear();
     // The Esc above dismissed any rendered TUI dialog with it.
     this.pendingTuiDialogs.clear();
+    // Esc also makes the CLI take up what is waiting in its queue, at once, as
+    // a turn of its own. That turn opens with no UserPromptSubmit (the hook ran
+    // when the message was typed), so it is the one still in progress.
+    this.stopHeldWatch();
+    this.reconcileHeld();
+    this.turnInProgress = this.heldMidTurn.length > 0;
+    if (this.turnInProgress) {
+      this.turnEnded = false;
+      this.watchHeldTakeUp();
+    }
     void this.clearBlockingDialogs();
   }
 
@@ -481,6 +721,10 @@ export class PtyRuntime {
     this.pendingTuiDialogs.clear();
     // The process is going away, so nothing it launched is still running.
     this.runningTasks.clear();
+    this.turnInProgress = false;
+    this.heldMidTurn = [];
+    this.stopHeldWatch();
+    this.releaseFollower();
     await this.cleanup();
   }
 
@@ -660,8 +904,28 @@ export class PtyRuntime {
         // of what is still running.
         this.turnEnded = true;
         this.syncRunningTasks(payload);
-        logDiag(this.opts.sessionId, "pty:turn-ended", { runningTasks: this.runningTasks.size });
+        this.stopHeldWatch();
+        // A message typed mid-turn that this turn never reached a tool result
+        // for is still in the CLI's queue, and the CLI runs it as a turn of its
+        // own straight away. Nothing announces that turn: its UserPromptSubmit
+        // fired when the message was typed. So the session is not let go idle
+        // while that is still possible (see watchHeldTakeUp).
+        //
+        // A Stop from a later turn than the one a message was typed into is
+        // the end of the turn that took it up: the CLI empties its whole queue
+        // into the next turn, and that turn has its own prompt id.
+        const stopPromptId = typeof payload.prompt_id === "string" ? payload.prompt_id : undefined;
+        if (stopPromptId) this.heldMidTurn = this.heldMidTurn.filter((h) => !h.promptId || h.promptId === stopPromptId);
+        this.reconcileHeld();
+        const continues = this.heldMidTurn.length > 0;
+        this.turnInProgress = continues;
+        logDiag(this.opts.sessionId, "pty:turn-ended", { runningTasks: this.runningTasks.size, heldMidTurn: this.heldMidTurn.length });
         const events = translateHookEvent("Stop", payload);
+        if (continues) {
+          this.turnEnded = false;
+          events.push({ type: "system_message", text: TURN_CONTINUES });
+          this.watchHeldTakeUp();
+        }
         this.emit(events);
       },
       onStopFailure: (payload) => {
@@ -682,6 +946,10 @@ export class PtyRuntime {
         const errorMessage = screenError ?? (hookMessage || "Unknown error");
         this.cancelErrorDebounce();
         this.ptyOutputBuffer = "";
+        this.turnInProgress = false;
+        this.heldMidTurn = [];
+        this.stopHeldWatch();
+        this.releaseFollower();
         logDiag(this.opts.sessionId, "hook:StopFailure", {
           errorType,
           errorMessage: errorMessage.slice(0, 200),
@@ -701,7 +969,15 @@ export class PtyRuntime {
           runningTasks: this.runningTasks.size,
         });
         this.notePayloadMode(payload, "UserPromptSubmit");
+        // A message typed while the turn was under way: the CLI has queued it
+        // and the turn carries on, so nothing here starts a new one.
+        if (this.midTurnAccepted) {
+          this.midTurnAccepted(payload);
+          this.midTurnAccepted = null;
+          return;
+        }
         this.promptAccepted?.();
+        this.turnInProgress = true;
         // A parent turn is starting, so the gate closes: this turn's tool calls
         // are the user's, whatever background work is still going. The CLI
         // submits a prompt of its own when it resumes the parent after a

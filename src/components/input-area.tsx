@@ -1581,7 +1581,9 @@ export function InputArea({
                     ? "Queue paused (send to discard, or manage in modal)"
                     : "Message queued (Esc to interrupt)"
                   : isResponding
-                    ? "Use /btw to nudge, or type to queue..."
+                    ? currentRuntime === "pty"
+                      ? "Message Claude while it works..."
+                      : "Use /btw to nudge, or type to queue..."
                     : planMode
                       ? "Plan with Claude..."
                       : "Send a message..."

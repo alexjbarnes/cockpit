@@ -66,6 +66,9 @@ export interface ChatMessage {
   documents?: DocumentAttachment[];
   textFiles?: TextFileAttachment[];
   model?: string;
+  /** A user message sent while Claude was working that Claude has not read
+   *  yet. Only ever on the local copy: the transcript's has no such flag. */
+  awaitingRead?: boolean;
 }
 
 export interface GlobalSearchResult {
@@ -637,6 +640,9 @@ export type ServerMessage =
       count: number;
       cancelledText?: string;
       sentText?: string;
+      /** sentText went into the CLI's own queue mid-turn: Claude reads it at
+       *  its next tool result, or as the next turn. */
+      midTurn?: boolean;
       messages?: Array<{ id: string; text: string }>;
       paused?: boolean;
       editText?: string;

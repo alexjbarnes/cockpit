@@ -89,6 +89,22 @@ class ClaudePtyProcess implements HarnessProcess {
     });
   }
 
+  // Earlier attachments are left alone: the turn this joins may not have read
+  // them yet. They go with the next ordinary send, by which time it has.
+  async sendMidTurnMessage(text: string, images?: ImageAttachment[], documents?: DocumentAttachment[]): Promise<boolean> {
+    const attachments = writeAttachments(images, documents);
+    this.attachmentPaths.push(...attachments);
+    return this.runtime.sendMidTurnText(buildPtyText(text, attachments)).catch(() => false);
+  }
+
+  canTakeMidTurnMessage(): boolean {
+    return this.runtime.canTakeMidTurnMessage();
+  }
+
+  holdsMidTurnMessages(): boolean {
+    return this.runtime.holdsMidTurnMessages;
+  }
+
   interrupt(): void {
     this.runtime.interrupt();
   }

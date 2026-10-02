@@ -264,12 +264,13 @@ export function createWebSocketHandler(
       });
       if (unsubInit) cleanups.push(unsubInit);
 
-      const unsubQueued = sessionManager.onQueued(sessionId, (count, sentText) => {
+      const unsubQueued = sessionManager.onQueued(sessionId, (count, sentText, midTurn) => {
         send(ws, {
           type: "session:queued",
           sessionId,
           count,
           sentText: sentText ?? undefined,
+          midTurn: midTurn || undefined,
           messages: sessionManager.getQueuedMessages(sessionId),
           paused: sessionManager.isQueuePaused(sessionId),
         });

@@ -272,6 +272,11 @@ export const MessageBubble = memo(function MessageBubble({
           </>
         )}
       </div>
+      {isUser && message.awaitingRead && (
+        <span data-testid="awaiting-read" className="mt-1 text-xs text-muted-foreground">
+          Claude reads this at its next step
+        </span>
+      )}
       {!selectionMode && !collapsedByDefault && <MessageActions message={message} isUser={isUser} workedMs={workedMs} />}
       <Dialog open={previewSrc !== null} onOpenChange={() => setPreviewSrc(null)} className="max-w-3xl">
         <DialogContent className="max-h-[80vh] overflow-auto" onClose={() => setPreviewSrc(null)}>

@@ -858,7 +858,9 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
               Date.now(),
             );
             if (matchedIndex !== -1) queuedTextsRef.current.splice(matchedIndex, 1);
-            setMessages((prev) => [...prev, message]);
+            // Sent mid-turn, it sits in the CLI's queue until Claude's next tool
+            // result. The transcript's copy replaces this one once it has.
+            setMessages((prev) => [...prev, msg.midTurn ? { ...message, awaitingRead: true } : message]);
           }
           break;
         }
