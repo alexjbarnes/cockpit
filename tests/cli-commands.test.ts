@@ -4,8 +4,8 @@ import { classifyCliCommand } from "@/lib/cli-commands";
 describe("classifyCliCommand", () => {
   it("classifies interactive (local-jsx) commands", () => {
     expect(classifyCliCommand("/mcp")).toBe("local-jsx");
-    expect(classifyCliCommand("/config")).toBe("local-jsx");
-    expect(classifyCliCommand("/agents")).toBe("local-jsx");
+    expect(classifyCliCommand("/hooks")).toBe("local-jsx");
+    expect(classifyCliCommand("/output-style")).toBe("local-jsx");
   });
 
   it("classifies local action commands", () => {
@@ -14,7 +14,8 @@ describe("classifyCliCommand", () => {
   });
 
   it("classifies model-invoking (prompt) commands", () => {
-    expect(classifyCliCommand("/review")).toBe("prompt");
+    expect(classifyCliCommand("/init")).toBe("prompt");
+    expect(classifyCliCommand("/insights")).toBe("prompt");
   });
 
   it("accepts names with or without a leading slash and is case-insensitive", () => {

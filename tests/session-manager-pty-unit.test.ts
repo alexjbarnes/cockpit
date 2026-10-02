@@ -958,7 +958,7 @@ describe("SessionManager PTY runtime (unit)", () => {
       manager.sendMessage(session.id, "hello");
       const msgs: string[] = [];
       manager.onSystem(session.id, (m) => msgs.push(m));
-      expect(manager.sendMessage(session.id, "/config")).toBe(true);
+      expect(manager.sendMessage(session.id, "/hooks")).toBe(true);
       expect(msgs.some((m) => m.includes("interactive CLI dialog"))).toBe(true);
     });
 
@@ -968,7 +968,7 @@ describe("SessionManager PTY runtime (unit)", () => {
       ptyMocks.isAlive = false; // simulate PTY death (e.g. crash)
       const msgs: string[] = [];
       manager.onSystem(session.id, (m) => msgs.push(m));
-      manager.sendMessage(session.id, "/config");
+      manager.sendMessage(session.id, "/hooks");
       expect(msgs.every((m) => !m.includes("interactive CLI dialog"))).toBe(true);
     });
 
@@ -1005,7 +1005,7 @@ describe("SessionManager PTY runtime (unit)", () => {
       manager.sendMessage(session.id, "hello");
       const msgs: string[] = [];
       manager.onSystem(session.id, (m) => msgs.push(m));
-      manager.sendMessage(session.id, "/review"); // prompt type
+      manager.sendMessage(session.id, "/init"); // prompt type
       manager.sendMessage(session.id, "/my-custom-command"); // unknown
       expect(msgs.every((m) => !m.includes("isn't available in remote mode"))).toBe(true);
     });
