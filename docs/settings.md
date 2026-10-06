@@ -89,6 +89,12 @@ Each hook is a shell command. Scopes: Global, Project, Local (project-local, not
 
 `/mcp-servers` manages Model Context Protocol integrations. Add a server with name, type (stdio or SSE), and command or URL. The Test button validates the connection. Same global and project scope split as agents.
 
+The Claude account card lists the servers the CLI itself reports, which is the only place an account connector (`claude.ai <name>`) appears: they live on the account, not in any config file Cockpit can read. The list comes from `claude mcp list`, which health-checks every server, so it takes a few seconds and is cached for a minute.
+
+Authenticate runs the CLI's own sign-in. A connector prints a URL to authorise at on claude.ai; a server that speaks OAuth prints its own authorisation URL and then wants the URL the browser was redirected to pasted back. Signing in replaces the credentials the server already holds, so abandoning the flow part-way can leave a working server disconnected. Servers that use OAuth also have an Authenticate button on their own page.
+
+Account connectors only load in sessions that sign in with the Claude account. A session running on another provider sets its own API credentials, which the CLI treats as taking precedence, so those sessions never use them.
+
 ### CLAUDE.md
 
 `/claude-md` edits Claude's memory files inline. Three scopes:
