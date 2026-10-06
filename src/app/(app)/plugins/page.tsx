@@ -11,6 +11,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Input } from "@/components/ui/input";
 import { type AvailablePlugin, type InstalledPlugin, type Marketplace, type PluginScope, usePlugins } from "@/hooks/use-plugins";
 import { useScrollRestoration } from "@/hooks/use-scroll-restoration";
+import { summariseUpdateResults } from "@/lib/plugin-updates";
 
 type Tab = "installed" | "browse" | "marketplaces";
 
@@ -38,6 +39,7 @@ export default function PluginsPage() {
     setEnabled,
     uninstall,
     update,
+    updateAll,
     addMarketplace,
     removeMarketplace,
     updateMarketplace,
@@ -51,6 +53,8 @@ export default function PluginsPage() {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [mktBusy, setMktBusy] = useState<string | null>(null);
+  const [updatingAll, setUpdatingAll] = useState(false);
+  const [updateSummary, setUpdateSummary] = useState<string | null>(null);
 
   const installedIds = useMemo(() => new Set(installed.map((p) => p.id)), [installed]);
 
@@ -69,6 +73,20 @@ export default function PluginsPage() {
     if (!res.ok) setActionError(res.error ?? "Failed to add marketplace");
     setMktBusy(null);
     return res.ok;
+  }
+
+  async function handleUpdateAll() {
+    setUpdatingAll(true);
+    setActionError(null);
+    setUpdateSummary(null);
+    const res = await updateAll();
+    setUpdatingAll(false);
+    if (!res.ok) {
+      setActionError(res.error ?? "Failed to update plugins");
+      return;
+    }
+    const results = res.results ?? [];
+    setUpdateSummary(summariseUpdateResults(results));
   }
 
   async function handleUpdateMarketplace(name?: string) {
@@ -139,19 +157,34 @@ export default function PluginsPage() {
 
       {error && <div className="rounded border border-red-500/30 bg-red-500/5 p-3 text-sm text-red-500">{error}</div>}
       {actionError && <div className="rounded border border-red-500/30 bg-red-500/5 p-3 text-sm text-red-500">{actionError}</div>}
+      {updateSummary && (
+        <div className="rounded border border-green-500/30 bg-green-500/5 p-3 text-sm" data-testid="plugin-update-summary">
+          {updateSummary}
+        </div>
+      )}
 
       {loading && installed.length === 0 && <p className="text-sm text-muted-foreground">Loading plugins...</p>}
 
       {tab === "installed" && !loading && (
-        <Card>
-          <CardContent className="space-y-1 pt-4">
-            {installed.length === 0 ? (
-              <p className="text-sm text-muted-foreground">No plugins installed. Browse a marketplace to add one.</p>
-            ) : (
-              installed.map((p) => <PluginRow key={p.id} plugin={p} />)
-            )}
-          </CardContent>
-        </Card>
+        <div className="space-y-3">
+          {installed.length > 0 && (
+            <div className="flex items-center justify-between">
+              <span className="text-xs text-muted-foreground">Each plugin is pulled from its marketplace source.</span>
+              <Button size="sm" variant="outline" onClick={handleUpdateAll} disabled={updatingAll} data-testid="plugins-update-all">
+                {updatingAll ? <Loader2 className="h-4 w-4 animate-spin" /> : "Update all"}
+              </Button>
+            </div>
+          )}
+          <Card>
+            <CardContent className="space-y-1 pt-4">
+              {installed.length === 0 ? (
+                <p className="text-sm text-muted-foreground">No plugins installed. Browse a marketplace to add one.</p>
+              ) : (
+                installed.map((p) => <PluginRow key={p.id} plugin={p} />)
+              )}
+            </CardContent>
+          </Card>
+        </div>
       )}
 
       {tab === "browse" && !loading && (
