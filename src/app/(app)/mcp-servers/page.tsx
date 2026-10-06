@@ -1,14 +1,16 @@
 "use client";
 
-import { ArrowLeft, ChevronRight, Loader2, Plus } from "lucide-react";
+import { ArrowLeft, Check, ChevronRight, Copy, ExternalLink, Eye, EyeOff, Loader2, Plus, RefreshCw } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { usePageHeader } from "@/components/app-shell";
 import { DirectoryPicker } from "@/components/directory-picker";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { type LoginStart, type McpServerEntry, useMcpConnectors } from "@/hooks/use-mcp-connectors";
 import { type McpServerConfig, useMcpServers } from "@/hooks/use-mcp-servers";
 import { useScrollRestoration } from "@/hooks/use-scroll-restoration";
 
@@ -22,32 +24,58 @@ export default function McpServersPage() {
 
   const cwd = typeof localStorage !== "undefined" ? localStorage.getItem("cockpit-agents-cwd") || undefined : undefined;
   const { servers, loading, getServer, deleteServer } = useMcpServers(cwd);
+  const account = useMcpConnectors(cwd);
+  const [signInName, setSignInName] = useState<string | null>(null);
+
+  const signInDialog = signInName ? (
+    <McpSignInDialog
+      name={signInName}
+      onClose={() => setSignInName(null)}
+      startLogin={account.startLogin}
+      submitRedirect={account.submitRedirect}
+      cancelLogin={account.cancelLogin}
+      onSignedIn={() => account.refresh(true)}
+    />
+  ) : null;
 
   if (mcpName) {
     return (
-      <McpServerDetailView
-        name={mcpName}
-        scope={mcpScope}
-        cwd={cwd}
-        onBack={() => router.push("/mcp-servers")}
-        getServer={getServer}
-        onDelete={async (n, s) => {
-          const ok = await deleteServer(n, s);
-          return ok;
-        }}
-      />
+      <>
+        <McpServerDetailView
+          name={mcpName}
+          scope={mcpScope}
+          cwd={cwd}
+          onBack={() => router.push("/mcp-servers")}
+          getServer={getServer}
+          onAuthenticate={setSignInName}
+          onDelete={async (n, s) => {
+            const ok = await deleteServer(n, s);
+            return ok;
+          }}
+        />
+        {signInDialog}
+      </>
     );
   }
 
-  return <McpServerList servers={servers} loading={loading} />;
+  return (
+    <>
+      <McpServerList servers={servers} loading={loading} account={account} onAuthenticate={setSignInName} />
+      {signInDialog}
+    </>
+  );
 }
 
 function McpServerList({
   servers,
   loading,
+  account,
+  onAuthenticate,
 }: {
   servers: { name: string; scope: "user" | "project"; type: string; command?: string; url?: string }[];
   loading: boolean;
+  account: ReturnType<typeof useMcpConnectors>;
+  onAuthenticate: (name: string) => void;
 }) {
   const router = useRouter();
   const scrollRef = useScrollRestoration<HTMLDivElement>("mcp-servers-scroll");
@@ -84,6 +112,8 @@ function McpServerList({
       {!loading && servers.length === 0 && (
         <p className="text-sm text-muted-foreground">No MCP servers configured. Add one to get started.</p>
       )}
+
+      <ClaudeAccountCard account={account} onAuthenticate={onAuthenticate} />
 
       {globalServers.length > 0 && (
         <Card>
@@ -176,12 +206,281 @@ function ServerRow({ name, type, detail, onClick }: { name: string; type: string
   );
 }
 
+const STATUS_DOT: Record<McpServerEntry["status"], string> = {
+  connected: "bg-green-500",
+  "needs-auth": "bg-amber-500",
+  failed: "bg-red-500",
+  pending: "bg-muted-foreground/40",
+};
+
+const STATUS_LABEL: Record<McpServerEntry["status"], string> = {
+  connected: "Connected",
+  "needs-auth": "Needs authentication",
+  failed: "Failed to connect",
+  pending: "Pending approval",
+};
+
+/**
+ * The servers on the Claude account itself. They are not in any config file
+ * cockpit can read, so the list comes from the CLI, which health-checks each
+ * one and takes a few seconds over it.
+ */
+function ClaudeAccountCard({
+  account,
+  onAuthenticate,
+}: {
+  account: ReturnType<typeof useMcpConnectors>;
+  onAuthenticate: (name: string) => void;
+}) {
+  const connectors = account.servers.filter((s) => s.scope === "connector");
+
+  return (
+    <Card>
+      <CardHeader className="flex flex-row items-center justify-between space-y-0">
+        <CardTitle className="text-base">Claude account</CardTitle>
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={() => account.refresh(true)}
+          disabled={account.loading}
+          title="Check every server again"
+          data-testid="connectors-refresh"
+        >
+          <RefreshCw className={`h-4 w-4 ${account.loading ? "animate-spin" : ""}`} />
+        </Button>
+      </CardHeader>
+      <CardContent className="space-y-1">
+        {account.error && (
+          <div className="rounded border border-red-500/30 bg-red-500/5 p-2 text-xs text-red-500" data-testid="connectors-error">
+            {account.error}
+          </div>
+        )}
+
+        {account.loading && connectors.length === 0 && <p className="text-sm text-muted-foreground">Checking servers...</p>}
+
+        {!account.loading && connectors.length === 0 && !account.error && (
+          <p className="text-sm text-muted-foreground" data-testid="connectors-empty">
+            No account connectors. Sign in with the CLI on this machine to add some.
+          </p>
+        )}
+
+        {connectors.map((server) => (
+          <div
+            key={server.name}
+            className="flex flex-col gap-2 rounded px-2 py-2 sm:flex-row sm:items-center sm:gap-3"
+            data-testid="connector-row"
+          >
+            <div className="flex min-w-0 flex-1 items-center gap-2">
+              <span className={`inline-block h-2 w-2 shrink-0 rounded-full ${STATUS_DOT[server.status]}`} />
+              <div className="min-w-0 flex-1">
+                <span className="block font-mono font-bold text-sm truncate">{server.name.replace(/^claude\.ai /, "")}</span>
+                <p className="text-xs text-muted-foreground truncate mt-0.5" title={server.detail ?? server.target}>
+                  {server.detail ?? server.target}
+                </p>
+              </div>
+              <span className="shrink-0 text-xs text-muted-foreground">{STATUS_LABEL[server.status]}</span>
+            </div>
+            <Button
+              size="sm"
+              variant="outline"
+              className="w-full shrink-0 sm:w-auto"
+              onClick={() => onAuthenticate(server.name)}
+              data-testid="connector-authenticate"
+            >
+              {server.status === "connected" ? "Sign in again" : "Authenticate"}
+            </Button>
+          </div>
+        ))}
+
+        {connectors.length > 0 && (
+          <p className="px-2 pt-1 text-xs text-muted-foreground">
+            Account connectors load in CLI sessions that sign in with your Claude account. A session running on another provider does not
+            use them.
+          </p>
+        )}
+        {account.checkedAt && (
+          <p className="px-2 text-xs text-muted-foreground">
+            Last checked {new Date(account.checkedAt).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}
+          </p>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+/**
+ * Signing in is the CLI's own flow: it prints a URL to authorise at, and either
+ * finishes there (an account connector) or waits for the redirect URL the
+ * browser lands on to be pasted back.
+ */
+function McpSignInDialog({
+  name,
+  onClose,
+  startLogin,
+  submitRedirect,
+  cancelLogin,
+  onSignedIn,
+}: {
+  name: string;
+  onClose: () => void;
+  startLogin: (name: string) => Promise<LoginStart>;
+  submitRedirect: (id: string, redirectUrl: string) => Promise<{ ok: boolean; error?: string }>;
+  cancelLogin: (id: string) => Promise<void>;
+  onSignedIn: () => void;
+}) {
+  const [start, setStart] = useState<LoginStart | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [redirectUrl, setRedirectUrl] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const startRef = useRef<LoginStart | null>(null);
+  const doneRef = useRef(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    startLogin(name)
+      .then((res) => {
+        if (cancelled) return;
+        startRef.current = res;
+        if (!res.ok) setError(res.error ?? "Could not start the sign-in");
+        else setStart(res);
+      })
+      .catch(() => {
+        if (!cancelled) setError("Could not start the sign-in");
+      });
+    return () => {
+      cancelled = true;
+      const pending = startRef.current;
+      if (pending?.id && !doneRef.current) void cancelLogin(pending.id);
+    };
+  }, [name, startLogin, cancelLogin]);
+
+  function handleCopy() {
+    if (!start?.url) return;
+    navigator.clipboard?.writeText(start.url);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  }
+
+  async function handleSubmit() {
+    if (!start?.id || !redirectUrl.trim()) return;
+    setBusy(true);
+    setError(null);
+    const res = await submitRedirect(start.id, redirectUrl.trim());
+    setBusy(false);
+    if (!res.ok) {
+      setError(res.error ?? "Sign-in failed");
+      return;
+    }
+    doneRef.current = true;
+    setDone(true);
+    onSignedIn();
+  }
+
+  return (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent data-testid="mcp-signin-dialog" onClose={onClose}>
+        <DialogHeader>
+          <DialogTitle className="font-mono font-bold">{name}</DialogTitle>
+        </DialogHeader>
+
+        {error && (
+          <div className="rounded border border-red-500/30 bg-red-500/5 p-3 text-sm text-red-500" data-testid="mcp-signin-error">
+            {error}
+          </div>
+        )}
+
+        {!start && !error && (
+          <p className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            Asking the CLI for an authorisation URL...
+          </p>
+        )}
+
+        {done && <p className="text-sm text-green-500">Signed in.</p>}
+
+        {start && (
+          <div className="space-y-3">
+            <div className="flex items-center gap-2">
+              <Input readOnly value={start.url ?? ""} className="font-mono text-xs" data-testid="mcp-signin-url" />
+              <Button size="sm" variant="outline" onClick={handleCopy} className="shrink-0">
+                {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+              </Button>
+              <Button size="sm" variant="outline" asChild className="shrink-0">
+                <a href={start.url} target="_blank" rel="noreferrer">
+                  <ExternalLink className="h-4 w-4" />
+                </a>
+              </Button>
+            </div>
+
+            {start.kind === "connector" ? (
+              <p className="text-sm text-muted-foreground">
+                Authorise on claude.ai, then check the server again. The connector is available the next time a CLI session starts.
+              </p>
+            ) : (
+              <>
+                <p className="text-sm text-muted-foreground">Authorise in the browser, then paste the URL it redirects to here.</p>
+                <div className="flex items-center gap-2">
+                  <Input
+                    value={redirectUrl}
+                    onChange={(e) => setRedirectUrl(e.target.value)}
+                    placeholder="http://localhost:..."
+                    className="font-mono text-xs"
+                    data-testid="mcp-signin-redirect-input"
+                  />
+                  <Button size="sm" onClick={handleSubmit} disabled={busy || !redirectUrl.trim()} data-testid="mcp-signin-submit">
+                    {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Submit"}
+                  </Button>
+                </div>
+              </>
+            )}
+
+            <p className="text-xs text-muted-foreground">
+              Signing in replaces the credentials this server already has, so closing this without finishing can leave it disconnected.
+            </p>
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/** What a masked value shows instead of itself, whatever its real length. */
+const MASK = "••••••••";
+
+/**
+ * An environment variable or header value: masked until clicked, because these
+ * are where API keys and bearer tokens live and the page is as likely to be
+ * open while a screen is shared as any other.
+ */
+function SecretValue({ label, value, separator }: { label: string; value: string; separator: string }) {
+  const [shown, setShown] = useState(false);
+  const Icon = shown ? EyeOff : Eye;
+  return (
+    <button
+      type="button"
+      onClick={() => setShown((s) => !s)}
+      title={shown ? "Hide value" : "Show value"}
+      aria-pressed={shown}
+      data-testid="secret-value"
+      className="block w-full font-mono text-right"
+    >
+      {label}
+      {separator}
+      {shown ? value : MASK}
+      <Icon className="ml-1 inline h-3 w-3 align-text-bottom opacity-60" />
+    </button>
+  );
+}
+
 function McpServerDetailView({
   name: rawName,
   scope,
   cwd,
   onBack,
   getServer,
+  onAuthenticate,
   onDelete,
 }: {
   name: string;
@@ -193,6 +492,7 @@ function McpServerDetailView({
     scope: "user" | "project",
     cwd?: string,
   ) => Promise<{ name: string; scope: string; config: McpServerConfig } | null>;
+  onAuthenticate: (name: string) => void;
   onDelete: (name: string, scope: "user" | "project") => Promise<boolean>;
 }) {
   const name = decodeURIComponent(rawName);
@@ -331,9 +631,7 @@ function McpServerDetailView({
               <span className="text-muted-foreground">Environment</span>
               <span className="text-xs text-right max-w-[60%] break-words">
                 {envKeys.map((k) => (
-                  <span key={k} className="block font-mono">
-                    {k}={config.env![k]}
-                  </span>
+                  <SecretValue key={k} label={k} value={config.env![k]} separator="=" />
                 ))}
               </span>
             </div>
@@ -343,9 +641,7 @@ function McpServerDetailView({
               <span className="text-muted-foreground">Headers</span>
               <span className="text-xs text-right max-w-[60%] break-words">
                 {headerKeys.map((k) => (
-                  <span key={k} className="block font-mono">
-                    {k}: {config.headers![k]}
-                  </span>
+                  <SecretValue key={k} label={k} value={config.headers![k]} separator=": " />
                 ))}
               </span>
             </div>
@@ -373,6 +669,20 @@ function McpServerDetailView({
                 <span className="font-medium">{testResult.success ? "Connected" : "Failed"}</span>
               </div>
               <pre className="whitespace-pre-wrap text-muted-foreground font-mono leading-relaxed">{testResult.logs}</pre>
+            </div>
+          )}
+          {serversType !== "stdio" && (
+            <div className="flex items-center justify-between">
+              <span className="text-sm">Sign in to the server</span>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => onAuthenticate(name)}
+                disabled={actionBusy !== null}
+                data-testid="server-authenticate"
+              >
+                Authenticate
+              </Button>
             </div>
           )}
           <div className="flex items-center justify-between">
