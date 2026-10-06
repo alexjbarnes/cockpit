@@ -30,6 +30,10 @@ export interface ProxyUpstream {
    *  map the CLI's thinking budget onto reasoning_effort for translated
    *  requests. Models absent here never get a reasoning_effort field. */
   effortByModel?: Record<string, string[]>;
+  /** Whether each model takes images (models.dev input modalities). A model
+   *  known to be false is never sent one; a model absent here is sent them as
+   *  before, since the flag is not always known. */
+  supportsImageInputByModel?: Record<string, boolean>;
 }
 
 export type UpstreamResolver = (providerId: string) => ProxyUpstream | null;
@@ -51,7 +55,9 @@ interface AnthropicContentBlock {
   /** Chain-of-thought on a thinking block, mapped to/from the upstream's
    *  reasoning_content — see the assistant branch of anthropicToOpenAIRequest. */
   thinking?: string;
-  source?: { type: string; media_type?: string; data?: string };
+  /** The opaque blob a redacted_thinking block carries instead of its text. */
+  data?: string;
+  source?: { type: string; media_type?: string; data?: string; url?: string };
   id?: string;
   name?: string;
   input?: unknown;
@@ -106,12 +112,61 @@ function blockText(content: string | AnthropicContentBlock[] | undefined): strin
     .join("\n");
 }
 
-export function anthropicToOpenAIRequest(body: AnthropicRequest, opts?: { effortLevels?: string[] }): Record<string, unknown> {
+/** An image block as an OpenAI image part, or null for one this wire cannot
+ *  carry. The payload is checked: a block with no data used to become the URL
+ *  "data:image/png;base64,undefined". */
+function imagePart(block: AnthropicContentBlock): Record<string, unknown> | null {
+  if (block.type !== "image") return null;
+  if (block.source?.type === "base64") {
+    if (!block.source.data || !block.source.media_type) return null;
+    return { type: "image_url", image_url: { url: `data:${block.source.media_type};base64,${block.source.data}` } };
+  }
+  if (block.source?.type === "url" && block.source.url) {
+    return { type: "image_url", image_url: { url: block.source.url } };
+  }
+  return null;
+}
+
+/** Every image in a tool result's content that this wire can carry. */
+function imagePartsInToolResult(content: string | AnthropicContentBlock[] | undefined): Array<Record<string, unknown>> {
+  if (!Array.isArray(content)) return [];
+  return content.map(imagePart).filter((p): p is Record<string, unknown> => p !== null);
+}
+
+/** What a model is told in place of an image it cannot be shown. */
+function omittedImageNote(count: number, model: string | undefined): string {
+  return `[${count === 1 ? "image" : `${count} images`} omitted: ${model ?? "this model"} does not accept images]`;
+}
+
+/** What a model is told about a block this wire has no room for, which is
+ *  better than the stringified content array it used to receive. */
+function unsupportedBlockNote(block: AnthropicContentBlock): string {
+  const kind = block.type === "document" ? `document (${block.source?.media_type ?? "unknown type"})` : block.type;
+  return `[${kind} omitted: this wire carries text and images only]`;
+}
+
+/** A tool result's content when it holds no text and no image this wire can
+ *  carry. Stringifying the array here is where "[object Object]" came from. */
+function toolResultFallback(content: string | AnthropicContentBlock[] | undefined): string {
+  if (typeof content === "string") return content;
+  if (content === undefined || content === null) return "";
+  if (!Array.isArray(content)) return JSON.stringify(content);
+  const kinds = [...new Set(content.map((b) => (typeof b === "string" ? "text" : b.type)))].filter(Boolean);
+  return `[tool returned ${kinds.join(", ") || "content"} that cannot be sent to this model]`;
+}
+
+export function anthropicToOpenAIRequest(
+  body: AnthropicRequest,
+  opts?: { effortLevels?: string[]; modelTakesImages?: boolean },
+): Record<string, unknown> {
   const messages: Array<Record<string, unknown>> = [];
   // Assistant turns that called a tool but carried no thinking; they only
   // need a placeholder reasoning_content if this request ends up in thinking
   // mode, which is not known until reasoning_effort is resolved below.
   const assistantsNeedingReasoning: Array<Record<string, unknown>> = [];
+  // tool_use id to tool name, so an image a tool returned can be labelled with
+  // the tool that produced it when it moves into the user turn.
+  const toolNames = new Map<string, string>();
 
   const system = blockText(body.system);
   if (system) messages.push({ role: "system", content: system });
@@ -121,6 +176,10 @@ export function anthropicToOpenAIRequest(body: AnthropicRequest, opts?: { effort
       messages.push({ role: msg.role, content: msg.content });
       continue;
     }
+    // A message with no content at all (null, absent, or something that is not
+    // a block array) is skipped rather than throwing: this runs inside the
+    // request handler, where a throw would answer nothing at all.
+    if (!Array.isArray(msg.content)) continue;
 
     if (msg.role === "assistant") {
       const text = blockText(msg.content);
@@ -133,6 +192,7 @@ export function anthropicToOpenAIRequest(body: AnthropicRequest, opts?: { effort
         }));
       const out: Record<string, unknown> = { role: "assistant", content: text || null };
       if (toolCalls.length > 0) out.tool_calls = toolCalls;
+      for (const b of msg.content) if (b.type === "tool_use" && b.id) toolNames.set(b.id, b.name ?? "tool");
       // Send the model's own chain-of-thought back the way it arrived. The
       // response direction turns an upstream reasoning_content into an
       // Anthropic thinking block, so the CLI replays that block in history on
@@ -148,6 +208,11 @@ export function anthropicToOpenAIRequest(body: AnthropicRequest, opts?: { effort
         .map((b) => b.thinking ?? "")
         .filter(Boolean)
         .join("\n");
+      // A redacted thinking block carries its reasoning as an opaque blob this
+      // wire has no field for, but its presence still means the turn reasoned:
+      // the placeholder below is what keeps such a turn acceptable to an
+      // upstream that demands reasoning_content back in thinking mode.
+      const hadRedactedThinking = msg.content.some((b) => b.type === "redacted_thinking");
       // A turn that called a tool while also saying something must carry the
       // field even when it did no reasoning at all. DeepSeek refuses
       // {content, tool_calls} with no reasoning_content in thinking mode —
@@ -158,7 +223,7 @@ export function anthropicToOpenAIRequest(body: AnthropicRequest, opts?: { effort
       // fixed. Only applied when reasoning_effort is going upstream, so a
       // non-thinking request never gains the field.
       if (reasoning) out.reasoning_content = reasoning;
-      else if (toolCalls.length > 0) assistantsNeedingReasoning.push(out);
+      else if (toolCalls.length > 0 || hadRedactedThinking) assistantsNeedingReasoning.push(out);
       messages.push(out);
       continue;
     }
@@ -166,17 +231,59 @@ export function anthropicToOpenAIRequest(body: AnthropicRequest, opts?: { effort
     // user message: tool_results become role:"tool" messages (which OpenAI
     // requires directly after the assistant tool_calls turn), remaining
     // text/image blocks follow as the user turn.
+    //
+    // An image a tool returned — the Read tool on a screenshot is the usual
+    // case — cannot ride in a tool message on this wire, so it moves into the
+    // user turn that follows, and the tool message says so. The fallback below
+    // it used to stringify the content array, handing the model the literal
+    // text "[object Object]" in place of the picture.
+    const toolImages: Array<{ part: Record<string, unknown>; tool: string }> = [];
     for (const b of msg.content) {
-      if (b.type === "tool_result") {
-        messages.push({ role: "tool", tool_call_id: b.tool_use_id ?? "", content: blockText(b.content) || String(b.content ?? "") });
+      if (b.type !== "tool_result") continue;
+      const text = blockText(b.content);
+      const images = imagePartsInToolResult(b.content);
+      if (images.length === 0) {
+        messages.push({ role: "tool", tool_call_id: b.tool_use_id ?? "", content: text || toolResultFallback(b.content) });
+        continue;
       }
+      if (opts?.modelTakesImages === false) {
+        messages.push({
+          role: "tool",
+          tool_call_id: b.tool_use_id ?? "",
+          content: [text, omittedImageNote(images.length, body.model)].filter(Boolean).join("\n"),
+        });
+        continue;
+      }
+      messages.push({
+        role: "tool",
+        tool_call_id: b.tool_use_id ?? "",
+        content: text || "The tool returned an image, which follows in the next message.",
+      });
+      const tool = toolNames.get(b.tool_use_id ?? "") ?? "tool";
+      for (const part of images) toolImages.push({ part, tool });
     }
     const parts: Array<Record<string, unknown>> = [];
+    if (toolImages.length > 0) {
+      const byTool = [...new Set(toolImages.map((t) => t.tool))];
+      parts.push({
+        type: "text",
+        text: `${toolImages.length === 1 ? "Image" : "Images"} returned by the ${byTool.join(" and ")} tool:`,
+      });
+      for (const t of toolImages) parts.push(t.part);
+    }
     for (const b of msg.content) {
       if (b.type === "text" && b.text) parts.push({ type: "text", text: b.text });
-      if (b.type === "image" && b.source?.type === "base64") {
-        parts.push({ type: "image_url", image_url: { url: `data:${b.source.media_type};base64,${b.source.data}` } });
+      if (b.type === "image") {
+        if (opts?.modelTakesImages === false) {
+          parts.push({ type: "text", text: omittedImageNote(1, body.model) });
+          continue;
+        }
+        const part = imagePart(b);
+        parts.push(part ?? { type: "text", text: unsupportedBlockNote(b) });
       }
+      // A PDF the user attached: this wire carries text and images only, so the
+      // model is told one was there rather than the block vanishing.
+      if (b.type === "document") parts.push({ type: "text", text: unsupportedBlockNote(b) });
     }
     if (parts.length > 0) {
       const onlyText = parts.every((p) => p.type === "text");
@@ -198,7 +305,16 @@ export function anthropicToOpenAIRequest(body: AnthropicRequest, opts?: { effort
   }
   if (body.tool_choice) {
     const t = body.tool_choice.type;
-    out.tool_choice = t === "any" ? "required" : t === "tool" ? { type: "function", function: { name: body.tool_choice.name } } : "auto";
+    // "none" is a real tool_choice on both wires, so a client that forbids
+    // tools does not get them allowed by the translation.
+    out.tool_choice =
+      t === "any"
+        ? "required"
+        : t === "tool"
+          ? { type: "function", function: { name: body.tool_choice.name } }
+          : t === "none"
+            ? "none"
+            : "auto";
   }
   // Reasoning depth: only models with declared effort levels get a
   // reasoning_effort field — everything else leaves the upstream default, so
@@ -283,8 +399,13 @@ const STOP_REASON: Record<string, string> = {
   content_filter: "end_turn",
 };
 
-function parseArgs(raw: string | undefined): unknown {
-  if (!raw) return {};
+function parseArgs(raw: unknown): unknown {
+  if (raw === undefined || raw === null || raw === "") return {};
+  // Some compatible servers send the arguments as an object rather than a
+  // string. JSON.parse would stringify that to "[object Object]" and throw,
+  // wrapping the whole thing in __raw, so an object is taken as it is.
+  if (typeof raw === "object") return raw;
+  if (typeof raw !== "string") return { __raw: String(raw) };
   try {
     return JSON.parse(raw);
   } catch {
@@ -300,12 +421,12 @@ interface OpenAIResponse {
       content?: string | null;
       reasoning_content?: string | null;
       reasoning?: string | null;
-      tool_calls?: Array<{ id?: string; function?: { name?: string; arguments?: string } }>;
+      tool_calls?: Array<{ id?: string; function?: { name?: string; arguments?: string | Record<string, unknown> } }>;
     };
     finish_reason?: string;
   }>;
   usage?: OpenAIUsage;
-  error?: { message?: string };
+  error?: { message?: string; type?: string };
 }
 
 export function openAIToAnthropicResponse(body: OpenAIResponse): Record<string, unknown> {
@@ -342,11 +463,13 @@ interface OpenAIChunk {
       content?: string | null;
       reasoning_content?: string | null;
       reasoning?: string | null;
-      tool_calls?: Array<{ index?: number; id?: string; function?: { name?: string; arguments?: string } }>;
+      tool_calls?: Array<{ index?: number; id?: string; function?: { name?: string; arguments?: string | Record<string, unknown> } }>;
     };
     finish_reason?: string | null;
   }>;
   usage?: OpenAIUsage | null;
+  /** Some gateways report a failure as a chunk rather than an HTTP status. */
+  error?: { message?: string; type?: string } | null;
 }
 
 /** Stateful translator: feed OpenAI SSE lines, collect Anthropic SSE text.
@@ -357,9 +480,21 @@ export class StreamTranslator {
   private blockIndex = -1;
   private openBlock: "none" | "text" | "tool" | "thinking" = "none";
   private openToolIndex = -1;
+  private lastToolIndex = 0;
+  /** What each tool call index announced. The id and name arrive once, on the
+   *  first fragment, and a stream may switch indexes and come back, or send a
+   *  continuation fragment with no index at all, so both are remembered per
+   *  index rather than read from whichever fragment reopens the block. */
+  private readonly announcedTools = new Map<number, { id: string; name: string }>();
   private finishReason: string | null = null;
   private usage: OpenAIUsage | null = null;
   private buffer = "";
+  /** An error the upstream put in the stream itself (data: {"error": ...}),
+   *  which the CLI would otherwise read as an empty turn. */
+  private upstreamError: string | null = null;
+  /** Whether the stream reached its own end marker. A stream that stops without
+   *  one and without a finish_reason was cut short, which is not end_turn. */
+  private sawDone = false;
 
   private event(name: string, data: Record<string, unknown>): string {
     return `event: ${name}\ndata: ${JSON.stringify({ type: name, ...data })}\n\n`;
@@ -401,6 +536,7 @@ export class StreamTranslator {
       const payload = line.slice(5).trim();
       if (!payload) continue;
       if (payload === "[DONE]") {
+        this.sawDone = true;
         out += this.finish();
         continue;
       }
@@ -410,6 +546,7 @@ export class StreamTranslator {
       } catch {
         continue;
       }
+      if (chunk.error) this.upstreamError = chunk.error.message ?? chunk.error.type ?? "Upstream reported an error";
       out += this.handleChunk(chunk);
     }
     return out;
@@ -450,7 +587,15 @@ export class StreamTranslator {
     }
 
     for (const tc of delta.tool_calls ?? []) {
-      const toolIndex = tc.index ?? 0;
+      // A fragment with no index belongs to the tool call already in flight,
+      // not to index 0: defaulting to 0 split a second call in two.
+      const toolIndex = tc.index ?? (this.openBlock === "tool" ? this.openToolIndex : this.lastToolIndex);
+      this.lastToolIndex = toolIndex;
+      const announced = this.announcedTools.get(toolIndex) ?? { id: `call_${toolIndex}`, name: "" };
+      if (tc.id) announced.id = tc.id;
+      if (tc.function?.name) announced.name = tc.function.name;
+      this.announcedTools.set(toolIndex, announced);
+
       if (this.openBlock !== "tool" || this.openToolIndex !== toolIndex) {
         out += this.closeBlock();
         this.blockIndex += 1;
@@ -458,13 +603,15 @@ export class StreamTranslator {
         this.openToolIndex = toolIndex;
         out += this.event("content_block_start", {
           index: this.blockIndex,
-          content_block: { type: "tool_use", id: tc.id ?? `call_${toolIndex}`, name: tc.function?.name ?? "", input: {} },
+          content_block: { type: "tool_use", id: announced.id, name: announced.name, input: {} },
         });
       }
-      if (tc.function?.arguments) {
+      const args = tc.function?.arguments;
+      const partial = typeof args === "string" ? args : args === undefined || args === null ? "" : JSON.stringify(args);
+      if (partial) {
         out += this.event("content_block_delta", {
           index: this.blockIndex,
-          delta: { type: "input_json_delta", partial_json: tc.function.arguments },
+          delta: { type: "input_json_delta", partial_json: partial },
         });
       }
     }
@@ -480,6 +627,14 @@ export class StreamTranslator {
   /** Close everything out; safe to call once at stream end. */
   finish(): string {
     if (!this.started) return "";
+    // An upstream failure or a stream that stopped before its own end is
+    // reported as an error event: closed as a normal end_turn, the CLI cannot
+    // tell a half-finished answer from a complete one.
+    const failure = this.upstreamError ?? (this.sawDone || this.finishReason ? null : "Upstream stream ended before the turn finished");
+    if (failure) {
+      this.started = false;
+      return this.event("error", { error: { type: "api_error", message: failure } });
+    }
     let out = this.closeBlock();
     out += this.event("message_delta", {
       delta: { stop_reason: STOP_REASON[this.finishReason ?? "stop"] ?? "end_turn", stop_sequence: null },
@@ -680,7 +835,16 @@ export class FormatProxy {
 
   async start(port = 0): Promise<void> {
     if (this.server) return;
-    const server = createServer((req, res) => void this.handle(req, res));
+    const server = createServer((req, res) => {
+      // A throw anywhere in a handler would otherwise be an unhandled rejection,
+      // which on Node 24 ends the process and takes every proxied session with
+      // it. Answer the request instead.
+      this.handle(req, res).catch((err) => {
+        console.error(`[format-proxy] handler failed: ${err instanceof Error ? err.message : String(err)}`);
+        if (!res.headersSent) jsonError(res, 502, `Proxy failed: ${err instanceof Error ? err.message : String(err)}`);
+        else res.end();
+      });
+    });
     await new Promise<void>((resolve, reject) => {
       server.once("error", reject);
       server.listen(port, "127.0.0.1", () => resolve());
@@ -887,7 +1051,10 @@ export class FormatProxy {
       return;
     }
 
-    const openaiBody = anthropicToOpenAIRequest(anthropicBody, { effortLevels: upstream.effortByModel?.[anthropicBody.model] });
+    const openaiBody = anthropicToOpenAIRequest(anthropicBody, {
+      effortLevels: upstream.effortByModel?.[anthropicBody.model],
+      modelTakesImages: upstream.supportsImageInputByModel?.[anthropicBody.model],
+    });
     logProxy(providerId, "translate", {
       model: anthropicBody.model,
       stream: !!anthropicBody.stream,
@@ -961,6 +1128,15 @@ export class FormatProxy {
 
     if (!anthropicBody.stream) {
       const body = (await upstreamRes.json()) as OpenAIResponse;
+      // A 200 whose body is an error object: the message the upstream wrote is
+      // the only useful thing here, and without this the CLI gets an empty turn
+      // and blames the proxy for a malformed response.
+      if (body.error) {
+        const message = body.error.message ?? body.error.type ?? "Upstream reported an error";
+        logProxy(providerId, "error-in-200", { model: anthropicBody.model, stream: false, message: message.slice(0, 300) });
+        jsonError(res, 502, message);
+        return;
+      }
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify(openAIToAnthropicResponse(body)));
       logProxy(providerId, "complete", {
@@ -982,7 +1158,6 @@ export class FormatProxy {
       return;
     }
 
-    res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
     const translator = new StreamTranslator();
     const reader = upstreamRes.body?.getReader();
     if (!reader) {
@@ -991,8 +1166,28 @@ export class FormatProxy {
       return;
     }
     const decoder = new TextDecoder();
+    // A 200 that answers a streaming request with a JSON error rather than a
+    // stream (or with nothing at all) is answered as an error here: relayed,
+    // the CLI sees a turn with no events and reports a malformed response.
+    const first = await reader.read();
+    const firstText = first.value ? decoder.decode(first.value, { stream: true }) : "";
+    const asJsonError = firstText.trim().startsWith("{")
+      ? (JSON.parse(firstText) as { error?: { message?: string; type?: string } }).error
+      : null;
+    if (asJsonError || (first.done && !firstText)) {
+      const message = asJsonError?.message ?? asJsonError?.type ?? "Upstream returned an empty response";
+      logProxy(providerId, "error-in-200", { model: anthropicBody.model, stream: true, message: message.slice(0, 300) });
+      await reader.cancel().catch(() => {});
+      jsonError(res, 502, message);
+      return;
+    }
+    res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
     let aborted: string | null = null;
     try {
+      if (firstText) {
+        const out = translator.feed(firstText);
+        if (out) res.write(out);
+      }
       for (;;) {
         const { done, value } = await reader.read();
         if (done) break;

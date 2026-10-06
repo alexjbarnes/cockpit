@@ -109,7 +109,13 @@ describe("providers", () => {
     vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(zenEntry));
 
     const upstream = resolveProxyUpstream("zen");
-    expect(upstream).toEqual({ baseUrl: "https://opencode.ai/zen/v1", apiKey: "zk-1", modelIds: ["opencode/gpt-5.5"], effortByModel: {} });
+    expect(upstream).toEqual({
+      baseUrl: "https://opencode.ai/zen/v1",
+      apiKey: "zk-1",
+      modelIds: ["opencode/gpt-5.5"],
+      effortByModel: {},
+      supportsImageInputByModel: {},
+    });
 
     const updated = updateProvider("zen", { enabledModels: [] });
     expect(updated.id).toBe("zen");
@@ -118,6 +124,30 @@ describe("providers", () => {
     expect(updated.envVars.ANTHROPIC_BASE_URL).toBeUndefined();
 
     expect(() => deleteProvider("zen")).toThrow(/built-in/);
+  });
+
+  it("marks a model that cannot take images on the proxy upstream", async () => {
+    const fs = await import("node:fs");
+    const { resolveProxyUpstream } = await import("@/server/providers");
+    vi.mocked(fs.readFileSync).mockReturnValue(
+      JSON.stringify([
+        {
+          id: "zen",
+          name: "OpenCode Zen",
+          isBuiltin: true,
+          envVars: { OPENCODE_API_KEY: "zk-1" },
+          models: [
+            { modelId: "text-only/model", displayName: "text-only/model", supportsImageInput: false, contextSizes: [] },
+            { modelId: "sees/model", displayName: "sees/model", supportsImageInput: true, contextSizes: [] },
+          ],
+          enabledModels: [],
+        },
+      ]),
+    );
+
+    // Only the false is listed, so a model whose capability is unknown keeps
+    // being sent images the way it always was.
+    expect(resolveProxyUpstream("zen")?.supportsImageInputByModel).toEqual({ "text-only/model": false });
   });
 
   it("syncZenModels stores models, enables all on first connect, and stamps syncedAt", async () => {
@@ -266,6 +296,7 @@ describe("providers", () => {
       apiKey: "zgk-1",
       modelIds: ["grok-code-fast-2"],
       effortByModel: {},
+      supportsImageInputByModel: {},
     });
 
     const updated = updateProvider("zen-go", { enabledModels: [] });

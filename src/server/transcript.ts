@@ -619,6 +619,8 @@ function parseLines(lines: string[]): { messages: ChatMessage[]; lastUsage: { us
           const tool = toolUseMap.get(tr.tool_use_id || "");
           if (tool) {
             tool.output = extractOutput(tr);
+            const images = extractToolImages(tr);
+            if (images.length > 0) tool.images = images;
             tool.status = "done";
           }
         }
@@ -720,6 +722,8 @@ function parseLines(lines: string[]): { messages: ChatMessage[]; lastUsage: { us
           const tool = toolUseMap.get(toolId);
           if (tool) {
             tool.output = extractOutput(tr);
+            const images = extractToolImages(tr);
+            if (images.length > 0) tool.images = images;
             tool.status = "done";
           }
         }
@@ -1057,6 +1061,21 @@ function extractOutput(block: TranscriptBlock): string {
       .join("\n");
   }
   return "";
+}
+
+/** The images a tool returned. A Read of a screenshot answers with a picture
+ *  rather than text, which extractOutput cannot carry, so the card shows them. */
+function extractToolImages(block: TranscriptBlock): ImageAttachment[] {
+  if (!Array.isArray(block.content)) return [];
+  const images: ImageAttachment[] = [];
+  for (const b of block.content) {
+    if (typeof b === "string" || b.type !== "image") continue;
+    const mediaType = b.source?.media_type;
+    const data = b.source?.data;
+    if (!mediaType || !data) continue;
+    images.push({ mediaType: mediaType as ImageAttachment["mediaType"], data });
+  }
+  return images;
 }
 
 interface SessionMeta {

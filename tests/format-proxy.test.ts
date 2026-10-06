@@ -100,6 +100,253 @@ describe("anthropicToOpenAIRequest", () => {
     ]);
   });
 
+  it("moves an image a tool returned into the user turn, since a tool message cannot carry one", () => {
+    const out = anthropicToOpenAIRequest({
+      model: "m",
+      messages: [
+        { role: "user", content: "look at this screenshot" },
+        { role: "assistant", content: [{ type: "tool_use", id: "toolu_9", name: "Read", input: { file_path: "/tmp/shot.png" } }] },
+        {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "toolu_9",
+              content: [{ type: "image", source: { type: "base64", media_type: "image/png", data: "BBBB" } }],
+            },
+          ],
+        },
+      ],
+    });
+
+    const msgs = out.messages as Array<Record<string, unknown>>;
+    // The tool message says where the picture went instead of stringifying the
+    // content array, which used to hand the model the text "[object Object]".
+    expect(msgs[2]).toEqual({
+      role: "tool",
+      tool_call_id: "toolu_9",
+      content: "The tool returned an image, which follows in the next message.",
+    });
+    expect(msgs[3]).toEqual({
+      role: "user",
+      content: [
+        { type: "text", text: "Image returned by the Read tool:" },
+        { type: "image_url", image_url: { url: "data:image/png;base64,BBBB" } },
+      ],
+    });
+    expect(JSON.stringify(msgs)).not.toContain("[object Object]");
+  });
+
+  it("keeps a tool result's own text alongside the image it returned", () => {
+    const out = anthropicToOpenAIRequest({
+      model: "m",
+      messages: [
+        { role: "assistant", content: [{ type: "tool_use", id: "toolu_1", name: "mcp__shots__capture", input: {} }] },
+        {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "toolu_1",
+              content: [
+                { type: "text", text: "Captured the page." },
+                { type: "image", source: { type: "base64", media_type: "image/jpeg", data: "CCCC" } },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+
+    const msgs = out.messages as Array<Record<string, unknown>>;
+    expect(msgs[1]).toEqual({ role: "tool", tool_call_id: "toolu_1", content: "Captured the page." });
+    expect(msgs[2]).toEqual({
+      role: "user",
+      content: [
+        { type: "text", text: "Image returned by the mcp__shots__capture tool:" },
+        { type: "image_url", image_url: { url: "data:image/jpeg;base64,CCCC" } },
+      ],
+    });
+  });
+
+  it("keeps tool_choice none as none rather than allowing tools", () => {
+    const none = anthropicToOpenAIRequest({ model: "m", messages: [], tools: [{ name: "t" }], tool_choice: { type: "none" } });
+    expect(none.tool_choice).toBe("none");
+    const auto = anthropicToOpenAIRequest({ model: "m", messages: [], tools: [{ name: "t" }], tool_choice: { type: "auto" } });
+    expect(auto.tool_choice).toBe("auto");
+    const any = anthropicToOpenAIRequest({ model: "m", messages: [], tools: [{ name: "t" }], tool_choice: { type: "any" } });
+    expect(any.tool_choice).toBe("required");
+  });
+
+  it("counts a redacted thinking block as reasoning the turn must replay", () => {
+    const out = anthropicToOpenAIRequest(
+      {
+        model: "m",
+        // Thinking mode is what makes the placeholder matter at all.
+        output_config: { effort: "high" },
+        messages: [
+          {
+            role: "assistant",
+            content: [
+              { type: "redacted_thinking", data: "opaque" },
+              { type: "tool_use", id: "t1", name: "Read", input: {} },
+            ],
+          },
+        ],
+      },
+      { effortLevels: ["low", "high"] },
+    );
+
+    // The blob itself cannot be carried, but the placeholder is what an
+    // upstream in thinking mode demands back for a turn that reasoned.
+    expect((out.messages as Array<Record<string, unknown>>)[0].reasoning_content).toBe("");
+  });
+
+  it("skips a message with no content instead of throwing", () => {
+    const out = anthropicToOpenAIRequest({
+      model: "m",
+      messages: [
+        { role: "user", content: "hello" },
+        { role: "assistant", content: null as unknown as string },
+        { role: "user", content: undefined as unknown as string },
+      ],
+    });
+
+    expect((out.messages as Array<Record<string, unknown>>).map((m) => m.role)).toEqual(["user"]);
+  });
+
+  it("never hands the model a stringified content array", () => {
+    const out = anthropicToOpenAIRequest({
+      model: "m",
+      messages: [
+        { role: "assistant", content: [{ type: "tool_use", id: "toolu_d", name: "Read", input: {} }] },
+        {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "toolu_d",
+              content: [{ type: "document", source: { type: "base64", media_type: "application/pdf", data: "JVBERi0=" } }],
+            },
+          ],
+        },
+      ],
+    });
+
+    const msgs = out.messages as Array<Record<string, unknown>>;
+    expect(msgs[1]).toEqual({
+      role: "tool",
+      tool_call_id: "toolu_d",
+      content: "[tool returned document that cannot be sent to this model]",
+    });
+    expect(JSON.stringify(msgs)).not.toContain("[object Object]");
+  });
+
+  it("tells the model a PDF was attached rather than dropping it", () => {
+    const out = anthropicToOpenAIRequest({
+      model: "m",
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "summarise this" },
+            { type: "document", source: { type: "base64", media_type: "application/pdf", data: "JVBERi0=" } },
+          ],
+        },
+      ],
+    });
+
+    const msgs = out.messages as Array<Record<string, unknown>>;
+    expect(msgs[0].content).toBe("summarise this\n[document (application/pdf) omitted: this wire carries text and images only]");
+  });
+
+  it("sends a url image as a url rather than promising one it never delivers", () => {
+    const out = anthropicToOpenAIRequest({
+      model: "m",
+      messages: [
+        { role: "assistant", content: [{ type: "tool_use", id: "toolu_u", name: "Fetch", input: {} }] },
+        {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "toolu_u",
+              content: [{ type: "image", source: { type: "url", url: "https://example.com/shot.png" } }],
+            },
+          ],
+        },
+      ],
+    });
+
+    const msgs = out.messages as Array<Record<string, unknown>>;
+    expect(msgs[1]).toEqual({
+      role: "tool",
+      tool_call_id: "toolu_u",
+      content: "The tool returned an image, which follows in the next message.",
+    });
+    expect(msgs[2]).toEqual({
+      role: "user",
+      content: [
+        { type: "text", text: "Image returned by the Fetch tool:" },
+        { type: "image_url", image_url: { url: "https://example.com/shot.png" } },
+      ],
+    });
+  });
+
+  it("leaves out an image block with no data instead of sending an undefined payload", () => {
+    const out = anthropicToOpenAIRequest({
+      model: "m",
+      messages: [
+        {
+          role: "user",
+          content: [{ type: "image", source: { type: "base64", media_type: "image/png" } }],
+        },
+      ],
+    });
+
+    const msgs = out.messages as Array<Record<string, unknown>>;
+    expect(JSON.stringify(msgs)).not.toContain("base64,undefined");
+    expect(msgs[0].content).toBe("[image omitted: this wire carries text and images only]");
+  });
+
+  it("tells a model that cannot take images what it was not shown", () => {
+    const out = anthropicToOpenAIRequest(
+      {
+        model: "text-only-model",
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "here is a screenshot" },
+              { type: "image", source: { type: "base64", media_type: "image/png", data: "DDDD" } },
+            ],
+          },
+          { role: "assistant", content: [{ type: "tool_use", id: "toolu_2", name: "Read", input: {} }] },
+          {
+            role: "user",
+            content: [
+              {
+                type: "tool_result",
+                tool_use_id: "toolu_2",
+                content: [{ type: "image", source: { type: "base64", media_type: "image/png", data: "EEEE" } }],
+              },
+            ],
+          },
+        ],
+      },
+      { modelTakesImages: false },
+    );
+
+    const msgs = out.messages as Array<Record<string, unknown>>;
+    expect(msgs[0].content).toBe("here is a screenshot\n[image omitted: text-only-model does not accept images]");
+    expect(msgs[2]).toEqual({
+      role: "tool",
+      tool_call_id: "toolu_2",
+      content: "[image omitted: text-only-model does not accept images]",
+    });
+    expect(JSON.stringify(msgs)).not.toContain("image_url");
+  });
+
   it("maps tool_choice any and specific tool", () => {
     const base = { model: "m", messages: [] };
     expect(anthropicToOpenAIRequest({ ...base, tool_choice: { type: "any" } }).tool_choice).toBe("required");
@@ -297,6 +544,28 @@ function parseAnthropicSSE(out: string): Array<{ event: string; data: Record<str
   return events;
 }
 
+describe("openAIToAnthropicResponse tool arguments", () => {
+  it("takes arguments that arrive as an object rather than a JSON string", () => {
+    const out = openAIToAnthropicResponse({
+      id: "c1",
+      model: "m",
+      choices: [
+        {
+          message: {
+            content: null,
+            tool_calls: [{ id: "call_a", function: { name: "Read", arguments: { file_path: "/tmp/a" } as unknown as string } }],
+          },
+          finish_reason: "tool_calls",
+        },
+      ],
+    });
+
+    const content = out.content as Array<{ type: string; input?: unknown }>;
+    const toolUse = content.find((b) => b.type === "tool_use");
+    expect(toolUse?.input).toEqual({ file_path: "/tmp/a" });
+  });
+});
+
 describe("StreamTranslator", () => {
   it("translates a text stream into the Anthropic event vocabulary", () => {
     const t = new StreamTranslator();
@@ -358,6 +627,97 @@ describe("StreamTranslator", () => {
     const messageDelta = events.find((e) => e.event === "message_delta")?.data.delta as { stop_reason: string } | undefined;
     expect(messageDelta?.stop_reason).toBe("tool_use");
     expect(events.filter((e) => e.event === "content_block_stop")).toHaveLength(2);
+  });
+
+  it("reports an error the upstream put in the stream", () => {
+    const t = new StreamTranslator();
+    const out = t.feed(
+      sse([
+        '{"id":"c1","choices":[{"delta":{"content":"partial"},"finish_reason":null}]}',
+        '{"error":{"message":"upstream moderation blocked this request","type":"moderation"}}',
+        "[DONE]",
+      ]),
+    );
+    const events = parseAnthropicSSE(out);
+    const error = events.find((e) => e.event === "error")?.data.error as { message: string } | undefined;
+    expect(error?.message).toBe("upstream moderation blocked this request");
+    expect(events.some((e) => e.event === "message_stop")).toBe(false);
+  });
+
+  it("reports a stream that stops before its own end as an error, not a finished turn", () => {
+    const t = new StreamTranslator();
+    const out = t.feed(
+      sse([
+        '{"id":"c1","choices":[{"delta":{"content":"half an ans"},"finish_reason":null}]}',
+        '{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_a","function":{"name":"Read","arguments":"{\\"file_pa"}}]},"finish_reason":null}]}',
+      ]),
+    );
+    const finished = out + t.finish();
+    const events = parseAnthropicSSE(finished);
+    const error = events.find((e) => e.event === "error")?.data.error as { message: string } | undefined;
+    expect(error?.message).toContain("ended before the turn finished");
+    expect(events.some((e) => e.event === "message_stop")).toBe(false);
+  });
+
+  it("keeps a tool call's id and name when the stream moves to another index and comes back", () => {
+    const t = new StreamTranslator();
+    const out = t.feed(
+      sse([
+        '{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_a","function":{"name":"Bash","arguments":""}}]},"finish_reason":null}]}',
+        '{"choices":[{"delta":{"tool_calls":[{"index":1,"id":"call_b","function":{"name":"Read","arguments":""}}]},"finish_reason":null}]}',
+        '{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\\"command\\":\\"echo A\\"}"}}]},"finish_reason":null}]}',
+        '{"choices":[{"delta":{"tool_calls":[{"index":1,"function":{"arguments":"{\\"file_path\\":\\"/tmp/a\\"}"}}]},"finish_reason":null}]}',
+        '{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}',
+        "[DONE]",
+      ]),
+    );
+    const starts = parseAnthropicSSE(out)
+      .filter((e) => e.event === "content_block_start")
+      .map((e) => e.data.content_block as { type: string; id?: string; name?: string });
+
+    // Four blocks: the call comes back to index 0 after index 1, and each
+    // reopen carries the id and name the stream announced for that index.
+    expect(starts.map((b) => [b.id, b.name])).toEqual([
+      ["call_a", "Bash"],
+      ["call_b", "Read"],
+      ["call_a", "Bash"],
+      ["call_b", "Read"],
+    ]);
+  });
+
+  it("treats a fragment with no index as part of the tool call already in flight", () => {
+    const t = new StreamTranslator();
+    const out = t.feed(
+      sse([
+        '{"choices":[{"delta":{"tool_calls":[{"index":1,"id":"call_b","function":{"name":"Read","arguments":""}}]},"finish_reason":null}]}',
+        '{"choices":[{"delta":{"tool_calls":[{"function":{"arguments":"{\\"file_path\\":\\"/tmp/a\\"}"}}]},"finish_reason":null}]}',
+        '{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}',
+        "[DONE]",
+      ]),
+    );
+    const events = parseAnthropicSSE(out);
+    expect(events.filter((e) => e.event === "content_block_start")).toHaveLength(1);
+    const json = events
+      .filter((e) => e.event === "content_block_delta")
+      .map((e) => (e.data.delta as { partial_json?: string }).partial_json ?? "")
+      .join("");
+    expect(json).toBe('{"file_path":"/tmp/a"}');
+  });
+
+  it("accepts tool arguments sent as an object rather than a string", () => {
+    const t = new StreamTranslator();
+    const out = t.feed(
+      sse([
+        '{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_a","function":{"name":"Read","arguments":{"file_path":"/tmp/a"}}}]},"finish_reason":null}]}',
+        '{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}',
+        "[DONE]",
+      ]),
+    );
+    const json = parseAnthropicSSE(out)
+      .filter((e) => e.event === "content_block_delta")
+      .map((e) => (e.data.delta as { partial_json?: string }).partial_json ?? "")
+      .join("");
+    expect(json).toBe('{"file_path":"/tmp/a"}');
   });
 
   it("maps reasoning deltas to a thinking block before the answer text", () => {
@@ -477,6 +837,48 @@ describe("FormatProxy server", () => {
     const addr = upstream?.address();
     return typeof addr === "object" && addr ? addr.port : 0;
   }
+
+  it("answers a 200 whose body is an error object with the upstream's own message", async () => {
+    const port = await startUpstream((_body, res) => {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: { message: "upstream moderation blocked this request", type: "moderation" } }));
+    });
+    proxy = new FormatProxy(() => ({ baseUrl: `http://127.0.0.1:${port}`, apiKey: "k" }));
+    await proxy.start();
+
+    const res = await fetch(`${proxy.getUrl("zen")}/v1/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "m", max_tokens: 10, messages: [{ role: "user", content: "hi" }] }),
+    });
+
+    expect(res.status).toBe(502);
+    expect(await res.json()).toEqual({
+      type: "error",
+      error: { type: "api_error", message: "upstream moderation blocked this request" },
+    });
+  });
+
+  it("answers a streaming request that gets a JSON error body the same way", async () => {
+    const port = await startUpstream((_body, res) => {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: { message: "upstream moderation blocked this request" } }));
+    });
+    proxy = new FormatProxy(() => ({ baseUrl: `http://127.0.0.1:${port}`, apiKey: "k" }));
+    await proxy.start();
+
+    const res = await fetch(`${proxy.getUrl("zen")}/v1/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "m", max_tokens: 10, stream: true, messages: [{ role: "user", content: "hi" }] }),
+    });
+
+    expect(res.status).toBe(502);
+    expect(await res.json()).toEqual({
+      type: "error",
+      error: { type: "api_error", message: "upstream moderation blocked this request" },
+    });
+  });
 
   it("serves the provider catalog on the models probe and stubs count_tokens", async () => {
     proxy = new FormatProxy(() => ({ baseUrl: "http://127.0.0.1:1", apiKey: "k", modelIds: ["opencode/gpt-5.5"] }));

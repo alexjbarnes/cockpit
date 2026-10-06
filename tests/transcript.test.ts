@@ -358,6 +358,35 @@ describe("transcript module", () => {
       expect(result.messages[0].content).toContain("part 2");
     });
 
+    it("gives a tool card the images the tool returned", async () => {
+      (existsSync as any).mockReturnValue(true);
+      const content = jsonl(
+        {
+          type: "assistant",
+          message: { id: "a3", content: [{ type: "tool_use", id: "t9", name: "Read", input: { file_path: "/tmp/shot.png" } }] },
+        },
+        {
+          type: "user",
+          message: {
+            content: [
+              {
+                type: "tool_result",
+                tool_use_id: "t9",
+                content: [{ type: "image", source: { type: "base64", media_type: "image/png", data: "iVBORw0KG..." } }],
+              },
+            ],
+          },
+        },
+      );
+      (readFile as any).mockResolvedValue(content);
+
+      const result = await loadTranscript("session-123", "/tmp");
+
+      const tool = result.messages[0].toolUses?.[0];
+      expect(tool).toMatchObject({ name: "Read", output: "", status: "done" });
+      expect(tool?.images).toEqual([{ mediaType: "image/png", data: "iVBORw0KG..." }]);
+    });
+
     it("extracts images from user content arrays", async () => {
       (existsSync as any).mockReturnValue(true);
       const content = jsonl({

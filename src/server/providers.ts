@@ -308,6 +308,7 @@ export function resolveProxyUpstream(providerId: string): {
   modelIds: string[];
   wireFormat?: "openai" | "anthropic";
   effortByModel?: Record<string, string[]>;
+  supportsImageInputByModel?: Record<string, boolean>;
 } | null {
   if (providerId === OPENROUTER_PROVIDER_ID) {
     const stored = loadBuiltinStored(OPENROUTER_PROVIDER_ID);
@@ -329,7 +330,12 @@ export function resolveProxyUpstream(providerId: string): {
   const models = stored?.models ?? [];
   const effortByModel: Record<string, string[]> = {};
   for (const m of models) if ((m.effortLevels ?? []).length > 0) effortByModel[m.modelId] = m.effortLevels;
-  return { baseUrl: cfg.baseUrl(), apiKey, modelIds: models.map((m) => m.modelId), effortByModel };
+  // Only the translated path needs this: a model known to refuse image input
+  // gets a note in place of the picture instead of a request the upstream
+  // rejects outright.
+  const supportsImageInputByModel: Record<string, boolean> = {};
+  for (const m of models) if (m.supportsImageInput === false) supportsImageInputByModel[m.modelId] = false;
+  return { baseUrl: cfg.baseUrl(), apiKey, modelIds: models.map((m) => m.modelId), effortByModel, supportsImageInputByModel };
 }
 
 interface ModelsDevEntry {

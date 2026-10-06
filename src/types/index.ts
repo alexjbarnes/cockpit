@@ -28,6 +28,9 @@ export interface ToolUse {
   name: string;
   input: string;
   output: string;
+  /** Images the tool returned, which the output line cannot carry: Read on a
+   *  screenshot hands back a picture, not text. */
+  images?: ImageAttachment[];
   filePath?: string;
   status: "running" | "done";
   children?: ToolUse[];

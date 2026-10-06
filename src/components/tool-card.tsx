@@ -6,12 +6,13 @@ import { useSettings } from "@/hooks/use-settings";
 import { agentIdFromOutput, isAsyncLaunchOutput } from "@/lib/agent-tasks";
 import { shortPath } from "@/lib/path";
 import { cn } from "@/lib/utils";
-import type { ChatMessage, ToolUse } from "@/types";
+import type { ChatMessage, ImageAttachment, ToolUse } from "@/types";
 import { useShell } from "./app-shell";
 import { CodeBlock, languageFromPath, prehighlight } from "./code-block";
 import { DiffViewer } from "./diff-viewer";
 import { MessageBubble } from "./message-bubble";
 import { PlanViewModal } from "./plan-view-modal";
+import { Dialog, DialogContent } from "./ui/dialog";
 
 /** How often an open transcript re-reads a still-working agent. Each poll is
  *  one read of that agent's JSONL, and only while its card is expanded. */
@@ -108,7 +109,7 @@ export function ToolCard({ tool, expandedToolIds }: ToolCardProps) {
     tool.name === "TaskList" ||
     tool.name === "TaskGet" ||
     tool.name === "TodoWrite";
-  const hasContent = !isStatusOnly && (tool.input || tool.output);
+  const hasContent = !isStatusOnly && (tool.input || tool.output || tool.images?.length);
 
   // Track whether this expansion was user-initiated (click) vs automatic
   const userToggled = useMemo(() => ({ current: false }), []);
@@ -430,8 +431,44 @@ function ReadContent({ input, tool, dark }: { input: Record<string, unknown>; to
   return (
     <div className="space-y-1">
       {filePath && <FilePathLink filePath={filePath}>{filePath}</FilePathLink>}
+      {tool.images && tool.images.length > 0 && <ToolImages images={tool.images} />}
       {tool.output && <CodeBlock code={tool.output} language={lang} dark={dark} />}
     </div>
+  );
+}
+
+/** Images a tool returned, which its output line cannot carry: a Read of a
+ *  screenshot answers with a picture rather than text. Rendered the way the
+ *  images in a user's own message are, with a click to open one full size. */
+function ToolImages({ images }: { images: ImageAttachment[] }) {
+  const [preview, setPreview] = useState<string | null>(null);
+
+  return (
+    <>
+      <div className="flex gap-2 flex-wrap">
+        {images.map((img, i) => {
+          const src = `data:${img.mediaType};base64,${img.data}`;
+          return (
+            <img
+              key={i}
+              src={src}
+              className="max-h-60 rounded border object-contain cursor-pointer"
+              alt=""
+              data-testid="tool-image"
+              onClick={(e) => {
+                e.stopPropagation();
+                setPreview(src);
+              }}
+            />
+          );
+        })}
+      </div>
+      <Dialog open={preview !== null} onOpenChange={(open) => !open && setPreview(null)}>
+        <DialogContent className="max-h-[80vh] overflow-auto" onClose={() => setPreview(null)}>
+          {preview && <img src={preview} className="w-full rounded object-contain" alt="" />}
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }
 

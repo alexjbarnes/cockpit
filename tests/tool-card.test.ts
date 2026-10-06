@@ -39,3 +39,21 @@ describe("ToolCard button nesting", () => {
     expect(html.includes('role="button"')).toBe(true);
   });
 });
+
+describe("ToolCard images", () => {
+  it("shows a picture the tool returned, which its output line cannot carry", () => {
+    const tool: ToolUse = {
+      ...readTool("Read", "/tmp/shot.png"),
+      images: [{ mediaType: "image/png", data: "iVBORw0KGgo=" }],
+    };
+    const html = renderToStaticMarkup(
+      React.createElement(ToolCard, {
+        tool,
+        expandedToolIds: { current: new Set([tool.id]) } as React.RefObject<Set<string>>,
+      }),
+    );
+
+    expect(html).toContain('data-testid="tool-image"');
+    expect(html).toContain("data:image/png;base64,iVBORw0KGgo=");
+  });
+});

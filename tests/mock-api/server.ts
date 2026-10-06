@@ -110,6 +110,13 @@ export function createMockApiServer(): Promise<MockApiServer> {
       // correctness is unit-tested (format-proxy.test.ts); this endpoint
       // exists to prove the CLI → proxy → upstream plumbing, so requests are
       // recorded for assertions and the reply is constant.
+      //
+      // One exception: a turn that asks the CLI to read an image gets a Read
+      // tool call, so a spec can drive a tool that answers with a picture
+      // without the mock having to script OpenAI-shaped tool calls. Only the
+      // newest message is inspected, and only when the request carries tools,
+      // so the follow-up turn (which holds the tool result) gets the constant
+      // reply and the loop ends.
       if (req.method === "POST" && pathOnly === "/v1/chat/completions") {
         readBody(req).then((raw) => {
           requests.push({
@@ -119,11 +126,42 @@ export function createMockApiServer(): Promise<MockApiServer> {
             body: raw,
             headers: req.headers as Record<string, string | string[] | undefined>,
           });
+
+          const asked = requestedImageRead(raw);
           res.writeHead(200, { "Content-Type": "text/event-stream" });
-          res.write(
-            'data: {"id":"chatcmpl-mock","model":"mock","choices":[{"delta":{"role":"assistant","content":"Hello from zen upstream"},"finish_reason":null}]}\n\n',
-          );
-          res.write('data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n');
+          if (asked) {
+            res.write(
+              `data: ${JSON.stringify({
+                id: "chatcmpl-mock",
+                model: "mock",
+                choices: [
+                  {
+                    delta: {
+                      role: "assistant",
+                      tool_calls: [{ index: 0, id: "call_mock_read", type: "function", function: { name: "Read", arguments: "" } }],
+                    },
+                    finish_reason: null,
+                  },
+                ],
+              })}\n\n`,
+            );
+            res.write(
+              `data: ${JSON.stringify({
+                choices: [
+                  {
+                    delta: { tool_calls: [{ index: 0, function: { arguments: JSON.stringify({ file_path: asked }) } }] },
+                    finish_reason: null,
+                  },
+                ],
+              })}\n\n`,
+            );
+            res.write('data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}\n\n');
+          } else {
+            res.write(
+              'data: {"id":"chatcmpl-mock","model":"mock","choices":[{"delta":{"role":"assistant","content":"Hello from zen upstream"},"finish_reason":null}]}\n\n',
+            );
+            res.write('data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n');
+          }
           res.write('data: {"choices":[],"usage":{"prompt_tokens":5,"completion_tokens":4}}\n\n');
           res.write("data: [DONE]\n\n");
           res.end();
@@ -258,6 +296,29 @@ export function createMockApiServer(): Promise<MockApiServer> {
       });
     });
   });
+}
+
+/** The path in a "read the image at <path>" turn, when the request carries
+ *  tools and no tool has run yet, so the OpenAI door can answer with a Read
+ *  tool call. Skipping once a tool message exists is what stops the follow-up
+ *  turn (which holds the tool result) triggering another one. Null for
+ *  everything else. */
+function requestedImageRead(raw: string): string | null {
+  let body: { tools?: unknown[]; messages?: Array<{ role?: string; content?: unknown }> };
+  try {
+    body = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  const messages = body.messages ?? [];
+  if (!Array.isArray(body.tools) || body.tools.length === 0) return null;
+  if (messages.some((m) => m.role === "tool")) return null;
+  for (const message of messages) {
+    const text = typeof message.content === "string" ? message.content : JSON.stringify(message.content ?? "");
+    const path = /read the image at (\S+)/i.exec(text)?.[1];
+    if (path) return path;
+  }
+  return null;
 }
 
 function readBody(req: IncomingMessage): Promise<string> {
