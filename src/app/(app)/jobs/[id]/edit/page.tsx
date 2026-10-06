@@ -90,8 +90,8 @@ function ScheduleEntry({
   const jobName = (jobId: string) => otherJobs.find((j) => j.id === jobId)?.name;
   return (
     <div className="border rounded-md p-3 space-y-2">
-      <div className="flex items-center justify-between">
-        <div className="flex gap-2">
+      <div className="flex items-start justify-between gap-2">
+        <div className="flex min-w-0 flex-wrap gap-2">
           <Button
             variant={value.type === "simple" ? "default" : "outline"}
             size="sm"
@@ -132,7 +132,7 @@ function ScheduleEntry({
           )}
         </div>
         {canRemove && (
-          <button type="button" onClick={onRemove} className="text-muted-foreground hover:text-destructive">
+          <button type="button" onClick={onRemove} className="shrink-0 text-muted-foreground hover:text-destructive">
             <X className="h-4 w-4" />
           </button>
         )}
