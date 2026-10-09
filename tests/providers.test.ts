@@ -327,7 +327,7 @@ describe("providers", () => {
                 models: {
                   "grok-code-fast-2": {
                     name: "Grok Code Fast 2",
-                    cost: { input: 0.2, output: 1.5 },
+                    cost: { input: 0.2, output: 1.5, cache_read: 0.02 },
                     limit: { context: 256000 },
                     tool_call: true,
                     reasoning: false,
@@ -364,7 +364,9 @@ describe("providers", () => {
     // enriched from models.dev's "opencode-go" key: pricing per M, raw context, capability flags
     expect(byId["grok-code-fast-2"]).toMatchObject({
       displayName: "Grok Code Fast 2",
-      pricing: { inPerM: 0.2, outPerM: 1.5 },
+      // cache_read rides along so the spend estimate prices cache hits at
+      // their own rate rather than the input rate
+      pricing: { inPerM: 0.2, outPerM: 1.5, cacheReadPerM: 0.02 },
       contextLength: 256000,
       free: false,
       supportsTools: true,

@@ -114,6 +114,10 @@ export function mapOpenRouterModel(raw: OpenRouterRawModel): ProviderModel | nul
   if (!(raw.supported_parameters ?? []).includes("tools")) return null;
   const prompt = Number(raw.pricing?.prompt ?? 0);
   const completion = Number(raw.pricing?.completion ?? 0);
+  // What the upstream charges for a prompt token it served from its cache:
+  // much less than the input rate, and the reason a spend estimate that bills
+  // every prompt token at the input rate reads high.
+  const cacheRead = Number(raw.pricing?.input_cache_read ?? 0);
   // Zero prompt/completion alone is not "free": media-output models bill on
   // audio/image generation (sometimes without exposing it in this pricing
   // map), and "openrouter/*" ids are meta-routers with no price of their own.
@@ -136,7 +140,13 @@ export function mapOpenRouterModel(raw: OpenRouterRawModel): ProviderModel | nul
     effortLevels,
     contextSizes: [],
     contextLength: raw.context_length,
-    pricing: { inPerM: prompt * PER_TOKEN_TO_PER_M, outPerM: completion * PER_TOKEN_TO_PER_M },
+    // Absent rather than zero when the catalog does not declare one, so a
+    // consumer falls back to the input rate instead of reading a free cache.
+    pricing: {
+      inPerM: prompt * PER_TOKEN_TO_PER_M,
+      outPerM: completion * PER_TOKEN_TO_PER_M,
+      cacheReadPerM: cacheRead ? cacheRead * PER_TOKEN_TO_PER_M : undefined,
+    },
     free,
     supportsTools: params.includes("tools"),
     supportsReasoning: params.includes("reasoning"),

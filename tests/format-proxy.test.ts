@@ -1510,7 +1510,7 @@ describe("FormatProxy server", () => {
       res.end(
         JSON.stringify({
           choices: [{ message: { content: "ok" }, finish_reason: "stop" }],
-          usage: { prompt_tokens: 12, completion_tokens: 7 },
+          usage: { prompt_tokens: 12, completion_tokens: 7, prompt_tokens_details: { cached_tokens: 8 } },
         }),
       );
     });
@@ -1524,7 +1524,9 @@ describe("FormatProxy server", () => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ model: "opencode/gpt-5.5", max_tokens: 5, messages: [{ role: "user", content: "hi" }] }),
     });
-    expect(events).toEqual([{ providerId: "zen", modelId: "opencode/gpt-5.5", inputTokens: 12, outputTokens: 7 }]);
+    // The cache read rides along, since prompt_tokens includes it and the spend
+    // estimate prices that part at the cache rate.
+    expect(events).toEqual([{ providerId: "zen", modelId: "opencode/gpt-5.5", inputTokens: 12, outputTokens: 7, cacheReadTokens: 8 }]);
   });
 
   it("reports stream usage from the final include_usage chunk", async () => {
@@ -1551,7 +1553,7 @@ describe("FormatProxy server", () => {
       body: JSON.stringify({ model: "m1", max_tokens: 5, stream: true, messages: [{ role: "user", content: "hi" }] }),
     });
     await res.text();
-    expect(events).toEqual([{ providerId: "zen", modelId: "m1", inputTokens: 40, outputTokens: 9 }]);
+    expect(events).toEqual([{ providerId: "zen", modelId: "m1", inputTokens: 40, outputTokens: 9, cacheReadTokens: 0 }]);
   });
 });
 

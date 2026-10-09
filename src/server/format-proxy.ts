@@ -43,8 +43,12 @@ export type UpstreamResolver = (providerId: string) => ProxyUpstream | null;
 export interface ProxyUsageEvent {
   providerId: string;
   modelId: string;
+  /** The upstream's prompt tokens, which include the cache reads below. */
   inputTokens: number;
   outputTokens: number;
+  /** Prompt tokens served from the upstream's cache, which the meter prices at
+   *  the cache rate rather than the input rate. */
+  cacheReadTokens: number;
 }
 
 // ── Request translation (Anthropic → OpenAI) ────────────────────────────
@@ -1153,6 +1157,7 @@ export class FormatProxy {
           modelId: anthropicBody.model,
           inputTokens: body.usage.prompt_tokens ?? 0,
           outputTokens: body.usage.completion_tokens ?? 0,
+          cacheReadTokens: Math.min(cachedPromptTokens(body.usage), body.usage.prompt_tokens ?? 0),
         });
       }
       return;
@@ -1215,6 +1220,7 @@ export class FormatProxy {
         modelId: anthropicBody.model,
         inputTokens: usage.prompt_tokens ?? 0,
         outputTokens: usage.completion_tokens ?? 0,
+        cacheReadTokens: Math.min(cachedPromptTokens(usage), usage.prompt_tokens ?? 0),
       });
     }
   }

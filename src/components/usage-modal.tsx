@@ -130,6 +130,7 @@ function OpenRouterUsagePanel() {
 interface MeteredWindow {
   inputTokens: number;
   outputTokens: number;
+  cacheReadTokens: number;
   requests: number;
   costUSD: number;
 }
@@ -189,6 +190,7 @@ function BuiltinUsagePanel({ providerId }: { providerId: string }) {
           <CreditRow label="Spend this week (est.)" value={formatUSD(data.spend.week.costUSD)} />
           <CreditRow label="Spend this month (est.)" value={formatUSD(data.spend.month.costUSD)} />
           <CreditRow label="Requests this week" value={String(data.spend.week.requests)} />
+          <CreditRow label="Cache reads this week" value={`${Math.round(data.spend.week.cacheReadTokens / 1000).toLocaleString()}k`} />
           <p className="mt-3 text-xs text-muted-foreground">
             {providerId === "zen"
               ? "Metered by cockpit from proxied sessions at current model prices. Billing lives in your opencode.ai workspace console."

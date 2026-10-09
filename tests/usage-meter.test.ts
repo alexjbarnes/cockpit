@@ -63,12 +63,59 @@ describe("UsageMeter", () => {
     const s = meter.summarize("zen", pricing, now);
 
     // today: 1M in @ $2 + 0.5M out @ $10 = $7
-    expect(s.today).toEqual({ inputTokens: 1_000_000, outputTokens: 500_000, requests: 1, costUSD: 7 });
+    expect(s.today).toEqual({ inputTokens: 1_000_000, outputTokens: 500_000, cacheReadTokens: 0, requests: 1, costUSD: 7 });
     // week adds the 3-day-old row (+$4); other providers and future rows excluded
-    expect(s.week).toEqual({ inputTokens: 3_000_000, outputTokens: 500_000, requests: 2, costUSD: 11 });
+    expect(s.week).toEqual({ inputTokens: 3_000_000, outputTokens: 500_000, cacheReadTokens: 0, requests: 2, costUSD: 11 });
     // month adds the free row at zero cost; the 40-day row stays out
     expect(s.month.requests).toBe(3);
     expect(s.month.costUSD).toBe(11);
+  });
+
+  it("prices cache reads at the cache rate rather than the input rate", () => {
+    const meter = new UsageMeter({ file: tempFile() });
+    const now = Date.now();
+    // 1M prompt tokens, 900k of them served from cache: the upstream bills the
+    // cached part at its own rate, so pricing every prompt token as input reads
+    // several times high.
+    meter.record({
+      ts: now - 1000,
+      providerId: "zen-go",
+      modelId: "m",
+      inputTokens: 1_000_000,
+      outputTokens: 100_000,
+      cacheReadTokens: 900_000,
+    });
+
+    const pricing = new Map([["m", { inPerM: 0.15, outPerM: 0.6, cacheReadPerM: 0.003 }]]);
+    const s = meter.summarize("zen-go", pricing, now);
+
+    // 100k uncached @ $0.15 + 900k cached @ $0.003 + 100k out @ $0.6
+    expect(s.today.costUSD).toBeCloseTo(0.015 + 0.0027 + 0.06, 6);
+    expect(s.today.cacheReadTokens).toBe(900_000);
+  });
+
+  it("falls back to the input rate for a model with no cache price, and for rows written without one", () => {
+    const meter = new UsageMeter({ file: tempFile() });
+    const now = Date.now();
+    meter.record({ ts: now - 2000, providerId: "zen-go", modelId: "m", inputTokens: 1_000_000, outputTokens: 0, cacheReadTokens: 500_000 });
+    // A row from before cache reads were recorded has no field at all.
+    meter.record({ ts: now - 1000, providerId: "zen-go", modelId: "m", inputTokens: 1_000_000, outputTokens: 0 });
+
+    const noCacheRate = new Map([["m", { inPerM: 0.15, outPerM: 0.6 }]]);
+    expect(meter.summarize("zen-go", noCacheRate, now).today.costUSD).toBeCloseTo(0.3, 6);
+
+    const withCacheRate = new Map([["m", { inPerM: 0.15, outPerM: 0.6, cacheReadPerM: 0.003 }]]);
+    // Only the row that recorded its cache reads is discounted.
+    expect(meter.summarize("zen-go", withCacheRate, now).today.costUSD).toBeCloseTo(0.075 + 0.0015 + 0.15, 6);
+  });
+
+  it("never lets cache reads exceed the prompt tokens they came from", () => {
+    const meter = new UsageMeter({ file: tempFile() });
+    const now = Date.now();
+    meter.record({ ts: now - 1000, providerId: "zen-go", modelId: "m", inputTokens: 100, outputTokens: 0, cacheReadTokens: 500 });
+
+    const pricing = new Map([["m", { inPerM: 1, outPerM: 0, cacheReadPerM: 0 }]]);
+    expect(meter.summarize("zen-go", pricing, now).today.costUSD).toBe(0);
   });
 
   it("prices unknown models at zero", () => {
@@ -76,7 +123,7 @@ describe("UsageMeter", () => {
     const now = Date.now();
     meter.record({ ts: now - 1000, providerId: "zen", modelId: "gone", inputTokens: 1_000_000, outputTokens: 1_000_000 });
     const s = meter.summarize("zen", new Map(), now);
-    expect(s.month).toEqual({ inputTokens: 1_000_000, outputTokens: 1_000_000, requests: 1, costUSD: 0 });
+    expect(s.month).toEqual({ inputTokens: 1_000_000, outputTokens: 1_000_000, cacheReadTokens: 0, requests: 1, costUSD: 0 });
   });
 
   it("compacts rows past retention once the file crosses the threshold", () => {

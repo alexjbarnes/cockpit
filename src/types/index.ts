@@ -162,6 +162,10 @@ export interface SandboxConfig {
   /** Domains this session may reach on top of the shared list. Only enforced
    *  where the host has the network backend (Linux/WSL2 need socat). */
   allowedDomains?: string[];
+  /** A scheduled job's own storage folder, which its shell may read and write
+   *  when the sandbox is on. The rest of cockpit's directory stays denied, and
+   *  a narrower allow beats the wider deny. */
+  jobStorageDir?: string;
 }
 
 /** The Bash sandbox rules cockpit edits in the user's own Claude settings
@@ -683,7 +687,10 @@ export interface ProviderModel {
    *  enum stays Anthropic-only (it drives CLAUDE_CODE_DISABLE_1M_CONTEXT). */
   contextLength?: number;
   /** USD per million tokens, derived from the provider catalog at sync time. */
-  pricing?: { inPerM: number; outPerM: number };
+  /** USD per 1M tokens. cacheReadPerM is what the upstream charges for prompt
+   *  tokens it served from its own cache; absent means it charges the input
+   *  rate for them, as the spend estimate assumes. */
+  pricing?: { inPerM: number; outPerM: number; cacheReadPerM?: number };
   free?: boolean;
   supportsTools?: boolean;
   supportsReasoning?: boolean;

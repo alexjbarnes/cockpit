@@ -16,13 +16,18 @@ export interface ProviderUsageRecord {
   ts: number;
   providerId: string;
   modelId: string;
+  /** The upstream's prompt tokens, which INCLUDE the cache reads below. */
   inputTokens: number;
   outputTokens: number;
+  /** Prompt tokens served from the upstream's cache. Absent on rows written
+   *  before this was recorded, which are then priced as if nothing was cached. */
+  cacheReadTokens?: number;
 }
 
 export interface ProviderSpendWindow {
   inputTokens: number;
   outputTokens: number;
+  cacheReadTokens: number;
   requests: number;
   /** Estimated from current per-model pricing; 0 for free models. */
   costUSD: number;
@@ -41,7 +46,7 @@ const RETAIN_MS = 45 * 24 * 60 * 60 * 1000;
 const COMPACT_THRESHOLD_BYTES = 4 * 1024 * 1024;
 
 function emptyWindow(): ProviderSpendWindow {
-  return { inputTokens: 0, outputTokens: 0, requests: 0, costUSD: 0 };
+  return { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, requests: 0, costUSD: 0 };
 }
 
 export class UsageMeter {
@@ -104,7 +109,7 @@ export class UsageMeter {
    *  row from the given per-model pricing map (USD per 1M tokens). */
   summarize(
     providerId: string,
-    pricing: Map<string, { inPerM: number; outPerM: number } | undefined>,
+    pricing: Map<string, { inPerM: number; outPerM: number; cacheReadPerM?: number } | undefined>,
     now = Date.now(),
   ): ProviderUsageSummary {
     const midnight = new Date(now);
@@ -118,12 +123,19 @@ export class UsageMeter {
     for (const r of this.load()) {
       if (r.providerId !== providerId || r.ts > now) continue;
       const p = pricing.get(r.modelId);
-      const cost = p ? (r.inputTokens / 1e6) * p.inPerM + (r.outputTokens / 1e6) * p.outPerM : 0;
+      // inputTokens is the upstream's prompt total, cache reads included, so the
+      // cached part is priced at the cache rate rather than the input rate. A
+      // model with no cache rate declared keeps the old, higher figure.
+      const cached = Math.min(r.cacheReadTokens ?? 0, r.inputTokens);
+      const cost = p
+        ? ((r.inputTokens - cached) / 1e6) * p.inPerM + (cached / 1e6) * (p.cacheReadPerM ?? p.inPerM) + (r.outputTokens / 1e6) * p.outPerM
+        : 0;
       for (const [key, since] of bounds) {
         if (r.ts < since) continue;
         const w = summary[key];
         w.inputTokens += r.inputTokens;
         w.outputTokens += r.outputTokens;
+        w.cacheReadTokens += cached;
         w.requests += 1;
         w.costUSD += cost;
       }

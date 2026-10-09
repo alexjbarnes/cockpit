@@ -340,7 +340,7 @@ export function resolveProxyUpstream(providerId: string): {
 
 interface ModelsDevEntry {
   name?: string;
-  cost?: { input?: number; output?: number };
+  cost?: { input?: number; output?: number; cache_read?: number; cache_write?: number };
   limit?: { context?: number };
   tool_call?: boolean;
   reasoning?: boolean;
@@ -394,7 +394,7 @@ function modelFromMeta(id: string, m: ModelsDevEntry | undefined): ProviderModel
     effortLevels: metaEffortLevels(m),
     contextSizes: [],
     contextLength: m?.limit?.context,
-    pricing: m?.cost ? { inPerM: m.cost.input ?? 0, outPerM: m.cost.output ?? 0 } : undefined,
+    pricing: m?.cost ? { inPerM: m.cost.input ?? 0, outPerM: m.cost.output ?? 0, cacheReadPerM: m.cost.cache_read } : undefined,
     free,
     supportsTools: m?.tool_call,
     supportsReasoning: m?.reasoning,
