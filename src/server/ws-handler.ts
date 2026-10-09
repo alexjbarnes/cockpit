@@ -865,7 +865,10 @@ export function createWebSocketHandler(
             if (unsubInfo) watchCleanups.push(unsubInfo);
 
             const cwd = sessionManager.getSessionCwd(id);
-            if (cwd && !watchedCwds.has(cwd)) {
+            // A cockpit-agent session lives in the cockpit dir itself, where
+            // debug.jsonl, job runs and inbox writes land constantly; a
+            // recursive watch there would fire fs_changed for every write.
+            if (cwd && !watchedCwds.has(cwd) && !sessionManager.isCockpitAgentSession(id)) {
               watchedCwds.add(cwd);
               watchCleanups.push(
                 watchCwd(cwd, () => {

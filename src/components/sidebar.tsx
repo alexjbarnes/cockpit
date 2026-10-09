@@ -32,6 +32,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { useJobFailureCount } from "@/hooks/use-jobs";
 import { useSettings } from "@/hooks/use-settings";
 import { useWebSocket } from "@/hooks/use-websocket";
+import { type AssistantDot, assistantDot } from "@/lib/assistant-dot";
 import { useCheckedFiles } from "@/lib/checked-files";
 import { createStaleGuard } from "@/lib/stale-guard";
 import { cn } from "@/lib/utils";
@@ -216,6 +217,14 @@ export interface SidebarHandle {
   close: () => void;
 }
 
+/** The cockpit assistant's session as the footer button's dot needs it. It is
+ *  an ordinary session, just never pinned into the list. */
+interface AssistantStatus {
+  id: string;
+  status: "idle" | "running";
+  pendingRequestCount: number;
+}
+
 function shortPath(cwd: string): string {
   const parts = cwd.split(/[/\\]/);
   return parts.length > 2 ? "~/" + parts.slice(-2).join("/") : cwd;
@@ -327,6 +336,8 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
   const [open, setOpen] = useState(false);
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
   const [unread, setUnread] = useState<Set<string>>(new Set());
+  const [assistant, setAssistant] = useState<AssistantStatus | null>(null);
+  const [reviewWatchIds, setReviewWatchIds] = useState<string[]>([]);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [assistantOpen, setAssistantOpen] = useState(false);
   const [width, setWidth] = useState(DEFAULT_WIDTH);
@@ -349,6 +360,7 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
 
   const prevStatusRef = useRef<Map<string, string>>(new Map());
   const staleGuard = useRef(createStaleGuard()).current;
+  const assistantStaleGuard = useRef(createStaleGuard()).current;
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -383,9 +395,11 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
     return subscribe((msg) => {
       if (msg.type === "session:status") {
         const { sessionId, status } = msg;
-        // Accept status updates for any session we're showing (pinned or running)
+        const isAssistant = assistant?.id === sessionId;
+        // Accept status updates for any session we're showing (pinned, running
+        // or the assistant)
         const known = new Set(sessions.map((s) => s.id));
-        if (!known.has(sessionId)) {
+        if (!known.has(sessionId) && !isAssistant) {
           console.log(
             "[sidebar] status update for unknown session",
             sessionId.slice(0, 8),
@@ -399,14 +413,25 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
         const prev = prevStatusRef.current.get(sessionId);
         prevStatusRef.current.set(sessionId, status);
 
-        if (prev === "running" && status === "idle" && currentSessionId !== sessionId) {
+        // The assistant has no route of its own, so "viewing" it is the modal
+        // being open.
+        const viewing = sessionId === currentSessionId || (isAssistant && assistantOpen);
+        if (prev === "running" && status === "idle" && !viewing) {
           addUnreadSession(sessionId);
           setUnread(getUnreadSessions());
         }
 
-        setSessions((list) => list.map((s) => (s.id === sessionId ? { ...s, status: status as SessionInfo["status"] } : s)));
+        if (isAssistant) {
+          setAssistant((a) => (a && a.id === sessionId ? { ...a, status } : a));
+        } else {
+          setSessions((list) => list.map((s) => (s.id === sessionId ? { ...s, status: status as SessionInfo["status"] } : s)));
+        }
       } else if (msg.type === "session:pending") {
         const { sessionId, count } = msg;
+        if (assistant?.id === sessionId) {
+          setAssistant((a) => (a && a.id === sessionId ? { ...a, pendingRequestCount: count } : a));
+          return;
+        }
         const known = new Set(sessions.map((s) => s.id));
         if (!known.has(sessionId)) {
           console.log("[sidebar] pending update for unknown session", sessionId.slice(0, 8));
@@ -422,7 +447,7 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
         setSessions((list) => list.map((s) => (s.id === sessionId ? { ...s, name: info.name, model: info.model } : s)));
       }
     });
-  }, [subscribe, currentSessionId, sessions]);
+  }, [subscribe, currentSessionId, sessions, assistant, assistantOpen]);
 
   const fetchSessions = useCallback(async () => {
     // The effects below can start a second run while the first is still waiting
@@ -480,11 +505,24 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
       }
     }
     setSessions(visible);
+  }, [staleGuard]);
 
-    if (visible.length > 0) {
-      send({ type: "session:subscribe", sessionIds: visible.map((s) => s.id) });
+  const fetchAssistant = useCallback(async () => {
+    const isStale = assistantStaleGuard.begin();
+    const res = await fetch("/api/assistant-status")
+      .then((r) => (r.ok ? r.json() : null))
+      .catch(() => null);
+    if (!res || isStale()) return;
+    if (!res.sessionId) {
+      setAssistant(null);
+      return;
     }
-  }, [send, staleGuard]);
+    const id: string = res.sessionId;
+    if (!prevStatusRef.current.has(id)) {
+      prevStatusRef.current.set(id, res.status);
+    }
+    setAssistant({ id, status: res.status, pendingRequestCount: res.pendingRequestCount ?? 0 });
+  }, [assistantStaleGuard]);
 
   // Fetch immediately on mount so pinned sessions appear without waiting
   // for the WebSocket connection to establish.
@@ -493,15 +531,32 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
     if (!hasFetchedRef.current) {
       hasFetchedRef.current = true;
       fetchSessions();
+      fetchAssistant();
     }
-  }, [fetchSessions]);
+  }, [fetchSessions, fetchAssistant]);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: pathname triggers refetch on navigation
   useEffect(() => {
     if (open || connected) {
       fetchSessions();
+      fetchAssistant();
     }
-  }, [open, connected, pathname, fetchSessions]);
+  }, [open, connected, pathname, fetchSessions, fetchAssistant]);
+
+  // One watch list per connection: the server replaces everything it watches
+  // when a `session:subscribe` arrives, so the review rows' ids are merged here
+  // rather than sent by RecentReviewsSection itself, which would wipe the
+  // sessions' and the assistant's watches. Joined into a string so the status
+  // updates that replace the sessions array do not re-send it.
+  const watchedIds = useMemo(
+    () => [...sessions.map((s) => s.id), ...reviewWatchIds, ...(assistant ? [assistant.id] : [])].join(","),
+    [sessions, reviewWatchIds, assistant],
+  );
+  // biome-ignore lint/correctness/useExhaustiveDependencies: connected re-sends after a reconnect, which drops the server's per-connection watches; the ids themselves are watchedIds
+  useEffect(() => {
+    if (!watchedIds) return;
+    send({ type: "session:subscribe", sessionIds: watchedIds.split(",") });
+  }, [watchedIds, connected, send]);
 
   const stopSession = async (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
@@ -567,6 +622,30 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
     if (session.name) params.set("name", session.name);
     router.push(`/sessions/${session.id}?${params}`);
   };
+
+  const openAssistant = useCallback(() => {
+    if (assistant) {
+      clearUnreadSession(assistant.id);
+      setUnread(getUnreadSessions());
+    }
+    setAssistantOpen(true);
+  }, [assistant]);
+
+  // The modal's first open creates the session; until then nothing knew its
+  // id, so the watch list and the dot learn it here.
+  const handleAssistantSession = useCallback((id: string) => {
+    setAssistant((prev) => (prev?.id === id ? prev : { id, status: "idle", pendingRequestCount: 0 }));
+  }, []);
+
+  const watchReviewIds = useCallback((ids: string[]) => setReviewWatchIds(ids), []);
+
+  const dot = assistant
+    ? assistantDot({
+        status: assistant.status,
+        pendingRequestCount: assistant.pendingRequestCount,
+        unread: unread.has(assistant.id),
+      })
+    : null;
 
   return (
     <>
@@ -644,7 +723,7 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
 
           {cwd && !sidebarSections.has("file-tree") && <SidebarFileTree cwd={cwd} />}
 
-          {settings.reviewsEnabled && <RecentReviewsSection onNavigate={close} />}
+          {settings.reviewsEnabled && <RecentReviewsSection onNavigate={close} onWatchIds={watchReviewIds} />}
 
           {settings.reviewsEnabled && (
             <SidebarSection
@@ -663,7 +742,7 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
         </div>
 
         <div className="border-t px-3 py-2 flex items-center justify-end gap-2">
-          <AssistantButton onClick={() => setAssistantOpen(true)} />
+          <AssistantButton dot={dot} onClick={openAssistant} />
           <JobsButton onClick={() => openPage("/jobs")} />
           <InboxButton onClick={() => openPage("/inbox")} />
           {settings.issuesEnabled && <IssuesButton onClick={() => openPage("/issues")} />}
@@ -683,16 +762,16 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
       </div>
 
       <NewSessionDialog open={dialogOpen} onOpenChange={setDialogOpen} onSubmit={createSession} />
-      <AssistantModal open={assistantOpen} onOpenChange={setAssistantOpen} />
+      <AssistantModal open={assistantOpen} onOpenChange={setAssistantOpen} onSession={handleAssistantSession} />
       <PageModal path={pageModal.path} onClose={pageModal.close} onOpenInApp={pageModal.openInApp} />
     </>
   );
 });
 
-function RecentReviewsSection({ onNavigate }: { onNavigate: () => void }) {
+function RecentReviewsSection({ onNavigate, onWatchIds }: { onNavigate: () => void; onWatchIds: (ids: string[]) => void }) {
   const router = useRouter();
   const pathname = usePathname();
-  const { subscribe, send } = useWebSocket();
+  const { subscribe } = useWebSocket();
   const [reviews, setReviews] = useState<ReviewSession[]>([]);
 
   const fetchReviews = useCallback(async () => {
@@ -733,15 +812,19 @@ function RecentReviewsSection({ onNavigate }: { onNavigate: () => void }) {
 
     setReviews(visible);
 
-    if (visible.length > 0) {
-      send({ type: "session:subscribe", sessionIds: visible.map((r) => r.id) });
-    }
-  }, [send]);
+    // The sidebar sends the one watch list for the whole connection; these ids
+    // go into it rather than being sent from here.
+    onWatchIds(visible.map((r) => r.id));
+  }, [onWatchIds]);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: pathname triggers refetch on navigation
   useEffect(() => {
     fetchReviews();
   }, [pathname, fetchReviews]);
+
+  useEffect(() => {
+    return () => onWatchIds([]);
+  }, [onWatchIds]);
 
   useEffect(() => {
     return onPinChange(() => fetchReviews());
@@ -1126,16 +1209,27 @@ function IssuesButton({ onClick }: { onClick: () => void }) {
   );
 }
 
-function AssistantButton({ onClick }: { onClick: () => void }) {
+const ASSISTANT_DOTS: Record<AssistantDot, { className: string; title: string }> = {
+  pending: { className: "bg-blue-500", title: "Awaiting your input" },
+  working: { className: "bg-yellow-500", title: "Working" },
+  unread: { className: "bg-green-500", title: "New response" },
+};
+
+function AssistantButton({ dot, onClick }: { dot: AssistantDot | null; onClick: () => void }) {
+  const state = dot ? ASSISTANT_DOTS[dot] : null;
   return (
     <Button
       variant="ghost"
       size="icon"
-      className="shrink-0 h-8 w-8 text-muted-foreground hover:text-foreground"
+      className="shrink-0 h-8 w-8 text-muted-foreground hover:text-foreground relative"
       onClick={onClick}
-      title="Cockpit Assistant"
+      title={state ? `Cockpit Assistant: ${state.title.toLowerCase()}` : "Cockpit Assistant"}
+      data-testid="assistant-button"
     >
       <Bot className="h-4 w-4" />
+      {state && (
+        <span className={cn("absolute top-1 right-1 h-2 w-2 rounded-full", state.className)} data-testid="assistant-dot" data-state={dot} />
+      )}
     </Button>
   );
 }

@@ -1397,6 +1397,29 @@ describe("WebSocket handler", () => {
 
       ws.close();
     });
+
+    it("forwards status and pending for a cockpit-agent session", async () => {
+      // The assistant is never pinned into the sidebar's list, so its footer
+      // dot depends on a subscription just like this one.
+      const session = manager.createSession("/tmp", "Cockpit Assistant", { cockpitAgent: true });
+      const ws = await connectWs();
+
+      ws.send(JSON.stringify({ type: "session:subscribe", sessionIds: [session.id] }));
+      await new Promise((r) => setTimeout(r, 50));
+
+      const s = (manager as any).sessions.get(session.id);
+      s.emitter.emit("status", session.id, "running");
+      const statusMsg = await readMessage(ws);
+      expect(statusMsg.type).toBe("session:status");
+      expect(statusMsg.status).toBe("running");
+
+      s.emitter.emit("pending", session.id, 1);
+      const pendingMsg = await readMessage(ws);
+      expect(pendingMsg.type).toBe("session:pending");
+      expect(pendingMsg.count).toBe(1);
+
+      ws.close();
+    });
   });
 
   describe("message:send", () => {

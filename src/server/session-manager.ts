@@ -936,6 +936,10 @@ export class SessionManager {
     return this.sessions.get(id)?.info.model ?? null;
   }
 
+  isCockpitAgentSession(id: string): boolean {
+    return this.sessions.get(id)?.cockpitAgent === true;
+  }
+
   listActiveSessions(): SessionInfo[] {
     return Array.from(this.sessions.values())
       .filter((s) => !!s.harnessProcess?.isAlive)
