@@ -43,6 +43,10 @@ test("a session on a zen model reaches the OpenAI door through the format proxy"
     await page.goto(`${harness.cockpitUrl}/sessions/${sessionId}?cwd=${encodeURIComponent(workDir)}`);
     const input = page.getByTestId("message-input");
     await expect(input).toBeVisible();
+    // The model pill names the provider for anything that is not a built-in
+    // Anthropic model: "opencode/mock-model" alone would not say which
+    // provider the session runs it on.
+    await expect(page.getByTestId("model-pill")).toContainText("OpenCode Zen · opencode/mock-model");
     // Let session:connect's eager ensureProcess finish spawning the PTY (see
     // hello.spec.ts for why this wait exists).
     await page.waitForTimeout(5000);

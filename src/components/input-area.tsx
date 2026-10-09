@@ -1628,7 +1628,12 @@ export function InputArea({
                 className="absolute bottom-2.5 left-2.5 flex max-w-[60%] items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground transition-colors hover:bg-muted/70 hover:text-foreground"
               >
                 <Cpu className="h-2.5 w-2.5 shrink-0" />
-                <span className="truncate">{modelSelection.label}</span>
+                <span className="truncate">
+                  {/* The provider leads only when it is not Anthropic: with several
+                      providers serving the catalog, the model name alone does not
+                      say which one the session runs. */}
+                  {modelSelection.provider ? `${modelSelection.provider} · ${modelSelection.label}` : modelSelection.label}
+                </span>
                 {thinkingLabel && <span className="shrink-0 text-muted-foreground/60">· {thinkingLabel}</span>}
                 {contextLabel && <span className="shrink-0 text-muted-foreground/60">· {contextLabel}</span>}
               </button>

@@ -267,18 +267,24 @@ export function resolveProviderId(currentModel: string, providers: { id: string;
  * does not allow the given level (e.g. Haiku 4.5, or a custom model without that
  * effort); context=null when the model offers only one size (nothing to
  * disambiguate), mirroring the session-settings UI. Powers the input-area pill.
+ *
+ * provider names the model's provider for anything that is not a built-in
+ * Anthropic model, and is null for those: with several providers serving the
+ * same catalog, "kimi-k3" alone does not say which one a session runs, while
+ * "Sonnet 5.5" needs no qualifier.
  */
 export function describeModelSelection(
   currentModel: string,
   thinkingLevel: ThinkingLevel,
   contextSize: ContextSize,
-  providers: { id: string; models: ProviderModel[] }[] | undefined,
-): { label: string; thinking: ThinkingLevel | null; context: ContextSize | null } {
+  providers: { id: string; name?: string; models: ProviderModel[] }[] | undefined,
+): { label: string; provider: string | null; thinking: ThinkingLevel | null; context: ContextSize | null } {
   const entry = resolveModel(currentModel);
   if (entry) {
     const allowed = allowedEffortLevels(entry);
     return {
       label: entry.displayName,
+      provider: null,
       // "off" shows whenever the model can think (it disables thinking); effort
       // levels show when allowed. Haiku 4.5 (no thinking) shows nothing.
       thinking: allowed.length > 0 && (thinkingLevel === "off" || allowed.includes(thinkingLevel)) ? thinkingLevel : null,
@@ -292,12 +298,22 @@ export function describeModelSelection(
       const lv = m.effortLevels ?? [];
       return {
         label: m.displayName || m.modelId,
+        provider: p.name || p.id,
         thinking: lv.length > 0 && (thinkingLevel === "off" || lv.includes(thinkingLevel)) ? thinkingLevel : null,
         context: (m.contextSizes ?? []).length >= 2 ? contextSize : null,
       };
     }
   }
-  return { label: base.replace(/^[^:]+:/, "") || base, thinking: null, context: null };
+  // A model no provider in the list serves — disconnected, delisted, or the
+  // settings not loaded yet. The id's own prefix still says which provider it
+  // belongs to.
+  const colon = base.indexOf(":");
+  return {
+    label: (colon > 0 ? base.slice(colon + 1) : base) || base,
+    provider: colon > 0 ? base.slice(0, colon) : null,
+    thinking: null,
+    context: null,
+  };
 }
 
 /**
