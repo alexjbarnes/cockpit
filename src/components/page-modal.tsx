@@ -3,84 +3,28 @@
 import { Loader2, X } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useHistoryModal } from "@/hooks/use-history-modal";
 import { PAGE_MODAL_FRAME_NAME, parsePageModalMessage } from "@/lib/page-modal";
 import { cn } from "@/lib/utils";
 
 /**
- * Open state for the page modal. Opening pushes a history entry of the
- * modal's own, so the device's Back closes the modal rather than leaving the
- * page underneath it; every way of closing takes that entry back off.
- * `onClosed` runs however the modal closed.
+ * Open state for the page modal. The device's Back closes it rather than
+ * leaving the page underneath (see useHistoryModal). `onClosed` runs however
+ * the modal closed.
  */
 export function usePageModal(onClosed?: () => void) {
   const router = useRouter();
-  const [path, setPath] = useState<string | null>(null);
-  const ownsEntry = useRef(false);
-  // history.back() is asynchronous: until its popstate arrives, a new entry
-  // pushed now would be the one it takes off, so an open waits for it.
-  const backPending = useRef(false);
-  const entryWanted = useRef(false);
-  const onClosedRef = useRef(onClosed);
-  onClosedRef.current = onClosed;
-
-  const pushEntry = useCallback(() => {
-    window.history.pushState(window.history.state, "");
-    ownsEntry.current = true;
-  }, []);
-
-  const open = useCallback(
-    (p: string) => {
-      setPath(p);
-      if (ownsEntry.current) return;
-      if (backPending.current) entryWanted.current = true;
-      else pushEntry();
-    },
-    [pushEntry],
-  );
-
-  const close = useCallback(() => {
-    setPath(null);
-    entryWanted.current = false;
-    if (ownsEntry.current) {
-      ownsEntry.current = false;
-      backPending.current = true;
-      window.history.back();
-    }
-    onClosedRef.current?.();
-  }, []);
+  const { value: path, open, close, release } = useHistoryModal<string>(onClosed);
 
   /** Leave the modal for a page it does not show, such as a session. The
    *  modal's entry becomes that page's, so Back returns to where it opened. */
   const openInApp = useCallback(
     (url: string) => {
-      ownsEntry.current = false;
-      entryWanted.current = false;
-      setPath(null);
+      release();
       router.replace(url);
-      onClosedRef.current?.();
     },
-    [router],
+    [release, router],
   );
-
-  useEffect(() => {
-    const onPopState = () => {
-      if (backPending.current) {
-        backPending.current = false;
-        if (entryWanted.current) {
-          entryWanted.current = false;
-          pushEntry();
-        }
-        return;
-      }
-      // The device's Back, taking the modal's entry off.
-      if (!ownsEntry.current) return;
-      ownsEntry.current = false;
-      setPath(null);
-      onClosedRef.current?.();
-    };
-    window.addEventListener("popstate", onPopState);
-    return () => window.removeEventListener("popstate", onPopState);
-  }, [pushEntry]);
 
   return { path, open, close, openInApp };
 }

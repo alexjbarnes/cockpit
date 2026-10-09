@@ -3,6 +3,7 @@
 import { ArrowLeft, ChevronDown, ChevronRight, ChevronUp, FileText, Loader2, MessageSquare, Square, X } from "lucide-react";
 import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { AgentTranscriptProvider } from "@/components/agent-transcript-modal";
 import { usePageHeader } from "@/components/app-shell";
 import { MessageBubble } from "@/components/message-bubble";
 import { Badge } from "@/components/ui/badge";
@@ -91,7 +92,19 @@ function ToolEntry({ tool }: { tool: JobRunToolUse }) {
   );
 }
 
-function TranscriptModal({ jobId, runId, onClose }: { jobId: string; runId: string; onClose: () => void }) {
+function TranscriptModal({
+  jobId,
+  runId,
+  sessionId,
+  cwd,
+  onClose,
+}: {
+  jobId: string;
+  runId: string;
+  sessionId: string;
+  cwd: string;
+  onClose: () => void;
+}) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -151,12 +164,15 @@ function TranscriptModal({ jobId, runId, onClose }: { jobId: string; runId: stri
           {!loading && messages.length === 0 && !error && (
             <div className="text-center text-sm text-muted-foreground py-12">No transcript found for this run.</div>
           )}
-          {!loading &&
-            messages.map((msg) => (
-              <div key={msg.id}>
-                <MessageBubble message={msg} expandedToolIds={expandedToolIds} />
-              </div>
-            ))}
+          {/* The run's agents are looked up in the run's own session. */}
+          <AgentTranscriptProvider sessionId={sessionId} cwd={cwd}>
+            {!loading &&
+              messages.map((msg) => (
+                <div key={msg.id}>
+                  <MessageBubble message={msg} expandedToolIds={expandedToolIds} />
+                </div>
+              ))}
+          </AgentTranscriptProvider>
         </div>
       </Card>
     </div>
@@ -291,7 +307,9 @@ export default function RunDetailPage() {
         </CardContent>
       </Card>
 
-      {showTranscript && <TranscriptModal jobId={jobId} runId={runId} onClose={() => setShowTranscript(false)} />}
+      {showTranscript && (
+        <TranscriptModal jobId={jobId} runId={runId} sessionId={run.sessionId} cwd={run.cwd} onClose={() => setShowTranscript(false)} />
+      )}
     </div>
   );
 }

@@ -4,6 +4,7 @@ import { Menu, Terminal, X } from "lucide-react";
 import Image from "next/image";
 import { usePathname } from "next/navigation";
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useRef, useState } from "react";
+import { AgentTranscriptProvider } from "@/components/agent-transcript-modal";
 import { AuthGuard } from "@/components/auth-guard";
 import { SearchButton } from "@/components/search-modal";
 import { Sidebar, type SidebarHandle } from "@/components/sidebar";
@@ -338,50 +339,52 @@ export function AppShell({ children }: { children: ReactNode }) {
             setTabActions,
           }}
         >
-          <div className="fixed inset-0 flex">
-            {!embedded && <Sidebar ref={sidebarRef} />}
-            <div className="flex-1 min-h-0 min-w-0 flex flex-col">
-              <header className="shrink-0 flex items-center gap-2 border-b px-4 py-2 bg-background">
-                {!embedded && (
-                  <Button variant="ghost" size="icon" onClick={toggleSidebar} title="Toggle sidebar (Ctrl+B)" className="md:hidden">
-                    <Menu className="h-4 w-4" />
-                  </Button>
-                )}
-                <div className={`${embedded ? "flex" : "hidden md:flex"} items-center gap-2 min-w-0 flex-1 overflow-hidden`}>
-                  {!embedded && <Image src="/icon-192.png" alt="" width={22} height={22} className="shrink-0 dark:invert" />}
-                  <EditableTitle title={header.title} onRename={header.onRename} />
-                </div>
-                {(actions.showSessionActions || actions.showUsage) && (
-                  <div className="flex items-center gap-2 shrink-0 ml-auto">
-                    {actions.showSessionActions && (
-                      <>
-                        {cwd && <NewTerminalButton cwd={cwd} />}
-                        <SearchButton />
-                        {cwd && <TodoIndicator todos={todos} />}
-                        {cwd && <BackgroundTasksButton tasks={backgroundTasks} />}
-                      </>
-                    )}
-                    {actions.showUsage && <UsageButton sessionModel={sessionModel} />}
+          <AgentTranscriptProvider sessionId={sessionId} cwd={cwd}>
+            <div className="fixed inset-0 flex">
+              {!embedded && <Sidebar ref={sidebarRef} />}
+              <div className="flex-1 min-h-0 min-w-0 flex flex-col">
+                <header className="shrink-0 flex items-center gap-2 border-b px-4 py-2 bg-background">
+                  {!embedded && (
+                    <Button variant="ghost" size="icon" onClick={toggleSidebar} title="Toggle sidebar (Ctrl+B)" className="md:hidden">
+                      <Menu className="h-4 w-4" />
+                    </Button>
+                  )}
+                  <div className={`${embedded ? "flex" : "hidden md:flex"} items-center gap-2 min-w-0 flex-1 overflow-hidden`}>
+                    {!embedded && <Image src="/icon-192.png" alt="" width={22} height={22} className="shrink-0 dark:invert" />}
+                    <EditableTitle title={header.title} onRename={header.onRename} />
                   </div>
-                )}
-                {embedded && (
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    onClick={() => postToParent({ type: "close" })}
-                    title="Close"
-                    className="shrink-0"
-                    data-testid="page-modal-close"
-                  >
-                    <X className="h-4 w-4" />
-                  </Button>
-                )}
-              </header>
-              {/* A page the modal does not show is opened outside instead, so it is never rendered in here. */}
-              <main className="flex-1 min-h-0 min-w-0 flex flex-col">{embedded && !isModalPath(pathname) ? null : children}</main>
+                  {(actions.showSessionActions || actions.showUsage) && (
+                    <div className="flex items-center gap-2 shrink-0 ml-auto">
+                      {actions.showSessionActions && (
+                        <>
+                          {cwd && <NewTerminalButton cwd={cwd} />}
+                          <SearchButton />
+                          {cwd && <TodoIndicator todos={todos} />}
+                          {cwd && <BackgroundTasksButton tasks={backgroundTasks} />}
+                        </>
+                      )}
+                      {actions.showUsage && <UsageButton sessionModel={sessionModel} />}
+                    </div>
+                  )}
+                  {embedded && (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => postToParent({ type: "close" })}
+                      title="Close"
+                      className="shrink-0"
+                      data-testid="page-modal-close"
+                    >
+                      <X className="h-4 w-4" />
+                    </Button>
+                  )}
+                </header>
+                {/* A page the modal does not show is opened outside instead, so it is never rendered in here. */}
+                <main className="flex-1 min-h-0 min-w-0 flex flex-col">{embedded && !isModalPath(pathname) ? null : children}</main>
+              </div>
             </div>
-          </div>
-          {embedded && <EmbeddedPageBridge pathname={pathname} />}
+            {embedded && <EmbeddedPageBridge pathname={pathname} />}
+          </AgentTranscriptProvider>
         </ShellContext.Provider>
       </WebSocketProvider>
     </AuthGuard>

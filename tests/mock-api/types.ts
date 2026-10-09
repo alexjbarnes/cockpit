@@ -124,4 +124,9 @@ export interface TurnScript {
    *  a turn in flight — a subagent's turn, say, so the parent sits idle with a
    *  live agent for long enough to observe. */
   delayMs?: number;
+  /** Serve this entry only to a request whose body contains this text, out of
+   *  turn and as often as one arrives, without moving the script along. Gives
+   *  a side request, such as the title request the CLI sends beside a turn,
+   *  a reply of its own instead of the turn's. */
+  match?: string;
 }

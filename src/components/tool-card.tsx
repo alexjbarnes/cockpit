@@ -3,20 +3,17 @@
 import { ChevronRight, ClipboardList, ExternalLink, Loader2 } from "lucide-react";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSettings } from "@/hooks/use-settings";
-import { agentIdFromOutput, isAsyncLaunchOutput } from "@/lib/agent-tasks";
+import { agentIdFromOutput } from "@/lib/agent-tasks";
+import { agentFromTool } from "@/lib/agent-transcript";
 import { shortPath } from "@/lib/path";
 import { cn } from "@/lib/utils";
-import type { ChatMessage, ImageAttachment, ToolUse } from "@/types";
+import type { ImageAttachment, ToolUse } from "@/types";
+import { useAgentTranscripts } from "./agent-transcript-modal";
 import { useShell } from "./app-shell";
 import { CodeBlock, languageFromPath, prehighlight } from "./code-block";
 import { DiffViewer } from "./diff-viewer";
-import { MessageBubble } from "./message-bubble";
 import { PlanViewModal } from "./plan-view-modal";
 import { Dialog, DialogContent } from "./ui/dialog";
-
-/** How often an open transcript re-reads a still-working agent. Each poll is
- *  one read of that agent's JSONL, and only while its card is expanded. */
-const TRANSCRIPT_POLL_MS = 3000;
 
 function parseInput(input: string): Record<string, unknown> {
   if (!input) return {};
@@ -70,6 +67,7 @@ function settingDefault(toolName: string, settings: ReturnType<typeof useSetting
 export function ToolCard({ tool, expandedToolIds }: ToolCardProps) {
   const dark = useIsDark();
   const { backgroundTasks } = useShell();
+  const agentTranscripts = useAgentTranscripts();
   const { settings, loaded } = useSettings();
   const input = useMemo(() => parseInput(tool.input), [tool.input]);
   const [expanded, setExpanded] = useState(() => expandedToolIds?.current?.has(tool.id) ?? false);
@@ -110,6 +108,9 @@ export function ToolCard({ tool, expandedToolIds }: ToolCardProps) {
     tool.name === "TaskGet" ||
     tool.name === "TodoWrite";
   const hasContent = !isStatusOnly && (tool.input || tool.output || tool.images?.length);
+  // An agent's card opens its transcript in a modal rather than expanding.
+  const opensTranscript = tool.name === "Agent" && agentTranscripts !== null;
+  const expandable = hasContent && !opensTranscript;
 
   // Track whether this expansion was user-initiated (click) vs automatic
   const userToggled = useMemo(() => ({ current: false }), []);
@@ -140,7 +141,11 @@ export function ToolCard({ tool, expandedToolIds }: ToolCardProps) {
               setPlanModalOpen(true);
               return;
             }
-            if (!hasContent) return;
+            if (opensTranscript) {
+              agentTranscripts.openAgent(agentFromTool(tool));
+              return;
+            }
+            if (!expandable) return;
             const next = !expanded;
             userToggled.current = next;
             userToggledRef.current = true;
@@ -152,14 +157,16 @@ export function ToolCard({ tool, expandedToolIds }: ToolCardProps) {
           }}
           className={cn(
             "flex w-full items-start gap-2 px-3 py-1.5 text-left",
-            hasContent && "cursor-pointer hover:bg-muted/50",
-            !hasContent && "cursor-default",
+            expandable || opensTranscript ? "cursor-pointer hover:bg-muted/50" : "cursor-default",
           )}
+          data-testid={opensTranscript ? "agent-card" : undefined}
         >
           {isPlanWrite ? (
             <ClipboardList className="h-3 w-3 shrink-0 text-blue-500" />
           ) : (
-            <ChevronRight className={cn("h-3 w-3 shrink-0 text-muted-foreground transition-transform", expanded && "rotate-90")} />
+            <ChevronRight
+              className={cn("h-3 w-3 shrink-0 text-muted-foreground transition-transform", expanded && expandable && "rotate-90")}
+            />
           )}
           {tool.name === "Agent" ? (
             <AgentHeader tool={tool} input={input} backgroundTasks={backgroundTasks} />
@@ -171,9 +178,9 @@ export function ToolCard({ tool, expandedToolIds }: ToolCardProps) {
           )}
         </button>
 
-        {expanded && hasContent && (
+        {expanded && expandable && (
           <div ref={contentRef} className="border-t border-border px-3 py-2 space-y-2">
-            <ToolContent tool={tool} input={input} dark={dark} expandedToolIds={expandedToolIds} />
+            <ToolContent tool={tool} input={input} dark={dark} />
           </div>
         )}
       </div>
@@ -354,17 +361,7 @@ function ToolSummary({ tool, input }: { tool: ToolUse; input: Record<string, unk
   return null;
 }
 
-function ToolContent({
-  tool,
-  input,
-  dark,
-  expandedToolIds,
-}: {
-  tool: ToolUse;
-  input: Record<string, unknown>;
-  dark: boolean;
-  expandedToolIds?: React.RefObject<Set<string>>;
-}) {
+function ToolContent({ tool, input, dark }: { tool: ToolUse; input: Record<string, unknown>; dark: boolean }) {
   const name = tool.name;
 
   if (name === "Edit" || name === "edit") {
@@ -385,10 +382,6 @@ function ToolContent({
 
   if (name === "Grep" || name === "grep" || name === "Glob" || name === "glob") {
     return <SearchContent input={input} tool={tool} />;
-  }
-
-  if (name === "Agent") {
-    return <AgentContent input={input} tool={tool} dark={dark} expandedToolIds={expandedToolIds} />;
   }
 
   return <DefaultContent input={input} tool={tool} />;
@@ -503,149 +496,6 @@ function SearchContent({ input, tool }: { input: Record<string, unknown>; tool: 
       </div>
       {tool.output && (
         <pre className="overflow-x-auto rounded bg-muted/50 p-2 text-[11px] leading-relaxed max-h-64 overflow-y-auto">{tool.output}</pre>
-      )}
-    </div>
-  );
-}
-
-function AgentContent({
-  input,
-  tool,
-  expandedToolIds,
-}: {
-  input: Record<string, unknown>;
-  tool: ToolUse;
-  dark?: boolean;
-  expandedToolIds?: React.RefObject<Set<string>>;
-}) {
-  const prompt = (input.prompt as string) || "";
-  const children = tool.children || [];
-  const { sessionId, cwd, backgroundTasks } = useShell();
-  // A background launch reports "done" the moment it returns, so its own tool
-  // status says nothing about the agent. The task list is what knows.
-  const launchedAsync = isAsyncLaunchOutput(tool.output);
-  const agentId = agentIdFromOutput(tool.output);
-  const stillRunning = backgroundTasks.some((t) => t.toolUseId === (agentId ?? tool.id) && t.status === "running");
-
-  // On-demand subagent transcript. The CLI writes each Task/Agent subagent to
-  // its own `subagents/agent-<id>.jsonl`; the parent tool_use id (tool.id) maps
-  // to it via the meta sidecar the API route resolves. Fetched on expand, then
-  // polled while the agent is still working.
-  const [open, setOpen] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [messages, setMessages] = useState<ChatMessage[] | null>(null);
-  const subExpandedToolIds = useRef<Set<string>>(new Set());
-
-  // The agent's transcript opens with the prompt it was handed, which is the
-  // block already rendered above this. Showing it twice pushed the agent's
-  // actual work off the screen, so the echo is dropped.
-  const transcript = useMemo(() => {
-    if (!messages) return [];
-    const first = messages[0];
-    const echoesPrompt = first?.role === "user" && prompt && first.content.trim().startsWith(prompt.trim().slice(0, 200));
-    return echoesPrompt ? messages.slice(1) : messages;
-  }, [messages, prompt]);
-
-  const fetchTranscript = useCallback(async () => {
-    if (!sessionId) return;
-    const params = new URLSearchParams({ toolUseId: tool.id });
-    if (cwd) params.set("cwd", cwd);
-    try {
-      const res = await fetch(`/api/sessions/${sessionId}/subagents?${params}`);
-      const data: { messages?: ChatMessage[] } = res.status === 404 ? { messages: [] } : await res.json();
-      if (res.status !== 404 && !res.ok) throw new Error("Failed to load agent transcript");
-      const next = data.messages ?? [];
-      // Replace only on a real change, so a poll that finds nothing new does
-      // not re-render the transcript under someone who is reading it.
-      setMessages((prev) => (prev && prev.length === next.length && prev.at(-1)?.id === next.at(-1)?.id ? prev : next));
-      setError(null);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    }
-  }, [sessionId, cwd, tool.id]);
-
-  const toggleTranscript = useCallback(() => {
-    setOpen((prev) => {
-      const next = !prev;
-      if (next && messages === null && !loading && sessionId) {
-        setLoading(true);
-        setError(null);
-        void fetchTranscript().finally(() => setLoading(false));
-      }
-      return next;
-    });
-  }, [messages, loading, sessionId, fetchTranscript]);
-
-  // A working agent appends to its transcript the whole time. Fetching once on
-  // expand froze it at whatever it held the moment it was opened, which is the
-  // least useful instant to freeze it.
-  useEffect(() => {
-    if (!open || !stillRunning || !sessionId) return;
-    const id = setInterval(() => void fetchTranscript(), TRANSCRIPT_POLL_MS);
-    return () => clearInterval(id);
-  }, [open, stillRunning, sessionId, fetchTranscript]);
-
-  // One last read when the agent stops, to pick up whatever it wrote between
-  // the final poll and finishing.
-  const wasRunning = useRef(stillRunning);
-  useEffect(() => {
-    if (wasRunning.current && !stillRunning && open) void fetchTranscript();
-    wasRunning.current = stillRunning;
-  }, [stillRunning, open, fetchTranscript]);
-
-  return (
-    <div className="space-y-2">
-      {prompt && (
-        <pre className="whitespace-pre-wrap break-words rounded bg-muted/50 p-2 text-[11px] leading-relaxed max-h-32 overflow-y-auto text-muted-foreground">
-          {prompt}
-        </pre>
-      )}
-      {children.length > 0 && (
-        <div className="pl-3 border-l-2 border-border space-y-1">
-          {children.map((child) => (
-            <ToolCard key={child.id} tool={child} expandedToolIds={expandedToolIds} />
-          ))}
-        </div>
-      )}
-      {tool.output &&
-        (launchedAsync ? (
-          <div className="text-[11px] text-muted-foreground">
-            {/* The spinner for this lives on the card header, so it reads as
-                running without having to expand the card. */}
-            {stillRunning ? "Working in the background" : "Ran in the background"}
-          </div>
-        ) : (
-          <pre className="whitespace-pre-wrap break-words rounded bg-muted/50 p-2 text-[11px] leading-relaxed max-h-48 overflow-y-auto text-muted-foreground">
-            {tool.output}
-          </pre>
-        ))}
-      {sessionId && (
-        <div className="space-y-1">
-          <button
-            type="button"
-            onClick={toggleTranscript}
-            className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground"
-          >
-            <ChevronRight className={cn("h-3 w-3 transition-transform", open && "rotate-90")} />
-            {open ? "Hide agent transcript" : "Show agent transcript"}
-            {loading && <Loader2 className="h-3 w-3 animate-spin" />}
-          </button>
-          {open && !loading && error && <div className="text-[11px] text-red-500">{error}</div>}
-          {open && !loading && !error && messages !== null && messages.length === 0 && (
-            <div className="text-[11px] italic text-muted-foreground">No transcript recorded for this agent.</div>
-          )}
-          {open && messages !== null && transcript.length > 0 && (
-            <div className="space-y-3 border-l-2 border-border pl-3">
-              {transcript.map((m) => (
-                <MessageBubble key={m.id} message={m} expandedToolIds={subExpandedToolIds} />
-              ))}
-            </div>
-          )}
-          {open && messages !== null && messages.length > 0 && transcript.length === 0 && (
-            <div className="text-[11px] italic text-muted-foreground">Agent has not replied yet.</div>
-          )}
-        </div>
       )}
     </div>
   );

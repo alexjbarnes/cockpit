@@ -3,6 +3,7 @@
 import { Bot, Loader2, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
+import { AgentTranscriptProvider } from "./agent-transcript-modal";
 import { ChatView } from "./chat-view";
 
 interface AssistantModalProps {
@@ -102,7 +103,11 @@ export function AssistantModal({ open, onOpenChange }: AssistantModalProps) {
             </div>
           )}
           {error && <div className="flex items-center justify-center h-full text-sm text-muted-foreground px-4">{error}</div>}
-          {sessionId && !loading && !error && <ChatView sessionId={sessionId} cwd={cwd} showPlanToggle={false} isCockpitAgent />}
+          {sessionId && !loading && !error && (
+            <AgentTranscriptProvider sessionId={sessionId} cwd={cwd}>
+              <ChatView sessionId={sessionId} cwd={cwd} showPlanToggle={false} isCockpitAgent />
+            </AgentTranscriptProvider>
+          )}
         </div>
       </DialogContent>
     </Dialog>

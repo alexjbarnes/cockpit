@@ -6,6 +6,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import type { ChatMessage } from "@/types";
+import { AgentTranscriptProvider } from "./agent-transcript-modal";
 import { useShell } from "./app-shell";
 import { MessageBubble } from "./message-bubble";
 
@@ -107,16 +108,18 @@ export function MessageContextModal(props: MessageContextModalProps) {
             </div>
           )}
           {error && <div className="text-center text-sm text-red-500 py-12">{error}</div>}
-          {!loading &&
-            messages.map((msg) => (
-              <div
-                key={msg.id}
-                ref={msg.id === targetId ? targetRef : undefined}
-                className={msg.id === targetId ? "ring-2 ring-primary/50 rounded-lg" : undefined}
-              >
-                <MessageBubble message={msg} expandedToolIds={expandedToolIds} />
-              </div>
-            ))}
+          <AgentTranscriptProvider sessionId={sessionId} cwd={cwd}>
+            {!loading &&
+              messages.map((msg) => (
+                <div
+                  key={msg.id}
+                  ref={msg.id === targetId ? targetRef : undefined}
+                  className={msg.id === targetId ? "ring-2 ring-primary/50 rounded-lg" : undefined}
+                >
+                  <MessageBubble message={msg} expandedToolIds={expandedToolIds} />
+                </div>
+              ))}
+          </AgentTranscriptProvider>
         </div>
       </Card>
     </div>

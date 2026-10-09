@@ -398,6 +398,8 @@ export function ChatView({
     const handler = () => {
       if (document.activeElement?.closest("textarea, input, [contenteditable]")) return;
       if (document.activeElement === el) return;
+      // A modal over the chat keeps the keys, to scroll and close it with.
+      if (document.querySelector(".fixed.inset-0.z-50")) return;
       el?.focus({ preventScroll: true });
       if (stickToBottom.current) scrollToBottom();
     };

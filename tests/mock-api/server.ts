@@ -206,7 +206,14 @@ export function createMockApiServer(): Promise<MockApiServer> {
             return;
           }
 
-          const turn = script[turnIndex] ?? script[script.length - 1];
+          const matched = script.find((t) => t.match && raw.includes(t.match));
+          const turns = script.filter((t) => !t.match);
+          const turn = matched ?? turns[turnIndex] ?? turns[turns.length - 1];
+          if (!turn) {
+            res.writeHead(500, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: { type: "server_error", message: "No script entry for this request" } }));
+            return;
+          }
           const isError = turn.events.length > 0 && turn.events[0].event === "__error__";
 
           if (isError) {
@@ -228,7 +235,7 @@ export function createMockApiServer(): Promise<MockApiServer> {
           function flushNext() {
             if (i >= turn.events.length) {
               res.end();
-              turnIndex = Math.min(turnIndex + 1, script.length - 1);
+              if (!matched) turnIndex = Math.min(turnIndex + 1, script.filter((t) => !t.match).length - 1);
               return;
             }
             const ev = turn.events[i++];
