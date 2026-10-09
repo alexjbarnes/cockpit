@@ -34,6 +34,7 @@ import type {
   InitData,
   ModelSlots,
   SandboxConfig,
+  SendOptions,
   SessionInfo,
   SessionPermissionMode,
   ThinkingLevel,
@@ -107,6 +108,8 @@ interface QueuedMessage {
   text: string;
   images?: ImageAttachment[];
   documents?: DocumentAttachment[];
+  /** Held for the turn's end by choice, so a later mid-turn send need not wait behind it. */
+  afterTurn?: boolean;
 }
 
 interface Session {
@@ -2486,7 +2489,7 @@ Additional Cockpit rules beyond the CLI's defaults:
     return used + estimate > total * 0.85;
   }
 
-  sendMessage(sessionId: string, text: string, images?: ImageAttachment[], documents?: DocumentAttachment[]): boolean {
+  sendMessage(sessionId: string, text: string, images?: ImageAttachment[], documents?: DocumentAttachment[], opts?: SendOptions): boolean {
     const session = this.sessions.get(sessionId);
     if (!session) {
       smLog(sessionId, "sendMessage: session not in memory, returning false");
@@ -2552,10 +2555,17 @@ Additional Cockpit rules beyond the CLI's defaults:
     }
 
     // If already running, hand it to the CLI's own queue when it can take it,
-    // else queue it here to send when the session goes idle.
+    // else queue it here to send when the session goes idle. One sent for
+    // after the turn always waits here.
     if (session.info.status === "running") {
-      if (this.sendMidTurn(session, sessionId, text, images, documents)) return true;
-      session.queuedMessages.push({ id: `q-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, text, images, documents });
+      if (!opts?.afterTurn && this.sendMidTurn(session, sessionId, text, images, documents)) return true;
+      session.queuedMessages.push({
+        id: `q-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        text,
+        images,
+        documents,
+        afterTurn: opts?.afterTurn,
+      });
       session.emitter.emit("queued", sessionId, session.queuedMessages.length);
       return true;
     }
@@ -2601,7 +2611,8 @@ Additional Cockpit rules beyond the CLI's defaults:
    * for the turn to end instead: a transport with no such queue, a compaction
    * under way, a card waiting on the user (keys typed now would answer its
    * dialog), a slash command, or earlier messages already waiting here, which
-   * must go first.
+   * must go first. Messages held for after the turn by choice do not count:
+   * they were never meant for this turn.
    */
   private sendMidTurn(
     session: Session,
@@ -2612,7 +2623,7 @@ Additional Cockpit rules beyond the CLI's defaults:
   ): boolean {
     const proc = session.harnessProcess;
     if (!proc?.sendMidTurnMessage || !proc.isAlive || !proc.canTakeMidTurnMessage?.()) return false;
-    if (session.compacting || session.pendingRequests.size > 0 || session.queuedMessages.length > 0) return false;
+    if (session.compacting || session.pendingRequests.size > 0 || session.queuedMessages.some((m) => !m.afterTurn)) return false;
     if (text.trim().startsWith("/")) return false;
     logDiag(sessionId, "send:mid-turn", { textLen: text.length });
     void proc.sendMidTurnMessage(text, images, documents).then((queued) => {

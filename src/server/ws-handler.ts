@@ -649,12 +649,13 @@ export function createWebSocketHandler(
           if (!sessionCleanups.has(msg.sessionId)) {
             subscribeSession(msg.sessionId);
           }
-          const sent = sessionManager.sendMessage(msg.sessionId, msg.text, msg.images, msg.documents);
+          const opts = { afterTurn: msg.afterTurn };
+          const sent = sessionManager.sendMessage(msg.sessionId, msg.text, msg.images, msg.documents, opts);
           if (!sent) {
             sessionManager.recoverSession(msg.sessionId, { cwd: msg.cwd, pinExact: msg.historyView }).then((recovered) => {
               if (recovered) {
                 subscribeSession(msg.sessionId);
-                sessionManager.sendMessage(msg.sessionId, msg.text, msg.images, msg.documents);
+                sessionManager.sendMessage(msg.sessionId, msg.text, msg.images, msg.documents, opts);
               } else {
                 send(ws, { type: "session:error", sessionId: msg.sessionId, error: "Session not found. Try refreshing the page." });
               }

@@ -553,6 +553,12 @@ export interface Issue {
   activity: IssueActivity[]; // append-only, who changed what
 }
 
+/** How a message sent while Claude is working is delivered. */
+export interface SendOptions {
+  /** Hold it in cockpit's queue until the turn ends, instead of handing it to Claude mid-turn. */
+  afterTurn?: boolean;
+}
+
 // Client -> Server messages
 export type ClientMessage =
   | { type: "session:connect"; sessionId: string; cwd?: string; lastMessageId?: string | null; historyView?: boolean }
@@ -564,6 +570,7 @@ export type ClientMessage =
       documents?: DocumentAttachment[];
       cwd?: string;
       historyView?: boolean;
+      afterTurn?: boolean;
     }
   | { type: "session:interrupt"; sessionId: string }
   | {

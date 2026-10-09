@@ -755,6 +755,57 @@ describe("SessionManager PTY runtime (unit)", () => {
       expect(ptyMocks.sendUserText).toHaveBeenCalledWith("held here");
     });
 
+    it("waits for the turn's end when sent for after the turn, though the CLI could take it now", () => {
+      const session = runningSession();
+      ptyMocks.canTakeMidTurn = true;
+
+      expect(manager.sendMessage(session.id, "next", undefined, undefined, { afterTurn: true })).toBe(true);
+
+      expect(ptyMocks.sendMidTurnText).not.toHaveBeenCalled();
+      expect(manager.getQueuedCount(session.id)).toBe(1);
+      expect(ptyMocks.sendUserText).not.toHaveBeenCalled();
+
+      emitMessageDone();
+      expect(ptyMocks.sendUserText).toHaveBeenCalledWith("next");
+      expect(manager.getQueuedCount(session.id)).toBe(0);
+    });
+
+    it("does not hold a mid-turn message back behind one waiting for the turn's end", async () => {
+      const session = runningSession();
+      ptyMocks.canTakeMidTurn = true;
+      const queued = recordQueued(session.id);
+
+      manager.sendMessage(session.id, "after", undefined, undefined, { afterTurn: true });
+      manager.sendMessage(session.id, "now");
+
+      expect(ptyMocks.sendMidTurnText).toHaveBeenCalledWith("now");
+      expect(manager.getQueuedMessages(session.id).map((m) => m.text)).toEqual(["after"]);
+      await vi.waitFor(() => expect(queued).toContainEqual({ count: 1, sentText: "now", midTurn: true }));
+    });
+
+    it("still keeps a message that could not go mid-turn behind earlier ones", () => {
+      const session = runningSession();
+      ptyMocks.canTakeMidTurn = false;
+      manager.sendMessage(session.id, "fell back");
+      ptyMocks.canTakeMidTurn = true;
+
+      manager.sendMessage(session.id, "after", undefined, undefined, { afterTurn: true });
+      manager.sendMessage(session.id, "now");
+
+      expect(ptyMocks.sendMidTurnText).not.toHaveBeenCalled();
+      expect(manager.getQueuedMessages(session.id).map((m) => m.text)).toEqual(["fell back", "after", "now"]);
+    });
+
+    it("is sent at once when sent for after the turn and the turn has already ended", () => {
+      const session = runningSession();
+      emitMessageDone();
+
+      manager.sendMessage(session.id, "next", undefined, undefined, { afterTurn: true });
+
+      expect(ptyMocks.sendUserText).toHaveBeenCalledWith("next");
+      expect(manager.getQueuedCount(session.id)).toBe(0);
+    });
+
     it("stays running after Esc while the CLI takes a queued message up", () => {
       const session = runningSession();
       ptyMocks.holdsMidTurn = true;

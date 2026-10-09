@@ -439,13 +439,14 @@ export function ChatView({
       images?: import("@/types").ImageAttachment[],
       documents?: import("@/types").DocumentAttachment[],
       textFiles?: import("@/types").TextFileAttachment[],
+      opts?: import("@/types").SendOptions,
     ) => {
       stickToBottom.current = true;
       if (initialContext && !contextInjected.current && messages.length === 0) {
         contextInjected.current = true;
-        sendMessage(`${text}\n\n---\n${initialContext}`, images, documents, textFiles);
+        sendMessage(`${text}\n\n---\n${initialContext}`, images, documents, textFiles, opts);
       } else {
-        sendMessage(text, images, documents, textFiles);
+        sendMessage(text, images, documents, textFiles, opts);
       }
     },
     [sendMessage, initialContext, messages.length],
