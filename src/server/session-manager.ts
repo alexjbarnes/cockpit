@@ -289,7 +289,13 @@ function cliSpawnMode(mode: SessionPermissionMode, runtime: SessionRuntime): str
  *  sandbox cannot be enforced, and an empty allowlist is dropped. */
 function enforceableSandbox(config: SandboxConfig): SandboxConfig {
   if (config.enabled && !sandboxSupport().supported) return { enabled: false };
-  return { enabled: config.enabled, ...(config.allowedDomains?.length ? { allowedDomains: config.allowedDomains } : {}) };
+  return {
+    enabled: config.enabled,
+    ...(config.allowedDomains?.length ? { allowedDomains: config.allowedDomains } : {}),
+    // A job run's storage folder travels with the config, or the run's shell
+    // would lose the one path its prompt tells it to write to.
+    ...(config.jobStorageDir ? { jobStorageDir: config.jobStorageDir } : {}),
+  };
 }
 
 export class SessionManager {
@@ -1267,7 +1273,9 @@ export class SessionManager {
   setSandbox(sessionId: string, config: SandboxConfig): void {
     const session = this.sessions.get(sessionId);
     if (!session) return;
-    const next = enforceableSandbox(config);
+    // The session switch carries no storage folder of its own; a job run's is
+    // kept so toggling the switch cannot take the run's only writable path away.
+    const next = enforceableSandbox({ ...config, jobStorageDir: config.jobStorageDir ?? session.sandbox.jobStorageDir });
 
     const same =
       session.sandbox.enabled === next.enabled &&

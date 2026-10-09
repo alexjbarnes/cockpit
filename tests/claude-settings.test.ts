@@ -99,6 +99,75 @@ describe("prepareHookSettings", () => {
     expect(bare.sandbox).toEqual({ enabled: true, filesystem: fence });
   });
 
+  it("gives a sandboxed job exactly its own storage folder, and nothing else in cockpit's directory", async () => {
+    const read = async (id: string, sandbox?: { enabled: boolean; allowedDomains?: string[]; jobStorageDir?: string }) => {
+      cleanupIds.push(id);
+      const { settingsPath } = await prepareHookSettings({
+        sessionId: id,
+        hookUrl: "http://127.0.0.1:1",
+        hookToken: "tok",
+        sandbox,
+      });
+      return JSON.parse(readFileSync(settingsPath, "utf-8")) as { sandbox: Record<string, unknown> };
+    };
+    const fence = [getCockpitDir()];
+    const jobA = join(getCockpitDir(), "jobs", "job-a");
+    const jobB = join(getCockpitDir(), "jobs", "job-b");
+
+    const cases = [
+      {
+        name: "a sandboxed job",
+        session: "test-sb-job-a",
+        sandbox: { enabled: true, jobStorageDir: jobA },
+        filesystem: { denyRead: fence, allowRead: [jobA], allowWrite: [jobA] },
+      },
+      {
+        name: "a second sandboxed job",
+        session: "test-sb-job-b",
+        sandbox: { enabled: true, jobStorageDir: jobB },
+        filesystem: { denyRead: fence, allowRead: [jobB], allowWrite: [jobB] },
+      },
+      {
+        name: "a job with the sandbox off",
+        session: "test-sb-job-off",
+        sandbox: { enabled: false, jobStorageDir: jobA },
+        filesystem: { denyRead: fence },
+      },
+      {
+        name: "an interactive session",
+        session: "test-sb-interactive",
+        sandbox: { enabled: true },
+        filesystem: { denyRead: fence },
+      },
+      {
+        name: "a sandboxed job with domains of its own",
+        session: "test-sb-job-domains",
+        sandbox: { enabled: true, jobStorageDir: jobA, allowedDomains: ["github.com"] },
+        filesystem: { denyRead: fence, allowRead: [jobA], allowWrite: [jobA] },
+      },
+    ];
+
+    for (const c of cases) {
+      const settings = await read(c.session, c.sandbox);
+      expect(settings.sandbox.filesystem, c.name).toEqual(c.filesystem);
+      // The fence over cockpit's directory is what the allow is cut out of, so
+      // it has to survive every case.
+      expect((settings.sandbox.filesystem as { denyRead: string[] }).denyRead, c.name).toEqual(fence);
+      // A folder is only ever added, never swapped for the whole jobs tree.
+      const allowed = [
+        ...((settings.sandbox.filesystem as { allowRead?: string[] }).allowRead ?? []),
+        ...((settings.sandbox.filesystem as { allowWrite?: string[] }).allowWrite ?? []),
+      ];
+      for (const path of allowed) expect(path, c.name).toMatch(/\/jobs\/job-[a-z]+$/);
+    }
+
+    expect((await read("test-sb-job-domains-2", { enabled: true, jobStorageDir: jobA, allowedDomains: ["github.com"] })).sandbox).toEqual({
+      enabled: true,
+      filesystem: { denyRead: fence, allowRead: [jobA], allowWrite: [jobA] },
+      network: { allowedDomains: ["github.com"] },
+    });
+  });
+
   it("leaves the user's sandbox rules in their own file instead of copying them in", async () => {
     writeFileSync(
       join(claudeDir, "settings.json"),

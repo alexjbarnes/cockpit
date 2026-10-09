@@ -605,7 +605,9 @@ export class JobScheduler {
       bypassPermissions: !!job.bypassPermissions,
       // The job's own switch, never the session default: a default switched on
       // for interactive work must not reach a job whose author left it off.
-      sandbox: { enabled: job.sandbox === true },
+      // Its storage folder travels with it, so a sandboxed run can write the
+      // state its prompt tells it to keep there.
+      sandbox: { enabled: job.sandbox === true, jobStorageDir: getJobScratchpadDir(job.id) },
       runtime: job.runtime,
       // Only an inbox-reporting job gets a run context, and only a run context
       // gets the cockpit MCP server. A job that never reports keeps no reach

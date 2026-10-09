@@ -55,6 +55,7 @@ import { loadIssues, loadProjects } from "@/server/issue-storage";
 import { acquireJobLock, releaseJobLock } from "@/server/job-lock";
 import { JobScheduler } from "@/server/job-scheduler";
 import { getLatestRun, loadJobs, loadRuns, saveRun } from "@/server/job-storage";
+import { getJobScratchpadDir } from "@/server/paths";
 import { checkJobModel } from "@/server/provider-catalog";
 import type { JobRun, JobRunStatus, ScheduledJob } from "@/types";
 
@@ -318,7 +319,9 @@ describe("JobScheduler", () => {
 
       expect(sm.createSession).toHaveBeenCalledWith(expect.any(String), "[job] Test Job", {
         bypassPermissions: true,
-        sandbox: { enabled: false },
+        // The job's storage folder travels with the config even when the switch
+        // is off; the settings file only uses it for a sandboxed run.
+        sandbox: { enabled: false, jobStorageDir: getJobScratchpadDir("job-1") },
       });
     });
 
@@ -331,7 +334,7 @@ describe("JobScheduler", () => {
 
       expect(sm.createSession).toHaveBeenCalledWith(expect.any(String), "[job] Test Job", {
         bypassPermissions: false,
-        sandbox: { enabled: true },
+        sandbox: { enabled: true, jobStorageDir: getJobScratchpadDir("job-1") },
       });
     });
 
