@@ -8,6 +8,12 @@ const LONG_PRESS_MS = 500;
  * desktop arrive through contextmenu. Spread `handlers` on the element and
  * return early from its onClick when `swallowClick()` is true, since a click
  * can still follow a long press and must not also act as a tap.
+ *
+ * A released touch long press also suppresses the browser's synthesised mouse
+ * events (mousedown, mouseup, click) at the touch point. They are dispatched at
+ * whatever now sits under the finger, which for a long press that opened a
+ * modal is the modal itself: the send-mode modal's backdrop closed again on the
+ * release-click's mousedown, so the press looked like it did nothing.
  */
 export function useLongPress(onLongPress: () => void, enabled: boolean) {
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -54,8 +60,25 @@ export function useLongPress(onLongPress: () => void, enabled: boolean) {
     return was;
   }, []);
 
+  const onTouchEnd = useCallback(
+    (e: React.TouchEvent) => {
+      cancel();
+      // Cancelling touchend is what stops the synthesised mouse events; without
+      // it the release clicks whatever the long press just opened.
+      if (fired.current) e.preventDefault();
+    },
+    [cancel],
+  );
+
   return {
-    handlers: { onPointerDown, onPointerUp: cancel, onPointerLeave: cancel, onPointerCancel: cancel, onContextMenu },
+    handlers: {
+      onPointerDown,
+      onPointerUp: cancel,
+      onPointerLeave: cancel,
+      onPointerCancel: cancel,
+      onContextMenu,
+      onTouchEnd,
+    },
     swallowClick,
   };
 }
