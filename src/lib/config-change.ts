@@ -31,6 +31,7 @@ const DOMAIN_LABELS: Record<string, Record<string, string>> = {
     messageStitching: "Message stitching",
     reviewsEnabled: "Reviews enabled",
     issuesEnabled: "Issues enabled",
+    modalPagesEnabled: "Pages open in a modal",
     bypassAllPermissions: "Bypass all permissions",
     permissionMode: "Default permission mode",
     sandbox: "Default sandbox",

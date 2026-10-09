@@ -38,6 +38,7 @@ import { cn } from "@/lib/utils";
 import type { SessionInfo } from "@/types";
 import { AssistantModal } from "./assistant-modal";
 import { NewSessionDialog } from "./new-session-dialog";
+import { PageModal, usePageModal } from "./page-modal";
 
 const SIDEBAR_WIDTH_KEY = "cockpit_sidebar_width";
 const DEFAULT_WIDTH = 288; // 18rem = w-72
@@ -320,7 +321,9 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
   const pathname = usePathname();
   const { send, subscribe, connected } = useWebSocket();
   const { sidebarSections, cwd, sessionId: shellSessionId } = useShell();
-  const { settings } = useSettings();
+  const { settings, reload: reloadSettings } = useSettings();
+  // Settings changed inside the modal apply here as soon as it closes.
+  const pageModal = usePageModal(reloadSettings);
   const [open, setOpen] = useState(false);
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
   const [unread, setUnread] = useState<Set<string>>(new Set());
@@ -363,6 +366,16 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
   );
 
   const close = useCallback(() => setOpen(false), []);
+
+  /** A footer page: in the page modal when that experiment is on, else in place of this one. */
+  const openPage = useCallback(
+    (path: string) => {
+      close();
+      if (settings.modalPagesEnabled) pageModal.open(path);
+      else router.push(path);
+    },
+    [close, settings.modalPagesEnabled, pageModal.open, router],
+  );
 
   const currentSessionId = pathname.startsWith("/sessions/") ? pathname.split("/")[2] : null;
 
@@ -651,34 +664,16 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
 
         <div className="border-t px-3 py-2 flex items-center justify-end gap-2">
           <AssistantButton onClick={() => setAssistantOpen(true)} />
-          <JobsButton
-            onClick={() => {
-              close();
-              router.push("/jobs");
-            }}
-          />
-          <InboxButton
-            onClick={() => {
-              close();
-              router.push("/inbox");
-            }}
-          />
-          {settings.issuesEnabled && (
-            <IssuesButton
-              onClick={() => {
-                close();
-                router.push("/issues");
-              }}
-            />
-          )}
+          <JobsButton onClick={() => openPage("/jobs")} />
+          <InboxButton onClick={() => openPage("/inbox")} />
+          {settings.issuesEnabled && <IssuesButton onClick={() => openPage("/issues")} />}
           <Button
             variant="ghost"
             size="icon"
             className="shrink-0 h-8 w-8 text-muted-foreground hover:text-foreground"
             onClick={() => {
               sessionStorage.removeItem("settings-scroll");
-              close();
-              router.push("/settings");
+              openPage("/settings");
             }}
             title="Settings"
           >
@@ -689,6 +684,7 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
 
       <NewSessionDialog open={dialogOpen} onOpenChange={setDialogOpen} onSubmit={createSession} />
       <AssistantModal open={assistantOpen} onOpenChange={setAssistantOpen} />
+      <PageModal path={pageModal.path} onClose={pageModal.close} onOpenInApp={pageModal.openInApp} />
     </>
   );
 });

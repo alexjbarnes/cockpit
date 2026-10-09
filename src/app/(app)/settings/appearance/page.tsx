@@ -206,6 +206,12 @@ export default function AppearanceSettingsPage() {
           >
             <Toggle enabled={settings.issuesEnabled} onToggle={() => updateSetting("issuesEnabled", !settings.issuesEnabled)} />
           </SettingRow>
+          <SettingRow
+            label="Pages in a modal"
+            hint="Open Jobs, Inbox, Issues and Settings in a modal over your session instead of leaving it. Experimental and may change."
+          >
+            <Toggle enabled={settings.modalPagesEnabled} onToggle={() => updateSetting("modalPagesEnabled", !settings.modalPagesEnabled)} />
+          </SettingRow>
         </div>
       </div>
     </div>

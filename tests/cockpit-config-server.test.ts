@@ -1243,6 +1243,12 @@ describe("cockpit-config MCP server (in-process HTTP)", () => {
       }
     });
 
+    it("update_settings allows modalPagesEnabled", async () => {
+      await callTool("update_settings", { modalPagesEnabled: true });
+      const settings = (await callToolParsed("get_settings")) as { modalPagesEnabled?: boolean };
+      expect(settings.modalPagesEnabled).toBe(true);
+    });
+
     it("update_settings allows modelSlots", async () => {
       const modelSlots = { main: "claude-opus-4-5-20251101", mainContext: "100k" };
       await callTool("update_settings", { modelSlots });

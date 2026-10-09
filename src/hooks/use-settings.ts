@@ -32,6 +32,7 @@ export interface Settings {
   messageStitching: boolean;
   reviewsEnabled: boolean;
   issuesEnabled: boolean;
+  modalPagesEnabled: boolean;
   allowSonnet1m: boolean;
   terminalFontSize: number;
   terminalTheme: TerminalTheme;
@@ -52,6 +53,7 @@ const defaultSettings: Settings = {
   messageStitching: true,
   reviewsEnabled: true,
   issuesEnabled: false,
+  modalPagesEnabled: false,
   allowSonnet1m: false,
   terminalFontSize: 14,
   terminalTheme: "dark" as TerminalTheme,
@@ -62,7 +64,7 @@ export function useSettings() {
   const [settings, setSettings] = useState<Settings>(defaultSettings);
   const [loaded, setLoaded] = useState(false);
 
-  useEffect(() => {
+  const reload = useCallback(() => {
     fetch("/api/defaults")
       .then((res) => res.json())
       .then((data) => {
@@ -84,6 +86,8 @@ export function useSettings() {
       .catch(() => setLoaded(true));
   }, []);
 
+  useEffect(() => reload(), [reload]);
+
   const updateSetting = useCallback(<K extends keyof Settings>(key: K, value: Settings[K]) => {
     setSettings((prev) => {
       const next = { ...prev, [key]: value };
@@ -96,5 +100,5 @@ export function useSettings() {
     });
   }, []);
 
-  return { settings, updateSetting, loaded };
+  return { settings, updateSetting, loaded, reload };
 }

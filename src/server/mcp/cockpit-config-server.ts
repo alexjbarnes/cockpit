@@ -534,6 +534,7 @@ const TOOL_DEFINITIONS = [
         messageStitching: { type: "boolean" },
         reviewsEnabled: { type: "boolean" },
         issuesEnabled: { type: "boolean" },
+        modalPagesEnabled: { type: "boolean" },
         permissionMode: {
           type: "string",
           enum: ["manual", "auto", "bypass"],
@@ -1138,6 +1139,7 @@ async function handleToolCall(
           "messageStitching",
           "reviewsEnabled",
           "issuesEnabled",
+          "modalPagesEnabled",
           "permissionMode",
           "sandbox",
           "modelSlots",
