@@ -3,37 +3,10 @@
 import { Globe, ShieldAlert } from "lucide-react";
 import { useEffect, useMemo, useRef } from "react";
 import type { PendingPermission } from "@/hooks/use-session";
-import { pathBasename, shortPath } from "@/lib/path";
+import { pathBasename } from "@/lib/path";
 import { isSandboxEscape, NETWORK_ACCESS_TOOL } from "@/lib/sandbox-requests";
+import { formatToolSummary } from "@/lib/tool-summary";
 import type { PermissionMode, PermissionSuggestion } from "@/types";
-
-function formatToolSummary(toolName: string, input: Record<string, unknown>): string {
-  switch (toolName) {
-    case "Bash":
-    case "bash": {
-      const cmd = (input.command as string) || "";
-      return cmd.length > 80 ? cmd.slice(0, 80) + "..." : cmd;
-    }
-    case "Write":
-    case "write":
-    case "Edit":
-    case "edit":
-    case "Read":
-    case "read": {
-      const fp = (input.file_path as string) || "";
-      return fp ? shortPath(fp) : "";
-    }
-    // The URL is the whole decision for a fetch, so put it in the summary
-    // instead of leaving it to be read out of the raw input JSON.
-    case "WebFetch":
-    case "WebSearch": {
-      const target = (input.url as string) || (input.query as string) || "";
-      return target.length > 80 ? target.slice(0, 80) + "..." : target;
-    }
-    default:
-      return "";
-  }
-}
 
 const destinationLabels: Record<string, string> = {
   session: "session",

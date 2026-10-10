@@ -4,7 +4,7 @@ import type { ContextSize } from "@/lib/models";
 import { splitLegacyModel } from "@/lib/models";
 import { writeJsonAtomic } from "@/server/atomic-write";
 import { getCockpitDir } from "@/server/paths";
-import type { InitData, ModelSlots, SandboxConfig, SessionPermissionMode, ThinkingLevel } from "@/types";
+import type { InitData, ModelSlots, SandboxConfig, SessionNotifications, SessionPermissionMode, ThinkingLevel } from "@/types";
 
 export type SessionRuntime = "stream" | "pty";
 
@@ -32,6 +32,8 @@ export interface SessionPrefs {
   activeTabId?: string;
   runtime?: SessionRuntime;
   cockpitAgent?: boolean;
+  /** Alerts this session sends out. Absent means silent. */
+  notifications?: SessionNotifications;
 }
 
 function prefsDir(): string {

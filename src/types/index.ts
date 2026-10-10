@@ -14,6 +14,9 @@ export interface SessionInfo {
   /** Subagents the session launched that are still running. A session can be
    *  idle and accepting input while these work on. */
   agentCount?: number;
+  /** What this session sends out when it finishes, asks, or waits for
+   *  approval. Absent means silent, which is the default. */
+  notifications?: SessionNotifications;
 }
 
 export interface SessionGroup {
@@ -400,6 +403,26 @@ export interface NotificationPayload {
    *  push carries it so the notification's own buttons can act on the message
    *  without the app being open. */
   messageId?: string;
+  /** A permission request waiting on the user, when the notification is about
+   *  one. A web push turns it into Approve and Deny buttons that answer the
+   *  request directly, without the app being open. */
+  approval?: { sessionId: string; requestId: string };
+}
+
+/** What a session sends out, chosen in its settings: one provider, and which
+ *  of the three moments are worth a message. Absent means the session is
+ *  silent, which is the default. */
+export interface SessionNotifications {
+  /** A notification provider entry id (see NotificationSettings.providers). */
+  providerId?: string;
+  events?: {
+    /** The turn ended and nothing is waiting on the user. */
+    finished?: boolean;
+    /** The model asked a question (AskUserQuestion). */
+    question?: boolean;
+    /** A tool call is waiting for approval, plan approvals included. */
+    permission?: boolean;
+  };
 }
 
 export interface TelegramConfig {
@@ -606,6 +629,7 @@ export type ClientMessage =
   | { type: "session:set_model_slot"; sessionId: string; slot: "main" | "subagent" | "fast"; modelId: string }
   | { type: "session:restart"; sessionId: string }
   | { type: "session:set_runtime"; sessionId: string; runtime: "pty" | "stream" }
+  | { type: "session:set_notifications"; sessionId: string; notifications: SessionNotifications | null }
   | { type: "session:subscribe"; sessionIds: string[] }
   | { type: "question:response"; sessionId: string; requestId: string; answers: Record<string, string> }
   | { type: "message:cancel_queued"; sessionId: string }
@@ -643,6 +667,23 @@ export type ServerMessage =
       configProposal?: { toolName: string; domain: string; action: string; displayName?: string; idNames?: Record<string, string> };
     }
   | { type: "question:request"; sessionId: string; requestId: string; questions: string }
+  /** A pending request is gone — answered here, answered from a push, or
+   *  dropped when the turn ended. Anything still showing its card or banner
+   *  clears it. */
+  | { type: "request:resolved"; sessionId: string; requestId: string }
+  /** A session needs the user while they are looking somewhere else. Sent to
+   *  every connected socket; each client decides whether it is the session on
+   *  screen and whether it wants the banner. */
+  | {
+      type: "session:attention";
+      sessionId: string;
+      name: string;
+      cwd: string;
+      kind: "finished" | "question" | "permission";
+      requestId?: string;
+      toolName?: string;
+      input?: string;
+    }
   | { type: "session:clear"; sessionId: string }
   | { type: "session:system"; sessionId: string; text: string }
   | { type: "session:info_updated"; sessionId: string; info: SessionInfo }

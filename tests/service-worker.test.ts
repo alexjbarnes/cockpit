@@ -90,6 +90,22 @@ describe("service worker push", () => {
     expect(options.data).toMatchObject({ url: "/inbox/abc", messageId: "abc" });
   });
 
+  it("offers Approve and Deny for a permission a session is waiting on", async () => {
+    const sw = loadServiceWorker();
+    await push(sw, {
+      title: "Weekly organiser",
+      body: "Needs approval: rm -rf build",
+      approval: { sessionId: "sess-1", requestId: "req-1" },
+    });
+
+    const { options } = sw.notifications[0];
+    expect(options.actions).toEqual([
+      { action: "approve", title: "Approve" },
+      { action: "deny", title: "Deny" },
+    ]);
+    expect(options.data).toMatchObject({ approval: { sessionId: "sess-1", requestId: "req-1" } });
+  });
+
   it("gives a push with no inbox message behind it no buttons", async () => {
     const sw = loadServiceWorker();
     await push(sw, { title: "Cockpit", body: "something happened" });
@@ -131,6 +147,23 @@ describe("service worker notification buttons", () => {
 
     expect(sw.fetched[0].url).toBe("/api/inbox/abc");
     expect(sw.fetched[0].init?.method).toBe("DELETE");
+  });
+
+  it("approves the request through the route the app itself uses", async () => {
+    const sw = loadServiceWorker();
+    const close = await click(sw, "approve", { approval: { sessionId: "sess-1", requestId: "req-1" } });
+
+    expect(sw.fetched[0].url).toBe("/api/sessions/sess-1/permissions/req-1");
+    expect(sw.fetched[0].init).toMatchObject({ method: "POST", body: JSON.stringify({ allowed: true }) });
+    expect(close, "the notification has done its job").toHaveBeenCalled();
+    expect(sw.opened, "an action must not open the app").toEqual([]);
+  });
+
+  it("denies with allowed false, not just an absent body", async () => {
+    const sw = loadServiceWorker();
+    await click(sw, "deny", { approval: { sessionId: "sess-1", requestId: "req-1" } });
+
+    expect(sw.fetched[0].init).toMatchObject({ method: "POST", body: JSON.stringify({ allowed: false }) });
   });
 
   it("opens the message when the body of the notification is tapped", async () => {

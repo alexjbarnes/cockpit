@@ -78,16 +78,21 @@ self.addEventListener("push", (event) => {
     payload = { title: "Cockpit", body: "" };
   }
   const title = payload.title || "Cockpit";
-  // The message's id turns the notification into something actionable. Two
-  // actions is what a browser will show — Chrome's Notification.maxActions is
-  // 2 — and on Android they appear only once the notification is expanded. No
-  // id (a push that did not come from the inbox) means no buttons.
-  const actions = payload.messageId
+  // Two actions is what a browser will show — Chrome's Notification.maxActions
+  // is 2 — and on Android they appear only once the notification is expanded.
+  // A permission request gets Approve and Deny; an inbox message gets its two;
+  // a push with neither is just a banner.
+  const actions = payload.approval
     ? [
-        { action: "mark-read", title: "Mark read" },
-        { action: "delete", title: "Delete" },
+        { action: "approve", title: "Approve" },
+        { action: "deny", title: "Deny" },
       ]
-    : [];
+    : payload.messageId
+      ? [
+          { action: "mark-read", title: "Mark read" },
+          { action: "delete", title: "Delete" },
+        ]
+      : [];
   event.waitUntil(
     self.registration.showNotification(title, {
       body: payload.body || "",
@@ -97,7 +102,7 @@ self.addEventListener("push", (event) => {
       badge: "/notification-badge.png",
       tag: payload.tag || undefined,
       actions,
-      data: { url: payload.url || "/inbox", messageId: payload.messageId },
+      data: { url: payload.url || "/inbox", messageId: payload.messageId, approval: payload.approval },
     })
   );
 });
@@ -118,11 +123,36 @@ async function actOnMessage(action, id) {
   }
 }
 
+/** Approve or deny the permission request a notification is about, through the
+ *  same REST route the app itself would use. */
+async function actOnApproval(allowed, approval) {
+  try {
+    const res = await fetch(
+      `/api/sessions/${encodeURIComponent(approval.sessionId)}/permissions/${encodeURIComponent(approval.requestId)}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ allowed }),
+      },
+    );
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
 // An action button acts and leaves the app alone. Anything else — a tap on the
 // notification body — focuses a window already showing cockpit rather than
 // opening a second one, and lands on the page the notification named.
 self.addEventListener("notificationclick", (event) => {
   const data = event.notification.data || {};
+  if (event.action === "approve" || event.action === "deny") {
+    event.notification.close();
+    if (data.approval) {
+      event.waitUntil(actOnApproval(event.action === "approve", data.approval));
+    }
+    return;
+  }
   if (event.action === "mark-read" || event.action === "delete") {
     event.notification.close();
     if (data.messageId) {

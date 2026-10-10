@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  Bell,
   Box,
   Brain,
   Check,
@@ -59,11 +60,13 @@ import type {
   DocumentAttachment,
   ImageAttachment,
   InitData,
+  NotificationProviderEntry,
   Provider,
   ProviderModel,
   SandboxConfig,
   SandboxSupport,
   SendOptions,
+  SessionNotifications,
   SessionPermissionMode,
   TextFileAttachment,
   ThinkingLevel,
@@ -314,6 +317,8 @@ interface InputAreaProps {
   currentRuntime?: "pty" | "stream";
   onSetRuntime?: (runtime: "pty" | "stream") => void;
   onRestart?: () => void;
+  notifications?: SessionNotifications | null;
+  onSetNotifications?: (notifications: SessionNotifications | null) => void;
   providers?: Provider[];
 }
 
@@ -376,6 +381,8 @@ export function InputArea({
   currentRuntime,
   onSetRuntime,
   onRestart,
+  notifications = null,
+  onSetNotifications,
   providers,
 }: InputAreaProps) {
   const { connected } = useWebSocket();
@@ -404,7 +411,8 @@ export function InputArea({
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [optionsOpen, setOptionsOpen] = useState(false);
   const [inputFocused, setInputFocused] = useState(false);
-  const [settingsTab, setSettingsTab] = useState<"model" | "runtime">("model");
+  const [settingsTab, setSettingsTab] = useState<"model" | "runtime" | "notifications">("model");
+  const [notifyProviders, setNotifyProviders] = useState<NotificationProviderEntry[]>([]);
   const [modelSearch, setModelSearch] = useState("");
   const [recentModels, setRecentModels] = useState<string[]>([]);
   useEffect(() => {
@@ -415,6 +423,22 @@ export function InputArea({
       // corrupt or absent — start empty
     }
   }, []);
+
+  // The provider list only matters for the Notifications tab, so it is fetched
+  // when that tab is opened rather than on every composer mount.
+  useEffect(() => {
+    if (!optionsOpen || settingsTab !== "notifications") return;
+    let cancelled = false;
+    fetch("/api/notifications")
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data: { providers?: NotificationProviderEntry[] } | null) => {
+        if (!cancelled && data?.providers) setNotifyProviders(data.providers);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [optionsOpen, settingsTab]);
   const selectModel = useCallback(
     (value: string) => {
       onSetModel(value);
@@ -1005,6 +1029,18 @@ export function InputArea({
                         <Terminal className="h-3.5 w-3.5" />
                         Harness
                       </button>
+                      <button
+                        onClick={() => setSettingsTab("notifications")}
+                        data-testid="settings-tab-notifications"
+                        className={`flex items-center gap-2 px-3 py-2 rounded text-xs font-medium transition-colors ${
+                          settingsTab === "notifications"
+                            ? "bg-primary/10 text-primary border-l-2 border-primary"
+                            : "text-muted-foreground hover:text-foreground hover:bg-muted border-l-2 border-transparent"
+                        }`}
+                      >
+                        <Bell className="h-3.5 w-3.5" />
+                        Notifications
+                      </button>
                     </aside>
 
                     {/* Tab content */}
@@ -1448,6 +1484,106 @@ export function InputArea({
                                 <ChevronRight className="h-3 w-3" />
                               </span>
                             </button>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Notifications tab: what this session sends out, and
+                          through which of the configured providers. */}
+                      {settingsTab === "notifications" && (
+                        <div className="space-y-4" data-testid="settings-notifications">
+                          <div className="space-y-2">
+                            <div className="flex items-center gap-2">
+                              <Bell className="h-3.5 w-3.5 text-muted-foreground" />
+                              <span className="text-xs font-medium text-foreground">Send notifications</span>
+                            </div>
+                            <p className="text-[11px] text-muted-foreground">
+                              One provider per session. Off means this session never messages you on its own.
+                            </p>
+                            <div className="space-y-1.5">
+                              <button
+                                onClick={() => onSetNotifications?.(null)}
+                                data-testid="notify-off"
+                                className={`flex w-full items-center justify-between rounded-lg border px-3 py-2 text-xs transition-colors ${
+                                  !notifications?.providerId ? "border-primary bg-primary/10" : "border-border hover:bg-muted/50"
+                                }`}
+                              >
+                                <span>Off</span>
+                                {!notifications?.providerId && <Check className="h-3.5 w-3.5 text-primary" />}
+                              </button>
+                              {notifyProviders.map((provider) => {
+                                const selected = notifications?.providerId === provider.id;
+                                return (
+                                  <button
+                                    key={provider.id}
+                                    onClick={() =>
+                                      onSetNotifications?.({
+                                        providerId: provider.id,
+                                        events: notifications?.events ?? { finished: true, question: true, permission: true },
+                                      })
+                                    }
+                                    data-testid={`notify-provider-${provider.id}`}
+                                    className={`flex w-full items-center justify-between rounded-lg border px-3 py-2 text-xs transition-colors ${
+                                      selected ? "border-primary bg-primary/10" : "border-border hover:bg-muted/50"
+                                    }`}
+                                  >
+                                    <span className="flex items-center gap-2">
+                                      {provider.name}
+                                      <span className="text-muted-foreground">{provider.type}</span>
+                                      {!provider.enabled && <span className="text-muted-foreground">(disabled)</span>}
+                                    </span>
+                                    {selected && <Check className="h-3.5 w-3.5 text-primary" />}
+                                  </button>
+                                );
+                              })}
+                              {/* A provider this session chose and that has since been
+                                  deleted: saying so is better than silence. */}
+                              {notifications?.providerId && !notifyProviders.some((p) => p.id === notifications.providerId) && (
+                                <div className="flex items-center justify-between rounded-lg border border-dashed px-3 py-2 text-xs text-muted-foreground">
+                                  <span>This session's provider is no longer configured</span>
+                                </div>
+                              )}
+                              {notifyProviders.length === 0 && notifications?.providerId === undefined && (
+                                <p className="text-[11px] text-muted-foreground">
+                                  No providers configured yet. Add one in Settings → Notifications.
+                                </p>
+                              )}
+                            </div>
+                          </div>
+
+                          {notifications?.providerId && (
+                            <div className="space-y-2">
+                              <span className="text-xs font-medium text-foreground">Tell me when</span>
+                              <div className="space-y-1.5">
+                                {(
+                                  [
+                                    ["finished", "A turn finishes"],
+                                    ["question", "Claude asks a question"],
+                                    ["permission", "A permission is waiting"],
+                                  ] as const
+                                ).map(([key, label]) => {
+                                  const on = notifications?.events?.[key] !== false;
+                                  return (
+                                    <button
+                                      key={key}
+                                      onClick={() =>
+                                        onSetNotifications?.({
+                                          ...notifications,
+                                          events: { ...notifications?.events, [key]: !on },
+                                        })
+                                      }
+                                      data-testid={`notify-event-${key}`}
+                                      className={`flex w-full items-center justify-between rounded-lg border px-3 py-2 text-xs transition-colors ${
+                                        on ? "border-primary bg-primary/10" : "border-border hover:bg-muted/50"
+                                      }`}
+                                    >
+                                      <span>{label}</span>
+                                      {on && <Check className="h-3.5 w-3.5 text-primary" />}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            </div>
                           )}
                         </div>
                       )}

@@ -36,6 +36,7 @@ import type {
   SandboxConfig,
   SendOptions,
   SessionInfo,
+  SessionNotifications,
   SessionPermissionMode,
   ThinkingLevel,
   ToolUse,
@@ -51,6 +52,8 @@ import { clearToken, type RunContext, registerAuthToken, registerRunContext, reg
 import { getNotificationSettings } from "./notification-settings";
 import { findLatestPlanFile, readPlanFile } from "./plans";
 import { UntrustedWorkspaceError } from "./pty-session";
+import { emitSessionRequestResolved } from "./session-attention";
+import { notifySessionEvent } from "./session-notify";
 import { findChainForCliSession, getSessionPrefs, type SessionRuntime, setSessionPrefs } from "./session-prefs";
 import { getCockpitMcp } from "./singleton";
 import { createStreamState, processEvents, type StreamState } from "./stream-processor";
@@ -181,6 +184,8 @@ interface Session {
    *  claude through node-pty + hooks. Selectable per session via env at
    *  creation time; future revisions may expose this on SessionInfo. */
   runtime: SessionRuntime;
+  /** What this session sends out, from its own settings. Absent = silent. */
+  notifications?: SessionNotifications;
   cockpitAgent: boolean;
   cockpitAgentCleanups: (() => void)[];
   mcpToken?: string;
@@ -489,6 +494,7 @@ export class SessionManager {
           contextSize: restoredContextSize,
           runtime: restoredRuntime,
           pendingRequestCount: 0,
+          notifications: prefs?.notifications,
         },
         harnessProcess: null,
         emitter: new EventEmitter(),
@@ -504,6 +510,7 @@ export class SessionManager {
         // a sandbox and ran without one, so turning the default on must not
         // sandbox every existing session on its next restart.
         sandbox: prefs?.sandbox ?? { enabled: false },
+        notifications: prefs?.notifications,
         planMode: prefs?.planMode ?? false,
         pendingPlanReminder: prefs?.planMode ?? false,
         needsRespawnForPermissions: false,
@@ -971,8 +978,7 @@ export class SessionManager {
     const session = this.sessions.get(id);
     if (session && session.info.status === "running" && !session.harnessProcess?.isAlive) {
       session.info.status = "idle";
-      session.pendingRequests.clear();
-      this.notifyPendingChanged(session, id);
+      this.dropAllPendingRequests(session, id);
     }
   }
 
@@ -986,8 +992,7 @@ export class SessionManager {
     }
 
     this.killProcess(session);
-    session.pendingRequests.clear();
-    this.notifyPendingChanged(session, sessionId);
+    this.dropAllPendingRequests(session, sessionId);
     session.streamingSnapshot = null;
     session.info.status = "idle";
     session.emitter.emit("status", sessionId, "idle");
@@ -1147,8 +1152,7 @@ export class SessionManager {
         session.emitter.emit("status", id, "idle");
       }
     }
-    session.pendingRequests.clear();
-    this.notifyPendingChanged(session, id);
+    this.dropAllPendingRequests(session, id);
     return true;
   }
 
@@ -1162,10 +1166,31 @@ export class SessionManager {
 
   removePendingRequest(sessionId: string, requestId: string): void {
     const session = this.sessions.get(sessionId);
-    if (session) {
-      session.pendingRequests.delete(requestId);
-      this.notifyPendingChanged(session, sessionId);
+    if (session) this.dropPendingRequest(session, sessionId, requestId);
+  }
+
+  /** Take one request out of the pending map and tell everyone it is gone.
+   *  Every removal goes through here (the answer path included), so a card or
+   *  a banner raised for it anywhere clears — including one raised by a push
+   *  notification the user answered on their phone. */
+  private dropPendingRequest(session: Session, sessionId: string, requestId: string): boolean {
+    if (!session.pendingRequests.delete(requestId)) return false;
+    // Broadcast, not per-session: the banner for this request may be on the
+    // screen of someone watching a different session.
+    emitSessionRequestResolved(sessionId, requestId);
+    this.notifyPendingChanged(session, sessionId);
+    return true;
+  }
+
+  /** The same, for the paths that clear the lot: interrupt, exit, a stale
+   *  clear when a turn ends. */
+  private dropAllPendingRequests(session: Session, sessionId: string): void {
+    if (session.pendingRequests.size === 0) return;
+    for (const requestId of Array.from(session.pendingRequests.keys())) {
+      emitSessionRequestResolved(sessionId, requestId);
     }
+    session.pendingRequests.clear();
+    this.notifyPendingChanged(session, sessionId);
   }
 
   getPendingRequests(sessionId: string): PendingRequest[] {
@@ -1189,8 +1214,7 @@ export class SessionManager {
     const session = this.sessions.get(sessionId);
     if (!session?.harnessProcess?.isAlive) return false;
 
-    session.pendingRequests.delete(requestId);
-    this.notifyPendingChanged(session, sessionId);
+    this.dropPendingRequest(session, sessionId, requestId);
     return session.harnessProcess.respondToPermission(requestId, allowed, toolInput, permissionSuggestions, denyReason);
   }
 
@@ -1315,6 +1339,23 @@ export class SessionManager {
     return true;
   }
 
+  /** Set what this session sends out. Null clears it back to silent. */
+  setNotifications(sessionId: string, notifications: SessionNotifications | null): boolean {
+    const session = this.sessions.get(sessionId);
+    if (!session) return false;
+    if (notifications === null) {
+      session.notifications = undefined;
+      session.info.notifications = undefined;
+      setSessionPrefs(sessionId, { notifications: undefined });
+    } else {
+      session.notifications = notifications;
+      session.info.notifications = notifications;
+      setSessionPrefs(sessionId, { notifications });
+    }
+    this.emitInfoUpdated(session, sessionId);
+    return true;
+  }
+
   isBypassActive(sessionId: string): boolean {
     const session = this.sessions.get(sessionId);
     return session?.permissionMode === "bypass";
@@ -1334,8 +1375,7 @@ export class SessionManager {
       session.emitter.emit("status", sessionId, "idle");
     }
     // Clear orphaned pending requests from the killed process
-    session.pendingRequests.clear();
-    this.notifyPendingChanged(session, sessionId);
+    this.dropAllPendingRequests(session, sessionId);
     this.emitSystem(session, sessionId, "__plan_state::on");
   }
 
@@ -1352,8 +1392,7 @@ export class SessionManager {
       session.emitter.emit("status", sessionId, "idle");
     }
     // Clear orphaned pending requests from the killed process
-    session.pendingRequests.clear();
-    this.notifyPendingChanged(session, sessionId);
+    this.dropAllPendingRequests(session, sessionId);
     this.emitSystem(session, sessionId, "__plan_state::off");
     // Re-sync the permission mode with the client so the selector reflects it
     // correctly after the plan-mode process is torn down.
@@ -2126,6 +2165,13 @@ export class SessionManager {
           planContent: planPath ? readPlanFile(planPath) : undefined,
         });
         this.notifyPendingChanged(session, sessionId);
+        // Everything above this point answered itself, so a request arriving
+        // here is one the user actually has to deal with.
+        notifySessionEvent({ sessionId, name: session.info.name, cwd: session.info.cwd, notifications: session.notifications }, reqType, {
+          requestId: pa.requestId,
+          toolName: pa.toolName,
+          input: pa.toolInput || "",
+        });
       }
     }
 
@@ -2174,8 +2220,7 @@ export class SessionManager {
       // without ever telling cockpit. This is the only place that catches
       // the second case, otherwise it orphans the sidebar's pending indicator.
       if (session.pendingRequests.size > 0) {
-        session.pendingRequests.clear();
-        this.notifyPendingChanged(session, sessionId);
+        this.dropAllPendingRequests(session, sessionId);
       }
     }
 
@@ -2198,6 +2243,20 @@ export class SessionManager {
       });
       console.log(`[sm] emit status idle for ${sessionId.slice(0, 8)} (runtime=${session.runtime})`);
       session.emitter.emit("status", sessionId, "idle");
+      // A turn worth telling the user about is one that produced a real
+      // assistant message and left nothing waiting on them. Stopping a turn,
+      // an API error, "No response requested.", a manual compaction and a
+      // request still open all reach idle too, and none of them is news.
+      const finishedTurn =
+        lastEmitEv?.type === "message_done" &&
+        !!lastEmitEv.message &&
+        !lastEmitEv.interrupted &&
+        !result.compactDone &&
+        result.errors.length === 0 &&
+        session.pendingRequests.size === 0;
+      if (finishedTurn) {
+        notifySessionEvent({ sessionId, name: session.info.name, cwd: session.info.cwd, notifications: session.notifications }, "finished");
+      }
       this.flushQueuedMessage(session, sessionId);
     }
   }

@@ -8,6 +8,7 @@ import { debugLog, logClientMessage, logDiag, logParsedEvent, logServerMessage, 
 import type { ParsedEvent } from "./event-parser";
 import { watchCwd } from "./fs-watcher";
 import { findLatestPlanFile, readPlanFile } from "./plans";
+import { onSessionAttention, onSessionRequestResolved } from "./session-attention";
 import { SessionManager } from "./session-manager";
 import { getSessionPrefs } from "./session-prefs";
 import type { TerminalManager } from "./terminal-manager";
@@ -117,6 +118,26 @@ export function createWebSocketHandler(
 
   setupTerminalWebSocket(terminalWss, terminalManager);
 
+  // A session needing the user goes to every connection rather than to the
+  // sockets watching that session: the point is to reach someone who is
+  // looking at a different one. Each client decides whether it is the session
+  // on screen. Subscribed once per handler, not per socket, or every open
+  // socket would multiply the events by the number of sockets.
+  const broadcast = (message: ServerMessage) => {
+    const payload = JSON.stringify(message);
+    for (const client of wss.clients) {
+      if (client.readyState === client.OPEN) client.send(payload);
+    }
+  };
+
+  const unsubAttention = onSessionAttention((event) => {
+    broadcast({ type: "session:attention", ...event });
+  });
+
+  const unsubResolved = onSessionRequestResolved((sessionId, requestId) => {
+    broadcast({ type: "request:resolved", sessionId, requestId });
+  });
+
   const heartbeat = setInterval(() => {
     for (const ws of wss.clients) {
       const ext = ws as WebSocket & { isAlive?: boolean };
@@ -131,6 +152,8 @@ export function createWebSocketHandler(
 
   wss.on("close", () => {
     clearInterval(heartbeat);
+    unsubAttention();
+    unsubResolved();
   });
 
   server.on("upgrade", (req: IncomingMessage, socket: Duplex, head: Buffer) => {
@@ -800,6 +823,11 @@ export function createWebSocketHandler(
 
         case "session:set_runtime": {
           sessionManager.setRuntime(msg.sessionId, msg.runtime);
+          break;
+        }
+
+        case "session:set_notifications": {
+          sessionManager.setNotifications(msg.sessionId, msg.notifications);
           break;
         }
 

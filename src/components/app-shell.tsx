@@ -7,6 +7,7 @@ import { createContext, type ReactNode, useCallback, useContext, useEffect, useR
 import { AgentTranscriptProvider } from "@/components/agent-transcript-modal";
 import { AuthGuard } from "@/components/auth-guard";
 import { SearchButton } from "@/components/search-modal";
+import { SessionAlerts } from "@/components/session-alerts";
 import { Sidebar, type SidebarHandle } from "@/components/sidebar";
 import { BackgroundTasksButton } from "@/components/task-indicator";
 import { Button } from "@/components/ui/button";
@@ -384,6 +385,9 @@ export function AppShell({ children }: { children: ReactNode }) {
                 <main className="flex-1 min-h-0 min-w-0 flex flex-col">{embedded && !isModalPath(pathname) ? null : children}</main>
               </div>
             </div>
+            {/* Only the real shell: the page-modal iframe renders its own, and
+                two shells would each raise a banner for the same event. */}
+            {!embedded && <SessionAlerts />}
             {embedded && <EmbeddedPageBridge pathname={pathname} />}
           </AgentTranscriptProvider>
         </ShellContext.Provider>

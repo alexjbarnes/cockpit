@@ -30,6 +30,13 @@ export interface AppDefaults {
   messageStitching: boolean;
   reviewsEnabled: boolean;
   /**
+   * Raise a banner in the app when a session other than the one on screen
+   * wants the user: a finished turn, a question, or a permission prompt. Off
+   * by default. Independent of a session's own notification settings — this is
+   * about the sessions you are not looking at.
+   */
+  sessionAlerts: boolean;
+  /**
    * Native issue tracker (Issues sidebar icon, /issues pages, Projects
    * settings, the seven issue/project MCP tools). Off by default: it's
    * experimental and gates surfaces across server/MCP/UI — see the MCP tool
@@ -72,6 +79,7 @@ const fallback: AppDefaults = {
   modelSlots: { main: "sonnet" },
   messageStitching: true,
   reviewsEnabled: true,
+  sessionAlerts: false,
   issuesEnabled: false,
   modalPagesEnabled: true,
   allowSonnet1m: false,

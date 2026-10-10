@@ -17,6 +17,7 @@ import type {
   SandboxSupport,
   SendOptions,
   ServerMessage,
+  SessionNotifications,
   SessionPermissionMode,
   TextFileAttachment,
   ThinkingLevel,
@@ -136,6 +137,8 @@ interface UseSessionReturn {
   retry: () => void;
   currentRuntime: "pty" | "stream";
   setRuntime: (runtime: "pty" | "stream") => void;
+  notifications: SessionNotifications | null;
+  setNotifications: (notifications: SessionNotifications | null) => void;
   restartSession: () => void;
   thinkingCheck: ThinkingCheck | null;
   confirmThinkingStrip: () => Promise<void>;
@@ -155,6 +158,7 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
   const [currentModel, setCurrentModel] = useState("sonnet");
   const [currentContextSize, setCurrentContextSize] = useState<ContextSize>(DEFAULT_CONTEXT_SIZE);
   const [currentRuntime, setCurrentRuntime] = useState<"pty" | "stream">("stream");
+  const [notifications, setNotificationsState] = useState<SessionNotifications | null>(null);
   const [permissionMode, setPermissionModeState] = useState<SessionPermissionMode>("manual");
   const [appliedPermissionMode, setAppliedPermissionMode] = useState<SessionPermissionMode>("manual");
   // The mode the CLI reports; null until it has.
@@ -1022,6 +1026,7 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
           if (msg.info.runtime) {
             setCurrentRuntime(msg.info.runtime);
           }
+          setNotificationsState(msg.info.notifications ?? null);
           break;
         }
 
@@ -1052,6 +1057,14 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
           // so never stack a second entry for a request id already held. Two
           // entries read as two unanswered questions: a duplicated card.
           setPendingQuestions((prev) => pushPendingQuestion(prev, { requestId: msg.requestId, questions: msg.questions }));
+          break;
+        }
+
+        case "request:resolved": {
+          // Answered somewhere else: another tab, the banner, or a button on
+          // the push notification. Whatever this client is showing for it goes.
+          setPendingPermissions((prev) => prev.filter((p) => p.requestId !== msg.requestId));
+          setPendingQuestions((prev) => prev.filter((q) => q.requestId !== msg.requestId));
           break;
         }
       }
@@ -1476,6 +1489,14 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
     send({ type: "session:restart", sessionId });
   }, [send, sessionId]);
 
+  const setNotifications = useCallback(
+    (next: SessionNotifications | null) => {
+      setNotificationsState(next);
+      send({ type: "session:set_notifications", sessionId, notifications: next });
+    },
+    [send, sessionId],
+  );
+
   // Agents come from the message stream, not from hooks: the CLI reports a
   // subagent's completion but never its start, so a hook-only list stayed
   // empty for exactly as long as an agent was actually running.
@@ -1540,6 +1561,8 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
     retry,
     currentRuntime,
     setRuntime,
+    notifications,
+    setNotifications,
     restartSession,
     thinkingCheck,
     confirmThinkingStrip,

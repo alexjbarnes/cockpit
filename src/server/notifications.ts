@@ -29,6 +29,9 @@ const webPushProvider: NotificationProvider<WebPushConfig> = {
         // a push can carry this: it is the one channel with a surface that
         // takes input.
         ...(payload.messageId ? { messageId: payload.messageId } : {}),
+        // Same idea for a permission request: Approve and Deny on the
+        // notification itself, answered through the REST route.
+        ...(payload.approval ? { approval: payload.approval } : {}),
       });
     } catch (err) {
       if (isDeadSubscription(err)) {

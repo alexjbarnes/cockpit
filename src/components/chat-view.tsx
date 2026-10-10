@@ -106,6 +106,8 @@ export function ChatView({
     retry,
     currentRuntime,
     setRuntime,
+    notifications,
+    setNotifications,
     restartSession,
     thinkingCheck,
     confirmThinkingStrip,
@@ -769,6 +771,8 @@ export function ChatView({
           currentRuntime={currentRuntime}
           onSetRuntime={setRuntime}
           onRestart={restartSession}
+          notifications={notifications}
+          onSetNotifications={setNotifications}
           providers={providers}
         />
       </div>

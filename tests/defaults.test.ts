@@ -38,6 +38,7 @@ describe("defaults", () => {
       issuesEnabled: false,
       modalPagesEnabled: true,
       allowSonnet1m: false,
+      sessionAlerts: false,
     });
   });
 
@@ -69,6 +70,7 @@ describe("defaults", () => {
       issuesEnabled: false,
       modalPagesEnabled: true,
       allowSonnet1m: false,
+      sessionAlerts: false,
     });
   });
 
