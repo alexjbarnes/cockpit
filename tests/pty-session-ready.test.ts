@@ -149,7 +149,8 @@ describe("PtySession startup readiness", () => {
 // went on to type the whole prompt into the dialog and the CLI exited 1, which
 // a scheduled job reported as "went idle without producing any assistant
 // message" — no transcript, no mention of trust. Screen is as recorded,
-// including the intra-row spaces the TUI's per-character painting eats.
+// including the intra-row spaces the TUI's per-character painting eats, and the
+// highlight on "No, exit" as CLI 2.1.296 opens it.
 describe("PtySession workspace trust", () => {
   const TRUST_DIALOG =
     "\x1b[?25l────────────\nAccessingworkspace:\n/tmp\n\nQuicksafetycheck:Isthisaprojectyoucreatedoroneyoutrust?\n\n❯No,exit\nYes,Itrustthisfolder\n\nEntertoconfirm·Esctocancel\n";
@@ -165,29 +166,36 @@ describe("PtySession workspace trust", () => {
       // passes. Same guard the initial-prompt tests use.
       started.catch(() => {});
       await vi.advanceTimersByTimeAsync(0);
+      mockPty.write.mockClear();
       emit(TRUST_DIALOG);
-      // The Enter goes out; 2s later the dialog is still on screen.
+      // 2s later the dialog is still on screen.
       await vi.advanceTimersByTimeAsync(2500);
       emit(TRUST_DIALOG);
       await vi.advanceTimersByTimeAsync(100);
 
       await expect(started).rejects.toMatchObject({ name: "UntrustedWorkspaceError", cwd: "/tmp" });
+      // Nothing is typed at it. The highlight opens on "No, exit", so an Enter
+      // here — which this used to send on seeing the word "trust" on screen —
+      // chooses Exit: the CLI quit with code 1 and the session showed "claude
+      // exited during startup" instead of asking about trust.
+      expect(mockPty.write).not.toHaveBeenCalledWith("\r");
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it("carries on when the Enter does clear it, as on CLI versions where Yes is the default", async () => {
+  it("carries on when the dialog clears itself before the re-check", async () => {
     vi.useFakeTimers();
     try {
       const session = newSession();
       const started = session.start();
       await vi.advanceTimersByTimeAsync(0);
       emit(TRUST_DIALOG);
-      // Enough for the loop to spot it and send Enter, but inside the 2s it
-      // then waits before re-checking the screen.
+      // Enough for the loop to spot the dialog, but inside the 2s it then
+      // waits before re-checking the screen.
       await vi.advanceTimersByTimeAsync(300);
-      // Dialog gone, REPL painting in its place.
+      // Dialog gone — the CLI decided not to ask after all, or its trust
+      // arrived another way — and the REPL painting in its place.
       (session as unknown as { buffer: string }).buffer = "";
       emit(FIRST_BURST);
       await vi.advanceTimersByTimeAsync(5000);

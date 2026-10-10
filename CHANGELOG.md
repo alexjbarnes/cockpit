@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - **A reset of the config no longer takes your trusted directories with it.** The reset drops the whole `projects` map, so every directory you had trusted starts asking again — which is why sessions in familiar repos began showing the trust card. The guard keeps the trusted list alongside the MCP servers and puts it back when it detects a reset, merging into whatever the CLI wrote for each directory; a directory you untrust deliberately stays untrusted.
+- **A session in a directory Claude Code has not been told to trust asks about it again.** The CLI's trust question opens with its highlight on "No, exit", and cockpit answered every dialog it saw with a bare Enter — harmless while that dialog opened on "Yes, I trust this folder", and a crash once the order changed: Enter chose Exit, the CLI quit with code 1, and the session showed "claude exited during startup" instead of the trust card. Cockpit types nothing at the dialog now and reports the directory it is waiting on, so the card can grant it.
+
 ## [0.8.0] - 2026-10-10
 
 ### Added
