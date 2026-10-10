@@ -1,6 +1,6 @@
 "use client";
 
-import { Minus, Palette, Plus, Settings2, X } from "lucide-react";
+import { ChevronDown, Keyboard, Minus, Palette, Plus, Settings2, TextCursor, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useIsDesktop } from "@/hooks/use-is-desktop";
 import { type TerminalTheme, useSettings } from "@/hooks/use-settings";
@@ -108,7 +108,7 @@ interface TerminalPanelProps {
 
 const TOOLBAR_KEYS = [
   { label: "Esc", data: "\x1b" },
-  { label: "Ctrl", modifier: true },
+  { label: "Ctrl", modifier: "ctrl" },
   { label: "Tab", data: "\t" },
   { label: "|", data: "|", separator: true },
   { label: "←", data: "\x1b[D" },
@@ -116,6 +116,96 @@ const TOOLBAR_KEYS = [
   { label: "↓", data: "\x1b[B" },
   { label: "→", data: "\x1b[C" },
 ] as const;
+
+/** The keys a phone keyboard does not have, in the four-column shape the
+ *  terminal's own expansion opens into: modifiers and editing keys first, then
+ *  the punctuation that is otherwise buried behind a symbol page. */
+const EXTRA_KEY_ROWS: Array<Array<{ label: string; data?: string; modifier?: "ctrl" | "alt" }>> = [
+  [
+    { label: "Ctrl", modifier: "ctrl" },
+    { label: "Esc", data: "\x1b" },
+    { label: "-", data: "-" },
+    { label: "/", data: "/" },
+  ],
+  [
+    { label: "←", data: "\x1b[D" },
+    { label: "↑", data: "\x1b[A" },
+    { label: "↓", data: "\x1b[B" },
+    { label: "→", data: "\x1b[C" },
+  ],
+  [
+    { label: "Alt", modifier: "alt" },
+    { label: "Tab", data: "\t" },
+    { label: "Insert", data: "\x1b[2~" },
+    { label: "Delete", data: "\x1b[3~" },
+  ],
+  [
+    { label: "Home", data: "\x1b[H" },
+    { label: "Pg Up", data: "\x1b[5~" },
+    { label: "Pg Dn", data: "\x1b[6~" },
+    { label: "End", data: "\x1b[F" },
+  ],
+  [
+    { label: "|", data: "|" },
+    { label: ":", data: ":" },
+    { label: ";", data: ";" },
+    { label: "!", data: "!" },
+  ],
+  [
+    { label: "~", data: "~" },
+    { label: "@", data: "@" },
+    { label: "$", data: "$" },
+    { label: "*", data: "*" },
+  ],
+  [
+    { label: "^", data: "^" },
+    { label: "%", data: "%" },
+    { label: "=", data: "=" },
+    { label: "`", data: "`" },
+  ],
+];
+
+/** The terminal's text, newest lines last, as one string — what select mode
+ *  hands to the browser so a phone can select and copy it. Capped: the overlay
+ *  is a DOM node, and nobody selects their way through 10k lines on a phone. */
+function bufferText(term: import("@xterm/xterm").Terminal): string {
+  const buffer = term.buffer.active;
+  const first = Math.max(0, buffer.length - 2500);
+  const lines: string[] = [];
+  for (let i = first; i < buffer.length; i++) {
+    lines.push(buffer.getLine(i)?.translateToString(true) ?? "");
+  }
+  return lines.join("\n").replace(/\s+$/, "");
+}
+
+const TERMINAL_FONT_FAMILY = "'Menlo', 'Consolas', 'DejaVu Sans Mono', 'Courier New', 'Symbols Nerd Font Mono', monospace";
+
+/** Clipboard write that also works on the plain-HTTP LAN address, where
+ *  navigator.clipboard is undefined. Must run inside the click gesture. */
+async function copyText(text: string): Promise<boolean> {
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      // fall through to the legacy path
+    }
+  }
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.setAttribute("readonly", "");
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand("copy");
+    document.body.removeChild(ta);
+    return ok;
+  } catch {
+    return false;
+  }
+}
 
 export function TerminalPanel({ terminalId: initialTerminalId, cwd, active = true }: TerminalPanelProps) {
   const [currentTerminalId, setCurrentTerminalId] = useState(initialTerminalId);
@@ -164,6 +254,14 @@ function TerminalPanelInner({ terminalId, cwd: _cwd, active = true, onReconnect,
   const [error, setError] = useState<string | null>(null);
   const [ctrlActive, setCtrlActive] = useState(false);
   const ctrlRef = useRef(false);
+  const [altActive, setAltActive] = useState(false);
+  const altRef = useRef(false);
+  // The expanded key panel, and select mode: a phone cannot select a canvas,
+  // so the buffer is laid over it as text the browser's own selection can grab.
+  const [keysExpanded, setKeysExpanded] = useState(false);
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedText, setSelectedText] = useState("");
+  const [copied, setCopied] = useState(false);
   const activeRef = useRef(active);
   activeRef.current = active;
   const isDesktop = useIsDesktop();
@@ -264,7 +362,7 @@ function TerminalPanelInner({ terminalId, cwd: _cwd, active = true, onReconnect,
           cursorBlink: true,
           fontSize: settings.terminalFontSize,
           scrollback: settings.terminalScrollback,
-          fontFamily: "'Menlo', 'Consolas', 'DejaVu Sans Mono', 'Courier New', 'Symbols Nerd Font Mono', monospace",
+          fontFamily: TERMINAL_FONT_FAMILY,
           theme: {
             background: theme.bg,
             foreground: theme.fg,
@@ -290,16 +388,21 @@ function TerminalPanelInner({ terminalId, cwd: _cwd, active = true, onReconnect,
 
       disposables.push(
         term.onData((data: string) => {
+          let payload = data;
           if (ctrlRef.current && data.length === 1) {
             const upper = data.toUpperCase().charCodeAt(0);
             if (upper >= 64 && upper < 96) {
-              sendData(String.fromCharCode(upper - 64));
+              payload = String.fromCharCode(upper - 64);
               ctrlRef.current = false;
               setCtrlActive(false);
-              return;
             }
           }
-          sendData(data);
+          if (altRef.current && payload.length === 1) {
+            payload = `\x1b${payload}`;
+            altRef.current = false;
+            setAltActive(false);
+          }
+          sendData(payload);
         }),
       );
 
@@ -451,19 +554,50 @@ function TerminalPanelInner({ terminalId, cwd: _cwd, active = true, onReconnect,
   }, []);
 
   const handleToolbarKey = useCallback(
-    (key: (typeof TOOLBAR_KEYS)[number]) => {
-      if ("modifier" in key && key.modifier) {
+    (key: { label: string; data?: string; modifier?: "ctrl" | "alt" }) => {
+      if (key.modifier === "ctrl") {
         const next = !ctrlRef.current;
         ctrlRef.current = next;
         setCtrlActive(next);
         return;
       }
-      if ("data" in key) {
+      if (key.modifier === "alt") {
+        const next = !altRef.current;
+        altRef.current = next;
+        setAltActive(next);
+        return;
+      }
+      if (key.data !== undefined) {
         sendToTerminal(key.data);
       }
     },
     [sendToTerminal],
   );
+
+  const enterSelectMode = useCallback(() => {
+    const term = termRef.current;
+    if (!term) return;
+    setSelectedText(bufferText(term));
+    setCopied(false);
+    setSelectMode(true);
+  }, []);
+
+  const exitSelectMode = useCallback(() => {
+    setSelectMode(false);
+    setSelectedText("");
+    setCopied(false);
+  }, []);
+
+  const copyFromTerminal = useCallback(async () => {
+    // Whatever the user has highlighted, or the whole buffer when they have
+    // not: the native long-press menu copies a selection, and this button is
+    // the shortcut for the lot.
+    const selected = window.getSelection()?.toString() ?? "";
+    const ok = await copyText(selected.trim() ? selected : selectedText);
+    if (!ok) return;
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  }, [selectedText]);
 
   if (error) {
     return (
@@ -494,44 +628,147 @@ function TerminalPanelInner({ terminalId, cwd: _cwd, active = true, onReconnect,
         >
           <Settings2 className="h-4.5 w-4.5" />
         </button>
-      </div>
-      {!isDesktop && kbOpen && (
-        <div
-          className="shrink-0 relative z-10 flex items-center gap-1.5 px-2 py-1.5 border-t border-border/50"
-          style={{ backgroundColor: currentTheme.bg }}
-        >
+        {selectMode && (
           <div
-            role="button"
-            tabIndex={-1}
-            onPointerDown={(e) => {
-              e.preventDefault();
-              setSettingsOpen(true);
-            }}
-            className="px-2 py-1.5 text-xs font-medium rounded-md transition-colors select-none bg-muted text-muted-foreground active:bg-primary active:text-primary-foreground"
+            className="absolute inset-0 z-20 overflow-auto px-3 pt-2"
+            style={{ backgroundColor: currentTheme.bg, color: currentTheme.fg }}
+            data-testid="terminal-select-overlay"
           >
-            <Settings2 className="h-3.5 w-3.5" />
+            <pre
+              className="whitespace-pre-wrap break-words"
+              style={{
+                fontFamily: TERMINAL_FONT_FAMILY,
+                fontSize: settings.terminalFontSize,
+                lineHeight: 1.3,
+                userSelect: "text",
+                WebkitUserSelect: "text",
+              }}
+            >
+              {selectedText}
+            </pre>
           </div>
-          <div className="w-px h-5 bg-border/50" />
-          {TOOLBAR_KEYS.map((key) => (
-            <div key={key.label} className="flex items-center gap-1.5">
-              {"separator" in key && key.separator && <div className="w-px h-5 bg-border/50" />}
+        )}
+      </div>
+      {!isDesktop && (kbOpen || keysExpanded || selectMode) && (
+        <div className="shrink-0 relative z-10 border-t border-border/50" style={{ backgroundColor: currentTheme.bg }}>
+          {selectMode ? (
+            <div className="flex items-center gap-1.5 px-2 py-1.5" data-testid="terminal-select-bar">
               <div
                 role="button"
                 tabIndex={-1}
                 onPointerDown={(e) => {
                   e.preventDefault();
-                  handleToolbarKey(key);
+                  copyFromTerminal();
                 }}
+                data-testid="terminal-copy"
                 className={cn(
-                  "px-3 py-1.5 text-xs font-medium rounded-md transition-colors select-none",
-                  "active:bg-primary active:text-primary-foreground",
-                  "modifier" in key && key.modifier && ctrlActive ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground",
+                  "flex-1 py-1.5 text-center text-xs font-medium rounded-md transition-colors select-none",
+                  copied
+                    ? "bg-primary text-primary-foreground"
+                    : "bg-muted text-muted-foreground active:bg-primary active:text-primary-foreground",
                 )}
               >
-                {key.label}
+                {copied ? "Copied" : "Copy"}
+              </div>
+              <div
+                role="button"
+                tabIndex={-1}
+                onPointerDown={(e) => {
+                  e.preventDefault();
+                  exitSelectMode();
+                }}
+                data-testid="terminal-select-done"
+                className="flex-1 py-1.5 text-center text-xs font-medium rounded-md transition-colors select-none bg-muted text-muted-foreground active:bg-primary active:text-primary-foreground"
+              >
+                Done
               </div>
             </div>
-          ))}
+          ) : (
+            <>
+              {keysExpanded && (
+                <div className="grid grid-cols-4 gap-1.5 px-2 pt-2" data-testid="terminal-key-panel">
+                  {EXTRA_KEY_ROWS.flat().map((key) => (
+                    <div
+                      key={key.label}
+                      role="button"
+                      tabIndex={-1}
+                      onPointerDown={(e) => {
+                        e.preventDefault();
+                        handleToolbarKey(key);
+                      }}
+                      className={cn(
+                        "py-2 text-center text-xs font-medium rounded-md transition-colors select-none",
+                        "active:bg-primary active:text-primary-foreground",
+                        key.modifier && (key.modifier === "ctrl" ? ctrlActive : altActive)
+                          ? "bg-primary text-primary-foreground"
+                          : "bg-muted text-muted-foreground",
+                      )}
+                    >
+                      {key.label}
+                    </div>
+                  ))}
+                </div>
+              )}
+              <div className="flex items-center gap-1.5 px-2 py-1.5">
+                <div
+                  role="button"
+                  tabIndex={-1}
+                  onPointerDown={(e) => {
+                    e.preventDefault();
+                    setKeysExpanded((prev) => !prev);
+                  }}
+                  aria-label={keysExpanded ? "Fewer keys" : "More keys"}
+                  data-testid="terminal-key-panel-toggle"
+                  className={cn(
+                    "shrink-0 px-2 py-1.5 rounded-md transition-colors select-none",
+                    keysExpanded
+                      ? "bg-primary text-primary-foreground"
+                      : "bg-muted text-muted-foreground active:bg-primary active:text-primary-foreground",
+                  )}
+                >
+                  {keysExpanded ? <ChevronDown className="h-3.5 w-3.5" /> : <Keyboard className="h-3.5 w-3.5" />}
+                </div>
+                <div className="w-px h-5 bg-border/50 shrink-0" />
+                {TOOLBAR_KEYS.map((key) => (
+                  <div key={key.label} className="flex min-w-0 flex-1 items-center gap-1.5">
+                    {"separator" in key && key.separator && <div className="w-px h-5 bg-border/50 shrink-0" />}
+                    <div
+                      role="button"
+                      tabIndex={-1}
+                      onPointerDown={(e) => {
+                        e.preventDefault();
+                        handleToolbarKey(key);
+                      }}
+                      className={cn(
+                        "min-w-0 flex-1 py-1.5 text-center text-xs font-medium rounded-md transition-colors select-none",
+                        "active:bg-primary active:text-primary-foreground",
+                        "modifier" in key && key.modifier && ctrlActive
+                          ? "bg-primary text-primary-foreground"
+                          : "bg-muted text-muted-foreground",
+                      )}
+                    >
+                      {key.label}
+                    </div>
+                  </div>
+                ))}
+                <div className="w-px h-5 bg-border/50 shrink-0" />
+                <div
+                  role="button"
+                  tabIndex={-1}
+                  onPointerDown={(e) => {
+                    e.preventDefault();
+                    enterSelectMode();
+                  }}
+                  aria-label="Select and copy"
+                  title="Select and copy"
+                  data-testid="terminal-select"
+                  className="shrink-0 px-2 py-1.5 rounded-md bg-muted text-muted-foreground transition-colors select-none active:bg-primary active:text-primary-foreground"
+                >
+                  <TextCursor className="h-3.5 w-3.5" />
+                </div>
+              </div>
+            </>
+          )}
         </div>
       )}
 
