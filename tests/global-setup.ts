@@ -31,6 +31,15 @@ for (const key of Object.keys(process.env)) {
   if (key.startsWith("COCKPIT_")) delete process.env[key];
 }
 
+// CLAUDE_CONFIG_DIR belongs in the same guard for the same reason. Cockpit
+// reads the CLI's directory through it (paths.ts), and it takes precedence over
+// homedir() — so a suite that mocks homedir() to a fake home and expects to
+// read nothing real instead read the developer's own ~/.claude. The dev
+// container exports it, which is how the hole surfaced; a plain shell does not,
+// which is why the suites passed there. Suites that want their own directory
+// still assign it at module scope, which runs after this.
+delete process.env.CLAUDE_CONFIG_DIR;
+
 const dir = mkdtempSync(path.join(tmpdir(), "cockpit-vitest-"));
 process.env.COCKPIT_CONFIG_DIR = dir;
 
