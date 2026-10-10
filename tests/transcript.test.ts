@@ -358,6 +358,35 @@ describe("transcript module", () => {
       expect(result.messages[0].content).toContain("part 2");
     });
 
+    it("gives a tool card the images the tool returned", async () => {
+      (existsSync as any).mockReturnValue(true);
+      const content = jsonl(
+        {
+          type: "assistant",
+          message: { id: "a3", content: [{ type: "tool_use", id: "t9", name: "Read", input: { file_path: "/tmp/shot.png" } }] },
+        },
+        {
+          type: "user",
+          message: {
+            content: [
+              {
+                type: "tool_result",
+                tool_use_id: "t9",
+                content: [{ type: "image", source: { type: "base64", media_type: "image/png", data: "iVBORw0KG..." } }],
+              },
+            ],
+          },
+        },
+      );
+      (readFile as any).mockResolvedValue(content);
+
+      const result = await loadTranscript("session-123", "/tmp");
+
+      const tool = result.messages[0].toolUses?.[0];
+      expect(tool).toMatchObject({ name: "Read", output: "", status: "done" });
+      expect(tool?.images).toEqual([{ mediaType: "image/png", data: "iVBORw0KG..." }]);
+    });
+
     it("extracts images from user content arrays", async () => {
       (existsSync as any).mockReturnValue(true);
       const content = jsonl({
@@ -1543,6 +1572,47 @@ describe("transcript module", () => {
       const result = await loadTranscript("session-123", "/tmp");
 
       expect(result.messages).toHaveLength(0);
+    });
+  });
+
+  // The CLI records the thinking level a turn ran at as perTurnEffort, and the
+  // agent transcript modal shows it. Nothing else writes the level down, so the
+  // parser is the only door it can come through.
+  describe("the thinking level a turn ran at", () => {
+    const assistant = (extra: Record<string, unknown>) => ({
+      type: "assistant",
+      message: { id: "m1", model: "claude-haiku-4-5-20251001", content: [{ type: "text", text: "hi" }] },
+      timestamp: "2024-01-01T00:00:00Z",
+      ...extra,
+    });
+
+    it("carries perTurnEffort onto the message", async () => {
+      (existsSync as any).mockReturnValue(true);
+      (readFile as any).mockResolvedValue(jsonl(assistant({ perTurnEffort: "max" })));
+
+      const result = await loadTranscript("session-123", "/tmp");
+
+      expect(result.messages[0]).toMatchObject({ model: "claude-haiku-4-5-20251001", effort: "max" });
+    });
+
+    it("leaves it off when the CLI did not record one", async () => {
+      (existsSync as any).mockReturnValue(true);
+      (readFile as any).mockResolvedValue(jsonl(assistant({})));
+
+      const result = await loadTranscript("session-123", "/tmp");
+
+      expect(result.messages[0].effort).toBeUndefined();
+    });
+
+    // A level this cockpit does not know is a value it cannot render or reason
+    // about, so it is dropped rather than trusted into the type.
+    it("ignores a level it does not recognise", async () => {
+      (existsSync as any).mockReturnValue(true);
+      (readFile as any).mockResolvedValue(jsonl(assistant({ perTurnEffort: "ludicrous" })));
+
+      const result = await loadTranscript("session-123", "/tmp");
+
+      expect(result.messages[0].effort).toBeUndefined();
     });
   });
 

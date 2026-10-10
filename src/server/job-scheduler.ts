@@ -1,9 +1,11 @@
 import { mkdirSync } from "node:fs";
 import { v4 as uuidv4 } from "uuid";
+import { checkClaudeUserConfig } from "@/server/claude-config-guard";
+import { configuredMcpServerNames } from "@/server/mcp-discovery";
 import { getJobScratchpadDir } from "@/server/paths";
 import { trustDirectory } from "@/server/workspace-trust";
-import type { IssueStatusSchedule, JobRun, JobRunToolUse, ScheduledJob } from "@/types";
-import { findMissedRun, getJobSchedules, matchesCron, scheduleToCron } from "./cron-utils";
+import type { AfterJobsSchedule, IssueStatusSchedule, JobRun, JobRunToolUse, ScheduledJob } from "@/types";
+import { findMissedRun, getJobSchedules, isTimeBasedSchedule, matchesCron, scheduleToCron } from "./cron-utils";
 import { logDiag } from "./debug-logger";
 import { addInboxMessage, parseErrorBlock } from "./inbox";
 import { type IssueStatusChangeEvent, onIssueStatusChange } from "./issue-events";
@@ -234,6 +236,28 @@ function countMatchingIssues(sched: IssueStatusSchedule): number {
   return projects.reduce((n, p) => n + loadIssues(p.id).filter((i) => i.status === sched.status).length, 0);
 }
 
+/** When a job last completed successfully, or 0 if it never has. */
+function lastSuccessAt(jobId: string): number {
+  return loadRuns(jobId).reduce(
+    (latest, r) => (r.status === "success" && (r.completedAt ?? 0) > latest ? (r.completedAt ?? 0) : latest),
+    0,
+  );
+}
+
+/**
+ * Whether a job waiting on others is due: every job one of its afterJobs
+ * schedules lists has completed successfully since this job last started, or
+ * since it was last saved if it has never run. Measured from persisted runs,
+ * not from events, so a completion the scheduler missed (a restart, or this
+ * job still running when its last dependency finished) is still caught.
+ */
+function dependenciesMet(job: ScheduledJob): boolean {
+  const waits = getJobSchedules(job).filter((s): s is AfterJobsSchedule => s.type === "afterJobs");
+  if (waits.length === 0) return false;
+  const since = getLatestRun(job.id)?.startedAt ?? (job.updatedAt || job.createdAt);
+  return waits.some((s) => s.jobIds.length > 0 && s.jobIds.every((id) => lastSuccessAt(id) > since));
+}
+
 export class JobScheduler {
   private sessionManager: SessionManager;
   private timer: ReturnType<typeof setInterval> | null = null;
@@ -241,6 +265,7 @@ export class JobScheduler {
   private runningJobs = new Map<string, JobRun>();
   private jobResolvers = new Map<string, (run: JobRun) => void>();
   private lastPruneAt = 0;
+  private lastConfigCheckAt = 0;
   private unsubIssueEvents: (() => void) | null = null;
 
   constructor(sessionManager: SessionManager) {
@@ -292,6 +317,20 @@ export class JobScheduler {
    * its own run record and inbox output; the failure alert is suppressed on attempts
    * that will be retried, so only the final outcome pages the operator.
    */
+  /**
+   * Servers the job needs that are configured nowhere, after one attempt to
+   * restore a wiped config. Empty for a job that runs with no servers of its
+   * own, which is most of them.
+   */
+  private missingJobMcpServers(job: ScheduledJob): string[] {
+    const required = job.mcpServers ?? [];
+    if (required.length === 0) return [];
+    const cwd = job.cwd || getJobScratchpadDir(job.id);
+    checkClaudeUserConfig();
+    const configured = new Set(configuredMcpServerNames(cwd));
+    return required.filter((name) => !configured.has(name));
+  }
+
   private async executeJobWithRetries(job: ScheduledJob): Promise<JobRun> {
     // W6j: a job whose model is gone from the provider catalog fails before
     // the CLI spawns — no lock, no session, no substitution onto another
@@ -328,6 +367,43 @@ export class JobScheduler {
       return run;
     }
 
+    // A job's MCP servers are definitions the CLI reads out of its own user
+    // config, and the CLI resets that file from defaults after one unreadable
+    // read (see claude-config-guard). When a wipe has taken them and the guard
+    // cannot put them back, the run stops here, naming them, rather than
+    // running without gmail or conduit and reporting success.
+    const missingServers = this.missingJobMcpServers(job);
+    if (missingServers.length > 0) {
+      const reason = `MCP server(s) the job needs are configured nowhere: ${missingServers.join(", ")}. Check ~/.claude.json and the job's own server list.`;
+      const run: JobRun = {
+        id: uuidv4(),
+        jobId: job.id,
+        sessionId: "",
+        status: "failure",
+        startedAt: Date.now(),
+        completedAt: Date.now(),
+        durationMs: 0,
+        error: reason,
+        toolsUsed: [],
+        messageCount: 0,
+        prompt: job.prompt,
+        cwd: job.cwd || "",
+        configFailure: true,
+      };
+      saveRun(run);
+      logDiag(job.id, "job:config-failure", { runId: run.id, missingServers, error: reason });
+      addInboxMessage({
+        title: `Job failed: ${job.name}`,
+        body: `**Status:** failure\n\n${reason}`,
+        priority: "error",
+        jobId: job.id,
+        jobName: job.name,
+        runId: run.id,
+        notifyProviders: job.notifyProviders,
+      });
+      return run;
+    }
+
     const maxRetries = Math.max(0, job.maxRetries ?? DEFAULT_JOB_MAX_RETRIES);
     let run: JobRun;
     for (let attempt = 0; ; attempt++) {
@@ -337,7 +413,24 @@ export class JobScheduler {
       logDiag(job.id, "job:retry", { attempt: attempt + 1, maxRetries, prevRunId: run.id, error: run.error });
       await new Promise((r) => setTimeout(r, RETRY_BACKOFF_MS));
     }
+    if (run.status === "success") this.startJobsWaitingOn(job);
     return run;
+  }
+
+  /** Start the jobs that were waiting on `finished` and now have everything
+   *  they wait on. One still waiting on another job keeps waiting. */
+  private startJobsWaitingOn(finished: ScheduledJob): void {
+    for (const job of loadJobs()) {
+      if (!job.enabled || this.runningJobs.has(job.id)) continue;
+      const waitsOnFinished = getJobSchedules(job).some((s) => s.type === "afterJobs" && s.jobIds.includes(finished.id));
+      if (!waitsOnFinished || !dependenciesMet(job)) continue;
+      logDiag(job.id, "job:dependencies-met", { after: finished.id });
+      console.log(`[scheduler] starting job ${job.name}: the jobs it waits on have completed`);
+      this.lastFiredAt.set(job.id, new Date());
+      this.executeJobWithRetries(job).catch((err) => {
+        console.error(`[scheduler] failed to execute job ${job.name} after the jobs it waits on:`, err);
+      });
+    }
   }
 
   stopJob(jobId: string): JobRun {
@@ -421,6 +514,18 @@ export class JobScheduler {
       pruneAllRuns();
     }
 
+    // The CLI resets its user config from defaults after a single unparseable
+    // read, and that silently strips the MCP servers a job runs with. The check
+    // is one local JSON file, but there is no point doing it every minute.
+    if (nowMs - this.lastConfigCheckAt >= 5 * 60_000) {
+      this.lastConfigCheckAt = nowMs;
+      try {
+        checkClaudeUserConfig();
+      } catch (err) {
+        logDiag("config-guard", "check-failed", { error: String(err) });
+      }
+    }
+
     for (const [jobId, run] of this.runningJobs) {
       if (!this.sessionManager.hasRunningProcess(run.sessionId)) {
         console.log(`[scheduler] run ${run.id} for job ${jobId} has no running process, marking as failure`);
@@ -442,23 +547,31 @@ export class JobScheduler {
       if (this.runningJobs.has(job.id)) continue;
 
       const lastFired = this.lastFiredAt.get(job.id);
+      // A job that has never run counts missed times from when it was last
+      // saved. With nothing to measure from, one whose time always passes
+      // while the server is down would never run at all.
+      const missedSince = lastFired ?? new Date(job.updatedAt || job.createdAt);
       let shouldFire = false;
 
       for (const sched of getJobSchedules(job)) {
-        if (sched.type === "onIssueStatus") continue; // event-triggered; the 60s tick never fires it directly
+        if (!isTimeBasedSchedule(sched)) continue; // event-triggered; handled apart from the clock
         const cronExpr = scheduleToCron(sched);
         if (matchesCron(cronExpr, now)) {
           if (!lastFired || lastFired.getTime() < now.getTime()) {
             shouldFire = true;
             break;
           }
-        } else if (lastFired && findMissedRun(cronExpr, lastFired, now)) {
+        } else if (findMissedRun(cronExpr, missedSince, now)) {
           if (!job.skipIfMissed) {
             shouldFire = true;
             break;
           }
         }
       }
+
+      // Normally started the moment its last dependency succeeds; checked here
+      // too for one that was missed then.
+      if (!shouldFire && dependenciesMet(job)) shouldFire = true;
 
       if (shouldFire) {
         this.lastFiredAt.set(job.id, now);
@@ -558,7 +671,9 @@ export class JobScheduler {
       bypassPermissions: !!job.bypassPermissions,
       // The job's own switch, never the session default: a default switched on
       // for interactive work must not reach a job whose author left it off.
-      sandbox: { enabled: job.sandbox === true },
+      // Its storage folder travels with it, so a sandboxed run can write the
+      // state its prompt tells it to keep there.
+      sandbox: { enabled: job.sandbox === true, jobStorageDir: getJobScratchpadDir(job.id) },
       runtime: job.runtime,
       // Only an inbox-reporting job gets a run context, and only a run context
       // gets the cockpit MCP server. A job that never reports keeps no reach

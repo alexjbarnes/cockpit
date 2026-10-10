@@ -3,6 +3,7 @@ import { networkInterfaces } from "node:os";
 import { parse } from "node:url";
 import next from "next";
 import { deletePasswordFile, needsSetup } from "./src/server/auth";
+import { checkClaudeUserConfig } from "./src/server/claude-config-guard";
 import { logDiag, logProxy } from "./src/server/debug-logger";
 import { FormatProxy, setActiveFormatProxy } from "./src/server/format-proxy";
 import { startHealthProbe } from "./src/server/health-probe";
@@ -152,6 +153,13 @@ async function main() {
     logStartupBanner();
     if (needsSetup()) {
       console.log("No password set. Visit the UI to create one.");
+    }
+    // A reset user config costs every scheduled job its MCP servers, and a
+    // restart is a natural moment to notice and put them back.
+    try {
+      checkClaudeUserConfig();
+    } catch (err) {
+      logDiag("-", "config-guard-startup-failed", { error: String(err) });
     }
   });
 }

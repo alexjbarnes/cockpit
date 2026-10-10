@@ -34,6 +34,7 @@ import type {
   InitData,
   ModelSlots,
   SandboxConfig,
+  SendOptions,
   SessionInfo,
   SessionPermissionMode,
   ThinkingLevel,
@@ -42,7 +43,7 @@ import type {
 } from "@/types";
 import { debugLog, isDebugEnabled, logDiag, logRawLine } from "./debug-logger";
 import { getDefaults } from "./defaults";
-import { ONE_M_CREDITS_REQUIRED, type ParsedEvent } from "./event-parser";
+import { ONE_M_CREDITS_REQUIRED, type ParsedEvent, TURN_CONTINUES } from "./event-parser";
 import { getHarnessAdapter } from "./harness/registry";
 import type { HarnessProcess, HarnessProcessCallbacks, HarnessSpawnConfig } from "./harness/types";
 import { getJob } from "./job-storage";
@@ -107,6 +108,8 @@ interface QueuedMessage {
   text: string;
   images?: ImageAttachment[];
   documents?: DocumentAttachment[];
+  /** Held for the turn's end by choice, so a later mid-turn send need not wait behind it. */
+  afterTurn?: boolean;
 }
 
 interface Session {
@@ -289,7 +292,13 @@ function cliSpawnMode(mode: SessionPermissionMode, runtime: SessionRuntime): str
  *  sandbox cannot be enforced, and an empty allowlist is dropped. */
 function enforceableSandbox(config: SandboxConfig): SandboxConfig {
   if (config.enabled && !sandboxSupport().supported) return { enabled: false };
-  return { enabled: config.enabled, ...(config.allowedDomains?.length ? { allowedDomains: config.allowedDomains } : {}) };
+  return {
+    enabled: config.enabled,
+    ...(config.allowedDomains?.length ? { allowedDomains: config.allowedDomains } : {}),
+    // A job run's storage folder travels with the config, or the run's shell
+    // would lose the one path its prompt tells it to write to.
+    ...(config.jobStorageDir ? { jobStorageDir: config.jobStorageDir } : {}),
+  };
 }
 
 export class SessionManager {
@@ -927,6 +936,10 @@ export class SessionManager {
     return this.sessions.get(id)?.info.model ?? null;
   }
 
+  isCockpitAgentSession(id: string): boolean {
+    return this.sessions.get(id)?.cockpitAgent === true;
+  }
+
   listActiveSessions(): SessionInfo[] {
     return Array.from(this.sessions.values())
       .filter((s) => !!s.harnessProcess?.isAlive)
@@ -1128,8 +1141,9 @@ export class SessionManager {
     // process stays alive at its REPL prompt and accepts the next message.
     // Stream's control_request interrupt keeps the process alive too, so this
     // early idle-reset is harmless there — its own Stop event still lands.
+    // Unless a message sent mid-turn is still in the CLI's queue: Esc makes the
+    // CLI take it up at once as a new turn, whose Stop ends it.
     if (session.runtime === "pty" && session.info.status === "running") {
-      session.info.status = "idle";
       session.streamingSnapshot = null;
       if (session.streamState) {
         session.streamState.pendingBlocks.length = 0;
@@ -1138,7 +1152,12 @@ export class SessionManager {
         session.streamState.currentAssistantMsgId = null;
         session.streamState.flushedOnMessageDone = false;
       }
-      session.emitter.emit("status", id, "idle");
+      if (session.harnessProcess.holdsMidTurnMessages?.()) {
+        logDiag(id, "interrupt:cli-takes-up-queued");
+      } else {
+        session.info.status = "idle";
+        session.emitter.emit("status", id, "idle");
+      }
     }
     session.pendingRequests.clear();
     this.notifyPendingChanged(session, id);
@@ -1261,7 +1280,9 @@ export class SessionManager {
   setSandbox(sessionId: string, config: SandboxConfig): void {
     const session = this.sessions.get(sessionId);
     if (!session) return;
-    const next = enforceableSandbox(config);
+    // The session switch carries no storage folder of its own; a job run's is
+    // kept so toggling the switch cannot take the run's only writable path away.
+    const next = enforceableSandbox({ ...config, jobStorageDir: config.jobStorageDir ?? session.sandbox.jobStorageDir });
 
     const same =
       session.sandbox.enabled === next.enabled &&
@@ -1697,10 +1718,12 @@ export class SessionManager {
     return this.sessions.get(sessionId)?.queuePaused ?? false;
   }
 
-  onQueued(id: string, listener: (count: number, sentText?: string) => void): (() => void) | null {
+  /** `midTurn` marks a sent message the CLI took into its own queue mid-turn,
+   *  which Claude has not read yet. */
+  onQueued(id: string, listener: (count: number, sentText?: string, midTurn?: boolean) => void): (() => void) | null {
     const session = this.sessions.get(id);
     if (!session) return null;
-    const handler = (_sessionId: string, count: number, sentText?: string) => listener(count, sentText);
+    const handler = (_sessionId: string, count: number, sentText?: string, midTurn?: boolean) => listener(count, sentText, midTurn);
     session.emitter.on("queued", handler);
     return () => session.emitter.off("queued", handler);
   }
@@ -1958,7 +1981,12 @@ export class SessionManager {
       }
     }
 
+    let turnContinues = false;
     for (const sysMsg of result.systemMessages) {
+      if (sysMsg === TURN_CONTINUES) {
+        turnContinues = true;
+        continue;
+      }
       if (sysMsg === "__tool_use_start" || sysMsg === "__turn_start") {
         session.info.status = "running";
         console.log(`[sm] emit status running (via ${sysMsg.slice(2)}) for ${sessionId.slice(0, 8)} (runtime=${session.runtime})`);
@@ -2198,7 +2226,12 @@ export class SessionManager {
       }
     }
 
-    if (result.statusChange === "idle") {
+    if (result.statusChange === "idle" && turnContinues) {
+      // The CLI goes straight on to a message still in its queue, as a turn
+      // that opens with no hook of its own, so the session stays running.
+      logDiag(sessionId, "sm:turn-continues");
+      console.log(`[sm] turn ended, CLI taking up a queued message for ${sessionId.slice(0, 8)}; staying running`);
+    } else if (result.statusChange === "idle") {
       session.info.status = "idle";
       // JOB-DEBUG: every idle emission with why + state, to catch a spurious idle
       // tearing down a job run mid-turn (this is what the scheduler ends a run on).
@@ -2460,7 +2493,7 @@ Additional Cockpit rules beyond the CLI's defaults:
     return used + estimate > total * 0.85;
   }
 
-  sendMessage(sessionId: string, text: string, images?: ImageAttachment[], documents?: DocumentAttachment[]): boolean {
+  sendMessage(sessionId: string, text: string, images?: ImageAttachment[], documents?: DocumentAttachment[], opts?: SendOptions): boolean {
     const session = this.sessions.get(sessionId);
     if (!session) {
       smLog(sessionId, "sendMessage: session not in memory, returning false");
@@ -2525,9 +2558,18 @@ Additional Cockpit rules beyond the CLI's defaults:
       session.emitter.emit("queued", sessionId, 0);
     }
 
-    // If already running, queue the message to send when the session goes idle
+    // If already running, hand it to the CLI's own queue when it can take it,
+    // else queue it here to send when the session goes idle. One sent for
+    // after the turn always waits here.
     if (session.info.status === "running") {
-      session.queuedMessages.push({ id: `q-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, text, images, documents });
+      if (!opts?.afterTurn && this.sendMidTurn(session, sessionId, text, images, documents)) return true;
+      session.queuedMessages.push({
+        id: `q-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        text,
+        images,
+        documents,
+        afterTurn: opts?.afterTurn,
+      });
       session.emitter.emit("queued", sessionId, session.queuedMessages.length);
       return true;
     }
@@ -2563,6 +2605,49 @@ Additional Cockpit rules beyond the CLI's defaults:
     }
 
     this.spawnProcess(session, sessionId, text, images, documents);
+    return true;
+  }
+
+  /**
+   * Hand a message sent while Claude is working to the CLI, whose own queue
+   * delivers it: with the next tool result of the turn under way, or as a turn
+   * of its own straight after. False when it has to wait in cockpit's queue
+   * for the turn to end instead: a transport with no such queue, a compaction
+   * under way, a card waiting on the user (keys typed now would answer its
+   * dialog), a slash command, or earlier messages already waiting here, which
+   * must go first. Messages held for after the turn by choice do not count:
+   * they were never meant for this turn.
+   */
+  private sendMidTurn(
+    session: Session,
+    sessionId: string,
+    text: string,
+    images?: ImageAttachment[],
+    documents?: DocumentAttachment[],
+  ): boolean {
+    const proc = session.harnessProcess;
+    if (!proc?.sendMidTurnMessage || !proc.isAlive || !proc.canTakeMidTurnMessage?.()) return false;
+    if (session.compacting || session.pendingRequests.size > 0 || session.queuedMessages.some((m) => !m.afterTurn)) return false;
+    if (text.trim().startsWith("/")) return false;
+    logDiag(sessionId, "send:mid-turn", { textLen: text.length });
+    void proc.sendMidTurnMessage(text, images, documents).then((queued) => {
+      if (queued) {
+        session.emitter.emit("queued", sessionId, session.queuedMessages.length, text, true);
+        return;
+      }
+      if (this.sessions.get(sessionId) !== session) return;
+      // It did not go in, so it waits for the turn to end like any other
+      // message sent mid-turn, or goes now if the turn ended meanwhile.
+      logDiag(sessionId, "send:mid-turn-fallback", { status: session.info.status });
+      if (session.info.status === "running") {
+        session.queuedMessages.push({ id: `q-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, text, images, documents });
+        session.emitter.emit("queued", sessionId, session.queuedMessages.length);
+      } else {
+        // As a flush from the queue would: the page shows it once told it is sent.
+        session.emitter.emit("queued", sessionId, session.queuedMessages.length, text);
+        this.sendMessage(sessionId, text, images, documents);
+      }
+    });
     return true;
   }
 

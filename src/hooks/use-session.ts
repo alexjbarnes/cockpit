@@ -15,6 +15,7 @@ import type {
   PermissionMode,
   SandboxConfig,
   SandboxSupport,
+  SendOptions,
   ServerMessage,
   SessionPermissionMode,
   TextFileAttachment,
@@ -110,7 +111,13 @@ interface UseSessionReturn {
   hasMoreHistory: boolean;
   loadingMore: boolean;
   requestMoreHistory: () => void;
-  sendMessage: (text: string, images?: ImageAttachment[], documents?: DocumentAttachment[], textFiles?: TextFileAttachment[]) => void;
+  sendMessage: (
+    text: string,
+    images?: ImageAttachment[],
+    documents?: DocumentAttachment[],
+    textFiles?: TextFileAttachment[],
+    opts?: SendOptions,
+  ) => void;
   interrupt: () => void;
   respondToPermission: (requestId: string, allowed: boolean, permissionMode?: PermissionMode, suggestionIndex?: number) => void;
   respondToQuestion: (requestId: string, answers: Record<string, string>) => void;
@@ -858,7 +865,9 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
               Date.now(),
             );
             if (matchedIndex !== -1) queuedTextsRef.current.splice(matchedIndex, 1);
-            setMessages((prev) => [...prev, message]);
+            // Sent mid-turn, it sits in the CLI's queue until Claude's next tool
+            // result. The transcript's copy replaces this one once it has.
+            setMessages((prev) => [...prev, msg.midTurn ? { ...message, awaitingRead: true } : message]);
           }
           break;
         }
@@ -1164,7 +1173,7 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
   }, [isResponding, sessionId, subscribe, checkSessionViaHttp]);
 
   const sendMessage = useCallback(
-    (text: string, images?: ImageAttachment[], documents?: DocumentAttachment[], textFiles?: TextFileAttachment[]) => {
+    (text: string, images?: ImageAttachment[], documents?: DocumentAttachment[], textFiles?: TextFileAttachment[], opts?: SendOptions) => {
       // Inline text file contents into the API text but keep structured data on the message for rendering
       let apiText = text;
       if (textFiles?.length) {
@@ -1213,6 +1222,7 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
           text: apiText,
           images: images?.length ? images : undefined,
           documents: documents?.length ? documents : undefined,
+          afterTurn: opts?.afterTurn || undefined,
         });
         return;
       }

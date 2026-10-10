@@ -541,6 +541,20 @@ export function GoCard(props: { provider: Provider; onChanged: () => void; onMan
   );
 }
 
+/** CommandCode — one key, two wires: its catalog's Claude models answer only
+ *  /messages and are relayed, everything else answers /chat/completions and is
+ *  translated. Which one a model is on comes from its own catalog. */
+export function CommandCodeCard(props: { provider: Provider; onChanged: () => void; onManage: () => void }) {
+  return (
+    <BuiltinKeyCard
+      {...props}
+      keyEnvVar="COMMANDCODE_API_KEY"
+      tagline="Both wires · Claude models relayed, the rest via cockpit proxy"
+      keyPlaceholder="CommandCode API key…"
+    />
+  );
+}
+
 /** DeepSeek — Anthropic-native endpoint, relayed for retries when the proxy
  *  is up, direct otherwise. */
 export function DeepSeekCard(props: { provider: Provider; onChanged: () => void; onManage: () => void }) {

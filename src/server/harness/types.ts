@@ -87,6 +87,14 @@ export interface HarnessProcess {
    *  message delivery, which sendUserMessage can be called on regardless. */
   readonly ready: Promise<void>;
   sendUserMessage(text: string, images?: ImageAttachment[], documents?: DocumentAttachment[], reminderText?: string): void;
+  /** Hand a message to the CLI while a turn is under way, for the CLI's own
+   *  queue to deliver: with the next tool result, or as the next turn. Resolves
+   *  false when it did not go in. Absent where the transport has no such queue. */
+  sendMidTurnMessage?(text: string, images?: ImageAttachment[], documents?: DocumentAttachment[]): Promise<boolean>;
+  /** Whether sendMidTurnMessage can type into the CLI right now. */
+  canTakeMidTurnMessage?(): boolean;
+  /** Whether messages handed over mid-turn are still waiting in the CLI's queue. */
+  holdsMidTurnMessages?(): boolean;
   interrupt(): void;
   /** reason is forwarded to Claude's end_session control request for its own
    *  logging; harnesses without an equivalent concept just ignore it. */

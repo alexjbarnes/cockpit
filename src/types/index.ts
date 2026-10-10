@@ -28,6 +28,9 @@ export interface ToolUse {
   name: string;
   input: string;
   output: string;
+  /** Images the tool returned, which the output line cannot carry: Read on a
+   *  screenshot hands back a picture, not text. */
+  images?: ImageAttachment[];
   filePath?: string;
   status: "running" | "done";
   children?: ToolUse[];
@@ -66,6 +69,13 @@ export interface ChatMessage {
   documents?: DocumentAttachment[];
   textFiles?: TextFileAttachment[];
   model?: string;
+  /** The thinking level this turn ran at, as the CLI recorded it
+   *  (perTurnEffort on the entry). Absent on transcripts written by a CLI that
+   *  did not record it. */
+  effort?: ThinkingLevel;
+  /** A user message sent while Claude was working that Claude has not read
+   *  yet. Only ever on the local copy: the transcript's has no such flag. */
+  awaitingRead?: boolean;
 }
 
 export interface GlobalSearchResult {
@@ -156,6 +166,10 @@ export interface SandboxConfig {
   /** Domains this session may reach on top of the shared list. Only enforced
    *  where the host has the network backend (Linux/WSL2 need socat). */
   allowedDomains?: string[];
+  /** A scheduled job's own storage folder, which its shell may read and write
+   *  when the sandbox is on. The rest of cockpit's directory stays denied, and
+   *  a narrower allow beats the wider deny. */
+  jobStorageDir?: string;
 }
 
 /** The Bash sandbox rules cockpit edits in the user's own Claude settings
@@ -212,7 +226,11 @@ export interface PermissionSuggestion {
   destination?: string;
 }
 
-export type ThinkingLevel = "off" | "low" | "medium" | "high" | "xhigh" | "max";
+/** Canonical list; ThinkingLevel derives from it (same pattern as
+ *  ISSUE_STATUSES). The transcript parser validates the CLI's recorded effort
+ *  against it, so a level the CLI adds later is ignored rather than trusted. */
+export const THINKING_LEVELS = ["off", "low", "medium", "high", "xhigh", "max"] as const;
+export type ThinkingLevel = (typeof THINKING_LEVELS)[number];
 
 export interface UsageLimit {
   /** Percentage 0-100 */
@@ -285,7 +303,20 @@ export interface IssueStatusSchedule {
   project?: string;
 }
 
-export type JobSchedule = SimpleSchedule | CronSchedule | IssueStatusSchedule;
+/**
+ * Fires once every listed job has completed successfully since this job last
+ * started, or since it was last saved if it has never run. A failed run of one
+ * of them holds this job back until that job next succeeds. Event-driven like
+ * onIssueStatus, so it has no cron form either. Saving rejects a job that
+ * waits on itself or on a job that (through others) waits on it.
+ */
+export interface AfterJobsSchedule {
+  type: "afterJobs";
+  /** Ids of the jobs this one waits on. */
+  jobIds: string[];
+}
+
+export type JobSchedule = SimpleSchedule | CronSchedule | IssueStatusSchedule | AfterJobsSchedule;
 
 export interface ScheduledJob {
   id: string;
@@ -530,6 +561,12 @@ export interface Issue {
   activity: IssueActivity[]; // append-only, who changed what
 }
 
+/** How a message sent while Claude is working is delivered. */
+export interface SendOptions {
+  /** Hold it in cockpit's queue until the turn ends, instead of handing it to Claude mid-turn. */
+  afterTurn?: boolean;
+}
+
 // Client -> Server messages
 export type ClientMessage =
   | { type: "session:connect"; sessionId: string; cwd?: string; lastMessageId?: string | null; historyView?: boolean }
@@ -541,6 +578,7 @@ export type ClientMessage =
       documents?: DocumentAttachment[];
       cwd?: string;
       historyView?: boolean;
+      afterTurn?: boolean;
     }
   | { type: "session:interrupt"; sessionId: string }
   | {
@@ -637,6 +675,9 @@ export type ServerMessage =
       count: number;
       cancelledText?: string;
       sentText?: string;
+      /** sentText went into the CLI's own queue mid-turn: Claude reads it at
+       *  its next tool result, or as the next turn. */
+      midTurn?: boolean;
       messages?: Array<{ id: string; text: string }>;
       paused?: boolean;
       editText?: string;
@@ -661,13 +702,21 @@ export interface ProviderModel {
    *  enum stays Anthropic-only (it drives CLAUDE_CODE_DISABLE_1M_CONTEXT). */
   contextLength?: number;
   /** USD per million tokens, derived from the provider catalog at sync time. */
-  pricing?: { inPerM: number; outPerM: number };
+  /** USD per 1M tokens. cacheReadPerM is what the upstream charges for prompt
+   *  tokens it served from its own cache; absent means it charges the input
+   *  rate for them, as the spend estimate assumes. */
+  pricing?: { inPerM: number; outPerM: number; cacheReadPerM?: number };
   free?: boolean;
   supportsTools?: boolean;
   supportsReasoning?: boolean;
   supportsImageInput?: boolean;
   /** ISO date after which the provider withdraws the model, when declared. */
   expirationDate?: string;
+  /** The wire this model is served on, for a provider whose catalog straddles
+   *  both: "anthropic" is relayed verbatim by the proxy, "openai" (and absent)
+   *  goes through the translation. CommandCode is the case — its Claude models
+   *  answer only /messages, everything else only /chat/completions. */
+  wire?: "anthropic" | "openai";
 }
 
 export interface Provider {

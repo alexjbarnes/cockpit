@@ -161,9 +161,15 @@ The usage button in the header is visible on every page, including PR reviews. C
 
 When Claude runs a long operation (a slow Bash command, a large file scan), a task indicator surfaces in the chat. Keep typing or switch sessions; the indicator stays visible until the task ends.
 
+## Messages sent while Claude works
+
+Sending a message while Claude is mid-response does not interrupt the current turn.
+
+On the PTY runtime the message goes to Claude straight away. The CLI keeps it in its own queue and hands it to Claude with the next tool result, inside the same turn, so Claude can change course without stopping. Until then the message shows "Claude reads this at its next step" under it. If the turn ends before another tool call, the CLI runs the message as the next turn, and the session keeps working through to the end of that turn. Pressing Esc does the same at once: Claude stops what it is doing and takes up the message. A message sent this way has gone to Claude, so it cannot be edited or deleted afterwards.
+
 ## Message queue
 
-Sending a message while Claude is mid-response does not interrupt the current turn. Cockpit queues the message on the server and delivers it on the next user turn.
+Cockpit holds a message sent mid-response in its own queue, and delivers it on the next user turn, when it cannot go to Claude straight away: on the stream runtime, for a slash command, while a permission or question card is waiting on you, during a compaction, or when earlier messages are already queued.
 
 The queue:
 

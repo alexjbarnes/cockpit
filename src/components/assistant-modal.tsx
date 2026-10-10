@@ -3,14 +3,18 @@
 import { Bot, Loader2, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
+import { AgentTranscriptProvider } from "./agent-transcript-modal";
 import { ChatView } from "./chat-view";
 
 interface AssistantModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** The session the modal is showing, so the sidebar can watch it. Fired on
+   *  open, after a first open has created the session. */
+  onSession?: (sessionId: string) => void;
 }
 
-export function AssistantModal({ open, onOpenChange }: AssistantModalProps) {
+export function AssistantModal({ open, onOpenChange, onSession }: AssistantModalProps) {
   const sessionIdRef = useRef<string | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -33,6 +37,7 @@ export function AssistantModal({ open, onOpenChange }: AssistantModalProps) {
     if (existingId) {
       // Reuse existing session
       setSessionId(existingId);
+      onSession?.(existingId);
       return;
     }
 
@@ -48,6 +53,7 @@ export function AssistantModal({ open, onOpenChange }: AssistantModalProps) {
           sessionIdRef.current = newId;
           setSessionId(newId);
           setCwd(cockpitCwd);
+          onSession?.(newId);
         }
       } catch (err) {
         if (!cancelled) {
@@ -64,7 +70,7 @@ export function AssistantModal({ open, onOpenChange }: AssistantModalProps) {
     return () => {
       cancelled = true;
     };
-  }, [open]);
+  }, [open, onSession]);
 
   // On close, keep the session alive in the ref but reset display state
   const handleOpenChange = useCallback(
@@ -102,7 +108,11 @@ export function AssistantModal({ open, onOpenChange }: AssistantModalProps) {
             </div>
           )}
           {error && <div className="flex items-center justify-center h-full text-sm text-muted-foreground px-4">{error}</div>}
-          {sessionId && !loading && !error && <ChatView sessionId={sessionId} cwd={cwd} showPlanToggle={false} isCockpitAgent />}
+          {sessionId && !loading && !error && (
+            <AgentTranscriptProvider sessionId={sessionId} cwd={cwd}>
+              <ChatView sessionId={sessionId} cwd={cwd} showPlanToggle={false} isCockpitAgent />
+            </AgentTranscriptProvider>
+          )}
         </div>
       </DialogContent>
     </Dialog>

@@ -12,7 +12,7 @@ import { useJobs } from "@/hooks/use-jobs";
 import { useScrollRestoration } from "@/hooks/use-scroll-restoration";
 import { type JobDisplayStatus, jobDisplayStatus } from "@/lib/job-display";
 import { describeProviderModel } from "@/lib/models";
-import { describeAllSchedules, getJobSchedules, getNextRunTimeAny, hasTimeBasedSchedule } from "@/server/cron-utils";
+import { describeAllSchedules, describeSchedule, getJobSchedules, getNextRunTimeAny, hasTimeBasedSchedule } from "@/server/cron-utils";
 import type { Provider, ScheduledJob } from "@/types";
 
 type JobWithStatus = ScheduledJob & {
@@ -74,13 +74,19 @@ function timeAgo(ts: number): string {
   return `${days}d ago`;
 }
 
-function formatNextRun(job: JobWithStatus): string {
+/** A job's name from its id, for the schedules that wait on other jobs. */
+type JobNameOf = (id: string) => string | undefined;
+
+function formatNextRun(job: JobWithStatus, jobName: JobNameOf): string {
   if (!job.enabled) return "Disabled";
   const schedules = getJobSchedules(job);
-  // A job whose only schedule(s) are onIssueStatus has no clock-driven next
-  // run at all — getNextRunTimeAny's "nothing matched" fallback would
-  // otherwise print a real-looking but meaningless date (tomorrow, same time).
-  if (!hasTimeBasedSchedule(schedules)) return "On status change";
+  // A job whose only schedules are event-driven has no clock-driven next run
+  // at all — getNextRunTimeAny's "nothing matched" fallback would otherwise
+  // print a real-looking but meaningless date (tomorrow, same time).
+  if (!hasTimeBasedSchedule(schedules)) {
+    const waiting = schedules.find((s) => s.type === "afterJobs");
+    return waiting ? describeSchedule(waiting, jobName) : "On status change";
+  }
   try {
     const next = getNextRunTimeAny(schedules, new Date());
     return next.toLocaleString();
@@ -124,6 +130,7 @@ function groupJobsByDir(jobs: JobWithStatus[]): JobGroupData[] {
 function JobCard({
   job,
   providers,
+  jobName,
   triggeringJobs,
   stoppingJobs,
   onTrigger,
@@ -134,6 +141,7 @@ function JobCard({
 }: {
   job: JobWithStatus;
   providers: Provider[];
+  jobName: JobNameOf;
   triggeringJobs: Set<string>;
   stoppingJobs?: Set<string>;
   onTrigger: (e: React.MouseEvent, id: string) => void;
@@ -156,8 +164,8 @@ function JobCard({
         {/* Row 2: schedule/next/last-run metadata on the left, actions on the right */}
         <div className="flex items-center gap-3">
           <div className="flex-1 min-w-0">
-            <p className="text-xs text-muted-foreground">{describeAllSchedules(getJobSchedules(job))}</p>
-            <p className="text-xs text-muted-foreground mt-0.5">Next: {formatNextRun(job)}</p>
+            <p className="text-xs text-muted-foreground">{describeAllSchedules(getJobSchedules(job), jobName)}</p>
+            <p className="text-xs text-muted-foreground mt-0.5">Next: {formatNextRun(job, jobName)}</p>
             {model && (
               <>
                 <p className="text-xs text-muted-foreground mt-0.5 truncate">Provider: {model.provider}</p>
@@ -215,6 +223,7 @@ function JobCard({
 function JobDirGroup({
   group,
   providers,
+  jobName,
   triggeringJobs,
   stoppingJobs,
   onTrigger,
@@ -227,6 +236,7 @@ function JobDirGroup({
 }: {
   group: JobGroupData;
   providers: Provider[];
+  jobName: JobNameOf;
   triggeringJobs: Set<string>;
   stoppingJobs?: Set<string>;
   onTrigger: (e: React.MouseEvent, id: string) => void;
@@ -274,6 +284,7 @@ function JobDirGroup({
               key={job.id}
               job={job}
               providers={providers}
+              jobName={jobName}
               triggeringJobs={triggeringJobs}
               stoppingJobs={stoppingJobs}
               onTrigger={onTrigger}
@@ -312,6 +323,10 @@ export default function JobsPage() {
   }, []);
 
   const groups = useMemo(() => groupJobsByDir(jobs as JobWithStatus[]), [jobs]);
+  const jobName = useMemo<JobNameOf>(() => {
+    const names = new Map(jobs.map((j) => [j.id, j.name]));
+    return (id) => names.get(id);
+  }, [jobs]);
 
   async function handleDelete() {
     if (!confirmDelete) return;
@@ -377,6 +392,7 @@ export default function JobsPage() {
                 key={job.id}
                 job={job}
                 providers={providers}
+                jobName={jobName}
                 triggeringJobs={triggeringJobs}
                 stoppingJobs={stoppingJobs}
                 onTrigger={handleTrigger}
@@ -391,6 +407,7 @@ export default function JobsPage() {
                 key={group.cwd}
                 group={group}
                 providers={providers}
+                jobName={jobName}
                 triggeringJobs={triggeringJobs}
                 stoppingJobs={stoppingJobs}
                 onTrigger={handleTrigger}

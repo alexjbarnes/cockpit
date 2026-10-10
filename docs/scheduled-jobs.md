@@ -17,13 +17,13 @@ The Jobs page lists your jobs. Add one with:
 
 - Name. Used in the dashboard and run history.
 - Working directory. Where Claude runs (defaults to your home).
-- Schedule. Either **Simple** (hourly, daily, weekly, or monthly, at a chosen time and day) or a raw **Cron** expression. A single job can hold more than one schedule. Cockpit shows the next 3 fire times so you can sanity-check.
+- Schedule. Either **Simple** (hourly, daily, weekly, or monthly, at a chosen time and day) or a raw **Cron** expression, or **After jobs** to run when other jobs finish (see [Chaining jobs](#chaining-jobs)). A single job can hold more than one schedule. Cockpit shows the next 3 fire times so you can sanity-check.
 - Prompt. The instruction Claude runs on each fire.
 - Model, context size, and thinking level. Same options as interactive sessions, including custom [providers](settings.md#providers).
-- Runtime. Stream (headless, the default) or PTY, the same choice as interactive sessions.
+- Runtime. PTY (the default, including for a job created through the assistant's tools) or Stream (deprecated), the same choice as interactive sessions.
 - Run-time budget. The maximum minutes a run may take before it is stopped (default 30).
 - Retention. How many days of run history and transcripts to keep (default 90).
-- Skip if missed. If the server was down when a run was due, skip the late catch-up rather than firing on startup.
+- Skip if missed. Off by default, so a run that fell due while the server was down fires once, within a minute of the server starting. It looks back up to 24 hours from the job's last run, or from when the job was last saved if it has never run. Turn this on to skip the late catch-up instead.
 - Enabled. Toggle to pause the job without deleting it.
 
 Save and the scheduler picks it up immediately.
@@ -74,13 +74,24 @@ For enabled servers you can also restrict which tools are callable:
 - Filter list. Only listed tools on that server are callable.
 - `server:tool` syntax. For meta-tools that take server and tool arguments, scope by both.
 
+## Chaining jobs
+
+An **After jobs** schedule makes a job wait on others. Pick the jobs it waits on, and it runs as soon as every one of them has completed successfully since its own last run. A job that has never run counts from when it was last saved, so setting one up does not fire it on old runs.
+
+- A failed run of a job it waits on holds it back until that job next succeeds. A disabled job it waits on holds it back too.
+- A manual Run Now of a job counts like a scheduled one, so it starts the jobs waiting on it.
+- If a job it waits on finishes twice before it gets to run, it runs once.
+- It can sit alongside a time schedule, and runs on whichever comes first.
+- A job cannot wait on itself, or on a job that waits on it. Deleting a job removes it from the jobs that waited on it.
+
 ## Running a job
 
-Three ways:
+Four ways:
 
 1. Schedule. Fires automatically at the cron time.
-2. Trigger. Run Now button on the job page. Same as a scheduled run, just immediate.
-3. Duplicate. Copy an existing job to use as a template for a new one.
+2. After jobs. Fires when the jobs it waits on have completed.
+3. Trigger. Run Now button on the job page. Same as a scheduled run, just immediate.
+4. Duplicate. Copy an existing job to use as a template for a new one.
 
 ## Run history
 

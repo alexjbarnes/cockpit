@@ -1,11 +1,11 @@
 import { randomUUID } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
-import { dirname } from "node:path";
 import { Server as McpServer } from "@modelcontextprotocol/sdk/server/index.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { CONTEXT_SIZES } from "@/lib/models";
+import { rememberClaudeConfig } from "@/server/claude-config-guard";
+import { readClaudeUserConfig, updateClaudeUserConfig } from "@/server/claude-user-config";
 import { getDefaults, setDefaults } from "@/server/defaults";
 import { addInboxMessage } from "@/server/inbox";
 import {
@@ -25,7 +25,6 @@ import {
 import { buildJob, deleteJob, getJob, getLatestRun, getRun, loadJobs, saveJob } from "@/server/job-storage";
 import { discoverMcpServerNames } from "@/server/mcp-discovery";
 import { getNotificationSettings, setNotificationSettings, updateNotificationSettings } from "@/server/notification-settings";
-import { getClaudeUserConfigFile } from "@/server/paths";
 import { addProvider, deleteProvider, getProviders, updateProvider } from "@/server/providers";
 import { getJobScheduler } from "@/server/singleton";
 import { findSessionCwd, loadTranscript } from "@/server/transcript";
@@ -312,14 +311,14 @@ function issueSummary(issue: Issue): Record<string, unknown> {
   };
 }
 
-/** Schema for one job schedule — the three JobSchedule variants spelled out
+/** Schema for one job schedule — the four JobSchedule variants spelled out
  *  so a caller can construct one from the schema alone, instead of having to
  *  list existing jobs and copy a real one's shape. Kept in lockstep with the
  *  write-boundary validation in job-storage.ts's assertValidSchedules. */
 const JOB_SCHEDULE_SCHEMA = {
   type: "object",
   description:
-    'One schedule; shape depends on `type`. Examples: {"type":"simple","frequency":"daily","time":"09:30"} · {"type":"cron","expression":"*/15 * * * *"} · {"type":"onIssueStatus","status":"Refine Ready"}',
+    'One schedule; shape depends on `type`. Examples: {"type":"simple","frequency":"daily","time":"09:30"} · {"type":"cron","expression":"*/15 * * * *"} · {"type":"onIssueStatus","status":"Refine Ready"} · {"type":"afterJobs","jobIds":["<job id>"]}',
   anyOf: [
     {
       properties: {
@@ -348,6 +347,18 @@ const JOB_SCHEDULE_SCHEMA = {
         project: { type: "string", description: "Project id to scope to; omit for any project" },
       },
       required: ["type", "status"],
+    },
+    {
+      properties: {
+        type: { const: "afterJobs" },
+        jobIds: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "Ids of jobs (from list_jobs) this one waits on. It runs once every one of them has completed successfully since it last ran; a failed run holds it back until that job next succeeds. A job cannot wait on itself or on a job that waits on it.",
+        },
+      },
+      required: ["type", "jobIds"],
     },
   ],
 };
@@ -522,6 +533,7 @@ const TOOL_DEFINITIONS = [
         messageStitching: { type: "boolean" },
         reviewsEnabled: { type: "boolean" },
         issuesEnabled: { type: "boolean" },
+        modalPagesEnabled: { type: "boolean" },
         permissionMode: {
           type: "string",
           enum: ["manual", "auto", "bypass"],
@@ -814,18 +826,43 @@ const TOOL_DEFINITIONS = [
   },
 ];
 
-function readClaudeConfig(): { mcpServers: Record<string, McpServerEntry> } {
-  try {
-    return JSON.parse(readFileSync(getClaudeUserConfigFile(), "utf-8"));
-  } catch {
-    return { mcpServers: {} };
-  }
+/** The user config's MCP servers, for callers that only read them. An
+ *  unreadable config reads as empty here; the writers below refuse instead. */
+function readMcpServers(): Record<string, McpServerEntry> {
+  const read = readClaudeUserConfig();
+  return (read?.data.mcpServers as Record<string, McpServerEntry>) ?? {};
 }
 
-function writeClaudeConfig(data: { mcpServers: Record<string, McpServerEntry> }): void {
-  const file = getClaudeUserConfigFile();
-  mkdirSync(dirname(file), { recursive: true });
-  writeFileSync(file, JSON.stringify(data, null, 2) + "\n");
+/**
+ * Add, replace or remove one server, through the shared writer.
+ *
+ * This used to be a bare writeFileSync of the whole document, which had two
+ * ways to lose data: it replaced a file the CLI may have written since the read
+ * (the CLI and cockpit write the same file, with no lock between them), and on
+ * an unreadable file the reader returned `{mcpServers: {}}`, so the write
+ * dropped everything else the config held. Now the write is a read-modify-write
+ * that refuses a file it cannot parse, and it is the same one the trust path
+ * uses, atomic where the filesystem allows it and never truncating where it
+ * does not.
+ */
+function writeMcpServer(name: string, entry: McpServerEntry | null): boolean {
+  const wrote = updateClaudeUserConfig(
+    (data) => {
+      const servers = (data.mcpServers ?? {}) as Record<string, McpServerEntry>;
+      if (entry) servers[name] = entry;
+      else delete servers[name];
+      data.mcpServers = servers;
+      return true;
+    },
+    // Saving a server on a machine that has never run the CLI is a legitimate
+    // way to end up with a config, and there is nothing there to overwrite.
+    { create: true },
+  );
+  // Keep the reset guard's record current, so a deliberate edit here is not
+  // read as a wipe and undone later.
+  const read = readClaudeUserConfig();
+  if (read) rememberClaudeConfig(read.data);
+  return wrote;
 }
 
 async function handleToolCall(
@@ -991,6 +1028,7 @@ async function handleToolCall(
             'mcpToolFilters: { "<serverName>": ["tool", ...] } limits an enabled server; omitted servers expose all tools.',
             "inboxOutput posts the final message to the cockpit inbox; notifyProviders pushes it to the named notifyTargets ids.",
             "onIssueStatus schedules: status is a built-in, or a custom status of the named project (from list_projects); project ids come from list_projects.",
+            "afterJobs schedules: jobIds come from list_jobs. The job runs when all of them have succeeded since its own last run, so it can chain after jobs on any schedule; it can sit alongside a time schedule.",
           ],
         };
         return { content: [{ type: "text", text: JSON.stringify(options, null, 2) }] };
@@ -1125,6 +1163,7 @@ async function handleToolCall(
           "messageStitching",
           "reviewsEnabled",
           "issuesEnabled",
+          "modalPagesEnabled",
           "permissionMode",
           "sandbox",
           "modelSlots",
@@ -1163,44 +1202,46 @@ async function handleToolCall(
         return { content: [{ type: "text", text: JSON.stringify({ deleted: redactSecrets(provider) }, null, 2) }] };
       }
       case "list_mcp_servers": {
-        const config = readClaudeConfig();
-        const entries = Object.entries(config.mcpServers ?? {}).map(([n, c]) => ({ name: n, ...c }));
+        const entries = Object.entries(readMcpServers()).map(([n, c]) => ({ name: n, ...c }));
         return { content: [{ type: "text", text: JSON.stringify(redactSecrets(entries), null, 2) }] };
       }
       case "get_mcp_server": {
-        const config = readClaudeConfig();
-        const entry = config.mcpServers?.[args.name as string];
+        const entry = readMcpServers()[args.name as string];
         if (!entry)
           return { content: [{ type: "text", text: JSON.stringify({ error: `MCP server not found: ${args.name}` }) }], isError: true };
         return { content: [{ type: "text", text: JSON.stringify(redactSecrets({ name: args.name, ...entry }), null, 2) }] };
       }
       case "save_mcp_server": {
-        const config = readClaudeConfig();
-        const servers = config.mcpServers ?? {};
-        const before = servers[args.name as string] ? { ...servers[args.name as string] } : null;
-        servers[args.name as string] = {
+        const before = readMcpServers()[args.name as string] ? { ...readMcpServers()[args.name as string] } : null;
+        const after: McpServerEntry = {
           command: args.command as string,
           args: args.args as string[],
           env: restoreRedacted(args.env as Record<string, string> | undefined, before?.env),
         };
-        writeClaudeConfig({ ...config, mcpServers: servers });
+        if (!writeMcpServer(args.name as string, after)) {
+          return {
+            content: [
+              { type: "text", text: JSON.stringify({ error: "Could not read the Claude config (~/.claude.json); nothing was written." }) },
+            ],
+            isError: true,
+          };
+        }
         return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify({ before: redactSecrets(before), after: redactSecrets(servers[args.name as string]) }, null, 2),
-            },
-          ],
+          content: [{ type: "text", text: JSON.stringify({ before: redactSecrets(before), after: redactSecrets(after) }, null, 2) }],
         };
       }
       case "delete_mcp_server": {
-        const config = readClaudeConfig();
-        const servers = config.mcpServers ?? {};
-        if (!servers[args.name as string])
+        const deleted = readMcpServers()[args.name as string];
+        if (!deleted)
           return { content: [{ type: "text", text: JSON.stringify({ error: `MCP server not found: ${args.name}` }) }], isError: true };
-        const deleted = servers[args.name as string];
-        delete servers[args.name as string];
-        writeClaudeConfig({ ...config, mcpServers: servers });
+        if (!writeMcpServer(args.name as string, null)) {
+          return {
+            content: [
+              { type: "text", text: JSON.stringify({ error: "Could not read the Claude config (~/.claude.json); nothing was written." }) },
+            ],
+            isError: true,
+          };
+        }
         return { content: [{ type: "text", text: JSON.stringify({ deleted: redactSecrets(deleted) }, null, 2) }] };
       }
       case "get_notification_settings":

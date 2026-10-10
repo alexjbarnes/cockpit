@@ -4,7 +4,7 @@ import { ArrowLeft, ChevronRight, Plus } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { usePageHeader } from "@/components/app-shell";
-import { DeepSeekCard, GoCard, OpenRouterCard, ZenCard } from "@/components/openrouter-provider";
+import { CommandCodeCard, DeepSeekCard, GoCard, OpenRouterCard, ZenCard } from "@/components/openrouter-provider";
 import { Button } from "@/components/ui/button";
 import type { Provider } from "@/types";
 
@@ -31,6 +31,7 @@ export default function ProvidersPage() {
   const zen = providers.find((p) => p.id === "zen");
   const go = providers.find((p) => p.id === "zen-go");
   const deepseek = providers.find((p) => p.id === "deepseek");
+  const commandCode = providers.find((p) => p.id === "commandcode");
   const custom = providers.filter((p) => !p.isBuiltin);
 
   return (
@@ -57,6 +58,13 @@ export default function ProvidersPage() {
         {go && <GoCard provider={go} onChanged={fetchProviders} onManage={() => router.push("/settings/providers/zen-go")} />}
         {deepseek && (
           <DeepSeekCard provider={deepseek} onChanged={fetchProviders} onManage={() => router.push("/settings/providers/deepseek")} />
+        )}
+        {commandCode && (
+          <CommandCodeCard
+            provider={commandCode}
+            onChanged={fetchProviders}
+            onManage={() => router.push("/settings/providers/commandcode")}
+          />
         )}
 
         <p className="pt-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">Custom</p>

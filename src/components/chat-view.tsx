@@ -398,6 +398,8 @@ export function ChatView({
     const handler = () => {
       if (document.activeElement?.closest("textarea, input, [contenteditable]")) return;
       if (document.activeElement === el) return;
+      // A modal over the chat keeps the keys, to scroll and close it with.
+      if (document.querySelector(".fixed.inset-0.z-50")) return;
       el?.focus({ preventScroll: true });
       if (stickToBottom.current) scrollToBottom();
     };
@@ -439,13 +441,14 @@ export function ChatView({
       images?: import("@/types").ImageAttachment[],
       documents?: import("@/types").DocumentAttachment[],
       textFiles?: import("@/types").TextFileAttachment[],
+      opts?: import("@/types").SendOptions,
     ) => {
       stickToBottom.current = true;
       if (initialContext && !contextInjected.current && messages.length === 0) {
         contextInjected.current = true;
-        sendMessage(`${text}\n\n---\n${initialContext}`, images, documents, textFiles);
+        sendMessage(`${text}\n\n---\n${initialContext}`, images, documents, textFiles, opts);
       } else {
-        sendMessage(text, images, documents, textFiles);
+        sendMessage(text, images, documents, textFiles, opts);
       }
     },
     [sendMessage, initialContext, messages.length],

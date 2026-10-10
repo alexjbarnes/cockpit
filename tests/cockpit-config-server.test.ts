@@ -208,6 +208,36 @@ describe("cockpit-config MCP server (in-process HTTP)", () => {
       expect(result.created.id).toBeDefined();
     });
 
+    it("create_job stores the pty runtime when none is given, and keeps one that is", async () => {
+      const base = { schedules: [{ type: "simple", frequency: "hourly" }], prompt: "p", cwd: "/tmp" };
+      const plain = (await callToolParsed("create_job", { ...base, name: "runtime-default" })) as { created: { runtime?: string } };
+      const stream = (await callToolParsed("create_job", { ...base, name: "runtime-stream", runtime: "stream" })) as {
+        created: { runtime?: string };
+      };
+
+      expect(plain.created.runtime).toBe("pty");
+      expect(stream.created.runtime).toBe("stream");
+    });
+
+    it("create_job and update_job set up one job waiting on another, and refuse a loop", async () => {
+      const base = { schedules: [{ type: "simple", frequency: "hourly" }], prompt: "p", cwd: "/tmp" };
+      const first = (await callToolParsed("create_job", { ...base, name: "chain-first" })) as { created: { id: string } };
+      const second = (await callToolParsed("create_job", {
+        ...base,
+        name: "chain-second",
+        schedules: [{ type: "afterJobs", jobIds: [first.created.id] }],
+      })) as { created: { id: string; schedules: unknown } };
+      expect(second.created.schedules).toEqual([{ type: "afterJobs", jobIds: [first.created.id] }]);
+
+      const loop = (await callToolParsed("update_job", {
+        id: first.created.id,
+        schedules: [{ type: "afterJobs", jobIds: [second.created.id] }],
+      })) as { error?: string };
+      expect(loop.error).toMatch(/loop/);
+      const kept = (await callToolParsed("get_job", { id: first.created.id })) as { schedules: unknown };
+      expect(kept.schedules).toEqual(base.schedules);
+    });
+
     it("list_jobs returns the created job", async () => {
       const result = (await callToolParsed("list_jobs")) as { name: string }[];
       expect(Array.isArray(result)).toBe(true);
@@ -1211,6 +1241,12 @@ describe("cockpit-config MCP server (in-process HTTP)", () => {
       } finally {
         await callTool("update_settings", { issuesEnabled: true }); // restore for the rest of the suite
       }
+    });
+
+    it("update_settings allows modalPagesEnabled", async () => {
+      await callTool("update_settings", { modalPagesEnabled: true });
+      const settings = (await callToolParsed("get_settings")) as { modalPagesEnabled?: boolean };
+      expect(settings.modalPagesEnabled).toBe(true);
     });
 
     it("update_settings allows modelSlots", async () => {

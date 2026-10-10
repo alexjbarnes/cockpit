@@ -1,9 +1,11 @@
 "use client";
 
-import { Activity, CheckCircle2, Loader2, X } from "lucide-react";
+import { Activity, CheckCircle2, ChevronRight, Loader2, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { agentFromTask } from "@/lib/agent-transcript";
 import type { BackgroundTask } from "@/types";
+import { useAgentTranscripts } from "./agent-transcript-modal";
 
 interface BackgroundTasksButtonProps {
   tasks: BackgroundTask[];
@@ -11,6 +13,7 @@ interface BackgroundTasksButtonProps {
 
 export function BackgroundTasksButton({ tasks }: BackgroundTasksButtonProps) {
   const [open, setOpen] = useState(false);
+  const agentTranscripts = useAgentTranscripts();
 
   useEffect(() => {
     if (!open) return;
@@ -58,7 +61,19 @@ export function BackgroundTasksButton({ tasks }: BackgroundTasksButtonProps) {
             ) : (
               <div className="space-y-2 max-h-64 overflow-y-auto">
                 {tasks.map((task) => (
-                  <div key={task.taskId} className="flex items-start gap-3 rounded-md border border-border px-3 py-2.5">
+                  <button
+                    type="button"
+                    key={task.taskId}
+                    disabled={!agentTranscripts}
+                    onClick={() => {
+                      // The list closes behind it, so closing the transcript
+                      // goes straight back to the chat.
+                      setOpen(false);
+                      agentTranscripts?.openAgent(agentFromTask(task));
+                    }}
+                    className="flex w-full items-start gap-3 rounded-md border border-border px-3 py-2.5 text-left enabled:hover:bg-muted/50"
+                    data-testid="background-task"
+                  >
                     {task.status === "completed" ? (
                       <CheckCircle2 className="h-4 w-4 shrink-0 mt-0.5 text-green-500" />
                     ) : (
@@ -76,7 +91,8 @@ export function BackgroundTasksButton({ tasks }: BackgroundTasksButtonProps) {
                         <div className="text-xs text-muted-foreground truncate mt-0.5">{task.summary}</div>
                       )}
                     </div>
-                  </div>
+                    {agentTranscripts && <ChevronRight className="h-4 w-4 shrink-0 mt-0.5 text-muted-foreground" />}
+                  </button>
                 ))}
               </div>
             )}

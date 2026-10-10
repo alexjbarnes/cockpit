@@ -55,8 +55,7 @@ describe("findModelById", () => {
 describe("versionsForAlias", () => {
   it("returns haiku versions", () => {
     const versions = versionsForAlias("haiku");
-    expect(versions).toHaveLength(1);
-    expect(versions[0].version).toBe("4.5");
+    expect(versions.map((v) => v.version)).toEqual(["4.5", "5.5"]);
   });
 
   it("returns sonnet versions", () => {
@@ -92,7 +91,7 @@ describe("versionsForAlias", () => {
 describe("defaultForAlias", () => {
   it("returns default haiku model", () => {
     const model = defaultForAlias("haiku");
-    expect(model).toBeDefined();
+    expect(model?.modelId).toBe("claude-haiku-5-5");
     expect(model?.isDefault).toBe(true);
   });
 
@@ -185,9 +184,14 @@ describe("allowedEffortLevels", () => {
     expect(allowedEffortLevels(undefined)).toEqual([]);
   });
 
-  it("returns empty array for haiku", () => {
-    const haiku = MODELS.find((m) => m.alias === "haiku")!;
-    expect(allowedEffortLevels(haiku)).toEqual([]);
+  it("returns empty array for haiku 4.5", () => {
+    const haiku45 = MODELS.find((m) => m.alias === "haiku" && m.version === "4.5")!;
+    expect(allowedEffortLevels(haiku45)).toEqual([]);
+  });
+
+  it("returns [low, medium, high, xhigh, max] for haiku 5.5", () => {
+    const haiku55 = MODELS.find((m) => m.alias === "haiku" && m.version === "5.5")!;
+    expect(allowedEffortLevels(haiku55)).toEqual(["low", "medium", "high", "xhigh", "max"]);
   });
 
   it("returns [low, medium, high, max] for sonnet", () => {
@@ -220,9 +224,13 @@ describe("recommendedEffort", () => {
     expect(recommendedEffort(undefined)).toBeNull();
   });
 
-  it("returns null for haiku", () => {
-    const haiku = MODELS.find((m) => m.alias === "haiku")!;
-    expect(recommendedEffort(haiku)).toBeNull();
+  it("returns null for haiku 4.5", () => {
+    const haiku45 = MODELS.find((m) => m.alias === "haiku" && m.version === "4.5")!;
+    expect(recommendedEffort(haiku45)).toBeNull();
+  });
+
+  it("returns 'xhigh' for haiku 5.5", () => {
+    expect(recommendedEffort(resolveModel("claude-haiku-5-5"))).toBe("xhigh");
   });
 
   it("returns 'xhigh' for opus 4.7", () => {
@@ -247,7 +255,7 @@ describe("recommendedEffort", () => {
 });
 
 describe("coerceEffort", () => {
-  const haiku = MODELS.find((m) => m.alias === "haiku")!;
+  const haiku = MODELS.find((m) => m.alias === "haiku" && m.version === "4.5")!;
   const sonnet = MODELS.find((m) => m.alias === "sonnet")!;
   const opus46 = MODELS.find((m) => m.alias === "opus" && m.version === "4.6")!;
   const opus47 = MODELS.find((m) => m.alias === "opus" && m.version === "4.7")!;
@@ -260,7 +268,7 @@ describe("coerceEffort", () => {
     expect(coerceEffort("low", undefined)).toBeNull();
   });
 
-  it("returns null for haiku (no allowed levels)", () => {
+  it("returns null for haiku 4.5 (no allowed levels)", () => {
     expect(coerceEffort("low", haiku)).toBeNull();
     expect(coerceEffort("medium", haiku)).toBeNull();
   });
@@ -332,27 +340,53 @@ describe("resolveProviderId", () => {
 });
 
 describe("describeModelSelection", () => {
-  const customProviders: { id: string; models: ProviderModel[] }[] = [
+  const customProviders: { id: string; name?: string; models: ProviderModel[] }[] = [
     {
       id: "lmstudio",
+      name: "LM Studio",
       models: [{ modelId: "gpt-oss-20b", displayName: "GPT-OSS 20B", effortLevels: ["low", "high"], contextSizes: ["200k", "1m"] }],
     },
   ];
 
   it("labels a built-in opus, keeps an allowed thinking level, and reports the context size", () => {
-    expect(describeModelSelection("opus", "max", "200k", undefined)).toEqual({ label: "Opus 5.5", thinking: "max", context: "200k" });
+    expect(describeModelSelection("opus", "max", "200k", undefined)).toEqual({
+      provider: null,
+      label: "Opus 5.5",
+      thinking: "max",
+      context: "200k",
+    });
   });
 
   it("reports 1M context when selected on a multi-size model", () => {
-    expect(describeModelSelection("opus", "high", "1m", undefined)).toEqual({ label: "Opus 5.5", thinking: "high", context: "1m" });
+    expect(describeModelSelection("opus", "high", "1m", undefined)).toEqual({
+      provider: null,
+      label: "Opus 5.5",
+      thinking: "high",
+      context: "1m",
+    });
   });
 
-  it("drops thinking for a model with none (haiku) and omits context for a single-size model", () => {
-    expect(describeModelSelection("haiku", "high", "200k", undefined)).toEqual({ label: "Haiku 4.5", thinking: null, context: null });
+  it("drops thinking for a model with none (haiku 4.5) and omits context for a single-size model", () => {
+    expect(describeModelSelection("claude-haiku-4-5-20251001", "high", "200k", undefined)).toEqual({
+      provider: null,
+      label: "Haiku 4.5",
+      thinking: null,
+      context: null,
+    });
+  });
+
+  it("resolves bare haiku to Haiku 5.5, which has thinking and a 1M option", () => {
+    expect(describeModelSelection("haiku", "high", "1m", undefined)).toEqual({
+      provider: null,
+      label: "Haiku 5.5",
+      thinking: "high",
+      context: "1m",
+    });
   });
 
   it("drops xhigh for a model that does not allow it (sonnet 4.6) but keeps context", () => {
     expect(describeModelSelection("claude-sonnet-4-6", "xhigh", "200k", undefined)).toEqual({
+      provider: null,
       label: "Sonnet 4.6",
       thinking: null,
       context: "200k",
@@ -361,6 +395,7 @@ describe("describeModelSelection", () => {
 
   it("resolves a built-in by exact modelId", () => {
     expect(describeModelSelection("claude-opus-4-7", "xhigh", "1m", undefined)).toEqual({
+      provider: null,
       label: "Opus 4.7",
       thinking: "xhigh",
       context: "1m",
@@ -369,6 +404,7 @@ describe("describeModelSelection", () => {
 
   it("strips a [context] suffix before resolving", () => {
     expect(describeModelSelection("sonnet[1m]", "medium", "200k", undefined)).toEqual({
+      provider: null,
       label: "Sonnet 5.5",
       thinking: "medium",
       context: "200k",
@@ -377,11 +413,13 @@ describe("describeModelSelection", () => {
 
   it("labels a custom provider model by displayName and honours its effortLevels and sizes", () => {
     expect(describeModelSelection("lmstudio:gpt-oss-20b", "high", "1m", customProviders)).toEqual({
+      provider: "LM Studio",
       label: "GPT-OSS 20B",
       thinking: "high",
       context: "1m",
     });
     expect(describeModelSelection("lmstudio:gpt-oss-20b", "max", "200k", customProviders)).toEqual({
+      provider: "LM Studio",
       label: "GPT-OSS 20B",
       thinking: null,
       context: "200k",
@@ -390,6 +428,7 @@ describe("describeModelSelection", () => {
 
   it("matches a custom provider model by bare modelId too", () => {
     expect(describeModelSelection("gpt-oss-20b", "low", "200k", customProviders)).toEqual({
+      provider: "LM Studio",
       label: "GPT-OSS 20B",
       thinking: "low",
       context: "200k",
@@ -397,18 +436,23 @@ describe("describeModelSelection", () => {
   });
 
   it("omits context for a single-size custom model", () => {
-    const single: { id: string; models: ProviderModel[] }[] = [
+    const single: { id: string; name?: string; models: ProviderModel[] }[] = [
       { id: "lm", models: [{ modelId: "m", displayName: "M", effortLevels: [], contextSizes: ["200k"] }] },
     ];
-    expect(describeModelSelection("lm:m", "low", "200k", single)).toEqual({ label: "M", thinking: null, context: null });
+    expect(describeModelSelection("lm:m", "low", "200k", single)).toEqual({ provider: "lm", label: "M", thinking: null, context: null });
   });
 
-  it("strips a provider prefix and shows no thinking or context for an unknown model", () => {
-    expect(describeModelSelection("ghost:some-model", "high", "1m", [])).toEqual({ label: "some-model", thinking: null, context: null });
+  it("keeps the provider prefix of an unknown model, with no thinking or context", () => {
+    expect(describeModelSelection("ghost:some-model", "high", "1m", [])).toEqual({
+      provider: "ghost",
+      label: "some-model",
+      thinking: null,
+      context: null,
+    });
   });
 
   it("shows off for a custom model that declares effort levels", () => {
-    const providers: { id: string; models: ProviderModel[] }[] = [
+    const providers: { id: string; name?: string; models: ProviderModel[] }[] = [
       { id: "lm", models: [{ modelId: "m", displayName: "M", effortLevels: ["low", "high"], contextSizes: ["200k"] }] },
     ];
     expect(describeModelSelection("lm:m", "off", "200k", providers).thinking).toBe("off");
@@ -503,6 +547,26 @@ describe("Sonnet 5.5", () => {
   });
 });
 
+describe("Haiku 5.5", () => {
+  it("is the default haiku, resolvable by alias and modelId", () => {
+    expect(resolveModel("haiku")?.modelId).toBe("claude-haiku-5-5");
+    expect(resolveModel("claude-haiku-5-5")?.alias).toBe("haiku");
+    expect(findModelById("claude-haiku-5-5")?.displayName).toBe("Haiku 5.5");
+  });
+
+  it("has an included 1M window, so the id stays bare at 1M", () => {
+    expect(findModelById("claude-haiku-5-5")?.contextSizes).toEqual(["200k", "1m"]);
+    expect(cliModelWithContext("claude-haiku-5-5", "1m", true)).toBe("claude-haiku-5-5");
+  });
+
+  it("leaves Haiku 4.5 selectable as a previous generation without thinking", () => {
+    const haiku45 = findModelById("claude-haiku-4-5-20251001");
+    expect(haiku45?.description).toBe("Previous generation");
+    expect(haiku45?.isDefault).toBeUndefined();
+    expect(allowedEffortLevels(haiku45)).toEqual([]);
+  });
+});
+
 describe("Opus 5.5", () => {
   it("is the default opus, resolvable by alias and modelId", () => {
     expect(resolveModel("opus")?.modelId).toBe("claude-opus-5-5");
@@ -547,6 +611,7 @@ describe("modelOneMRequiresCredits", () => {
     expect(modelOneMRequiresCredits("claude-fable-5")).toBe(false);
     expect(modelOneMRequiresCredits("claude-fable-5-1")).toBe(false);
     expect(modelOneMRequiresCredits("haiku")).toBe(false);
+    expect(modelOneMRequiresCredits("claude-haiku-5-5")).toBe(false);
   });
 
   it("is false for unknown/custom models and nullish input", () => {
@@ -581,15 +646,21 @@ describe("cliModelWithContext", () => {
 });
 
 describe('thinking "off"', () => {
-  it("coerceEffort keeps off for thinking-capable models and drops it for haiku", () => {
+  it("coerceEffort keeps off for thinking-capable models and drops it for haiku 4.5", () => {
     expect(coerceEffort("off", resolveModel("opus"))).toBe("off");
     expect(coerceEffort("off", resolveModel("fable"))).toBe("off");
-    expect(coerceEffort("off", resolveModel("haiku"))).toBeNull();
+    expect(coerceEffort("off", resolveModel("haiku"))).toBe("off");
+    expect(coerceEffort("off", resolveModel("claude-haiku-4-5-20251001"))).toBeNull();
   });
 
-  it("describeModelSelection shows off for thinking-capable models, nothing for haiku", () => {
+  it("describeModelSelection shows off for thinking-capable models, nothing for haiku 4.5", () => {
     expect(describeModelSelection("opus", "off", "200k", undefined).thinking).toBe("off");
-    expect(describeModelSelection("fable", "off", "1m", undefined)).toEqual({ label: "Fable 5.1", thinking: "off", context: "1m" });
-    expect(describeModelSelection("haiku", "off", "200k", undefined).thinking).toBeNull();
+    expect(describeModelSelection("fable", "off", "1m", undefined)).toEqual({
+      provider: null,
+      label: "Fable 5.1",
+      thinking: "off",
+      context: "1m",
+    });
+    expect(describeModelSelection("claude-haiku-4-5-20251001", "off", "200k", undefined).thinking).toBeNull();
   });
 });

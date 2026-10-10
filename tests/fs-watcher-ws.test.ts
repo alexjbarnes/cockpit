@@ -217,6 +217,38 @@ describe("fs-watcher WebSocket integration", () => {
     }
   });
 
+  it("does not watch the cwd of a cockpit-agent session", async () => {
+    // The assistant lives in the cockpit dir itself, where debug.jsonl, job
+    // runs and inbox writes land constantly; a recursive watch there would
+    // fire fs_changed for every write.
+    const plain = manager.createSession(sandbox);
+    const cockpitDir = mkdtempSync(join(tmpdir(), "fsw-ws-cockpit-"));
+    const assistant = manager.createSession(cockpitDir, "Cockpit Assistant", { cockpitAgent: true });
+    try {
+      const ws = await connectWs();
+      const bag = collectMessages(ws);
+
+      ws.send(JSON.stringify({ type: "session:subscribe", sessionIds: [plain.id, assistant.id] }));
+      await syncWithServer(ws, bag);
+
+      // Positive control: the socket's fs path is live for the plain session,
+      // so silence on the assistant's dir means no watcher there.
+      bag.messages = [];
+      await armFor(bag, "plain-trigger.txt");
+      expect(fsChangedIn(bag).some((m) => m.cwd === sandbox)).toBe(true);
+
+      bag.messages = [];
+      writeFileSync(join(cockpitDir, "debug.jsonl"), `x ${Date.now()}`);
+      await wait(SETTLE_MS);
+
+      expect(fsChangedIn(bag).filter((m) => m.cwd === cockpitDir)).toEqual([]);
+
+      ws.close();
+    } finally {
+      rmSync(cockpitDir, { recursive: true, force: true });
+    }
+  });
+
   it("deduplicates watchers for sessions sharing the same cwd", async () => {
     const s1 = manager.createSession(sandbox);
     const s2 = manager.createSession(sandbox);

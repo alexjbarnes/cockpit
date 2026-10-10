@@ -89,6 +89,12 @@ Each hook is a shell command. Scopes: Global, Project, Local (project-local, not
 
 `/mcp-servers` manages Model Context Protocol integrations. Add a server with name, type (stdio or SSE), and command or URL. The Test button validates the connection. Same global and project scope split as agents.
 
+The Claude account card lists the servers the CLI itself reports, which is the only place an account connector (`claude.ai <name>`) appears: they live on the account, not in any config file Cockpit can read. The list comes from `claude mcp list`, which health-checks every server, so it takes a few seconds and is cached for a minute.
+
+Authenticate runs the CLI's own sign-in. A connector prints a URL to authorise at on claude.ai; a server that speaks OAuth prints its own authorisation URL and then wants the URL the browser was redirected to pasted back. Signing in replaces the credentials the server already holds, so abandoning the flow part-way can leave a working server disconnected. Servers that use OAuth also have an Authenticate button on their own page.
+
+Account connectors only load in sessions that sign in with the Claude account. A session running on another provider sets its own API credentials, which the CLI treats as taking precedence, so those sessions never use them.
+
 ### CLAUDE.md
 
 `/claude-md` edits Claude's memory files inline. Three scopes:
@@ -120,7 +126,7 @@ Configuration is stored in `~/.cockpit/notifications.json`.
 
 The inbox at `/inbox` collects messages from scheduled job completions and system events. Each message has a title, body, priority level (info, warning, error), and timestamp.
 
-The inbox button in the sidebar shows an unread count badge. From the inbox page you can mark all as read or clear all messages.
+The inbox button in the sidebar shows an unread count badge. From the inbox page you can mark all as read or clear all messages. Select turns on checkboxes: pick messages one by one, or all at once from the count, then mark them read or unread, or delete them together.
 
 Inbox messages are stored in `~/.cockpit/inbox.jsonl`. When a message arrives, it is also dispatched to any configured notification providers.
 

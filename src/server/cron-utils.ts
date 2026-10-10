@@ -1,12 +1,13 @@
 import type { CronSchedule, JobSchedule, SimpleSchedule } from "@/types";
 
 /**
- * The subset of JobSchedule with an actual cron/time-of-day form. Excludes
- * IssueStatusSchedule on purpose: it fires on an event, not a clock, so it has
- * no cron expression and no "next run time". scheduleToCron and getNextRunTime
- * are typed to this narrower union so a caller can't reach either with an
- * onIssueStatus schedule without the compiler forcing it to filter first —
- * see getNextRunTimeAny below and job-scheduler.ts's tick().
+ * The subset of JobSchedule with an actual cron/time-of-day form. Excludes the
+ * event-driven schedules (IssueStatusSchedule, AfterJobsSchedule) on purpose:
+ * they fire on an event, not a clock, so they have no cron expression and no
+ * "next run time". scheduleToCron and getNextRunTime are typed to this
+ * narrower union so a caller can't reach either with an event schedule without
+ * the compiler forcing it to filter first — see getNextRunTimeAny below and
+ * job-scheduler.ts's tick().
  */
 export type TimeBasedSchedule = SimpleSchedule | CronSchedule;
 
@@ -123,7 +124,18 @@ export function scheduleToCron(schedule: TimeBasedSchedule): string {
   return simpleScheduleToCron(schedule);
 }
 
-export function describeSchedule(schedule: JobSchedule): string {
+/** "A", "A and B", "A, B and C". */
+function listNames(names: string[]): string {
+  if (names.length <= 1) return names.join("");
+  return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+}
+
+/** `jobName` turns a job id into its name for an afterJobs schedule; without
+ *  one, or for a job it does not know, the id stands in. */
+export function describeSchedule(schedule: JobSchedule, jobName?: (id: string) => string | undefined): string {
+  if (schedule.type === "afterJobs") {
+    return `After ${listNames(schedule.jobIds.map((id) => jobName?.(id) ?? id))}`;
+  }
   if (schedule.type === "onIssueStatus") {
     return schedule.project ? `On issue → ${schedule.status} (project: ${schedule.project})` : `On issue → ${schedule.status}`;
   }
@@ -188,14 +200,19 @@ export function getJobSchedules(job: { schedules: JobSchedule[] }): JobSchedule[
   return job.schedules;
 }
 
-export function describeAllSchedules(schedules: JobSchedule[]): string {
-  return schedules.map(describeSchedule).join("; ");
+export function describeAllSchedules(schedules: JobSchedule[], jobName?: (id: string) => string | undefined): string {
+  return schedules.map((s) => describeSchedule(s, jobName)).join("; ");
+}
+
+/** Narrows to the schedules with a clock form, the ones cron math applies to. */
+export function isTimeBasedSchedule(schedule: JobSchedule): schedule is TimeBasedSchedule {
+  return schedule.type === "simple" || schedule.type === "cron";
 }
 
 export function getNextRunTimeAny(schedules: JobSchedule[], after: Date): Date {
   let earliest: Date | null = null;
   for (const s of schedules) {
-    if (s.type === "onIssueStatus") continue; // no cron form; see TimeBasedSchedule
+    if (!isTimeBasedSchedule(s)) continue; // event-driven, no cron form; see TimeBasedSchedule
     const next = getNextRunTime(s, after);
     if (!earliest || next.getTime() < earliest.getTime()) {
       earliest = new Date(next.getTime());
@@ -213,5 +230,5 @@ export function getNextRunTimeAny(schedules: JobSchedule[], after: Date): Date {
  * status change".
  */
 export function hasTimeBasedSchedule(schedules: JobSchedule[]): boolean {
-  return schedules.some((s) => s.type !== "onIssueStatus");
+  return schedules.some(isTimeBasedSchedule);
 }

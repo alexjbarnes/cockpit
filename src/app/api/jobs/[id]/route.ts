@@ -42,7 +42,12 @@ export function PUT(req: NextRequest, { params }: { params: Promise<{ id: string
       updatedAt: Date.now(),
     };
 
-    saveJob(updated);
+    try {
+      saveJob(updated);
+    } catch (err) {
+      // saveJob is where schedules are validated; say what was wrong.
+      return NextResponse.json({ error: err instanceof Error ? err.message : String(err) }, { status: 400 });
+    }
     getJobScheduler()?.reloadJobs();
 
     return NextResponse.json({ job: updated });

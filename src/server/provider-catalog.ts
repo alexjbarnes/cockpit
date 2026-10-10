@@ -114,6 +114,10 @@ export function mapOpenRouterModel(raw: OpenRouterRawModel): ProviderModel | nul
   if (!(raw.supported_parameters ?? []).includes("tools")) return null;
   const prompt = Number(raw.pricing?.prompt ?? 0);
   const completion = Number(raw.pricing?.completion ?? 0);
+  // What the upstream charges for a prompt token it served from its cache:
+  // much less than the input rate, and the reason a spend estimate that bills
+  // every prompt token at the input rate reads high.
+  const cacheRead = Number(raw.pricing?.input_cache_read ?? 0);
   // Zero prompt/completion alone is not "free": media-output models bill on
   // audio/image generation (sometimes without exposing it in this pricing
   // map), and "openrouter/*" ids are meta-routers with no price of their own.
@@ -136,7 +140,13 @@ export function mapOpenRouterModel(raw: OpenRouterRawModel): ProviderModel | nul
     effortLevels,
     contextSizes: [],
     contextLength: raw.context_length,
-    pricing: { inPerM: prompt * PER_TOKEN_TO_PER_M, outPerM: completion * PER_TOKEN_TO_PER_M },
+    // Absent rather than zero when the catalog does not declare one, so a
+    // consumer falls back to the input rate instead of reading a free cache.
+    pricing: {
+      inPerM: prompt * PER_TOKEN_TO_PER_M,
+      outPerM: completion * PER_TOKEN_TO_PER_M,
+      cacheReadPerM: cacheRead ? cacheRead * PER_TOKEN_TO_PER_M : undefined,
+    },
     free,
     supportsTools: params.includes("tools"),
     supportsReasoning: params.includes("reasoning"),
@@ -259,11 +269,16 @@ export async function getOpenRouterUsage(): Promise<OpenRouterUsage | null> {
 
 // Built-ins whose synced model list lives on their providers.json entry
 // (ids inlined — providers.ts imports this module, so no import back).
-const ENTRY_BACKED_BUILTINS: Record<string, string> = { zen: "OpenCode Zen", "zen-go": "OpenCode Go", deepseek: "DeepSeek" };
+const ENTRY_BACKED_BUILTINS: Record<string, string> = {
+  zen: "OpenCode Zen",
+  "zen-go": "OpenCode Go",
+  deepseek: "DeepSeek",
+  commandcode: "CommandCode",
+};
 
 /** W6j: a job on a catalog-backed model that is missing from the catalog must
  *  fail before the CLI spawns. Judges openrouter-qualified ids against the
- *  synced catalog and zen/zen-go/deepseek ids against their stored model
+ *  synced catalog and zen/zen-go/deepseek/commandcode ids against their stored model
  *  lists — and only once a list exists, so an unsynced install never fails
  *  jobs. */
 export function checkJobModel(model: string | undefined): { ok: true } | { ok: false; reason: string } {

@@ -2,9 +2,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { validateSession } from "@/server/auth";
 import { OPENROUTER_PROVIDER_ID, syncOpenRouterCatalog } from "@/server/provider-catalog";
 import {
+  COMMANDCODE_PROVIDER_ID,
   DEEPSEEK_PROVIDER_ID,
   OPENCODE_ZEN_GO_PROVIDER_ID,
   OPENCODE_ZEN_PROVIDER_ID,
+  syncCommandCodeModels,
   syncDeepSeekModels,
   syncGoModels,
   syncZenModels,
@@ -35,6 +37,11 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   }
   if (id === DEEPSEEK_PROVIDER_ID) {
     const result = await syncDeepSeekModels();
+    if (!result.ok) return NextResponse.json({ error: result.error }, { status: 502 });
+    return NextResponse.json({ ok: true, modelCount: result.modelCount });
+  }
+  if (id === COMMANDCODE_PROVIDER_ID) {
+    const result = await syncCommandCodeModels();
     if (!result.ok) return NextResponse.json({ error: result.error }, { status: 502 });
     return NextResponse.json({ ok: true, modelCount: result.modelCount });
   }

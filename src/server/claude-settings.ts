@@ -202,7 +202,15 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
  */
 function buildSessionSandboxBlock(sandbox: SandboxConfig | undefined): Record<string, unknown> {
   const enabled = sandbox?.enabled === true;
-  const block: Record<string, unknown> = { enabled, filesystem: { denyRead: [getCockpitDir()] } };
+  const filesystem: Record<string, unknown> = { denyRead: [getCockpitDir()] };
+  // A job's storage folder sits inside the denied directory. A narrower allow
+  // beats the wider deny, so the job's shell can keep state between runs while
+  // the rest of cockpit's directory, and every other job's folder, stay closed.
+  if (enabled && sandbox?.jobStorageDir) {
+    filesystem.allowRead = [sandbox.jobStorageDir];
+    filesystem.allowWrite = [sandbox.jobStorageDir];
+  }
+  const block: Record<string, unknown> = { enabled, filesystem };
   if (enabled && sandbox?.allowedDomains?.length) block.network = { allowedDomains: sandbox.allowedDomains };
   return block;
 }

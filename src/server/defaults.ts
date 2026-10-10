@@ -37,6 +37,13 @@ export interface AppDefaults {
    */
   issuesEnabled: boolean;
   /**
+   * Open the sidebar footer's pages (jobs, inbox, issues, settings) in a modal
+   * over the current page instead of navigating away from it. On by default;
+   * turning it off restores navigating to the page itself. See
+   * src/lib/page-modal.ts.
+   */
+  modalPagesEnabled: boolean;
+  /**
    * Opt in to Sonnet 4.6's 1M context window. Off by default because it needs
    * usage credits (claude.ai/settings/usage) and silently runs at 200K without
    * them. When on, cockpit requests 1M for Sonnet 4.6 and surfaces the credits
@@ -66,6 +73,7 @@ const fallback: AppDefaults = {
   messageStitching: true,
   reviewsEnabled: true,
   issuesEnabled: false,
+  modalPagesEnabled: true,
   allowSonnet1m: false,
 };
 

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { validateSession } from "@/server/auth";
 import {
+  COMMANDCODE_PROVIDER_ID,
   DEEPSEEK_PROVIDER_ID,
   type DeepSeekBalance,
   getDeepSeekBalance,
@@ -15,14 +16,19 @@ function checkAuth(req: NextRequest): boolean {
   return !!token && validateSession(token);
 }
 
-/** Usage for built-ins without a spend API. Zen and Go sessions run through
- *  the format proxy, so spend is metered locally; DeepSeek adds the account
- *  balance from their /user/balance endpoint. OpenRouter has its own literal
- *  route (their key API reports spend server-side). */
+/** Usage for built-ins without a spend API. Zen, Go and CommandCode sessions
+ *  run through the format proxy, so spend is metered locally; DeepSeek adds the
+ *  account balance from their /user/balance endpoint. OpenRouter has its own
+ *  literal route (their key API reports spend server-side). */
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   if (!checkAuth(req)) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   const { id } = await params;
-  if (id !== OPENCODE_ZEN_PROVIDER_ID && id !== OPENCODE_ZEN_GO_PROVIDER_ID && id !== DEEPSEEK_PROVIDER_ID) {
+  if (
+    id !== OPENCODE_ZEN_PROVIDER_ID &&
+    id !== OPENCODE_ZEN_GO_PROVIDER_ID &&
+    id !== DEEPSEEK_PROVIDER_ID &&
+    id !== COMMANDCODE_PROVIDER_ID
+  ) {
     return NextResponse.json({ error: "No usage source for this provider" }, { status: 404 });
   }
   const provider = getProvider(id);

@@ -11,6 +11,5 @@ export const slashCommands: SlashCommand[] = [
   { command: "/model", description: "Show or switch model" },
   { command: "/rename", description: "Rename this session" },
   { command: "/commit", description: "Commit changes" },
-  { command: "/review", description: "Review code changes" },
   { command: "/help", description: "Show available commands" },
 ];

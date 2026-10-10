@@ -86,6 +86,35 @@ export async function listMarketplaces(): Promise<Marketplace[]> {
   return JSON.parse(res.stdout) as Marketplace[];
 }
 
+/** Installed plugins only. `list` without `--available` is a bare array and skips the catalog fetch. */
+export async function listInstalledPlugins(): Promise<InstalledPlugin[]> {
+  const res = await runClaudePlugin(["list", "--json"]);
+  if (!res.ok) throw new Error(res.stderr);
+  return JSON.parse(res.stdout) as InstalledPlugin[];
+}
+
+export interface PluginUpdateResult {
+  id: string;
+  ok: boolean;
+  /** Whatever the CLI said, so the summary can report a failure's reason. */
+  message: string;
+}
+
+/**
+ * Update every installed plugin, one at a time. Each update fetches from its
+ * marketplace source, so running them together would put several git fetches on
+ * the same working tree at once.
+ */
+export async function updateAllPlugins(ids?: string[]): Promise<PluginUpdateResult[]> {
+  const targets = ids ?? (await listInstalledPlugins()).map((p) => p.id);
+  const results: PluginUpdateResult[] = [];
+  for (const id of targets) {
+    const res = await updatePlugin(id);
+    results.push({ id, ok: res.ok, message: (res.ok ? res.stdout : res.stderr).trim() });
+  }
+  return results;
+}
+
 /** Enable or disable an installed plugin. Scope defaults to the CLI's auto-detect. */
 export async function setPluginEnabled(id: string, enabled: boolean, scope?: PluginScope): Promise<PluginCommandResult> {
   const args = [enabled ? "enable" : "disable", id];

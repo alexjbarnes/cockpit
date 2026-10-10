@@ -109,7 +109,13 @@ describe("providers", () => {
     vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(zenEntry));
 
     const upstream = resolveProxyUpstream("zen");
-    expect(upstream).toEqual({ baseUrl: "https://opencode.ai/zen/v1", apiKey: "zk-1", modelIds: ["opencode/gpt-5.5"], effortByModel: {} });
+    expect(upstream).toEqual({
+      baseUrl: "https://opencode.ai/zen/v1",
+      apiKey: "zk-1",
+      modelIds: ["opencode/gpt-5.5"],
+      effortByModel: {},
+      supportsImageInputByModel: {},
+    });
 
     const updated = updateProvider("zen", { enabledModels: [] });
     expect(updated.id).toBe("zen");
@@ -118,6 +124,30 @@ describe("providers", () => {
     expect(updated.envVars.ANTHROPIC_BASE_URL).toBeUndefined();
 
     expect(() => deleteProvider("zen")).toThrow(/built-in/);
+  });
+
+  it("marks a model that cannot take images on the proxy upstream", async () => {
+    const fs = await import("node:fs");
+    const { resolveProxyUpstream } = await import("@/server/providers");
+    vi.mocked(fs.readFileSync).mockReturnValue(
+      JSON.stringify([
+        {
+          id: "zen",
+          name: "OpenCode Zen",
+          isBuiltin: true,
+          envVars: { OPENCODE_API_KEY: "zk-1" },
+          models: [
+            { modelId: "text-only/model", displayName: "text-only/model", supportsImageInput: false, contextSizes: [] },
+            { modelId: "sees/model", displayName: "sees/model", supportsImageInput: true, contextSizes: [] },
+          ],
+          enabledModels: [],
+        },
+      ]),
+    );
+
+    // Only the false is listed, so a model whose capability is unknown keeps
+    // being sent images the way it always was.
+    expect(resolveProxyUpstream("zen")?.supportsImageInputByModel).toEqual({ "text-only/model": false });
   });
 
   it("syncZenModels stores models, enables all on first connect, and stamps syncedAt", async () => {
@@ -266,6 +296,7 @@ describe("providers", () => {
       apiKey: "zgk-1",
       modelIds: ["grok-code-fast-2"],
       effortByModel: {},
+      supportsImageInputByModel: {},
     });
 
     const updated = updateProvider("zen-go", { enabledModels: [] });
@@ -296,7 +327,7 @@ describe("providers", () => {
                 models: {
                   "grok-code-fast-2": {
                     name: "Grok Code Fast 2",
-                    cost: { input: 0.2, output: 1.5 },
+                    cost: { input: 0.2, output: 1.5, cache_read: 0.02 },
                     limit: { context: 256000 },
                     tool_call: true,
                     reasoning: false,
@@ -333,7 +364,9 @@ describe("providers", () => {
     // enriched from models.dev's "opencode-go" key: pricing per M, raw context, capability flags
     expect(byId["grok-code-fast-2"]).toMatchObject({
       displayName: "Grok Code Fast 2",
-      pricing: { inPerM: 0.2, outPerM: 1.5 },
+      // cache_read rides along so the spend estimate prices cache hits at
+      // their own rate rather than the input rate
+      pricing: { inPerM: 0.2, outPerM: 1.5, cacheReadPerM: 0.02 },
       contextLength: 256000,
       free: false,
       supportsTools: true,
@@ -385,7 +418,7 @@ describe("providers", () => {
     vi.stubGlobal("fetch", vi.fn(async () => ({ ok: false, status: 503, json: async () => ({}) })) as unknown as typeof fetch);
 
     const { syncGoModels } = await import("@/server/providers");
-    expect(await syncGoModels("zgk-1")).toEqual({ ok: false, error: "OpenCode Go models fetch failed: HTTP 503" });
+    expect(await syncGoModels("zgk-1")).toEqual({ ok: false, error: "Could not reach OpenCode Go (HTTP 503)" });
     expect(fs.writeFileSync).not.toHaveBeenCalled();
     vi.unstubAllGlobals();
   });
@@ -398,7 +431,7 @@ describe("providers", () => {
     vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ data: [] }) })) as unknown as typeof fetch);
 
     const { syncGoModels } = await import("@/server/providers");
-    expect(await syncGoModels()).toEqual({ ok: false, error: "OpenCode Go models fetch returned no models" });
+    expect(await syncGoModels()).toEqual({ ok: false, error: "OpenCode Go returned an empty model list" });
     vi.unstubAllGlobals();
   });
 
@@ -497,7 +530,7 @@ describe("providers", () => {
     );
 
     const { syncDeepSeekModels } = await import("@/server/providers");
-    expect(await syncDeepSeekModels("bad-key")).toEqual({ ok: false, error: "DeepSeek rejected the API key" });
+    expect(await syncDeepSeekModels("bad-key")).toEqual({ ok: false, error: "DeepSeek rejected the API key", rejected: true });
 
     // Keyless: no live-list call is made, the models.dev catalog is the list,
     // and nothing gets enabled.
@@ -1033,5 +1066,83 @@ describe("providers", () => {
 
     expect(getProviders().find((p) => p.id === "p-b")).toBeDefined();
     expect(getProviders().find((p) => p.id === "p-a")).toBeUndefined();
+  });
+  // CommandCode serves two wires from one provider, and its catalog says per
+  // model which one: /messages for its Claude models, /chat/completions for
+  // everything else. The wire is stored on the model so the proxy can route.
+  describe("CommandCode's split catalog", () => {
+    const catalog = {
+      data: [
+        { id: "claude-sonnet-5-5", name: "Claude Sonnet 5.5", context_length: 1_000_000, supported_endpoints: ["/messages"] },
+        {
+          id: "deepseek/deepseek-v4-flash",
+          name: "DeepSeek V4 Flash",
+          context_length: 1_000_000,
+          supported_endpoints: ["/chat/completions", "/responses"],
+        },
+        { id: "poolside/laguna-s-2.1-free", name: "Laguna S 2.1", context_length: 256_000, supported_endpoints: ["/chat/completions"] },
+      ],
+    };
+
+    it("stores the wire each model is served on, and the free ones", async () => {
+      const fs = await import("node:fs");
+      vi.mocked(fs.readFileSync).mockImplementation(() => {
+        throw new Error("ENOENT");
+      });
+      vi.mocked(fs.writeFileSync).mockImplementation(() => {});
+      vi.mocked(fs.mkdirSync).mockImplementation(() => "");
+      vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, status: 200, json: async () => catalog })) as unknown as typeof fetch);
+
+      const { syncCommandCodeModels } = await import("@/server/providers");
+      expect(await syncCommandCodeModels("cnd-key")).toEqual({ ok: true, modelCount: 3 });
+
+      const written = JSON.parse(vi.mocked(fs.writeFileSync).mock.calls.at(-1)?.[1] as string);
+      const cc = written.find((p: { id: string }) => p.id === "commandcode");
+      expect(cc.name).toBe("CommandCode");
+      expect(cc.envVars.COMMANDCODE_API_KEY).toBe("cnd-key");
+      const byId = Object.fromEntries(cc.models.map((m: { modelId: string }) => [m.modelId, m]));
+      expect(byId["claude-sonnet-5-5"]).toMatchObject({ wire: "anthropic", displayName: "Claude Sonnet 5.5", contextLength: 1_000_000 });
+      expect(byId["deepseek/deepseek-v4-flash"]).toMatchObject({ wire: "openai" });
+      expect(byId["poolside/laguna-s-2.1-free"]).toMatchObject({ wire: "openai", free: true });
+      vi.unstubAllGlobals();
+    });
+
+    it("hands the proxy the models to relay, and the path they live at", async () => {
+      const fs = await import("node:fs");
+      vi.mocked(fs.readFileSync).mockImplementation(() => {
+        throw new Error("ENOENT");
+      });
+      vi.mocked(fs.writeFileSync).mockImplementation(() => {});
+      vi.mocked(fs.mkdirSync).mockImplementation(() => "");
+      vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, status: 200, json: async () => catalog })) as unknown as typeof fetch);
+
+      const { syncCommandCodeModels, resolveProxyUpstream } = await import("@/server/providers");
+      await syncCommandCodeModels("cnd-key");
+
+      // resolveProxyUpstream re-reads providers.json, so serve it the entry the
+      // sync just wrote rather than mocking the file twice.
+      const stored = JSON.parse(vi.mocked(fs.writeFileSync).mock.calls.at(-1)?.[1] as string);
+      vi.mocked(fs.readFileSync).mockImplementation(() => JSON.stringify(stored) as unknown as ReturnType<typeof fs.readFileSync>);
+
+      const upstream = resolveProxyUpstream("commandcode");
+      expect(upstream?.baseUrl).toBe("https://api.commandcode.ai/provider/v1");
+      expect(upstream?.apiKey).toBe("cnd-key");
+      expect(upstream?.anthropicWireModels, "only the /messages models are relayed").toEqual(["claude-sonnet-5-5"]);
+      expect(upstream?.anthropicMessagesPath, "the door is /messages, not the CLI's /v1/messages").toBe("/messages");
+      vi.unstubAllGlobals();
+    });
+
+    it("reports a non-OK catalog fetch without touching storage", async () => {
+      const fs = await import("node:fs");
+      vi.mocked(fs.readFileSync).mockImplementation(() => {
+        throw new Error("ENOENT");
+      });
+      vi.stubGlobal("fetch", vi.fn(async () => ({ ok: false, status: 502, json: async () => ({}) })) as unknown as typeof fetch);
+
+      const { syncCommandCodeModels } = await import("@/server/providers");
+      expect(await syncCommandCodeModels("cnd-key")).toEqual({ ok: false, error: "Could not reach CommandCode (HTTP 502)" });
+      expect(fs.writeFileSync).not.toHaveBeenCalled();
+      vi.unstubAllGlobals();
+    });
   });
 });

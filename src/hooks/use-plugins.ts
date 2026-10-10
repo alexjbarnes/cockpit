@@ -37,6 +37,18 @@ interface MutationResult {
   error?: string;
 }
 
+export interface PluginUpdateResult {
+  id: string;
+  ok: boolean;
+  message: string;
+}
+
+interface UpdateAllResult {
+  ok: boolean;
+  results?: PluginUpdateResult[];
+  error?: string;
+}
+
 async function mutate(input: RequestInfo, init: RequestInit): Promise<MutationResult> {
   try {
     const res = await fetch(input, init);
@@ -114,6 +126,22 @@ export function usePlugins() {
     [refresh],
   );
 
+  const updateAll = useCallback(async (): Promise<UpdateAllResult> => {
+    try {
+      const res = await fetch("/api/plugins", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "update-all" }),
+      });
+      const data = (await res.json().catch(() => ({}))) as { results?: PluginUpdateResult[]; error?: string };
+      if (!res.ok) return { ok: false, error: data.error || `Request failed (${res.status})` };
+      refresh();
+      return { ok: true, results: data.results ?? [] };
+    } catch {
+      return { ok: false, error: "Request failed" };
+    }
+  }, [refresh]);
+
   const install = useCallback(
     async (id: string, scope: PluginScope = "user"): Promise<MutationResult> => {
       const result = await mutate("/api/plugins/install", {
@@ -178,6 +206,7 @@ export function usePlugins() {
     setEnabled,
     uninstall,
     update,
+    updateAll,
     install,
     addMarketplace,
     removeMarketplace,

@@ -363,6 +363,58 @@ describe("saveJob: onIssueStatus schedule validation (phase 4, storage boundary)
   });
 });
 
+describe("saveJob: afterJobs schedules", () => {
+  const waitingOn = (...jobIds: string[]) => [{ type: "afterJobs" as const, jobIds }];
+
+  it("saves a job that waits on existing jobs", () => {
+    saveJob(makeJob("collect"));
+    saveJob(makeJob("fetch"));
+    saveJob(makeJob("report", { schedules: waitingOn("collect", "fetch") }));
+    expect(getJob("report")?.schedules).toEqual(waitingOn("collect", "fetch"));
+  });
+
+  it("rejects an empty list, a repeated job and a job that does not exist", () => {
+    saveJob(makeJob("collect"));
+    expect(() => saveJob(makeJob("report", { schedules: waitingOn() }))).toThrow(/non-empty list/);
+    expect(() => saveJob(makeJob("report", { schedules: waitingOn("collect", "collect") }))).toThrow(/more than once/);
+    expect(() => saveJob(makeJob("report", { schedules: waitingOn("ghost") }))).toThrow(/unknown job "ghost"/);
+    expect(getJob("report")).toBeUndefined();
+  });
+
+  it("rejects a job that waits on itself", () => {
+    expect(() => saveJob(makeJob("report", { schedules: waitingOn("report") }))).toThrow(/itself/);
+  });
+
+  it("rejects waiting that comes back round, however far", () => {
+    saveJob(makeJob("a"));
+    saveJob(makeJob("b", { schedules: waitingOn("a") }));
+    saveJob(makeJob("c", { schedules: waitingOn("b") }));
+    // a -> c -> b -> a
+    expect(() => saveJob(makeJob("a", { schedules: waitingOn("c") }))).toThrow(/loop/);
+    expect(getJob("a")?.schedules).toEqual([{ type: "simple", frequency: "daily" }]);
+  });
+
+  it("allows two jobs to wait on the same one", () => {
+    saveJob(makeJob("a"));
+    saveJob(makeJob("b", { schedules: waitingOn("a") }));
+    saveJob(makeJob("c", { schedules: waitingOn("a", "b") }));
+    expect(getJob("c")?.schedules).toEqual(waitingOn("a", "b"));
+  });
+
+  it("removes a deleted job from the jobs that waited on it", () => {
+    saveJob(makeJob("a"));
+    saveJob(makeJob("b"));
+    saveJob(makeJob("both", { schedules: waitingOn("a", "b") }));
+    saveJob(makeJob("only-a", { schedules: [{ type: "simple", frequency: "hourly" }, ...waitingOn("a")] }));
+
+    deleteJob("a");
+
+    expect(getJob("both")?.schedules).toEqual(waitingOn("b"));
+    // A schedule left waiting on nothing goes; the job's other schedules stay.
+    expect(getJob("only-a")?.schedules).toEqual([{ type: "simple", frequency: "hourly" }]);
+  });
+});
+
 describe("run CRUD", () => {
   it("returns [] when no runs file exists", () => {
     expect(loadRuns("a")).toEqual([]);

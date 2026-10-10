@@ -264,12 +264,13 @@ export function createWebSocketHandler(
       });
       if (unsubInit) cleanups.push(unsubInit);
 
-      const unsubQueued = sessionManager.onQueued(sessionId, (count, sentText) => {
+      const unsubQueued = sessionManager.onQueued(sessionId, (count, sentText, midTurn) => {
         send(ws, {
           type: "session:queued",
           sessionId,
           count,
           sentText: sentText ?? undefined,
+          midTurn: midTurn || undefined,
           messages: sessionManager.getQueuedMessages(sessionId),
           paused: sessionManager.isQueuePaused(sessionId),
         });
@@ -648,12 +649,13 @@ export function createWebSocketHandler(
           if (!sessionCleanups.has(msg.sessionId)) {
             subscribeSession(msg.sessionId);
           }
-          const sent = sessionManager.sendMessage(msg.sessionId, msg.text, msg.images, msg.documents);
+          const opts = { afterTurn: msg.afterTurn };
+          const sent = sessionManager.sendMessage(msg.sessionId, msg.text, msg.images, msg.documents, opts);
           if (!sent) {
             sessionManager.recoverSession(msg.sessionId, { cwd: msg.cwd, pinExact: msg.historyView }).then((recovered) => {
               if (recovered) {
                 subscribeSession(msg.sessionId);
-                sessionManager.sendMessage(msg.sessionId, msg.text, msg.images, msg.documents);
+                sessionManager.sendMessage(msg.sessionId, msg.text, msg.images, msg.documents, opts);
               } else {
                 send(ws, { type: "session:error", sessionId: msg.sessionId, error: "Session not found. Try refreshing the page." });
               }
@@ -863,7 +865,10 @@ export function createWebSocketHandler(
             if (unsubInfo) watchCleanups.push(unsubInfo);
 
             const cwd = sessionManager.getSessionCwd(id);
-            if (cwd && !watchedCwds.has(cwd)) {
+            // A cockpit-agent session lives in the cockpit dir itself, where
+            // debug.jsonl, job runs and inbox writes land constantly; a
+            // recursive watch there would fire fs_changed for every write.
+            if (cwd && !watchedCwds.has(cwd) && !sessionManager.isCockpitAgentSession(id)) {
               watchedCwds.add(cwd);
               watchCleanups.push(
                 watchCwd(cwd, () => {

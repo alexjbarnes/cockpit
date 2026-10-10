@@ -1,8 +1,10 @@
 "use client";
 
-import { Menu, Terminal } from "lucide-react";
+import { Menu, Terminal, X } from "lucide-react";
 import Image from "next/image";
+import { usePathname } from "next/navigation";
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useRef, useState } from "react";
+import { AgentTranscriptProvider } from "@/components/agent-transcript-modal";
 import { AuthGuard } from "@/components/auth-guard";
 import { SearchButton } from "@/components/search-modal";
 import { Sidebar, type SidebarHandle } from "@/components/sidebar";
@@ -10,8 +12,10 @@ import { BackgroundTasksButton } from "@/components/task-indicator";
 import { TodoIndicator } from "@/components/todo-indicator";
 import { Button } from "@/components/ui/button";
 import { UsageButton } from "@/components/usage-modal";
+import { useEmbedded } from "@/hooks/use-embedded";
 import { WebSocketProvider } from "@/hooks/use-websocket";
 import { headerActionsVisibility } from "@/lib/header-actions";
+import { isModalPath, type PageModalMessage, pageModalMessage } from "@/lib/page-modal";
 import type { BackgroundTask, InitData, TodoItem } from "@/types";
 
 export interface SidebarSectionConfig {
@@ -203,8 +207,37 @@ function NewTerminalButton({ cwd }: { cwd: string }) {
   );
 }
 
+function postToParent(msg: PageModalMessage): void {
+  window.parent.postMessage(pageModalMessage(msg), window.location.origin);
+}
+
+/** The embedded document's side of the page modal. */
+function EmbeddedPageBridge({ pathname }: { pathname: string }) {
+  useEffect(() => {
+    // A navigation inside the modal replaces its history entry rather than
+    // adding one, so the device's Back closes the modal instead of stepping
+    // through pages the window outside never shows.
+    const push = window.history.pushState;
+    window.history.pushState = function pushState(data, unused, url) {
+      return window.history.replaceState(data, unused, url);
+    };
+    postToParent({ type: "ready" });
+    return () => {
+      window.history.pushState = push;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isModalPath(pathname)) postToParent({ type: "open-in-app", url: pathname + window.location.search });
+  }, [pathname]);
+
+  return null;
+}
+
 export function AppShell({ children }: { children: ReactNode }) {
   const sidebarRef = useRef<SidebarHandle>(null);
+  const embedded = useEmbedded();
+  const pathname = usePathname();
   const [header, setHeaderState] = useState<HeaderConfig>({ title: "Cockpit" });
   const [cwd, setCwdState] = useState<string | undefined>(undefined);
   const [sessionId, setSessionIdState] = useState<string | undefined>(undefined);
@@ -306,34 +339,52 @@ export function AppShell({ children }: { children: ReactNode }) {
             setTabActions,
           }}
         >
-          <div className="fixed inset-0 flex">
-            <Sidebar ref={sidebarRef} />
-            <div className="flex-1 min-h-0 min-w-0 flex flex-col">
-              <header className="shrink-0 flex items-center gap-2 border-b px-4 py-2 bg-background">
-                <Button variant="ghost" size="icon" onClick={toggleSidebar} title="Toggle sidebar (Ctrl+B)" className="md:hidden">
-                  <Menu className="h-4 w-4" />
-                </Button>
-                <div className="hidden md:flex items-center gap-2 min-w-0 flex-1 overflow-hidden">
-                  <Image src="/icon-192.png" alt="" width={22} height={22} className="shrink-0 dark:invert" />
-                  <EditableTitle title={header.title} onRename={header.onRename} />
-                </div>
-                {(actions.showSessionActions || actions.showUsage) && (
-                  <div className="flex items-center gap-2 shrink-0 ml-auto">
-                    {actions.showSessionActions && (
-                      <>
-                        {cwd && <NewTerminalButton cwd={cwd} />}
-                        <SearchButton />
-                        {cwd && <TodoIndicator todos={todos} />}
-                        {cwd && <BackgroundTasksButton tasks={backgroundTasks} />}
-                      </>
-                    )}
-                    {actions.showUsage && <UsageButton sessionModel={sessionModel} />}
+          <AgentTranscriptProvider sessionId={sessionId} cwd={cwd}>
+            <div className="fixed inset-0 flex">
+              {!embedded && <Sidebar ref={sidebarRef} />}
+              <div className="flex-1 min-h-0 min-w-0 flex flex-col">
+                <header className="shrink-0 flex items-center gap-2 border-b px-4 py-2 bg-background">
+                  {!embedded && (
+                    <Button variant="ghost" size="icon" onClick={toggleSidebar} title="Toggle sidebar (Ctrl+B)" className="md:hidden">
+                      <Menu className="h-4 w-4" />
+                    </Button>
+                  )}
+                  <div className={`${embedded ? "flex" : "hidden md:flex"} items-center gap-2 min-w-0 flex-1 overflow-hidden`}>
+                    {!embedded && <Image src="/icon-192.png" alt="" width={22} height={22} className="shrink-0 dark:invert" />}
+                    <EditableTitle title={header.title} onRename={header.onRename} />
                   </div>
-                )}
-              </header>
-              <main className="flex-1 min-h-0 min-w-0 flex flex-col">{children}</main>
+                  {(actions.showSessionActions || actions.showUsage) && (
+                    <div className="flex items-center gap-2 shrink-0 ml-auto">
+                      {actions.showSessionActions && (
+                        <>
+                          {cwd && <NewTerminalButton cwd={cwd} />}
+                          <SearchButton />
+                          {cwd && <TodoIndicator todos={todos} />}
+                          {cwd && <BackgroundTasksButton tasks={backgroundTasks} />}
+                        </>
+                      )}
+                      {actions.showUsage && <UsageButton sessionModel={sessionModel} />}
+                    </div>
+                  )}
+                  {embedded && (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => postToParent({ type: "close" })}
+                      title="Close"
+                      className="shrink-0"
+                      data-testid="page-modal-close"
+                    >
+                      <X className="h-4 w-4" />
+                    </Button>
+                  )}
+                </header>
+                {/* A page the modal does not show is opened outside instead, so it is never rendered in here. */}
+                <main className="flex-1 min-h-0 min-w-0 flex flex-col">{embedded && !isModalPath(pathname) ? null : children}</main>
+              </div>
             </div>
-          </div>
+            {embedded && <EmbeddedPageBridge pathname={pathname} />}
+          </AgentTranscriptProvider>
         </ShellContext.Provider>
       </WebSocketProvider>
     </AuthGuard>

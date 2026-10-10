@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { validateSession } from "@/server/auth";
-import { listMarketplaces, listPlugins } from "@/server/plugins";
+import { listMarketplaces, listPlugins, updateAllPlugins } from "@/server/plugins";
 
 function authenticate(req: NextRequest): boolean {
   const token = req.cookies.get("cockpit_session")?.value || req.headers.get("authorization")?.replace("Bearer ", "");
@@ -15,6 +15,24 @@ export async function GET(req: NextRequest) {
   try {
     const [plugins, marketplaces] = await Promise.all([listPlugins(), listMarketplaces()]);
     return NextResponse.json({ ...plugins, marketplaces });
+  } catch (err) {
+    return NextResponse.json({ error: (err as Error).message }, { status: 500 });
+  }
+}
+
+export async function POST(req: NextRequest) {
+  if (!authenticate(req)) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const body = (await req.json().catch(() => ({}))) as { action?: string; plugins?: string[] };
+  if (body.action !== "update-all") {
+    return NextResponse.json({ error: `Unknown action: ${body.action ?? "(none)"}` }, { status: 400 });
+  }
+
+  try {
+    const results = await updateAllPlugins(body.plugins);
+    return NextResponse.json({ results });
   } catch (err) {
     return NextResponse.json({ error: (err as Error).message }, { status: 500 });
   }

@@ -10,6 +10,13 @@ import type { ChatMessage, InitData, ToolUse } from "@/types";
  */
 export const ONE_M_CREDITS_REQUIRED = "__1m_credits_required__";
 
+/**
+ * Sent by pty-runtime with a Stop after which the CLI goes straight on to a
+ * message still in its own queue (one typed mid-turn that the turn never
+ * reached a tool result for). The turn has ended; the session is still working.
+ */
+export const TURN_CONTINUES = "__turn_continues";
+
 export interface ParsedEvent {
   type:
     | "text_delta"

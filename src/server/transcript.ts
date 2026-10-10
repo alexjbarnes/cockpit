@@ -1,4 +1,4 @@
-import { createReadStream, existsSync, readdirSync, readFileSync } from "node:fs";
+import { closeSync, createReadStream, existsSync, fstatSync, openSync, readdirSync, readFileSync, readSync, statSync } from "node:fs";
 import { open, readdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { createInterface } from "node:readline";
@@ -14,8 +14,10 @@ import type {
   ImageAttachment,
   SessionGroup,
   SessionInfo,
+  ThinkingLevel,
   ToolUse,
 } from "@/types";
+import { THINKING_LEVELS } from "@/types";
 import { debugLog } from "./debug-logger";
 import { getSessionPrefs } from "./session-prefs";
 
@@ -47,6 +49,10 @@ interface TranscriptEntry {
     model?: string;
     usage?: { output_tokens?: number };
   };
+  /** An "attachment" entry's payload, such as a queued_command (see humanQueuedPrompt). */
+  attachment?: QueuedCommandAttachment;
+  /** A "queue-operation" entry's operation: enqueue, remove or dequeue. */
+  operation?: string;
   parentToolUseID?: string;
   data?: {
     message?: {
@@ -57,6 +63,144 @@ interface TranscriptEntry {
       };
     };
   };
+}
+
+interface QueuedCommandAttachment {
+  type?: string;
+  prompt?: unknown;
+  commandMode?: string;
+  origin?: { kind?: string };
+}
+
+/**
+ * The text of a message the user sent while Claude was working, or null for
+ * any other attachment.
+ *
+ * The CLI holds a message typed mid-turn in its own queue and hands it to the
+ * model with the next tool result. It records the handover as an attachment of
+ * type queued_command, placed where the message was read, and writes no user
+ * entry for it. The same attachment type carries the CLI's own background-task
+ * notices, which have a different commandMode and are not the user's words.
+ */
+function humanQueuedPrompt(attachment: QueuedCommandAttachment | undefined): string | null {
+  if (attachment?.type !== "queued_command" || attachment.commandMode !== "prompt") return null;
+  if (typeof attachment.prompt !== "string") return null;
+  if (attachment.origin?.kind && attachment.origin.kind !== "human") return null;
+  return attachment.prompt;
+}
+
+// biome-ignore lint/suspicious/noControlCharactersInRegex: a stray NAK from the clear-line write must not defeat the match
+const CONTROL_OR_WHITESPACE = /[\x00-\x1f\s]+/g;
+
+/**
+ * A message's text reduced to what survives the CLI's handling of it, for
+ * telling whether a message cockpit typed is the one a transcript entry holds.
+ * The CLI may wrap a paste in <pasted_content> tags, and a stray control byte
+ * from the clear-line keystroke can land ahead of the text.
+ */
+export function promptMatchKey(text: string): string {
+  return unwrapPastedContent(text).replace(CONTROL_OR_WHITESPACE, " ").trim();
+}
+
+function userEntryText(content: unknown): string | null {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return null;
+  if (content.some((b) => b?.type === "tool_result")) return null;
+  const text = content
+    .filter((b) => b?.type === "text" && typeof b.text === "string")
+    .map((b) => b.text)
+    .join("\n");
+  return text || null;
+}
+
+/** The user's messages in part of a transcript, each as its promptMatchKey. */
+export interface TranscriptPrompts {
+  /** Put in the CLI's queue: it logs an enqueue the moment a message typed
+   *  mid-turn is submitted. */
+  queued: string[];
+  /** Handed to the model inside a turn already under way (queued_command). */
+  absorbed: string[];
+  /** Prompts that opened a turn of their own. */
+  opened: string[];
+}
+
+function collectPrompts(line: string, prompts: TranscriptPrompts): void {
+  if (!line.includes('"user"') && !line.includes('"queued_command"') && !line.includes('"queue-operation"')) return;
+  let entry: TranscriptEntry;
+  try {
+    entry = JSON.parse(line);
+  } catch {
+    return;
+  }
+  if (entry.type === "queue-operation") {
+    if (entry.operation === "enqueue" && typeof entry.content === "string") prompts.queued.push(promptMatchKey(entry.content));
+  } else if (entry.type === "attachment") {
+    const text = humanQueuedPrompt(entry.attachment);
+    if (text) prompts.absorbed.push(promptMatchKey(text));
+  } else if (entry.type === "user" && !entry.isMeta) {
+    const text = userEntryText(entry.message?.content);
+    if (text) prompts.opened.push(promptMatchKey(text));
+  }
+}
+
+/**
+ * Follows a session's transcript forward from where the file ends when it is
+ * made, picking out the user's messages in whatever has been added since the
+ * last look.
+ *
+ * Forward from an offset rather than a tail, because every request the CLI
+ * makes logs its whole prompt as one line of some 200KB: a tail of any fixed
+ * size holds little more than the latest of those. Synchronous, for use from
+ * hook handlers.
+ */
+export class TranscriptPromptFollower {
+  private offset: number;
+  private partial: Buffer = Buffer.alloc(0);
+
+  constructor(
+    private readonly sessionId: string,
+    private readonly cwd: string,
+  ) {
+    let size = 0;
+    try {
+      size = statSync(getTranscriptPath(sessionId, cwd)).size;
+    } catch {
+      // no transcript yet: follow it from its first line
+    }
+    this.offset = size;
+  }
+
+  readNew(): TranscriptPrompts {
+    const prompts: TranscriptPrompts = { queued: [], absorbed: [], opened: [] };
+    let fd: number;
+    try {
+      fd = openSync(getTranscriptPath(this.sessionId, this.cwd), "r");
+    } catch {
+      return prompts;
+    }
+    try {
+      const size = fstatSync(fd).size;
+      // Shorter than what was read means a different file: start it afresh.
+      if (size < this.offset) {
+        this.offset = 0;
+        this.partial = Buffer.alloc(0);
+      }
+      if (size === this.offset) return prompts;
+      const added = Buffer.alloc(size - this.offset);
+      readSync(fd, added, 0, added.length, this.offset);
+      this.offset = size;
+      const chunk = this.partial.length > 0 ? Buffer.concat([this.partial, added]) : added;
+      // Only whole lines are read. A newline byte never occurs inside a UTF-8
+      // sequence, so splitting the bytes there cannot cut a character in two.
+      const end = chunk.lastIndexOf(0x0a);
+      this.partial = Buffer.from(chunk.subarray(end + 1));
+      if (end === -1) return prompts;
+      for (const line of chunk.subarray(0, end).toString("utf8").split("\n")) collectPrompts(line, prompts);
+      return prompts;
+    } finally {
+      closeSync(fd);
+    }
+  }
 }
 
 function projectTranscriptPath(sessionId: string, cwd: string): string {
@@ -403,6 +547,15 @@ function pushBlockCoalescingThinking(target: ContentBlock[], block: ContentBlock
   target.push(block);
 }
 
+/** The level this turn ran at. The CLI records it per assistant entry as
+ *  perTurnEffort, which is the only place the level is written down: nothing in
+ *  the session's own settings says what a subagent was launched with, since an
+ *  agent inherits the session's level unless the launch overrode it. */
+function effortOf(entry: TranscriptEntry): ThinkingLevel | undefined {
+  const value = (entry as unknown as Record<string, unknown>).perTurnEffort;
+  return typeof value === "string" && THINKING_LEVELS.includes(value as ThinkingLevel) ? (value as ThinkingLevel) : undefined;
+}
+
 function parseLines(lines: string[]): { messages: ChatMessage[]; lastUsage: { used: number; total: number } | null } {
   const messages: ChatMessage[] = [];
   const messageById = new Map<string, ChatMessage>();
@@ -477,6 +630,8 @@ function parseLines(lines: string[]): { messages: ChatMessage[]; lastUsage: { us
           const tool = toolUseMap.get(tr.tool_use_id || "");
           if (tool) {
             tool.output = extractOutput(tr);
+            const images = extractToolImages(tr);
+            if (images.length > 0) tool.images = images;
             tool.status = "done";
           }
         }
@@ -487,6 +642,26 @@ function parseLines(lines: string[]): { messages: ChatMessage[]; lastUsage: { us
 
     // Skip meta messages (slash command caveats, etc.)
     if (entry.isMeta) continue;
+
+    if (entry.type === "attachment") {
+      const prompt = humanQueuedPrompt(entry.attachment);
+      if (prompt === null) continue;
+      const { cleaned, textFiles } = extractTextFiles(stripCommandXml(prompt));
+      const id = entry.uuid || uuidv4();
+      if ((cleaned || textFiles.length > 0) && !seenUserIds.has(id)) {
+        seenUserIds.add(id);
+        messages.push({
+          id,
+          role: "user",
+          content: cleaned,
+          toolUses: [],
+          blocks: [],
+          timestamp: entry.timestamp ? new Date(entry.timestamp).getTime() : Date.now(),
+          textFiles: textFiles.length > 0 ? textFiles : undefined,
+        });
+      }
+      continue;
+    }
 
     if (entry.type === "system" && entry.subtype === "local_command" && entry.content) {
       const rawContent = entry.content as string;
@@ -558,6 +733,8 @@ function parseLines(lines: string[]): { messages: ChatMessage[]; lastUsage: { us
           const tool = toolUseMap.get(toolId);
           if (tool) {
             tool.output = extractOutput(tr);
+            const images = extractToolImages(tr);
+            if (images.length > 0) tool.images = images;
             tool.status = "done";
           }
         }
@@ -676,6 +853,7 @@ function parseLines(lines: string[]): { messages: ChatMessage[]; lastUsage: { us
           blocks,
           timestamp: entry.timestamp ? new Date(entry.timestamp).getTime() : Date.now(),
           model: typeof entry.message.model === "string" ? entry.message.model : undefined,
+          effort: effortOf(entry),
         };
         messages.push(msg);
         messageById.set(msgId, msg);
@@ -772,14 +950,15 @@ const promptCache = new Map<string, PromptCacheEntry>();
  *  line is not a recallable prompt (tool results, slash commands, compaction
  *  headers, system reminders). */
 function promptFromLine(line: string): string | null {
-  let entry: { type?: string; message?: { content?: unknown } };
+  let entry: { type?: string; message?: { content?: unknown }; attachment?: QueuedCommandAttachment };
   try {
     entry = JSON.parse(line);
   } catch {
     return null;
   }
-  if (entry.type !== "user" || !entry.message) return null;
-  const content = entry.message.content;
+  const queued = entry.type === "attachment" ? humanQueuedPrompt(entry.attachment) : null;
+  if (queued === null && (entry.type !== "user" || !entry.message)) return null;
+  const content = queued ?? entry.message?.content;
 
   let text = "";
   if (typeof content === "string") {
@@ -894,6 +1073,21 @@ function extractOutput(block: TranscriptBlock): string {
       .join("\n");
   }
   return "";
+}
+
+/** The images a tool returned. A Read of a screenshot answers with a picture
+ *  rather than text, which extractOutput cannot carry, so the card shows them. */
+function extractToolImages(block: TranscriptBlock): ImageAttachment[] {
+  if (!Array.isArray(block.content)) return [];
+  const images: ImageAttachment[] = [];
+  for (const b of block.content) {
+    if (typeof b === "string" || b.type !== "image") continue;
+    const mediaType = b.source?.media_type;
+    const data = b.source?.data;
+    if (!mediaType || !data) continue;
+    images.push({ mediaType: mediaType as ImageAttachment["mediaType"], data });
+  }
+  return images;
 }
 
 interface SessionMeta {

@@ -130,6 +130,7 @@ function OpenRouterUsagePanel() {
 interface MeteredWindow {
   inputTokens: number;
   outputTokens: number;
+  cacheReadTokens: number;
   requests: number;
   costUSD: number;
 }
@@ -183,16 +184,19 @@ function BuiltinUsagePanel({ providerId }: { providerId: string }) {
         </>
       )}
       {data.balanceError && <p className="text-xs text-destructive mb-2">Balance unavailable: {data.balanceError}</p>}
-      {(providerId === "zen" || providerId === "zen-go") && (
+      {(providerId === "zen" || providerId === "zen-go" || providerId === "commandcode") && (
         <>
           <CreditRow label="Spend today (est.)" value={formatUSD(data.spend.today.costUSD)} />
           <CreditRow label="Spend this week (est.)" value={formatUSD(data.spend.week.costUSD)} />
           <CreditRow label="Spend this month (est.)" value={formatUSD(data.spend.month.costUSD)} />
           <CreditRow label="Requests this week" value={String(data.spend.week.requests)} />
+          <CreditRow label="Cache reads this week" value={`${Math.round(data.spend.week.cacheReadTokens / 1000).toLocaleString()}k`} />
           <p className="mt-3 text-xs text-muted-foreground">
             {providerId === "zen"
               ? "Metered by cockpit from proxied sessions at current model prices. Billing lives in your opencode.ai workspace console."
-              : "Metered by cockpit from proxied sessions at current model prices. Go has no spend API — its real limits are dollar-based (5-hour, weekly, and monthly caps), viewable only in your opencode.ai workspace console."}
+              : providerId === "zen-go"
+                ? "Metered by cockpit from proxied sessions at current model prices. Go has no spend API — its real limits are dollar-based (5-hour, weekly, and monthly caps), viewable only in your opencode.ai workspace console."
+                : "Metered by cockpit from proxied sessions. CommandCode publishes no per-token prices and bills the plan's credits, so treat the counts as exact and the spend as an estimate: $14 per 5 hours, $35 per 7 days, $70 per month."}
           </p>
         </>
       )}
@@ -218,6 +222,7 @@ export function UsageButton({ className, sessionModel }: { className?: string; s
     openrouter: "OpenRouter Usage",
     zen: "OpenCode Zen Usage",
     "zen-go": "OpenCode Go Usage",
+    commandcode: "CommandCode Usage",
     deepseek: "DeepSeek Usage",
   };
   const providerId = prefix && PROVIDER_TITLES[prefix] ? prefix : null;

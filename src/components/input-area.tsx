@@ -36,6 +36,7 @@ import { FreeBadge, splitProviderModelId } from "@/components/openrouter-provide
 import { SlashCommandMenu } from "@/components/slash-command-menu";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
+import { useLongPress } from "@/hooks/use-long-press";
 import { useWebSocket } from "@/hooks/use-websocket";
 import type { SlashCommand } from "@/lib/commands";
 import {
@@ -62,6 +63,7 @@ import type {
   ProviderModel,
   SandboxConfig,
   SandboxSupport,
+  SendOptions,
   SessionPermissionMode,
   TextFileAttachment,
   ThinkingLevel,
@@ -69,6 +71,7 @@ import type {
 import { ContextIndicator } from "./context-indicator";
 import { PromptHistoryModal } from "./prompt-history-modal";
 import { QueueModal } from "./queue-modal";
+import { SendModeModal } from "./send-mode-modal";
 
 const RECENT_MODELS_KEY = "cockpit-recent-models";
 
@@ -262,7 +265,13 @@ const FILE_ACCEPT = ["image/*", ".pdf", ...Array.from(TEXT_EXTENSIONS)].join(","
 interface InputAreaProps {
   sessionId: string;
   promptHistory?: string[];
-  onSend: (text: string, images?: ImageAttachment[], documents?: DocumentAttachment[], textFiles?: TextFileAttachment[]) => void;
+  onSend: (
+    text: string,
+    images?: ImageAttachment[],
+    documents?: DocumentAttachment[],
+    textFiles?: TextFileAttachment[],
+    opts?: SendOptions,
+  ) => void;
   onInterrupt: () => void;
   isResponding: boolean;
   bypassActive: boolean;
@@ -372,6 +381,7 @@ export function InputArea({
   const { connected } = useWebSocket();
   const [text, setText] = useState(() => sessionDrafts.get(sessionId) || "");
   const [queueModalOpen, setQueueModalOpen] = useState(false);
+  const [sendModeOpen, setSendModeOpen] = useState(false);
   const [mcpOpen, setMcpOpen] = useState(false);
 
   useEffect(() => {
@@ -484,48 +494,60 @@ export function InputArea({
 
   const hasAttachments = pendingImages.length > 0 || pendingDocs.length > 0 || pendingTextFiles.length > 0;
 
-  const handleSend = useCallback(() => {
-    const trimmed = text.trim();
-    if (!trimmed && !hasAttachments) return;
-    if (!connected) return;
+  const handleSend = useCallback(
+    (opts?: SendOptions, ui?: { keepKeyboard?: boolean }) => {
+      const trimmed = text.trim();
+      if (!trimmed && !hasAttachments) return;
+      if (!connected) return;
 
-    // Intercept /mcp to open the MCP status modal
-    if (/^\/mcp\s*$/i.test(trimmed)) {
-      setText("");
-      setMcpOpen(true);
-      return;
-    }
-
-    // A message ending in an @-mention (no trailing space) leaves the CLI REPL's
-    // autocomplete menu open in PTY mode, so the submit Enter is consumed selecting a
-    // completion instead of sending — the turn never starts and the session hangs
-    // "running" with the bubble vanishing on reload. The @-menu selection appends a
-    // trailing space for exactly this reason, but trim() above strips it, so re-add a
-    // single space when the message ends in a dangling @-token. The CLI then closes
-    // the menu and submits the literal text (verified against the real CLI 2.1.x: it
-    // submits "@name" literally, accepting/rewriting nothing).
-    const toSend = /@\S+$/.test(trimmed) ? `${trimmed} ` : trimmed;
-
-    onSend(
-      toSend,
-      pendingImages.length > 0 ? pendingImages : undefined,
-      pendingDocs.length > 0 ? pendingDocs : undefined,
-      pendingTextFiles.length > 0 ? pendingTextFiles : undefined,
-    );
-    setText("");
-    setPendingImages([]);
-    setPendingDocs([]);
-    setPendingTextFiles([]);
-    setSelectedIndex(0);
-    if (textareaRef.current) {
-      textareaRef.current.style.height = "auto";
-      if (dismissKeyboard && "ontouchstart" in window) {
-        textareaRef.current.blur();
-      } else {
-        textareaRef.current.focus();
+      // Intercept /mcp to open the MCP status modal
+      if (/^\/mcp\s*$/i.test(trimmed)) {
+        setText("");
+        setMcpOpen(true);
+        return;
       }
-    }
-  }, [text, hasAttachments, pendingImages, pendingDocs, pendingTextFiles, onSend, dismissKeyboard, connected]);
+
+      // A message ending in an @-mention (no trailing space) leaves the CLI REPL's
+      // autocomplete menu open in PTY mode, so the submit Enter is consumed selecting a
+      // completion instead of sending — the turn never starts and the session hangs
+      // "running" with the bubble vanishing on reload. The @-menu selection appends a
+      // trailing space for exactly this reason, but trim() above strips it, so re-add a
+      // single space when the message ends in a dangling @-token. The CLI then closes
+      // the menu and submits the literal text (verified against the real CLI 2.1.x: it
+      // submits "@name" literally, accepting/rewriting nothing).
+      const toSend = /@\S+$/.test(trimmed) ? `${trimmed} ` : trimmed;
+
+      onSend(
+        toSend,
+        pendingImages.length > 0 ? pendingImages : undefined,
+        pendingDocs.length > 0 ? pendingDocs : undefined,
+        pendingTextFiles.length > 0 ? pendingTextFiles : undefined,
+        opts,
+      );
+      setText("");
+      setPendingImages([]);
+      setPendingDocs([]);
+      setPendingTextFiles([]);
+      setSelectedIndex(0);
+      if (textareaRef.current) {
+        textareaRef.current.style.height = "auto";
+        // A send chosen from the long-press menu keeps the keyboard: it is a
+        // mid-turn action taken while composing, and dropping the keyboard
+        // under it hides the composer the user is still working in.
+        if (dismissKeyboard && "ontouchstart" in window && !ui?.keepKeyboard) {
+          textareaRef.current.blur();
+        } else {
+          textareaRef.current.focus();
+        }
+      }
+    },
+    [text, hasAttachments, pendingImages, pendingDocs, pendingTextFiles, onSend, dismissKeyboard, connected],
+  );
+
+  // While Claude works, a long press or right-click on Send offers holding the
+  // message for the turn's end instead of handing it over now.
+  const openSendMode = useCallback(() => setSendModeOpen(true), []);
+  const sendModePress = useLongPress(openSendMode, isResponding);
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -1581,7 +1603,9 @@ export function InputArea({
                     ? "Queue paused (send to discard, or manage in modal)"
                     : "Message queued (Esc to interrupt)"
                   : isResponding
-                    ? "Use /btw to nudge, or type to queue..."
+                    ? currentRuntime === "pty"
+                      ? "Message Claude while it works..."
+                      : "Use /btw to nudge, or type to queue..."
                     : planMode
                       ? "Plan with Claude..."
                       : "Send a message..."
@@ -1598,16 +1622,23 @@ export function InputArea({
             >
               <Paperclip className="h-4 w-4" />
             </button>
+            {/* Hugs its text, and may grow to the full width of the row less the
+                paperclip: 10px in from the left, 32px short of the right. */}
             {!inputFocused && (
               <button
                 type="button"
                 data-testid="model-pill"
                 title="Model and thinking level — click to change"
                 onClick={() => setOptionsOpen(true)}
-                className="absolute bottom-2.5 left-2.5 flex max-w-[60%] items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground transition-colors hover:bg-muted/70 hover:text-foreground"
+                className="absolute bottom-2.5 left-2.5 flex max-w-[calc(100%-2.625rem)] items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground transition-colors hover:bg-muted/70 hover:text-foreground"
               >
                 <Cpu className="h-2.5 w-2.5 shrink-0" />
-                <span className="truncate">{modelSelection.label}</span>
+                <span className="truncate">
+                  {/* The provider leads only when it is not Anthropic: with several
+                      providers serving the catalog, the model name alone does not
+                      say which one the session runs. */}
+                  {modelSelection.provider ? `${modelSelection.provider} · ${modelSelection.label}` : modelSelection.label}
+                </span>
                 {thinkingLabel && <span className="shrink-0 text-muted-foreground/60">· {thinkingLabel}</span>}
                 {contextLabel && <span className="shrink-0 text-muted-foreground/60">· {contextLabel}</span>}
               </button>
@@ -1625,9 +1656,14 @@ export function InputArea({
             ) : (
               <Button
                 size="icon"
-                className="h-8 w-8"
-                onClick={handleSend}
+                className="h-8 w-8 select-none [-webkit-touch-callout:none]"
+                onClick={() => {
+                  if (sendModePress.swallowClick()) return;
+                  handleSend();
+                }}
+                {...sendModePress.handlers}
                 disabled={!text.trim() && !hasAttachments}
+                title={isResponding ? "Send (hold or right-click to send when Claude finishes)" : undefined}
                 data-testid="btn-send"
               >
                 <Send className="h-4 w-4" />
@@ -1681,6 +1717,12 @@ export function InputArea({
         onDelete={onDeleteQueued ?? (() => {})}
         onEdit={onEditQueued ?? (() => {})}
         onResume={onResumeQueue ?? (() => {})}
+      />
+      <SendModeModal
+        open={sendModeOpen}
+        onOpenChange={setSendModeOpen}
+        onSendNow={() => handleSend(undefined, { keepKeyboard: true })}
+        onSendAfterTurn={() => handleSend({ afterTurn: true }, { keepKeyboard: true })}
       />
       <McpStatusModal open={mcpOpen} onOpenChange={setMcpOpen} sessionId={sessionId} initData={initData} />
       <PromptHistoryModal

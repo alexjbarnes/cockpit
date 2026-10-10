@@ -1,5 +1,8 @@
 import { EventEmitter } from "node:events";
+import { mkdtempSync, rmSync } from "node:fs";
 import { createServer, type Server } from "node:http";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 
@@ -22,8 +25,20 @@ import { SessionManager } from "@/server/session-manager";
 import { TerminalManager } from "@/server/terminal-manager";
 import { createWebSocketHandler } from "@/server/ws-handler";
 
+// Connecting to a session starts a recursive watch on its folder, and Node
+// sets that up on Linux by walking every directory under it before returning.
+// Sessions here live in their own empty folder, so how long a connect takes
+// does not depend on how much the shared /tmp holds: a large one made each
+// connect slow enough that five reconnects ran past the test timeout.
+let sessionDir: string;
+
 beforeAll(async () => {
   await setupPassword("test-password");
+  sessionDir = mkdtempSync(path.join(tmpdir(), "cockpit-reconnect-"));
+});
+
+afterAll(() => {
+  rmSync(sessionDir, { recursive: true, force: true });
 });
 
 describe("WebSocket reconnection", () => {
@@ -77,7 +92,7 @@ describe("WebSocket reconnection", () => {
   }
 
   it("history message always includes status field", async () => {
-    const session = manager.createSession("/tmp");
+    const session = manager.createSession(sessionDir);
     const ws = await connectWs();
 
     const collecting = collectMessages(ws, 5);
@@ -95,7 +110,7 @@ describe("WebSocket reconnection", () => {
     // Simulates the mobile bug: WS drops before the separate
     // session:status message arrives. The status bundled in the
     // history message is the client's only signal.
-    const session = manager.createSession("/tmp");
+    const session = manager.createSession(sessionDir);
     const ws = await connectWs();
 
     const firstMsg = await new Promise<Record<string, unknown>>((resolve) => {
@@ -111,7 +126,7 @@ describe("WebSocket reconnection", () => {
   });
 
   it("delta reconnect sends status and minimal messages", async () => {
-    const session = manager.createSession("/tmp");
+    const session = manager.createSession(sessionDir);
 
     // First connection: get full history (0 messages)
     const ws1 = await connectWs();
@@ -152,7 +167,7 @@ describe("WebSocket reconnection", () => {
   it("rapid connect/disconnect cycles always get status in first message", async () => {
     // Simulates the mobile pattern: connect, get 1 message, WS dies, repeat.
     // Every cycle should get status in the very first message.
-    const session = manager.createSession("/tmp");
+    const session = manager.createSession(sessionDir);
 
     for (let i = 0; i < 5; i++) {
       const ws = await connectWs();
@@ -180,7 +195,7 @@ describe("WebSocket reconnection", () => {
   it("session:status message is also sent separately for redundancy", async () => {
     // Even though status is in the history message, the separate
     // session:status message should also be sent for backwards compat.
-    const session = manager.createSession("/tmp");
+    const session = manager.createSession(sessionDir);
     const ws = await connectWs();
 
     const collecting = collectMessages(ws, 5);

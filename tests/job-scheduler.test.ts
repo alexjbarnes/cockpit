@@ -44,6 +44,20 @@ vi.mock("@/server/workspace-trust", () => ({
   },
 }));
 
+// The real guard reads the developer's own ~/.claude.json; these tests stay on
+// the scheduler's side of that boundary.
+const { mcpState } = vi.hoisted(() => ({ mcpState: { configured: [] as string[], checks: 0 } }));
+vi.mock("@/server/claude-config-guard", () => ({
+  checkClaudeUserConfig: () => {
+    mcpState.checks += 1;
+    return { action: "healthy", restored: [], missing: [] };
+  },
+}));
+vi.mock("@/server/mcp-discovery", () => ({
+  configuredMcpServerNames: () => mcpState.configured,
+  discoverMcpServerNames: () => mcpState.configured,
+}));
+
 vi.mock("node:fs", async () => {
   const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
   return { ...actual, mkdirSync: vi.fn() };
@@ -54,7 +68,8 @@ import { emitIssueStatusChange } from "@/server/issue-events";
 import { loadIssues, loadProjects } from "@/server/issue-storage";
 import { acquireJobLock, releaseJobLock } from "@/server/job-lock";
 import { JobScheduler } from "@/server/job-scheduler";
-import { loadJobs, loadRuns, saveRun } from "@/server/job-storage";
+import { getLatestRun, loadJobs, loadRuns, saveRun } from "@/server/job-storage";
+import { getJobScratchpadDir } from "@/server/paths";
 import { checkJobModel } from "@/server/provider-catalog";
 import type { JobRun, JobRunStatus, ScheduledJob } from "@/types";
 
@@ -134,8 +149,55 @@ describe("JobScheduler", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mcpState.configured = [];
+    mcpState.checks = 0;
     sm = makeMockSessionManager();
     scheduler = new JobScheduler(sm as any);
+  });
+
+  describe("a job's own MCP servers", () => {
+    it("fails before the lock when a server it needs is configured nowhere", async () => {
+      const job = makeJob({ mcpServers: ["gmail", "conduit"] });
+      vi.mocked(loadJobs).mockReturnValue([job]);
+      mcpState.configured = ["gmail"];
+
+      const run = await scheduler.triggerJob("job-1");
+
+      expect(run.status).toBe("failure");
+      expect(run.configFailure, "deterministic: the operator fixes the config, not a retry").toBe(true);
+      expect(run.error).toContain("conduit");
+      expect(acquireJobLock, "nothing is spawned, so no lock is taken").not.toHaveBeenCalled();
+      expect(addInboxMessage).toHaveBeenCalledWith(expect.objectContaining({ priority: "error" }));
+      expect(mcpState.checks, "the config is checked, so a wipe can be repaired before giving up").toBe(1);
+    });
+
+    it("runs a job whose servers are all configured", async () => {
+      const job = makeJob({ mcpServers: ["gmail"] });
+      vi.mocked(loadJobs).mockReturnValue([job]);
+      mcpState.configured = ["gmail"];
+
+      const promise = scheduler.triggerJob("job-1");
+      await vi.waitFor(() => expect(sm.sendMessage).toHaveBeenCalled());
+      sm.emitEvent({ type: "message_done", message: { content: "Done." } });
+      sm.emitStatus("idle");
+
+      const run = await promise;
+      expect(run.configFailure).toBeUndefined();
+      expect(run.status).toBe("success");
+    });
+
+    it("leaves a job with no servers of its own alone", async () => {
+      const job = makeJob({ mcpServers: [] });
+      vi.mocked(loadJobs).mockReturnValue([job]);
+
+      const promise = scheduler.triggerJob("job-1");
+      await vi.waitFor(() => expect(sm.sendMessage).toHaveBeenCalled());
+      sm.emitEvent({ type: "message_done", message: { content: "Done." } });
+      sm.emitStatus("idle");
+      await promise;
+
+      expect(mcpState.checks, "no servers to lose means no reason to read the config").toBe(0);
+    });
   });
 
   describe("executeJob", () => {
@@ -318,7 +380,9 @@ describe("JobScheduler", () => {
 
       expect(sm.createSession).toHaveBeenCalledWith(expect.any(String), "[job] Test Job", {
         bypassPermissions: true,
-        sandbox: { enabled: false },
+        // The job's storage folder travels with the config even when the switch
+        // is off; the settings file only uses it for a sandboxed run.
+        sandbox: { enabled: false, jobStorageDir: getJobScratchpadDir("job-1") },
       });
     });
 
@@ -331,7 +395,7 @@ describe("JobScheduler", () => {
 
       expect(sm.createSession).toHaveBeenCalledWith(expect.any(String), "[job] Test Job", {
         bypassPermissions: false,
-        sandbox: { enabled: true },
+        sandbox: { enabled: true, jobStorageDir: getJobScratchpadDir("job-1") },
       });
     });
 
@@ -1345,6 +1409,56 @@ describe("tick: missed run handling", () => {
     scheduler = new JobScheduler(sm as any);
   });
 
+  /** A daily cron for the minute `hours` hours ago. */
+  function dailyCronHoursAgo(hours: number): string {
+    const at = new Date();
+    at.setHours(at.getHours() - hours);
+    return `${at.getMinutes()} ${at.getHours()} * * *`;
+  }
+
+  function spyOnRuns() {
+    return vi.spyOn(scheduler as any, "executeJobWithRetries").mockResolvedValue(undefined);
+  }
+
+  it("catches up a run missed since the last one", () => {
+    const job = makeJob({ schedules: [{ type: "cron", expression: dailyCronHoursAgo(2) }] });
+    vi.mocked(loadJobs).mockReturnValue([job]);
+    const runs = spyOnRuns();
+
+    (scheduler as any).lastFiredAt.set(job.id, new Date(Date.now() - 5 * 3600000));
+    (scheduler as any).tick();
+
+    expect(runs).toHaveBeenCalledWith(job);
+  });
+
+  // A job whose time always passes while the server is down has no run to
+  // measure from, so it counts from when it was last saved.
+  it("catches up a missed run for a job that has never run", () => {
+    const threeDaysAgo = Date.now() - 3 * 86400000;
+    const job = makeJob({
+      createdAt: threeDaysAgo,
+      updatedAt: threeDaysAgo,
+      schedules: [{ type: "cron", expression: dailyCronHoursAgo(2) }],
+    });
+    vi.mocked(loadJobs).mockReturnValue([job]);
+    const runs = spyOnRuns();
+
+    (scheduler as any).tick();
+
+    expect(runs).toHaveBeenCalledWith(job);
+  });
+
+  it("does not count a time from before the job was last saved as missed", () => {
+    const anHourAgo = Date.now() - 3600000;
+    const job = makeJob({ createdAt: anHourAgo, updatedAt: anHourAgo, schedules: [{ type: "cron", expression: dailyCronHoursAgo(2) }] });
+    vi.mocked(loadJobs).mockReturnValue([job]);
+    const runs = spyOnRuns();
+
+    (scheduler as any).tick();
+
+    expect(runs).not.toHaveBeenCalled();
+  });
+
   it("skips missed runs when skipIfMissed is true", () => {
     const pastHour = new Date();
     pastHour.setHours(pastHour.getHours() - 2);
@@ -1751,5 +1865,160 @@ describe("issue-events wiring: start()/stop() actually subscribe (phase 4)", () 
     sm.createSession.mockClear();
     emitIssueStatusChange({ key: "CK-2", projectId: "p1", to: "Backlog" });
     expect(sm.createSession).not.toHaveBeenCalled();
+  });
+});
+
+describe("jobs that wait on other jobs", () => {
+  let sm: ReturnType<typeof makeMockSessionManager>;
+  let scheduler: JobScheduler;
+  const anHourAgo = Date.now() - 3600000;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    sm = makeMockSessionManager();
+    scheduler = new JobScheduler(sm as any);
+  });
+
+  function waiting(jobIds: string[], overrides: Partial<ScheduledJob> = {}): ScheduledJob {
+    return makeJob({
+      id: "report",
+      name: "Report",
+      schedules: [{ type: "afterJobs", jobIds }],
+      createdAt: anHourAgo,
+      updatedAt: anHourAgo,
+      ...overrides,
+    });
+  }
+
+  function runOf(jobId: string, status: JobRunStatus, completedAt: number): JobRun {
+    return {
+      id: `${jobId}-${completedAt}`,
+      jobId,
+      sessionId: "s",
+      status,
+      startedAt: completedAt - 1000,
+      completedAt,
+      toolsUsed: [],
+      messageCount: 0,
+      prompt: "",
+      cwd: "",
+    };
+  }
+
+  function withRuns(byJob: Record<string, JobRun[]>): void {
+    vi.mocked(loadRuns).mockImplementation((id: string) => byJob[id] ?? []);
+    vi.mocked(getLatestRun).mockImplementation((id: string) =>
+      (byJob[id] ?? []).reduce<JobRun | undefined>((latest, r) => (!latest || r.startedAt > latest.startedAt ? r : latest), undefined),
+    );
+  }
+
+  function spyOnRuns() {
+    return vi.spyOn(scheduler as any, "executeJobWithRetries").mockResolvedValue(undefined);
+  }
+
+  const collect = makeJob({ id: "collect", name: "Collect" });
+  const fetchJob = makeJob({ id: "fetch", name: "Fetch" });
+
+  it("starts a job once the job it waits on succeeds", () => {
+    const report = waiting(["collect"]);
+    vi.mocked(loadJobs).mockReturnValue([collect, report]);
+    withRuns({ collect: [runOf("collect", "success", Date.now())] });
+    const runs = spyOnRuns();
+
+    (scheduler as any).startJobsWaitingOn(collect);
+
+    expect(runs).toHaveBeenCalledWith(report);
+  });
+
+  it("waits until every job it waits on has succeeded", () => {
+    const report = waiting(["collect", "fetch"]);
+    vi.mocked(loadJobs).mockReturnValue([collect, fetchJob, report]);
+    withRuns({ collect: [runOf("collect", "success", Date.now())] });
+    const runs = spyOnRuns();
+
+    (scheduler as any).startJobsWaitingOn(collect);
+    expect(runs).not.toHaveBeenCalled();
+
+    withRuns({ collect: [runOf("collect", "success", Date.now() - 5000)], fetch: [runOf("fetch", "success", Date.now())] });
+    (scheduler as any).startJobsWaitingOn(fetchJob);
+    expect(runs).toHaveBeenCalledWith(report);
+  });
+
+  it("is held back by a job whose last run failed", () => {
+    const report = waiting(["collect"]);
+    vi.mocked(loadJobs).mockReturnValue([collect, report]);
+    withRuns({ collect: [runOf("collect", "failure", Date.now())] });
+    const runs = spyOnRuns();
+
+    (scheduler as any).startJobsWaitingOn(collect);
+    (scheduler as any).tick();
+
+    expect(runs).not.toHaveBeenCalled();
+  });
+
+  it("counts only successes since its own last run", () => {
+    const report = waiting(["collect"]);
+    vi.mocked(loadJobs).mockReturnValue([collect, report]);
+    const tenMinutesAgo = Date.now() - 600000;
+    withRuns({ collect: [runOf("collect", "success", tenMinutesAgo - 60000)], report: [runOf("report", "success", tenMinutesAgo)] });
+    const runs = spyOnRuns();
+
+    (scheduler as any).startJobsWaitingOn(collect);
+    expect(runs).not.toHaveBeenCalled();
+
+    withRuns({ collect: [runOf("collect", "success", Date.now())], report: [runOf("report", "success", tenMinutesAgo)] });
+    (scheduler as any).startJobsWaitingOn(collect);
+    expect(runs).toHaveBeenCalledWith(report);
+  });
+
+  it("does not run for completions from before it was set up", () => {
+    const report = waiting(["collect"], { createdAt: Date.now(), updatedAt: Date.now() });
+    vi.mocked(loadJobs).mockReturnValue([collect, report]);
+    withRuns({ collect: [runOf("collect", "success", anHourAgo)] });
+    const runs = spyOnRuns();
+
+    (scheduler as any).startJobsWaitingOn(collect);
+
+    expect(runs).not.toHaveBeenCalled();
+  });
+
+  it("leaves a disabled job, or one already running, alone", () => {
+    const report = waiting(["collect"], { enabled: false });
+    vi.mocked(loadJobs).mockReturnValue([collect, report]);
+    withRuns({ collect: [runOf("collect", "success", Date.now())] });
+    const runs = spyOnRuns();
+    (scheduler as any).startJobsWaitingOn(collect);
+    expect(runs).not.toHaveBeenCalled();
+
+    const running = waiting(["collect"]);
+    vi.mocked(loadJobs).mockReturnValue([collect, running]);
+    (scheduler as any).runningJobs.set("report", runOf("report", "running", Date.now()));
+    (scheduler as any).startJobsWaitingOn(collect);
+    expect(runs).not.toHaveBeenCalled();
+  });
+
+  it("is started by the tick when its start was missed", () => {
+    const report = waiting(["collect"]);
+    vi.mocked(loadJobs).mockReturnValue([collect, report]);
+    withRuns({ collect: [runOf("collect", "success", Date.now() - 120000)] });
+    const runs = spyOnRuns();
+
+    (scheduler as any).tick();
+
+    expect(runs).toHaveBeenCalledWith(report);
+    expect(runs).not.toHaveBeenCalledWith(collect);
+  });
+
+  it("starts the jobs waiting after a successful run, not after a failed one", async () => {
+    const job = makeJob({ id: "collect", maxRetries: 0 });
+    vi.spyOn(scheduler, "executeJob")
+      .mockResolvedValueOnce(runOf("collect", "success", Date.now()))
+      .mockResolvedValueOnce(runOf("collect", "failure", Date.now()));
+    const started = vi.spyOn(scheduler as any, "startJobsWaitingOn").mockImplementation(() => {});
+
+    await (scheduler as any).executeJobWithRetries(job);
+    expect(started).toHaveBeenCalledWith(job);
+    await (scheduler as any).executeJobWithRetries(job);
+    expect(started).toHaveBeenCalledTimes(1);
   });
 });
