@@ -1,9 +1,53 @@
-import type { NotificationPayload, NotificationProviderEntry, NtfyConfig, TelegramConfig } from "@/types";
+import { isDeadSubscription, sendWebPush } from "@/server/web-push";
+import type { NotificationPayload, NotificationProviderEntry, NtfyConfig, TelegramConfig, WebPushConfig } from "@/types";
 import { debugLog } from "./debug-logger";
-import { getNotificationSettings } from "./notification-settings";
+import { getNotificationSettings, updateNotificationSettings } from "./notification-settings";
 
 interface NotificationProvider<C = unknown> {
   send(payload: NotificationPayload, config: C, baseUrl?: string): Promise<void>;
+}
+
+/**
+ * Web Push. The payload is what the service worker hands to showNotification,
+ * so it carries the title, the body and where a tap should land; the entry's
+ * own filters have already decided that this message is one this device wants.
+ *
+ * A push service that answers 404 or 410 has forgotten the subscription — the
+ * browser was uninstalled or the subscription expired — so the entry is
+ * switched off rather than retried on every later notification. Re-enabling it
+ * from the browser subscribes again.
+ */
+const webPushProvider: NotificationProvider<WebPushConfig> = {
+  async send(payload: NotificationPayload, config: WebPushConfig, baseUrl?: string): Promise<void> {
+    try {
+      await sendWebPush(config, {
+        title: payload.title,
+        body: payload.body,
+        url: buildFullUrl(payload.url, baseUrl),
+        priority: payload.priority,
+      });
+    } catch (err) {
+      if (isDeadSubscription(err)) {
+        disableProvider(payload.providerIds, config.endpoint);
+      }
+      throw err;
+    }
+  },
+};
+
+/** Switch off the entry a dead subscription belongs to. */
+function disableProvider(providerIds: string[] | undefined, endpoint: string): void {
+  const settings = getNotificationSettings();
+  if (providerIds && !providerIds.includes(entryIdFor(settings, endpoint))) return;
+  const providers = settings.providers.map((p) =>
+    p.type === "webpush" && (p.config as WebPushConfig).endpoint === endpoint ? { ...p, enabled: false } : p,
+  );
+  updateNotificationSettings({ providers });
+  debugLog(`[notifications] webpush subscription went away, disabled its entry: ${endpoint.slice(0, 40)}…`);
+}
+
+function entryIdFor(settings: { providers: NotificationProviderEntry[] }, endpoint: string): string {
+  return settings.providers.find((p) => p.type === "webpush" && (p.config as WebPushConfig).endpoint === endpoint)?.id ?? "";
 }
 
 function buildFullUrl(path: string | undefined, baseUrl: string | undefined): string | undefined {
@@ -111,6 +155,8 @@ function getProvider(type: string): NotificationProvider<never> | null {
       return telegramProvider as NotificationProvider<never>;
     case "ntfy":
       return ntfyProvider as NotificationProvider<never>;
+    case "webpush":
+      return webPushProvider as NotificationProvider<never>;
     default:
       return null;
   }

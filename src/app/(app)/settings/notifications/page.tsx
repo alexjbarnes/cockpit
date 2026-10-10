@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { v4 as uuidv4 } from "uuid";
 import { usePageHeader } from "@/components/app-shell";
+import { PushDeviceCard } from "@/components/push-device-card";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -12,6 +13,10 @@ import { Input } from "@/components/ui/input";
 import type { InboxPriority, NotificationProviderEntry, NotificationSettings, NtfyConfig, TelegramConfig } from "@/types";
 
 type ProviderType = "telegram" | "ntfy";
+
+/** The types the form offers. Web Push entries are not created here — the
+ *  browser subscribes itself and the entry appears in the list — so they are
+ *  shown and can be toggled or deleted, but never edited into a config. */
 
 interface FormState {
   id: string;
@@ -33,6 +38,8 @@ const emptyForm = (type: ProviderType): FormState => ({
   filterSources: [],
 });
 
+/** Only Telegram and ntfy entries reach this: a webpush entry has no fields to
+ *  edit, since the browser owns its subscription. */
 function entryToForm(entry: NotificationProviderEntry): FormState {
   const config: Record<string, string> = {};
   for (const [k, v] of Object.entries(entry.config)) {
@@ -40,7 +47,7 @@ function entryToForm(entry: NotificationProviderEntry): FormState {
   }
   return {
     id: entry.id,
-    type: entry.type,
+    type: entry.type === "webpush" ? "ntfy" : entry.type,
     name: entry.name,
     enabled: entry.enabled,
     config,
@@ -333,6 +340,8 @@ export default function NotificationsSettingsPage() {
         Settings
       </Button>
 
+      {settings && <PushDeviceCard providers={settings.providers} onChanged={fetchSettings} />}
+
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Base URL</CardTitle>
@@ -387,17 +396,19 @@ export default function NotificationsSettingsPage() {
                     <span className="text-xs text-muted-foreground">{entry.filter.priorities.join(", ")} only</span>
                   )}
                 </div>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-8 w-8"
-                  onClick={() => {
-                    setEditForm(entryToForm(entry));
-                    setTestResult(null);
-                  }}
-                >
-                  <Pencil className="h-3.5 w-3.5" />
-                </Button>
+                {entry.type !== "webpush" && (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8"
+                    onClick={() => {
+                      setEditForm(entryToForm(entry));
+                      setTestResult(null);
+                    }}
+                  >
+                    <Pencil className="h-3.5 w-3.5" />
+                  </Button>
+                )}
                 <Button
                   variant="ghost"
                   size="icon"

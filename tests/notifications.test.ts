@@ -501,3 +501,77 @@ describe("sendTestNotification", () => {
     expect(result).toContain("Unknown provider type");
   });
 });
+
+// Web Push joins Telegram and ntfy as a provider, so an inbox message reaches a
+// subscribed browser by the same path — and a subscription the push service has
+// forgotten is switched off rather than retried forever.
+describe("web push delivery", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.clearAllMocks();
+    mockSend.mockResolvedValue(undefined);
+    mockSettings = {
+      providers: [
+        {
+          id: "push-1",
+          type: "webpush",
+          enabled: true,
+          name: "Chrome on Android",
+          config: { endpoint: "https://push.example/device-1", keys: { p256dh: "p", auth: "a" }, label: "Chrome on Android" },
+        },
+      ],
+    };
+  });
+
+  it("sends the message to the browser, with where a tap should land", async () => {
+    const sendWebPush = vi.fn().mockResolvedValue(undefined);
+    vi.doMock("@/server/web-push", () => ({ sendWebPush, isDeadSubscription: () => false }));
+    const { dispatchNotification } = await import("@/server/notifications");
+
+    dispatchNotification({ title: "Job failed", body: "Weekly organiser", url: "/inbox/abc", priority: "error", source: "job" });
+    await vi.waitFor(() => expect(sendWebPush).toHaveBeenCalled());
+
+    const [, payload] = sendWebPush.mock.calls[0] as [unknown, Record<string, unknown>];
+    expect(payload).toEqual({ title: "Job failed", body: "Weekly organiser", url: "/inbox/abc", priority: "error" });
+  });
+
+  it("switches off an entry whose subscription the push service has forgotten", async () => {
+    const err = Object.assign(new Error("gone"), { statusCode: 410 });
+    const sendWebPush = vi.fn().mockRejectedValue(err);
+    vi.doMock("@/server/web-push", () => ({
+      sendWebPush,
+      isDeadSubscription: (e: unknown) => (e as { statusCode?: number }).statusCode === 410,
+    }));
+    const writes: Array<{ providers: Array<{ id: string; enabled: boolean }> }> = [];
+    vi.doMock("@/server/notification-settings", () => ({
+      getNotificationSettings: () => mockSettings,
+      updateNotificationSettings: (partial: { providers: Array<{ id: string; enabled: boolean }> }) => {
+        writes.push(partial);
+        return partial;
+      },
+    }));
+    const { dispatchNotification } = await import("@/server/notifications");
+
+    dispatchNotification({ title: "t", body: "b", priority: "info", source: "job" });
+    await vi.waitFor(() => expect(writes).toHaveLength(1));
+    expect(writes[0].providers[0]).toMatchObject({ id: "push-1", enabled: false });
+  });
+
+  it("leaves the entry alone when the failure is not the subscription's fault", async () => {
+    const sendWebPush = vi.fn().mockRejectedValue(Object.assign(new Error("flaky"), { statusCode: 500 }));
+    vi.doMock("@/server/web-push", () => ({ sendWebPush, isDeadSubscription: () => false }));
+    const writes: unknown[] = [];
+    vi.doMock("@/server/notification-settings", () => ({
+      getNotificationSettings: () => mockSettings,
+      updateNotificationSettings: (partial: unknown) => {
+        writes.push(partial);
+        return partial;
+      },
+    }));
+    const { dispatchNotification } = await import("@/server/notifications");
+
+    dispatchNotification({ title: "t", body: "b", priority: "info", source: "job" });
+    await vi.waitFor(() => expect(sendWebPush).toHaveBeenCalled());
+    expect(writes, "a 5xx is worth retrying, not a reason to unsubscribe").toEqual([]);
+  });
+});

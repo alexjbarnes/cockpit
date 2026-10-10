@@ -415,12 +415,22 @@ export interface NtfyConfig {
   token?: string;
 }
 
+/** One browser's push subscription. The endpoint is the identity: the push
+ *  service issues it, and re-subscribing the same browser returns the same
+ *  one, which is what makes subscribing idempotent. */
+export interface WebPushConfig {
+  endpoint: string;
+  keys: { p256dh: string; auth: string };
+  /** What to call this browser in the settings list, e.g. "Chrome on Pixel". */
+  label?: string;
+}
+
 export interface NotificationProviderEntry {
   id: string;
-  type: "telegram" | "ntfy";
+  type: "telegram" | "ntfy" | "webpush";
   enabled: boolean;
   name: string;
-  config: TelegramConfig | NtfyConfig;
+  config: TelegramConfig | NtfyConfig | WebPushConfig;
   filter?: {
     priorities?: InboxPriority[];
     sources?: string[];

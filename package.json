@@ -84,6 +84,7 @@
     "tailwind-merge": "^3.5.0",
     "tailwindcss": "^4",
     "uuid": "^14.0.0",
+    "web-push": "^3.6.7",
     "ws": "^8"
   },
   "overrides": {
@@ -95,6 +96,7 @@
     "@types/node": "^26.0.1",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "@types/web-push": "^3.6.4",
     "@types/ws": "^8",
     "@vitest/coverage-v8": "^5.0.3",
     "tsc-alias": "^1.8.10",
