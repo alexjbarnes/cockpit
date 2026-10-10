@@ -36,7 +36,7 @@ describe("defaults", () => {
       messageStitching: true,
       reviewsEnabled: true,
       issuesEnabled: false,
-      modalPagesEnabled: false,
+      modalPagesEnabled: true,
       allowSonnet1m: false,
     });
   });
@@ -67,7 +67,7 @@ describe("defaults", () => {
       messageStitching: true,
       reviewsEnabled: true,
       issuesEnabled: false,
-      modalPagesEnabled: false,
+      modalPagesEnabled: true,
       allowSonnet1m: false,
     });
   });

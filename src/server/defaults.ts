@@ -38,8 +38,9 @@ export interface AppDefaults {
   issuesEnabled: boolean;
   /**
    * Open the sidebar footer's pages (jobs, inbox, issues, settings) in a modal
-   * over the current page instead of navigating away from it. Experimental,
-   * off by default; see src/lib/page-modal.ts.
+   * over the current page instead of navigating away from it. On by default;
+   * turning it off restores navigating to the page itself. See
+   * src/lib/page-modal.ts.
    */
   modalPagesEnabled: boolean;
   /**
@@ -72,7 +73,7 @@ const fallback: AppDefaults = {
   messageStitching: true,
   reviewsEnabled: true,
   issuesEnabled: false,
-  modalPagesEnabled: false,
+  modalPagesEnabled: true,
   allowSonnet1m: false,
 };
 

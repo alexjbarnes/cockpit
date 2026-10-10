@@ -53,7 +53,7 @@ const defaultSettings: Settings = {
   messageStitching: true,
   reviewsEnabled: true,
   issuesEnabled: false,
-  modalPagesEnabled: false,
+  modalPagesEnabled: true,
   allowSonnet1m: false,
   terminalFontSize: 14,
   terminalTheme: "dark" as TerminalTheme,

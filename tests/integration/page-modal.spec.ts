@@ -1,4 +1,4 @@
-// The experimental page modal: with modalPagesEnabled on, the sidebar footer's
+// The page modal: with modalPagesEnabled on (its default), the sidebar footer's
 // pages open in a modal over the session instead of replacing it. The modal
 // shows the real page in an iframe, which drops the sidebar, keeps its
 // navigation to itself, and hands a page it does not show (a session) back to
@@ -45,9 +45,13 @@ async function openSession(page: Page, url: string): Promise<void> {
   await expect(page.getByTestId("message-input")).toBeVisible();
 }
 
-test("with the experiment off, the footer's pages replace the session as before", async ({ page, harness }) => {
+test("with the setting off, the footer's pages replace the session as before", async ({ page, harness }) => {
   const workDir = makeWorkDir(harness);
   try {
+    // Stated rather than left to the default: this is the off case, and the
+    // default is on.
+    const patched = await page.request.patch(`${harness.cockpitUrl}/api/defaults`, { data: { modalPagesEnabled: false } });
+    expect(patched.ok()).toBe(true);
     await openSession(page, await createSession(page, harness, workDir));
     await page.getByTitle("Scheduled Jobs").click();
     await expect(page).toHaveURL(/\/jobs$/);
@@ -57,7 +61,7 @@ test("with the experiment off, the footer's pages replace the session as before"
   }
 });
 
-test("with the experiment on, the footer's pages open over the session and close back to it", async ({ page, harness }) => {
+test("with the setting on, the footer's pages open over the session and close back to it", async ({ page, harness }) => {
   test.setTimeout(90_000);
   const workDir = makeWorkDir(harness);
   try {
