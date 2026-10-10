@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **A reset of the config no longer takes your trusted directories with it.** The reset drops the whole `projects` map, so every directory you had trusted starts asking again — which is why sessions in familiar repos began showing the trust card. The guard keeps the trusted list alongside the MCP servers and puts it back when it detects a reset, merging into whatever the CLI wrote for each directory; a directory you untrust deliberately stays untrusted.
 ## [0.8.0] - 2026-10-10
 
 ### Added
