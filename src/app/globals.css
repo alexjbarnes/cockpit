@@ -49,6 +49,14 @@
   height: 100%;
 }
 
+/* xterm ships its viewport black. The canvas only covers whole rows, so the
+   sliver below it showed through as a black band above the key bar, which is
+   a different colour from every terminal theme. Let the panel's own
+   background show instead. */
+.xterm .xterm-viewport {
+  background-color: transparent;
+}
+
 /* Thin scrollbars inside message bubbles, tool cards, and code blocks */
 pre::-webkit-scrollbar,
 .overflow-y-auto::-webkit-scrollbar,

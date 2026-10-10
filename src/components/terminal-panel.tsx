@@ -632,8 +632,18 @@ function TerminalPanelInner({ terminalId, cwd: _cwd, active = true, onReconnect,
 
   const currentTheme = TERMINAL_THEMES[settings.terminalTheme] ?? TERMINAL_THEMES.dark;
 
+  // The shell reserves the gesture bar's strip for every page; the terminal
+  // takes it back with the equal and opposite margin, so its colour runs to the
+  // bottom of the screen, and pads its content out of it again.
   return (
-    <div className="flex flex-col flex-1 min-h-0" style={{ backgroundColor: currentTheme.bg }}>
+    <div
+      className="flex flex-col flex-1 min-h-0"
+      style={{
+        backgroundColor: currentTheme.bg,
+        marginBottom: "calc(-1 * env(safe-area-inset-bottom))",
+        paddingBottom: "env(safe-area-inset-bottom)",
+      }}
+    >
       <div className="flex-1 min-h-0 relative overflow-hidden">
         <div ref={containerRef} className="absolute inset-0 px-3 pt-2" />
         <button
