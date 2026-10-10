@@ -44,6 +44,20 @@ vi.mock("@/server/workspace-trust", () => ({
   },
 }));
 
+// The real guard reads the developer's own ~/.claude.json; these tests stay on
+// the scheduler's side of that boundary.
+const { mcpState } = vi.hoisted(() => ({ mcpState: { configured: [] as string[], checks: 0 } }));
+vi.mock("@/server/claude-config-guard", () => ({
+  checkClaudeUserConfig: () => {
+    mcpState.checks += 1;
+    return { action: "healthy", restored: [], missing: [] };
+  },
+}));
+vi.mock("@/server/mcp-discovery", () => ({
+  configuredMcpServerNames: () => mcpState.configured,
+  discoverMcpServerNames: () => mcpState.configured,
+}));
+
 vi.mock("node:fs", async () => {
   const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
   return { ...actual, mkdirSync: vi.fn() };
@@ -135,8 +149,55 @@ describe("JobScheduler", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mcpState.configured = [];
+    mcpState.checks = 0;
     sm = makeMockSessionManager();
     scheduler = new JobScheduler(sm as any);
+  });
+
+  describe("a job's own MCP servers", () => {
+    it("fails before the lock when a server it needs is configured nowhere", async () => {
+      const job = makeJob({ mcpServers: ["gmail", "conduit"] });
+      vi.mocked(loadJobs).mockReturnValue([job]);
+      mcpState.configured = ["gmail"];
+
+      const run = await scheduler.triggerJob("job-1");
+
+      expect(run.status).toBe("failure");
+      expect(run.configFailure, "deterministic: the operator fixes the config, not a retry").toBe(true);
+      expect(run.error).toContain("conduit");
+      expect(acquireJobLock, "nothing is spawned, so no lock is taken").not.toHaveBeenCalled();
+      expect(addInboxMessage).toHaveBeenCalledWith(expect.objectContaining({ priority: "error" }));
+      expect(mcpState.checks, "the config is checked, so a wipe can be repaired before giving up").toBe(1);
+    });
+
+    it("runs a job whose servers are all configured", async () => {
+      const job = makeJob({ mcpServers: ["gmail"] });
+      vi.mocked(loadJobs).mockReturnValue([job]);
+      mcpState.configured = ["gmail"];
+
+      const promise = scheduler.triggerJob("job-1");
+      await vi.waitFor(() => expect(sm.sendMessage).toHaveBeenCalled());
+      sm.emitEvent({ type: "message_done", message: { content: "Done." } });
+      sm.emitStatus("idle");
+
+      const run = await promise;
+      expect(run.configFailure).toBeUndefined();
+      expect(run.status).toBe("success");
+    });
+
+    it("leaves a job with no servers of its own alone", async () => {
+      const job = makeJob({ mcpServers: [] });
+      vi.mocked(loadJobs).mockReturnValue([job]);
+
+      const promise = scheduler.triggerJob("job-1");
+      await vi.waitFor(() => expect(sm.sendMessage).toHaveBeenCalled());
+      sm.emitEvent({ type: "message_done", message: { content: "Done." } });
+      sm.emitStatus("idle");
+      await promise;
+
+      expect(mcpState.checks, "no servers to lose means no reason to read the config").toBe(0);
+    });
   });
 
   describe("executeJob", () => {

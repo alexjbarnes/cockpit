@@ -1,5 +1,7 @@
 import { mkdirSync } from "node:fs";
 import { v4 as uuidv4 } from "uuid";
+import { checkClaudeUserConfig } from "@/server/claude-config-guard";
+import { configuredMcpServerNames } from "@/server/mcp-discovery";
 import { getJobScratchpadDir } from "@/server/paths";
 import { trustDirectory } from "@/server/workspace-trust";
 import type { AfterJobsSchedule, IssueStatusSchedule, JobRun, JobRunToolUse, ScheduledJob } from "@/types";
@@ -263,6 +265,7 @@ export class JobScheduler {
   private runningJobs = new Map<string, JobRun>();
   private jobResolvers = new Map<string, (run: JobRun) => void>();
   private lastPruneAt = 0;
+  private lastConfigCheckAt = 0;
   private unsubIssueEvents: (() => void) | null = null;
 
   constructor(sessionManager: SessionManager) {
@@ -314,6 +317,20 @@ export class JobScheduler {
    * its own run record and inbox output; the failure alert is suppressed on attempts
    * that will be retried, so only the final outcome pages the operator.
    */
+  /**
+   * Servers the job needs that are configured nowhere, after one attempt to
+   * restore a wiped config. Empty for a job that runs with no servers of its
+   * own, which is most of them.
+   */
+  private missingJobMcpServers(job: ScheduledJob): string[] {
+    const required = job.mcpServers ?? [];
+    if (required.length === 0) return [];
+    const cwd = job.cwd || getJobScratchpadDir(job.id);
+    checkClaudeUserConfig();
+    const configured = new Set(configuredMcpServerNames(cwd));
+    return required.filter((name) => !configured.has(name));
+  }
+
   private async executeJobWithRetries(job: ScheduledJob): Promise<JobRun> {
     // W6j: a job whose model is gone from the provider catalog fails before
     // the CLI spawns — no lock, no session, no substitution onto another
@@ -341,6 +358,43 @@ export class JobScheduler {
       addInboxMessage({
         title: `Job failed: ${job.name}`,
         body: `**Status:** failure\n\n${modelCheck.reason}`,
+        priority: "error",
+        jobId: job.id,
+        jobName: job.name,
+        runId: run.id,
+        notifyProviders: job.notifyProviders,
+      });
+      return run;
+    }
+
+    // A job's MCP servers are definitions the CLI reads out of its own user
+    // config, and the CLI resets that file from defaults after one unreadable
+    // read (see claude-config-guard). When a wipe has taken them and the guard
+    // cannot put them back, the run stops here, naming them, rather than
+    // running without gmail or conduit and reporting success.
+    const missingServers = this.missingJobMcpServers(job);
+    if (missingServers.length > 0) {
+      const reason = `MCP server(s) the job needs are configured nowhere: ${missingServers.join(", ")}. Check ~/.claude.json and the job's own server list.`;
+      const run: JobRun = {
+        id: uuidv4(),
+        jobId: job.id,
+        sessionId: "",
+        status: "failure",
+        startedAt: Date.now(),
+        completedAt: Date.now(),
+        durationMs: 0,
+        error: reason,
+        toolsUsed: [],
+        messageCount: 0,
+        prompt: job.prompt,
+        cwd: job.cwd || "",
+        configFailure: true,
+      };
+      saveRun(run);
+      logDiag(job.id, "job:config-failure", { runId: run.id, missingServers, error: reason });
+      addInboxMessage({
+        title: `Job failed: ${job.name}`,
+        body: `**Status:** failure\n\n${reason}`,
         priority: "error",
         jobId: job.id,
         jobName: job.name,
@@ -458,6 +512,18 @@ export class JobScheduler {
     if (nowMs - this.lastPruneAt >= 3_600_000) {
       this.lastPruneAt = nowMs;
       pruneAllRuns();
+    }
+
+    // The CLI resets its user config from defaults after a single unparseable
+    // read, and that silently strips the MCP servers a job runs with. The check
+    // is one local JSON file, but there is no point doing it every minute.
+    if (nowMs - this.lastConfigCheckAt >= 5 * 60_000) {
+      this.lastConfigCheckAt = nowMs;
+      try {
+        checkClaudeUserConfig();
+      } catch (err) {
+        logDiag("config-guard", "check-failed", { error: String(err) });
+      }
     }
 
     for (const [jobId, run] of this.runningJobs) {
