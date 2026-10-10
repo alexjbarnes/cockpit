@@ -254,11 +254,6 @@ export function createWebSocketHandler(
       });
       if (unsubUsage) cleanups.push(unsubUsage);
 
-      const unsubTodos = sessionManager.onTodos(sessionId, (todos) => {
-        send(ws, { type: "session:todos", sessionId, todos });
-      });
-      if (unsubTodos) cleanups.push(unsubTodos);
-
       const unsubInit = sessionManager.onInit(sessionId, (data) => {
         send(ws, { type: "session:init", sessionId, data });
       });
@@ -598,16 +593,6 @@ export function createWebSocketHandler(
             }
 
             subscribeSession(msg.sessionId);
-
-            sessionManager.loadTodosFromFiles(msg.sessionId);
-            const currentTodos = sessionManager.getTodos(msg.sessionId);
-            if (currentTodos.length > 0) {
-              send(ws, {
-                type: "session:todos",
-                sessionId: msg.sessionId,
-                todos: currentTodos,
-              });
-            }
 
             const initData = sessionManager.getInitData(msg.sessionId);
             if (initData) {

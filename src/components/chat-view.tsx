@@ -81,7 +81,6 @@ export function ChatView({
     queuedMessages,
     queuePaused,
     backgroundTasks,
-    todos,
     btw,
     promptHistory,
     hasMoreHistory,
@@ -114,7 +113,7 @@ export function ChatView({
   } = useSession(sessionId, cwd, historyView);
   const { settings } = useSettings();
   const router = useRouter();
-  const { setHeader, setBackgroundTasks, setTodos, setInitData: setShellInitData, setRuntime: setShellRuntime } = useShell();
+  const { setHeader, setBackgroundTasks, setInitData: setShellInitData, setRuntime: setShellRuntime } = useShell();
   // Header widgets (the usage indicator) follow this session's provider.
   useShellSessionModel(historyView ? undefined : currentModel);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -286,14 +285,10 @@ export function ChatView({
     setHeader({ title, onRename: handleRename });
   }, [sessionName, initialName, cwd, setHeader, handleRename]);
 
-  // Sync background tasks and todos to shell header
+  // Sync background tasks to the shell header
   useEffect(() => {
     setBackgroundTasks(backgroundTasks);
   }, [backgroundTasks, setBackgroundTasks]);
-
-  useEffect(() => {
-    setTodos(todos);
-  }, [todos, setTodos]);
 
   useEffect(() => {
     setShellInitData(initData);

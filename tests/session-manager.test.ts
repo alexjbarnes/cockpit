@@ -928,11 +928,6 @@ describe("SessionManager", () => {
       const session = manager.createSession("/tmp");
       expect(manager.getContextUsage(session.id)).toBeNull();
     });
-
-    it("getTodos returns empty array initially", () => {
-      const session = manager.createSession("/tmp");
-      expect(manager.getTodos(session.id)).toEqual([]);
-    });
   });
 
   describe("subscription and listener patterns", () => {
@@ -961,12 +956,6 @@ describe("SessionManager", () => {
     it("onInfoUpdated returns unsubscribe function", () => {
       const session = manager.createSession("/tmp");
       const unsub = manager.onInfoUpdated(session.id, () => {});
-      expect(typeof unsub).toBe("function");
-    });
-
-    it("onTodos returns unsubscribe function", () => {
-      const session = manager.createSession("/tmp");
-      const unsub = manager.onTodos(session.id, () => {});
       expect(typeof unsub).toBe("function");
     });
 
@@ -1860,11 +1849,6 @@ describe("SessionManager", () => {
       expect(manager.getTranscriptBuffer("nope")).toEqual([]);
     });
 
-    it("getTodos returns empty initially", () => {
-      const s = manager.createSession("/tmp");
-      expect(manager.getTodos(s.id)).toEqual([]);
-    });
-
     it("getModel returns default model", () => {
       const s = manager.createSession("/tmp");
       expect(manager.getModel(s.id)).toBe("sonnet");
@@ -1970,16 +1954,6 @@ describe("SessionManager", () => {
     it("onUsage returns unsubscribe function", () => {
       const s = manager.createSession("/tmp");
       const unsub = manager.onUsage(s.id, () => {});
-      expect(typeof unsub).toBe("function");
-    });
-
-    it("onTodos returns null for unknown session", () => {
-      expect(manager.onTodos("nope", () => {})).toBeNull();
-    });
-
-    it("onTodos returns unsubscribe function", () => {
-      const s = manager.createSession("/tmp");
-      const unsub = manager.onTodos(s.id, () => {});
       expect(typeof unsub).toBe("function");
     });
   });
@@ -2541,17 +2515,6 @@ describe("SessionManager", () => {
     });
   });
 
-  describe("getTodos", () => {
-    it("returns empty array initially", () => {
-      const session = manager.createSession("/tmp");
-      expect(manager.getTodos(session.id)).toEqual([]);
-    });
-
-    it("returns empty array for unknown session", () => {
-      expect(manager.getTodos("nonexistent")).toEqual([]);
-    });
-  });
-
   describe("addPendingRequest and removePendingRequest", () => {
     it("adds a pending request", () => {
       const session = manager.createSession("/tmp");
@@ -2854,12 +2817,6 @@ describe("SessionManager", () => {
 
     it("does nothing for unknown session", () => {
       expect(() => manager.setThinkingLevel("nonexistent", "low")).not.toThrow();
-    });
-  });
-
-  describe("loadTodosFromFiles", () => {
-    it("does nothing for unknown session", () => {
-      expect(() => manager.loadTodosFromFiles("nonexistent")).not.toThrow();
     });
   });
 
@@ -4786,38 +4743,6 @@ describe("SessionManager", () => {
   });
 
   describe("process close and error handling", () => {
-    it("clears todos when all completed on process close", () => {
-      const session = manager.createSession("/tmp");
-      const s = (manager as any).sessions.get(session.id)!;
-      s.todoItems = [
-        { content: "task1", status: "completed" },
-        { content: "task2", status: "completed" },
-      ];
-
-      const mockSpawn = vi.mocked(spawn);
-      (manager as any).spawnProcess(s, session.id);
-      const proc = mockSpawn.mock.results[mockSpawn.mock.results.length - 1].value;
-      proc.emit("close", 0, null);
-
-      expect(s.todoItems).toHaveLength(0);
-    });
-
-    it("does not clear todos when some are pending", () => {
-      const session = manager.createSession("/tmp");
-      const s = (manager as any).sessions.get(session.id)!;
-      s.todoItems = [
-        { content: "task1", status: "completed" },
-        { content: "task2", status: "pending" },
-      ];
-
-      const mockSpawn = vi.mocked(spawn);
-      (manager as any).spawnProcess(s, session.id);
-      const proc = mockSpawn.mock.results[mockSpawn.mock.results.length - 1].value;
-      proc.emit("close", 0, null);
-
-      expect(s.todoItems).toHaveLength(2);
-    });
-
     it("emits error on non-zero exit with stderr", () => {
       const session = manager.createSession("/tmp");
       const s = (manager as any).sessions.get(session.id)!;
@@ -5164,29 +5089,6 @@ describe("SessionManager", () => {
 
       expect(s.compacting).toBe(false);
       expect(emitted).toContain("__compact::done");
-    });
-
-    it("clears completed todos when PTY exits", async () => {
-      const session = manager.createSession("/tmp/pty-test", "PTY", { runtime: "pty" });
-      const s = (manager as any).sessions.get(session.id)!;
-      const todosEmitted: Array<unknown[]> = [];
-      s.emitter.on("todos", (_id: string, todos: unknown[]) => todosEmitted.push(todos));
-
-      capturedPtyOpts = null;
-      manager.sendMessage(session.id, "hello");
-      await vi.waitFor(() => expect(capturedPtyOpts).not.toBeNull());
-
-      // Add completed todos
-      s.todoItems = [
-        { id: "1", content: "task 1", status: "completed" },
-        { id: "2", content: "task 2", status: "completed" },
-      ];
-
-      const onExit = capturedPtyOpts!.onExit as (info: { exitCode: number; signal?: number }) => void;
-      onExit({ exitCode: 0 });
-
-      expect(s.todoItems).toEqual([]);
-      expect(todosEmitted.some((t) => t.length === 0)).toBe(true);
     });
   });
 

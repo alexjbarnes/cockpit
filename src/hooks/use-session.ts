@@ -20,7 +20,6 @@ import type {
   SessionPermissionMode,
   TextFileAttachment,
   ThinkingLevel,
-  TodoItem,
   ToolUse,
 } from "@/types";
 import {
@@ -105,7 +104,6 @@ interface UseSessionReturn {
   queuedMessages: Array<{ id: string; text: string }>;
   queuePaused: boolean;
   backgroundTasks: BackgroundTask[];
-  todos: TodoItem[];
   btw: BtwState | null;
   promptHistory: string[];
   hasMoreHistory: boolean;
@@ -176,7 +174,6 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
   const [initData, setInitData] = useState<InitData | null>(null);
   const [activeModelId, setActiveModelId] = useState<string | null>(null);
   const [hookTasks, setHookTasks] = useState<BackgroundTask[]>([]);
-  const [todos, setTodos] = useState<TodoItem[]>([]);
   const [btw, setBtw] = useState<BtwState | null>(null);
   const [promptHistory, setPromptHistory] = useState<string[]>([]);
   const [hasMoreHistory, setHasMoreHistory] = useState(false);
@@ -737,11 +734,6 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
           break;
         }
 
-        case "session:todos": {
-          setTodos(msg.todos);
-          break;
-        }
-
         case "session:task_update": {
           setHookTasks((prev) => {
             const existing = prev.find((t) => t.taskId === msg.task.taskId);
@@ -890,7 +882,6 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
           streamingRef.current = null;
           agentStackRef.current = [];
           setHookTasks([]);
-          setTodos([]);
           setHasQueuedMessage(false);
           setQueuedMessages([]);
           setQueuePaused(false);
@@ -1523,7 +1514,6 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
     queuedMessages,
     queuePaused,
     backgroundTasks,
-    todos,
     btw,
     promptHistory,
     hasMoreHistory,

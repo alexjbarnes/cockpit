@@ -38,7 +38,6 @@ import type {
   SessionInfo,
   SessionPermissionMode,
   ThinkingLevel,
-  TodoItem,
   ToolUse,
 } from "@/types";
 import { debugLog, isDebugEnabled, logDiag, logRawLine } from "./debug-logger";
@@ -55,7 +54,6 @@ import { UntrustedWorkspaceError } from "./pty-session";
 import { findChainForCliSession, getSessionPrefs, type SessionRuntime, setSessionPrefs } from "./session-prefs";
 import { getCockpitMcp } from "./singleton";
 import { createStreamState, processEvents, type StreamState } from "./stream-processor";
-import { TodoWatcher } from "./todo-watcher";
 import { findSessionCwd, loadMoreMessages, loadPromptHistory, loadTranscript, sumTranscriptUsage, transcriptExists } from "./transcript";
 
 export type { SessionRuntime };
@@ -164,7 +162,6 @@ interface Session {
   streamState: StreamState | null;
   contextUsage: ContextUsage | null;
   contextWindowSize: number;
-  todoItems: TodoItem[];
   /** Last reported background tasks, replayed to a client on connect. */
   backgroundTasks: BackgroundTask[];
   initData?: InitData;
@@ -197,7 +194,6 @@ interface Session {
    *  until PTY's async start() resolves). Also read by the stale-check log to
    *  tell "process died" from "still spawning". */
   spawning?: boolean;
-  todoWatcher: TodoWatcher | null;
   /** Cumulative token counts for the current session (used by /cost). */
 }
 
@@ -390,7 +386,6 @@ export class SessionManager {
       streamState: null,
       contextUsage: null,
       contextWindowSize: this.resolveContextWindow(info.model, info.contextSize ?? DEFAULT_CONTEXT_SIZE),
-      todoItems: [],
       backgroundTasks: [],
       pendingRequests: new Map(),
       streamingSnapshot: null,
@@ -403,7 +398,6 @@ export class SessionManager {
       bufferCliSessionId: id,
       paginationPrevIds: [],
       runtime: rt,
-      todoWatcher: null,
       cockpitAgent: isCockpitAgent,
       cockpitAgentCleanups: [],
       // Present only for a scheduled job that reports to the inbox. It is what
@@ -526,7 +520,6 @@ export class SessionManager {
         streamState: null,
         contextUsage: null,
         contextWindowSize: this.resolveContextWindow(modelSlots.main ?? undefined, restoredContextSize),
-        todoItems: [],
         backgroundTasks: [],
         pendingRequests: new Map(),
         initData: prefs?.initData,
@@ -540,7 +533,6 @@ export class SessionManager {
         bufferCliSessionId: cliId,
         paginationPrevIds: [],
         runtime: restoredRuntime,
-        todoWatcher: null,
         cockpitAgent: prefs?.cockpitAgent ?? false,
         cockpitAgentCleanups: [],
       };
@@ -1011,10 +1003,6 @@ export class SessionManager {
       const handle = session.harnessProcess;
       session.harnessProcess = null;
       handle.kill("session_destroyed");
-    }
-    if (session.todoWatcher) {
-      session.todoWatcher.stop();
-      session.todoWatcher = null;
     }
     for (const cleanup of session.cockpitAgentCleanups) {
       try {
@@ -1744,10 +1732,6 @@ export class SessionManager {
     return () => session.emitter.off("usage", handler);
   }
 
-  getTodos(sessionId: string): TodoItem[] {
-    return this.sessions.get(sessionId)?.todoItems ?? [];
-  }
-
   /**
    * The background tasks last reported for a session, for replay on connect.
    *
@@ -1799,14 +1783,6 @@ export class SessionManager {
     session.backgroundTasks = [...rest, task];
   }
 
-  onTodos(id: string, listener: (todos: TodoItem[]) => void): (() => void) | null {
-    const session = this.sessions.get(id);
-    if (!session) return null;
-    const handler = (_sessionId: string, todos: TodoItem[]) => listener(todos);
-    session.emitter.on("todos", handler);
-    return () => session.emitter.off("todos", handler);
-  }
-
   getInitData(sessionId: string): InitData | undefined {
     return this.sessions.get(sessionId)?.initData || getSessionPrefs(sessionId)?.initData;
   }
@@ -1842,29 +1818,6 @@ export class SessionManager {
     const handler = (_sessionId: string, data: InitData) => listener(data);
     session.emitter.on("init", handler);
     return () => session.emitter.off("init", handler);
-  }
-
-  loadTodosFromFiles(sessionId: string): void {
-    const session = this.sessions.get(sessionId);
-    if (!session) return;
-    if (session.todoItems.length > 0) return;
-    const watcher = new TodoWatcher(session.cliSessionId, () => {});
-    const todos = watcher.readOnce();
-    if (todos.length === 0) return;
-    session.todoItems = todos;
-    session.emitter.emit("todos", sessionId, [...session.todoItems]);
-  }
-
-  private startTodoWatcher(session: Session, sessionId: string): void {
-    if (session.todoWatcher) {
-      session.todoWatcher.stop();
-    }
-    const watcher = new TodoWatcher(session.cliSessionId, (todos) => {
-      session.todoItems = todos;
-      session.emitter.emit("todos", sessionId, [...todos]);
-    });
-    session.todoWatcher = watcher;
-    watcher.start();
   }
 
   private extractUsage(session: Session, sessionId: string, line: string): void {
@@ -2296,7 +2249,6 @@ export class SessionManager {
         session.cliSessionId = uuidv4();
         session.queuedMessages.length = 0;
         session.queuePaused = false;
-        session.todoItems = [];
         session.info.status = "idle";
         session.emitter.emit("clear", sessionId);
         session.emitter.emit("status", sessionId, "idle");
@@ -2858,7 +2810,6 @@ Additional Cockpit rules beyond the CLI's defaults:
     session.harnessProcess = handle;
     handleRef.current = handle;
     this.log(sessionId, `CLI process spawned`);
-    this.startTodoWatcher(session, sessionId);
 
     handle.ready
       .then(() => {
@@ -2949,11 +2900,6 @@ Additional Cockpit rules beyond the CLI's defaults:
           };
           session.contextUsage = postCompactEstimate;
           session.emitter.emit("usage", sessionId, postCompactEstimate);
-        }
-
-        if (session.todoItems.length > 0 && session.todoItems.every((t) => t.status === "completed")) {
-          session.todoItems = [];
-          session.emitter.emit("todos", sessionId, []);
         }
 
         // The process is gone, so there will be no transcript update to carry a

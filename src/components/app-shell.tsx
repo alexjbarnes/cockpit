@@ -9,14 +9,13 @@ import { AuthGuard } from "@/components/auth-guard";
 import { SearchButton } from "@/components/search-modal";
 import { Sidebar, type SidebarHandle } from "@/components/sidebar";
 import { BackgroundTasksButton } from "@/components/task-indicator";
-import { TodoIndicator } from "@/components/todo-indicator";
 import { Button } from "@/components/ui/button";
 import { UsageButton } from "@/components/usage-modal";
 import { useEmbedded } from "@/hooks/use-embedded";
 import { WebSocketProvider } from "@/hooks/use-websocket";
 import { headerActionsVisibility } from "@/lib/header-actions";
 import { isModalPath, type PageModalMessage, pageModalMessage } from "@/lib/page-modal";
-import type { BackgroundTask, InitData, TodoItem } from "@/types";
+import type { BackgroundTask, InitData } from "@/types";
 
 export interface SidebarSectionConfig {
   id: string;
@@ -53,8 +52,6 @@ interface ShellContextValue {
   setRuntime: (runtime: "pty" | "stream") => void;
   backgroundTasks: BackgroundTask[];
   setBackgroundTasks: (tasks: BackgroundTask[]) => void;
-  todos: TodoItem[];
-  setTodos: (todos: TodoItem[]) => void;
   initData: InitData | null;
   setInitData: (data: InitData | null) => void;
   sidebarSections: Map<string, SidebarSectionConfig>;
@@ -77,8 +74,6 @@ const ShellContext = createContext<ShellContextValue>({
   setRuntime: () => {},
   backgroundTasks: [],
   setBackgroundTasks: () => {},
-  todos: [],
-  setTodos: () => {},
   initData: null,
   setInitData: () => {},
   sidebarSections: new Map(),
@@ -243,7 +238,6 @@ export function AppShell({ children }: { children: ReactNode }) {
   const [sessionId, setSessionIdState] = useState<string | undefined>(undefined);
   const [sessionModel, setSessionModelState] = useState<string | undefined>(undefined);
   const [backgroundTasks, setBackgroundTasks] = useState<BackgroundTask[]>([]);
-  const [todos, setTodos] = useState<TodoItem[]>([]);
   const [initData, setInitData] = useState<InitData | null>(null);
   const [sidebarSectionsMap, setSidebarSectionsMap] = useState<Map<string, SidebarSectionConfig>>(new Map());
   const [runtime, setRuntimeState] = useState<"pty" | "stream">("stream");
@@ -327,8 +321,6 @@ export function AppShell({ children }: { children: ReactNode }) {
             setRuntime,
             backgroundTasks,
             setBackgroundTasks,
-            todos,
-            setTodos,
             initData,
             setInitData,
             sidebarSections: sidebarSectionsMap,
@@ -359,7 +351,6 @@ export function AppShell({ children }: { children: ReactNode }) {
                         <>
                           {cwd && <NewTerminalButton cwd={cwd} />}
                           <SearchButton />
-                          {cwd && <TodoIndicator todos={todos} />}
                           {cwd && <BackgroundTasksButton tasks={backgroundTasks} />}
                         </>
                       )}

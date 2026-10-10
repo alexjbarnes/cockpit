@@ -107,12 +107,6 @@ export interface BackgroundTask {
   summary?: string;
 }
 
-export interface TodoItem {
-  content: string;
-  status: "pending" | "in_progress" | "completed";
-  activeForm?: string;
-}
-
 export interface ModelInfo {
   value: string;
   displayName: string;
@@ -654,7 +648,6 @@ export type ServerMessage =
   | { type: "session:suggestions"; sessionId: string; suggestions: string[] }
   | { type: "session:task_update"; sessionId: string; task: BackgroundTask }
   | { type: "session:task_sync"; sessionId: string; tasks: BackgroundTask[] }
-  | { type: "session:todos"; sessionId: string; todos: TodoItem[] }
   | { type: "session:init"; sessionId: string; data: InitData }
   | {
       type: "history";

@@ -44,7 +44,7 @@ export interface PtyRuntimeOptions {
 /**
  * Owns a claude PTY process plus its HookRouter registration. Translates
  * hook payloads into ParsedEvents and pumps them through opts.onEvents so
- * SessionManager's existing stream-processor pipeline drives status, todos,
+ * SessionManager's existing stream-processor pipeline drives status,
  * pending permissions, etc.
  *
  * PermissionRequest hooks block the PTY until cockpit responds. We hold the
