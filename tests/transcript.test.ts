@@ -1575,6 +1575,47 @@ describe("transcript module", () => {
     });
   });
 
+  // The CLI records the thinking level a turn ran at as perTurnEffort, and the
+  // agent transcript modal shows it. Nothing else writes the level down, so the
+  // parser is the only door it can come through.
+  describe("the thinking level a turn ran at", () => {
+    const assistant = (extra: Record<string, unknown>) => ({
+      type: "assistant",
+      message: { id: "m1", model: "claude-haiku-4-5-20251001", content: [{ type: "text", text: "hi" }] },
+      timestamp: "2024-01-01T00:00:00Z",
+      ...extra,
+    });
+
+    it("carries perTurnEffort onto the message", async () => {
+      (existsSync as any).mockReturnValue(true);
+      (readFile as any).mockResolvedValue(jsonl(assistant({ perTurnEffort: "max" })));
+
+      const result = await loadTranscript("session-123", "/tmp");
+
+      expect(result.messages[0]).toMatchObject({ model: "claude-haiku-4-5-20251001", effort: "max" });
+    });
+
+    it("leaves it off when the CLI did not record one", async () => {
+      (existsSync as any).mockReturnValue(true);
+      (readFile as any).mockResolvedValue(jsonl(assistant({})));
+
+      const result = await loadTranscript("session-123", "/tmp");
+
+      expect(result.messages[0].effort).toBeUndefined();
+    });
+
+    // A level this cockpit does not know is a value it cannot render or reason
+    // about, so it is dropped rather than trusted into the type.
+    it("ignores a level it does not recognise", async () => {
+      (existsSync as any).mockReturnValue(true);
+      (readFile as any).mockResolvedValue(jsonl(assistant({ perTurnEffort: "ludicrous" })));
+
+      const result = await loadTranscript("session-123", "/tmp");
+
+      expect(result.messages[0].effort).toBeUndefined();
+    });
+  });
+
   describe("progress entries with missing parent", () => {
     it("skips progress entry when parent tool not found", async () => {
       (existsSync as any).mockReturnValue(true);

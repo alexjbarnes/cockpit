@@ -14,8 +14,10 @@ import type {
   ImageAttachment,
   SessionGroup,
   SessionInfo,
+  ThinkingLevel,
   ToolUse,
 } from "@/types";
+import { THINKING_LEVELS } from "@/types";
 import { debugLog } from "./debug-logger";
 import { getSessionPrefs } from "./session-prefs";
 
@@ -545,6 +547,15 @@ function pushBlockCoalescingThinking(target: ContentBlock[], block: ContentBlock
   target.push(block);
 }
 
+/** The level this turn ran at. The CLI records it per assistant entry as
+ *  perTurnEffort, which is the only place the level is written down: nothing in
+ *  the session's own settings says what a subagent was launched with, since an
+ *  agent inherits the session's level unless the launch overrode it. */
+function effortOf(entry: TranscriptEntry): ThinkingLevel | undefined {
+  const value = (entry as unknown as Record<string, unknown>).perTurnEffort;
+  return typeof value === "string" && THINKING_LEVELS.includes(value as ThinkingLevel) ? (value as ThinkingLevel) : undefined;
+}
+
 function parseLines(lines: string[]): { messages: ChatMessage[]; lastUsage: { used: number; total: number } | null } {
   const messages: ChatMessage[] = [];
   const messageById = new Map<string, ChatMessage>();
@@ -842,6 +853,7 @@ function parseLines(lines: string[]): { messages: ChatMessage[]; lastUsage: { us
           blocks,
           timestamp: entry.timestamp ? new Date(entry.timestamp).getTime() : Date.now(),
           model: typeof entry.message.model === "string" ? entry.message.model : undefined,
+          effort: effortOf(entry),
         };
         messages.push(msg);
         messageById.set(msgId, msg);

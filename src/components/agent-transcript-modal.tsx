@@ -6,7 +6,7 @@ import { createPortal } from "react-dom";
 import { Button } from "@/components/ui/button";
 import { useHistoryModal } from "@/hooks/use-history-modal";
 import { isAsyncLaunchOutput } from "@/lib/agent-tasks";
-import { type AgentTarget, agentRunning, atLatest, sameTranscript, splitAgentTranscript } from "@/lib/agent-transcript";
+import { type AgentTarget, agentRunning, agentTags, atLatest, sameTranscript, splitAgentTranscript } from "@/lib/agent-transcript";
 import type { ChatMessage } from "@/types";
 import { useShell } from "./app-shell";
 import { MessageBubble } from "./message-bubble";
@@ -140,7 +140,7 @@ function AgentTranscriptModal({
     };
   }, []);
 
-  const tags = [agent.agentType, agent.model].filter((t): t is string => !!t);
+  const tags = agentTags(agent, messages ?? []);
   // With no transcript to show, the launch's own record stands in: the calls
   // nested under it and, for an agent that did not run in the background, its
   // result.
@@ -170,7 +170,11 @@ function AgentTranscriptModal({
               <span className="font-mono text-sm font-medium">Agent</span>
               {running && <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground" />}
               {tags.map((tag) => (
-                <span key={tag} className="min-w-0 truncate rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                <span
+                  key={tag}
+                  data-testid="agent-tag"
+                  className="min-w-0 truncate rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground"
+                >
                   {tag}
                 </span>
               ))}

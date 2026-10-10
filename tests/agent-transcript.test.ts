@@ -2,7 +2,15 @@
 // row in Background Tasks. These cover what it is handed in each case, when it
 // counts the agent as working, and how it reads the transcript it fetches.
 import { describe, expect, it } from "vitest";
-import { agentFromTask, agentFromTool, agentRunning, atLatest, sameTranscript, splitAgentTranscript } from "@/lib/agent-transcript";
+import {
+  agentFromTask,
+  agentFromTool,
+  agentRunning,
+  agentTags,
+  atLatest,
+  sameTranscript,
+  splitAgentTranscript,
+} from "@/lib/agent-transcript";
 import type { BackgroundTask, ChatMessage, ToolUse } from "@/types";
 
 const ASYNC_OUTPUT =
@@ -134,5 +142,45 @@ describe("atLatest", () => {
 
   it("does not once the reader has scrolled up", () => {
     expect(atLatest({ scrollTop: 300, scrollHeight: 1000, clientHeight: 400 })).toBe(false);
+  });
+});
+
+// The chips above the transcript: what the agent is running on. A launch names
+// a model only when the caller overrode one, and the thinking level is recorded
+// per turn by the CLI and nowhere else, so the transcript is the source.
+describe("agentTags", () => {
+  const launch = agentFromTool(tool({ input: JSON.stringify({ description: "Review", subagent_type: "reviewer" }), output: ASYNC_OUTPUT }));
+  const said = (model: string, effort?: ChatMessage["effort"]): ChatMessage => ({
+    ...message("assistant", "…"),
+    model,
+    effort,
+  });
+
+  it("names the model and level the agent's own transcript recorded", () => {
+    expect(agentTags(launch, [said("claude-haiku-4-5-20251001", "max")])).toEqual(["reviewer", "claude-haiku-4-5-20251001", "Max"]);
+  });
+
+  it("falls back to the launch's model when the transcript has none yet", () => {
+    const withModel = agentFromTool(tool({ input: JSON.stringify({ subagent_type: "reviewer", model: "opus" }), output: ASYNC_OUTPUT }));
+    expect(agentTags(withModel, [])).toEqual(["reviewer", "opus"]);
+  });
+
+  it("prefers the transcript's model over the launch's, since the launch may have said inherit", () => {
+    const withModel = agentFromTool(tool({ input: JSON.stringify({ model: "opus" }), output: ASYNC_OUTPUT }));
+    expect(agentTags(withModel, [said("claude-haiku-4-5-20251001")])).toEqual(["claude-haiku-4-5-20251001"]);
+  });
+
+  // A level changed mid-run should read as the current one, not the first.
+  it("reports the newest level and model in the transcript", () => {
+    expect(agentTags(launch, [said("model-a", "high"), said("model-b", "xhigh")])).toEqual(["reviewer", "model-b", "XHigh"]);
+  });
+
+  it("leaves the level off for a transcript written before the CLI recorded one", () => {
+    expect(agentTags(launch, [said("claude-haiku-4-5-20251001")])).toEqual(["reviewer", "claude-haiku-4-5-20251001"]);
+  });
+
+  it("shows nothing but the type for an agent with no transcript and no launch details", () => {
+    expect(agentTags({ id: "toolu_1", taskIds: ["toolu_1"], agentType: "Explore" }, [])).toEqual(["Explore"]);
+    expect(agentTags({ id: "toolu_1", taskIds: ["toolu_1"] }, [])).toEqual([]);
   });
 });

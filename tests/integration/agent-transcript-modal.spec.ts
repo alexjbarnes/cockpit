@@ -100,6 +100,10 @@ test("an agent's transcript opens in a modal from Background Tasks and from its 
     await expect(modal.getByText(LAST_LINE)).toBeInViewport({ timeout: 30_000 });
     await expect.poll(() => atEnd(modal)).toEqual({ overflows: true, atEnd: true });
     await expect(modal.getByTestId("agent-transcript-working")).toHaveCount(0, { timeout: 30_000 });
+    // The chips name what the agent is running on. The model comes from the
+    // agent's own transcript rather than the launch, which names one only when
+    // the caller overrode it; the level shows only when the CLI recorded it.
+    await expect(modal.getByTestId("agent-tag")).toContainText(["general-purpose", "claude-sonnet-4-6"]);
     // The card shows the same agent as finished.
     await expect(card.locator(".animate-spin")).toHaveCount(0);
 

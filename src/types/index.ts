@@ -69,6 +69,10 @@ export interface ChatMessage {
   documents?: DocumentAttachment[];
   textFiles?: TextFileAttachment[];
   model?: string;
+  /** The thinking level this turn ran at, as the CLI recorded it
+   *  (perTurnEffort on the entry). Absent on transcripts written by a CLI that
+   *  did not record it. */
+  effort?: ThinkingLevel;
   /** A user message sent while Claude was working that Claude has not read
    *  yet. Only ever on the local copy: the transcript's has no such flag. */
   awaitingRead?: boolean;
@@ -222,7 +226,11 @@ export interface PermissionSuggestion {
   destination?: string;
 }
 
-export type ThinkingLevel = "off" | "low" | "medium" | "high" | "xhigh" | "max";
+/** Canonical list; ThinkingLevel derives from it (same pattern as
+ *  ISSUE_STATUSES). The transcript parser validates the CLI's recorded effort
+ *  against it, so a level the CLI adds later is ignored rather than trusted. */
+export const THINKING_LEVELS = ["off", "low", "medium", "high", "xhigh", "max"] as const;
+export type ThinkingLevel = (typeof THINKING_LEVELS)[number];
 
 export interface UsageLimit {
   /** Percentage 0-100 */

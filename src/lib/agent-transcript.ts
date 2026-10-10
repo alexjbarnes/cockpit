@@ -1,4 +1,4 @@
-import type { BackgroundTask, ChatMessage, ToolUse } from "@/types";
+import type { BackgroundTask, ChatMessage, ThinkingLevel, ToolUse } from "@/types";
 import { agentIdFromOutput } from "./agent-tasks";
 
 /**
@@ -91,4 +91,41 @@ const LATEST_SLACK_PX = 48;
 
 export function atLatest(el: { scrollTop: number; scrollHeight: number; clientHeight: number }): boolean {
   return el.scrollHeight - el.scrollTop - el.clientHeight <= LATEST_SLACK_PX;
+}
+
+/** The levels as the composer names them, so a level reads the same wherever
+ *  it appears. */
+const EFFORT_LABELS: Record<ThinkingLevel, string> = {
+  off: "Off",
+  low: "Low",
+  medium: "Medium",
+  high: "High",
+  xhigh: "XHigh",
+  max: "Max",
+};
+
+/**
+ * The chips above an agent's transcript: its type, the model it is running on
+ * and the thinking level it is running at.
+ *
+ * The model and the level come from the agent's own transcript rather than its
+ * launch record, because that is the only place either is written down: a
+ * launch names a model only when the caller overrode one (otherwise the agent
+ * inherits the session's), and the level is recorded per turn by the CLI and
+ * nowhere else. The newest message that named one wins, so a level changed
+ * mid-run reads as the current one. Without a transcript, the launch's own
+ * model still shows.
+ */
+export function agentTags(agent: AgentTarget, messages: ChatMessage[]): string[] {
+  const newest = <T>(pick: (m: ChatMessage) => T | undefined): T | undefined => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const value = pick(messages[i]);
+      if (value !== undefined) return value;
+    }
+    return undefined;
+  };
+  const effort = newest((m) => m.effort);
+  return [agent.agentType, newest((m) => m.model) ?? agent.model, effort ? EFFORT_LABELS[effort] : undefined].filter(
+    (tag): tag is string => !!tag,
+  );
 }
