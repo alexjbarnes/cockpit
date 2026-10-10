@@ -65,10 +65,17 @@ export function resetVapidCacheForTesting(): void {
  * one, and a URL that names the deployment is more useful to whoever runs the
  * push service than a placeholder: it is what they would contact before
  * blocking the sender.
+ *
+ * Only https: or mailto: is accepted — web-push refuses an http: subject outright
+ * ("Vapid subject is not an https: or mailto: URL"). A base URL of a LAN
+ * address is exactly that case, and a common one, since the base URL exists to
+ * build links that work from a phone on the same network: it stays for the
+ * links and the placeholder is used as the contact.
  */
 function vapidSubject(): string {
-  const baseUrl = getNotificationSettings().baseUrl?.trim();
-  if (baseUrl && /^https?:\/\//.test(baseUrl)) return baseUrl.replace(/\/$/, "");
+  const baseUrl = getNotificationSettings().baseUrl?.trim() ?? "";
+  if (baseUrl.startsWith("mailto:")) return baseUrl;
+  if (baseUrl.startsWith("https://")) return baseUrl.replace(/\/$/, "");
   return "mailto:cockpit@localhost";
 }
 

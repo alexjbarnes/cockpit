@@ -101,6 +101,23 @@ describe("sending a push", () => {
     const options = h.sent[0].options as { vapidDetails: { subject: string } };
     expect(options.vapidDetails.subject).toBe("mailto:cockpit@localhost");
   });
+
+  // The base URL exists to build links that work from a phone on the same
+  // network, so it is often a plain LAN address — and web-push refuses an
+  // http: subject outright rather than pushing anything.
+  it("ignores an http base url, which cannot be the subject", async () => {
+    h.settings.baseUrl = "http://192.168.0.39:3001";
+    await sendWebPush(config, { title: "t", body: "b" });
+    const options = h.sent[0].options as { vapidDetails: { subject: string } };
+    expect(options.vapidDetails.subject).toBe("mailto:cockpit@localhost");
+  });
+
+  it("takes a mailto base url as it stands", async () => {
+    h.settings.baseUrl = "mailto:me@example.com";
+    await sendWebPush(config, { title: "t", body: "b" });
+    const options = h.sent[0].options as { vapidDetails: { subject: string } };
+    expect(options.vapidDetails.subject).toBe("mailto:me@example.com");
+  });
 });
 
 describe("a subscription the push service has forgotten", () => {
