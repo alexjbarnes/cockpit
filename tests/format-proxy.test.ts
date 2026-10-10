@@ -944,6 +944,86 @@ describe("FormatProxy server", () => {
     expect((await res.json()).type).toBe("error");
   });
 
+  // One provider, two wires: CommandCode's catalog says per model which
+  // endpoint serves it, and the proxy routes accordingly — Claude models are
+  // relayed verbatim to /messages, everything else is translated to
+  // /chat/completions. The CLI on those sessions holds the proxy's placeholder
+  // token, so the relay must carry the provider's own key instead.
+  describe("a provider whose catalog straddles both wires", () => {
+    const upstreamFor = (port: number) => ({
+      baseUrl: `http://127.0.0.1:${port}`,
+      apiKey: "cmd-key",
+      modelIds: ["claude-sonnet-5-5", "deepseek/deepseek-v4-flash"],
+      anthropicWireModels: ["claude-sonnet-5-5"],
+      anthropicMessagesPath: "/messages",
+    });
+
+    it("relays a model its catalog lists on /messages", async () => {
+      let seenPath = "";
+      let seenAuth = "";
+      const port = await startUpstream((_body, res) => {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ id: "msg_1", type: "message", content: [{ type: "text", text: "relayed" }] }));
+      });
+      upstream?.on("request", (req) => {
+        seenPath = req.url ?? "";
+        seenAuth = String(req.headers.authorization ?? "");
+      });
+      proxy = new FormatProxy(() => upstreamFor(port));
+      await proxy.start();
+
+      const res = await fetch(`${proxy.getUrl("commandcode")}/v1/messages`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: "Bearer cockpit-format-proxy" },
+        body: JSON.stringify({ model: "claude-sonnet-5-5", max_tokens: 50, messages: [{ role: "user", content: "hi" }] }),
+      });
+
+      expect(seenPath, "the model's own endpoint, not the translated one").toBe("/messages");
+      expect(seenAuth, "the provider's key replaces the CLI's placeholder").toBe("Bearer cmd-key");
+      expect((await res.json()).content).toEqual([{ type: "text", text: "relayed" }]);
+    });
+
+    it("translates a model its catalog lists on /chat/completions", async () => {
+      let seenPath = "";
+      const port = await startUpstream((_body, res) => {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify({
+            id: "gen-1",
+            model: "deepseek/deepseek-v4-flash",
+            choices: [{ message: { content: "translated" }, finish_reason: "stop" }],
+          }),
+        );
+      });
+      upstream?.on("request", (req) => {
+        seenPath = req.url ?? "";
+      });
+      proxy = new FormatProxy(() => upstreamFor(port));
+      await proxy.start();
+
+      const res = await fetch(`${proxy.getUrl("commandcode")}/v1/messages`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model: "deepseek/deepseek-v4-flash", max_tokens: 50, messages: [{ role: "user", content: "hi" }] }),
+      });
+
+      expect(seenPath).toBe("/chat/completions");
+      expect((await res.json()).content).toEqual([{ type: "text", text: "translated" }]);
+    });
+
+    it("still answers an unparseable body with 400 rather than guessing a wire", async () => {
+      const port = await startUpstream((_body, res) => {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end("{}");
+      });
+      proxy = new FormatProxy(() => upstreamFor(port));
+      await proxy.start();
+
+      const res = await fetch(`${proxy.getUrl("commandcode")}/v1/messages`, { method: "POST", body: "{ not json" });
+      expect(res.status).toBe(400);
+    });
+  });
+
   it("translates a non-stream round trip and injects the upstream key", async () => {
     let seenAuth = "";
     let seenBody = "";

@@ -20,8 +20,10 @@ vi.mock("@/server/providers", () => ({
   syncZenModels: async () => h.sync,
   syncGoModels: async () => h.sync,
   syncDeepSeekModels: async () => h.sync,
+  syncCommandCodeModels: async () => h.sync,
 }));
 
+import { POST as connectCommandCode } from "@/app/api/providers/commandcode/connect/route";
 import { POST as connectDeepSeek } from "@/app/api/providers/deepseek/connect/route";
 import { POST as connectZen } from "@/app/api/providers/zen/connect/route";
 import { POST as connectZenGo } from "@/app/api/providers/zen-go/connect/route";
@@ -69,6 +71,13 @@ describe("connect routes report a transport failure as one", () => {
     h.sync = { ok: false, error: "Could not reach OpenCode Zen (HTTP 500)" };
     expect((await connect(connectZen)).status).toBe(502);
     expect((await connect(connectZenGo)).status).toBe(502);
+  });
+
+  // CommandCode's catalog is public too, so its key is not checked at connect
+  // either — the first turn is where a wrong one surfaces.
+  it("answers 502 for CommandCode when its catalog could not be fetched", async () => {
+    h.sync = { ok: false, error: "Could not reach CommandCode (HTTP 503)" };
+    expect((await connect(connectCommandCode)).status).toBe(502);
   });
 
   it("passes a successful sync straight through", async () => {

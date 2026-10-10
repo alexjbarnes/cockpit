@@ -10,6 +10,7 @@ import type { Provider, ProviderModel, ThinkingLevel } from "@/types";
 export const OPENCODE_ZEN_PROVIDER_ID = "zen";
 export const OPENCODE_ZEN_GO_PROVIDER_ID = "zen-go";
 export const DEEPSEEK_PROVIDER_ID = "deepseek";
+export const COMMANDCODE_PROVIDER_ID = "commandcode";
 /** Test escape hatches mirror COCKPIT_OPENROUTER_BASE_URL. */
 export function zenBaseUrl(): string {
   return process.env.COCKPIT_ZEN_BASE_URL || "https://opencode.ai/zen/v1";
@@ -24,6 +25,13 @@ export function zenGoBaseUrl(): string {
 export function deepseekBaseUrl(): string {
   return process.env.COCKPIT_DEEPSEEK_BASE_URL || "https://api.deepseek.com/anthropic";
 }
+/** CommandCode's Provider API. One key serves both wires, and the catalog says
+ *  per model which one a model is on: its Claude models answer only /messages,
+ *  everything else only /chat/completions. */
+export function commandCodeBaseUrl(): string {
+  return process.env.COCKPIT_COMMANDCODE_BASE_URL || "https://api.commandcode.ai/provider/v1";
+}
+
 /** DeepSeek's OpenAI-side endpoints (key validation via /v1/models, and
  *  /user/balance) live on the API root, not under the Anthropic door. */
 function deepseekApiRoot(): string {
@@ -35,6 +43,7 @@ const BUILTIN_CONFIG_IDS = new Set<string>([
   OPENCODE_ZEN_PROVIDER_ID,
   OPENCODE_ZEN_GO_PROVIDER_ID,
   DEEPSEEK_PROVIDER_ID,
+  COMMANDCODE_PROVIDER_ID,
 ]);
 
 /** Catalog-backed built-ins (openrouter, zen, zen-go, deepseek). Sessions on
@@ -46,12 +55,21 @@ export function isBuiltinCatalogProvider(id: string): boolean {
 /** Built-ins that speak OpenAI wire format through the cockpit proxy (DeepSeek
  *  is NOT one — it ships an Anthropic-native endpoint and runs passthrough):
  *  the env var holding the stored key and the upstream base. */
-const OPENAI_WIRE_BUILTINS: Record<string, { name: string; keyEnvVar: string; baseUrl: () => string }> = {
+const OPENAI_WIRE_BUILTINS: Record<string, { name: string; keyEnvVar: string; baseUrl: () => string; anthropicMessagesPath?: string }> = {
   [OPENCODE_ZEN_PROVIDER_ID]: { name: "OpenCode Zen", keyEnvVar: "OPENCODE_API_KEY", baseUrl: zenBaseUrl },
   // Go accepts the same key value as a connected Zen key, but is billed as a
   // separate subscription, so it is stored under its own env var rather than
   // sharing OPENCODE_API_KEY — connecting it is a deliberate separate step.
   [OPENCODE_ZEN_GO_PROVIDER_ID]: { name: "OpenCode Go", keyEnvVar: "OPENCODE_GO_API_KEY", baseUrl: zenGoBaseUrl },
+  // CommandCode serves both wires from one base; relayed (Anthropic-wire)
+  // models sit at /messages beside the OpenAI door's /chat/completions, so the
+  // CLI's own /v1 prefix has to come off on the way out.
+  [COMMANDCODE_PROVIDER_ID]: {
+    name: "CommandCode",
+    keyEnvVar: "COMMANDCODE_API_KEY",
+    baseUrl: commandCodeBaseUrl,
+    anthropicMessagesPath: "/messages",
+  },
 };
 
 function prefsDir(): string {
@@ -198,6 +216,7 @@ const BUILTIN_NAMES: Record<string, string> = {
   [OPENCODE_ZEN_PROVIDER_ID]: "OpenCode Zen",
   [OPENCODE_ZEN_GO_PROVIDER_ID]: "OpenCode Go",
   [DEEPSEEK_PROVIDER_ID]: "DeepSeek",
+  [COMMANDCODE_PROVIDER_ID]: "CommandCode",
 };
 
 /** Persist a built-in's user state (key, enabled set, and for zen the synced
@@ -309,6 +328,8 @@ export function resolveProxyUpstream(providerId: string): {
   wireFormat?: "openai" | "anthropic";
   effortByModel?: Record<string, string[]>;
   supportsImageInputByModel?: Record<string, boolean>;
+  anthropicWireModels?: string[];
+  anthropicMessagesPath?: string;
 } | null {
   if (providerId === OPENROUTER_PROVIDER_ID) {
     const stored = loadBuiltinStored(OPENROUTER_PROVIDER_ID);
@@ -335,7 +356,18 @@ export function resolveProxyUpstream(providerId: string): {
   // rejects outright.
   const supportsImageInputByModel: Record<string, boolean> = {};
   for (const m of models) if (m.supportsImageInput === false) supportsImageInputByModel[m.modelId] = false;
-  return { baseUrl: cfg.baseUrl(), apiKey, modelIds: models.map((m) => m.modelId), effortByModel, supportsImageInputByModel };
+  // A provider whose catalog straddles both wires routes per model: these are
+  // the ones the proxy relays instead of translating.
+  const anthropicWireModels = models.filter((m) => m.wire === "anthropic").map((m) => m.modelId);
+  return {
+    baseUrl: cfg.baseUrl(),
+    apiKey,
+    modelIds: models.map((m) => m.modelId),
+    effortByModel,
+    supportsImageInputByModel,
+    ...(anthropicWireModels.length > 0 ? { anthropicWireModels } : {}),
+    ...(cfg.anthropicMessagesPath ? { anthropicMessagesPath: cfg.anthropicMessagesPath } : {}),
+  };
 }
 
 interface ModelsDevEntry {
@@ -520,11 +552,63 @@ export async function syncDeepSeekModels(keyOverride?: string): Promise<SyncResu
   }
 }
 
+/** One entry of CommandCode's public model list. Its `supported_endpoints` is
+ *  the whole reason this provider is different: the same key serves models on
+ *  two wires, and the list says which. */
+interface CommandCodeModel {
+  id?: string;
+  name?: string;
+  context_length?: number;
+  supported_endpoints?: string[];
+}
+
+/**
+ * CommandCode's catalog, from its public /models (no key needed to read it, a
+ * key to run anything). The per-model `supported_endpoints` decides the wire:
+ * a model that answers /messages is marked anthropic and the proxy relays it
+ * verbatim, everything else goes through the OpenAI translation. models.dev
+ * has no entry for this provider, so there is no pricing to merge in and the
+ * spend estimate has nothing to charge against a credit-metered plan.
+ */
+export async function syncCommandCodeModels(keyOverride?: string): Promise<SyncResult> {
+  const stored = loadBuiltinStored(COMMANDCODE_PROVIDER_ID);
+  const apiKey = keyOverride ?? stored?.envVars?.COMMANDCODE_API_KEY;
+  try {
+    const res = await fetch(`${commandCodeBaseUrl()}/models`, {
+      headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : {},
+      signal: AbortSignal.timeout(30_000),
+    });
+    if (!res.ok) return { ok: false, error: `Could not reach CommandCode (HTTP ${res.status})` };
+    const body = (await res.json()) as { data?: CommandCodeModel[] };
+    const entries = (body.data ?? []).filter((m): m is CommandCodeModel & { id: string } => !!m.id);
+    if (entries.length === 0) return { ok: false, error: "CommandCode returned an empty model list" };
+
+    const models: ProviderModel[] = entries.map((m) => {
+      const endpoints = m.supported_endpoints ?? [];
+      return {
+        modelId: m.id,
+        displayName: m.name || m.id,
+        effortLevels: [],
+        contextSizes: [],
+        contextLength: m.context_length,
+        wire: endpoints.includes("/messages") ? "anthropic" : "openai",
+        // The free ids carry it in the name ("…:free", "…-free"), which is the
+        // only signal the catalog gives.
+        free: /[:-]free$/.test(m.id),
+      };
+    });
+    saveSyncedBuiltin(COMMANDCODE_PROVIDER_ID, "COMMANDCODE_API_KEY", stored, apiKey, models);
+    return { ok: true, modelCount: models.length };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
 const BUILTIN_SYNC_INTERVAL_MS = 24 * 60 * 60 * 1000;
 let builtinSyncTimer: ReturnType<typeof setInterval> | null = null;
 
 /** Boot-time plus daily refresh of the proxied built-ins' model lists. All
- *  sources are public (zen/go /models, models.dev), so this runs whether or
+ *  sources are public (zen/go/commandcode /models, models.dev), so this runs whether or
  *  not a key is connected — the providers page shows model and free counts before
  *  connect, and connected installs stay fresh without manual syncs. Failures
  *  stay silent (best-effort; the next tick retries). */
@@ -535,6 +619,7 @@ export function startBuiltinModelSync(): void {
       [OPENCODE_ZEN_PROVIDER_ID, () => syncZenModels()],
       [OPENCODE_ZEN_GO_PROVIDER_ID, () => syncGoModels()],
       [DEEPSEEK_PROVIDER_ID, () => syncDeepSeekModels()],
+      [COMMANDCODE_PROVIDER_ID, () => syncCommandCodeModels()],
     ];
     for (const [id, sync] of syncs) {
       const syncedAt = loadBuiltinStored(id)?.syncedAt ?? 0;

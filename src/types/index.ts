@@ -712,6 +712,11 @@ export interface ProviderModel {
   supportsImageInput?: boolean;
   /** ISO date after which the provider withdraws the model, when declared. */
   expirationDate?: string;
+  /** The wire this model is served on, for a provider whose catalog straddles
+   *  both: "anthropic" is relayed verbatim by the proxy, "openai" (and absent)
+   *  goes through the translation. CommandCode is the case — its Claude models
+   *  answer only /messages, everything else only /chat/completions. */
+  wire?: "anthropic" | "openai";
 }
 
 export interface Provider {

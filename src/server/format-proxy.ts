@@ -34,6 +34,17 @@ export interface ProxyUpstream {
    *  known to be false is never sent one; a model absent here is sent them as
    *  before, since the flag is not always known. */
   supportsImageInputByModel?: Record<string, boolean>;
+  /** Models this upstream serves on Anthropic wire while the rest of its
+   *  catalog is OpenAI wire. A request naming one is relayed verbatim to
+   *  `{baseUrl}/messages`; every other model is translated to
+   *  /chat/completions. CommandCode is why this exists: its catalog is one
+   *  provider with two wires, Claude models answering only /messages and
+   *  everything else only /chat/completions. */
+  anthropicWireModels?: string[];
+  /** Where a relayed Anthropic request goes, when the upstream's door is not
+   *  the CLI's own /v1 path. CommandCode mirrors OpenAI's shape — /messages
+   *  beside /chat/completions — so its relays drop the /v1 the CLI adds. */
+  anthropicMessagesPath?: string;
 }
 
 export type UpstreamResolver = (providerId: string) => ProxyUpstream | null;
@@ -930,6 +941,28 @@ export class FormatProxy {
     }
 
     if (req.method === "POST" && path === "/v1/messages") {
+      // A provider whose catalog straddles both wires is routed by the model
+      // the request names, so the body is read here and handed to whichever
+      // path runs. Reading it once also means the relay sends exactly the
+      // bytes the translation path would have seen.
+      if (upstream.anthropicWireModels?.length) {
+        const body = await readBody(req);
+        let model: unknown;
+        try {
+          model = (JSON.parse(body) as { model?: unknown }).model;
+        } catch {
+          logProxy(providerId, "bad-request-body", { status: 400 });
+          jsonError(res, 400, "Invalid JSON body");
+          return;
+        }
+        if (typeof model === "string" && upstream.anthropicWireModels.includes(model)) {
+          const relayPath = upstream.anthropicMessagesPath ?? path;
+          await this.passthrough(req, res, upstream, relayPath + (query ? `?${query}` : ""), providerId, body, true);
+          return;
+        }
+        await this.proxyMessages(req, res, upstream, providerId, body);
+        return;
+      }
       await this.proxyMessages(req, res, upstream, providerId);
       return;
     }
@@ -949,15 +982,26 @@ export class FormatProxy {
     upstream: ProxyUpstream,
     pathWithQuery: string,
     providerId: string,
+    /** The request body, when the caller has already read it to route by. */
+    preReadBody?: string,
+    /** Replace whatever auth the client sent with this upstream's own key.
+     *  Needed when one provider serves both wires: the CLI on those sessions
+     *  authenticates to this proxy with a placeholder token (it is configured
+     *  for the translated path), so relaying its headers verbatim would hand
+     *  the placeholder to a provider that checks for a real key. */
+    ownKeyOnly = false,
   ): Promise<void> {
-    const body = req.method === "GET" || req.method === "HEAD" ? undefined : await readBody(req);
+    const body = req.method === "GET" || req.method === "HEAD" ? undefined : (preReadBody ?? (await readBody(req)));
     const headers: Record<string, string> = {};
     for (const [key, value] of Object.entries(req.headers)) {
       if (typeof value !== "string") continue;
       if (key === "host" || key === "connection" || key === "content-length" || key === "transfer-encoding") continue;
+      if (ownKeyOnly && (key === "authorization" || key === "x-api-key")) continue;
       headers[key] = value;
     }
-    if (!headers.authorization && !headers["x-api-key"] && upstream.apiKey) {
+    if (ownKeyOnly && upstream.apiKey) {
+      headers.authorization = `Bearer ${upstream.apiKey}`;
+    } else if (!headers.authorization && !headers["x-api-key"] && upstream.apiKey) {
       headers.authorization = `Bearer ${upstream.apiKey}`;
     }
 
@@ -1045,10 +1089,17 @@ export class FormatProxy {
     res.end();
   }
 
-  private async proxyMessages(req: IncomingMessage, res: ServerResponse, upstream: ProxyUpstream, providerId: string): Promise<void> {
+  private async proxyMessages(
+    req: IncomingMessage,
+    res: ServerResponse,
+    upstream: ProxyUpstream,
+    providerId: string,
+    /** The request body, when the caller has already read it to route by. */
+    preReadBody?: string,
+  ): Promise<void> {
     let anthropicBody: AnthropicRequest;
     try {
-      anthropicBody = JSON.parse(await readBody(req));
+      anthropicBody = JSON.parse(preReadBody ?? (await readBody(req)));
     } catch {
       logProxy(providerId, "bad-request-body", { status: 400 });
       jsonError(res, 400, "Invalid JSON body");
