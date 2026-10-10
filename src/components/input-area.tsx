@@ -495,7 +495,7 @@ export function InputArea({
   const hasAttachments = pendingImages.length > 0 || pendingDocs.length > 0 || pendingTextFiles.length > 0;
 
   const handleSend = useCallback(
-    (opts?: SendOptions) => {
+    (opts?: SendOptions, ui?: { keepKeyboard?: boolean }) => {
       const trimmed = text.trim();
       if (!trimmed && !hasAttachments) return;
       if (!connected) return;
@@ -531,7 +531,10 @@ export function InputArea({
       setSelectedIndex(0);
       if (textareaRef.current) {
         textareaRef.current.style.height = "auto";
-        if (dismissKeyboard && "ontouchstart" in window) {
+        // A send chosen from the long-press menu keeps the keyboard: it is a
+        // mid-turn action taken while composing, and dropping the keyboard
+        // under it hides the composer the user is still working in.
+        if (dismissKeyboard && "ontouchstart" in window && !ui?.keepKeyboard) {
           textareaRef.current.blur();
         } else {
           textareaRef.current.focus();
@@ -1718,8 +1721,8 @@ export function InputArea({
       <SendModeModal
         open={sendModeOpen}
         onOpenChange={setSendModeOpen}
-        onSendNow={() => handleSend()}
-        onSendAfterTurn={() => handleSend({ afterTurn: true })}
+        onSendNow={() => handleSend(undefined, { keepKeyboard: true })}
+        onSendAfterTurn={() => handleSend({ afterTurn: true }, { keepKeyboard: true })}
       />
       <McpStatusModal open={mcpOpen} onOpenChange={setMcpOpen} sessionId={sessionId} initData={initData} />
       <PromptHistoryModal

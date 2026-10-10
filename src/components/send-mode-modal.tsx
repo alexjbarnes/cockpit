@@ -15,6 +15,11 @@ interface SendModeModalProps {
  * Offered on a long press or right-click of Send while Claude is working: hand
  * the message over now, for Claude to read at its next step, or hold it in
  * cockpit's queue and send it as a new message once the turn ends.
+ *
+ * Nothing here takes focus. The composer behind it is mid-message, and a
+ * focused button would close the on-screen keyboard and shrink the viewport
+ * this modal is centred in; preventing the default on mousedown leaves focus,
+ * and the keyboard, where the user left them.
  */
 export function SendModeModal({ open, onOpenChange, onSendNow, onSendAfterTurn }: SendModeModalProps) {
   useEffect(() => {
@@ -55,7 +60,13 @@ export function SendModeModal({ open, onOpenChange, onSendNow, onSendAfterTurn }
       <div className="w-full max-w-sm mx-4 rounded-lg border bg-background p-5 shadow-lg" data-testid="send-mode-modal">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-base font-semibold">Claude is working</h2>
-          <Button variant="ghost" size="icon" onClick={() => onOpenChange(false)} aria-label="Close">
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => onOpenChange(false)}
+            onMouseDown={(e) => e.preventDefault()}
+            aria-label="Close"
+          >
             <X className="h-4 w-4" />
           </Button>
         </div>
@@ -65,6 +76,7 @@ export function SendModeModal({ open, onOpenChange, onSendNow, onSendAfterTurn }
               key={testId}
               type="button"
               data-testid={testId}
+              onMouseDown={(e) => e.preventDefault()}
               onClick={() => {
                 onOpenChange(false);
                 onSelect();
