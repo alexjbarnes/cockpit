@@ -82,7 +82,9 @@ self.addEventListener("push", (event) => {
     self.registration.showNotification(title, {
       body: payload.body || "",
       icon: "/icon-192.png",
-      badge: "/icon-192.png",
+      // Android draws only the alpha of this one, in white: a colour icon
+      // arrives as a white square. See scripts/make-notification-badge.mjs.
+      badge: "/notification-badge.png",
       tag: payload.tag || undefined,
       data: { url: payload.url || "/inbox" },
     })
