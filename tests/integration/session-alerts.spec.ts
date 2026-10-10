@@ -36,6 +36,39 @@ async function openSession(page: Page, harness: Harness, workDir: string, name: 
   return sessionId;
 }
 
+test("a turn finishing in another session raises a banner too", async ({ page, harness }) => {
+  test.setTimeout(150_000);
+  const patched = await page.request.patch(`${harness.cockpitUrl}/api/defaults`, { data: { sessionAlerts: true } });
+  expect(patched.ok()).toBe(true);
+
+  const workDir = mkdtempSync(path.join(tmpdir(), "cockpit-it-alerts-"));
+  mkdirSync(path.join(workDir, ".git"), { recursive: true });
+  harness.trustWorkDir(workDir);
+
+  try {
+    await openSession(page, harness, workDir, "Watching session");
+
+    harness.mock.setScript([{ events: textResponse("All done here.") }]);
+
+    const other = await page.context().newPage();
+    await openSession(other, harness, workDir, "Busy session");
+    await other.getByTestId("message-input").fill("say something");
+    await other.getByTestId("btn-send").click();
+    await expect(other.getByText("All done here.")).toBeVisible({ timeout: 60_000 });
+
+    // The page that was not involved gets told, and the banner names what
+    // happened rather than the session's card being the only sign of it.
+    const banner = page.getByTestId("session-alert-finished");
+    await expect(banner).toBeVisible({ timeout: 20_000 });
+    await expect(banner).toContainText("Busy session");
+    await expect(banner).toContainText("finished a turn");
+
+    await other.close();
+  } finally {
+    rmSync(workDir, { recursive: true, force: true });
+  }
+});
+
 test("a permission in another session raises a banner, and Approve answers it there", async ({ page, harness }) => {
   // Two sessions to spawn, plus a real CLI turn for the prompt.
   test.setTimeout(180_000);

@@ -2247,13 +2247,7 @@ export class SessionManager {
       // assistant message and left nothing waiting on them. Stopping a turn,
       // an API error, "No response requested.", a manual compaction and a
       // request still open all reach idle too, and none of them is news.
-      const finishedTurn =
-        lastEmitEv?.type === "message_done" &&
-        !!lastEmitEv.message &&
-        !lastEmitEv.interrupted &&
-        !result.compactDone &&
-        result.errors.length === 0 &&
-        session.pendingRequests.size === 0;
+      const finishedTurn = result.messageDone && !result.compactDone && result.errors.length === 0 && session.pendingRequests.size === 0;
       if (finishedTurn) {
         notifySessionEvent({ sessionId, name: session.info.name, cwd: session.info.cwd, notifications: session.notifications }, "finished");
       }

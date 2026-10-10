@@ -25,6 +25,13 @@ export interface ProcessedResult {
   } | null;
   permissionActions: PermissionAction[];
   compactDone: boolean;
+  /** A turn ended with a real assistant message. False for the ends that are
+   *  not news: the user pressed Stop, the response was an API error or "No
+   *  response requested.", or there was nothing to say at all. The manager
+   *  reads this rather than looking for a message_done in `emit`, because the
+   *  PTY transport ends a turn on a transcript-loaded message that is never
+   *  re-emitted. */
+  messageDone: boolean;
 }
 
 export interface PermissionAction {
@@ -173,6 +180,7 @@ export function processEvents(
     snapshot: null,
     permissionActions: [],
     compactDone: false,
+    messageDone: false,
   };
 
   for (const event of events) {
@@ -338,8 +346,11 @@ export function processEvents(
       }
 
       if (state.pendingBlocks.length === 0 && state.pendingToolUses.length === 0 && state.currentAssistantMsgId) {
+        // The message was flushed as it streamed, so there is nothing left to
+        // assemble — but it did exist, which makes this a finished turn.
         state.currentAssistantMsgId = null;
         result.statusChange = "idle";
+        result.messageDone = true;
         if (options.compacting) result.compactDone = true;
         state.flushedOnMessageDone = true;
         result.snapshot = null;
@@ -353,6 +364,7 @@ export function processEvents(
         state.agentStack.length = 0;
         state.currentAssistantMsgId = null;
         result.statusChange = "idle";
+        result.messageDone = true;
         if (options.compacting) result.compactDone = true;
         state.flushedOnMessageDone = true;
       } else {
@@ -405,6 +417,7 @@ export function processEvents(
         state.agentStack.length = 0;
         state.currentAssistantMsgId = null;
         result.statusChange = "idle";
+        result.messageDone = true;
         if (options.compacting) result.compactDone = true;
         state.flushedOnMessageDone = true;
       }

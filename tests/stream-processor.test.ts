@@ -521,6 +521,53 @@ describe("processEvents", () => {
       expect(state.pendingToolUses).toHaveLength(0);
     });
 
+    // The manager's "a turn finished" notification keys off this flag rather
+    // than a message_done in `emit`: the PTY transport ends a turn on a
+    // transcript-loaded message, which is never re-emitted.
+    it("flags a real message end as the turn ending", () => {
+      const state = makeState({ currentAssistantMsgId: "msg-1" });
+      state.pendingBlocks.push({ type: "text", text: "response" });
+      const msg = { id: "x", role: "assistant" as const, content: "", toolUses: [] as any[], blocks: [] as any[], timestamp: 0 };
+      const result = processEvents([makeEvent({ type: "message_done", message: msg })], state, defaults);
+
+      expect(result.messageDone).toBe(true);
+    });
+
+    it("flags a transcript-loaded end too", () => {
+      const state = makeState({ currentAssistantMsgId: null });
+      const msg = { id: "x", role: "assistant" as const, content: "loaded", toolUses: [] as any[], blocks: [] as any[], timestamp: 0 };
+      const result = processEvents([makeEvent({ type: "message_done", message: msg, clearPending: true })], state, defaults);
+
+      expect(result.messageDone).toBe(true);
+    });
+
+    it("flags a message that already streamed as a finished turn", () => {
+      const state = makeState({ currentAssistantMsgId: "msg-1" });
+      const msg = { id: "x", role: "assistant" as const, content: "", toolUses: [] as any[], blocks: [] as any[], timestamp: 0 };
+      const result = processEvents([makeEvent({ type: "message_done", message: msg })], state, defaults);
+
+      expect(result.messageDone).toBe(true);
+    });
+
+    it("does not flag a stopped turn as finished", () => {
+      const state = makeState({ currentAssistantMsgId: "msg-1" });
+      state.pendingBlocks.push({ type: "text", text: "partial" });
+      const msg = { id: "x", role: "assistant" as const, content: "", toolUses: [] as any[], blocks: [] as any[], timestamp: 0 };
+      const result = processEvents([makeEvent({ type: "message_done", message: msg, interrupted: true })], state, defaults);
+
+      expect(result.messageDone).toBe(false);
+    });
+
+    it("does not flag an API error as finished", () => {
+      const state = makeState({ currentAssistantMsgId: "msg-1" });
+      state.pendingBlocks.push({ type: "text", text: 'API Error: 500 {"message":"boom"}' });
+      const msg = { id: "x", role: "assistant" as const, content: "", toolUses: [] as any[], blocks: [] as any[], timestamp: 0 };
+      const result = processEvents([makeEvent({ type: "message_done", message: msg })], state, defaults);
+
+      expect(result.errors).toHaveLength(1);
+      expect(result.messageDone).toBe(false);
+    });
+
     it("handles interrupted turn", () => {
       const state = makeState({ currentAssistantMsgId: "msg-1" });
       state.pendingBlocks.push({ type: "text", text: "partial" });
