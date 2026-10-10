@@ -300,6 +300,21 @@ function TerminalPanelInner({ terminalId, cwd: _cwd, active = true, onReconnect,
     }
   }, [active]);
 
+  // The pane changes height for reasons the window listeners cannot see: the
+  // key bar appears inside it when the keyboard opens, the expanded key panel
+  // opens, the sidebar takes width. Fitting on the window resize alone leaves
+  // the canvas at its old row count, so the bottom rows — the prompt you were
+  // reading — are clipped by the pane. Watch the box itself instead.
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const observer = new ResizeObserver(() => {
+      if (activeRef.current) fitRef.current?.fit();
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
   useEffect(() => {
     const term = termRef.current;
     if (!term) return;

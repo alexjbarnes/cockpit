@@ -332,7 +332,17 @@ export function AppShell({ children }: { children: ReactNode }) {
           }}
         >
           <AgentTranscriptProvider sessionId={sessionId} cwd={cwd}>
-            <div className="fixed inset-0 flex">
+            {/* The app draws under the system bars (viewport-fit=cover), so it
+                pads its own content back out of the notch and the gesture bar. */}
+            <div
+              className="fixed inset-0 flex"
+              style={{
+                paddingTop: "env(safe-area-inset-top)",
+                paddingBottom: "env(safe-area-inset-bottom)",
+                paddingLeft: "env(safe-area-inset-left)",
+                paddingRight: "env(safe-area-inset-right)",
+              }}
+            >
               {!embedded && <Sidebar ref={sidebarRef} />}
               <div className="flex-1 min-h-0 min-w-0 flex flex-col">
                 <header className="shrink-0 flex items-center gap-2 border-b px-4 py-2 bg-background">
