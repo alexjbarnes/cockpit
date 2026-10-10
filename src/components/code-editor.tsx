@@ -1,5 +1,7 @@
 "use client";
 
+import { javascript } from "@codemirror/lang-javascript";
+import { json } from "@codemirror/lang-json";
 import { markdown } from "@codemirror/lang-markdown";
 import { yaml } from "@codemirror/lang-yaml";
 import { Compartment, EditorState } from "@codemirror/state";
@@ -23,14 +25,26 @@ function isDark(): boolean {
   return document.documentElement.classList.contains("dark");
 }
 
+/** The language name `languageFromPath` gives a file, mapped to a CodeMirror
+ *  mode. Anything without one edits as plain text — the old fallback was
+ *  markdown, which highlighted code files as prose. */
 function getLanguageExtension(language?: string) {
   switch (language) {
+    case "javascript":
+    case "jsx":
+      return javascript({ jsx: true });
+    case "typescript":
+    case "tsx":
+      return javascript({ jsx: true, typescript: true });
+    case "json":
+      return json();
     case "markdown":
+    case "mdx":
       return markdown();
     case "yaml":
       return yaml();
     default:
-      return markdown();
+      return [];
   }
 }
 
