@@ -251,6 +251,12 @@ export default function NotificationsSettingsPage() {
   const [testResult, setTestResult] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const [baseUrl, setBaseUrl] = useState("");
+  /** Which row is sending a test, and what each row's last attempt said. The
+   *  form's own test covers unsaved edits; this covers a saved entry, which is
+   *  the only way to test one cockpit created rather than the user typed — a
+   *  browser's push subscription, for instance, has no form to open. */
+  const [testingRow, setTestingRow] = useState<string | null>(null);
+  const [rowResults, setRowResults] = useState<Record<string, string>>({});
 
   const fetchSettings = useCallback(async () => {
     const res = await fetch("/api/notifications");
@@ -295,6 +301,24 @@ export default function NotificationsSettingsPage() {
     if (!settings) return;
     const providers = settings.providers.map((p) => (p.id === id ? { ...p, enabled: !p.enabled } : p));
     saveSettings({ ...settings, providers });
+  };
+
+  const testRow = async (entry: NotificationProviderEntry) => {
+    setTestingRow(entry.id);
+    setRowResults((prev) => ({ ...prev, [entry.id]: "" }));
+    try {
+      const res = await fetch("/api/notifications/test", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider: entry }),
+      });
+      const data = await res.json().catch(() => ({}));
+      setRowResults((prev) => ({ ...prev, [entry.id]: data.success ? "ok" : data.error || `Failed (HTTP ${res.status})` }));
+    } catch (err) {
+      setRowResults((prev) => ({ ...prev, [entry.id]: err instanceof Error ? err.message : "Network error" }));
+    } finally {
+      setTestingRow(null);
+    }
   };
 
   const handleTest = async () => {
@@ -385,38 +409,58 @@ export default function NotificationsSettingsPage() {
 
           {!editForm &&
             settings?.providers.map((entry) => (
-              <div key={entry.id} className="flex items-center gap-3 py-2 border-b last:border-b-0">
-                <Toggle enabled={entry.enabled} onToggle={() => handleToggleProvider(entry.id)} />
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm font-medium truncate">{entry.name}</span>
-                    <span className="text-xs text-muted-foreground">{entry.type}</span>
+              <div key={entry.id} className="border-b last:border-b-0">
+                <div className="flex items-center gap-3 py-2">
+                  <Toggle enabled={entry.enabled} onToggle={() => handleToggleProvider(entry.id)} />
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-medium truncate">{entry.name}</span>
+                      <span className="text-xs text-muted-foreground">{entry.type}</span>
+                    </div>
+                    {entry.filter?.priorities && (
+                      <span className="text-xs text-muted-foreground">{entry.filter.priorities.join(", ")} only</span>
+                    )}
                   </div>
-                  {entry.filter?.priorities && (
-                    <span className="text-xs text-muted-foreground">{entry.filter.priorities.join(", ")} only</span>
+                  {entry.type !== "webpush" && (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8"
+                      onClick={() => {
+                        setEditForm(entryToForm(entry));
+                        setTestResult(null);
+                      }}
+                    >
+                      <Pencil className="h-3.5 w-3.5" />
+                    </Button>
                   )}
-                </div>
-                {entry.type !== "webpush" && (
                   <Button
                     variant="ghost"
                     size="icon"
                     className="h-8 w-8"
-                    onClick={() => {
-                      setEditForm(entryToForm(entry));
-                      setTestResult(null);
-                    }}
+                    title="Send a test notification"
+                    onClick={() => testRow(entry)}
+                    disabled={testingRow === entry.id}
                   >
-                    <Pencil className="h-3.5 w-3.5" />
+                    {testingRow === entry.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
                   </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8 text-destructive hover:text-destructive"
+                    onClick={() => setConfirmDelete(entry.id)}
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
+                {rowResults[entry.id] && (
+                  <p
+                    className={`pb-2 text-xs ${rowResults[entry.id] === "ok" ? "text-green-500" : "text-destructive"}`}
+                    data-testid="provider-test-result"
+                  >
+                    {rowResults[entry.id] === "ok" ? "Test notification sent" : rowResults[entry.id]}
+                  </p>
                 )}
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-8 w-8 text-destructive hover:text-destructive"
-                  onClick={() => setConfirmDelete(entry.id)}
-                >
-                  <Trash2 className="h-3.5 w-3.5" />
-                </Button>
               </div>
             ))}
 
