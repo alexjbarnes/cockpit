@@ -1619,13 +1619,15 @@ export function InputArea({
             >
               <Paperclip className="h-4 w-4" />
             </button>
+            {/* Hugs its text, and may grow to the full width of the row less the
+                paperclip: 10px in from the left, 32px short of the right. */}
             {!inputFocused && (
               <button
                 type="button"
                 data-testid="model-pill"
                 title="Model and thinking level — click to change"
                 onClick={() => setOptionsOpen(true)}
-                className="absolute bottom-2.5 left-2.5 flex max-w-[60%] items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground transition-colors hover:bg-muted/70 hover:text-foreground"
+                className="absolute bottom-2.5 left-2.5 flex max-w-[calc(100%-2.625rem)] items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground transition-colors hover:bg-muted/70 hover:text-foreground"
               >
                 <Cpu className="h-2.5 w-2.5 shrink-0" />
                 <span className="truncate">
