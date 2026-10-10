@@ -425,10 +425,24 @@ function saveSyncedBuiltin(
   rebuildCache(loadCustom());
 }
 
+/**
+ * Why a catalog sync failed, and what a connect route should tell the caller.
+ * `rejected` means the provider itself refused the key (an authenticated
+ * endpoint answered 401/403); anything else — an unreachable host, a timeout, a
+ * 5xx, an empty list — is a transport or catalog problem, and reporting it as a
+ * rejected key sends the user off to re-paste a key that was never wrong.
+ */
+export interface SyncResult {
+  ok: boolean;
+  modelCount?: number;
+  error?: string;
+  rejected?: boolean;
+}
+
 /** Fetch zen's OpenAI-style model list (the endpoint is public — the key is
  *  optional) and enrich it from models.dev. A keyless sync only refreshes the
  *  browsable list; connect (keyOverride) also stores the key. */
-export async function syncZenModels(keyOverride?: string): Promise<{ ok: boolean; modelCount?: number; error?: string }> {
+export async function syncZenModels(keyOverride?: string): Promise<SyncResult> {
   const stored = loadBuiltinStored(OPENCODE_ZEN_PROVIDER_ID);
   const apiKey = keyOverride ?? stored?.envVars?.OPENCODE_API_KEY;
   try {
@@ -436,10 +450,10 @@ export async function syncZenModels(keyOverride?: string): Promise<{ ok: boolean
       headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : {},
       signal: AbortSignal.timeout(30_000),
     });
-    if (!res.ok) return { ok: false, error: `Zen models fetch failed: HTTP ${res.status}` };
+    if (!res.ok) return { ok: false, error: `Could not reach OpenCode Zen (HTTP ${res.status})` };
     const body = (await res.json()) as { data?: Array<{ id?: string }> };
     const ids = (body.data ?? []).map((m) => m.id).filter((id): id is string => !!id);
-    if (ids.length === 0) return { ok: false, error: "Zen models fetch returned no models" };
+    if (ids.length === 0) return { ok: false, error: "OpenCode Zen returned an empty model list" };
 
     const meta = await fetchModelsDevModels("opencode");
     const models = ids.map((id) => modelFromMeta(id, meta[id]));
@@ -453,7 +467,7 @@ export async function syncZenModels(keyOverride?: string): Promise<{ ok: boolean
 /** Same shape as syncZenModels, against Go's base URL and its models.dev key
  *  ("opencode-go"). Go's /models is public too, so a keyless sync still
  *  refreshes the browsable list before anyone connects a key. */
-export async function syncGoModels(keyOverride?: string): Promise<{ ok: boolean; modelCount?: number; error?: string }> {
+export async function syncGoModels(keyOverride?: string): Promise<SyncResult> {
   const stored = loadBuiltinStored(OPENCODE_ZEN_GO_PROVIDER_ID);
   const apiKey = keyOverride ?? stored?.envVars?.OPENCODE_GO_API_KEY;
   try {
@@ -461,10 +475,10 @@ export async function syncGoModels(keyOverride?: string): Promise<{ ok: boolean;
       headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : {},
       signal: AbortSignal.timeout(30_000),
     });
-    if (!res.ok) return { ok: false, error: `OpenCode Go models fetch failed: HTTP ${res.status}` };
+    if (!res.ok) return { ok: false, error: `Could not reach OpenCode Go (HTTP ${res.status})` };
     const body = (await res.json()) as { data?: Array<{ id?: string }> };
     const ids = (body.data ?? []).map((m) => m.id).filter((id): id is string => !!id);
-    if (ids.length === 0) return { ok: false, error: "OpenCode Go models fetch returned no models" };
+    if (ids.length === 0) return { ok: false, error: "OpenCode Go returned an empty model list" };
 
     const meta = await fetchModelsDevModels("opencode-go");
     const models = ids.map((id) => modelFromMeta(id, meta[id]));
@@ -479,7 +493,7 @@ export async function syncGoModels(keyOverride?: string): Promise<{ ok: boolean;
  *  present the authenticated /v1/models list — DeepSeek 401s bad keys, unlike
  *  zen's open endpoint, so connect validation is real — becomes the id source
  *  of truth for what the key can actually run. */
-export async function syncDeepSeekModels(keyOverride?: string): Promise<{ ok: boolean; modelCount?: number; error?: string }> {
+export async function syncDeepSeekModels(keyOverride?: string): Promise<SyncResult> {
   const stored = loadBuiltinStored(DEEPSEEK_PROVIDER_ID);
   const apiKey = keyOverride ?? stored?.envVars?.DEEPSEEK_API_KEY;
   try {
@@ -490,7 +504,7 @@ export async function syncDeepSeekModels(keyOverride?: string): Promise<{ ok: bo
         headers: { Authorization: `Bearer ${apiKey}` },
         signal: AbortSignal.timeout(30_000),
       });
-      if (res.status === 401 || res.status === 403) return { ok: false, error: "DeepSeek rejected the API key" };
+      if (res.status === 401 || res.status === 403) return { ok: false, error: "DeepSeek rejected the API key", rejected: true };
       if (res.ok) {
         const body = (await res.json()) as { data?: Array<{ id?: string }> };
         const live = (body.data ?? []).map((m) => m.id).filter((id): id is string => !!id);

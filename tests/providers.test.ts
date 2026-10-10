@@ -418,7 +418,7 @@ describe("providers", () => {
     vi.stubGlobal("fetch", vi.fn(async () => ({ ok: false, status: 503, json: async () => ({}) })) as unknown as typeof fetch);
 
     const { syncGoModels } = await import("@/server/providers");
-    expect(await syncGoModels("zgk-1")).toEqual({ ok: false, error: "OpenCode Go models fetch failed: HTTP 503" });
+    expect(await syncGoModels("zgk-1")).toEqual({ ok: false, error: "Could not reach OpenCode Go (HTTP 503)" });
     expect(fs.writeFileSync).not.toHaveBeenCalled();
     vi.unstubAllGlobals();
   });
@@ -431,7 +431,7 @@ describe("providers", () => {
     vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ data: [] }) })) as unknown as typeof fetch);
 
     const { syncGoModels } = await import("@/server/providers");
-    expect(await syncGoModels()).toEqual({ ok: false, error: "OpenCode Go models fetch returned no models" });
+    expect(await syncGoModels()).toEqual({ ok: false, error: "OpenCode Go returned an empty model list" });
     vi.unstubAllGlobals();
   });
 
@@ -530,7 +530,7 @@ describe("providers", () => {
     );
 
     const { syncDeepSeekModels } = await import("@/server/providers");
-    expect(await syncDeepSeekModels("bad-key")).toEqual({ ok: false, error: "DeepSeek rejected the API key" });
+    expect(await syncDeepSeekModels("bad-key")).toEqual({ ok: false, error: "DeepSeek rejected the API key", rejected: true });
 
     // Keyless: no live-list call is made, the models.dev catalog is the list,
     // and nothing gets enabled.

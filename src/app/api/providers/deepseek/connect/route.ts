@@ -23,6 +23,9 @@ export async function POST(req: NextRequest) {
   }
 
   const sync = await syncDeepSeekModels(key.trim());
-  if (!sync.ok) return NextResponse.json({ error: sync.error }, { status: 401 });
+  // 401 only for a key the provider actually refused; a request that never
+  // got an answer is not the key's fault, and saying so sends the user off
+  // to re-paste a key that was fine. OpenRouter's route draws the same line.
+  if (!sync.ok) return NextResponse.json({ error: sync.error }, { status: sync.rejected ? 401 : 502 });
   return NextResponse.json({ provider: getProvider("deepseek"), sync });
 }
