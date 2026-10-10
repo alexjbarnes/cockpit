@@ -535,6 +535,25 @@ describe("web push delivery", () => {
     expect(payload).toEqual({ title: "Job failed", body: "Weekly organiser", url: "/inbox/abc", priority: "error" });
   });
 
+  it("carries the inbox message id, so the notification's own buttons can act on it", async () => {
+    const sendWebPush = vi.fn().mockResolvedValue(undefined);
+    vi.doMock("@/server/web-push", () => ({ sendWebPush, isDeadSubscription: () => false }));
+    const { dispatchNotification } = await import("@/server/notifications");
+
+    dispatchNotification({
+      title: "Job failed",
+      body: "Weekly organiser",
+      url: "/inbox/abc",
+      priority: "error",
+      source: "inbox",
+      messageId: "abc",
+    });
+    await vi.waitFor(() => expect(sendWebPush).toHaveBeenCalled());
+
+    const [, payload] = sendWebPush.mock.calls[0] as [unknown, Record<string, unknown>];
+    expect(payload.messageId).toBe("abc");
+  });
+
   it("switches off an entry whose subscription the push service has forgotten", async () => {
     const err = Object.assign(new Error("gone"), { statusCode: 410 });
     const sendWebPush = vi.fn().mockRejectedValue(err);

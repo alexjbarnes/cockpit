@@ -396,6 +396,10 @@ export interface NotificationPayload {
   priority: InboxPriority;
   source: string;
   providerIds?: string[];
+  /** The inbox message this notification came from, when there is one. A web
+   *  push carries it so the notification's own buttons can act on the message
+   *  without the app being open. */
+  messageId?: string;
 }
 
 export interface TelegramConfig {

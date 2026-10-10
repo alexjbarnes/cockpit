@@ -64,9 +64,9 @@ self.addEventListener("fetch", (event) => {
 // ── Web Push ────────────────────────────────────────────────────────────────
 // A push from cockpit carries the inbox message that caused it: the service
 // worker has only the payload to work with, so the title, body and where a tap
-// should land all travel in it. Nothing is fetched here — the notification must
-// appear whether or not the app is open, and whether or not it can reach the
-// server, since that is the point of a push.
+// should land all travel in it. Nothing is fetched to SHOW it — the
+// notification must appear whether or not the app is open, and whether or not
+// it can reach the server, since that is the point of a push.
 
 self.addEventListener("push", (event) => {
   let payload = {};
@@ -78,6 +78,16 @@ self.addEventListener("push", (event) => {
     payload = { title: "Cockpit", body: "" };
   }
   const title = payload.title || "Cockpit";
+  // The message's id turns the notification into something actionable. Two
+  // actions is what a browser will show — Chrome's Notification.maxActions is
+  // 2 — and on Android they appear only once the notification is expanded. No
+  // id (a push that did not come from the inbox) means no buttons.
+  const actions = payload.messageId
+    ? [
+        { action: "mark-read", title: "Mark read" },
+        { action: "delete", title: "Delete" },
+      ]
+    : [];
   event.waitUntil(
     self.registration.showNotification(title, {
       body: payload.body || "",
@@ -86,16 +96,42 @@ self.addEventListener("push", (event) => {
       // arrives as a white square. See scripts/make-notification-badge.mjs.
       badge: "/notification-badge.png",
       tag: payload.tag || undefined,
-      data: { url: payload.url || "/inbox" },
+      actions,
+      data: { url: payload.url || "/inbox", messageId: payload.messageId },
     })
   );
 });
 
-// A tap focuses a window already showing cockpit rather than opening a second
-// one, and lands on the page the notification named.
+// Acting on the notification itself: the same request the inbox page makes,
+// sent straight from here so it works with the app closed. The fetch is
+// same-origin, so the session cookie rides with it.
+async function actOnMessage(action, id) {
+  try {
+    const res = await fetch(`/api/inbox/${encodeURIComponent(id)}`, {
+      method: action === "delete" ? "DELETE" : "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: action === "delete" ? undefined : JSON.stringify({ read: true }),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+// An action button acts and leaves the app alone. Anything else — a tap on the
+// notification body — focuses a window already showing cockpit rather than
+// opening a second one, and lands on the page the notification named.
 self.addEventListener("notificationclick", (event) => {
+  const data = event.notification.data || {};
+  if (event.action === "mark-read" || event.action === "delete") {
+    event.notification.close();
+    if (data.messageId) {
+      event.waitUntil(actOnMessage(event.action, data.messageId));
+    }
+    return;
+  }
   event.notification.close();
-  const target = new URL(event.notification.data?.url || "/inbox", self.location.origin).href;
+  const target = new URL(data.url || "/inbox", self.location.origin).href;
   event.waitUntil(
     self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clients) => {
       for (const client of clients) {

@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Act on a push notification from the notification itself.** A push that came from an inbox message carries the message's id, so the notification offers Mark read and Delete as buttons of its own and the service worker sends the same request the inbox page would — with the app closed, and with the session cookie it already has. Chrome shows two buttons at most, and on Android only once the notification is expanded; Safari draws none, where a tap opens the message as before.
 - **Notifications from cockpit itself, on your phone.** Settings → Notifications gains a This device card: enable it and this browser receives inbox messages as push notifications, straight from cockpit, with no Telegram bot or ntfy topic involved. The subscription is kept as one of your notification providers, so it appears in the list below with the same on/off switch and the same priority and source filters as the others, and a tap takes you to the inbox entry that caused it. Each row has a send button for a test notification, which is the only way to test an entry cockpit made for itself — a browser subscription has no form to open. Needs HTTPS, and on iPhone or iPad the app on your home screen, since Safari only offers push to an installed app; a subscription the browser has dropped is switched off rather than retried forever.
 
 ### Removed

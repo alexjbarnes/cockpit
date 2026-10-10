@@ -25,6 +25,10 @@ const webPushProvider: NotificationProvider<WebPushConfig> = {
         body: payload.body,
         url: buildFullUrl(payload.url, baseUrl),
         priority: payload.priority,
+        // The message's id lets the notification's own buttons act on it. Only
+        // a push can carry this: it is the one channel with a surface that
+        // takes input.
+        ...(payload.messageId ? { messageId: payload.messageId } : {}),
       });
     } catch (err) {
       if (isDeadSubscription(err)) {

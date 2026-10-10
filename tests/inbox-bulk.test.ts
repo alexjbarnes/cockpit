@@ -4,7 +4,8 @@ import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/server/auth", () => ({ validateSession: (t: string) => t === "valid" }));
-vi.mock("@/server/notifications", () => ({ dispatchNotification: () => ({ attempted: [], delivered: [], failed: [] }) }));
+const h = vi.hoisted(() => ({ dispatch: vi.fn(() => ({ attempted: [], delivered: [], failed: [] })) }));
+vi.mock("@/server/notifications", () => ({ dispatchNotification: h.dispatch }));
 
 import { POST } from "@/app/api/inbox/route";
 import { addInboxMessage, clearInbox, deleteInboxMessages, getInboxMessages, markManyRead } from "@/server/inbox";
@@ -86,5 +87,15 @@ describe("POST /api/inbox bulk actions", () => {
     const res = await post({ action: "delete", ids: [a] }, "nope");
     expect(res.status).toBe(401);
     expect(getInboxMessages()).toHaveLength(1);
+  });
+});
+
+// What a new message tells the notifiers. The id is what lets a push
+// notification's own buttons act on the message they are attached to.
+describe("notifying about a new message", () => {
+  it("names the message it is about", () => {
+    const [id] = seed(1);
+
+    expect(h.dispatch).toHaveBeenCalledWith(expect.objectContaining({ url: `/inbox/${id}`, messageId: id, source: "inbox" }));
   });
 });
