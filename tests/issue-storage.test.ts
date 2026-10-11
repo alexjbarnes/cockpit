@@ -1131,14 +1131,17 @@ describe("placeIssue", () => {
     const project = makeProject("AAA");
     const backlog = seeded(project, "a");
     const done = seeded(project, "b", "Done");
-    const before = getIssue(done.key);
+    const beforeDone = getIssue(done.key);
+    const beforeMoved = getIssue(backlog.key);
 
     placeIssue(backlog.key, "Backlog", backlog.key);
 
-    const after = getIssue(done.key);
-    expect(after?.order, "an issue in another status is not renumbered").toBeUndefined();
-    expect(after?.activity).toHaveLength(before?.activity.length ?? 0);
-    expect(getIssue(backlog.key)?.updatedAt).toBe(before?.updatedAt);
+    const afterDone = getIssue(done.key);
+    const afterMoved = getIssue(backlog.key);
+    expect(afterDone?.order, "an issue in another status is not renumbered").toBeUndefined();
+    expect(afterDone?.activity).toHaveLength(beforeDone?.activity.length ?? 0);
+    expect(afterMoved?.activity, "reordering is not an activity entry").toHaveLength(beforeMoved?.activity.length ?? 0);
+    expect(afterMoved?.updatedAt, "and not a change to the issue either").toBe(beforeMoved?.updatedAt);
   });
 
   it("refuses a status that project does not have", () => {

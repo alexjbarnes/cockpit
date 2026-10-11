@@ -11,6 +11,7 @@ import {
   groupIssuesByProject,
   groupIssuesByStatus,
   ISSUE_STATUSES,
+  issueReturnPath,
   LABEL_COLORS,
   labelColor,
   NO_LABEL_GROUP,
@@ -646,5 +647,21 @@ describe("projectForCwd", () => {
 
     expect(projectForCwd(projects, "/home/dev/repos/cockpit")).toBeUndefined();
     expect(projectForCwd(projects, undefined)).toBeUndefined();
+  });
+});
+
+describe("issueReturnPath", () => {
+  it("honours a path inside cockpit, query and all", () => {
+    expect(issueReturnPath("/sessions/abc?cwd=%2Fhome%2Fdev")).toBe("/sessions/abc?cwd=%2Fhome%2Fdev");
+    expect(issueReturnPath("/issues")).toBe("/issues");
+  });
+
+  it("falls back to the Issues list for anything that is not one", () => {
+    expect(issueReturnPath(null)).toBe("/issues");
+    expect(issueReturnPath(undefined)).toBe("/issues");
+    expect(issueReturnPath("")).toBe("/issues");
+    expect(issueReturnPath("https://example.com/steal")).toBe("/issues");
+    expect(issueReturnPath("//example.com/steal")).toBe("/issues");
+    expect(issueReturnPath("sessions/abc")).toBe("/issues");
   });
 });

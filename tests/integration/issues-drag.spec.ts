@@ -145,3 +145,33 @@ test("the session header opens its project's issues", async ({ page, harness }) 
     rmSync(repoPath, { recursive: true, force: true });
   }
 });
+
+test("deleting an issue opened from a session comes back to that session", async ({ page, harness }) => {
+  test.setTimeout(120_000);
+  const repoPath = mkdtempSync(path.join(tmpdir(), "cockpit-it-issues-"));
+  try {
+    await page.request.patch(`${harness.cockpitUrl}/api/defaults`, { data: { issuesEnabled: true } });
+    const projectRes = await page.request.post(`${harness.cockpitUrl}/api/projects`, {
+      data: { name: "Return project", prefix: "RTN", repoPath },
+    });
+    const { project } = (await projectRes.json()) as { project: { id: string } };
+    await page.request.post(`${harness.cockpitUrl}/api/issues`, { data: { projectId: project.id, title: "Doomed issue" } });
+
+    harness.trustWorkDir(repoPath);
+    const sessionRes = await page.request.post(`${harness.cockpitUrl}/api/sessions`, { data: { cwd: repoPath, runtime: "pty" } });
+    const { sessionId } = (await sessionRes.json()) as { sessionId: string };
+    await page.goto(`${harness.cockpitUrl}/sessions/${sessionId}?cwd=${encodeURIComponent(repoPath)}`);
+    await page.getByTestId("session-issues").click();
+    await page.getByTestId("issue-list").getByRole("button", { name: /RTN-1/ }).first().click();
+
+    // The issue page knows where it was opened from.
+    await expect(page).toHaveURL(/\/issues\/RTN-1\?from=/, { timeout: 15_000 });
+
+    await page.locator("button.text-destructive").first().click();
+    await page.locator("button[class*='destructive']").last().click();
+
+    await expect(page).toHaveURL(new RegExp(`/sessions/${sessionId}\\?cwd=`), { timeout: 15_000 });
+  } finally {
+    rmSync(repoPath, { recursive: true, force: true });
+  }
+});

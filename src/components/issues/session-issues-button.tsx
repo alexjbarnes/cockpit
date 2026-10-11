@@ -172,7 +172,10 @@ export function SessionIssuesButton() {
                   projectNames={projectNames}
                   onIssueClick={(issue) => {
                     setOpen(false);
-                    router.push(`/issues/${encodeURIComponent(issue.key)}`);
+                    // Carry where we are, so closing or deleting the issue comes
+                    // back to this session rather than the Issues list.
+                    const from = encodeURIComponent(window.location.pathname + window.location.search);
+                    router.push(`/issues/${encodeURIComponent(issue.key)}?from=${from}`);
                   }}
                   onDrop={handleDrop}
                   className={cn("pb-2")}

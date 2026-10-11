@@ -519,3 +519,15 @@ export function actorHref(actor: IssueActor): string | undefined {
       return undefined;
   }
 }
+
+/**
+ * Where an issue was opened from: a `?from=` path the issue's own pages return
+ * to, so an issue opened from a session's modal closes and deletes back to that
+ * session. Only a path inside cockpit is honoured — anything else (an absolute
+ * URL, a protocol-relative `//host`, an absent value) falls back to the Issues
+ * list rather than becoming an open redirect.
+ */
+export function issueReturnPath(from: string | null | undefined): string {
+  if (!from?.startsWith("/") || from.startsWith("//")) return "/issues";
+  return from;
+}
