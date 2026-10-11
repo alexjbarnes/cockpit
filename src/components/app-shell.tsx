@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation";
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { AgentTranscriptProvider } from "@/components/agent-transcript-modal";
 import { AuthGuard } from "@/components/auth-guard";
+import { SessionIssuesButton } from "@/components/issues/session-issues-button";
 import { SearchButton } from "@/components/search-modal";
 import { SessionAlerts } from "@/components/session-alerts";
 import { Sidebar, type SidebarHandle } from "@/components/sidebar";
@@ -360,6 +361,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                     <div className="flex items-center gap-2 shrink-0 ml-auto">
                       {actions.showSessionActions && (
                         <>
+                          <SessionIssuesButton />
                           {cwd && <NewTerminalButton cwd={cwd} />}
                           <SearchButton />
                           {cwd && <BackgroundTasksButton tasks={backgroundTasks} />}

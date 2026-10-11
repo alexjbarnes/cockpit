@@ -5,6 +5,7 @@ import {
   boardColumns,
   describeActivity,
   describeActivityAction,
+  effectiveOrders,
   filterByQuickFilter,
   filterIssues,
   groupIssuesByProject,
@@ -13,9 +14,14 @@ import {
   LABEL_COLORS,
   labelColor,
   NO_LABEL_GROUP,
+  ORDER_STEP,
+  placementAt,
+  placeOptimistically,
   priorityLabel,
+  projectForCwd,
   resolveProjectStatuses,
   STATUS_COLORS,
+  sortIssuesByOrder,
   statusColor,
 } from "@/lib/issue-display";
 import type { Issue, IssueActivity, IssueActor, Project } from "@/types";
@@ -29,6 +35,7 @@ function makeIssue(overrides: Partial<Issue> = {}): Issue {
     description: overrides.description ?? "",
     status: overrides.status ?? "Backlog",
     priority: overrides.priority,
+    order: overrides.order,
     labels: overrides.labels,
     createdAt: overrides.createdAt ?? 1,
     updatedAt: overrides.updatedAt ?? 1,
@@ -498,5 +505,146 @@ describe("groupIssuesByStatus with a custom status", () => {
   it("lists built-in groups first, then custom-status groups", () => {
     const groups = groupIssuesByStatus([makeIssue({ id: "a", status: "Blocked" }), makeIssue({ id: "b", status: "Backlog" })]);
     expect(groups.map((g) => g.status)).toEqual(["Backlog", "Blocked"]);
+  });
+});
+
+describe("sortIssuesByOrder", () => {
+  it("puts numbered issues first, in their order", () => {
+    const issues = [
+      makeIssue({ id: "a", key: "A-1" }),
+      makeIssue({ id: "b", key: "A-2", order: 2000 }),
+      makeIssue({ id: "c", key: "A-3", order: 1000 }),
+    ];
+
+    expect(sortIssuesByOrder(issues).map((i) => i.key)).toEqual(["A-3", "A-2", "A-1"]);
+  });
+
+  it("keeps unnumbered issues in the order they arrived", () => {
+    const issues = [makeIssue({ id: "a", key: "A-1" }), makeIssue({ id: "b", key: "A-2" }), makeIssue({ id: "c", key: "A-3" })];
+    expect(sortIssuesByOrder(issues).map((i) => i.key)).toEqual(["A-1", "A-2", "A-3"]);
+  });
+});
+
+describe("effectiveOrders", () => {
+  it("imagines unnumbered issues after the numbered ones, a step apart", () => {
+    const ranks = effectiveOrders([
+      makeIssue({ id: "a", key: "A-1", order: 5000 }),
+      makeIssue({ id: "b", key: "A-2" }),
+      makeIssue({ id: "c", key: "A-3" }),
+    ]);
+
+    expect(ranks.get("a")).toBe(5000);
+    expect(ranks.get("b")).toBe(5000 + ORDER_STEP);
+    expect(ranks.get("c")).toBe(5000 + 2 * ORDER_STEP);
+  });
+});
+
+describe("placementAt", () => {
+  it("names the rows either side of the drop", () => {
+    expect(placementAt("Backlog", "A-9", 1, ["A-1", "A-2", "A-3"])).toEqual({
+      key: "A-9",
+      status: "Backlog",
+      index: 1,
+      afterKey: "A-1",
+      beforeKey: "A-2",
+    });
+  });
+
+  it("leaves a neighbour out at the ends", () => {
+    expect(placementAt("Backlog", "A-9", 0, ["A-1"])).toEqual({ key: "A-9", status: "Backlog", index: 0, beforeKey: "A-1" });
+    expect(placementAt("Backlog", "A-9", 1, ["A-1"])).toEqual({ key: "A-9", status: "Backlog", index: 1, afterKey: "A-1" });
+    expect(placementAt("Backlog", "A-9", 0, [])).toEqual({ key: "A-9", status: "Backlog", index: 0 });
+  });
+});
+
+describe("placeOptimistically", () => {
+  it("puts the moved issue at the position it was dropped", () => {
+    const issues = [
+      makeIssue({ id: "a", key: "A-1", order: 1000 }),
+      makeIssue({ id: "b", key: "A-2", order: 2000 }),
+      makeIssue({ id: "c", key: "A-3", order: 3000 }),
+    ];
+
+    const next = placeOptimistically(issues, { key: "A-3", status: "Backlog", index: 1, afterKey: "A-1", beforeKey: "A-2" });
+
+    expect(sortIssuesByOrder(next.filter((i) => i.status === "Backlog")).map((i) => i.key)).toEqual(["A-1", "A-3", "A-2"]);
+  });
+
+  it("numbers the group it landed in, so the sequence is the one dropped into", () => {
+    const issues = [makeIssue({ id: "a", key: "A-1", status: "Backlog" }), makeIssue({ id: "b", key: "A-2", status: "Backlog" })];
+    const next = placeOptimistically(issues, { key: "A-2", status: "Backlog", index: 0 });
+
+    expect(next.find((i) => i.key === "A-2")?.order).toBe(1000);
+    expect(next.find((i) => i.key === "A-1")?.order).toBe(2000);
+  });
+
+  it("moves it across statuses and takes a rank from the new group", () => {
+    const issues = [makeIssue({ id: "a", key: "A-1", status: "Backlog" }), makeIssue({ id: "b", key: "A-2", status: "Done" })];
+
+    const next = placeOptimistically(issues, { key: "A-1", status: "Done", index: 1 });
+    const moved = next.find((i) => i.key === "A-1");
+
+    expect(moved?.status).toBe("Done");
+    expect(sortIssuesByOrder(next.filter((i) => i.status === "Done")).map((i) => i.key)).toEqual(["A-2", "A-1"]);
+  });
+
+  it("does nothing for a key it does not hold", () => {
+    const issues = [makeIssue({ id: "a", key: "A-1" })];
+    expect(placeOptimistically(issues, { key: "A-9", status: "Done" })).toBe(issues);
+  });
+});
+
+describe("groupIssuesByStatus with empties", () => {
+  it("renders a status with no issues when asked", () => {
+    const groups = groupIssuesByStatus([makeIssue({ status: "Done" })], { includeEmpty: true });
+    const done = groups.find((g) => g.status === "Done");
+    const backlog = groups.find((g) => g.status === "Backlog");
+
+    expect(done?.issues).toHaveLength(1);
+    expect(backlog?.issues).toEqual([]);
+  });
+
+  it("takes a project's own status list, and keeps an issue in a status it omits", () => {
+    const groups = groupIssuesByStatus([makeIssue({ status: "Cancelled" })], {
+      includeEmpty: true,
+      statuses: ["Backlog", "Done"],
+    });
+
+    expect(groups.map((g) => g.status)).toEqual(["Backlog", "Done", "Cancelled"]);
+  });
+});
+
+describe("projectForCwd", () => {
+  const project = (id: string, repoPath: string | undefined, extra: Partial<Project> = {}): Project =>
+    ({ id, name: id, prefix: id.toUpperCase(), createdAt: 0, updatedAt: 0, nextNumber: 1, repoPath, ...extra }) as Project;
+
+  it("matches the directory itself and anything under it", () => {
+    const projects = [project("a", "/home/dev/repos/cockpit")];
+
+    expect(projectForCwd(projects, "/home/dev/repos/cockpit")?.id).toBe("a");
+    expect(projectForCwd(projects, "/home/dev/repos/cockpit/src/lib")?.id).toBe("a");
+    expect(projectForCwd(projects, "/home/dev/repos/cockpit/")?.id).toBe("a");
+  });
+
+  it("does not match a sibling that merely shares the prefix", () => {
+    const projects = [project("a", "/home/dev/repos/cockpit")];
+    expect(projectForCwd(projects, "/home/dev/repos/cockpit-2")).toBeUndefined();
+  });
+
+  it("picks the longest path when projects nest", () => {
+    const projects = [project("outer", "/home/dev/repos"), project("inner", "/home/dev/repos/cockpit")];
+    expect(projectForCwd(projects, "/home/dev/repos/cockpit/src")?.id).toBe("inner");
+    expect(projectForCwd(projects, "/home/dev/repos/other")?.id).toBe("outer");
+  });
+
+  it("ignores a project with no repo path, a relative one, and an archived one", () => {
+    const projects = [
+      project("none", undefined),
+      project("relative", "repos/cockpit"),
+      project("archived", "/home/dev/repos/cockpit", { archived: true }),
+    ];
+
+    expect(projectForCwd(projects, "/home/dev/repos/cockpit")).toBeUndefined();
+    expect(projectForCwd(projects, undefined)).toBeUndefined();
   });
 });

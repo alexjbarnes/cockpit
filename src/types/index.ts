@@ -584,6 +584,12 @@ export interface Issue {
   // IssueStatus stays the union the automation (skills, onIssueStatus) keys off.
   status: string;
   priority?: 0 | 1 | 2 | 3 | 4; // Linear's scale, so imports map cleanly
+  /** Where the issue sits in its status after a manual drag, ascending. Only
+   *  meaningful within one status — values across statuses are not comparable
+   *  — and absent until something has been dragged into that status. A status
+   *  change clears it, so an issue moved by the picker or by a pipeline skill
+   *  lands at the end rather than at the top of its new status. */
+  order?: number;
   labels?: string[];
   createdAt: number;
   updatedAt: number;

@@ -239,3 +239,76 @@ describe("DELETE /api/issues/[key]", () => {
     expect(next.key).not.toBe(first.key);
   });
 });
+
+describe("PUT /api/issues/order", () => {
+  async function order(body: unknown) {
+    const { PUT } = await import("@/app/api/issues/order/route");
+    return PUT(authedReq("http://localhost/api/issues/order", { method: "PUT", body }));
+  }
+
+  function seeded(project: Project, title: string, status = "Backlog") {
+    const issue = { ...buildIssue({ projectId: project.id, title }, { kind: "user" }), status };
+    saveIssue(issue);
+    return issue;
+  }
+
+  it("places an issue and numbers the status", async () => {
+    const project = makeProject("CK");
+    const a = seeded(project, "a");
+    const b = seeded(project, "b");
+
+    const res = await order({ key: b.key, status: "Backlog", beforeKey: a.key });
+
+    expect(res.status).toBe(200);
+    const { issues } = (await res.json()) as { issues: Array<{ key: string; order: number }> };
+    expect(issues.map((i) => [i.key, i.order])).toEqual([
+      [b.key, 1000],
+      [a.key, 2000],
+    ]);
+    expect(getIssue(b.key)?.order).toBe(1000);
+  });
+
+  it("moves an issue into another status", async () => {
+    const project = makeProject("CK");
+    const a = seeded(project, "a");
+
+    const res = await order({ key: a.key, status: "Done" });
+
+    expect(res.status).toBe(200);
+    expect(getIssue(a.key)?.status).toBe("Done");
+  });
+
+  it("refuses a missing key or status", async () => {
+    expect((await order({ status: "Backlog" })).status).toBe(400);
+    expect((await order({ key: "CK-1" })).status).toBe(400);
+    expect((await order({ key: "CK-1", status: 42 })).status).toBe(400);
+  });
+
+  it("refuses a neighbour that is not a string", async () => {
+    const project = makeProject("CK");
+    const a = seeded(project, "a");
+    expect((await order({ key: a.key, status: "Backlog", beforeKey: 7 })).status).toBe(400);
+  });
+
+  it("returns 400, not 500, for an unknown key or a status the project does not have", async () => {
+    const project = makeProject("CK");
+    const a = seeded(project, "a");
+
+    expect((await order({ key: "CK-999", status: "Backlog" })).status).toBe(400);
+    const bad = await order({ key: a.key, status: "Definitely Not A Status" });
+    expect(bad.status).toBe(400);
+    expect(getIssue(a.key)?.status, "nothing was persisted").toBe("Backlog");
+  });
+
+  it("refuses an unauthenticated caller", async () => {
+    const { PUT } = await import("@/app/api/issues/order/route");
+    const res = await PUT(
+      new NextRequest("http://localhost/api/issues/order", {
+        method: "PUT",
+        body: JSON.stringify({ key: "CK-1", status: "Backlog" }),
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    expect(res.status).toBe(401);
+  });
+});

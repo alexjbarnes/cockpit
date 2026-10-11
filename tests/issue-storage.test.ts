@@ -26,6 +26,7 @@ import {
   loadProjects,
   nextKey,
   persistAttachmentFile,
+  placeIssue,
   saveIssue,
   saveProject,
 } from "@/server/issue-storage";
@@ -1046,5 +1047,136 @@ describe("per-project status config", () => {
     expect(updated.disabledStatuses).toEqual(["Refining"]);
     const cleared = applyProjectUpdate(updated, { customStatuses: [] });
     expect(cleared.customStatuses).toEqual([]);
+  });
+});
+
+describe("placeIssue", () => {
+  /** The status as any list would render it: manual order first, then the
+   *  issues that have never been dragged, in file order. */
+  function byOrder(project: Project, status: string): Issue[] {
+    const group = loadIssues(project.id).filter((i) => i.status === status);
+    return [
+      ...group.filter((i) => typeof i.order === "number").sort((a, b) => (a.order as number) - (b.order as number)),
+      ...group.filter((i) => typeof i.order !== "number"),
+    ];
+  }
+
+  function seeded(project: Project, title: string, status = "Backlog"): Issue {
+    const issue = buildIssue({ projectId: project.id, title }, USER);
+    const placed = { ...issue, status };
+    saveIssue(placed);
+    return placed;
+  }
+
+  it("numbers the whole status in the order it was given", () => {
+    const project = makeProject("AAA");
+    const a = seeded(project, "a");
+    const b = seeded(project, "b");
+    const c = seeded(project, "c");
+
+    const changed = placeIssue(c.key, "Backlog", a.key);
+
+    expect(changed.map((i) => i.key)).toEqual([c.key, a.key, b.key]);
+    const stored = byOrder(project, "Backlog");
+    expect(stored.map((i) => [i.key, i.order])).toEqual([
+      [c.key, 1000],
+      [a.key, 2000],
+      [b.key, 3000],
+    ]);
+  });
+
+  it("moves an issue to another status and numbers it there", () => {
+    const project = makeProject("AAA");
+    const a = seeded(project, "a");
+    const b = seeded(project, "b", "Done");
+
+    const changed = placeIssue(a.key, "Done");
+
+    expect(changed.find((i) => i.key === a.key)).toMatchObject({ status: "Done", order: 2000 });
+    expect(changed.find((i) => i.key === b.key)).toMatchObject({ status: "Done", order: 1000 });
+  });
+
+  it("puts it at the end when the drop names no neighbour", () => {
+    const project = makeProject("AAA");
+    const a = seeded(project, "a");
+    const b = seeded(project, "b");
+
+    placeIssue(a.key, "Backlog");
+
+    expect(byOrder(project, "Backlog").map((i) => [i.key, i.order])).toEqual([
+      [b.key, 1000],
+      [a.key, 2000],
+    ]);
+  });
+
+  it("keeps every project's issues in one sequence, so a filtered view stays a subsequence", () => {
+    const one = makeProject("AAA");
+    const two = makeProject("BBB");
+    const a1 = seeded(one, "a1");
+    const a2 = seeded(one, "a2");
+    const b1 = seeded(two, "b1");
+
+    // A drop made from a view filtered to project one: b1 is not in it, and
+    // must keep its place in the whole.
+    placeIssue(a2.key, "Backlog", a1.key);
+
+    const all = [...loadIssues(one.id), ...loadIssues(two.id)]
+      .filter((i) => i.status === "Backlog")
+      .sort((x, y) => (x.order ?? 0) - (y.order ?? 0))
+      .map((i) => i.key);
+    expect(all).toEqual([a2.key, a1.key, b1.key]);
+  });
+
+  it("leaves other statuses alone, and writes no activity", () => {
+    const project = makeProject("AAA");
+    const backlog = seeded(project, "a");
+    const done = seeded(project, "b", "Done");
+    const before = getIssue(done.key);
+
+    placeIssue(backlog.key, "Backlog", backlog.key);
+
+    const after = getIssue(done.key);
+    expect(after?.order, "an issue in another status is not renumbered").toBeUndefined();
+    expect(after?.activity).toHaveLength(before?.activity.length ?? 0);
+    expect(getIssue(backlog.key)?.updatedAt).toBe(before?.updatedAt);
+  });
+
+  it("refuses a status that project does not have", () => {
+    const project = makeProject("AAA");
+    const issue = seeded(project, "a");
+    expect(() => placeIssue(issue.key, "Not A Status")).toThrow(/status must be one of/);
+  });
+
+  it("refuses an unknown key", () => {
+    makeProject("AAA");
+    expect(() => placeIssue("AAA-999", "Backlog")).toThrow(/Unknown issue/);
+  });
+
+  it("emits the status change event when a drop crosses statuses", () => {
+    const project = makeProject("AAA");
+    const issue = seeded(project, "a");
+    const events: IssueStatusChangeEvent[] = [];
+    const off = onIssueStatusChange((event) => events.push(event));
+
+    placeIssue(issue.key, "Done");
+    off();
+
+    expect(events).toEqual([{ key: issue.key, projectId: project.id, from: "Backlog", to: "Done" }]);
+  });
+});
+
+describe("a status change clears the manual order", () => {
+  it("drops order so the issue lands at the end of its new status", () => {
+    const project = makeProject("AAA");
+    const issue = { ...buildIssue({ projectId: project.id, title: "t" }, { kind: "user" }), order: 1000 };
+    const next = applyIssueUpdate(issue, { status: "Done" }, { kind: "user" });
+    expect(next.order).toBeUndefined();
+  });
+
+  it("leaves order alone when the status is untouched", () => {
+    const project = makeProject("AAA");
+    const issue = { ...buildIssue({ projectId: project.id, title: "t" }, { kind: "user" }), order: 1000 };
+    expect(applyIssueUpdate(issue, { title: "renamed" }, { kind: "user" }).order).toBe(1000);
+    expect(applyIssueUpdate(issue, { priority: 2 }, { kind: "user" }).order).toBe(1000);
   });
 });
