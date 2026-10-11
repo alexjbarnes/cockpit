@@ -171,6 +171,8 @@ test("deleting an issue opened from a session comes back to that session", async
     await page.locator("button[class*='destructive']").last().click();
 
     await expect(page).toHaveURL(new RegExp(`/sessions/${sessionId}\\?cwd=`), { timeout: 15_000 });
+    // Back where it started, with the list it was opened from open again.
+    await expect(page.getByTestId("session-issues-modal")).toBeVisible({ timeout: 15_000 });
   } finally {
     rmSync(repoPath, { recursive: true, force: true });
   }

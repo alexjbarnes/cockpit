@@ -24,7 +24,31 @@ export function SessionIssuesButton() {
   const { cwd } = useShell();
   const pathname = usePathname();
   const { settings, loaded, reload } = useSettings();
+  // Open state lives in the URL (?issues=1) so that coming back from an issue —
+  // the browser's Back, or the issue page's — reopens the list it was opened
+  // from, instead of landing on the session with the modal gone.
   const [open, setOpen] = useState(false);
+
+  const syncOpenFromUrl = useCallback(() => {
+    setOpen(new URLSearchParams(window.location.search).get("issues") === "1");
+  }, []);
+
+  useEffect(() => {
+    syncOpenFromUrl();
+    window.addEventListener("popstate", syncOpenFromUrl);
+    return () => window.removeEventListener("popstate", syncOpenFromUrl);
+  }, [syncOpenFromUrl]);
+
+  const setOpenInUrl = useCallback((next: boolean) => {
+    const params = new URLSearchParams(window.location.search);
+    if (next) params.set("issues", "1");
+    else params.delete("issues");
+    const query = params.toString();
+    // replaceState, not a router push: this is a query flag the page reads, and
+    // it must not add a history entry of its own between the session and Back.
+    window.history.replaceState(null, "", `${window.location.pathname}${query ? `?${query}` : ""}`);
+    setOpen(next);
+  }, []);
   const [issues, setIssues] = useState<Issue[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [projectId, setProjectId] = useState<string>("");
@@ -103,8 +127,8 @@ export function SessionIssuesButton() {
       <Button
         variant="ghost"
         size="icon"
-        className="shrink-0 h-8 w-8 text-muted-foreground hover:text-foreground"
-        onClick={() => setOpen(true)}
+        className="shrink-0"
+        onClick={() => setOpenInUrl(true)}
         title="Issues for this project"
         data-testid="session-issues"
       >
@@ -115,7 +139,7 @@ export function SessionIssuesButton() {
         <div
           className="fixed inset-0 z-50 flex items-start justify-center bg-black/50 p-3 sm:p-6"
           onMouseDown={(e) => {
-            if (e.target === e.currentTarget) setOpen(false);
+            if (e.target === e.currentTarget) setOpenInUrl(false);
           }}
         >
           <div
@@ -144,7 +168,7 @@ export function SessionIssuesButton() {
                 <span className="truncate text-xs text-muted-foreground">from this session's directory</span>
               )}
               <button
-                onClick={() => setOpen(false)}
+                onClick={() => setOpenInUrl(false)}
                 className="ml-auto rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
                 aria-label="Close"
               >
@@ -171,9 +195,9 @@ export function SessionIssuesButton() {
                   project={selected}
                   projectNames={projectNames}
                   onIssueClick={(issue) => {
-                    setOpen(false);
-                    // Carry where we are, so closing or deleting the issue comes
-                    // back to this session rather than the Issues list.
+                    // Carry where we are — the URL still says ?issues=1, so
+                    // closing or deleting the issue comes back to this session
+                    // with the list reopened, not to the bare session.
                     const from = encodeURIComponent(window.location.pathname + window.location.search);
                     router.push(`/issues/${encodeURIComponent(issue.key)}?from=${from}`);
                   }}
