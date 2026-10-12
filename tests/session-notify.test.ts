@@ -117,7 +117,14 @@ describe("the message a session sends", () => {
       url: "/sessions/sess-1?cwd=%2Fhome%2Fdev%2Frepos%2Fcockpit",
       approval: { sessionId: "sess-1", requestId: "req-1" },
     });
-    expect(payload.body).toBe("Needs approval: rm -rf build");
+    expect(payload.body).toBe("Needs approval\nrm -rf build · cockpit");
+    expect(payload.requireInteraction, "a permission waits on the user").toBe(true);
+  });
+
+  it("carries what Claude said when a turn finishes", () => {
+    notifySessionEvent(ctx, "finished", { summary: "Everything is green; I pushed the fix." });
+
+    expect(h.dispatch.mock.calls[0][0].body).toBe("Finished working\nEverything is green; I pushed the fix.");
   });
 
   it("says what was asked", () => {
@@ -127,7 +134,8 @@ describe("the message a session sends", () => {
       input: JSON.stringify({ questions: [{ question: "Which database?" }] }),
     });
 
-    expect(h.dispatch.mock.calls[0][0].body).toBe("Asked: Which database?");
+    expect(h.dispatch.mock.calls[0][0].body).toBe("Asked a question\nWhich database?");
+    expect(h.dispatch.mock.calls[0][0].requireInteraction).toBe(true);
   });
 
   it("sends nothing for a kind that is switched off", () => {
@@ -164,5 +172,6 @@ describe("the message a session sends", () => {
 
     expect(h.dispatch).toHaveBeenCalledTimes(1);
     expect(h.dispatch.mock.calls[0][0].body).toBe("Finished working");
+    expect(h.dispatch.mock.calls[0][0].requireInteraction, "news, not a task: it can fade").toBeUndefined();
   });
 });

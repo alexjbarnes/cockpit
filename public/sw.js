@@ -102,6 +102,9 @@ self.addEventListener("push", (event) => {
       badge: "/notification-badge.png",
       tag: payload.tag || undefined,
       actions,
+      // Waits on the user rather than reporting news: keep it on screen until
+      // they deal with it. Ignored where it is unsupported.
+      requireInteraction: payload.requireInteraction === true,
       data: { url: payload.url || "/inbox", messageId: payload.messageId, approval: payload.approval },
     })
   );

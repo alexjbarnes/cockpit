@@ -407,6 +407,10 @@ export interface NotificationPayload {
    *  one. A web push turns it into Approve and Deny buttons that answer the
    *  request directly, without the app being open. */
   approval?: { sessionId: string; requestId: string };
+  /** Keep the notification on screen until it is dismissed, for the ones that
+   *  are waiting on the user rather than reporting news. Chrome only; other
+   *  browsers ignore it. */
+  requireInteraction?: boolean;
 }
 
 /** What a session sends out, chosen in its settings: one provider, and which

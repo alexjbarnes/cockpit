@@ -32,6 +32,7 @@ const webPushProvider: NotificationProvider<WebPushConfig> = {
         // Same idea for a permission request: Approve and Deny on the
         // notification itself, answered through the REST route.
         ...(payload.approval ? { approval: payload.approval } : {}),
+        ...(payload.requireInteraction ? { requireInteraction: true } : {}),
       });
     } catch (err) {
       if (isDeadSubscription(err)) {

@@ -2261,7 +2261,11 @@ export class SessionManager {
       // request still open all reach idle too, and none of them is news.
       const finishedTurn = result.messageDone && !result.compactDone && result.errors.length === 0 && session.pendingRequests.size === 0;
       if (finishedTurn) {
-        notifySessionEvent(this.notifyContext(session, sessionId), "finished");
+        // What Claude actually said is the context worth carrying: a
+        // notification that only says "finished" makes you open the app to
+        // find out whether it matters.
+        const said = lastEmitEv?.type === "message_done" ? lastEmitEv.message?.content : undefined;
+        notifySessionEvent(this.notifyContext(session, sessionId), "finished", { summary: said });
       }
       this.flushQueuedMessage(session, sessionId);
     }

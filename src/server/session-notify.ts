@@ -64,14 +64,29 @@ function firstQuestion(input: string | undefined): string {
   }
 }
 
-function buildBody(kind: SessionEventKind, detail?: { toolName?: string; input?: string; summary?: string }): string {
-  if (kind === "finished") return "Finished working";
+/** A notification has room for a line or two, and the second line is what
+ *  makes it worth reading rather than opening: what Claude said, which
+ *  question, which command where. Clipped rather than wrapped, because a
+ *  desktop notification truncates mid-word on its own terms. */
+const BODY_LINE_MAX = 160;
+
+function clip(value: string): string {
+  const flat = value.replace(/\s+/g, " ").trim();
+  return flat.length > BODY_LINE_MAX ? `${flat.slice(0, BODY_LINE_MAX - 1).trimEnd()}…` : flat;
+}
+
+function buildBody(kind: SessionEventKind, detail?: { toolName?: string; input?: string; summary?: string }, where?: string): string {
+  if (kind === "finished") {
+    const said = clip(detail?.summary ?? "");
+    return said ? `Finished working\n${said}` : "Finished working";
+  }
   if (kind === "question") {
     const question = firstQuestion(detail?.input);
-    return question ? `Asked: ${question}` : "Asked a question";
+    return `Asked a question\n${clip(question) || "Tap to answer"}`;
   }
   const summary = detail?.summary || detail?.toolName || "";
-  return summary ? `Needs approval: ${summary}` : "Needs approval";
+  if (!summary) return where ? `Needs approval\n${where}` : "Needs approval";
+  return `Needs approval\n${clip(summary)}${where ? ` · ${where}` : ""}`;
 }
 
 /** What the permission is for: a caller-supplied line, else the same summary
@@ -151,7 +166,12 @@ export function notifySessionEvent(
 
     dispatchNotification({
       title: name,
-      body: buildBody(kind, { ...detail, summary }),
+      // `summary` is only rebuilt for a permission; for a finished turn the
+      // caller's own line (what Claude said) is the one to keep.
+      body: buildBody(kind, kind === "permission" ? { ...detail, summary } : detail, basename(ctx.cwd)),
+      // A question or a permission is waiting on the user, so the notification
+      // stays on screen until it is dealt with rather than fading like news.
+      ...(kind === "finished" ? {} : { requireInteraction: true }),
       priority: kind === "finished" ? "info" : "warning",
       source: "session",
       url: `/sessions/${ctx.sessionId}?cwd=${encodeURIComponent(ctx.cwd)}`,

@@ -80,13 +80,22 @@ function vapidSubject(): string {
 }
 
 /** Send one push. Throws whatever the push service said, so the caller can
- *  decide whether the subscription is dead. */
+ *  decide whether the subscription is dead.
+ *
+ *  Urgency is high, deliberately. It is the hint the push service uses to
+ *  decide whether a message may wait: on Android a `normal` one can sit until
+ *  the device next wakes, which is how a locked phone received nothing all
+ *  afternoon and every alert at once the moment the app was opened. Everything
+ *  cockpit sends is a "you are needed" message, so it wakes the device. */
 export async function sendWebPush(config: WebPushConfig, payload: unknown): Promise<void> {
   const keys = getVapidKeys();
   await webpush.sendNotification(
     { endpoint: config.endpoint, keys: { p256dh: config.keys.p256dh, auth: config.keys.auth } },
     JSON.stringify(payload),
-    { vapidDetails: { subject: vapidSubject(), publicKey: keys.publicKey, privateKey: keys.privateKey } },
+    {
+      vapidDetails: { subject: vapidSubject(), publicKey: keys.publicKey, privateKey: keys.privateKey },
+      urgency: "high",
+    },
   );
 }
 

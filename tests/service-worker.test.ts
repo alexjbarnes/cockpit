@@ -106,6 +106,15 @@ describe("service worker push", () => {
     expect(options.data).toMatchObject({ approval: { sessionId: "sess-1", requestId: "req-1" } });
   });
 
+  it("keeps one that is waiting on the user on screen", async () => {
+    const sw = loadServiceWorker();
+    await push(sw, { title: "Session", body: "Needs approval", requireInteraction: true });
+    expect(sw.notifications[0].options.requireInteraction).toBe(true);
+
+    await push(sw, { title: "Session", body: "Finished working" });
+    expect(sw.notifications[1].options.requireInteraction, "news may fade").toBe(false);
+  });
+
   it("gives a push with no inbox message behind it no buttons", async () => {
     const sw = loadServiceWorker();
     await push(sw, { title: "Cockpit", body: "something happened" });

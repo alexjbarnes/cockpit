@@ -82,9 +82,12 @@ describe("sending a push", () => {
       body: "Weekly organiser",
       url: "https://cockpit.test/inbox/abc",
     });
-    const options = h.sent[0].options as { vapidDetails: { subject: string; publicKey: string; privateKey: string } };
+    const options = h.sent[0].options as { vapidDetails: { subject: string; publicKey: string; privateKey: string }; urgency: string };
     expect(options.vapidDetails.publicKey).toBe("generated-public");
     expect(options.vapidDetails.privateKey).toBe("generated-private");
+    // Normal urgency lets a push wait until the device next wakes, which on a
+    // locked phone means every alert arriving when the app is opened.
+    expect(options.urgency, "a locked phone has to be woken").toBe("high");
   });
 
   // The push services want someone to contact before blocking a sender, and
