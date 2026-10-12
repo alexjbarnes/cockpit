@@ -18,6 +18,7 @@ vi.mock("@/server/notification-settings", () => ({
 
 import { onSessionAttention } from "@/server/session-attention";
 import { notifySessionEvent, resetSessionNotifyState } from "@/server/session-notify";
+import { resetViewers, setViewer } from "@/server/session-viewers";
 
 const ctx = {
   sessionId: "sess-1",
@@ -35,6 +36,7 @@ let unsubscribe: (() => void) | null = null;
 beforeEach(() => {
   vi.clearAllMocks();
   resetSessionNotifyState();
+  resetViewers();
   h.defaults = { sessionAlerts: false };
   h.providers = [{ id: "push-1", enabled: true, type: "webpush", name: "Chrome on Pixel" }];
   attention = [];
@@ -68,6 +70,36 @@ describe("a scheduled job's own session", () => {
 
     expect(attention).toEqual([]);
     expect(h.dispatch).not.toHaveBeenCalled();
+  });
+});
+
+describe("a session someone is already watching", () => {
+  it("raises nothing, push or banner", () => {
+    h.defaults = { sessionAlerts: true };
+    setViewer("client-1", ctx.sessionId, true);
+
+    notifySessionEvent(ctx, "finished");
+    notifySessionEvent(ctx, "permission", { requestId: "req-1", toolName: "Bash", input: "{}" });
+
+    expect(attention).toEqual([]);
+    expect(h.dispatch).not.toHaveBeenCalled();
+  });
+
+  it("notifies again once that client looks elsewhere, or its tab goes quiet", () => {
+    h.defaults = { sessionAlerts: true };
+    setViewer("client-1", ctx.sessionId, true);
+    notifySessionEvent(ctx, "finished");
+    expect(attention).toEqual([]);
+
+    // A backgrounded tab is not watching.
+    setViewer("client-1", ctx.sessionId, false);
+    notifySessionEvent(ctx, "finished");
+    expect(attention).toHaveLength(1);
+
+    // Nor is a client that has navigated away.
+    setViewer("client-1", "another-session", true);
+    notifySessionEvent(ctx, "finished");
+    expect(attention).toHaveLength(2);
   });
 });
 

@@ -4,6 +4,7 @@ import { getDefaults } from "@/server/defaults";
 import { getNotificationSettings } from "@/server/notification-settings";
 import { dispatchNotification } from "@/server/notifications";
 import { emitSessionAttention } from "@/server/session-attention";
+import { isSessionViewed } from "@/server/session-viewers";
 import type { SessionNotifications } from "@/types";
 import { debugLog } from "./debug-logger";
 
@@ -103,6 +104,10 @@ export function notifySessionEvent(
   detail?: { requestId?: string; toolName?: string; input?: string; summary?: string },
 ): void {
   if (ctx.isJobRun) return;
+  // Someone is already looking at this session: they can see it end, and the
+  // noise is worth less than nothing. A tab in the background does not count
+  // as looking (see session-viewers).
+  if (isSessionViewed(ctx.sessionId)) return;
   try {
     const name = sessionLabel(ctx);
     if (getDefaults().sessionAlerts) {

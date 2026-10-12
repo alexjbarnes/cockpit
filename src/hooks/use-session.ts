@@ -255,6 +255,19 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
     });
   }, [sessionId, cwd, historyView, send]);
 
+  // Tell the server what this client is looking at, so a notification can skip
+  // a session someone is already watching. Sent on mount, on every visibility
+  // change (a backgrounded tab is not watching), and cleared on unmount.
+  useEffect(() => {
+    const report = () => send({ type: "session:set_viewing", sessionId, visible: document.visibilityState === "visible" });
+    report();
+    document.addEventListener("visibilitychange", report);
+    return () => {
+      document.removeEventListener("visibilitychange", report);
+      send({ type: "session:set_viewing", sessionId: null, visible: false });
+    };
+  }, [sessionId, send]);
+
   // Dismissed on the user's grant rather than on reaching "running": a spawn
   // with no message to send stops at an idle REPL, so waiting for a turn would
   // leave the card up over a session that had already started fine. If the

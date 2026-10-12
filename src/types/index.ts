@@ -636,6 +636,10 @@ export type ClientMessage =
   | { type: "session:restart"; sessionId: string }
   | { type: "session:set_runtime"; sessionId: string; runtime: "pty" | "stream" }
   | { type: "session:set_notifications"; sessionId: string; notifications: SessionNotifications | null }
+  /** What this client is looking at, so a notification can skip the session
+   *  the user is already watching. Null when it has navigated away from every
+   *  session; `visible` is the document's own visibility. */
+  | { type: "session:set_viewing"; sessionId: string | null; visible: boolean }
   | { type: "session:subscribe"; sessionIds: string[] }
   | { type: "question:response"; sessionId: string; requestId: string; answers: Record<string, string> }
   | { type: "message:cancel_queued"; sessionId: string }

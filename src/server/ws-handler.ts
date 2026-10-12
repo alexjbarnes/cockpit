@@ -11,6 +11,7 @@ import { findLatestPlanFile, readPlanFile } from "./plans";
 import { onSessionAttention, onSessionRequestResolved } from "./session-attention";
 import { SessionManager } from "./session-manager";
 import { getSessionPrefs } from "./session-prefs";
+import { forgetViewer, setViewer } from "./session-viewers";
 import type { TerminalManager } from "./terminal-manager";
 
 const RESIZE_PREFIX = "\x01R";
@@ -831,6 +832,11 @@ export function createWebSocketHandler(
           break;
         }
 
+        case "session:set_viewing": {
+          setViewer(wsId, msg.sessionId, msg.visible);
+          break;
+        }
+
         case "session:restart": {
           sessionManager.restartSession(msg.sessionId);
           break;
@@ -911,6 +917,7 @@ export function createWebSocketHandler(
     });
 
     ws.on("close", (code, _reason) => {
+      forgetViewer(wsId);
       const sessions = Array.from(sessionCleanups.keys()).map((s) => s.slice(0, 8));
       debugLog(`[ws:${wsId}] closed (code=${code}, sessions=[${sessions.join(",")}], clients=${wss.clients.size})`);
       for (const fns of sessionCleanups.values()) {
