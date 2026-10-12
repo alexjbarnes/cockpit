@@ -40,6 +40,9 @@ export function SessionAlerts() {
   const router = useRouter();
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [collapsed, setCollapsed] = useState(false);
+  // Which banners are showing their whole command rather than the first line of
+  // it. A banner is deliberately small, and a command can be a whole script.
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
   // Suppress the session on screen. Read from the pathname, not from the shell
   // context: that one is set by the session page and never cleared, so
@@ -136,10 +139,23 @@ export function SessionAlerts() {
   const summary = (alert: Alert) => {
     if (alert.kind !== "permission") return "";
     try {
-      return formatToolSummary(alert.toolName ?? "", JSON.parse(alert.input || "{}") as Record<string, unknown>);
+      // The whole command, not the card's one-line version: the banner shows
+      // one line of it until the user asks for the rest.
+      return formatToolSummary(alert.toolName ?? "", JSON.parse(alert.input || "{}") as Record<string, unknown>, {
+        maxLength: Number.MAX_SAFE_INTEGER,
+      });
     } catch {
       return "";
     }
+  };
+
+  const toggleExpanded = (key: string) => {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
   };
 
   if (collapsed) {
@@ -177,10 +193,33 @@ export function SessionAlerts() {
               <span className="truncate font-medium">{alert.name}</span>
               <span className="shrink-0 text-muted-foreground">{label(alert)}</span>
             </div>
-            {summary(alert) && <div className="truncate font-mono text-[11px] text-muted-foreground">{summary(alert)}</div>}
+            {summary(alert) && (
+              <div
+                className={
+                  expanded.has(alert.key)
+                    ? "max-h-40 overflow-y-auto whitespace-pre-wrap break-words font-mono text-[11px] text-muted-foreground"
+                    : "truncate font-mono text-[11px] text-muted-foreground"
+                }
+                data-testid="session-alert-command"
+              >
+                {summary(alert)}
+              </div>
+            )}
           </div>
           {alert.kind === "permission" && (
             <>
+              {summary(alert).length > 60 && (
+                <button
+                  type="button"
+                  onClick={() => toggleExpanded(alert.key)}
+                  title={expanded.has(alert.key) ? "Show less" : "Show the whole command"}
+                  aria-label={expanded.has(alert.key) ? "Show less" : "Show the whole command"}
+                  data-testid="session-alert-expand"
+                  className="shrink-0 rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+                >
+                  {expanded.has(alert.key) ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => respond(alert, true)}

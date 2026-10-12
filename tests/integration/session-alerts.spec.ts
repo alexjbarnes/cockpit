@@ -130,8 +130,10 @@ test("a permission in another session raises a banner, and Approve answers it th
 
     // A command the CLI will not wave through on its own: `echo` is on its
     // safe list and runs without asking, whatever the permission mode says.
+    // Long, so the banner has to truncate it and offer the rest.
+    const command = `rm -rf ${Array.from({ length: 30 }, (_, i) => `build/artifact-${i}`).join(" ")}`;
     harness.mock.setScript([
-      { events: toolUseResponse("Bash", { command: "rm -rf build", description: "Remove the build directory" }) },
+      { events: toolUseResponse("Bash", { command, description: "Remove the build directory" }) },
       { events: textResponse("Removed it.") },
     ]);
 
@@ -155,8 +157,18 @@ test("a permission in another session raises a banner, and Approve answers it th
       });
     await expect(banner).toBeVisible({ timeout: 20_000 });
     await expect(banner).toContainText("Waiting session");
-    await expect(banner).toContainText("rm -rf build");
+    await expect(banner).toContainText("rm -rf build/artifact-0");
     expect(page.url(), "the page stayed where it was").not.toContain("Waiting");
+
+    // One line of the command by default, all of it on request: the banner is
+    // deliberately small, and a command can be a whole script.
+    const commandLine = page.getByTestId("session-alert-command");
+    const collapsedHeight = await commandLine.evaluate((el) => el.clientHeight);
+    await expect.poll(() => commandLine.evaluate((el) => el.scrollWidth > el.clientWidth), { timeout: 5_000 }).toBe(true);
+
+    await page.getByTestId("session-alert-expand").click();
+    await expect.poll(() => commandLine.evaluate((el) => el.clientHeight), { timeout: 5_000 }).toBeGreaterThan(collapsedHeight);
+    await expect(commandLine).toContainText("artifact-29");
 
     await page.getByTestId("session-alert-approve").click();
 
