@@ -127,6 +127,13 @@ describe("the message a session sends", () => {
     expect(h.dispatch.mock.calls[0][0].body).toBe("Finished working\nEverything is green; I pushed the fix.");
   });
 
+  it("carries a long command whole, rather than the card's eighty characters", () => {
+    const command = `git commit -m "${"x".repeat(200)}"`;
+    notifySessionEvent(ctx, "permission", { requestId: "req-long", toolName: "Bash", input: JSON.stringify({ command }) });
+
+    expect(h.dispatch.mock.calls[0][0].body).toContain(command);
+  });
+
   it("says what was asked", () => {
     notifySessionEvent(ctx, "question", {
       requestId: "req-2",

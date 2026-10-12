@@ -8,14 +8,18 @@ import { shortPath } from "@/lib/path";
  *
  * An empty string means "this tool has nothing worth summarising": the raw
  * input is the only thing that would say, and callers show that instead.
+ *
+ * `maxLength` defaults to what an approval card can show on one line. A
+ * notification passes a much larger one: the command is the whole decision
+ * there, and a phone has room for it.
  */
-export function formatToolSummary(toolName: string, input: Record<string, unknown>): string {
+export function formatToolSummary(toolName: string, input: Record<string, unknown>, options?: { maxLength?: number }): string {
+  const max = options?.maxLength ?? 80;
+  const clip = (value: string) => (value.length > max ? `${value.slice(0, max)}...` : value);
   switch (toolName) {
     case "Bash":
-    case "bash": {
-      const cmd = (input.command as string) || "";
-      return cmd.length > 80 ? cmd.slice(0, 80) + "..." : cmd;
-    }
+    case "bash":
+      return clip((input.command as string) || "");
     case "Write":
     case "write":
     case "Edit":
@@ -28,10 +32,8 @@ export function formatToolSummary(toolName: string, input: Record<string, unknow
     // The URL is the whole decision for a fetch, so put it in the summary
     // instead of leaving it to be read out of the raw input JSON.
     case "WebFetch":
-    case "WebSearch": {
-      const target = (input.url as string) || (input.query as string) || "";
-      return target.length > 80 ? target.slice(0, 80) + "..." : target;
-    }
+    case "WebSearch":
+      return clip((input.url as string) || (input.query as string) || "");
     default:
       return "";
   }

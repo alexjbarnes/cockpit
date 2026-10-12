@@ -67,12 +67,19 @@ function firstQuestion(input: string | undefined): string {
 /** A notification has room for a line or two, and the second line is what
  *  makes it worth reading rather than opening: what Claude said, which
  *  question, which command where. Clipped rather than wrapped, because a
- *  desktop notification truncates mid-word on its own terms. */
+ *  desktop notification truncates mid-word on its own terms.
+ *
+ * The permission line gets much more room: the command *is* the decision, and
+ * a summary that stops at eighty characters is one the user has to open the
+ * app to judge. */
 const BODY_LINE_MAX = 160;
+const COMMAND_LINE_MAX = 300;
 
-function clip(value: string): string {
+function clip(value: string, max = BODY_LINE_MAX): string {
+  // Newlines collapse: a notification body is a line, not a document, and a
+  // multi-line command reads better as one.
   const flat = value.replace(/\s+/g, " ").trim();
-  return flat.length > BODY_LINE_MAX ? `${flat.slice(0, BODY_LINE_MAX - 1).trimEnd()}…` : flat;
+  return flat.length > max ? `${flat.slice(0, max - 1).trimEnd()}…` : flat;
 }
 
 function buildBody(kind: SessionEventKind, detail?: { toolName?: string; input?: string; summary?: string }, where?: string): string {
@@ -86,7 +93,7 @@ function buildBody(kind: SessionEventKind, detail?: { toolName?: string; input?:
   }
   const summary = detail?.summary || detail?.toolName || "";
   if (!summary) return where ? `Needs approval\n${where}` : "Needs approval";
-  return `Needs approval\n${clip(summary)}${where ? ` · ${where}` : ""}`;
+  return `Needs approval\n${clip(summary, COMMAND_LINE_MAX)}${where ? ` · ${where}` : ""}`;
 }
 
 /** What the permission is for: a caller-supplied line, else the same summary
@@ -96,7 +103,8 @@ function permissionSummary(detail?: { toolName?: string; input?: string; summary
   if (!detail?.input) return detail?.toolName ?? "";
   try {
     const parsed = JSON.parse(detail.input) as Record<string, unknown>;
-    return formatToolSummary(detail.toolName ?? "", parsed) || (detail.toolName ?? "");
+    // No card-sized truncation: the body's own limit is the only one here.
+    return formatToolSummary(detail.toolName ?? "", parsed, { maxLength: Number.MAX_SAFE_INTEGER }) || (detail.toolName ?? "");
   } catch {
     return detail.toolName ?? "";
   }
