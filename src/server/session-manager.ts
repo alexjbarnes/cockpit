@@ -46,14 +46,14 @@ import { getDefaults } from "./defaults";
 import { ONE_M_CREDITS_REQUIRED, type ParsedEvent, TURN_CONTINUES } from "./event-parser";
 import { getHarnessAdapter } from "./harness/registry";
 import type { HarnessProcess, HarnessProcessCallbacks, HarnessSpawnConfig } from "./harness/types";
-import { getJob } from "./job-storage";
+import { getJob, getJobSessionIds } from "./job-storage";
 import { COCKPIT_AGENT_SYSTEM_PROMPT } from "./mcp/cockpit-agent-prompt";
 import { clearToken, type RunContext, registerAuthToken, registerRunContext, registerSessionContext } from "./mcp/run-context";
 import { getNotificationSettings } from "./notification-settings";
 import { findLatestPlanFile, readPlanFile } from "./plans";
 import { UntrustedWorkspaceError } from "./pty-session";
 import { emitSessionRequestResolved } from "./session-attention";
-import { notifySessionEvent } from "./session-notify";
+import { notifySessionEvent, type SessionNotifyContext } from "./session-notify";
 import { findChainForCliSession, getSessionPrefs, type SessionRuntime, setSessionPrefs } from "./session-prefs";
 import { getCockpitMcp } from "./singleton";
 import { createStreamState, processEvents, type StreamState } from "./stream-processor";
@@ -1356,6 +1356,18 @@ export class SessionManager {
     return true;
   }
 
+  /** What notifySessionEvent needs about a session, in one place so both call
+   *  sites cannot disagree about it — the job-run flag included. */
+  private notifyContext(session: Session, sessionId: string): SessionNotifyContext {
+    return {
+      sessionId,
+      name: session.info.name,
+      cwd: session.info.cwd,
+      notifications: session.notifications,
+      isJobRun: getJobSessionIds().has(sessionId),
+    };
+  }
+
   isBypassActive(sessionId: string): boolean {
     const session = this.sessions.get(sessionId);
     return session?.permissionMode === "bypass";
@@ -2167,7 +2179,7 @@ export class SessionManager {
         this.notifyPendingChanged(session, sessionId);
         // Everything above this point answered itself, so a request arriving
         // here is one the user actually has to deal with.
-        notifySessionEvent({ sessionId, name: session.info.name, cwd: session.info.cwd, notifications: session.notifications }, reqType, {
+        notifySessionEvent(this.notifyContext(session, sessionId), reqType, {
           requestId: pa.requestId,
           toolName: pa.toolName,
           input: pa.toolInput || "",
@@ -2249,7 +2261,7 @@ export class SessionManager {
       // request still open all reach idle too, and none of them is news.
       const finishedTurn = result.messageDone && !result.compactDone && result.errors.length === 0 && session.pendingRequests.size === 0;
       if (finishedTurn) {
-        notifySessionEvent({ sessionId, name: session.info.name, cwd: session.info.cwd, notifications: session.notifications }, "finished");
+        notifySessionEvent(this.notifyContext(session, sessionId), "finished");
       }
       this.flushQueuedMessage(session, sessionId);
     }

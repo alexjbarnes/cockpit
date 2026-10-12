@@ -59,6 +59,18 @@ describe("the banner the app raises", () => {
   });
 });
 
+describe("a scheduled job's own session", () => {
+  it("raises nothing in the app, not even the banner", () => {
+    h.defaults = { sessionAlerts: true };
+
+    notifySessionEvent({ ...ctx, isJobRun: true }, "finished");
+    notifySessionEvent({ ...ctx, isJobRun: true }, "permission", { requestId: "req-1", toolName: "Bash", input: "{}" });
+
+    expect(attention).toEqual([]);
+    expect(h.dispatch).not.toHaveBeenCalled();
+  });
+});
+
 describe("the message a session sends", () => {
   it("carries the provider, the session's name and where to open it", () => {
     notifySessionEvent(ctx, "permission", { requestId: "req-1", toolName: "Bash", input: JSON.stringify({ command: "rm -rf build" }) });

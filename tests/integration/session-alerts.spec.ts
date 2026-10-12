@@ -141,3 +141,60 @@ test("a permission in another session raises a banner, and Approve answers it th
     rmSync(workDir, { recursive: true, force: true });
   }
 });
+
+test("a scheduled job finishing raises no banner", async ({ page, harness }) => {
+  // A job's outcome goes to its run records and the inbox, with the notify
+  // targets its author chose. The in-app banner is for the sessions you are
+  // working in, and every job ending over the top of one is noise.
+  test.setTimeout(150_000);
+  const patched = await page.request.patch(`${harness.cockpitUrl}/api/defaults`, { data: { sessionAlerts: true } });
+  expect(patched.ok()).toBe(true);
+
+  const workDir = mkdtempSync(path.join(tmpdir(), "cockpit-it-alerts-"));
+  mkdirSync(path.join(workDir, ".git"), { recursive: true });
+  harness.trustWorkDir(workDir);
+
+  const frames: string[] = [];
+  page.on("websocket", (ws) => ws.on("framereceived", (f) => frames.push(String(f.payload))));
+
+  try {
+    // Somewhere to be when the job ends.
+    await openSession(page, harness, workDir, "Watching session");
+
+    harness.mock.setScript([{ events: textResponse("Job done.") }]);
+    const jobRes = await page.request.post(`${harness.cockpitUrl}/api/jobs`, {
+      data: {
+        name: "Quiet job",
+        prompt: "do the thing",
+        cwd: workDir,
+        runtime: "pty",
+        schedules: [{ type: "simple", frequency: "daily", time: "09:00" }],
+        enabled: false,
+      },
+    });
+    expect(jobRes.ok()).toBe(true);
+    const { job } = (await jobRes.json()) as { job: { id: string } };
+
+    const runRes = await page.request.post(`${harness.cockpitUrl}/api/jobs/${job.id}/trigger`);
+    expect(runRes.ok()).toBe(true);
+    // The job has to have actually run and finished, or "no banner" proves
+    // nothing: its run record is the evidence that a turn ended at all.
+    await expect
+      .poll(
+        async () => {
+          const res = await page.request.get(`${harness.cockpitUrl}/api/jobs/${job.id}/runs`);
+          const data = (await res.json()) as { runs?: Array<{ status: string }> };
+          return (data.runs ?? []).some((run) => run.status === "success" || run.status === "failure");
+        },
+        { timeout: 60_000 },
+      )
+      .toBe(true);
+
+    const attention = frames.filter((f) => f.includes("session:attention"));
+    expect(attention, `job sessions must stay out of it: ${attention.join(" | ").slice(0, 300)}`).toEqual([]);
+    await expect(page.getByTestId("session-alert-finished")).toHaveCount(0);
+    await expect(page.getByTestId("session-alerts")).toHaveCount(0);
+  } finally {
+    rmSync(workDir, { recursive: true, force: true });
+  }
+});

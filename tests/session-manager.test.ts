@@ -56,6 +56,8 @@ vi.mock("@/server/transcript", () => ({
 const { mockJobs } = vi.hoisted(() => ({ mockJobs: {} as Record<string, { name: string }> }));
 vi.mock("@/server/job-storage", () => ({
   getJob: (id: string) => mockJobs[id],
+  // No run records in these tests: every session here is an interactive one.
+  getJobSessionIds: () => new Set<string>(),
 }));
 
 // Named providers so an approval card can be asserted to show the name rather

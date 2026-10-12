@@ -21,6 +21,12 @@ export interface SessionNotifyContext {
   name?: string;
   cwd: string;
   notifications?: SessionNotifications;
+  /** A scheduled job's own session. A job reports where it was told to — its
+   *  run records and the inbox, with the notify targets its author chose — so
+   *  it never raises the in-app banner or a session message, whatever it does.
+   *  Without this, every job finishing raised "… finished a turn" over
+   *  whatever the user was actually doing. */
+  isJobRun?: boolean;
 }
 
 /** The same "finished" push is not worth repeating within a few seconds — a
@@ -96,6 +102,7 @@ export function notifySessionEvent(
   kind: SessionEventKind,
   detail?: { requestId?: string; toolName?: string; input?: string; summary?: string },
 ): void {
+  if (ctx.isJobRun) return;
   try {
     const name = sessionLabel(ctx);
     if (getDefaults().sessionAlerts) {
