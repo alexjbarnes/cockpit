@@ -29,6 +29,24 @@ describe("providers", () => {
     expect(anthropic!.models.length).toBeGreaterThan(0);
   });
 
+  // CommandCode shipped with a sync, a connect route and a proxy entry but no
+  // line in the providers list, so the settings page had no card for it and
+  // there was no way to connect a key. Nothing asserted the list, so this is
+  // the assertion that would have caught it.
+  it("lists every catalog-backed built-in, connected or not", async () => {
+    const fs = await import("node:fs");
+    vi.mocked(fs.readFileSync).mockImplementation(() => {
+      throw new Error("ENOENT");
+    });
+
+    const { getProviders } = await import("@/server/providers");
+    const ids = getProviders().map((p) => p.id);
+
+    for (const id of ["anthropic", "openrouter", "zen", "zen-go", "deepseek", "commandcode"]) {
+      expect(ids, `${id} must be offered in the UI`).toContain(id);
+    }
+  });
+
   it("merges custom providers with built-in Anthropic", async () => {
     const fs = await import("node:fs");
     const custom = [
@@ -44,13 +62,14 @@ describe("providers", () => {
     const { getProviders } = await import("@/server/providers");
     const providers = getProviders();
 
-    expect(providers.length).toBe(6);
+    expect(providers.length).toBe(7);
     expect(providers[0].id).toBe("anthropic");
     expect(providers[1].id).toBe("openrouter");
     expect(providers[2].id).toBe("zen");
     expect(providers[3].id).toBe("zen-go");
     expect(providers[4].id).toBe("deepseek");
-    expect(providers[5].id).toBe("or-123");
+    expect(providers[5].id).toBe("commandcode");
+    expect(providers[6].id).toBe("or-123");
   });
 
   it("openrouter built-in accepts key + enabled set, derives env, and rejects deletion", async () => {

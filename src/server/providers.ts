@@ -675,6 +675,10 @@ function rebuildCache(custom: Provider[]): void {
     buildOpenAIWireProvider(OPENCODE_ZEN_PROVIDER_ID, loadBuiltinStored(OPENCODE_ZEN_PROVIDER_ID)),
     buildOpenAIWireProvider(OPENCODE_ZEN_GO_PROVIDER_ID, loadBuiltinStored(OPENCODE_ZEN_GO_PROVIDER_ID)),
     buildDeepSeekProvider(loadBuiltinStored(DEEPSEEK_PROVIDER_ID)),
+    // Every id in BUILTIN_CONFIG_IDS needs a line here: this list is what the
+    // providers API and the settings page see, and a built-in missing from it
+    // has no card to connect it with, however well the rest of it works.
+    buildOpenAIWireProvider(COMMANDCODE_PROVIDER_ID, loadBuiltinStored(COMMANDCODE_PROVIDER_ID)),
     ...custom.map((p) => ({ ...p, models: applyContextSizeOverrides(p.models, p.contextSizeOverrides) })),
   ];
   cacheMtimeMs = providersMtimeMs();
