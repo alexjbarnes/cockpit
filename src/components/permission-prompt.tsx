@@ -1,7 +1,7 @@
 "use client";
 
 import { Globe, ShieldAlert } from "lucide-react";
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { PendingPermission } from "@/hooks/use-session";
 import { pathBasename } from "@/lib/path";
 import { isSandboxEscape, NETWORK_ACCESS_TOOL } from "@/lib/sandbox-requests";
@@ -50,6 +50,43 @@ interface PermissionPromptProps {
   onRespond: (requestId: string, allowed: boolean, permissionMode?: PermissionMode, suggestionIndex?: number) => void;
 }
 
+/**
+ * What the tool is about to do, in full. A Bash call shows its command rather
+ * than the JSON that carries it — the command is the decision, and the JSON
+ * only hides it behind escapes and a field name. Long input starts collapsed
+ * (it can be a whole script or a file's contents) with the size on the toggle,
+ * because a card that pushes Allow off the screen is worse than one line of it.
+ */
+function PermissionInput({ toolName, input, parsed }: { toolName: string; input: string; parsed: Record<string, unknown> }) {
+  const [expanded, setExpanded] = useState(false);
+  const COLLAPSED_CHARS = 500;
+  const command = (toolName === "Bash" || toolName === "bash") && typeof parsed.command === "string" ? parsed.command : null;
+  const text = command ?? input;
+  const clipped = text.length > COLLAPSED_CHARS && !expanded;
+
+  return (
+    <div className="space-y-1" data-testid="permission-input">
+      <pre
+        className={`overflow-x-auto overflow-y-auto rounded bg-black/10 dark:bg-white/5 p-2 text-[11px] leading-relaxed ${
+          expanded ? "max-h-96" : "max-h-32"
+        }`}
+      >
+        {clipped ? `${text.slice(0, COLLAPSED_CHARS)}\n... ${text.length - COLLAPSED_CHARS} more characters` : text}
+      </pre>
+      {text.length > COLLAPSED_CHARS && (
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          data-testid="btn-toggle-permission-input"
+          className="text-[11px] text-muted-foreground underline underline-offset-2 hover:text-foreground"
+        >
+          {expanded ? "Show less" : `Show all (${text.length.toLocaleString()} characters)`}
+        </button>
+      )}
+    </div>
+  );
+}
+
 export function PermissionPrompt({ permission, onRespond }: PermissionPromptProps) {
   const allowRef = useRef<HTMLButtonElement>(null);
 
@@ -90,11 +127,7 @@ export function PermissionPrompt({ permission, onRespond }: PermissionPromptProp
                 Runs outside the sandbox, with no file or network limits.
               </div>
             )}
-            {permission.input && (
-              <pre className="overflow-x-auto rounded bg-black/10 dark:bg-white/5 p-2 text-[11px] leading-relaxed max-h-32 overflow-y-auto">
-                {permission.input.length > 500 ? permission.input.slice(0, 500) + "\n... (truncated)" : permission.input}
-              </pre>
-            )}
+            {permission.input && <PermissionInput toolName={permission.toolName} input={permission.input} parsed={parsed} />}
             <div className="flex flex-wrap gap-2 pt-1">
               <button
                 ref={allowRef}

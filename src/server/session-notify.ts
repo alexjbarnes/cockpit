@@ -73,7 +73,11 @@ function firstQuestion(input: string | undefined): string {
  * a summary that stops at eighty characters is one the user has to open the
  * app to judge. */
 const BODY_LINE_MAX = 160;
-const COMMAND_LINE_MAX = 300;
+// A sanity cap, not a display decision: Android ellipsizes a notification's
+// body until the user expands it, and expanding is how they read all of it.
+// The cap only stops a pathological input (a whole file pasted into a command)
+// from travelling every time.
+const COMMAND_LINE_MAX = 1000;
 
 function clip(value: string, max = BODY_LINE_MAX): string {
   // Newlines collapse: a notification body is a line, not a document, and a
