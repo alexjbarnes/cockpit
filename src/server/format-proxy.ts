@@ -725,6 +725,49 @@ export function estimateInputTokens(rawBody: string): number {
 /** Statuses worth retrying before any response bytes were sent: upstream
  *  saturation (429, and OpenRouter surfaces provider congestion as 429),
  *  gateway failures, and Anthropic's 529 overloaded. */
+/**
+ * How long an upstream may stay silent before cockpit calls it a failure: no
+ * response headers, no first chunk, or no chunk at all for this long
+ * mid-stream. A provider that accepts a request and then says nothing parks
+ * the session — nothing on either side gives up, and the CLI shows no error
+ * because it has none — so the silence itself is the failure. NVIDIA's hosted
+ * endpoints do exactly this for some models, and a real session sat on it.
+ */
+export const UPSTREAM_SILENCE_MS = 120_000;
+
+type SilencePhase = "headers" | "first-chunk" | "stream";
+
+export class UpstreamSilenceError extends Error {
+  constructor(
+    readonly phase: SilencePhase,
+    readonly silentMs: number,
+  ) {
+    super(`upstream stayed silent for ${Math.round(silentMs / 1000)}s (${phase})`);
+    this.name = "UpstreamSilenceError";
+  }
+}
+
+/** Run `work`, but fail if it has not settled within the silence budget;
+ *  aborting the upstream request as it does, so the socket does not stay open
+ *  behind a response nobody is waiting for. */
+async function withinSilence<T>(work: Promise<T>, phase: SilencePhase, silentMs: number, abort: AbortController): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  work.catch(() => {}); // the race's loser: its rejection is not an unhandled one
+  try {
+    return await Promise.race([
+      work,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          abort.abort();
+          reject(new UpstreamSilenceError(phase, silentMs));
+        }, silentMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 const RETRYABLE_STATUS = new Set([429, 502, 503, 529]);
 
 /** Some gateways (OpenRouter's free tier especially) signal upstream
@@ -779,6 +822,9 @@ export class FormatProxy {
   private port = 0;
   private retryBackoffMs: number[];
   private onUsage?: (u: ProxyUsageEvent) => void;
+  /** How long an upstream may stay silent; a test lowers it (see
+   *  UPSTREAM_SILENCE_MS for why this exists at all). */
+  private upstreamSilenceMs: number;
   /**
    * Gate for inbound requests, carried as the first path segment of the base
    * URL rather than a header. Without it any local process could POST to the
@@ -795,25 +841,29 @@ export class FormatProxy {
 
   constructor(
     private resolveUpstream: UpstreamResolver,
-    opts?: { retryBackoffMs?: number[]; onUsage?: (u: ProxyUsageEvent) => void },
+    opts?: { retryBackoffMs?: number[]; onUsage?: (u: ProxyUsageEvent) => void; upstreamSilenceMs?: number },
   ) {
     this.retryBackoffMs = opts?.retryBackoffMs ?? [1000, 3000];
     this.onUsage = opts?.onUsage;
+    this.upstreamSilenceMs = opts?.upstreamSilenceMs ?? UPSTREAM_SILENCE_MS;
   }
 
   /** Fetch with bounded retries on saturation-class failures. Safe because it
    *  only runs before any response bytes reach the client. Honors a small
    *  Retry-After when the upstream sends one. */
-  private async fetchWithRetry(url: string, init: RequestInit, providerId: string): Promise<Response> {
+  private async fetchWithRetry(url: string, init: RequestInit, providerId: string, abort: AbortController): Promise<Response> {
     for (let attempt = 0; ; attempt++) {
       let res: Response | null = null;
       let networkErr: unknown = null;
       try {
-        res = await fetch(url, init);
+        res = await withinSilence(fetch(url, init), "headers", this.upstreamSilenceMs, abort);
       } catch (err) {
         networkErr = err;
       }
-      const retryable = res ? RETRYABLE_STATUS.has(res.status) : true;
+      // A silence is terminal: the provider took the request and said nothing,
+      // and re-sending the same body would park the session for another budget
+      // with nothing to show. The retry ladder is for congestion, not for this.
+      const retryable = res ? RETRYABLE_STATUS.has(res.status) : !(networkErr instanceof UpstreamSilenceError);
       if (!retryable || attempt >= this.retryBackoffMs.length) {
         if (res) {
           if (attempt > 0) logProxy(providerId, "retry-settled", { status: res.status, attempts: attempt + 1 });
@@ -967,6 +1017,17 @@ export class FormatProxy {
       return;
     }
 
+    // The CLI's own health check: on startup and after failures it probes
+    // `HEAD <base>/api/hello` with a 10s timeout, which is the base URL
+    // cockpit handed it, i.e. this proxy. A 404 there is noise in the debug log
+    // and a failed health check on the CLI's side, so it gets an answer.
+    if (path === "/api/hello") {
+      logProxy(providerId, "hello", { method: req.method });
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ hello: "cockpit" }));
+      return;
+    }
+
     logProxy(providerId, "unsupported-path", { method: req.method, path, status: 404 });
     jsonError(res, 404, `Unsupported proxy path: ${path}`);
   }
@@ -1013,9 +1074,17 @@ export class FormatProxy {
     let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
     let firstChunk: Uint8Array | null = null;
     let saturatedPeek: string | null = null;
+    // One controller per upstream request, so a silence can tear the request
+    // down instead of leaving the socket parked behind nobody's response.
+    const abort = new AbortController();
     for (let attempt = 0; ; attempt++) {
       try {
-        upstreamRes = await this.fetchWithRetry(`${upstream.baseUrl}${pathWithQuery}`, { method: req.method, headers, body }, providerId);
+        upstreamRes = await this.fetchWithRetry(
+          `${upstream.baseUrl}${pathWithQuery}`,
+          { method: req.method, headers, body, signal: abort.signal },
+          providerId,
+          abort,
+        );
       } catch (err) {
         logProxy(providerId, "passthrough-failed", { status: 502, error: err instanceof Error ? err.message : String(err) });
         jsonError(res, 502, `Upstream request failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -1030,7 +1099,21 @@ export class FormatProxy {
         break;
       }
 
-      const { done, value } = await reader.read();
+      let firstRead: ReadableStreamReadResult<Uint8Array>;
+      try {
+        firstRead = await withinSilence(reader.read(), "first-chunk", this.upstreamSilenceMs, abort);
+      } catch (err) {
+        // Nothing has reached the client yet, so the silence can still be
+        // reported as an error rather than a stream that stops mid-sentence.
+        logProxy(providerId, "upstream-timeout", {
+          phase: "first-chunk",
+          silentMs: this.upstreamSilenceMs,
+          upstreamStatus: upstreamRes.status,
+        });
+        jsonError(res, 504, err instanceof Error ? err.message : String(err));
+        return;
+      }
+      const { done, value } = firstRead;
       firstChunk = value ?? null;
       const peek = firstChunk ? new TextDecoder().decode(firstChunk).slice(0, 256) : "";
       if (is200Saturation(peek, done && !value)) {
@@ -1078,13 +1161,17 @@ export class FormatProxy {
     try {
       if (firstChunk) res.write(Buffer.from(firstChunk));
       for (;;) {
-        const { done, value } = await reader.read();
+        const { done, value } = await withinSilence(reader.read(), "stream", this.upstreamSilenceMs, abort);
         if (done) break;
         res.write(Buffer.from(value));
       }
     } catch (err) {
       // upstream died mid-stream — end what we have
-      logProxy(providerId, "passthrough-stream-aborted", { error: err instanceof Error ? err.message : String(err) });
+      if (err instanceof UpstreamSilenceError) {
+        logProxy(providerId, "upstream-timeout", { phase: "stream", silentMs: err.silentMs, detached: true });
+      } else {
+        logProxy(providerId, "passthrough-stream-aborted", { error: err instanceof Error ? err.message : String(err) });
+      }
     }
     res.end();
   }
@@ -1118,14 +1205,16 @@ export class FormatProxy {
       effortLevels: upstream.effortByModel?.[anthropicBody.model] ?? null,
       openaiKeys: Object.keys(openaiBody),
     });
+    const abort = new AbortController();
     const init: RequestInit = {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${upstream.apiKey}`, ...conversationHeader(req, providerId) },
       body: JSON.stringify(openaiBody),
+      signal: abort.signal,
     };
     let upstreamRes: Response;
     try {
-      upstreamRes = await this.fetchWithRetry(`${upstream.baseUrl}/chat/completions`, init, providerId);
+      upstreamRes = await this.fetchWithRetry(`${upstream.baseUrl}/chat/completions`, init, providerId, abort);
       // Zen wraps non-auth failures in 401 ("Model X is not supported",
       // "No provider available" when its routing finds no upstream), which the
       // CLI reads as an auth failure and answers with a "run /login" prompt.
@@ -1139,9 +1228,16 @@ export class FormatProxy {
         if (!/no provider available/i.test(probe?.error?.message ?? "")) break;
         logProxy(providerId, "no-provider-retry", { attempt: attempt + 1, upstreamMessage: probe?.error?.message ?? null });
         await new Promise((r) => setTimeout(r, this.retryBackoffMs[attempt]));
-        upstreamRes = await fetch(`${upstream.baseUrl}/chat/completions`, init);
+        upstreamRes = await withinSilence(fetch(`${upstream.baseUrl}/chat/completions`, init), "headers", this.upstreamSilenceMs, abort);
       }
     } catch (err) {
+      // A provider that never answers is not the same failure as one that is
+      // unreachable, and the difference is what the user needs to see.
+      if (err instanceof UpstreamSilenceError) {
+        logProxy(providerId, "upstream-timeout", { phase: err.phase, silentMs: err.silentMs, model: anthropicBody.model });
+        jsonError(res, 504, `${upstream.baseUrl} accepted the request and then sent nothing for ${Math.round(err.silentMs / 1000)}s.`);
+        return;
+      }
       logProxy(providerId, "upstream-failed", {
         status: 502,
         model: anthropicBody.model,
@@ -1182,7 +1278,19 @@ export class FormatProxy {
     }
 
     if (!anthropicBody.stream) {
-      const body = (await upstreamRes.json()) as OpenAIResponse;
+      let body: OpenAIResponse;
+      try {
+        body = await withinSilence(upstreamRes.json() as Promise<OpenAIResponse>, "stream", this.upstreamSilenceMs, abort);
+      } catch (err) {
+        logProxy(providerId, "upstream-timeout", {
+          phase: "stream",
+          silentMs: this.upstreamSilenceMs,
+          model: anthropicBody.model,
+          detached: true,
+        });
+        jsonError(res, 504, err instanceof Error ? err.message : String(err));
+        return;
+      }
       // A 200 whose body is an error object: the message the upstream wrote is
       // the only useful thing here, and without this the CLI gets an empty turn
       // and blames the proxy for a malformed response.
@@ -1225,7 +1333,15 @@ export class FormatProxy {
     // A 200 that answers a streaming request with a JSON error rather than a
     // stream (or with nothing at all) is answered as an error here: relayed,
     // the CLI sees a turn with no events and reports a malformed response.
-    const first = await reader.read();
+    let first: ReadableStreamReadResult<Uint8Array>;
+    try {
+      first = await withinSilence(reader.read(), "first-chunk", this.upstreamSilenceMs, abort);
+    } catch (err) {
+      logProxy(providerId, "upstream-timeout", { phase: "first-chunk", silentMs: this.upstreamSilenceMs, model: anthropicBody.model });
+      await reader.cancel().catch(() => {});
+      jsonError(res, 504, err instanceof Error ? err.message : String(err));
+      return;
+    }
     const firstText = first.value ? decoder.decode(first.value, { stream: true }) : "";
     const asJsonError = firstText.trim().startsWith("{")
       ? (JSON.parse(firstText) as { error?: { message?: string; type?: string } }).error
@@ -1245,7 +1361,7 @@ export class FormatProxy {
         if (out) res.write(out);
       }
       for (;;) {
-        const { done, value } = await reader.read();
+        const { done, value } = await withinSilence(reader.read(), "stream", this.upstreamSilenceMs, abort);
         if (done) break;
         const out = translator.feed(decoder.decode(value, { stream: true }));
         if (out) res.write(out);
@@ -1253,6 +1369,8 @@ export class FormatProxy {
     } catch (err) {
       // upstream died mid-stream — close out what we have
       aborted = err instanceof Error ? err.message : String(err);
+      if (err instanceof UpstreamSilenceError)
+        logProxy(providerId, "upstream-timeout", { phase: "stream", silentMs: err.silentMs, detached: true });
     }
     const usage = translator.getUsage();
     res.write(translator.finish());

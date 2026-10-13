@@ -30,6 +30,8 @@ The Claude CLI speaks the Anthropic wire format only. Cockpit runs a local proxy
 - **OpenAI-format upstreams** (OpenCode Zen, Groq, Google AI Studio, NVIDIA NIM) get full request and response translation, streaming included. A reasoning model's chain-of-thought maps to thinking blocks, so it renders in the chat the same way Claude's does.
 - **Anthropic-native upstreams** (OpenRouter, DeepSeek) relay through the proxy verbatim, purely to add bounded retries on saturation errors (free-model 429s, gateway 5xx) before the CLI sees them.
 
+Either wire is bounded in time: if an upstream accepts a request and then sends nothing for two minutes, cockpit gives up and answers 504 with what happened, rather than leaving the turn waiting on a response that is not coming. That is a real failure mode on free tiers (NVIDIA's hosted endpoints do it for several models), and without the bound the session simply sits there with no error to show.
+
 Gateway models carry their real context window, and Cockpit pins the CLI's context tracking and auto-compact to it rather than the 200K the CLI would otherwise assume. Reasoning-capable gateway models expose effort levels from catalog metadata: the thinking selector shows them, and for OpenAI-format upstreams the proxy maps the chosen level onto `reasoning_effort`.
 
 ## Usage and spend
