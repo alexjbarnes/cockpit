@@ -109,7 +109,9 @@ export default function ReviewsPage() {
     repoCache.delete(selectedOrg);
     setReposLoading(true);
     setReposError(null);
-    fetch(`/api/github/repos?owner=${encodeURIComponent(selectedOrg)}`)
+    // The server holds this read for an hour; a refresh must say it wants a
+    // new one, or the button returns the list the user is trying to escape.
+    fetch(`/api/github/repos?owner=${encodeURIComponent(selectedOrg)}`, { headers: { "cache-control": "no-cache" } })
       .then((res) => {
         if (!res.ok) return res.json().then((d) => Promise.reject(d.error));
         return res.json();

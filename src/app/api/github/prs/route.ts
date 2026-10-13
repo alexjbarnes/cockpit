@@ -1,20 +1,5 @@
-import { execFile } from "node:child_process";
 import { NextRequest, NextResponse } from "next/server";
-import { validateSession } from "@/server/auth";
-
-function authenticate(req: NextRequest): boolean {
-  const token = req.cookies.get("cockpit_session")?.value || req.headers.get("authorization")?.replace("Bearer ", "");
-  return !!token && validateSession(token);
-}
-
-function run(cmd: string, args: string[]): Promise<string> {
-  return new Promise((resolve, reject) => {
-    execFile(cmd, args, { maxBuffer: 10 * 1024 * 1024 }, (err, stdout) => {
-      if (err) reject(err);
-      else resolve(stdout);
-    });
-  });
-}
+import { authenticate, GH_TTL, runCached, wantsFreshData } from "@/server/gh";
 
 export async function GET(req: NextRequest) {
   if (!authenticate(req)) {
@@ -30,18 +15,23 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    const stdout = await run("gh", [
-      "pr",
-      "list",
-      "-R",
-      repo,
-      "--state",
-      state,
-      "--json",
-      "number,title,author,additions,deletions,changedFiles,createdAt,updatedAt,headRefName,baseRefName,isDraft,labels,reviewDecision,state",
-      "--limit",
-      "50",
-    ]);
+    const stdout = await runCached(
+      `prs:${repo}:${state}`,
+      GH_TTL.fast,
+      [
+        "pr",
+        "list",
+        "-R",
+        repo,
+        "--state",
+        state,
+        "--json",
+        "number,title,author,additions,deletions,changedFiles,createdAt,updatedAt,headRefName,baseRefName,isDraft,labels,reviewDecision,state",
+        "--limit",
+        "50",
+      ],
+      { bypass: wantsFreshData(req) },
+    );
     const prs = JSON.parse(stdout);
     return NextResponse.json(prs);
   } catch (err) {

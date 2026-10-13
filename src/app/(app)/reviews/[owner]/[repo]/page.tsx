@@ -75,7 +75,13 @@ export default function PRListPage({ params }: { params: Promise<{ owner: string
       }
       setLoading(true);
       setError(null);
-      fetch(`/api/github/prs?repo=${encodeURIComponent(fullRepo)}&state=${state}`)
+      // A refresh asks for a reading taken now: the server keeps the last one
+      // for a minute, and a Refresh button that gives back the same list is a
+      // lie. The header is the only way for a GET to say so.
+      fetch(
+        `/api/github/prs?repo=${encodeURIComponent(fullRepo)}&state=${state}`,
+        force ? { headers: { "cache-control": "no-cache" } } : undefined,
+      )
         .then((res) => {
           if (!res.ok) return res.json().then((d) => Promise.reject(d.error));
           return res.json();

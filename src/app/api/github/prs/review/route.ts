@@ -1,20 +1,5 @@
-import { execFile } from "node:child_process";
 import { NextRequest, NextResponse } from "next/server";
-import { validateSession } from "@/server/auth";
-
-function authenticate(req: NextRequest): boolean {
-  const token = req.cookies.get("cockpit_session")?.value || req.headers.get("authorization")?.replace("Bearer ", "");
-  return !!token && validateSession(token);
-}
-
-function run(cmd: string, args: string[]): Promise<string> {
-  return new Promise((resolve, reject) => {
-    execFile(cmd, args, { maxBuffer: 10 * 1024 * 1024 }, (err, stdout) => {
-      if (err) reject(err);
-      else resolve(stdout);
-    });
-  });
-}
+import { authenticate, invalidateGhReads, invalidateGhReadsByPrefix, run } from "@/server/gh";
 
 export async function POST(req: NextRequest) {
   if (!authenticate(req)) {
@@ -55,7 +40,11 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    await run("gh", args);
+    await run(args);
+    // The review just changed reviewDecision, so the views that show it are
+    // wrong from here: this PR, and every list of the repo's PRs.
+    invalidateGhReads(`pr:${repo}:${number}`);
+    invalidateGhReadsByPrefix(`prs:${repo}:`);
     return NextResponse.json({ ok: true });
   } catch (err) {
     return NextResponse.json({ error: String(err) }, { status: 500 });

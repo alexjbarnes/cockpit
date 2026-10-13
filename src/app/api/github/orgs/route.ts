@@ -1,34 +1,21 @@
-import { execFile } from "node:child_process";
 import { NextRequest, NextResponse } from "next/server";
-import { validateSession } from "@/server/auth";
-
-function authenticate(req: NextRequest): boolean {
-  const token = req.cookies.get("cockpit_session")?.value || req.headers.get("authorization")?.replace("Bearer ", "");
-  return !!token && validateSession(token);
-}
-
-function run(cmd: string, args: string[]): Promise<string> {
-  return new Promise((resolve, reject) => {
-    execFile(cmd, args, { maxBuffer: 10 * 1024 * 1024 }, (err, stdout) => {
-      if (err) reject(err);
-      else resolve(stdout);
-    });
-  });
-}
+import { authenticate, GH_TTL, runCached, wantsFreshData } from "@/server/gh";
 
 export async function GET(req: NextRequest) {
   if (!authenticate(req)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  const bypass = wantsFreshData(req);
+
   try {
     // Always include the authenticated user's personal account
-    const userOut = await run("gh", ["api", "user", "--jq", ".login"]);
+    const userOut = await runCached("orgs:user", GH_TTL.slow, ["api", "user", "--jq", ".login"], { bypass });
     const username = userOut.trim();
 
     let orgs: string[] = [];
     try {
-      const stdout = await run("gh", ["api", "user/orgs", "--jq", ".[].login"]);
+      const stdout = await runCached("orgs:user-orgs", GH_TTL.slow, ["api", "user/orgs", "--jq", ".[].login"], { bypass });
       orgs = stdout.trim().split(/\r?\n/).filter(Boolean);
     } catch {
       // read:org scope may be missing, continue with just the personal account
