@@ -58,10 +58,19 @@ test("a permission card shows the whole command, on request", async ({ page, har
 
     const input = page.getByTestId("permission-input");
     await expect(input, "the command itself, not the JSON that carries it").toContainText("rm -rf build/artifact-0");
-    await expect(input, "and the end of it is behind the toggle").not.toContainText(tail);
+    await expect(input, "the whole command, not a slice of it").toContainText(tail);
 
+    // Wrapped rather than scrolled sideways: the block is exactly as wide as
+    // the card, so a long command has nowhere to hide behind a scrollbar.
+    const block = page.getByTestId("permission-input-text");
+    const overflow = await block.evaluate((el) => el.scrollWidth - el.clientWidth);
+    expect(overflow, "no horizontal scrollbar").toBeLessThanOrEqual(1);
+
+    const collapsed = (await block.boundingBox())?.height ?? 0;
     await page.getByTestId("btn-toggle-permission-input").click();
-    await expect(input).toContainText(tail);
+    const expanded = (await block.boundingBox())?.height ?? 0;
+    expect(expanded, "Show all makes it taller, not wider").toBeGreaterThan(collapsed);
+    expect(await block.evaluate((el) => el.scrollHeight - el.clientHeight), "and nothing is left hidden").toBeLessThanOrEqual(1);
 
     await card.getByTestId("btn-allow").click();
     await expect(page.getByText("Done.")).toBeVisible({ timeout: 30_000 });

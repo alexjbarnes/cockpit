@@ -53,25 +53,28 @@ interface PermissionPromptProps {
 /**
  * What the tool is about to do, in full. A Bash call shows its command rather
  * than the JSON that carries it — the command is the decision, and the JSON
- * only hides it behind escapes and a field name. Long input starts collapsed
- * (it can be a whole script or a file's contents) with the size on the toggle,
- * because a card that pushes Allow off the screen is worse than one line of it.
+ * only hides it behind escapes and a field name.
+ *
+ * The text wraps rather than scrolling sideways: a command read through a
+ * horizontal scrollbar is a command you cannot read. Long input (a whole
+ * script, a file's contents) starts in a shorter box and grows to the rest on
+ * the toggle, so a card that would push Allow off the screen does not.
  */
 function PermissionInput({ toolName, input, parsed }: { toolName: string; input: string; parsed: Record<string, unknown> }) {
   const [expanded, setExpanded] = useState(false);
   const COLLAPSED_CHARS = 500;
   const command = (toolName === "Bash" || toolName === "bash") && typeof parsed.command === "string" ? parsed.command : null;
   const text = command ?? input;
-  const clipped = text.length > COLLAPSED_CHARS && !expanded;
 
   return (
     <div className="space-y-1" data-testid="permission-input">
       <pre
-        className={`overflow-x-auto overflow-y-auto rounded bg-black/10 dark:bg-white/5 p-2 text-[11px] leading-relaxed ${
-          expanded ? "max-h-96" : "max-h-32"
+        data-testid="permission-input-text"
+        className={`overflow-y-auto whitespace-pre-wrap [overflow-wrap:anywhere] rounded bg-black/10 p-2 text-xs leading-relaxed dark:bg-white/5 ${
+          expanded ? "max-h-[70vh]" : "max-h-40"
         }`}
       >
-        {clipped ? `${text.slice(0, COLLAPSED_CHARS)}\n... ${text.length - COLLAPSED_CHARS} more characters` : text}
+        {text}
       </pre>
       {text.length > COLLAPSED_CHARS && (
         <button
