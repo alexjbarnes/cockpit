@@ -64,6 +64,15 @@ export interface HookSettingsOptions {
    * own ~/.claude/settings.json (see buildSessionSandboxBlock).
    */
   sandbox?: SandboxConfig;
+  /**
+   * Whether the CLI may use auto permission mode in this session. False for a
+   * model no Anthropic account backs, because auto's classifier is served by
+   * Anthropic: without it the CLI cannot classify anything and instead raises
+   * a dialog asking the user to acknowledge a classifier billing notice,
+   * which blocks the turn with no hook to say so. Undefined leaves the user's
+   * own settings alone.
+   */
+  autoModeEnabled?: boolean;
 }
 
 export interface HookSettingsArtifact {
@@ -111,7 +120,17 @@ export async function prepareHookSettings(opts: HookSettingsOptions): Promise<Ho
       ...((base.permissions as Record<string, unknown>) ?? {}),
       allow: [...baseAllow, ...(opts.allowList ?? [])],
       deny: [...baseDeny, ...(opts.denyList ?? [])],
+      // A session whose model no Anthropic account backs cannot use auto mode
+      // for anything: its classifier is an Anthropic service, so the only
+      // thing the mode contributes is a dialog asking the user to acknowledge
+      // a billing notice, which blocks the turn. The user's own defaultMode is
+      // overridden only in that case.
+      ...(opts.autoModeEnabled === false ? { defaultMode: "manual" } : {}),
     },
+    // "disable" and not true: the CLI validates settings and skips a file with
+    // any invalid value WHOLE — hooks included — showing a settings-error
+    // dialog at startup, which is a worse stall than the one this fixes.
+    ...(opts.autoModeEnabled === false ? { disableAutoMode: "disable", useAutoModeDuringPlan: false } : {}),
     // cockpit drives the CLI programmatically and owns the bypass-mode UX
     // itself (flipping bypass on is a deliberate cockpit UI action). The CLI's
     // interactive "WARNING: Bypass Permissions mode" dialog has nowhere to go

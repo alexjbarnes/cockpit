@@ -777,3 +777,16 @@ export function resolveProviderModel(modelId: string): { provider: Provider; mod
   }
   return null;
 }
+
+/**
+ * Whether `model` runs on Anthropic — the one provider whose account backs the
+ * auto permission mode's classifier. On any other provider the classifier is
+ * not available, and the CLI's fallback is a dialog asking the user to
+ * acknowledge a billing notice, which blocks the turn until someone presses
+ * Enter in the terminal. An id no provider claims counts as Anthropic, as it
+ * always has.
+ */
+export function modelRunsOnAnthropic(model: string | undefined): boolean {
+  const resolved = resolveProviderModel(model ?? "");
+  return !resolved || resolved.provider.id === "anthropic";
+}

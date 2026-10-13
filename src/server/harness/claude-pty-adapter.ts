@@ -217,6 +217,12 @@ export class ClaudePtyAdapter implements HarnessAdapter {
       extraEnv,
       thinkingEnabled: config.thinkingLevel !== "off",
       sandbox: config.sandbox,
+      // Auto mode's classifier is an Anthropic service. On a provider session
+      // the CLI cannot classify anything, and its fallback is a dialog asking
+      // the user to acknowledge a classifier billing notice — which blocked
+      // real sessions with no hook to say so. Turn the mode off in the
+      // settings file for those sessions.
+      autoModeEnabled: config.autoModeEnabled,
       // Mirrors the --permission-mode arg above, so the runtime can spot the
       // CLI silently running in a different mode than requested.
       expectedPermissionMode: config.planMode

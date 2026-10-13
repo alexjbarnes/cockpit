@@ -33,6 +33,10 @@ export interface PtyRuntimeOptions {
   thinkingEnabled?: boolean;
   /** OS-level Bash sandbox written into the settings file when enabled. */
   sandbox?: SandboxConfig;
+  /** When false, the settings file turns auto mode off for this session: its
+   *  classifier is an Anthropic service, and without it the CLI only raises a
+   *  billing-notice dialog that blocks the turn. */
+  autoModeEnabled?: boolean;
   /** Optional debug callback for raw PTY data chunks. */
   onPtyData?: (chunk: string) => void;
   /** The permission mode the spawn asked for (--permission-mode). Hook
@@ -183,6 +187,7 @@ export class PtyRuntime {
       denyList: this.opts.denyList,
       thinkingEnabled: this.opts.thinkingEnabled,
       sandbox: this.opts.sandbox,
+      autoModeEnabled: this.opts.autoModeEnabled,
     });
     this.settingsPath = settingsPath;
     logDiag(sessionId, "pty:hooks-ready", { elapsedMs: Date.now() - startAt });

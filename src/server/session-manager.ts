@@ -22,7 +22,7 @@ import { getAssistantSettings, updateAssistantSettings } from "@/server/assistan
 import { supportedPermissionModes } from "@/server/claude-bin";
 import { getCockpitDir } from "@/server/paths";
 import { ensureCatalogFresh, OPENROUTER_PROVIDER_ID } from "@/server/provider-catalog";
-import { getProvider, isBuiltinCatalogProvider, openRouterModelEnv, resolveProviderModel } from "@/server/providers";
+import { getProvider, isBuiltinCatalogProvider, modelRunsOnAnthropic, openRouterModelEnv, resolveProviderModel } from "@/server/providers";
 import { sandboxSupport } from "@/server/sandbox";
 import type {
   BackgroundTask,
@@ -263,11 +263,10 @@ function proposalIdNames(rawInput: unknown): Record<string, string> | undefined 
 }
 
 /** Whether `model` runs on Anthropic, which auto permission mode needs: its
- *  classifier runs on the session's own model. An id no provider claims counts
- *  as Anthropic, as it always has. */
+ *  classifier is an Anthropic service. An id no provider claims counts as
+ *  Anthropic, as it always has. */
 function isAnthropicModel(model: string | undefined): boolean {
-  const resolved = resolveProviderModel(model ?? "");
-  return !resolved || resolved.provider.id === "anthropic";
+  return modelRunsOnAnthropic(model);
 }
 
 /** The mode a new or restored session starts in. A cockpit agent is always
@@ -2832,6 +2831,10 @@ Additional Cockpit rules beyond the CLI's defaults:
       willResume,
       model: cliModel ?? undefined,
       providerEnvVars,
+      // The session's own model, not the CLI's (which is the bare id): the
+      // provider that answers for it decides whether auto mode's classifier
+      // exists at all for this session.
+      autoModeEnabled: this.isAnthropicSession(session),
       subagentModel,
       contextSize: effectiveContextSize,
       thinkingLevel: session.thinkingLevel,

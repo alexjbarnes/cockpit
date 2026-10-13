@@ -1062,6 +1062,29 @@ describe("providers", () => {
     expect(() => updateProvider("zen", { contextSizeOverrides: [1] as never })).toThrow(/must be an object/);
   });
 
+  // Auto permission mode is an Anthropic service behind the classifier, so a
+  // session on any other provider has to run without it: the CLI's only
+  // auto-mode fallback is a billing-notice dialog that blocks the turn.
+  it("knows which models run on Anthropic, and counts an unclaimed id as one", async () => {
+    const fs = await import("node:fs");
+    const list = [
+      {
+        id: "p-deepseek",
+        name: "DeepSeek",
+        envVars: {},
+        models: [{ modelId: "deepseek-v4.1-flash", displayName: "V4.1 Flash", effortLevels: [], contextSizes: ["200k"] }],
+      },
+    ];
+    vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(list));
+    vi.mocked(fs.statSync).mockReturnValue({ mtimeMs: 1 } as unknown as ReturnType<typeof fs.statSync>);
+
+    const { modelRunsOnAnthropic } = await import("@/server/providers");
+
+    expect(modelRunsOnAnthropic("p-deepseek:deepseek-v4.1-flash")).toBe(false);
+    expect(modelRunsOnAnthropic("sonnet"), "the built-in Anthropic models are Anthropic").toBe(true);
+    expect(modelRunsOnAnthropic(undefined), "as before, an id no provider claims").toBe(true);
+  });
+
   it("reloads providers when providers.json changes out of band (different mtime)", async () => {
     const fs = await import("node:fs");
     const listA = [
