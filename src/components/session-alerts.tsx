@@ -164,11 +164,11 @@ export function SessionAlerts() {
         type="button"
         onClick={() => setCollapsed(false)}
         data-testid="session-alerts-collapsed"
-        className="fixed left-1/2 top-[4.25rem] z-40 flex -translate-x-1/2 items-center gap-2 rounded-full border bg-card px-3 py-1.5 text-xs shadow-lg hover:bg-accent"
+        className="fixed left-1/2 top-[4.25rem] z-40 flex -translate-x-1/2 items-center gap-2 rounded-full border bg-card px-4 py-2 text-sm shadow-lg hover:bg-accent"
       >
-        <Bell className="h-3.5 w-3.5 text-yellow-500" />
+        <Bell className="h-4 w-4 text-yellow-500" />
         {alerts.length === 1 ? `${alerts[0].name} ${label(alerts[0])}` : `${alerts.length} sessions need you`}
-        <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
+        <ChevronDown className="h-4 w-4 text-muted-foreground" />
       </button>
     );
   }
@@ -185,21 +185,21 @@ export function SessionAlerts() {
         <div
           key={alert.key}
           data-testid={`session-alert-${alert.kind}`}
-          className="pointer-events-auto flex w-full max-w-xl items-center gap-2 rounded-lg border bg-card px-3 py-2 text-xs shadow-lg"
+          className="pointer-events-auto flex w-full max-w-2xl items-center gap-3 rounded-xl border bg-card px-4 py-3.5 text-[15px] shadow-xl"
         >
-          <Bell className="h-3.5 w-3.5 shrink-0 text-yellow-500" />
+          <Bell className="h-4 w-4 shrink-0 text-yellow-500" />
           <div className="min-w-0 flex-1">
-            <div className="flex items-baseline gap-1.5">
+            <div className="flex items-baseline gap-2">
               <span className="truncate font-medium">{alert.name}</span>
               <span className="shrink-0 text-muted-foreground">{label(alert)}</span>
             </div>
             {summary(alert) && (
+              // Wrapped, not truncated: several lines of the command are what
+              // make the card worth looking at, and the chevron opens the rest.
               <div
-                className={
-                  expanded.has(alert.key)
-                    ? "max-h-40 overflow-y-auto whitespace-pre-wrap break-words font-mono text-[11px] text-muted-foreground"
-                    : "truncate font-mono text-[11px] text-muted-foreground"
-                }
+                className={`overflow-y-auto whitespace-pre-wrap [overflow-wrap:anywhere] font-mono text-[13px] text-muted-foreground ${
+                  expanded.has(alert.key) ? "max-h-[60vh]" : "max-h-24"
+                }`}
                 data-testid="session-alert-command"
               >
                 {summary(alert)}
@@ -215,25 +215,25 @@ export function SessionAlerts() {
                   title={expanded.has(alert.key) ? "Show less" : "Show the whole command"}
                   aria-label={expanded.has(alert.key) ? "Show less" : "Show the whole command"}
                   data-testid="session-alert-expand"
-                  className="shrink-0 rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+                  className="shrink-0 rounded p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
                 >
-                  {expanded.has(alert.key) ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+                  {expanded.has(alert.key) ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
                 </button>
               )}
               <button
                 type="button"
                 onClick={() => respond(alert, true)}
                 data-testid="session-alert-approve"
-                className="flex shrink-0 items-center gap-1 rounded bg-primary px-2 py-1 text-primary-foreground hover:opacity-90"
+                className="flex shrink-0 items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-primary-foreground hover:opacity-90"
               >
-                <Check className="h-3 w-3" />
+                <Check className="h-3.5 w-3.5" />
                 Approve
               </button>
               <button
                 type="button"
                 onClick={() => respond(alert, false)}
                 data-testid="session-alert-deny"
-                className="shrink-0 rounded border px-2 py-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+                className="shrink-0 rounded-md border px-3 py-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
               >
                 Deny
               </button>
@@ -244,7 +244,7 @@ export function SessionAlerts() {
               type="button"
               onClick={() => open(alert)}
               data-testid="session-alert-open"
-              className="shrink-0 rounded bg-primary px-2 py-1 text-primary-foreground hover:opacity-90"
+              className="shrink-0 rounded-md bg-primary px-3 py-1.5 text-primary-foreground hover:opacity-90"
             >
               Open
             </button>
@@ -254,9 +254,9 @@ export function SessionAlerts() {
             onClick={() => removeAlert(alert.key)}
             title="Dismiss"
             data-testid="session-alert-dismiss"
-            className="shrink-0 rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+            className="shrink-0 rounded p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
           >
-            <X className="h-3.5 w-3.5" />
+            <X className="h-4 w-4" />
           </button>
         </div>
       ))}
@@ -265,7 +265,7 @@ export function SessionAlerts() {
           <button
             type="button"
             onClick={() => setCollapsed(true)}
-            className="rounded-full border bg-card px-3 py-1 text-[11px] shadow hover:bg-accent"
+            className="rounded-full border bg-card px-3.5 py-1.5 text-xs shadow hover:bg-accent"
           >
             {hidden} more
           </button>
@@ -275,9 +275,9 @@ export function SessionAlerts() {
           onClick={() => setCollapsed(true)}
           title="Collapse, but keep them here"
           data-testid="session-alerts-collapse"
-          className="flex items-center gap-1 rounded-full border bg-card px-2.5 py-1 text-[11px] text-muted-foreground shadow hover:bg-accent"
+          className="flex items-center gap-1 rounded-full border bg-card px-3.5 py-1.5 text-xs text-muted-foreground shadow hover:bg-accent"
         >
-          <ChevronUp className="h-3 w-3" />
+          <ChevronUp className="h-3.5 w-3.5" />
           Hide
         </button>
       </div>

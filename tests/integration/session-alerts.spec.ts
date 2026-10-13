@@ -160,11 +160,11 @@ test("a permission in another session raises a banner, and Approve answers it th
     await expect(banner).toContainText("rm -rf build/artifact-0");
     expect(page.url(), "the page stayed where it was").not.toContain("Waiting");
 
-    // One line of the command by default, all of it on request: the banner is
-    // deliberately small, and a command can be a whole script.
+    // Wrapped, not truncated: several lines of the command by default, all of
+    // it on request, and never a sideways scrollbar to read it through.
     const commandLine = page.getByTestId("session-alert-command");
+    expect(await commandLine.evaluate((el) => el.scrollWidth - el.clientWidth), "no horizontal scrollbar").toBeLessThanOrEqual(1);
     const collapsedHeight = await commandLine.evaluate((el) => el.clientHeight);
-    await expect.poll(() => commandLine.evaluate((el) => el.scrollWidth > el.clientWidth), { timeout: 5_000 }).toBe(true);
 
     await page.getByTestId("session-alert-expand").click();
     await expect.poll(() => commandLine.evaluate((el) => el.clientHeight), { timeout: 5_000 }).toBeGreaterThan(collapsedHeight);
