@@ -590,6 +590,13 @@ export async function syncDeepSeekModels(keyOverride?: string): Promise<SyncResu
  * so reporting it as a rejected key would send the user off to re-paste a key
  * that was never wrong.
  */
+/** Ids that answer something other than /chat/completions: embeddings,
+ *  rerankers, speech and audio, image and video generators, translation
+ *  models and safety classifiers. Vision-language chat models stay — they take
+ *  an image part and answer with text like any other. */
+const NON_CHAT_MODEL =
+  /embed|rerank|whisper|orpheus|tts|voice|speech|magpie|gliner|usd|esm|cosmos|sparse|bevformer|streampetr|active-speaker|detect|diffusion|flux|image|paligemma|content-safety|safety|guard|translate|nemoretriever|video/;
+
 interface WireCatalog {
   id: string;
   name: string;
@@ -633,7 +640,17 @@ async function syncOpenAIWireCatalog(opts: WireCatalog, keyOverride?: string): P
 /** Groq: the most usable card-free tier of the three, per model and per day. */
 export function syncGroqModels(keyOverride?: string): Promise<SyncResult> {
   return syncOpenAIWireCatalog(
-    { id: GROQ_PROVIDER_ID, name: "Groq", keyEnvVar: "GROQ_API_KEY", baseUrl: groqBaseUrl, modelsDevId: "groq" },
+    {
+      id: GROQ_PROVIDER_ID,
+      name: "Groq",
+      keyEnvVar: "GROQ_API_KEY",
+      baseUrl: groqBaseUrl,
+      modelsDevId: "groq",
+      // Groq's list is small and half of it is not a chat model: whisper,
+      // orpheus speech, prompt-guard classifiers. What is left is the point of
+      // the provider.
+      keep: (id) => !NON_CHAT_MODEL.test(id),
+    },
     keyOverride,
   );
 }
@@ -647,9 +664,12 @@ export function syncGeminiModels(keyOverride?: string): Promise<SyncResult> {
       keyEnvVar: "GEMINI_API_KEY",
       baseUrl: geminiBaseUrl,
       modelsDevId: "google",
-      // Google's compatibility list carries the embedding and live-media
-      // models beside the chat ones; the picker is for chat.
-      keep: (id) => /^(gemini|gemma)-/.test(id) && !/embedding|aqa|tts|native-audio|-image/.test(id),
+      // Google's compatibility list carries the embedding, live-media and
+      // computer-use models beside the chat ones; the picker is for chat. The
+      // "-live" family (live-translate, *-live-preview) speaks Google's Live
+      // API over a websocket rather than /chat/completions, and computer-use is
+      // a tool-loop model, so both would fail in a session.
+      keep: (id) => /^(gemini|gemma)-/.test(id) && !NON_CHAT_MODEL.test(id) && !/aqa|native-audio|-live|computer-use|robotics|veo/.test(id),
     },
     keyOverride,
   );
@@ -659,7 +679,16 @@ export function syncGeminiModels(keyOverride?: string): Promise<SyncResult> {
  *  evaluation, per their API trial agreement), not a production workhorse. */
 export function syncNvidiaModels(keyOverride?: string): Promise<SyncResult> {
   return syncOpenAIWireCatalog(
-    { id: NVIDIA_PROVIDER_ID, name: "NVIDIA NIM", keyEnvVar: "NVIDIA_NIM_API_KEY", baseUrl: nvidiaBaseUrl, modelsDevId: "nvidia" },
+    {
+      id: NVIDIA_PROVIDER_ID,
+      name: "NVIDIA NIM",
+      keyEnvVar: "NVIDIA_NIM_API_KEY",
+      baseUrl: nvidiaBaseUrl,
+      modelsDevId: "nvidia",
+      // Its catalog is over a hundred ids and most of them are embeddings,
+      // rerankers, vision and video pipelines, TTS and safety classifiers.
+      keep: (id) => !NON_CHAT_MODEL.test(id),
+    },
     keyOverride,
   );
 }

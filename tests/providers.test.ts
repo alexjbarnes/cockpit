@@ -581,18 +581,30 @@ describe("providers", () => {
         return {
           ok: true,
           status: 200,
-          json: async () => ({ data: [{ id: "gemini-3.8-flash" }, { id: "imagen-4.0-generate" }, { id: "gemini-embedding-001" }] }),
+          json: async () => ({
+            data: [
+              { id: "gemini-3.8-flash" },
+              { id: "gemini-3.1-pro-preview" },
+              { id: "imagen-4.0-generate" },
+              { id: "gemini-embedding-001" },
+              { id: "gemini-3.5-live-translate-preview" },
+              { id: "gemini-2.5-computer-use-preview-10-2025" },
+            ],
+          }),
         };
       }) as unknown as typeof fetch,
     );
 
     const { syncGeminiModels } = await import("@/server/providers");
     const result = await syncGeminiModels("gm-9");
-    expect(result).toEqual({ ok: true, modelCount: 1 });
+    // The chat models survive, previews included; the embedding, image, Live
+    // API and computer-use ids do not, because none of them answers
+    // /chat/completions.
+    expect(result).toEqual({ ok: true, modelCount: 2 });
 
     const written = JSON.parse(vi.mocked(fs.writeFileSync).mock.calls.at(-1)?.[1] as string);
     const gemini = written.find((p: { id: string }) => p.id === "gemini");
-    expect(gemini.models.map((m: { modelId: string }) => m.modelId)).toEqual(["gemini-3.8-flash"]);
+    expect(gemini.models.map((m: { modelId: string }) => m.modelId)).toEqual(["gemini-3.8-flash", "gemini-3.1-pro-preview"]);
     vi.unstubAllGlobals();
   });
 
@@ -621,6 +633,99 @@ describe("providers", () => {
     const gemini = written.find((p: { id: string }) => p.id === "gemini");
     expect(gemini.envVars.GEMINI_API_KEY).toBeUndefined();
     expect(gemini.enabledModels).toEqual([]);
+    vi.unstubAllGlobals();
+  });
+
+  it("keeps chat models and drops Groq's audio, speech and classifier ids", async () => {
+    const fs = await import("node:fs");
+    vi.mocked(fs.readFileSync).mockImplementation(() => {
+      throw new Error("ENOENT");
+    });
+    vi.mocked(fs.writeFileSync).mockImplementation(() => {});
+    vi.mocked(fs.mkdirSync).mockImplementation(() => "");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (String(url).includes("models.dev")) {
+          return { ok: true, status: 200, json: async () => ({ groq: { models: {} } }) };
+        }
+        // The shape Groq really returns for an account: a handful of chat
+        // models among whisper, speech and prompt-guard ids.
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            data: [
+              { id: "meta-llama/llama-prompt-guard-2-22m" },
+              { id: "whisper-large-v3" },
+              { id: "canopylabs/orpheus-v1-english" },
+              { id: "openai/gpt-oss-20b" },
+              { id: "qwen/qwen3.8-27b" },
+              { id: "openai/gpt-oss-120b" },
+              { id: "meta-llama/llama-4-maverick-17b-128e-instruct" },
+            ],
+          }),
+        };
+      }) as unknown as typeof fetch,
+    );
+
+    const { syncGroqModels } = await import("@/server/providers");
+    expect(await syncGroqModels("gsk-1")).toEqual({ ok: true, modelCount: 4 });
+
+    const written = JSON.parse(vi.mocked(fs.writeFileSync).mock.calls.at(-1)?.[1] as string);
+    const groq = written.find((p: { id: string }) => p.id === "groq");
+    expect(groq.models.map((m: { modelId: string }) => m.modelId)).toEqual([
+      "openai/gpt-oss-20b",
+      "qwen/qwen3.8-27b",
+      "openai/gpt-oss-120b",
+      "meta-llama/llama-4-maverick-17b-128e-instruct",
+    ]);
+    vi.unstubAllGlobals();
+  });
+
+  it("keeps chat models and drops NVIDIA's embedding, video and TTS ids", async () => {
+    const fs = await import("node:fs");
+    vi.mocked(fs.readFileSync).mockImplementation(() => {
+      throw new Error("ENOENT");
+    });
+    vi.mocked(fs.writeFileSync).mockImplementation(() => {});
+    vi.mocked(fs.mkdirSync).mockImplementation(() => {});
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (String(url).includes("models.dev")) {
+          return { ok: true, status: 200, json: async () => ({ nvidia: { models: {} } }) };
+        }
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            data: [
+              { id: "nvidia/nv-embed-v1" },
+              { id: "nvidia/llama-nemotron-rerank-vl-1b-v2" },
+              { id: "nvidia/cosmos-predict1-5b" },
+              { id: "nvidia/magpie-tts-zeroshot" },
+              { id: "meta/llama-guard-4-12b" },
+              { id: "moonshotai/kimi-k3" },
+              { id: "deepseek-ai/deepseek-v4-pro" },
+              { id: "meta/llama-3.2-90b-vision-instruct" },
+            ],
+          }),
+        };
+      }) as unknown as typeof fetch,
+    );
+
+    const { syncNvidiaModels } = await import("@/server/providers");
+    expect(await syncNvidiaModels("nvapi-1")).toEqual({ ok: true, modelCount: 3 });
+
+    const written = JSON.parse(vi.mocked(fs.writeFileSync).mock.calls.at(-1)?.[1] as string);
+    const nvidia = written.find((p: { id: string }) => p.id === "nvidia");
+    expect(nvidia.models.map((m: { modelId: string }) => m.modelId)).toEqual([
+      "moonshotai/kimi-k3",
+      "deepseek-ai/deepseek-v4-pro",
+      // a vision-language chat model is still a chat model
+      "meta/llama-3.2-90b-vision-instruct",
+    ]);
     vi.unstubAllGlobals();
   });
 
