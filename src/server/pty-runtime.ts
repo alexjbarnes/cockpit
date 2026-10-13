@@ -882,6 +882,57 @@ export class PtyRuntime {
       // here for one thing: its payload carries the permission mode, so it is
       // known before any message is sent. Returns nothing, so no context is
       // added to the session.
+      onPostToolUseFailure: (payload) => {
+        this.cancelErrorDebounce();
+        this.ptyOutputBuffer = "";
+        const toolName = typeof payload.tool_name === "string" ? payload.tool_name : "unknown";
+        logDiag(this.opts.sessionId, "hook:PostToolUseFailure", {
+          tool: toolName,
+          error: String(payload.error ?? "").slice(0, 160),
+          isTimeout: payload.is_timeout === true,
+        });
+        this.emit(translateHookEvent("PostToolUseFailure", payload));
+      },
+      onPermissionDenied: (payload) => {
+        const toolName = typeof payload.tool_name === "string" ? payload.tool_name : "unknown";
+        logDiag(this.opts.sessionId, "hook:PermissionDenied", {
+          tool: toolName,
+          reason: String(payload.reason ?? "").slice(0, 160),
+        });
+        this.emit(translateHookEvent("PermissionDenied", payload));
+      },
+      onSessionEnd: (payload) => {
+        logDiag(this.opts.sessionId, "hook:SessionEnd", { reason: payload.reason });
+        this.emit(translateHookEvent("SessionEnd", payload));
+      },
+      onElicitation: (payload) => {
+        // Only observed, never answered: an elicitation is a form in the
+        // terminal, and a hook allow/deny would decide it without the user.
+        logDiag(this.opts.sessionId, "hook:Elicitation", {
+          server: payload.mcp_server_name,
+          message: String(payload.message ?? "").slice(0, 160),
+        });
+        this.emit(translateHookEvent("Elicitation", payload));
+      },
+      onElicitationResult: (payload) => {
+        logDiag(this.opts.sessionId, "hook:ElicitationResult", {
+          server: payload.mcp_server_name,
+          action: payload.action,
+        });
+        this.emit(translateHookEvent("ElicitationResult", payload));
+      },
+      onTaskCreated: (payload) => {
+        logDiag(this.opts.sessionId, "hook:TaskCreated", { task: payload.task_id, subject: payload.task_subject });
+        this.emit(translateHookEvent("TaskCreated", payload));
+      },
+      onTaskCompleted: (payload) => {
+        logDiag(this.opts.sessionId, "hook:TaskCompleted", { task: payload.task_id, subject: payload.task_subject });
+        this.emit(translateHookEvent("TaskCompleted", payload));
+      },
+      onTeammateIdle: (payload) => {
+        logDiag(this.opts.sessionId, "hook:TeammateIdle", { teammate: payload.teammate_name, team: payload.team_name });
+        this.emit(translateHookEvent("TeammateIdle", payload));
+      },
       onSessionStart: (payload) => {
         this.notePayloadMode(payload, "SessionStart");
       },
@@ -1064,11 +1115,29 @@ export class PtyRuntime {
         // Surface it as a real permission request; the decision comes back via
         // notifyPermissionDecision, which answers with PTY keystrokes.
         const message = typeof payload.message === "string" ? payload.message : "";
+        // The CLI types every notification, and the type is stable where the
+        // wording is not. The message check stays for older payloads.
+        const type = typeof payload.notification_type === "string" ? payload.notification_type : "";
         if (/sandboxed command needs network access/i.test(message)) {
           void this.raiseNetworkAccessRequest();
           return;
         }
-        if (/needs your permission/i.test(message)) {
+        if (type === "elicitation_dialog" || type === "elicitation_url_dialog" || type === "agent_needs_input") {
+          // A dialog cockpit has no card for: a form, a sign-in page, or an
+          // agent's own question. Saying so plainly is the whole point — the
+          // session is waiting on a person and nothing else would say it.
+          logDiag(this.opts.sessionId, "pty:dialog-notification", { type, message: message.slice(0, 160) });
+          this.emit([
+            {
+              type: "system_message",
+              text: `The CLI is waiting on a dialog in the terminal${message ? `: ${message}` : ` (${type})`}. Answer it there; cockpit cannot.`,
+            },
+          ]);
+          return;
+        }
+        // The type is the reliable signal; the wording check stays because it
+        // is what carried this before the type was read at all.
+        if (type === "permission_prompt" || type === "worker_permission_prompt" || /needs your permission/i.test(message)) {
           const tool = this.lastPreToolUse?.tool ?? "unknown";
           // The CLI notifies for a dialog it rendered itself AND for one it is
           // waiting on cockpit's hook response for. Rescuing the second kind
@@ -1097,6 +1166,13 @@ export class PtyRuntime {
               interactiveOnly: true,
             },
           ]);
+        }
+        // Everything else the CLI notifies about — auth_success, quota_*,
+        // agent_completed, model fallbacks — needs no action here, but the
+        // type belongs in the log so a session that behaved oddly can be read
+        // back. idle_prompt fires at every turn end and is not worth the line.
+        if (type && type !== "idle_prompt") {
+          logDiag(this.opts.sessionId, "pty:notification", { type, message: message.slice(0, 120) });
         }
       },
       onPermissionRequest: (payload) => this.handlePermissionRequest(payload),

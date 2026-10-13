@@ -110,7 +110,7 @@ describe("TUI-only permission dialog rescue", () => {
   function fire(events: ParsedEvent[], runtime: PtyRuntime): ParsedEvent | undefined {
     const handler = (runtime as never as { buildHandler(): Record<string, (p: Record<string, unknown>) => unknown> }).buildHandler();
     handler.onPreToolUse({ permission_mode: "default", tool_name: "Write", tool_input: { file_path: "/x/.claude/skills/a/SKILL.md" } });
-    handler.onNotification({ message: "Claude needs your permission to use Write", notification_type: "permission" });
+    handler.onNotification({ message: "Claude needs your permission to use Write", notification_type: "permission_prompt" });
     return events.find((e) => e.type === "permission_request");
   }
 
@@ -144,8 +144,38 @@ describe("TUI-only permission dialog rescue", () => {
   it("ignores unrelated notifications", () => {
     const { runtime, events } = makeRuntime("manual");
     const handler = (runtime as never as { buildHandler(): Record<string, (p: Record<string, unknown>) => unknown> }).buildHandler();
-    handler.onNotification({ message: "Claude is waiting for your input" });
+    handler.onNotification({ message: "Claude is waiting for your input", notification_type: "idle_prompt" });
     expect(events.find((e) => e.type === "permission_request")).toBeUndefined();
+  });
+
+  // The type is the signal; the wording was only ever a stand-in for it.
+  it("rescues on the notification type even when the message says nothing useful", () => {
+    const { runtime, events } = makeRuntime("manual");
+    const handler = (runtime as never as { buildHandler(): Record<string, (p: Record<string, unknown>) => unknown> }).buildHandler();
+    handler.onPreToolUse({ permission_mode: "default", tool_name: "Write", tool_input: { file_path: "/x" } });
+    handler.onNotification({ message: "", notification_type: "permission_prompt" });
+
+    const req = events.find((e) => e.type === "permission_request");
+    expect(req?.interactiveOnly).toBe(true);
+    expect(req?.toolName).toBe("Write");
+  });
+
+  // A form, a sign-in page, a background agent's question: all dialogs the CLI
+  // draws itself and no card can answer. Saying so is the point, so it must
+  // reach the chat as real text rather than as a marker the client strips.
+  it("says plainly that a dialog it cannot answer is waiting in the terminal", () => {
+    const { runtime, events } = makeRuntime("manual");
+    const handler = (runtime as never as { buildHandler(): Record<string, (p: Record<string, unknown>) => unknown> }).buildHandler();
+    handler.onNotification({ message: "The linear server wants your API key", notification_type: "elicitation_dialog" });
+
+    expect(
+      events.find((e) => e.type === "permission_request"),
+      "no card can answer it",
+    ).toBeUndefined();
+    const visible = events.filter((e) => e.type === "system_message" && !(e.text ?? "").startsWith("__"));
+    expect(visible).toHaveLength(1);
+    expect(visible[0].text).toContain("terminal");
+    expect(visible[0].text).toContain("API key");
   });
 
   // Observed live 2026-08-12 with AskUserQuestion: the PermissionRequest hook
@@ -161,7 +191,7 @@ describe("TUI-only permission dialog rescue", () => {
 
     handler.onPreToolUse({ permission_mode: "default", tool_name: "AskUserQuestion", tool_input: toolInput });
     handler.onPermissionRequest({ permission_mode: "default", tool_name: "AskUserQuestion", tool_input: toolInput });
-    handler.onNotification({ message: "Claude needs your permission to use AskUserQuestion", notification_type: "permission" });
+    handler.onNotification({ message: "Claude needs your permission to use AskUserQuestion", notification_type: "permission_prompt" });
 
     const requests = events.filter((e) => e.type === "permission_request");
     expect(requests).toHaveLength(1);
@@ -179,7 +209,7 @@ describe("TUI-only permission dialog rescue", () => {
     runtime.notifyPermissionDecision(hookRequest?.requestId as string, { behavior: "allow" });
 
     // The CLI refused the hook's allow and is sitting on its own dialog.
-    handler.onNotification({ message: "Claude needs your permission to use Write", notification_type: "permission" });
+    handler.onNotification({ message: "Claude needs your permission to use Write", notification_type: "permission_prompt" });
 
     const rescued = events.filter((e) => e.type === "permission_request").at(-1);
     expect(rescued?.requestId?.startsWith("tui-")).toBe(true);

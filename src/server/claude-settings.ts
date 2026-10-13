@@ -8,6 +8,13 @@ import { resolveHookBridgePath } from "./hook-bridge-path";
 const HOOK_EVENTS = [
   "PreToolUse",
   "PostToolUse",
+  // PostToolUse fires only on success. Without its failure twin a tool that
+  // errored never resolves in the chat: the card spins for the rest of the
+  // session and the turn looks stuck.
+  "PostToolUseFailure",
+  // A call the auto-mode classifier refused. Nothing else reports it, so
+  // without this hook a session blocked by the classifier looks idle.
+  "PermissionDenied",
   "Stop",
   "StopFailure",
   "UserPromptSubmit",
@@ -21,6 +28,19 @@ const HOOK_EVENTS = [
   // Registered for its payload's permission_mode, so the mode the CLI really
   // runs in is known the moment it starts rather than at the first message.
   "SessionStart",
+  // The CLI's own goodbye — a crash, an exit, a restart — which no other hook
+  // reports.
+  "SessionEnd",
+  // A dialog asking for something that is not a tool permission: an MCP
+  // elicitation, or a launched agent that wants input. Neither fires
+  // PermissionRequest, so both are invisible without these two.
+  "Elicitation",
+  "ElicitationResult",
+  // Task and teammate lifecycle, which is how work that launched an agent
+  // reports progress between its start and its Stop.
+  "TaskCreated",
+  "TaskCompleted",
+  "TeammateIdle",
 ] as const;
 type HookEvent = (typeof HOOK_EVENTS)[number];
 

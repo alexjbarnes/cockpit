@@ -4,6 +4,8 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 export type HookEventName =
   | "PreToolUse"
   | "PostToolUse"
+  | "PostToolUseFailure"
+  | "PermissionDenied"
   | "Stop"
   | "StopFailure"
   | "UserPromptSubmit"
@@ -14,7 +16,13 @@ export type HookEventName =
   | "PermissionRequest"
   | "PreCompact"
   | "PostCompact"
-  | "SessionStart";
+  | "SessionStart"
+  | "SessionEnd"
+  | "Elicitation"
+  | "ElicitationResult"
+  | "TaskCreated"
+  | "TaskCompleted"
+  | "TeammateIdle";
 
 export interface HookResponse {
   stdout?: string;
@@ -34,6 +42,8 @@ type HookCallback = (payload: Record<string, unknown>) => HookCallbackReturn;
 export interface SessionHookHandler {
   onPreToolUse?: HookCallback;
   onPostToolUse?: HookCallback;
+  onPostToolUseFailure?: HookCallback;
+  onPermissionDenied?: HookCallback;
   onStop?: HookCallback;
   onStopFailure?: HookCallback;
   onUserPromptSubmit?: HookCallback;
@@ -44,6 +54,12 @@ export interface SessionHookHandler {
   onPreCompact?: HookCallback;
   onPostCompact?: HookCallback;
   onSessionStart?: HookCallback;
+  onSessionEnd?: HookCallback;
+  onElicitation?: HookCallback;
+  onElicitationResult?: HookCallback;
+  onTaskCreated?: HookCallback;
+  onTaskCompleted?: HookCallback;
+  onTeammateIdle?: HookCallback;
   /** Must resolve with the permission decision. The promise can take as long as needed. */
   onPermissionRequest?: (payload: Record<string, unknown>) => Promise<PermissionDecision>;
 }
@@ -181,6 +197,8 @@ export class HookRouter {
     const handlerMap: Partial<Record<HookEventName, HookCallback | undefined>> = {
       PreToolUse: handler.onPreToolUse,
       PostToolUse: handler.onPostToolUse,
+      PostToolUseFailure: handler.onPostToolUseFailure,
+      PermissionDenied: handler.onPermissionDenied,
       Stop: handler.onStop,
       StopFailure: handler.onStopFailure,
       UserPromptSubmit: handler.onUserPromptSubmit,
@@ -191,6 +209,12 @@ export class HookRouter {
       PreCompact: handler.onPreCompact,
       PostCompact: handler.onPostCompact,
       SessionStart: handler.onSessionStart,
+      SessionEnd: handler.onSessionEnd,
+      Elicitation: handler.onElicitation,
+      ElicitationResult: handler.onElicitationResult,
+      TaskCreated: handler.onTaskCreated,
+      TaskCompleted: handler.onTaskCompleted,
+      TeammateIdle: handler.onTeammateIdle,
     };
     const fn = handlerMap[eventName];
 

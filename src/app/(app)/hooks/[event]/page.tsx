@@ -8,19 +8,40 @@ import { CodeEditor } from "@/components/code-editor";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 
+// Kept in step with the API route's list and with the CLI's documented set.
 const HOOK_EVENTS = [
   "SessionStart",
+  "SessionEnd",
   "UserPromptSubmit",
+  "UserPromptExpansion",
   "PreToolUse",
   "PermissionRequest",
+  "PermissionDenied",
   "PostToolUse",
   "PostToolUseFailure",
+  "PostToolBatch",
+  "Notification",
   "Stop",
+  "StopFailure",
   "SubagentStart",
   "SubagentStop",
   "PreCompact",
   "PostCompact",
-  "SessionEnd",
+  "PreModelSwitch",
+  "PostModelSwitch",
+  "Elicitation",
+  "ElicitationResult",
+  "TaskCreated",
+  "TaskCompleted",
+  "TeammateIdle",
+  "ConfigChange",
+  "InstructionsLoaded",
+  "CwdChanged",
+  "FileChanged",
+  "DirectoryAdded",
+  "Setup",
+  "WorktreeCreate",
+  "WorktreeRemove",
 ];
 
 const SCOPE_OPTIONS = [

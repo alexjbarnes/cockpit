@@ -39,7 +39,22 @@ describe("prepareHookSettings", () => {
     };
 
     const bridge = resolveHookBridgePath();
-    for (const event of ["PreToolUse", "PostToolUse", "Stop", "UserPromptSubmit", "Notification", "PermissionRequest"]) {
+    for (const event of [
+      "PreToolUse",
+      "PostToolUse",
+      "PostToolUseFailure",
+      "PermissionDenied",
+      "Stop",
+      "UserPromptSubmit",
+      "Notification",
+      "PermissionRequest",
+      "SessionEnd",
+      "Elicitation",
+      "ElicitationResult",
+      "TaskCreated",
+      "TaskCompleted",
+      "TeammateIdle",
+    ]) {
       expect(parsed.hooks[event]).toBeDefined();
       const last = parsed.hooks[event][parsed.hooks[event].length - 1];
       const cmd = last.hooks[0].command;
