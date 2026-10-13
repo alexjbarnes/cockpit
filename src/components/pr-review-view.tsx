@@ -30,6 +30,7 @@ import { pinReview } from "@/components/sidebar";
 import { Button } from "@/components/ui/button";
 import { useIsDesktop } from "@/hooks/use-is-desktop";
 import { useSettings } from "@/hooks/use-settings";
+import { checkOutcome, type PrCheck, tallyChecks } from "@/lib/checks";
 import { cn } from "@/lib/utils";
 
 // --- Types ---
@@ -66,13 +67,6 @@ interface PRDetails {
 interface FileDiff {
   path: string;
   patch: string;
-}
-
-interface PRCheck {
-  name: string;
-  state: string;
-  conclusion: string;
-  url: string;
 }
 
 // --- Utilities ---
@@ -538,7 +532,7 @@ export function PRReviewView({ owner, repo, number }: { owner: string; repo: str
   const [reviewsCwd, setReviewsCwd] = useState<string | null>(null);
   const [sessionLoading, setSessionLoading] = useState(true);
 
-  const [checks, setChecks] = useState<PRCheck[]>([]);
+  const [checks, setChecks] = useState<PrCheck[]>([]);
   const [checksOpen, setChecksOpen] = useState(false);
   const [reviewBody, setReviewBody] = useState("");
   const [reviewSubmitting, setReviewSubmitting] = useState<string | null>(null);
@@ -815,13 +809,7 @@ export function PRReviewView({ owner, repo, number }: { owner: string; repo: str
 
   const showChat = isDesktop && !!sessionId && !sessionLoading;
 
-  const passingChecks = checks.filter((c) => c.conclusion === "SUCCESS" || c.conclusion === "NEUTRAL" || c.conclusion === "SKIPPED");
-  const failingChecks = checks.filter(
-    (c) => c.conclusion === "FAILURE" || c.conclusion === "CANCELLED" || c.conclusion === "TIMED_OUT" || c.conclusion === "ACTION_REQUIRED",
-  );
-  const pendingChecks = checks.filter(
-    (c) => c.state === "PENDING" || c.state === "QUEUED" || c.state === "IN_PROGRESS" || c.state === "WAITING",
-  );
+  const { passing, failing, pending } = tallyChecks(checks);
 
   return (
     <div className="flex flex-col flex-1 min-h-0">
@@ -850,22 +838,22 @@ export function PRReviewView({ owner, repo, number }: { owner: string; repo: str
               onClick={() => setChecksOpen((v) => !v)}
               className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
             >
-              {passingChecks.length > 0 && (
+              {passing > 0 && (
                 <span className="flex items-center gap-0.5 text-green-500">
                   <CheckCircle className="h-3 w-3" />
-                  {passingChecks.length}
+                  {passing}
                 </span>
               )}
-              {failingChecks.length > 0 && (
+              {failing > 0 && (
                 <span className="flex items-center gap-0.5 text-red-500">
                   <XCircle className="h-3 w-3" />
-                  {failingChecks.length}
+                  {failing}
                 </span>
               )}
-              {pendingChecks.length > 0 && (
+              {pending > 0 && (
                 <span className="flex items-center gap-0.5 text-yellow-500">
                   <Clock className="h-3 w-3" />
-                  {pendingChecks.length}
+                  {pending}
                 </span>
               )}
             </button>
@@ -874,17 +862,14 @@ export function PRReviewView({ owner, repo, number }: { owner: string; repo: str
                 {checks.map((check) => (
                   <a
                     key={check.name}
-                    href={check.url}
+                    href={check.link}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-muted/50 transition-colors"
                   >
-                    {check.conclusion === "SUCCESS" || check.conclusion === "NEUTRAL" || check.conclusion === "SKIPPED" ? (
+                    {checkOutcome(check.bucket) === "pass" ? (
                       <CheckCircle className="h-3 w-3 text-green-500 shrink-0" />
-                    ) : check.conclusion === "FAILURE" ||
-                      check.conclusion === "CANCELLED" ||
-                      check.conclusion === "TIMED_OUT" ||
-                      check.conclusion === "ACTION_REQUIRED" ? (
+                    ) : checkOutcome(check.bucket) === "fail" ? (
                       <XCircle className="h-3 w-3 text-red-500 shrink-0" />
                     ) : (
                       <Clock className="h-3 w-3 text-yellow-500 shrink-0" />
