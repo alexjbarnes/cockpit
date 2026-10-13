@@ -184,7 +184,7 @@ function BuiltinUsagePanel({ providerId }: { providerId: string }) {
         </>
       )}
       {data.balanceError && <p className="text-xs text-destructive mb-2">Balance unavailable: {data.balanceError}</p>}
-      {(providerId === "zen" || providerId === "zen-go" || providerId === "commandcode") && (
+      {providerId !== null && providerId !== "deepseek" && providerId !== "openrouter" && (
         <>
           <CreditRow label="Spend today (est.)" value={formatUSD(data.spend.today.costUSD)} />
           <CreditRow label="Spend this week (est.)" value={formatUSD(data.spend.week.costUSD)} />
@@ -196,7 +196,13 @@ function BuiltinUsagePanel({ providerId }: { providerId: string }) {
               ? "Metered by cockpit from proxied sessions at current model prices. Billing lives in your opencode.ai workspace console."
               : providerId === "zen-go"
                 ? "Metered by cockpit from proxied sessions at current model prices. Go has no spend API — its real limits are dollar-based (5-hour, weekly, and monthly caps), viewable only in your opencode.ai workspace console."
-                : "Metered by cockpit from proxied sessions. CommandCode publishes no per-token prices and bills the plan's credits, so treat the counts as exact and the spend as an estimate: $14 per 5 hours, $35 per 7 days, $70 per month."}
+                : providerId === "groq"
+                  ? "Metered by cockpit from proxied sessions at current model prices. Groq's own free-tier limits are per model and reset daily; they are visible in your Groq console."
+                  : providerId === "gemini"
+                    ? "Metered by cockpit from proxied sessions at current model prices. Google's free-tier limits are per model and shown in AI Studio only; the paid rate applies once they run out."
+                    : providerId === "nvidia"
+                      ? "Metered by cockpit from proxied sessions at current model prices. NVIDIA's hosted endpoints are free for development and evaluation under its API trial terms, not for production."
+                      : "Metered by cockpit from proxied sessions. CommandCode publishes no per-token prices and bills the plan's credits, so treat the counts as exact and the spend as an estimate: $14 per 5 hours, $35 per 7 days, $70 per month."}
           </p>
         </>
       )}
@@ -224,6 +230,9 @@ export function UsageButton({ className, sessionModel }: { className?: string; s
     "zen-go": "OpenCode Go Usage",
     commandcode: "CommandCode Usage",
     deepseek: "DeepSeek Usage",
+    groq: "Groq Usage",
+    gemini: "Google AI Studio Usage",
+    nvidia: "NVIDIA NIM Usage",
   };
   const providerId = prefix && PROVIDER_TITLES[prefix] ? prefix : null;
   const isOpenRouter = providerId === "openrouter";

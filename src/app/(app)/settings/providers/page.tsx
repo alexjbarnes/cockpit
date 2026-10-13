@@ -4,7 +4,16 @@ import { ArrowLeft, ChevronRight, Plus } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { usePageHeader } from "@/components/app-shell";
-import { CommandCodeCard, DeepSeekCard, GoCard, OpenRouterCard, ZenCard } from "@/components/openrouter-provider";
+import {
+  CommandCodeCard,
+  DeepSeekCard,
+  GeminiCard,
+  GoCard,
+  GroqCard,
+  NvidiaCard,
+  OpenRouterCard,
+  ZenCard,
+} from "@/components/openrouter-provider";
 import { Button } from "@/components/ui/button";
 import type { Provider } from "@/types";
 
@@ -32,6 +41,9 @@ export default function ProvidersPage() {
   const go = providers.find((p) => p.id === "zen-go");
   const deepseek = providers.find((p) => p.id === "deepseek");
   const commandCode = providers.find((p) => p.id === "commandcode");
+  const groq = providers.find((p) => p.id === "groq");
+  const gemini = providers.find((p) => p.id === "gemini");
+  const nvidia = providers.find((p) => p.id === "nvidia");
   const custom = providers.filter((p) => !p.isBuiltin);
 
   return (
@@ -66,6 +78,10 @@ export default function ProvidersPage() {
             onManage={() => router.push("/settings/providers/commandcode")}
           />
         )}
+
+        {groq && <GroqCard provider={groq} onChanged={fetchProviders} onManage={() => router.push("/settings/providers/groq")} />}
+        {gemini && <GeminiCard provider={gemini} onChanged={fetchProviders} onManage={() => router.push("/settings/providers/gemini")} />}
+        {nvidia && <NvidiaCard provider={nvidia} onChanged={fetchProviders} onManage={() => router.push("/settings/providers/nvidia")} />}
 
         <p className="pt-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">Custom</p>
         <div className="space-y-1">

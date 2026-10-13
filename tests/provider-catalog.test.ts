@@ -377,6 +377,30 @@ describe("checkJobModel", () => {
     expect(missing.ok).toBe(false);
     if (!missing.ok) expect(missing.reason).toContain("OpenCode Go");
   });
+
+  it("judges groq, gemini and nvidia ids against their stored model lists", async () => {
+    writeFileSync(
+      join(dir, "providers.json"),
+      JSON.stringify([
+        { id: "groq", isBuiltin: true, envVars: {}, models: [{ modelId: "gpt-oss-120b" }] },
+        { id: "gemini", isBuiltin: true, envVars: {}, models: [{ modelId: "gemini-3.8-flash" }] },
+        { id: "nvidia", isBuiltin: true, envVars: {}, models: [{ modelId: "moonshotai/kimi-k3" }] },
+      ]),
+    );
+    const cat = await loadModule();
+    expect(cat.checkJobModel("groq:gpt-oss-120b").ok).toBe(true);
+    expect(cat.checkJobModel("gemini:gemini-3.8-flash").ok).toBe(true);
+    expect(cat.checkJobModel("nvidia:moonshotai/kimi-k3").ok).toBe(true);
+
+    // Each judges its own list, and the reason names the provider the user
+    // chose rather than the id in the string.
+    const gone = cat.checkJobModel("groq:llama-3.3-70b-versatile");
+    expect(gone.ok).toBe(false);
+    if (!gone.ok) expect(gone.reason).toContain("Groq");
+    const geminiGone = cat.checkJobModel("gemini:gemini-2.0-flash");
+    expect(geminiGone.ok).toBe(false);
+    if (!geminiGone.ok) expect(geminiGone.reason).toContain("Google AI Studio");
+  });
 });
 
 describe("getOpenRouterUsage", () => {

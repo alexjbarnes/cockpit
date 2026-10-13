@@ -1,6 +1,6 @@
 # Model providers
 
-Cockpit can drive Claude Code against more than the built-in Anthropic models. Three gateways ship built in (OpenRouter, OpenCode Zen, DeepSeek), each connected with a single API key, plus custom Anthropic-compatible endpoints for anything else. Provider models are selectable per session and per scheduled job.
+Cockpit can drive Claude Code against more than the built-in Anthropic models. Six gateways ship built in (OpenRouter, OpenCode Zen, DeepSeek, Groq, Google AI Studio and NVIDIA NIM), each connected with a single API key, plus custom Anthropic-compatible endpoints for anything else. Provider models are selectable per session and per scheduled job.
 
 The built-in **Anthropic** provider is always present and needs no configuration. It exposes Haiku, Sonnet, and Opus with their version and context-size options.
 
@@ -11,10 +11,13 @@ Settings, then Model Providers, shows a card per gateway. Paste an API key to co
 - **OpenRouter.** The full catalog (roughly 340 models) synced from their public API. The key is validated against their key endpoint on connect.
 - **OpenCode Zen.** Model list from zen's public endpoint, enriched with pricing, context windows, and capability flags from models.dev. Zen's model list needs no key, so the key is only truly verified on the first turn.
 - **DeepSeek.** Their Anthropic-native endpoint. Connect validates the key against their authenticated model list, so a bad key is rejected immediately.
+- **Groq.** OpenAI-format, and the most usable free tier of the lot: a per-model daily allowance of requests and tokens with no card. Limits are per model and reset daily, and the 8K-tokens-per-minute ceiling is what long sessions hit first.
+- **Google AI Studio (Gemini).** Google's OpenAI compatibility layer, translated like the other OpenAI-format gateways. Free-tier prompts may be used for training, and the free tier is not available from the EEA, Switzerland or the UK; the per-model limits live in AI Studio rather than any API.
+- **NVIDIA NIM.** NVIDIA's hosted endpoints. Free, but on their API trial terms, which are scoped to development and evaluation rather than production, so treat it as a way to try models rather than a workhorse.
 
 Model lists refresh keylessly at startup and daily, so the cards show model and free-model counts before you connect. **Manage models** opens a browser with search, filters (All, Free, Tools, Enabled), and per-model toggles. Only enabled models appear in pickers: a fresh connect enables everything, bulk actions narrow it down. A connected card also offers **Replace key**, which swaps the stored key in place, validating it the same way a fresh connect does and keeping the provider's enabled model set.
 
-**Free models.** OpenRouter and Zen both carry free models. They get a FREE badge in the picker and browser, and paid models show their per-million pricing. Free status and pricing are always derived from the latest sync and never stored on sessions or jobs, so one resync corrects every surface, including a promo model that stops being free. When OpenRouter declares an expiry date, the badge shows it.
+**Free models.** OpenRouter and Zen both carry free models, and Groq, Google AI Studio and NVIDIA host free-tier endpoints of their own (a model with zero published cost gets the FREE badge, so an NVIDIA or Groq model priced at nothing is marked as free even though the tier is what makes it so). They get a FREE badge in the picker and browser, and paid models show their per-million pricing. Free status and pricing are always derived from the latest sync and never stored on sessions or jobs, so one resync corrects every surface, including a promo model that stops being free. When OpenRouter declares an expiry date, the badge shows it.
 
 **Sync alerts.** An OpenRouter sync that delists, reprices, or un-frees a model you actually use (enabled, in a slot, or on a job) posts an inbox notification. Repeated sync failures alert once per episode instead of nagging.
 
@@ -24,14 +27,14 @@ Model lists refresh keylessly at startup and daily, so the cards show model and 
 
 The Claude CLI speaks the Anthropic wire format only. Cockpit runs a local proxy that bridges the difference:
 
-- **OpenAI-format upstreams** (OpenCode Zen) get full request and response translation, streaming included. A reasoning model's chain-of-thought maps to thinking blocks, so it renders in the chat the same way Claude's does.
+- **OpenAI-format upstreams** (OpenCode Zen, Groq, Google AI Studio, NVIDIA NIM) get full request and response translation, streaming included. A reasoning model's chain-of-thought maps to thinking blocks, so it renders in the chat the same way Claude's does.
 - **Anthropic-native upstreams** (OpenRouter, DeepSeek) relay through the proxy verbatim, purely to add bounded retries on saturation errors (free-model 429s, gateway 5xx) before the CLI sees them.
 
 Gateway models carry their real context window, and Cockpit pins the CLI's context tracking and auto-compact to it rather than the 200K the CLI would otherwise assume. Reasoning-capable gateway models expose effort levels from catalog metadata: the thinking selector shows them, and for OpenAI-format upstreams the proxy maps the chosen level onto `reasoning_effort`.
 
 ## Usage and spend
 
-The usage indicator follows the active session's provider. Anthropic sessions show subscription limits. OpenRouter shows credit spend and key limits from their API. DeepSeek shows the account balance. Zen, which has no spend API, shows an estimate metered by Cockpit from proxied traffic at current model prices.
+The usage indicator follows the active session's provider. Anthropic sessions show subscription limits. OpenRouter shows credit spend and key limits from their API. DeepSeek shows the account balance. Zen, Groq, Google AI Studio and NVIDIA, none of which exposes a spend API cockpit can read, show an estimate metered from proxied traffic at current model prices; the panel says where each provider's own limits really live.
 
 ## Custom providers
 

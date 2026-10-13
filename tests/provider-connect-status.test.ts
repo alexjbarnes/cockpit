@@ -21,10 +21,16 @@ vi.mock("@/server/providers", () => ({
   syncGoModels: async () => h.sync,
   syncDeepSeekModels: async () => h.sync,
   syncCommandCodeModels: async () => h.sync,
+  syncGroqModels: async () => h.sync,
+  syncGeminiModels: async () => h.sync,
+  syncNvidiaModels: async () => h.sync,
 }));
 
 import { POST as connectCommandCode } from "@/app/api/providers/commandcode/connect/route";
 import { POST as connectDeepSeek } from "@/app/api/providers/deepseek/connect/route";
+import { POST as connectGemini } from "@/app/api/providers/gemini/connect/route";
+import { POST as connectGroq } from "@/app/api/providers/groq/connect/route";
+import { POST as connectNvidia } from "@/app/api/providers/nvidia/connect/route";
 import { POST as connectZen } from "@/app/api/providers/zen/connect/route";
 import { POST as connectZenGo } from "@/app/api/providers/zen-go/connect/route";
 
@@ -78,6 +84,22 @@ describe("connect routes report a transport failure as one", () => {
   it("answers 502 for CommandCode when its catalog could not be fetched", async () => {
     h.sync = { ok: false, error: "Could not reach CommandCode (HTTP 503)" };
     expect((await connect(connectCommandCode)).status).toBe(502);
+  });
+
+  // Groq, Google AI Studio and NVIDIA NIM all authenticate their model list,
+  // so for these three a 401 really is a refused key.
+  it("answers 401 for a key Groq, Google or NVIDIA refused, and 502 otherwise", async () => {
+    h.sync = { ok: false, error: "Groq rejected the API key", rejected: true };
+    expect((await connect(connectGroq)).status).toBe(401);
+    h.sync = { ok: false, error: "Google AI Studio rejected the API key", rejected: true };
+    expect((await connect(connectGemini)).status).toBe(401);
+    h.sync = { ok: false, error: "NVIDIA NIM rejected the API key", rejected: true };
+    expect((await connect(connectNvidia)).status).toBe(401);
+
+    h.sync = { ok: false, error: "Could not reach Groq (HTTP 503)" };
+    expect((await connect(connectGroq)).status).toBe(502);
+    expect((await connect(connectGemini)).status).toBe(502);
+    expect((await connect(connectNvidia)).status).toBe(502);
   });
 
   it("passes a successful sync straight through", async () => {

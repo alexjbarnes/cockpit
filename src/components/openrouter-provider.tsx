@@ -544,6 +544,39 @@ export function GoCard(props: { provider: Provider; onChanged: () => void; onMan
 /** CommandCode — one key, two wires: its catalog's Claude models answer only
  *  /messages and are relayed, everything else answers /chat/completions and is
  *  translated. Which one a model is on comes from its own catalog. */
+export function GroqCard(props: { provider: Provider; onChanged: () => void; onManage: () => void }) {
+  return (
+    <BuiltinKeyCard
+      {...props}
+      keyEnvVar="GROQ_API_KEY"
+      tagline="OpenAI wire format · via cockpit proxy · free tier per model, daily"
+      keyPlaceholder="Groq API key…"
+    />
+  );
+}
+
+export function GeminiCard(props: { provider: Provider; onChanged: () => void; onManage: () => void }) {
+  return (
+    <BuiltinKeyCard
+      {...props}
+      keyEnvVar="GEMINI_API_KEY"
+      tagline="OpenAI compatibility layer · via cockpit proxy · free tier per model"
+      keyPlaceholder="Google AI Studio API key…"
+    />
+  );
+}
+
+export function NvidiaCard(props: { provider: Provider; onChanged: () => void; onManage: () => void }) {
+  return (
+    <BuiltinKeyCard
+      {...props}
+      keyEnvVar="NVIDIA_NIM_API_KEY"
+      tagline="OpenAI wire format · via cockpit proxy · free on NVIDIA's trial terms"
+      keyPlaceholder="NVIDIA API key…"
+    />
+  );
+}
+
 export function CommandCodeCard(props: { provider: Provider; onChanged: () => void; onManage: () => void }) {
   return (
     <BuiltinKeyCard

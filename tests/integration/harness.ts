@@ -54,6 +54,10 @@ export interface HarnessOptions {
    *  COCKPIT_ZEN_BASE_URL at the mock API's OpenAI door, so zen sessions run
    *  CLI → cockpit format proxy → mock /v1/chat/completions. */
   zenViaMock?: boolean;
+  /** Seed the built-in Groq provider with a stored key and one enabled model,
+   *  and point COCKPIT_GROQ_BASE_URL at the mock, so "groq:<model>" sessions
+   *  run against it. */
+  groqViaMock?: boolean;
   /** Seed the built-in DeepSeek provider (key + one model) and point
    *  COCKPIT_DEEPSEEK_BASE_URL at the mock API, so deepseek sessions run
    *  CLI → cockpit proxy (anthropic passthrough) → mock /v1/messages. */
@@ -110,6 +114,7 @@ export async function startHarness(opts: HarnessOptions = {}): Promise<Harness> 
     thinkingLevel: opts.thinkingLevel,
     openRouterViaMock: opts.openRouterViaMock,
     zenViaMock: opts.zenViaMock,
+    groqViaMock: opts.groqViaMock,
     deepseekViaMock: opts.deepseekViaMock,
   });
 
@@ -125,6 +130,7 @@ export async function startHarness(opts: HarnessOptions = {}): Promise<Harness> 
     claudeBin: opts.claudeBin ?? process.env.CLAUDE_BIN ?? "claude",
     openRouterBaseUrl: opts.openRouterViaMock ? `http://127.0.0.1:${mock.port}` : undefined,
     zenBaseUrl: opts.zenViaMock ? `http://127.0.0.1:${mock.port}/v1` : undefined,
+    groqBaseUrl: opts.groqViaMock ? `http://127.0.0.1:${mock.port}/v1` : undefined,
     deepseekBaseUrl: opts.deepseekViaMock ? `http://127.0.0.1:${mock.port}` : undefined,
   });
   if (process.env.COCKPIT_IT_DEBUG === "1") captureCockpitLogs(proc);
@@ -172,6 +178,10 @@ interface SeedOpts {
   thinkingLevel?: ThinkingLevel;
   openRouterViaMock?: boolean;
   zenViaMock?: boolean;
+  /** Seed the built-in Groq provider with a stored key and one enabled model,
+   *  and point COCKPIT_GROQ_BASE_URL at the mock, so "groq:<model>" sessions
+   *  run against it. */
+  groqViaMock?: boolean;
   deepseekViaMock?: boolean;
 }
 
@@ -181,6 +191,8 @@ export const OR_TEST_MODEL = "mockvendor/or-test:free";
 export const ZEN_TEST_MODEL = "opencode/mock-model";
 /** Model id used by the DeepSeek integration seeding. */
 export const DEEPSEEK_TEST_MODEL = "deepseek-v4-flash";
+/** Model id used by the Groq integration seeding. */
+export const GROQ_TEST_MODEL = "mock-oss-120b";
 
 function seedConfig(opts: SeedOpts): void {
   // password.json: validateSession() requires a stored password to compute
@@ -253,6 +265,17 @@ function seedConfig(opts: SeedOpts): void {
   // COCKPIT_OPENROUTER_BASE_URL override (spawnCockpit), sessions on
   // "openrouter:<model>" route their /v1/messages traffic to the mock.
   const providersOut: unknown[] = [provider];
+  if (opts.groqViaMock) {
+    providersOut.unshift({
+      id: "groq",
+      name: "Groq",
+      isBuiltin: true,
+      envVars: { GROQ_API_KEY: "gsk-integration-key" },
+      models: [{ modelId: GROQ_TEST_MODEL, displayName: "Mock OSS 120B", effortLevels: [], contextSizes: [] }],
+      enabledModels: [GROQ_TEST_MODEL],
+      syncedAt: Date.now(),
+    });
+  }
   if (opts.zenViaMock) {
     providersOut.unshift({
       id: "zen",
@@ -348,6 +371,7 @@ interface SpawnOpts {
   claudeBin: string;
   openRouterBaseUrl?: string;
   zenBaseUrl?: string;
+  groqBaseUrl?: string;
   deepseekBaseUrl?: string;
 }
 
@@ -403,6 +427,7 @@ function spawnCockpit(opts: SpawnOpts): ChildProcess {
       // to the mock when the OpenRouter seeding is enabled.
       ...(opts.openRouterBaseUrl ? { COCKPIT_OPENROUTER_BASE_URL: opts.openRouterBaseUrl } : {}),
       ...(opts.zenBaseUrl ? { COCKPIT_ZEN_BASE_URL: opts.zenBaseUrl } : {}),
+      ...(opts.groqBaseUrl ? { COCKPIT_GROQ_BASE_URL: opts.groqBaseUrl } : {}),
       ...(opts.deepseekBaseUrl ? { COCKPIT_DEEPSEEK_BASE_URL: opts.deepseekBaseUrl } : {}),
     },
     stdio: ["ignore", "pipe", "pipe"],

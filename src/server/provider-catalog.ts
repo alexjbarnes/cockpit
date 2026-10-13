@@ -274,6 +274,9 @@ const ENTRY_BACKED_BUILTINS: Record<string, string> = {
   "zen-go": "OpenCode Go",
   deepseek: "DeepSeek",
   commandcode: "CommandCode",
+  groq: "Groq",
+  gemini: "Google AI Studio (Gemini)",
+  nvidia: "NVIDIA NIM",
 };
 
 /** W6j: a job on a catalog-backed model that is missing from the catalog must

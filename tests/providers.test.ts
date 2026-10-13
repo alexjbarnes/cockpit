@@ -42,7 +42,7 @@ describe("providers", () => {
     const { getProviders } = await import("@/server/providers");
     const ids = getProviders().map((p) => p.id);
 
-    for (const id of ["anthropic", "openrouter", "zen", "zen-go", "deepseek", "commandcode"]) {
+    for (const id of ["anthropic", "openrouter", "zen", "zen-go", "deepseek", "commandcode", "groq", "gemini", "nvidia"]) {
       expect(ids, `${id} must be offered in the UI`).toContain(id);
     }
   });
@@ -62,14 +62,17 @@ describe("providers", () => {
     const { getProviders } = await import("@/server/providers");
     const providers = getProviders();
 
-    expect(providers.length).toBe(7);
+    expect(providers.length).toBe(10);
     expect(providers[0].id).toBe("anthropic");
     expect(providers[1].id).toBe("openrouter");
     expect(providers[2].id).toBe("zen");
     expect(providers[3].id).toBe("zen-go");
     expect(providers[4].id).toBe("deepseek");
     expect(providers[5].id).toBe("commandcode");
-    expect(providers[6].id).toBe("or-123");
+    expect(providers[6].id).toBe("groq");
+    expect(providers[7].id).toBe("gemini");
+    expect(providers[8].id).toBe("nvidia");
+    expect(providers[9].id).toBe("or-123");
   });
 
   it("openrouter built-in accepts key + enabled set, derives env, and rejects deletion", async () => {
@@ -451,6 +454,213 @@ describe("providers", () => {
 
     const { syncGoModels } = await import("@/server/providers");
     expect(await syncGoModels()).toEqual({ ok: false, error: "OpenCode Go returned an empty model list" });
+    vi.unstubAllGlobals();
+  });
+
+  it("the three free-tier built-ins store a key, expose a proxy upstream, and reject deletion", async () => {
+    const fs = await import("node:fs");
+    vi.mocked(fs.readFileSync).mockImplementation(() => {
+      throw new Error("ENOENT");
+    });
+
+    const { deleteProvider, getProviders, resolveProxyUpstream } = await import("@/server/providers");
+
+    const entry = [
+      {
+        id: "groq",
+        name: "Groq",
+        isBuiltin: true,
+        envVars: { GROQ_API_KEY: "gsk-1" },
+        models: [{ modelId: "gpt-oss-120b", displayName: "gpt-oss-120b", effortLevels: [] }],
+        enabledModels: ["gpt-oss-120b"],
+      },
+      {
+        id: "gemini",
+        name: "Google AI Studio (Gemini)",
+        isBuiltin: true,
+        envVars: { GEMINI_API_KEY: "gm-1" },
+        models: [{ modelId: "gemini-3.8-flash", displayName: "gemini-3.8-flash", effortLevels: [] }],
+        enabledModels: [],
+      },
+      {
+        id: "nvidia",
+        name: "NVIDIA NIM",
+        isBuiltin: true,
+        envVars: { NVIDIA_NIM_API_KEY: "nvapi-1" },
+        models: [{ modelId: "moonshotai/kimi-k3", displayName: "kimi-k3", effortLevels: [] }],
+        enabledModels: [],
+      },
+    ];
+    vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(entry));
+
+    for (const p of getProviders()) {
+      if (["groq", "gemini", "nvidia"].includes(p.id)) expect(p.isBuiltin, p.id).toBe(true);
+    }
+    expect(resolveProxyUpstream("groq")?.baseUrl).toBe("https://api.groq.com/openai/v1");
+    expect(resolveProxyUpstream("groq")?.apiKey).toBe("gsk-1");
+    expect(resolveProxyUpstream("gemini")?.baseUrl).toBe("https://generativelanguage.googleapis.com/v1beta/openai");
+    expect(resolveProxyUpstream("nvidia")?.baseUrl).toBe("https://integrate.api.nvidia.com/api/v1".replace("/api/v1", "/v1"));
+
+    expect(() => deleteProvider("groq")).toThrow(/built-in/);
+    expect(() => deleteProvider("gemini")).toThrow(/built-in/);
+    expect(() => deleteProvider("nvidia")).toThrow(/built-in/);
+  });
+
+  it("syncGroqModels stores the key, the models and the enabled set from one connect", async () => {
+    const fs = await import("node:fs");
+    vi.mocked(fs.readFileSync).mockImplementation(() => {
+      throw new Error("ENOENT");
+    });
+    vi.mocked(fs.writeFileSync).mockImplementation(() => {});
+    vi.mocked(fs.mkdirSync).mockImplementation(() => "");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (String(url).includes("models.dev")) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              groq: {
+                models: {
+                  "gpt-oss-120b": { name: "GPT OSS 120B", cost: { input: 0, output: 0 }, limit: { context: 131072 }, tool_call: true },
+                },
+              },
+            }),
+          };
+        }
+        expect(String(url)).toBe("https://api.groq.com/openai/v1/models");
+        expect((init?.headers as Record<string, string> | undefined)?.Authorization).toBe("Bearer gsk-9");
+        return { ok: true, status: 200, json: async () => ({ data: [{ id: "gpt-oss-120b" }, { id: "llama-3.3-70b-versatile" }] }) };
+      }) as unknown as typeof fetch,
+    );
+
+    const { syncGroqModels } = await import("@/server/providers");
+    const result = await syncGroqModels("gsk-9");
+    expect(result).toEqual({ ok: true, modelCount: 2 });
+
+    const written = JSON.parse(vi.mocked(fs.writeFileSync).mock.calls.at(-1)?.[1] as string);
+    const groq = written.find((p: { id: string }) => p.id === "groq");
+    expect(groq.envVars.GROQ_API_KEY).toBe("gsk-9");
+    expect(groq.enabledModels).toEqual(["gpt-oss-120b", "llama-3.3-70b-versatile"]);
+    const byId = Object.fromEntries(groq.models.map((m: { modelId: string }) => [m.modelId, m]));
+    // zero cost on both sides marks a free model, which is the point of this one
+    expect(byId["gpt-oss-120b"]).toMatchObject({ displayName: "GPT OSS 120B", free: true, contextLength: 131072, supportsTools: true });
+    vi.unstubAllGlobals();
+  });
+
+  it("syncGeminiModels keeps Google's chat models and drops its embedding and media ids", async () => {
+    const fs = await import("node:fs");
+    vi.mocked(fs.readFileSync).mockImplementation(() => {
+      throw new Error("ENOENT");
+    });
+    vi.mocked(fs.writeFileSync).mockImplementation(() => {});
+    vi.mocked(fs.mkdirSync).mockImplementation(() => "");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (String(url).includes("models.dev")) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              google: {
+                models: {
+                  "gemini-3.8-flash": {
+                    name: "Gemini 3.8 Flash",
+                    cost: { input: 0.1, output: 0.4 },
+                    limit: { context: 1048576 },
+                    tool_call: true,
+                  },
+                  "text-embedding-005": { name: "Embedding 005", cost: { input: 0.01, output: 0 } },
+                },
+              },
+            }),
+          };
+        }
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ data: [{ id: "gemini-3.8-flash" }, { id: "imagen-4.0-generate" }, { id: "gemini-embedding-001" }] }),
+        };
+      }) as unknown as typeof fetch,
+    );
+
+    const { syncGeminiModels } = await import("@/server/providers");
+    const result = await syncGeminiModels("gm-9");
+    expect(result).toEqual({ ok: true, modelCount: 1 });
+
+    const written = JSON.parse(vi.mocked(fs.writeFileSync).mock.calls.at(-1)?.[1] as string);
+    const gemini = written.find((p: { id: string }) => p.id === "gemini");
+    expect(gemini.models.map((m: { modelId: string }) => m.modelId)).toEqual(["gemini-3.8-flash"]);
+    vi.unstubAllGlobals();
+  });
+
+  it("syncGeminiModels keyless still browses Google's catalog, and an empty one is a failure", async () => {
+    const fs = await import("node:fs");
+    vi.mocked(fs.readFileSync).mockImplementation(() => {
+      throw new Error("ENOENT");
+    });
+    vi.mocked(fs.writeFileSync).mockImplementation(() => {});
+    vi.mocked(fs.mkdirSync).mockImplementation(() => "");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (String(url).includes("models.dev")) {
+          return { ok: true, status: 200, json: async () => ({ google: { models: { "gemini-2.5-pro": { name: "Gemini 2.5 Pro" } } } }) };
+        }
+        return { ok: true, status: 200, json: async () => ({ data: [] }) };
+      }) as unknown as typeof fetch,
+    );
+
+    const { syncGeminiModels } = await import("@/server/providers");
+    // The compat list is empty without a key, so the models.dev list carries
+    // the browsable catalog, and nothing is enabled before a connect.
+    expect(await syncGeminiModels()).toEqual({ ok: true, modelCount: 1 });
+    const written = JSON.parse(vi.mocked(fs.writeFileSync).mock.calls.at(-1)?.[1] as string);
+    const gemini = written.find((p: { id: string }) => p.id === "gemini");
+    expect(gemini.envVars.GEMINI_API_KEY).toBeUndefined();
+    expect(gemini.enabledModels).toEqual([]);
+    vi.unstubAllGlobals();
+  });
+
+  it("a key the provider refuses is reported as rejected, not as a transport failure", async () => {
+    const fs = await import("node:fs");
+    vi.mocked(fs.readFileSync).mockImplementation(() => {
+      throw new Error("ENOENT");
+    });
+    const never = vi.fn(async (url: string) => {
+      if (String(url).includes("models.dev")) return { ok: true, status: 200, json: async () => ({ nvidia: { models: {} } }) };
+      return { ok: false, status: 401, json: async () => ({}) };
+    });
+    vi.stubGlobal("fetch", never as unknown as typeof fetch);
+
+    const { syncNvidiaModels } = await import("@/server/providers");
+    expect(await syncNvidiaModels("nvapi-bad")).toEqual({ ok: false, error: "NVIDIA NIM rejected the API key", rejected: true });
+
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: false, status: 503, json: async () => ({}) })) as unknown as typeof fetch);
+    expect(await syncNvidiaModels("nvapi-1")).toEqual({ ok: false, error: "Could not reach NVIDIA NIM (HTTP 503)" });
+    expect(fs.writeFileSync).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+
+  it("a sync that cannot reach anything surfaces the transport error", async () => {
+    const fs = await import("node:fs");
+    vi.mocked(fs.readFileSync).mockImplementation(() => {
+      throw new Error("ENOENT");
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new Error("network down");
+      }) as unknown as typeof fetch,
+    );
+
+    // With a key: models.dev's own failure is swallowed into an empty catalog
+    // (a sync without one can browse from models.dev alone), so the throw this
+    // case is about has to come from the provider's authenticated list.
+    const { syncGroqModels } = await import("@/server/providers");
+    expect(await syncGroqModels("gsk-1")).toEqual({ ok: false, error: "network down" });
     vi.unstubAllGlobals();
   });
 
