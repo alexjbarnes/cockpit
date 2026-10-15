@@ -6,7 +6,7 @@ import { cleanupHookSettings, prepareHookSettings } from "./claude-settings";
 import { fetchCliInitData } from "./cli-init-fetch";
 import { logDiag } from "./debug-logger";
 import { ONE_M_CREDITS_REQUIRED, type ParsedEvent, TURN_CONTINUES } from "./event-parser";
-import { newPermissionRequestId, translateHookEvent } from "./hook-event-translator";
+import { newPermissionRequestId, permissionSuggestionsFrom, translateHookEvent } from "./hook-event-translator";
 import type { HookResponse, HookRouter, PermissionDecision, SessionHookHandler } from "./hook-router";
 import { PtySession } from "./pty-session";
 import { countTranscriptMessages, promptMatchKey, TranscriptPromptFollower, type TranscriptPrompts } from "./transcript";
@@ -1303,6 +1303,11 @@ export class PtyRuntime {
       toolName,
       toolInput: toolInput ? JSON.stringify(toolInput) : "",
       rawToolInput: toolInput,
+      // The CLI's own "always" answers for this call (add this directory, stop
+      // asking about edits, …), offered to the card as its alternatives. The
+      // same list is what the hook's own dialog would show, and one chosen from
+      // the card goes back as the decision's updatedPermissions.
+      permissionSuggestions: permissionSuggestionsFrom(payload),
     };
 
     logDiag(this.opts.sessionId, "pty:permission-request", { requestId, toolName });

@@ -20,7 +20,16 @@ function suggestionLabel(s: PermissionSuggestion): string {
   const dest = destinationLabels[s.destination || ""] || s.destination || "session";
 
   if (s.type === "setMode" && s.mode) {
-    return `${s.mode} mode (${dest})`;
+    // The CLI names its modes for itself ("acceptEdits"); a card offering one
+    // as an answer says what it means for the asks that follow.
+    const named: Record<string, string> = {
+      acceptEdits: "Stop asking about edits",
+      bypassPermissions: "Bypass permissions",
+      plan: "Plan mode",
+      default: "Ask every time",
+      auto: "Auto mode",
+    };
+    return `${named[s.mode] ?? `${s.mode} mode`} (${dest})`;
   }
 
   if (s.type === "addDirectories" && s.directories?.length) {
@@ -156,55 +165,42 @@ export function PermissionPrompt({ permission, onRespond }: PermissionPromptProp
                 Deny
               </button>
               <span className="flex-1" />
-              {/* Bypass All lives in here rather than beside Allow: it is the
-                  widest permission on the card and should never be the easiest
-                  click, and the always-allow variants are the same kind of
-                  thing (a rule saved for later). */}
-              <details className="group relative" data-testid="permission-more">
-                <summary className="cursor-pointer list-none rounded-md border px-3 py-1.5 text-xs font-medium text-muted-foreground hover:bg-accent hover:text-foreground">
-                  More
-                </summary>
-                <div className="absolute right-0 z-10 mt-1.5 min-w-[15rem] rounded-lg border bg-popover p-1.5 shadow-md">
-                  {suggestions.length > 0 ? (
-                    suggestions.map((s, i) => (
+              {/* Only the variants the footer has no room for: the first is the
+                  Always button beside this, so a menu of one (or none) would
+                  repeat what is already there. Widening permissions past this
+                  is the session's own settings, not a card action. */}
+              {suggestions.length > 1 && (
+                <details className="group relative" data-testid="permission-more">
+                  <summary className="cursor-pointer list-none rounded-md border px-3 py-1.5 text-xs font-medium text-muted-foreground hover:bg-accent hover:text-foreground">
+                    More
+                  </summary>
+                  <div className="absolute right-0 z-10 mt-1.5 min-w-[15rem] rounded-lg border bg-popover p-1.5 shadow-md">
+                    {suggestions.slice(1).map((s, i) => (
                       <button
                         key={i}
-                        onClick={() => onRespond(permission.requestId, true, "allow_always", i)}
+                        onClick={() => onRespond(permission.requestId, true, "allow_always", i + 1)}
                         title={JSON.stringify(s, null, 2)}
                         className="block w-full rounded-md px-2.5 py-1.5 text-left text-xs hover:bg-accent"
                       >
                         {suggestionLabel(s)}
                       </button>
-                    ))
-                  ) : (
-                    <button
-                      onClick={() => onRespond(permission.requestId, true, "allow_always")}
-                      className="block w-full rounded-md px-2.5 py-1.5 text-left text-xs hover:bg-accent"
-                    >
-                      Always for {permission.toolName}
-                    </button>
-                  )}
-                  <div className="my-1 h-px bg-border" />
-                  <button
-                    onClick={() => onRespond(permission.requestId, true, "allow_all")}
-                    data-testid="btn-bypass-all"
-                    className="block w-full rounded-md px-2.5 py-1.5 text-left text-xs text-destructive hover:bg-destructive/10"
-                  >
-                    Bypass all permissions…
-                  </button>
-                </div>
-              </details>
-              <button
-                onClick={() =>
-                  suggestions.length > 0
-                    ? onRespond(permission.requestId, true, "allow_always", 0)
-                    : onRespond(permission.requestId, true, "allow_always")
-                }
-                data-testid="btn-always"
-                className="rounded-md border px-3 py-1.5 text-xs font-medium hover:bg-accent"
-              >
-                {suggestions.length > 0 ? suggestionLabel(suggestions[0]) : `Always for ${permission.toolName}`}
-              </button>
+                    ))}
+                  </div>
+                </details>
+              )}
+              {/* The first of the CLI's own alternatives, only when it offered
+                  one. There is no cockpit-invented "Always for <tool>": an
+                  answer that saves nothing is a button that lies about what it
+                  did, and the CLI is the one that knows which rule fits. */}
+              {suggestions.length > 0 && (
+                <button
+                  onClick={() => onRespond(permission.requestId, true, "allow_always", 0)}
+                  data-testid="btn-always"
+                  className="rounded-md border px-3 py-1.5 text-xs font-medium hover:bg-accent"
+                >
+                  {suggestionLabel(suggestions[0])}
+                </button>
+              )}
               <button
                 ref={allowRef}
                 onClick={() => onRespond(permission.requestId, true, "allow")}

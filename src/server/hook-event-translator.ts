@@ -128,6 +128,23 @@ export function newPermissionRequestId(): string {
   return uuidv4();
 }
 
+/**
+ * The CLI's own "always allow" answers for the call it is asking about, out of
+ * a PermissionRequest payload: add a rule, add directories, switch mode. They
+ * are what the CLI's own dialog would offer, so the card can offer the same
+ * alternatives, and the one the user picks travels back as the decision's
+ * `updatedPermissions`.
+ *
+ * Anything that is not an object is dropped rather than passed on: the CLI
+ * validates every entry and rejects the whole answer if one is malformed.
+ */
+export function permissionSuggestionsFrom(payload: Record<string, unknown>): Record<string, unknown>[] | undefined {
+  const raw = payload.permission_suggestions;
+  if (!Array.isArray(raw)) return undefined;
+  const suggestions = raw.filter((s): s is Record<string, unknown> => !!s && typeof s === "object" && !Array.isArray(s));
+  return suggestions.length > 0 ? suggestions : undefined;
+}
+
 function translatePreToolUse(payload: Record<string, unknown>): ParsedEvent[] {
   const toolName = stringOr(payload.tool_name, "unknown");
   const toolInput = payload.tool_input as Record<string, unknown> | undefined;
@@ -215,6 +232,7 @@ function translatePermissionRequest(payload: Record<string, unknown>): ParsedEve
       toolName,
       toolInput: toolInput ? JSON.stringify(toolInput) : "",
       rawToolInput: toolInput,
+      permissionSuggestions: permissionSuggestionsFrom(payload),
     },
   ];
 }

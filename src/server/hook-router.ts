@@ -34,6 +34,11 @@ export interface PermissionDecision {
   behavior: "allow" | "deny";
   message?: string;
   updatedInput?: Record<string, unknown>;
+  /** The CLI's own permission updates to apply along with the allow — one of
+   *  the suggestions its PermissionRequest payload offered, echoed back. This
+   *  is what makes the card's "always" answer save a rule rather than just
+   *  letting this one call through. */
+  updatedPermissions?: Record<string, unknown>[];
 }
 
 type HookCallbackReturn = Promise<HookResponse | undefined> | HookResponse | undefined;

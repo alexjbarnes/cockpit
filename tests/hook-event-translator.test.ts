@@ -204,6 +204,29 @@ describe("translateHookEvent", () => {
       expect(a[0].requestId).not.toBe(b[0].requestId);
     });
 
+    it("carries the CLI's own always-allow suggestions, dropping anything malformed", () => {
+      const suggestions = [
+        { type: "addDirectories", directories: ["/tmp/x/build"], destination: "session" },
+        { type: "setMode", mode: "acceptEdits", destination: "session" },
+      ];
+      const events = translateHookEvent("PermissionRequest", {
+        tool_name: "Bash",
+        tool_input: { command: "rm -rf build" },
+        permission_suggestions: [...suggestions, "nonsense", null, 7],
+      });
+
+      // The CLI validates every entry and refuses the whole answer if one is
+      // bad, so only the objects travel on.
+      expect(events[0].permissionSuggestions).toEqual(suggestions);
+    });
+
+    it("has no suggestions when the payload carries none", () => {
+      expect(translateHookEvent("PermissionRequest", { tool_name: "Bash" })[0].permissionSuggestions).toBeUndefined();
+      expect(
+        translateHookEvent("PermissionRequest", { tool_name: "Bash", permission_suggestions: [] })[0].permissionSuggestions,
+      ).toBeUndefined();
+    });
+
     it("falls back to 'unknown' toolName when missing", () => {
       const events = translateHookEvent("PermissionRequest", {});
       expect(events[0].toolName).toBe("unknown");

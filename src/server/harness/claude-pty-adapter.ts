@@ -121,14 +121,22 @@ class ClaudePtyProcess implements HarnessProcess {
     permissionSuggestions?: unknown,
     denyReason?: string,
   ): boolean {
+    const chosen = Array.isArray(permissionSuggestions) ? (permissionSuggestions as Record<string, unknown>[]) : [];
     return this.runtime.notifyPermissionDecision(
       requestId,
       allowed
-        ? { behavior: "allow", ...(toolInput ? { updatedInput: toolInput } : {}) }
+        ? {
+            behavior: "allow",
+            ...(toolInput ? { updatedInput: toolInput } : {}),
+            ...(chosen.length > 0 ? { updatedPermissions: chosen } : {}),
+            // The CLI's suggestion, echoed back: a hook answer can carry the
+            // permission updates to save, which is how an "always" from the
+            // card writes the same rule the CLI's own dialog would have.
+          }
         : { behavior: "deny", message: denyReason ?? "User denied" },
       // A chosen suggestion is the card's "always" answer. Only a TUI dialog
       // that has a "don't ask again" key of its own does anything with it.
-      { always: Array.isArray(permissionSuggestions) && permissionSuggestions.length > 0 },
+      { always: chosen.length > 0 },
     );
   }
 
