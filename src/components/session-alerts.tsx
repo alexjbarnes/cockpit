@@ -17,6 +17,9 @@ interface Alert {
   requestId?: string;
   toolName?: string;
   input?: string;
+  /** A finished turn's last message: the banner shows it so the user can read
+   *  the result without opening the session. */
+  summary?: string;
 }
 
 /** How long a "turn finished" banner lives: nothing is waiting on the user, so
@@ -82,6 +85,7 @@ export function SessionAlerts() {
           requestId: msg.requestId,
           toolName: msg.toolName,
           input: msg.input,
+          summary: msg.summary,
         };
         return [...prev, next];
       });
@@ -90,12 +94,16 @@ export function SessionAlerts() {
   }, [subscribe]);
 
   // Finished banners clear themselves; the others are waiting on an answer.
+  // One being read does not: someone who expanded the message wants longer
+  // than the news-fade, so the timer restarts if they fold it away again.
   useEffect(() => {
-    const timers = alerts.filter((a) => a.kind === "finished").map((a) => setTimeout(() => removeAlert(a.key), FINISHED_TIMEOUT_MS));
+    const timers = alerts
+      .filter((a) => a.kind === "finished" && !expanded.has(a.key))
+      .map((a) => setTimeout(() => removeAlert(a.key), FINISHED_TIMEOUT_MS));
     return () => {
       for (const timer of timers) clearTimeout(timer);
     };
-  }, [alerts, removeAlert]);
+  }, [alerts, expanded, removeAlert]);
 
   // Fold the stack after a while, but leave it on screen.
   const foldedRef = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -196,7 +204,9 @@ export function SessionAlerts() {
         const isOpen = expanded.has(alert.key);
         const questionText = alert.kind === "question" ? firstQuestion(alert.input) : "";
         const questions = alert.kind === "question" ? parseQuestionsFromInput(alert.input ?? "") : [];
-        const body = alert.kind === "permission" ? summary(alert) : questionText || summary(alert);
+        // A finished turn's body is what Claude last said, so the banner can be
+        // read rather than opened.
+        const body = alert.kind === "permission" ? summary(alert) : alert.kind === "question" ? questionText : (alert.summary ?? "");
         return (
           <div
             key={alert.key}

@@ -2262,8 +2262,12 @@ export class SessionManager {
       if (finishedTurn) {
         // What Claude actually said is the context worth carrying: a
         // notification that only says "finished" makes you open the app to
-        // find out whether it matters.
-        const said = lastEmitEv?.type === "message_done" ? lastEmitEv.message?.content : undefined;
+        // find out whether it matters. Found in the batch rather than read off
+        // its end: the message that ended the turn is often followed by a
+        // task_sync or a Stop-hook event, which is why this used to arrive
+        // empty for most turns.
+        const saidEvent = [...result.emit].reverse().find((e) => e.type === "message_done" && e.message?.content);
+        const said = saidEvent?.type === "message_done" ? saidEvent.message?.content : undefined;
         notifySessionEvent(this.notifyContext(session, sessionId), "finished", { summary: said });
       }
       this.flushQueuedMessage(session, sessionId);

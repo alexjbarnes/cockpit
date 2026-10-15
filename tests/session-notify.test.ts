@@ -55,6 +55,15 @@ describe("the banner the app raises", () => {
     expect(h.dispatch, "no provider, so nothing is sent").not.toHaveBeenCalled();
   });
 
+  it("carries what Claude said on a finished turn, so the banner can be read", () => {
+    h.defaults = { sessionAlerts: true };
+
+    notifySessionEvent({ ...ctx, notifications: undefined }, "finished", { summary: "Renamed 42 listings." });
+
+    expect(attention).toHaveLength(1);
+    expect(attention[0]).toMatchObject({ kind: "finished", summary: "Renamed 42 listings." });
+  });
+
   it("is silent when the global switch is off", () => {
     notifySessionEvent(ctx, "question", { requestId: "req-1" });
     expect(attention).toEqual([]);

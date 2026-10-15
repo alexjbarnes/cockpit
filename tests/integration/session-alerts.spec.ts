@@ -97,6 +97,9 @@ test("a turn finishing in another session raises a banner too", async ({ page, h
     await expect(banner).toBeVisible({ timeout: 60_000 });
     await expect(banner).toContainText("Busy session");
     await expect(banner).toContainText("finished a turn");
+    // The peek: the turn's own last message rides along, so the banner is
+    // readable without opening the session it came from.
+    await expect(banner.getByTestId("session-alert-command")).toContainText("All done here.");
   } finally {
     rmSync(workDir, { recursive: true, force: true });
   }

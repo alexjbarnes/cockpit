@@ -23,6 +23,10 @@ export interface SessionAttentionEvent {
    *  carries it, so a banner can describe the command the same way the card
    *  does. */
   input?: string;
+  /** Set for a finished turn: what Claude said, so a banner can be peeked at
+   *  without opening the session. The whole message, not the clipped line a
+   *  push body gets. */
+  summary?: string;
 }
 
 const emitter = new EventEmitter();

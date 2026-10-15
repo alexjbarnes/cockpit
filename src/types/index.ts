@@ -697,6 +697,9 @@ export type ServerMessage =
       requestId?: string;
       toolName?: string;
       input?: string;
+      /** A finished turn's last message, so the banner can be read without
+       *  opening the session. */
+      summary?: string;
     }
   | { type: "session:clear"; sessionId: string }
   | { type: "session:system"; sessionId: string; text: string }

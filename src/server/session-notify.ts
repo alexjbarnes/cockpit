@@ -146,6 +146,7 @@ export function notifySessionEvent(
         requestId: detail?.requestId,
         toolName: detail?.toolName,
         input: detail?.input,
+        summary: detail?.summary,
       });
     }
 
