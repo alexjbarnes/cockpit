@@ -47,6 +47,10 @@ export function SessionAlerts() {
   // Which banners are showing their whole command rather than the first line of
   // it. A banner is deliberately small, and a command can be a whole script.
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  // Which banners have a body too tall for the collapsed box. Measured rather
+  // than guessed from the text's length: a command that fits in the three lines
+  // on show is a chevron that does nothing when it is clicked.
+  const [clipped, setClipped] = useState<Set<string>>(new Set());
 
   // Suppress the session on screen. Read from the pathname, not from the shell
   // context: that one is set by the session page and never cleared, so
@@ -60,6 +64,20 @@ export function SessionAlerts() {
 
   const removeAlert = useCallback((key: string) => {
     setAlerts((prev) => prev.filter((a) => a.key !== key));
+  }, []);
+
+  /** Record whether a body is taller than its collapsed box. Only ever called
+   *  while collapsed, so a banner already open keeps its chevron to close. */
+  const measureBody = useCallback((key: string, el: HTMLDivElement | null) => {
+    if (!el) return;
+    const overflows = el.scrollHeight > el.clientHeight + 1;
+    setClipped((prev) => {
+      if (overflows === prev.has(key)) return prev;
+      const next = new Set(prev);
+      if (overflows) next.add(key);
+      else next.delete(key);
+      return next;
+    });
   }, []);
 
   useEffect(() => {
@@ -229,7 +247,7 @@ export function SessionAlerts() {
               <span className="truncate font-medium">{alert.name}</span>
               <span className="shrink-0 text-xs text-muted-foreground">{label(alert)}</span>
               <span className="flex-1" />
-              {body.length > 60 && (
+              {clipped.has(alert.key) && (
                 <button
                   type="button"
                   onClick={() => toggleExpanded(alert.key)}
@@ -257,6 +275,9 @@ export function SessionAlerts() {
               // question) are what make the banner worth looking at. The open
               // question prompt repeats the question, so it goes here.
               <div
+                ref={(el) => {
+                  if (!isOpen) measureBody(alert.key, el);
+                }}
                 className={`mt-2 overflow-y-auto whitespace-pre-wrap [overflow-wrap:anywhere] text-muted-foreground ${
                   alert.kind === "permission" ? "font-mono text-[13px]" : "text-sm"
                 } ${isOpen && alert.kind !== "question" ? "max-h-[60vh]" : "max-h-24"}`}

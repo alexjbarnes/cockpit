@@ -100,6 +100,9 @@ test("a turn finishing in another session raises a banner too", async ({ page, h
     // The peek: the turn's own last message rides along, so the banner is
     // readable without opening the session it came from.
     await expect(banner.getByTestId("session-alert-command")).toContainText("All done here.");
+    // A message that fits needs no chevron: the control appears only when the
+    // body is taller than the box it sits in.
+    await expect(banner.getByTestId("session-alert-expand")).toHaveCount(0);
   } finally {
     rmSync(workDir, { recursive: true, force: true });
   }
