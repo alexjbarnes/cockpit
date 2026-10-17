@@ -70,8 +70,35 @@ test("a row dragged inside its status keeps the new order, and a row dropped in 
 
     expect(inStatus(harness, project.id, "Backlog"), "the third row is now first").toEqual(["DRG-3", "DRG-1", "DRG-2"]);
 
+    // And back down, onto the row it is dropped on: the index has to be the
+    // hovered row's place with the moved row still in the list. Read off the
+    // list without it, every downward drag landed one row short of the row it
+    // was let go on.
+    const back = await handles.nth(0).boundingBox();
+    const third = await handles.nth(2).boundingBox();
+    if (!back || !third) throw new Error("rows not measurable");
+    const bx = back.x + back.width / 2;
+    const by = back.y + back.height / 2;
+    await page.mouse.move(bx, by);
+    await page.mouse.down();
+    await page.waitForTimeout(250);
+    for (let i = 1; i <= 10; i++) {
+      await page.mouse.move(bx, by + ((third.y - by) * i) / 10);
+      await page.waitForTimeout(30);
+    }
+    await page.mouse.up();
+    await page.waitForTimeout(1000);
+
+    expect(inStatus(harness, project.id, "Backlog"), "the first row is now last").toEqual(["DRG-1", "DRG-2", "DRG-3"]);
+
     // Into another status: the empty group only exists as a drop target while
     // the drag is in flight, which is the point of rendering them at all.
+    // Which row is second depends on the drags above, so the assertion below
+    // reads the key off the row being dragged rather than assuming one.
+    const movedKey = await page.evaluate(() => {
+      const handles = [...document.querySelectorAll('[data-testid="issue-group-Backlog"] button[aria-label="Drag to reorder"]')];
+      return ((handles[1]?.parentElement?.textContent || "").match(/DRG-\d+/) || ["?"])[0];
+    });
     const second = await handles.nth(1).boundingBox();
     if (!second) throw new Error("row not measurable");
     const sx = second.x + second.width / 2;
@@ -95,13 +122,19 @@ test("a row dragged inside its status keeps the new order, and a row dropped in 
     await page.mouse.up();
     await page.waitForTimeout(1000);
 
-    expect(inStatus(harness, project.id, "Done"), "moved into a status that had no issues").toContain("DRG-1");
+    expect(inStatus(harness, project.id, "Done"), "moved into a status that had no issues").toContain(movedKey);
 
-    // Reload: the order is the stored one, not a client-side artefact.
+    // Reload: the order is the stored one, not a client-side artefact. The
+    // rendered rows are checked against the file, so this stays honest whatever
+    // the drags above left behind.
     await page.reload();
     await expect(page.getByTestId("issue-group-Backlog")).toBeVisible({ timeout: 20_000 });
-    const titles = await page.locator('[data-testid="issue-group-Backlog"] [role="button"]').allInnerTexts();
-    expect(titles[0]).toContain("Third");
+    const rendered = await page.evaluate(() =>
+      [...document.querySelectorAll('[data-testid="issue-group-Backlog"] [role="button"]')]
+        .map((row) => ((row.textContent || "").match(/DRG-\d+/) || [])[0])
+        .filter(Boolean),
+    );
+    expect(rendered).toEqual(inStatus(harness, project.id, "Backlog"));
   } finally {
     rmSync(repoPath, { recursive: true, force: true });
   }

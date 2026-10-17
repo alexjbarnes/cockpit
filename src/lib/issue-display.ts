@@ -90,6 +90,23 @@ export interface IssuePlacement {
 export const ORDER_STEP = 1000;
 
 /**
+ * The index a drop lands at, for `placementAt`: the slot the hovered row holds
+ * in its group as the user is looking at it, which is where the moved issue
+ * goes.
+ *
+ * Read off the group with the moved issue still in it. Every index taken from
+ * the shortened group is one less than that for each row below the moved one,
+ * so it is right for a drag upwards and short for a drag downwards — the whole
+ * "it lands a row or two away from where I put it" bug. Null when the drop was
+ * not on a row at all (an empty group's own body), which means the end.
+ */
+export function dropIndex(issues: Issue[], targetStatus: string, overId: string): number | null {
+  const group = sortIssuesByOrder(issues.filter((issue) => issue.status === targetStatus));
+  const index = group.findIndex((issue) => issue.id === overId || issue.key === overId);
+  return index < 0 ? null : index;
+}
+
+/**
  * The placement for a key dropped at `index` in a status group, from the group
  * as displayed *without* the moved issue. Neighbours are read from that list,
  * so a filtered view asks for the position the user saw.

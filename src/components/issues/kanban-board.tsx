@@ -13,7 +13,7 @@ import {
 import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { useMemo, useState } from "react";
-import { boardColumns, sortIssuesByOrder } from "@/lib/issue-display";
+import { boardColumns, dropIndex, sortIssuesByOrder } from "@/lib/issue-display";
 import { cn } from "@/lib/utils";
 import type { Issue, Project } from "@/types";
 
@@ -160,14 +160,17 @@ export function KanbanBoard({
     const targetStatus = data?.sortable?.containerId ?? data?.status ?? (typeof over.id === "string" ? over.id : undefined);
     if (!targetStatus) return;
 
+    // The hovered card's place in its column as shown, taken with the dragged
+    // card still in it (see dropIndex): an index from the column without it is
+    // a row short on every downward drag. Null means the drop was on the
+    // column's own body, which is the end of it.
     const column = sortIssuesByOrder(issues.filter((i) => i.status === targetStatus && i.id !== issue.id));
-    const overIndex = column.findIndex((i) => i.id === over.id);
-    const index = overIndex >= 0 ? overIndex : column.length;
-    if (targetStatus === issue.status && index === column.length && issue.order === undefined) {
+    const overIndex = dropIndex(issues, targetStatus, String(over.id));
+    if (overIndex === null && targetStatus === issue.status && issue.order === undefined) {
       // Dropped back where it started at the end of its own column: nothing to do.
       return;
     }
-    onDrop(issue.key, targetStatus, index);
+    onDrop(issue.key, targetStatus, overIndex ?? column.length);
   }
 
   return (

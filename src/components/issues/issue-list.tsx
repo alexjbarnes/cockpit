@@ -17,7 +17,7 @@ import { ChevronRight, GripVertical } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
-import { type IssueStatusGroup, priorityLabel, sortIssuesByOrder, statusColor } from "@/lib/issue-display";
+import { dropIndex, type IssueStatusGroup, priorityLabel, sortIssuesByOrder, statusColor } from "@/lib/issue-display";
 import { cn } from "@/lib/utils";
 import type { Issue, Project } from "@/types";
 
@@ -194,12 +194,16 @@ export function IssueList({ issues, statusGroups, project, projectNames, onIssue
 
       const activeIssue = byId.get(String(active.id));
       if (!activeIssue) return;
+      // Dropped on itself: the row never left its slot.
+      if (String(over.id) === String(active.id)) return;
 
+      // The index is the hovered row's place in its group as shown, taken with
+      // the moved row still in it — see dropIndex. Reading it off the shortened
+      // group made every downward drag land a row short.
       const group = sortIssuesByOrder(issues.filter((issue) => issue.status === targetStatus && issue.id !== activeIssue.id));
-      const overIndex = group.findIndex((issue) => issue.id === over.id);
-      const targetIndex = overIndex >= 0 ? overIndex : group.length;
+      const overIndex = dropIndex(issues, targetStatus, String(over.id));
+      const targetIndex = overIndex ?? group.length;
 
-      if (targetStatus === activeIssue.status && targetIndex === group.findIndex((i) => i.id === activeIssue.id)) return;
       onDrop(activeIssue.key, targetStatus, targetIndex);
     },
     [byId, issues, onDrop],

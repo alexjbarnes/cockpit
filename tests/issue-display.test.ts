@@ -5,6 +5,7 @@ import {
   boardColumns,
   describeActivity,
   describeActivityAction,
+  dropIndex,
   effectiveOrders,
   filterByQuickFilter,
   filterIssues,
@@ -537,6 +538,39 @@ describe("effectiveOrders", () => {
     expect(ranks.get("a")).toBe(5000);
     expect(ranks.get("b")).toBe(5000 + ORDER_STEP);
     expect(ranks.get("c")).toBe(5000 + 2 * ORDER_STEP);
+  });
+});
+
+describe("dropIndex", () => {
+  const issues = [
+    makeIssue({ id: "a", key: "A-1", order: 1000 }),
+    makeIssue({ id: "b", key: "A-2", order: 2000 }),
+    makeIssue({ id: "c", key: "A-3", order: 3000 }),
+    makeIssue({ id: "d", key: "A-4", order: 4000, status: "Done" }),
+  ];
+
+  it("is the hovered row's place in its own status, moved row and all", () => {
+    expect(dropIndex(issues, "Backlog", "a")).toBe(0);
+    expect(dropIndex(issues, "Backlog", "c")).toBe(2);
+  });
+
+  it("reads a row by id too, and the end of a group as null", () => {
+    expect(dropIndex(issues, "Backlog", "b")).toBe(1);
+    expect(dropIndex(issues, "Backlog", "Done")).toBe(null);
+  });
+
+  it("lands a downward drag on the row it was dropped on, not one short", () => {
+    // A-1 dragged onto A-3: the row it lands on is the one under the pointer,
+    // which is what the list's preview shows. Taken from the group without the
+    // moved issue the index came out one less, so every downward drag landed a
+    // row above where it was let go.
+    const placement = placementAt("Backlog", "A-1", dropIndex(issues, "Backlog", "c") as number, ["A-2", "A-3"]);
+    expect(placement).toEqual({ key: "A-1", status: "Backlog", index: 2, afterKey: "A-3" });
+  });
+
+  it("lands an upward drag on the row it was dropped on too", () => {
+    const placement = placementAt("Backlog", "A-3", dropIndex(issues, "Backlog", "a") as number, ["A-1", "A-2"]);
+    expect(placement).toEqual({ key: "A-3", status: "Backlog", index: 0, beforeKey: "A-1" });
   });
 });
 
