@@ -9,6 +9,7 @@ import { useSettings } from "@/hooks/use-settings";
 import { useWebSocket } from "@/hooks/use-websocket";
 import { formatDuration } from "@/lib/format-time";
 import { pathBasename } from "@/lib/path";
+import { anchorCorrection, anchorFromItems, type ReadingAnchor } from "@/lib/reading-anchor";
 import { grownRenderWindow, type ListShape } from "@/lib/render-window";
 import { pairQuestionBlocks, splitAtQuestion } from "@/lib/split-question-blocks";
 import { turnStartAnchor } from "@/lib/turn-anchor";
@@ -124,7 +125,11 @@ export function ChatView({
   const ignoreScrollUntil = useRef(0);
   const [renderWindow, setRenderWindow] = useState(INITIAL_WINDOW);
   const expandThrottleRef = useRef(0);
-  const prevScrollHeightRef = useRef(0);
+  // Where the reader is while older messages may land above them: recorded on
+  // scroll near the top (where scrolling grows the render window or asks for
+  // older history) and while such a request is still in flight.
+  const readingAnchorRef = useRef<ReadingAnchor | null>(null);
+  const topInsertPendingRef = useRef(false);
   const { selectedIds, selectionMode, enterSelection, toggleSelect, clearSelection, copySelected } = useMessageSelection();
   const expandedToolIdsRef = useRef<Set<string>>(new Set());
   const [isTouch, setIsTouch] = useState(false);
@@ -300,17 +305,38 @@ export function ChatView({
     setShellRuntime(currentRuntime);
   }, [currentRuntime, setShellRuntime]);
 
-  // Preserve scroll position after expanding the window
+  const recordReadingAnchor = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const viewTop = el.getBoundingClientRect().top;
+    const items: { id: string; top: number; bottom: number }[] = [];
+    for (const node of el.querySelectorAll<HTMLElement>("[data-message-id]")) {
+      const r = node.getBoundingClientRect();
+      items.push({ id: node.dataset.messageId ?? "", top: r.top, bottom: r.bottom });
+      if (r.bottom > viewTop) break;
+    }
+    readingAnchorRef.current = anchorFromItems(items, viewTop);
+  }, []);
+
+  // Older messages landed above the reader: put the message they were reading
+  // back where it was. The browser's scroll anchoring usually has, in which case
+  // this measures no drift and does nothing (Chromium applies it in the forced
+  // layout this effect triggers). It does not when the list sits at exactly
+  // the top, where a flick on a phone always stops, and Safari never does: the
+  // view then landed a screenful or more further up, at older messages.
+  const firstRenderedId = visibleMessages[0]?.id ?? null;
+  const topSpinner = hasMoreAbove || loadingMore;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: runs when what sits above the reader changes
   useLayoutEffect(() => {
     const el = scrollRef.current;
-    if (!el || prevScrollHeightRef.current === 0) return;
-    const delta = el.scrollHeight - prevScrollHeightRef.current;
-    if (delta > 0) {
-      el.scrollTop += delta;
-      ignoreScrollUntil.current = Date.now() + 150;
-    }
-    prevScrollHeightRef.current = 0;
-  }, []);
+    const anchor = readingAnchorRef.current;
+    if (!el || !anchor || stickToBottom.current) return;
+    const node = el.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(anchor.id)}"]`);
+    if (!node) return;
+    const correction = anchorCorrection(anchor, node.getBoundingClientRect().top - el.getBoundingClientRect().top);
+    if (correction !== 0) el.scrollTop += correction;
+    topInsertPendingRef.current = false;
+  }, [firstRenderedId, topSpinner]);
 
   const handleScroll = useCallback(() => {
     if (Date.now() < ignoreScrollUntil.current) return;
@@ -320,17 +346,18 @@ export function ChatView({
     stickToBottom.current = distanceFromBottom < 80;
     setShowScrollDown(distanceFromBottom > 300);
 
+    if (el.scrollTop < 800 || topInsertPendingRef.current) recordReadingAnchor();
     if (el.scrollTop < 800 && Date.now() > expandThrottleRef.current) {
       expandThrottleRef.current = Date.now() + 100;
       if (hasMoreAbove) {
-        prevScrollHeightRef.current = el.scrollHeight;
+        topInsertPendingRef.current = true;
         setRenderWindow((w) => w + WINDOW_INCREMENT);
       } else if (hasMoreHistory && !loadingMore) {
-        prevScrollHeightRef.current = el.scrollHeight;
+        topInsertPendingRef.current = true;
         requestMoreHistory();
       }
     }
-  }, [hasMoreAbove, hasMoreHistory, loadingMore, requestMoreHistory]);
+  }, [hasMoreAbove, hasMoreHistory, loadingMore, requestMoreHistory, recordReadingAnchor]);
 
   const scrollToBottom = useCallback(() => {
     const el = scrollRef.current;
