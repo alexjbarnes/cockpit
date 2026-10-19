@@ -67,6 +67,7 @@ vi.mock("@/server/pty-runtime", () => {
 let mockHookRouter: unknown = { register: vi.fn(), unregister: vi.fn() };
 vi.mock("@/server/singleton", () => ({
   getHookRouter: vi.fn(() => mockHookRouter),
+  getTelemetry: vi.fn(() => null),
   getCockpitMcp: vi.fn(() => null),
 }));
 

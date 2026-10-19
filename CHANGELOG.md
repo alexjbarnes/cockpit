@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Cockpit can record everything Claude Code reports about a session (experimental).** Switch on Telemetry under Settings → Appearance → Experimental and each session started afterwards sends its OpenTelemetry to cockpit: tokens and cost per request, time to first token, every tool call with its timing and result, permission waits, errors and retries, and the prompts, replies and tool output themselves. It is kept in a SQLite file in cockpit's folder for 30 days and read through `/api/telemetry`, ready for the charts that come next. It uses the SQLite built into Node 22.13 and later; on an older Node the switch says why it is unavailable. A session whose telemetry Claude Code already sends somewhere else, through managed settings or your own, is left alone.
+
+### Fixed
+- **A session that restarts quickly keeps its hooks.** When a session respawned before its old process had finished cleaning up, the old cleanup removed the new process's registration, and every hook the new one sent was refused. Cleanup now removes only its own.
+- **Saving a setting no longer stores the issue tracker's override.** `COCKPIT_ISSUES_ENABLED` (which `make start` sets) was meant to apply only to the run that set it, but any change in Settings wrote it into `defaults.json`, where it outlived the run.
+
 ### Internal
 - The Socket scan of `main` passes the commit's subject line rather than its whole message. A release's squash commit carries every message since the branches split, and Socket refused the request as too long, so the scan had failed on every release since at least June.
 - The server build empties `dist/` before compiling. It only ever added to it, so a deleted server file kept shipping as its old compiled copy: 0.9.0 carried the removed todo watcher's.

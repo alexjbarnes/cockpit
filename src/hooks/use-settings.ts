@@ -33,6 +33,7 @@ export interface Settings {
   reviewsEnabled: boolean;
   issuesEnabled: boolean;
   modalPagesEnabled: boolean;
+  telemetryEnabled: boolean;
   allowSonnet1m: boolean;
   sessionAlerts: boolean;
   terminalFontSize: number;
@@ -55,6 +56,7 @@ const defaultSettings: Settings = {
   reviewsEnabled: true,
   issuesEnabled: false,
   modalPagesEnabled: true,
+  telemetryEnabled: false,
   allowSonnet1m: false,
   sessionAlerts: false,
   terminalFontSize: 14,

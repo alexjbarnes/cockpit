@@ -101,6 +101,7 @@ vi.mock("@/server/transcript-watcher", () => ({
 
 vi.mock("@/server/singleton", () => ({
   getHookRouter: vi.fn(() => mockHookRouter),
+  getTelemetry: vi.fn(() => null),
   setHookRouter: vi.fn(),
   getTerminalManager: vi.fn(() => null),
   setTerminalManager: vi.fn(),

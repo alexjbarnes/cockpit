@@ -9,6 +9,7 @@ import { ONE_M_CREDITS_REQUIRED, type ParsedEvent, TURN_CONTINUES } from "./even
 import { newPermissionRequestId, permissionSuggestionsFrom, translateHookEvent } from "./hook-event-translator";
 import type { HookResponse, HookRouter, PermissionDecision, SessionHookHandler } from "./hook-router";
 import { PtySession } from "./pty-session";
+import type { TelemetrySpawner } from "./telemetry/protocol";
 import { countTranscriptMessages, promptMatchKey, TranscriptPromptFollower, type TranscriptPrompts } from "./transcript";
 
 export interface PtyRuntimeOptions {
@@ -43,6 +44,8 @@ export interface PtyRuntimeOptions {
    *  payloads report the mode the CLI is actually in, which need not be the
    *  one asked for; notePayloadMode passes it out for the UI to show. */
   expectedPermissionMode?: "manual" | "auto" | "plan";
+  /** Cockpit's OpenTelemetry receiver, when telemetry is switched on. */
+  telemetry?: TelemetrySpawner;
 }
 
 /**
@@ -77,6 +80,9 @@ export class PtyRuntime {
   private readonly opts: PtyRuntimeOptions;
   private pty: PtySession | null = null;
   private settingsPath: string | null = null;
+  /** This spawn's hook registration, so cleanup removes only its own. */
+  private hookToken: string | undefined;
+  private telemetryToken: string | null = null;
   /** Hook requests awaiting a decision, by request id. The tool name rides
    *  along so onNotification can tell whether a rendered dialog belongs to a
    *  request the user already has a card for. */
@@ -179,16 +185,29 @@ export class PtyRuntime {
     logDiag(sessionId, "pty:start-enter", { hasInitialText: !!initialText });
 
     const token = hookRouter.register(sessionId, this.buildHandler());
-    const { settingsPath, env } = await prepareHookSettings({
-      sessionId,
-      hookUrl: hookRouter.getUrl(),
-      hookToken: token,
-      allowList: this.opts.allowList,
-      denyList: this.opts.denyList,
-      thinkingEnabled: this.opts.thinkingEnabled,
-      sandbox: this.opts.sandbox,
-      autoModeEnabled: this.opts.autoModeEnabled,
-    });
+    this.hookToken = token;
+    let prepared: Awaited<ReturnType<typeof prepareHookSettings>>;
+    try {
+      const telemetry = (await this.opts.telemetry?.beginSpawn(sessionId, this.opts.cliSessionId)) ?? null;
+      this.telemetryToken = telemetry?.token ?? null;
+      prepared = await prepareHookSettings({
+        sessionId,
+        hookUrl: hookRouter.getUrl(),
+        hookToken: token,
+        allowList: this.opts.allowList,
+        denyList: this.opts.denyList,
+        thinkingEnabled: this.opts.thinkingEnabled,
+        sandbox: this.opts.sandbox,
+        autoModeEnabled: this.opts.autoModeEnabled,
+        cwd,
+        telemetry: telemetry ? { token: telemetry.token, baseUrl: hookRouter.getUrl() } : undefined,
+      });
+      if (telemetry && prepared.telemetry) this.opts.telemetry?.noteOutcome(telemetry.token, prepared.telemetry);
+    } catch (err) {
+      await this.cleanup();
+      throw err;
+    }
+    const { settingsPath, env } = prepared;
     this.settingsPath = settingsPath;
     logDiag(sessionId, "pty:hooks-ready", { elapsedMs: Date.now() - startAt });
 
@@ -1491,7 +1510,13 @@ export class PtyRuntime {
   private async cleanup(): Promise<void> {
     if (this.cleaned) return;
     this.cleaned = true;
-    this.opts.hookRouter.unregister(this.opts.sessionId);
+    this.opts.hookRouter.unregister(this.opts.sessionId, this.hookToken);
+    if (this.telemetryToken) {
+      // Its token outlives the process briefly: a CLI flushes its last batch
+      // on the way out, after this runs.
+      this.opts.telemetry?.endSpawn(this.telemetryToken);
+      this.telemetryToken = null;
+    }
     if (this.settingsPath) {
       await cleanupHookSettings(this.opts.sessionId).catch(() => {});
       this.settingsPath = null;

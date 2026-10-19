@@ -108,6 +108,7 @@ vi.mock("@/server/pty-runtime", () => {
 });
 
 vi.mock("@/server/singleton", () => ({
+  getTelemetry: vi.fn(() => null),
   getHookRouter: vi.fn(() => ({
     register: vi.fn(),
     unregister: vi.fn(),

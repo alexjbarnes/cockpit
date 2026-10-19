@@ -1,10 +1,12 @@
 import { createServer } from "node:http";
 import { networkInterfaces } from "node:os";
+import path from "node:path";
 import { parse } from "node:url";
 import next from "next";
 import { deletePasswordFile, needsSetup } from "./src/server/auth";
 import { checkClaudeUserConfig } from "./src/server/claude-config-guard";
 import { logDiag, logProxy } from "./src/server/debug-logger";
+import { getDefaults } from "./src/server/defaults";
 import { FormatProxy, setActiveFormatProxy } from "./src/server/format-proxy";
 import { startHealthProbe } from "./src/server/health-probe";
 import { HookRouter } from "./src/server/hook-router";
@@ -14,7 +16,8 @@ import { getCockpitDir } from "./src/server/paths";
 import { startCatalogSync } from "./src/server/provider-catalog";
 import { resolveProxyUpstream, startBuiltinModelSync } from "./src/server/providers";
 import { SessionManager } from "./src/server/session-manager";
-import { setCockpitMcp, setHookRouter, setJobScheduler, setSessionManager, setTerminalManager } from "./src/server/singleton";
+import { setCockpitMcp, setHookRouter, setJobScheduler, setSessionManager, setTelemetry, setTerminalManager } from "./src/server/singleton";
+import { TelemetryService } from "./src/server/telemetry/service";
 import { TerminalManager } from "./src/server/terminal-manager";
 import { UsageMeter } from "./src/server/usage-meter";
 import { createWebSocketHandler } from "./src/server/ws-handler";
@@ -87,6 +90,15 @@ async function main() {
   const hookPortPref = parseInt(process.env.COCKPIT_HOOK_PORT || "0", 10);
   await hookRouter.start(hookHost, Number.isFinite(hookPortPref) ? hookPortPref : 0);
   setHookRouter(hookRouter);
+  // Claude Code's OpenTelemetry arrives on the hook router too. The store
+  // behind it starts the first time it is needed, so a user who never
+  // switches telemetry on gets no database and no worker.
+  const telemetry = new TelemetryService({
+    dbFile: path.join(getCockpitDir(), "telemetry.db"),
+    isEnabled: () => getDefaults().telemetryEnabled,
+  });
+  hookRouter.setOtelHandler((req, res) => telemetry.handleRequest(req, res));
+  setTelemetry(telemetry);
   // These three are internal loopback services, not somewhere the user
   // connects, so their addresses belong in the debug log rather than the
   // startup banner. Only the Cockpit URL above is worth printing.

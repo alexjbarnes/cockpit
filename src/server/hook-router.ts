@@ -75,13 +75,40 @@ interface RegisteredSession {
   pendingResponses: Set<ServerResponse>;
 }
 
+/** Takes the requests under /otel/: the CLI's OpenTelemetry export, which
+ *  authenticates with a token of its own rather than a hook registration. */
+export type OtelHandler = (req: IncomingMessage, res: ServerResponse) => Promise<void>;
+
 export class HookRouter {
   private server: Server | null = null;
   private port = 0;
   private sessions = new Map<string, RegisteredSession>();
+  private otelHandler: OtelHandler | null = null;
+
+  setOtelHandler(handler: OtelHandler | null): void {
+    this.otelHandler = handler;
+  }
 
   async start(host = "127.0.0.1", port = 0): Promise<{ host: string; port: number }> {
-    this.server = createServer((req, res) => this.handle(req, res));
+    this.server = createServer((req, res) => {
+      if (this.otelHandler && (req.url ?? "").startsWith("/otel/")) {
+        this.otelHandler(req, res).catch((err) => {
+          console.error("[hook-router] otel request failed:", err);
+          if (!res.headersSent) {
+            res.statusCode = 500;
+            res.end();
+          }
+        });
+        return;
+      }
+      void this.handle(req, res);
+    });
+    // The OpenTelemetry exporters keep their connection open and post every
+    // few seconds, the same cadence as Node's default keep-alive timeout, so
+    // a reused socket could be closed under a request. Hook calls are one-shot
+    // and unaffected.
+    this.server.keepAliveTimeout = 65_000;
+    this.server.headersTimeout = 66_000;
     await new Promise<void>((resolve, reject) => {
       this.server!.once("error", reject);
       this.server!.listen(port, host, () => {
@@ -109,8 +136,15 @@ export class HookRouter {
     return token;
   }
 
-  unregister(sessionId: string): void {
+  /**
+   * Remove a session's registration. With a token, only that registration: a
+   * session respawned before its old process finished cleaning up has already
+   * registered again under the same id, and the old cleanup must not remove
+   * the new spawn's registration (which turned every later hook into a 403).
+   */
+  unregister(sessionId: string, token?: string): void {
     const registered = this.sessions.get(sessionId);
+    if (registered && token !== undefined && registered.token !== token) return;
     if (registered) {
       for (const res of registered.pendingResponses) {
         if (!res.writableEnded) {

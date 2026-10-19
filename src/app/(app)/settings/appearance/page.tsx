@@ -34,10 +34,10 @@ function applyTheme(theme: Theme) {
   }
 }
 
-function Toggle({ enabled, onToggle }: { enabled: boolean; onToggle: () => void }) {
+function Toggle({ enabled, onToggle, disabled, testId }: { enabled: boolean; onToggle: () => void; disabled?: boolean; testId?: string }) {
   const bg = enabled ? "bg-green-500" : "bg-muted-foreground/30";
   return (
-    <button onClick={onToggle} className="shrink-0">
+    <button onClick={onToggle} disabled={disabled} data-testid={testId} className="shrink-0 disabled:opacity-50">
       <span className={`inline-flex h-7 w-12 items-center rounded-full transition-colors ${bg}`}>
         <span
           className={`inline-block h-5 w-5 rounded-full bg-white shadow transition-transform ${enabled ? "translate-x-6" : "translate-x-1"}`}
@@ -115,6 +115,18 @@ export default function AppearanceSettingsPage() {
   const router = useRouter();
   const { settings, updateSetting } = useSettings();
   const [theme, setTheme] = useState<Theme>("system");
+  // Whether this server's Node can store telemetry at all; the switch is
+  // disabled, with the reason, when it cannot.
+  const [telemetryBlocked, setTelemetryBlocked] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetch("/api/telemetry/stats")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((stats: { available?: boolean; reason?: string } | null) => {
+        if (stats && stats.available === false) setTelemetryBlocked(stats.reason ?? "Telemetry cannot be stored on this server.");
+      })
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     const stored = localStorage.getItem("cockpit-theme") as Theme | null;
@@ -211,6 +223,20 @@ export default function AppearanceSettingsPage() {
             hint="Open Jobs, Inbox, Issues and Settings in a modal over your session instead of leaving it. Turn off to navigate to the page itself."
           >
             <Toggle enabled={settings.modalPagesEnabled} onToggle={() => updateSetting("modalPagesEnabled", !settings.modalPagesEnabled)} />
+          </SettingRow>
+          <SettingRow
+            label="Telemetry"
+            hint={
+              telemetryBlocked ??
+              "Record everything Claude Code reports about sessions started from now on, prompts and tool output included. Kept for 30 days."
+            }
+          >
+            <Toggle
+              enabled={settings.telemetryEnabled && !telemetryBlocked}
+              disabled={!!telemetryBlocked}
+              testId="toggle-telemetry"
+              onToggle={() => updateSetting("telemetryEnabled", !settings.telemetryEnabled)}
+            />
           </SettingRow>
         </div>
       </div>

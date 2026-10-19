@@ -37,6 +37,7 @@ describe("defaults", () => {
       reviewsEnabled: true,
       issuesEnabled: false,
       modalPagesEnabled: true,
+      telemetryEnabled: false,
       allowSonnet1m: false,
       sessionAlerts: false,
     });
@@ -69,6 +70,7 @@ describe("defaults", () => {
       reviewsEnabled: true,
       issuesEnabled: false,
       modalPagesEnabled: true,
+      telemetryEnabled: false,
       allowSonnet1m: false,
       sessionAlerts: false,
     });
@@ -269,6 +271,44 @@ describe("defaults", () => {
       process.env.COCKPIT_ISSUES_ENABLED = "1";
       await readWithStored({ issuesEnabled: false });
       expect(fs.writeFileSync).not.toHaveBeenCalled();
+    });
+
+    it("keeps the override out of a save of some other setting, while reporting it in force", async () => {
+      // make start sets the override; before, changing any setting in the UI
+      // wrote it into defaults.json, where it outlived the run.
+      const fs = await import("node:fs");
+      process.env.COCKPIT_ISSUES_ENABLED = "1";
+      process.env.COCKPIT_TELEMETRY_ENABLED = "1";
+      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify({ issuesEnabled: false }));
+      const { setDefaults } = await import("@/server/defaults");
+      const result = setDefaults({ diffStyle: "unified" });
+      const written = JSON.parse(String(vi.mocked(fs.writeFileSync).mock.calls[0][1]));
+      expect(written).toMatchObject({ diffStyle: "unified", issuesEnabled: false, telemetryEnabled: false });
+      expect(result).toMatchObject({ diffStyle: "unified", issuesEnabled: true, telemetryEnabled: true });
+      delete process.env.COCKPIT_TELEMETRY_ENABLED;
+    });
+  });
+
+  describe("COCKPIT_TELEMETRY_ENABLED override", () => {
+    afterEach(() => {
+      delete process.env.COCKPIT_TELEMETRY_ENABLED;
+    });
+
+    it("is off unless switched on, and the env var decides when set to something it understands", async () => {
+      const fs = await import("node:fs");
+      const read = async (stored: Record<string, unknown>) => {
+        vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(stored));
+        const { getDefaults } = await import("@/server/defaults");
+        return getDefaults().telemetryEnabled;
+      };
+      expect(await read({})).toBe(false);
+      expect(await read({ telemetryEnabled: true })).toBe(true);
+      process.env.COCKPIT_TELEMETRY_ENABLED = "true";
+      expect(await read({ telemetryEnabled: false })).toBe(true);
+      process.env.COCKPIT_TELEMETRY_ENABLED = "0";
+      expect(await read({ telemetryEnabled: true })).toBe(false);
+      process.env.COCKPIT_TELEMETRY_ENABLED = "maybe";
+      expect(await read({ telemetryEnabled: true })).toBe(true);
     });
   });
 

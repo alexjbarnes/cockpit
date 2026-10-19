@@ -53,7 +53,7 @@ start:
 	@echo ">>> Installing the tarball the way a user would"
 	cd $(TARBALL_DIR) && npm init -y >/dev/null 2>&1 && npm install ./alexjbarnes-cockpit-*.tgz
 	@echo ">>> Running from $(TARBALL_DIR) on port $(PORT)"
-	@unset GITHUB_TOKEN && COCKPIT_DEBUG=1 COCKPIT_ISSUES_ENABLED=1 PORT=$(PORT) \
+	@unset GITHUB_TOKEN && COCKPIT_DEBUG=1 COCKPIT_ISSUES_ENABLED=1 COCKPIT_TELEMETRY_ENABLED=1 PORT=$(PORT) \
 	  node $(TARBALL_DIR)/node_modules/@alexjbarnes/cockpit/bin/cockpit.js
 
 # Preflight the release publish. The tarball is built from the working tree, so

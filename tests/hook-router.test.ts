@@ -169,6 +169,25 @@ describe("HookRouter + bridge round-trip", () => {
     expect(res.status).toBe(404);
   });
 
+  it("leaves a newer spawn's registration alone when an older one cleans up", async () => {
+    // A session respawned before its old process finished cleaning up has
+    // registered again under the same id; the old cleanup must remove only
+    // its own registration, or every hook the new process sends is refused.
+    const sessionId = "session-respawned";
+    const oldToken = router.register(sessionId, {});
+    const newToken = router.register(sessionId, { onStop: () => {} });
+    router.unregister(sessionId, oldToken);
+    const send = (token: string) =>
+      fetch(`${url}/hook/Stop`, {
+        method: "POST",
+        headers: { "x-cockpit-session": sessionId, "x-cockpit-token": token, "content-type": "application/json" },
+        body: "{}",
+      });
+    expect((await send(newToken)).status).toBe(200);
+    router.unregister(sessionId, newToken);
+    expect((await send(newToken)).status).toBe(403);
+  });
+
   it("returns 400 when session or token headers are missing", async () => {
     const res = await fetch(`${url}/hook/Stop`, { method: "POST", body: "{}" });
     expect(res.status).toBe(400);

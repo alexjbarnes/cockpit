@@ -5,7 +5,7 @@ import { CONTEXT_SIZES, DEFAULT_CONTEXT_SIZE } from "@/lib/models";
 import { getClaudeBin, supportedPermissionModes } from "@/server/claude-bin";
 import { getCockpitCacheDir } from "@/server/paths";
 import { PtyRuntime } from "@/server/pty-runtime";
-import { getHookRouter } from "@/server/singleton";
+import { getHookRouter, getTelemetry } from "@/server/singleton";
 import { TranscriptWatcher } from "@/server/transcript-watcher";
 import type { DocumentAttachment, ImageAttachment } from "@/types";
 import type { HarnessAdapter, HarnessProcess, HarnessSpawnConfig } from "./types";
@@ -238,6 +238,7 @@ export class ClaudePtyAdapter implements HarnessAdapter {
         : config.permissionMode === "auto" && supportedPermissionModes().has("auto")
           ? "auto"
           : "manual",
+      telemetry: getTelemetry() ?? undefined,
       onEvents: (events) => config.callbacks.onParsedEvents(events),
       onError: (err) => config.callbacks.onError(err),
       onExit: ({ exitCode, signal }) => {

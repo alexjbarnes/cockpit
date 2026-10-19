@@ -114,6 +114,17 @@ Use the Test button to send a test notification to each configured provider.
 
 Configuration is stored in `~/.cockpit/notifications.json`.
 
+## Telemetry (experimental)
+
+Settings → Appearance → Experimental → Telemetry. Off by default. When on, every session started afterwards sends Claude Code's OpenTelemetry to cockpit: metrics (tokens, cost, active time, lines changed), events (each prompt, API request, tool decision and tool result) and traces (each turn, API call and tool call, with timings). Prompts, replies, tool input and tool output are included. Raw API request bodies are not.
+
+It is stored in `~/.cockpit/telemetry.db`, a SQLite database readable only by you, for 30 days. Past 2 GB the oldest prompt and tool text goes first, so the numbers outlast it. Read it through `GET /api/telemetry` (filters: `session`, `cliSession`, `signal`, `name`, `since`, `until`; paging: `order=time|ingest`, `cursor`, `after`, `limit`; `content=inline` puts long text back) and `GET /api/telemetry/stats`.
+
+- Needs Node 22.13 or later, whose built-in SQLite it uses. On an older Node the switch is disabled and says why.
+- A session leaves telemetry alone if Claude Code is already sending it somewhere: an endpoint, headers or a headers helper in managed settings, or in your own settings or environment while telemetry is switched on there. The stats say which key decided it.
+- The CLI's telemetry is in beta, so names and attributes can change between versions. `cost_usd` is the CLI's estimate at Anthropic's prices, and is wrong for other providers' models.
+- Stream-runtime sessions do not send any.
+
 ## Inbox
 
 The inbox at `/inbox` collects messages from scheduled job completions and system events. Each message has a title, body, priority level (info, warning, error), and timestamp.
@@ -134,6 +145,8 @@ Inbox messages are stored in `~/.cockpit/inbox.jsonl`. When a message arrives, i
 | `COCKPIT_CACHE_DIR` | Location of per-session caches (hook settings, attachments) | `~/.cache/cockpit` |
 | `COCKPIT_DEBUG` | Set to `1` to write a structured debug log (see Troubleshooting) | unset |
 | `COCKPIT_TOKEN` | Auth-bypass token for automated/embedded use; requests presenting it skip the login. Keep it secret | unset |
+| `COCKPIT_ISSUES_ENABLED` | `1` or `0` overrides the issue tracker switch for this run, without saving it | unset |
+| `COCKPIT_TELEMETRY_ENABLED` | `1` or `0` overrides the telemetry switch for this run, without saving it | unset |
 
 Setting `COCKPIT_CONFIG_DIR` and `CLAUDE_CONFIG_DIR` lets you run fully isolated Cockpit instances side by side.
 
@@ -153,6 +166,7 @@ Cockpit config paths are under `COCKPIT_CONFIG_DIR` (default `~/.cockpit`); Clau
 | `~/.cockpit/scheduled-jobs.json` | Scheduled job definitions |
 | `~/.cockpit/job-runs/` | Scheduled job run history |
 | `~/.cockpit/job-locks/` | Scheduled job locks |
+| `~/.cockpit/telemetry.db` | Recorded telemetry, when switched on |
 | `~/.claude/cockpit/pinned_sessions.json` | Pinned session list |
 | `~/.claude/plans/` | Plan files written by Claude |
 | `~/.claude/agents/` | Global agents |

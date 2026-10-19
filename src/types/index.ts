@@ -801,3 +801,91 @@ export interface Provider {
   /** Last successful catalog sync, for catalog-backed providers. */
   syncedAt?: number;
 }
+
+/** One row of Claude Code's OpenTelemetry as cockpit stores it: a metric
+ *  point, a log event, a span, or an event on a span. */
+export type TelemetrySignal = "metric" | "log" | "span" | "span_event";
+
+export interface TelemetryQuery {
+  /** Cockpit session id. */
+  session?: string;
+  /** The CLI's own session id, which /clear changes. */
+  cliSession?: string;
+  signal?: TelemetrySignal;
+  name?: string;
+  /** Record time window, ms since the epoch, inclusive. */
+  since?: number;
+  until?: number;
+  /** "time" orders by the record's own time; "ingest" by arrival, which is
+   *  what a live view tails with `after`. */
+  order?: "time" | "ingest";
+  /** Ingest order only: records stored after this id. */
+  after?: number;
+  /** Time order only: the nextCursor of the previous page. */
+  cursor?: string;
+  limit?: number;
+  /** Large strings are stored apart from their record. "refs" leaves a
+   *  `{ $content, len }` marker in their place; "inline" puts them back. */
+  content?: "refs" | "inline";
+}
+
+export interface TelemetryRecord {
+  id: number;
+  receivedMs: number;
+  timeMs: number;
+  endMs: number | null;
+  sessionId: string;
+  cliSessionId: string | null;
+  signal: TelemetrySignal;
+  name: string;
+  /** A metric point's value, or a span's duration in ms. */
+  value: number | null;
+  traceId: string | null;
+  spanId: string | null;
+  parentSpanId: string | null;
+  promptId: string | null;
+  sourceId: number;
+  attrs: Record<string, unknown>;
+  detail: Record<string, unknown> | null;
+}
+
+export interface TelemetrySource {
+  sessionId: string;
+  spawnId: string;
+  resource: Record<string, unknown>;
+  scope: Record<string, unknown>;
+}
+
+export interface TelemetryPage {
+  records: TelemetryRecord[];
+  sources: Record<string, TelemetrySource>;
+  /** Pass back as `cursor` (time order) or `after` (ingest order); null when
+   *  this page reached the end. */
+  nextCursor: string | null;
+}
+
+export interface TelemetryStoreStats {
+  records: number;
+  bySignal: Record<string, number>;
+  /** Only when the stats are for one session. */
+  byName?: Record<string, number>;
+  sources: number;
+  contentRows: number;
+  oldestMs: number | null;
+  newestMs: number | null;
+  dbBytes: number;
+  walBytes: number;
+}
+
+export interface TelemetryStats {
+  /** Whether this Node can store telemetry at all, and why not. */
+  available: boolean;
+  reason?: string;
+  enabled: boolean;
+  spawns: { applied: number; skipped: number; off: number };
+  /** The most recent session that left telemetry alone, and why. */
+  lastSkip?: { sessionId: string; source: string; key: string; at: number };
+  dropped: { disabled: number; unknownToken: number; unsupportedType: number; oversize: number; queueFull: number; unavailable: number };
+  ingest: { batches: number; records: number; skipped: number; failed: number; pendingBytes: number; lastError?: string };
+  store: TelemetryStoreStats | null;
+}
