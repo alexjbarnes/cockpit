@@ -4,11 +4,17 @@ import { OPENROUTER_PROVIDER_ID, syncOpenRouterCatalog } from "@/server/provider
 import {
   COMMANDCODE_PROVIDER_ID,
   DEEPSEEK_PROVIDER_ID,
+  GEMINI_PROVIDER_ID,
+  GROQ_PROVIDER_ID,
+  NVIDIA_PROVIDER_ID,
   OPENCODE_ZEN_GO_PROVIDER_ID,
   OPENCODE_ZEN_PROVIDER_ID,
   syncCommandCodeModels,
   syncDeepSeekModels,
+  syncGeminiModels,
   syncGoModels,
+  syncGroqModels,
+  syncNvidiaModels,
   syncZenModels,
 } from "@/server/providers";
 
@@ -42,6 +48,21 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   }
   if (id === COMMANDCODE_PROVIDER_ID) {
     const result = await syncCommandCodeModels();
+    if (!result.ok) return NextResponse.json({ error: result.error }, { status: 502 });
+    return NextResponse.json({ ok: true, modelCount: result.modelCount });
+  }
+  if (id === GROQ_PROVIDER_ID) {
+    const result = await syncGroqModels();
+    if (!result.ok) return NextResponse.json({ error: result.error }, { status: 502 });
+    return NextResponse.json({ ok: true, modelCount: result.modelCount });
+  }
+  if (id === GEMINI_PROVIDER_ID) {
+    const result = await syncGeminiModels();
+    if (!result.ok) return NextResponse.json({ error: result.error }, { status: 502 });
+    return NextResponse.json({ ok: true, modelCount: result.modelCount });
+  }
+  if (id === NVIDIA_PROVIDER_ID) {
+    const result = await syncNvidiaModels();
     if (!result.ok) return NextResponse.json({ error: result.error }, { status: 502 });
     return NextResponse.json({ ok: true, modelCount: result.modelCount });
   }

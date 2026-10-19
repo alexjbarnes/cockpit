@@ -17,10 +17,10 @@ import type {
   SandboxSupport,
   SendOptions,
   ServerMessage,
+  SessionNotifications,
   SessionPermissionMode,
   TextFileAttachment,
   ThinkingLevel,
-  TodoItem,
   ToolUse,
 } from "@/types";
 import {
@@ -105,7 +105,6 @@ interface UseSessionReturn {
   queuedMessages: Array<{ id: string; text: string }>;
   queuePaused: boolean;
   backgroundTasks: BackgroundTask[];
-  todos: TodoItem[];
   btw: BtwState | null;
   promptHistory: string[];
   hasMoreHistory: boolean;
@@ -138,6 +137,8 @@ interface UseSessionReturn {
   retry: () => void;
   currentRuntime: "pty" | "stream";
   setRuntime: (runtime: "pty" | "stream") => void;
+  notifications: SessionNotifications | null;
+  setNotifications: (notifications: SessionNotifications | null) => void;
   restartSession: () => void;
   thinkingCheck: ThinkingCheck | null;
   confirmThinkingStrip: () => Promise<void>;
@@ -157,6 +158,7 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
   const [currentModel, setCurrentModel] = useState("sonnet");
   const [currentContextSize, setCurrentContextSize] = useState<ContextSize>(DEFAULT_CONTEXT_SIZE);
   const [currentRuntime, setCurrentRuntime] = useState<"pty" | "stream">("stream");
+  const [notifications, setNotificationsState] = useState<SessionNotifications | null>(null);
   const [permissionMode, setPermissionModeState] = useState<SessionPermissionMode>("manual");
   const [appliedPermissionMode, setAppliedPermissionMode] = useState<SessionPermissionMode>("manual");
   // The mode the CLI reports; null until it has.
@@ -176,7 +178,6 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
   const [initData, setInitData] = useState<InitData | null>(null);
   const [activeModelId, setActiveModelId] = useState<string | null>(null);
   const [hookTasks, setHookTasks] = useState<BackgroundTask[]>([]);
-  const [todos, setTodos] = useState<TodoItem[]>([]);
   const [btw, setBtw] = useState<BtwState | null>(null);
   const [promptHistory, setPromptHistory] = useState<string[]>([]);
   const [hasMoreHistory, setHasMoreHistory] = useState(false);
@@ -253,6 +254,19 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
       historyView: historyView || undefined,
     });
   }, [sessionId, cwd, historyView, send]);
+
+  // Tell the server what this client is looking at, so a notification can skip
+  // a session someone is already watching. Sent on mount, on every visibility
+  // change (a backgrounded tab is not watching), and cleared on unmount.
+  useEffect(() => {
+    const report = () => send({ type: "session:set_viewing", sessionId, visible: document.visibilityState === "visible" });
+    report();
+    document.addEventListener("visibilitychange", report);
+    return () => {
+      document.removeEventListener("visibilitychange", report);
+      send({ type: "session:set_viewing", sessionId: null, visible: false });
+    };
+  }, [sessionId, send]);
 
   // Dismissed on the user's grant rather than on reaching "running": a spawn
   // with no message to send stops at an idle REPL, so waiting for a turn would
@@ -737,11 +751,6 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
           break;
         }
 
-        case "session:todos": {
-          setTodos(msg.todos);
-          break;
-        }
-
         case "session:task_update": {
           setHookTasks((prev) => {
             const existing = prev.find((t) => t.taskId === msg.task.taskId);
@@ -890,7 +899,6 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
           streamingRef.current = null;
           agentStackRef.current = [];
           setHookTasks([]);
-          setTodos([]);
           setHasQueuedMessage(false);
           setQueuedMessages([]);
           setQueuePaused(false);
@@ -1031,6 +1039,7 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
           if (msg.info.runtime) {
             setCurrentRuntime(msg.info.runtime);
           }
+          setNotificationsState(msg.info.notifications ?? null);
           break;
         }
 
@@ -1061,6 +1070,14 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
           // so never stack a second entry for a request id already held. Two
           // entries read as two unanswered questions: a duplicated card.
           setPendingQuestions((prev) => pushPendingQuestion(prev, { requestId: msg.requestId, questions: msg.questions }));
+          break;
+        }
+
+        case "request:resolved": {
+          // Answered somewhere else: another tab, the banner, or a button on
+          // the push notification. Whatever this client is showing for it goes.
+          setPendingPermissions((prev) => prev.filter((p) => p.requestId !== msg.requestId));
+          setPendingQuestions((prev) => prev.filter((q) => q.requestId !== msg.requestId));
           break;
         }
       }
@@ -1485,6 +1502,14 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
     send({ type: "session:restart", sessionId });
   }, [send, sessionId]);
 
+  const setNotifications = useCallback(
+    (next: SessionNotifications | null) => {
+      setNotificationsState(next);
+      send({ type: "session:set_notifications", sessionId, notifications: next });
+    },
+    [send, sessionId],
+  );
+
   // Agents come from the message stream, not from hooks: the CLI reports a
   // subagent's completion but never its start, so a hook-only list stayed
   // empty for exactly as long as an agent was actually running.
@@ -1523,7 +1548,6 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
     queuedMessages,
     queuePaused,
     backgroundTasks,
-    todos,
     btw,
     promptHistory,
     hasMoreHistory,
@@ -1550,6 +1574,8 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
     retry,
     currentRuntime,
     setRuntime,
+    notifications,
+    setNotifications,
     restartSession,
     thinkingCheck,
     confirmThinkingStrip,

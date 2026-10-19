@@ -14,6 +14,9 @@ export interface SessionInfo {
   /** Subagents the session launched that are still running. A session can be
    *  idle and accepting input while these work on. */
   agentCount?: number;
+  /** What this session sends out when it finishes, asks, or waits for
+   *  approval. Absent means silent, which is the default. */
+  notifications?: SessionNotifications;
 }
 
 export interface SessionGroup {
@@ -105,12 +108,6 @@ export interface BackgroundTask {
   description: string;
   activity?: string;
   summary?: string;
-}
-
-export interface TodoItem {
-  content: string;
-  status: "pending" | "in_progress" | "completed";
-  activeForm?: string;
 }
 
 export interface ModelInfo {
@@ -402,6 +399,34 @@ export interface NotificationPayload {
   priority: InboxPriority;
   source: string;
   providerIds?: string[];
+  /** The inbox message this notification came from, when there is one. A web
+   *  push carries it so the notification's own buttons can act on the message
+   *  without the app being open. */
+  messageId?: string;
+  /** A permission request waiting on the user, when the notification is about
+   *  one. A web push turns it into Approve and Deny buttons that answer the
+   *  request directly, without the app being open. */
+  approval?: { sessionId: string; requestId: string };
+  /** Keep the notification on screen until it is dismissed, for the ones that
+   *  are waiting on the user rather than reporting news. Chrome only; other
+   *  browsers ignore it. */
+  requireInteraction?: boolean;
+}
+
+/** What a session sends out, chosen in its settings: one provider, and which
+ *  of the three moments are worth a message. Absent means the session is
+ *  silent, which is the default. */
+export interface SessionNotifications {
+  /** A notification provider entry id (see NotificationSettings.providers). */
+  providerId?: string;
+  events?: {
+    /** The turn ended and nothing is waiting on the user. */
+    finished?: boolean;
+    /** The model asked a question (AskUserQuestion). */
+    question?: boolean;
+    /** A tool call is waiting for approval, plan approvals included. */
+    permission?: boolean;
+  };
 }
 
 export interface TelegramConfig {
@@ -415,12 +440,22 @@ export interface NtfyConfig {
   token?: string;
 }
 
+/** One browser's push subscription. The endpoint is the identity: the push
+ *  service issues it, and re-subscribing the same browser returns the same
+ *  one, which is what makes subscribing idempotent. */
+export interface WebPushConfig {
+  endpoint: string;
+  keys: { p256dh: string; auth: string };
+  /** What to call this browser in the settings list, e.g. "Chrome on Pixel". */
+  label?: string;
+}
+
 export interface NotificationProviderEntry {
   id: string;
-  type: "telegram" | "ntfy";
+  type: "telegram" | "ntfy" | "webpush";
   enabled: boolean;
   name: string;
-  config: TelegramConfig | NtfyConfig;
+  config: TelegramConfig | NtfyConfig | WebPushConfig;
   filter?: {
     priorities?: InboxPriority[];
     sources?: string[];
@@ -553,6 +588,12 @@ export interface Issue {
   // IssueStatus stays the union the automation (skills, onIssueStatus) keys off.
   status: string;
   priority?: 0 | 1 | 2 | 3 | 4; // Linear's scale, so imports map cleanly
+  /** Where the issue sits in its status after a manual drag, ascending. Only
+   *  meaningful within one status — values across statuses are not comparable
+   *  — and absent until something has been dragged into that status. A status
+   *  change clears it, so an issue moved by the picker or by a pipeline skill
+   *  lands at the end rather than at the top of its new status. */
+  order?: number;
   labels?: string[];
   createdAt: number;
   updatedAt: number;
@@ -598,6 +639,11 @@ export type ClientMessage =
   | { type: "session:set_model_slot"; sessionId: string; slot: "main" | "subagent" | "fast"; modelId: string }
   | { type: "session:restart"; sessionId: string }
   | { type: "session:set_runtime"; sessionId: string; runtime: "pty" | "stream" }
+  | { type: "session:set_notifications"; sessionId: string; notifications: SessionNotifications | null }
+  /** What this client is looking at, so a notification can skip the session
+   *  the user is already watching. Null when it has navigated away from every
+   *  session; `visible` is the document's own visibility. */
+  | { type: "session:set_viewing"; sessionId: string | null; visible: boolean }
   | { type: "session:subscribe"; sessionIds: string[] }
   | { type: "question:response"; sessionId: string; requestId: string; answers: Record<string, string> }
   | { type: "message:cancel_queued"; sessionId: string }
@@ -635,6 +681,26 @@ export type ServerMessage =
       configProposal?: { toolName: string; domain: string; action: string; displayName?: string; idNames?: Record<string, string> };
     }
   | { type: "question:request"; sessionId: string; requestId: string; questions: string }
+  /** A pending request is gone — answered here, answered from a push, or
+   *  dropped when the turn ended. Anything still showing its card or banner
+   *  clears it. */
+  | { type: "request:resolved"; sessionId: string; requestId: string }
+  /** A session needs the user while they are looking somewhere else. Sent to
+   *  every connected socket; each client decides whether it is the session on
+   *  screen and whether it wants the banner. */
+  | {
+      type: "session:attention";
+      sessionId: string;
+      name: string;
+      cwd: string;
+      kind: "finished" | "question" | "permission";
+      requestId?: string;
+      toolName?: string;
+      input?: string;
+      /** A finished turn's last message, so the banner can be read without
+       *  opening the session. */
+      summary?: string;
+    }
   | { type: "session:clear"; sessionId: string }
   | { type: "session:system"; sessionId: string; text: string }
   | { type: "session:info_updated"; sessionId: string; info: SessionInfo }
@@ -644,7 +710,6 @@ export type ServerMessage =
   | { type: "session:suggestions"; sessionId: string; suggestions: string[] }
   | { type: "session:task_update"; sessionId: string; task: BackgroundTask }
   | { type: "session:task_sync"; sessionId: string; tasks: BackgroundTask[] }
-  | { type: "session:todos"; sessionId: string; todos: TodoItem[] }
   | { type: "session:init"; sessionId: string; data: InitData }
   | {
       type: "history";

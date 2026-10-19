@@ -87,11 +87,65 @@ test("provider dropdown defaults to the current custom provider", async ({ page,
     await page.getByTestId("btn-session-settings").click();
     await expect(page.getByRole("heading", { name: "Session settings" })).toBeVisible();
 
-    // The grouped picker should list the custom provider's group with the
+    // The tab opens on Thinking & context; the list is the second view. Its
+    // grouped picker should list the custom provider's group with the
     // session's current model row marked selected.
+    await expect(page.getByTestId("model-tune")).toBeVisible();
+    await page.getByTestId("model-view-model").click();
     await expect(page.getByTestId("model-search")).toBeVisible();
     await expect(page.getByText("Mock API", { exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: /claude-sonnet-4-6/ }).first()).toBeVisible();
+  } finally {
+    rmSync(workDir, { recursive: true, force: true });
+  }
+});
+
+test("the model tab opens on thinking, and a model picked from one provider's list reaches the session", async ({ page, harness }) => {
+  const workDir = mkdtempSync(path.join(tmpdir(), "cockpit-it-modeltab-"));
+  mkdirSync(path.join(workDir, ".git"), { recursive: true });
+  harness.trustWorkDir(workDir);
+
+  try {
+    const createRes = await page.request.post(`${harness.cockpitUrl}/api/sessions`, {
+      data: { cwd: workDir, runtime: "pty", model: "mock:claude-sonnet-4-6" },
+    });
+    expect(createRes.ok()).toBe(true);
+    const { sessionId } = await createRes.json();
+
+    // A phone: the size where the old tab scrolled sideways.
+    await page.setViewportSize({ width: 393, height: 760 });
+    await page.goto(`${harness.cockpitUrl}/sessions/${sessionId}?cwd=${encodeURIComponent(workDir)}`);
+    await expect(page.getByTestId("message-input")).toBeVisible();
+    await page.waitForTimeout(2000);
+    await page.getByTestId("btn-session-settings").click();
+
+    // Thinking & context first, with the line saying what is set.
+    const tune = page.getByTestId("model-tune");
+    await expect(tune).toBeVisible();
+    await expect(page.getByTestId("model-summary")).toContainText("Mock Sonnet");
+    await page.getByTestId("thinking-max").click();
+    await expect(page.getByTestId("model-summary")).toContainText("Thinking Max");
+    expect(await tune.evaluate((el) => el.scrollWidth - el.clientWidth), "nothing scrolls sideways").toBeLessThanOrEqual(1);
+
+    // The list, narrowed to one provider and searched.
+    await page.getByTestId("model-view-model").click();
+    await page.getByTestId("model-provider").click();
+    await page.getByTestId("model-provider-mock").click();
+    const list = page.getByTestId("model-list");
+    await expect(list).not.toContainText("Recent");
+    await expect(list.getByText("Anthropic", { exact: true }), "the aliases are another provider's").toHaveCount(0);
+    await page.getByTestId("model-search").fill("4-8");
+    await list.getByRole("button", { name: /claude-opus-4-8/ }).click();
+    await expect(page.getByTestId("model-summary")).toContainText("Mock Opus 4.8");
+    expect(await list.evaluate((el) => el.scrollWidth - el.clientWidth), "nothing scrolls sideways").toBeLessThanOrEqual(1);
+
+    // The pick reached the session, not just the card.
+    await expect
+      .poll(async () => {
+        const res = await page.request.get(`${harness.cockpitUrl}/api/sessions/${sessionId}`);
+        return ((await res.json()) as { session: { model?: string } }).session.model;
+      })
+      .toBe("mock:claude-opus-4-8");
   } finally {
     rmSync(workDir, { recursive: true, force: true });
   }

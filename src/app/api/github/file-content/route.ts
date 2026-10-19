@@ -1,20 +1,5 @@
-import { execFile } from "node:child_process";
 import { NextRequest, NextResponse } from "next/server";
-import { validateSession } from "@/server/auth";
-
-function authenticate(req: NextRequest): boolean {
-  const token = req.cookies.get("cockpit_session")?.value || req.headers.get("authorization")?.replace("Bearer ", "");
-  return !!token && validateSession(token);
-}
-
-function run(cmd: string, args: string[]): Promise<string> {
-  return new Promise((resolve, reject) => {
-    execFile(cmd, args, { maxBuffer: 10 * 1024 * 1024 }, (err, stdout) => {
-      if (err) reject(err);
-      else resolve(stdout);
-    });
-  });
-}
+import { authenticate, GH_TTL, runCached, wantsFreshData } from "@/server/gh";
 
 export async function GET(req: NextRequest) {
   if (!authenticate(req)) {
@@ -31,11 +16,19 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    const content = await run("gh", ["api", `repos/${repo}/contents/${path}?ref=${ref}`, "--jq", ".content"]);
+    // The ref is a commit in every path the diff viewer takes, so the answer
+    // is a fact about that commit; a branch name would just age out.
+    const content = await runCached(
+      `file:${repo}:${ref}:${path}`,
+      GH_TTL.slow,
+      ["api", `repos/${repo}/contents/${path}?ref=${ref}`, "--jq", ".content"],
+      { bypass: wantsFreshData(req) },
+    );
     const decoded = Buffer.from(content.trim(), "base64").toString("utf-8");
     return NextResponse.json({ content: decoded });
   } catch {
-    // File may not exist at this ref (new file or deleted file)
+    // File may not exist at this ref (new file or deleted file). A miss is not
+    // cached, so the next look tries again.
     return NextResponse.json({ content: null });
   }
 }

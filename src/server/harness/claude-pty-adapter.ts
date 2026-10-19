@@ -121,14 +121,22 @@ class ClaudePtyProcess implements HarnessProcess {
     permissionSuggestions?: unknown,
     denyReason?: string,
   ): boolean {
+    const chosen = Array.isArray(permissionSuggestions) ? (permissionSuggestions as Record<string, unknown>[]) : [];
     return this.runtime.notifyPermissionDecision(
       requestId,
       allowed
-        ? { behavior: "allow", ...(toolInput ? { updatedInput: toolInput } : {}) }
+        ? {
+            behavior: "allow",
+            ...(toolInput ? { updatedInput: toolInput } : {}),
+            ...(chosen.length > 0 ? { updatedPermissions: chosen } : {}),
+            // The CLI's suggestion, echoed back: a hook answer can carry the
+            // permission updates to save, which is how an "always" from the
+            // card writes the same rule the CLI's own dialog would have.
+          }
         : { behavior: "deny", message: denyReason ?? "User denied" },
       // A chosen suggestion is the card's "always" answer. Only a TUI dialog
       // that has a "don't ask again" key of its own does anything with it.
-      { always: Array.isArray(permissionSuggestions) && permissionSuggestions.length > 0 },
+      { always: chosen.length > 0 },
     );
   }
 
@@ -217,6 +225,12 @@ export class ClaudePtyAdapter implements HarnessAdapter {
       extraEnv,
       thinkingEnabled: config.thinkingLevel !== "off",
       sandbox: config.sandbox,
+      // Auto mode's classifier is an Anthropic service. On a provider session
+      // the CLI cannot classify anything, and its fallback is a dialog asking
+      // the user to acknowledge a classifier billing notice — which blocked
+      // real sessions with no hook to say so. Turn the mode off in the
+      // settings file for those sessions.
+      autoModeEnabled: config.autoModeEnabled,
       // Mirrors the --permission-mode arg above, so the runtime can spot the
       // CLI silently running in a different mode than requested.
       expectedPermissionMode: config.planMode

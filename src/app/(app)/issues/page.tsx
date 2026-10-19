@@ -1,11 +1,11 @@
 "use client";
 
-import { ChevronRight, ClipboardList, Loader2, Plus, X } from "lucide-react";
+import { ClipboardList, Loader2, Plus, X } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePageHeader } from "@/components/app-shell";
+import { GroupHeader, IssueList } from "@/components/issues/issue-list";
 import { KanbanBoard } from "@/components/issues/kanban-board";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -21,9 +21,9 @@ import {
   ISSUE_STATUSES,
   labelColor,
   NO_LABEL_GROUP,
-  priorityLabel,
-  statusColor,
 } from "@/lib/issue-display";
+import { mergeIssueChanges, resolveIssueDrop, sendIssuePlacement } from "@/lib/issue-drag";
+import { createStaleGuard } from "@/lib/stale-guard";
 import { cn } from "@/lib/utils";
 import type { Issue, IssueStatus, Project } from "@/types";
 
@@ -69,82 +69,6 @@ function saveProjectOpen(id: string, open: boolean): void {
     map[id] = open;
     localStorage.setItem(PROJECT_OPEN_KEY, JSON.stringify(map));
   } catch {}
-}
-
-function timeAgo(ts: number): string {
-  const diff = Date.now() - ts;
-  const mins = Math.floor(diff / 60_000);
-  if (mins < 1) return "just now";
-  if (mins < 60) return `${mins}m ago`;
-  const hours = Math.floor(mins / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.floor(hours / 24);
-  return `${days}d ago`;
-}
-
-function IssueRow({ issue, projectName, onClick }: { issue: Issue; projectName: string | undefined; onClick: () => void }) {
-  const priority = priorityLabel(issue.priority);
-  return (
-    <div
-      role="button"
-      tabIndex={0}
-      onClick={onClick}
-      onKeyDown={(e) => {
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          onClick();
-        }
-      }}
-      className="flex items-center gap-3 px-4 py-3 border-b last:border-b-0 hover:bg-accent/50 transition-colors cursor-pointer"
-    >
-      <span className="font-mono text-xs text-muted-foreground shrink-0">{issue.key}</span>
-      <div className="flex-1 min-w-0">
-        <div className="truncate text-sm font-medium">{issue.title}</div>
-        <div className="flex items-center gap-2 mt-0.5 text-xs text-muted-foreground">
-          {projectName && <span>{projectName}</span>}
-          {priority !== "No priority" && <span>{priority}</span>}
-          {issue.labels && issue.labels.length > 0 && <span>{issue.labels.join(", ")}</span>}
-          <span>{timeAgo(issue.updatedAt)}</span>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/** Shared collapsible row for a project group or a label sub-group: chevron
- *  + optional colour dot + name + count. Left padding (indent) and the
- *  name's font weight are caller-supplied via className/labelClassName so
- *  the two nesting levels can read as a visual hierarchy. */
-function GroupHeader({
-  open,
-  onToggle,
-  label,
-  count,
-  dot,
-  className,
-  labelClassName,
-}: {
-  open: boolean;
-  onToggle: () => void;
-  label: string;
-  count: number;
-  dot?: React.ReactNode;
-  className?: string;
-  labelClassName?: string;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onToggle}
-      aria-expanded={open}
-      className={cn("flex w-full items-center gap-2 py-3 pr-4 text-left hover:bg-accent/50 transition-colors min-w-0", className)}
-    >
-      <ChevronRight className={cn("h-4 w-4 shrink-0 text-muted-foreground transition-transform", open && "rotate-90")} />
-      {dot}
-      <span className={cn("flex-1 min-w-0 truncate text-sm", labelClassName)}>{label}</span>
-      <Badge variant="secondary">{count}</Badge>
-    </button>
-  );
 }
 
 // Deliberately leaner than IssueRow: project + label are already implied by
@@ -405,27 +329,29 @@ export default function IssuesPage() {
     } catch {}
   }, []);
 
-  // Drag-to-move on the board: apply optimistically so the card lands in the
-  // new column immediately, PUT the status, and roll back with a message if the
-  // server refuses (e.g. a status the project no longer allows).
-  const moveIssue = useCallback(async (issue: Issue, toStatus: string) => {
-    const previous = issue.status;
-    setMoveError(null);
-    setIssues((list) => list.map((i) => (i.id === issue.id ? { ...i, status: toStatus } : i)));
-    try {
-      const res = await fetch(`/api/issues/${encodeURIComponent(issue.key)}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: toStatus }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Failed to move issue");
-      setIssues((list) => list.map((i) => (i.id === issue.id ? data.issue : i)));
-    } catch (err) {
-      setIssues((list) => list.map((i) => (i.id === issue.id ? { ...i, status: previous } : i)));
-      setMoveError(err instanceof Error ? err.message : "Failed to move issue");
-    }
-  }, []);
+  // A dropped row: the list moves it straight away, the server is asked where
+  // it belongs (the rows either side of the drop), and its answer — the status
+  // renumbered, which may include issues in another group — is merged in.
+  const dropGuard = useRef(createStaleGuard()).current;
+  const handleDrop = useCallback(
+    async (activeKey: string, targetStatus: string, targetIndex: number) => {
+      const stale = dropGuard.begin();
+      const previous = issues;
+      const { placement, optimistic } = resolveIssueDrop(issues, activeKey, targetStatus, targetIndex);
+      setMoveError(null);
+      setIssues(optimistic);
+      try {
+        const changed = await sendIssuePlacement(placement);
+        if (stale()) return;
+        setIssues((list) => mergeIssueChanges(list, changed));
+      } catch (err) {
+        if (stale()) return;
+        setIssues(previous);
+        setMoveError(err instanceof Error ? err.message : "Failed to move the issue");
+      }
+    },
+    [dropGuard, issues],
+  );
 
   const fetchAll = useCallback(async () => {
     const [issuesRes, projectsRes] = await Promise.all([fetch("/api/issues"), fetch("/api/projects")]);
@@ -461,7 +387,9 @@ export default function IssuesPage() {
   // falls back to the built-in lifecycle (selectedProject undefined).
   const selectedProject = useMemo(() => projects.find((p) => p.id === projectFilter), [projects, projectFilter]);
 
-  const statusGroups = useMemo(() => groupIssuesByStatus(filtered), [filtered]);
+  // Empty statuses are in the list so a drag can drop into one; the list itself
+  // renders them only while a drag is in flight.
+  const statusGroups = useMemo(() => groupIssuesByStatus(filtered, { includeEmpty: true }), [filtered]);
   const projectGroups = useMemo(() => groupIssuesByProject(filtered, projects), [filtered, projects]);
 
   const hasFilters = projectFilter !== "" || (view === "status" && statusFilter !== "");
@@ -567,32 +495,17 @@ export default function IssuesPage() {
           projectNames={projectNames}
           showProject={!projectFilter}
           onIssueClick={(issue) => router.push(`/issues/${encodeURIComponent(issue.key)}`)}
-          onMove={moveIssue}
+          onDrop={handleDrop}
         />
       ) : view === "status" ? (
-        <div className="space-y-4">
-          {statusGroups.map((group) => (
-            <div key={group.status}>
-              <div className="flex items-center gap-2 mb-1.5 px-1">
-                <span className={cn("h-2.5 w-2.5 shrink-0 rounded-full", statusColor(group.status, selectedProject))} />
-                <h2 className="text-sm font-semibold">{group.status}</h2>
-                <Badge variant="secondary">{group.issues.length}</Badge>
-              </div>
-              <Card className="py-0 overflow-hidden">
-                <CardContent className="p-0">
-                  {group.issues.map((issue) => (
-                    <IssueRow
-                      key={issue.id}
-                      issue={issue}
-                      projectName={projectNames.get(issue.projectId)}
-                      onClick={() => router.push(`/issues/${encodeURIComponent(issue.key)}`)}
-                    />
-                  ))}
-                </CardContent>
-              </Card>
-            </div>
-          ))}
-        </div>
+        <IssueList
+          issues={filtered}
+          statusGroups={statusGroups}
+          project={selectedProject}
+          projectNames={projectNames}
+          onIssueClick={(issue) => router.push(`/issues/${encodeURIComponent(issue.key)}`)}
+          onDrop={handleDrop}
+        />
       ) : (
         <div className="space-y-4">
           {projectGroups.map((group) => (

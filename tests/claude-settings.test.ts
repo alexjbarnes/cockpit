@@ -39,7 +39,22 @@ describe("prepareHookSettings", () => {
     };
 
     const bridge = resolveHookBridgePath();
-    for (const event of ["PreToolUse", "PostToolUse", "Stop", "UserPromptSubmit", "Notification", "PermissionRequest"]) {
+    for (const event of [
+      "PreToolUse",
+      "PostToolUse",
+      "PostToolUseFailure",
+      "PermissionDenied",
+      "Stop",
+      "UserPromptSubmit",
+      "Notification",
+      "PermissionRequest",
+      "SessionEnd",
+      "Elicitation",
+      "ElicitationResult",
+      "TaskCreated",
+      "TaskCompleted",
+      "TeammateIdle",
+    ]) {
       expect(parsed.hooks[event]).toBeDefined();
       const last = parsed.hooks[event][parsed.hooks[event].length - 1];
       const cmd = last.hooks[0].command;
@@ -195,6 +210,40 @@ describe("prepareHookSettings", () => {
       });
       // Everything else in the user's settings is still carried over.
       expect(parsed.env).toEqual({ KEEP: "1" });
+    } finally {
+      unlinkSync(join(claudeDir, "settings.json"));
+    }
+  });
+
+  // Auto mode's classifier is an Anthropic service. On a provider session the
+  // CLI cannot classify anything, and its fallback — a dialog asking the user
+  // to acknowledge a classifier billing notice — blocked a real session for
+  // twenty minutes with nothing to report it.
+  it("turns auto mode off for a session whose model cannot run its classifier, and only then", async () => {
+    writeFileSync(join(claudeDir, "settings.json"), JSON.stringify({ permissions: { defaultMode: "auto", allow: ["Bash(ls:*)"] } }));
+    try {
+      const offId = "test-auto-off";
+      cleanupIds.push(offId);
+      const { settingsPath } = await prepareHookSettings({
+        sessionId: offId,
+        hookUrl: "http://127.0.0.1:1",
+        hookToken: "tok",
+        autoModeEnabled: false,
+      });
+      const parsed = JSON.parse(readFileSync(settingsPath, "utf-8")) as Record<string, unknown>;
+      expect(parsed.disableAutoMode, 'the CLI rejects a file whose value is not "disable"').toBe("disable");
+      expect(parsed.useAutoModeDuringPlan, "plan mode is where the classifier is consulted").toBe(false);
+      expect((parsed.permissions as Record<string, unknown>).defaultMode).toBe("manual");
+      expect((parsed.permissions as Record<string, unknown>).allow, "the user's own rules survive").toContain("Bash(ls:*)");
+
+      const onId = "test-auto-on";
+      cleanupIds.push(onId);
+      const onPath = (
+        await prepareHookSettings({ sessionId: onId, hookUrl: "http://127.0.0.1:1", hookToken: "tok", autoModeEnabled: true })
+      ).settingsPath;
+      const on = JSON.parse(readFileSync(onPath, "utf-8")) as Record<string, unknown>;
+      expect(on.disableAutoMode).toBeUndefined();
+      expect((on.permissions as Record<string, unknown>).defaultMode).toBe("auto");
     } finally {
       unlinkSync(join(claudeDir, "settings.json"));
     }

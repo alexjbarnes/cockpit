@@ -4,7 +4,7 @@ export interface HeaderActionsConfig {
 }
 
 export interface HeaderActionsVisibility {
-  /** session-scoped controls: New Terminal, Search, Todo, Background Tasks */
+  /** session-scoped controls: New Terminal, Search, Background Tasks */
   showSessionActions: boolean;
   /** the account Usage button */
   showUsage: boolean;

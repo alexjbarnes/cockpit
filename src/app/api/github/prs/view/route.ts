@@ -1,20 +1,5 @@
-import { execFile } from "node:child_process";
 import { NextRequest, NextResponse } from "next/server";
-import { validateSession } from "@/server/auth";
-
-function authenticate(req: NextRequest): boolean {
-  const token = req.cookies.get("cockpit_session")?.value || req.headers.get("authorization")?.replace("Bearer ", "");
-  return !!token && validateSession(token);
-}
-
-function run(cmd: string, args: string[]): Promise<string> {
-  return new Promise((resolve, reject) => {
-    execFile(cmd, args, { maxBuffer: 10 * 1024 * 1024 }, (err, stdout) => {
-      if (err) reject(err);
-      else resolve(stdout);
-    });
-  });
-}
+import { authenticate, GH_TTL, runCached, wantsFreshData } from "@/server/gh";
 
 export async function GET(req: NextRequest) {
   if (!authenticate(req)) {
@@ -30,20 +15,27 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    const stdout = await run("gh", [
-      "pr",
-      "view",
-      number,
-      "-R",
-      repo,
-      "--json",
-      "title,body,author,number,additions,deletions,files,changedFiles,headRefName,baseRefName,headRefOid,baseRefOid,state,isDraft,labels,reviewDecision,createdAt,updatedAt,url",
-    ]);
+    const stdout = await runCached(
+      `pr:${repo}:${number}`,
+      GH_TTL.medium,
+      [
+        "pr",
+        "view",
+        number,
+        "-R",
+        repo,
+        "--json",
+        "title,body,author,number,additions,deletions,files,changedFiles,headRefName,baseRefName,headRefOid,baseRefOid,state,isDraft,labels,reviewDecision,createdAt,updatedAt,url",
+      ],
+      { bypass: wantsFreshData(req) },
+    );
     const pr = JSON.parse(stdout);
 
     if (pr.baseRefOid && pr.headRefOid) {
       try {
-        const mergeBaseOut = await run("gh", [
+        // Keyed by the two commits, so it is a fact about those commits rather
+        // than about the PR: a push gets a new key, and the old answer stands.
+        const mergeBaseOut = await runCached(`mergebase:${repo}:${pr.baseRefOid}...${pr.headRefOid}`, GH_TTL.slow, [
           "api",
           `repos/${repo}/compare/${pr.baseRefOid}...${pr.headRefOid}`,
           "--jq",

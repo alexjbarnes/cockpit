@@ -859,6 +859,65 @@ describe("FormatProxy server", () => {
     });
   });
 
+  // The CLI probes `HEAD <base>/api/hello` on its own base URL, which is this
+  // proxy: a 404 made its health check fail and filled the debug log.
+  it("answers the CLI's own health probe", async () => {
+    const port = await startUpstream((_body, res) => res.end("{}"));
+    proxy = new FormatProxy(() => ({ baseUrl: `http://127.0.0.1:${port}`, apiKey: "k" }));
+    await proxy.start();
+
+    const res = await fetch(`${proxy.getUrl("zen")}/api/hello`, { method: "HEAD" });
+    expect(res.status).toBe(200);
+  });
+
+  // A provider that accepts the request and then says nothing parks the
+  // session: no error, no bytes, nothing for the CLI to report. NVIDIA's
+  // hosted endpoints do exactly this for some models, and a real session sat
+  // on one for fourteen minutes. The silence is now the failure.
+  it("answers 504 when the upstream accepts the request and then stays silent", async () => {
+    const port = await startUpstream(() => {
+      // never write, never end: the case the silence budget exists for
+    });
+    proxy = new FormatProxy(() => ({ baseUrl: `http://127.0.0.1:${port}`, apiKey: "k" }), {
+      upstreamSilenceMs: 80,
+      retryBackoffMs: [20],
+    });
+    await proxy.start();
+
+    const started = Date.now();
+    const res = await fetch(`${proxy.getUrl("nvidia")}/v1/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "deepseek-ai/deepseek-v4.1-flash", max_tokens: 10, messages: [{ role: "user", content: "hi" }] }),
+    });
+
+    expect(res.status).toBe(504);
+    expect((await res.json()).error.message).toContain("sent nothing");
+    expect(Date.now() - started, "the session is not left waiting").toBeLessThan(5_000);
+  });
+
+  it("ends a stream whose upstream goes quiet mid-response", async () => {
+    const port = await startUpstream((_body, res) => {
+      res.writeHead(200, { "Content-Type": "text/event-stream" });
+      res.write(`data: ${JSON.stringify({ id: "c", model: "m", choices: [{ delta: { content: "half" } }] })}\n\n`);
+      // …and then nothing, ever.
+    });
+    proxy = new FormatProxy(() => ({ baseUrl: `http://127.0.0.1:${port}`, apiKey: "k" }), { upstreamSilenceMs: 80 });
+    await proxy.start();
+
+    const res = await fetch(`${proxy.getUrl("nvidia")}/v1/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "m", max_tokens: 10, stream: true, messages: [{ role: "user", content: "hi" }] }),
+    });
+
+    expect(res.status).toBe(200);
+    // The proxy closes the stream instead of holding the connection open.
+    const text = await res.text();
+    expect(text).toContain("half");
+    expect(text, "no message_stop: the turn did not complete").not.toContain("message_stop");
+  });
+
   it("answers a streaming request that gets a JSON error body the same way", async () => {
     const port = await startUpstream((_body, res) => {
       res.writeHead(200, { "Content-Type": "application/json" });

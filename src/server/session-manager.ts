@@ -22,7 +22,7 @@ import { getAssistantSettings, updateAssistantSettings } from "@/server/assistan
 import { supportedPermissionModes } from "@/server/claude-bin";
 import { getCockpitDir } from "@/server/paths";
 import { ensureCatalogFresh, OPENROUTER_PROVIDER_ID } from "@/server/provider-catalog";
-import { getProvider, isBuiltinCatalogProvider, openRouterModelEnv, resolveProviderModel } from "@/server/providers";
+import { getProvider, isBuiltinCatalogProvider, modelRunsOnAnthropic, openRouterModelEnv, resolveProviderModel } from "@/server/providers";
 import { sandboxSupport } from "@/server/sandbox";
 import type {
   BackgroundTask,
@@ -36,9 +36,9 @@ import type {
   SandboxConfig,
   SendOptions,
   SessionInfo,
+  SessionNotifications,
   SessionPermissionMode,
   ThinkingLevel,
-  TodoItem,
   ToolUse,
 } from "@/types";
 import { debugLog, isDebugEnabled, logDiag, logRawLine } from "./debug-logger";
@@ -46,16 +46,17 @@ import { getDefaults } from "./defaults";
 import { ONE_M_CREDITS_REQUIRED, type ParsedEvent, TURN_CONTINUES } from "./event-parser";
 import { getHarnessAdapter } from "./harness/registry";
 import type { HarnessProcess, HarnessProcessCallbacks, HarnessSpawnConfig } from "./harness/types";
-import { getJob } from "./job-storage";
+import { getJob, getJobSessionIds } from "./job-storage";
 import { COCKPIT_AGENT_SYSTEM_PROMPT } from "./mcp/cockpit-agent-prompt";
 import { clearToken, type RunContext, registerAuthToken, registerRunContext, registerSessionContext } from "./mcp/run-context";
 import { getNotificationSettings } from "./notification-settings";
 import { findLatestPlanFile, readPlanFile } from "./plans";
 import { UntrustedWorkspaceError } from "./pty-session";
+import { emitSessionRequestResolved } from "./session-attention";
+import { notifySessionEvent, type SessionNotifyContext } from "./session-notify";
 import { findChainForCliSession, getSessionPrefs, type SessionRuntime, setSessionPrefs } from "./session-prefs";
 import { getCockpitMcp } from "./singleton";
 import { createStreamState, processEvents, type StreamState } from "./stream-processor";
-import { TodoWatcher } from "./todo-watcher";
 import { findSessionCwd, loadMoreMessages, loadPromptHistory, loadTranscript, sumTranscriptUsage, transcriptExists } from "./transcript";
 
 export type { SessionRuntime };
@@ -164,7 +165,6 @@ interface Session {
   streamState: StreamState | null;
   contextUsage: ContextUsage | null;
   contextWindowSize: number;
-  todoItems: TodoItem[];
   /** Last reported background tasks, replayed to a client on connect. */
   backgroundTasks: BackgroundTask[];
   initData?: InitData;
@@ -184,6 +184,8 @@ interface Session {
    *  claude through node-pty + hooks. Selectable per session via env at
    *  creation time; future revisions may expose this on SessionInfo. */
   runtime: SessionRuntime;
+  /** What this session sends out, from its own settings. Absent = silent. */
+  notifications?: SessionNotifications;
   cockpitAgent: boolean;
   cockpitAgentCleanups: (() => void)[];
   mcpToken?: string;
@@ -197,7 +199,6 @@ interface Session {
    *  until PTY's async start() resolves). Also read by the stale-check log to
    *  tell "process died" from "still spawning". */
   spawning?: boolean;
-  todoWatcher: TodoWatcher | null;
   /** Cumulative token counts for the current session (used by /cost). */
 }
 
@@ -262,11 +263,10 @@ function proposalIdNames(rawInput: unknown): Record<string, string> | undefined 
 }
 
 /** Whether `model` runs on Anthropic, which auto permission mode needs: its
- *  classifier runs on the session's own model. An id no provider claims counts
- *  as Anthropic, as it always has. */
+ *  classifier is an Anthropic service. An id no provider claims counts as
+ *  Anthropic, as it always has. */
 function isAnthropicModel(model: string | undefined): boolean {
-  const resolved = resolveProviderModel(model ?? "");
-  return !resolved || resolved.provider.id === "anthropic";
+  return modelRunsOnAnthropic(model);
 }
 
 /** The mode a new or restored session starts in. A cockpit agent is always
@@ -390,7 +390,6 @@ export class SessionManager {
       streamState: null,
       contextUsage: null,
       contextWindowSize: this.resolveContextWindow(info.model, info.contextSize ?? DEFAULT_CONTEXT_SIZE),
-      todoItems: [],
       backgroundTasks: [],
       pendingRequests: new Map(),
       streamingSnapshot: null,
@@ -403,7 +402,6 @@ export class SessionManager {
       bufferCliSessionId: id,
       paginationPrevIds: [],
       runtime: rt,
-      todoWatcher: null,
       cockpitAgent: isCockpitAgent,
       cockpitAgentCleanups: [],
       // Present only for a scheduled job that reports to the inbox. It is what
@@ -495,6 +493,7 @@ export class SessionManager {
           contextSize: restoredContextSize,
           runtime: restoredRuntime,
           pendingRequestCount: 0,
+          notifications: prefs?.notifications,
         },
         harnessProcess: null,
         emitter: new EventEmitter(),
@@ -510,6 +509,7 @@ export class SessionManager {
         // a sandbox and ran without one, so turning the default on must not
         // sandbox every existing session on its next restart.
         sandbox: prefs?.sandbox ?? { enabled: false },
+        notifications: prefs?.notifications,
         planMode: prefs?.planMode ?? false,
         pendingPlanReminder: prefs?.planMode ?? false,
         needsRespawnForPermissions: false,
@@ -526,7 +526,6 @@ export class SessionManager {
         streamState: null,
         contextUsage: null,
         contextWindowSize: this.resolveContextWindow(modelSlots.main ?? undefined, restoredContextSize),
-        todoItems: [],
         backgroundTasks: [],
         pendingRequests: new Map(),
         initData: prefs?.initData,
@@ -540,7 +539,6 @@ export class SessionManager {
         bufferCliSessionId: cliId,
         paginationPrevIds: [],
         runtime: restoredRuntime,
-        todoWatcher: null,
         cockpitAgent: prefs?.cockpitAgent ?? false,
         cockpitAgentCleanups: [],
       };
@@ -979,8 +977,7 @@ export class SessionManager {
     const session = this.sessions.get(id);
     if (session && session.info.status === "running" && !session.harnessProcess?.isAlive) {
       session.info.status = "idle";
-      session.pendingRequests.clear();
-      this.notifyPendingChanged(session, id);
+      this.dropAllPendingRequests(session, id);
     }
   }
 
@@ -994,8 +991,7 @@ export class SessionManager {
     }
 
     this.killProcess(session);
-    session.pendingRequests.clear();
-    this.notifyPendingChanged(session, sessionId);
+    this.dropAllPendingRequests(session, sessionId);
     session.streamingSnapshot = null;
     session.info.status = "idle";
     session.emitter.emit("status", sessionId, "idle");
@@ -1011,10 +1007,6 @@ export class SessionManager {
       const handle = session.harnessProcess;
       session.harnessProcess = null;
       handle.kill("session_destroyed");
-    }
-    if (session.todoWatcher) {
-      session.todoWatcher.stop();
-      session.todoWatcher = null;
     }
     for (const cleanup of session.cockpitAgentCleanups) {
       try {
@@ -1159,8 +1151,7 @@ export class SessionManager {
         session.emitter.emit("status", id, "idle");
       }
     }
-    session.pendingRequests.clear();
-    this.notifyPendingChanged(session, id);
+    this.dropAllPendingRequests(session, id);
     return true;
   }
 
@@ -1174,10 +1165,31 @@ export class SessionManager {
 
   removePendingRequest(sessionId: string, requestId: string): void {
     const session = this.sessions.get(sessionId);
-    if (session) {
-      session.pendingRequests.delete(requestId);
-      this.notifyPendingChanged(session, sessionId);
+    if (session) this.dropPendingRequest(session, sessionId, requestId);
+  }
+
+  /** Take one request out of the pending map and tell everyone it is gone.
+   *  Every removal goes through here (the answer path included), so a card or
+   *  a banner raised for it anywhere clears — including one raised by a push
+   *  notification the user answered on their phone. */
+  private dropPendingRequest(session: Session, sessionId: string, requestId: string): boolean {
+    if (!session.pendingRequests.delete(requestId)) return false;
+    // Broadcast, not per-session: the banner for this request may be on the
+    // screen of someone watching a different session.
+    emitSessionRequestResolved(sessionId, requestId);
+    this.notifyPendingChanged(session, sessionId);
+    return true;
+  }
+
+  /** The same, for the paths that clear the lot: interrupt, exit, a stale
+   *  clear when a turn ends. */
+  private dropAllPendingRequests(session: Session, sessionId: string): void {
+    if (session.pendingRequests.size === 0) return;
+    for (const requestId of Array.from(session.pendingRequests.keys())) {
+      emitSessionRequestResolved(sessionId, requestId);
     }
+    session.pendingRequests.clear();
+    this.notifyPendingChanged(session, sessionId);
   }
 
   getPendingRequests(sessionId: string): PendingRequest[] {
@@ -1201,8 +1213,7 @@ export class SessionManager {
     const session = this.sessions.get(sessionId);
     if (!session?.harnessProcess?.isAlive) return false;
 
-    session.pendingRequests.delete(requestId);
-    this.notifyPendingChanged(session, sessionId);
+    this.dropPendingRequest(session, sessionId, requestId);
     return session.harnessProcess.respondToPermission(requestId, allowed, toolInput, permissionSuggestions, denyReason);
   }
 
@@ -1327,6 +1338,35 @@ export class SessionManager {
     return true;
   }
 
+  /** Set what this session sends out. Null clears it back to silent. */
+  setNotifications(sessionId: string, notifications: SessionNotifications | null): boolean {
+    const session = this.sessions.get(sessionId);
+    if (!session) return false;
+    if (notifications === null) {
+      session.notifications = undefined;
+      session.info.notifications = undefined;
+      setSessionPrefs(sessionId, { notifications: undefined });
+    } else {
+      session.notifications = notifications;
+      session.info.notifications = notifications;
+      setSessionPrefs(sessionId, { notifications });
+    }
+    this.emitInfoUpdated(session, sessionId);
+    return true;
+  }
+
+  /** What notifySessionEvent needs about a session, in one place so both call
+   *  sites cannot disagree about it — the job-run flag included. */
+  private notifyContext(session: Session, sessionId: string): SessionNotifyContext {
+    return {
+      sessionId,
+      name: session.info.name,
+      cwd: session.info.cwd,
+      notifications: session.notifications,
+      isJobRun: getJobSessionIds().has(sessionId),
+    };
+  }
+
   isBypassActive(sessionId: string): boolean {
     const session = this.sessions.get(sessionId);
     return session?.permissionMode === "bypass";
@@ -1346,8 +1386,7 @@ export class SessionManager {
       session.emitter.emit("status", sessionId, "idle");
     }
     // Clear orphaned pending requests from the killed process
-    session.pendingRequests.clear();
-    this.notifyPendingChanged(session, sessionId);
+    this.dropAllPendingRequests(session, sessionId);
     this.emitSystem(session, sessionId, "__plan_state::on");
   }
 
@@ -1364,8 +1403,7 @@ export class SessionManager {
       session.emitter.emit("status", sessionId, "idle");
     }
     // Clear orphaned pending requests from the killed process
-    session.pendingRequests.clear();
-    this.notifyPendingChanged(session, sessionId);
+    this.dropAllPendingRequests(session, sessionId);
     this.emitSystem(session, sessionId, "__plan_state::off");
     // Re-sync the permission mode with the client so the selector reflects it
     // correctly after the plan-mode process is torn down.
@@ -1744,10 +1782,6 @@ export class SessionManager {
     return () => session.emitter.off("usage", handler);
   }
 
-  getTodos(sessionId: string): TodoItem[] {
-    return this.sessions.get(sessionId)?.todoItems ?? [];
-  }
-
   /**
    * The background tasks last reported for a session, for replay on connect.
    *
@@ -1799,14 +1833,6 @@ export class SessionManager {
     session.backgroundTasks = [...rest, task];
   }
 
-  onTodos(id: string, listener: (todos: TodoItem[]) => void): (() => void) | null {
-    const session = this.sessions.get(id);
-    if (!session) return null;
-    const handler = (_sessionId: string, todos: TodoItem[]) => listener(todos);
-    session.emitter.on("todos", handler);
-    return () => session.emitter.off("todos", handler);
-  }
-
   getInitData(sessionId: string): InitData | undefined {
     return this.sessions.get(sessionId)?.initData || getSessionPrefs(sessionId)?.initData;
   }
@@ -1842,29 +1868,6 @@ export class SessionManager {
     const handler = (_sessionId: string, data: InitData) => listener(data);
     session.emitter.on("init", handler);
     return () => session.emitter.off("init", handler);
-  }
-
-  loadTodosFromFiles(sessionId: string): void {
-    const session = this.sessions.get(sessionId);
-    if (!session) return;
-    if (session.todoItems.length > 0) return;
-    const watcher = new TodoWatcher(session.cliSessionId, () => {});
-    const todos = watcher.readOnce();
-    if (todos.length === 0) return;
-    session.todoItems = todos;
-    session.emitter.emit("todos", sessionId, [...session.todoItems]);
-  }
-
-  private startTodoWatcher(session: Session, sessionId: string): void {
-    if (session.todoWatcher) {
-      session.todoWatcher.stop();
-    }
-    const watcher = new TodoWatcher(session.cliSessionId, (todos) => {
-      session.todoItems = todos;
-      session.emitter.emit("todos", sessionId, [...todos]);
-    });
-    session.todoWatcher = watcher;
-    watcher.start();
   }
 
   private extractUsage(session: Session, sessionId: string, line: string): void {
@@ -2173,6 +2176,13 @@ export class SessionManager {
           planContent: planPath ? readPlanFile(planPath) : undefined,
         });
         this.notifyPendingChanged(session, sessionId);
+        // Everything above this point answered itself, so a request arriving
+        // here is one the user actually has to deal with.
+        notifySessionEvent(this.notifyContext(session, sessionId), reqType, {
+          requestId: pa.requestId,
+          toolName: pa.toolName,
+          input: pa.toolInput || "",
+        });
       }
     }
 
@@ -2221,8 +2231,7 @@ export class SessionManager {
       // without ever telling cockpit. This is the only place that catches
       // the second case, otherwise it orphans the sidebar's pending indicator.
       if (session.pendingRequests.size > 0) {
-        session.pendingRequests.clear();
-        this.notifyPendingChanged(session, sessionId);
+        this.dropAllPendingRequests(session, sessionId);
       }
     }
 
@@ -2245,6 +2254,22 @@ export class SessionManager {
       });
       console.log(`[sm] emit status idle for ${sessionId.slice(0, 8)} (runtime=${session.runtime})`);
       session.emitter.emit("status", sessionId, "idle");
+      // A turn worth telling the user about is one that produced a real
+      // assistant message and left nothing waiting on them. Stopping a turn,
+      // an API error, "No response requested.", a manual compaction and a
+      // request still open all reach idle too, and none of them is news.
+      const finishedTurn = result.messageDone && !result.compactDone && result.errors.length === 0 && session.pendingRequests.size === 0;
+      if (finishedTurn) {
+        // What Claude actually said is the context worth carrying: a
+        // notification that only says "finished" makes you open the app to
+        // find out whether it matters. Found in the batch rather than read off
+        // its end: the message that ended the turn is often followed by a
+        // task_sync or a Stop-hook event, which is why this used to arrive
+        // empty for most turns.
+        const saidEvent = [...result.emit].reverse().find((e) => e.type === "message_done" && e.message?.content);
+        const said = saidEvent?.type === "message_done" ? saidEvent.message?.content : undefined;
+        notifySessionEvent(this.notifyContext(session, sessionId), "finished", { summary: said });
+      }
       this.flushQueuedMessage(session, sessionId);
     }
   }
@@ -2296,7 +2321,6 @@ export class SessionManager {
         session.cliSessionId = uuidv4();
         session.queuedMessages.length = 0;
         session.queuePaused = false;
-        session.todoItems = [];
         session.info.status = "idle";
         session.emitter.emit("clear", sessionId);
         session.emitter.emit("status", sessionId, "idle");
@@ -2811,6 +2835,10 @@ Additional Cockpit rules beyond the CLI's defaults:
       willResume,
       model: cliModel ?? undefined,
       providerEnvVars,
+      // The session's own model, not the CLI's (which is the bare id): the
+      // provider that answers for it decides whether auto mode's classifier
+      // exists at all for this session.
+      autoModeEnabled: this.isAnthropicSession(session),
       subagentModel,
       contextSize: effectiveContextSize,
       thinkingLevel: session.thinkingLevel,
@@ -2858,7 +2886,6 @@ Additional Cockpit rules beyond the CLI's defaults:
     session.harnessProcess = handle;
     handleRef.current = handle;
     this.log(sessionId, `CLI process spawned`);
-    this.startTodoWatcher(session, sessionId);
 
     handle.ready
       .then(() => {
@@ -2949,11 +2976,6 @@ Additional Cockpit rules beyond the CLI's defaults:
           };
           session.contextUsage = postCompactEstimate;
           session.emitter.emit("usage", sessionId, postCompactEstimate);
-        }
-
-        if (session.todoItems.length > 0 && session.todoItems.every((t) => t.status === "completed")) {
-          session.todoItems = [];
-          session.emitter.emit("todos", sessionId, []);
         }
 
         // The process is gone, so there will be no transcript update to carry a

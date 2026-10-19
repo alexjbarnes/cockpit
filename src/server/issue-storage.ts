@@ -674,6 +674,12 @@ export function applyIssueUpdate(
   }
   if (patch.status !== undefined && patch.status !== issue.status) {
     next.status = patch.status;
+    // The manual order belongs to the status it was made in. Carrying the
+    // number across would drop the issue at the top of its new status (or on
+    // top of a number already there), so any status change that is not a drag
+    // — the detail-page picker, a pipeline skill through MCP — lands it at the
+    // end, like any other issue that has never been dragged.
+    delete next.order;
     record("status", issue.status, patch.status);
   }
   if ("priority" in patch && patch.priority !== issue.priority) {
@@ -689,6 +695,94 @@ export function applyIssueUpdate(
   next.updatedAt = now;
   next.activity = [...issue.activity, ...activity];
   return next;
+}
+
+/** The gap between two issues after a renumber. Big enough that a drop between
+ *  neighbours can be expressed before the next renumber, and small enough that
+ *  a status of them stays ordinary integers. */
+export const ISSUE_ORDER_STEP = 1000;
+
+/**
+ * Put `key` in `status` at the position it was dropped: immediately before
+ * `beforeKey`, or after `afterKey`, or at the end when neither is given.
+ *
+ * The whole status is renumbered, across every project that holds an issue in
+ * it, because a view can be filtered (the session's issues button is always
+ * one project) and renumbering only the ids that view could see would tie
+ * values with the issues it could not see and silently move another project's
+ * row. A filtered read is then a monotone subsequence of the whole.
+ *
+ * Reordering is not a change to an issue: no activity entry, no `updatedAt`.
+ * Each affected project's file is written once, with writeJsonAtomic. Reads all
+ * happen before any write, and nothing here is async: issue-storage holds no
+ * cache, so this is safe from more than one bundle in the process the same way
+ * loadIssues/saveIssue are. A throw part-way leaves some files renumbered and
+ * some not — each file is internally consistent and the call is idempotent, so
+ * re-running it converges.
+ */
+export function placeIssue(key: string, status: string, beforeKey?: string, afterKey?: string): Issue[] {
+  const moved = getIssue(key);
+  if (!moved) throw new Error(`Unknown issue "${key}"`);
+  assertValidStatus(status, allowedStatusesFor(getProject(moved.projectId)));
+
+  const projects = loadProjects();
+  const byProject = new Map<string, Issue[]>();
+  for (const project of projects) byProject.set(project.id, loadIssues(project.id));
+
+  // The status group as any list would show it: every project's issues,
+  // projects in file order, then numbered ones first in their order.
+  const group: Issue[] = [];
+  for (const project of projects) {
+    for (const issue of byProject.get(project.id) ?? []) {
+      if (issue.status === status) group.push(issue);
+    }
+  }
+  const ordered = [
+    ...group.filter((i) => typeof i.order === "number").sort((a, b) => (a.order as number) - (b.order as number)),
+    ...group.filter((i) => typeof i.order !== "number"),
+  ];
+
+  const without = ordered.filter((issue) => issue.key !== moved.key);
+  const beforeIdx = beforeKey ? without.findIndex((issue) => issue.key === beforeKey) : -1;
+  const afterIdx = afterKey ? without.findIndex((issue) => issue.key === afterKey) : -1;
+  let index = without.length; // neither neighbour: the end of the status
+  if (beforeIdx >= 0) index = beforeIdx;
+  else if (afterIdx >= 0) index = afterIdx + 1;
+
+  const next = [...without.slice(0, index), moved, ...without.slice(index)];
+  const renumbered = new Map<string, { order: number; status: string }>();
+  next.forEach((issue, i) => {
+    renumbered.set(issue.id, { order: (i + 1) * ISSUE_ORDER_STEP, status });
+  });
+
+  const changed: Issue[] = [];
+  for (const project of projects) {
+    const issues = byProject.get(project.id) ?? [];
+    let touched = false;
+    const updated = issues.map((issue) => {
+      const change = renumbered.get(issue.id);
+      if (!change) return issue;
+      touched = true;
+      const updatedIssue = { ...issue, status: change.status, order: change.order };
+      changed.push(updatedIssue);
+      return updatedIssue;
+    });
+    if (touched) {
+      const file = safeIssuesFile(project.id);
+      if (!file) continue;
+      writeJsonAtomic(file, { issues: updated });
+    }
+  }
+
+  // A placement can move an issue between statuses (that is what dragging a row
+  // into another group is), which is the event the pipeline's onIssueStatus
+  // trigger listens for — same as any other status change.
+  if (moved.status !== status) {
+    emitIssueStatusChange({ key: moved.key, projectId: moved.projectId, from: moved.status, to: status });
+  }
+  // In the order they now sit, not the order they were read in: a caller
+  // merging this into its list wants the sequence, and it costs nothing here.
+  return changed.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
 }
 
 /**

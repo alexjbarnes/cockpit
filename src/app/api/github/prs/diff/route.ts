@@ -1,25 +1,5 @@
-import { execFile } from "node:child_process";
 import { NextRequest, NextResponse } from "next/server";
-import { validateSession } from "@/server/auth";
-
-function authenticate(req: NextRequest): boolean {
-  const token = req.cookies.get("cockpit_session")?.value || req.headers.get("authorization")?.replace("Bearer ", "");
-  return !!token && validateSession(token);
-}
-
-function run(cmd: string, args: string[]): Promise<string> {
-  return new Promise((resolve, reject) => {
-    execFile(cmd, args, { maxBuffer: 50 * 1024 * 1024 }, (err, stdout) => {
-      if (err && !(err as NodeJS.ErrnoException).code && stdout) {
-        resolve(stdout);
-      } else if (err) {
-        reject(err);
-      } else {
-        resolve(stdout);
-      }
-    });
-  });
-}
+import { authenticate, GH_TTL, runCached, wantsFreshData } from "@/server/gh";
 
 function splitDiff(raw: string): { path: string; patch: string }[] {
   const lines = raw.split(/\r?\n/);
@@ -75,8 +55,15 @@ function buildFullPatch(f: GHFile): string {
 
 // Fallback: fetch per-file patches via GitHub REST API when the full
 // diff exceeds the 20K line limit (HTTP 406 from gh pr diff).
-async function fetchFileDiffs(repo: string, number: string): Promise<{ path: string; patch: string }[]> {
-  const stdout = await run("gh", ["api", `repos/${repo}/pulls/${number}/files?per_page=100`, "--paginate"]);
+async function fetchFileDiffs(repo: string, number: string, bypass: boolean): Promise<{ path: string; patch: string }[]> {
+  const stdout = await runCached(
+    `diff-files:${repo}:${number}`,
+    GH_TTL.fast,
+    ["api", `repos/${repo}/pulls/${number}/files?per_page=100`, "--paginate"],
+    {
+      bypass,
+    },
+  );
 
   // gh api --paginate concatenates JSON arrays back-to-back.
   // Parse by finding top-level array boundaries.
@@ -123,8 +110,14 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "repo and number are required" }, { status: 400 });
   }
 
+  const bypass = wantsFreshData(req);
+
   try {
-    const stdout = await run("gh", ["pr", "diff", number, "-R", repo, "--color", "never"]);
+    const stdout = await runCached(`diff:${repo}:${number}`, GH_TTL.fast, ["pr", "diff", number, "-R", repo, "--color", "never"], {
+      maxBuffer: 50 * 1024 * 1024,
+      allowStdoutOnError: true,
+      bypass,
+    });
     const files = splitDiff(stdout);
     return NextResponse.json({ files });
   } catch (err) {
@@ -133,7 +126,7 @@ export async function GET(req: NextRequest) {
     // per-file patches from the REST API
     if (errStr.includes("too_large") || errStr.includes("406")) {
       try {
-        const files = await fetchFileDiffs(repo, number);
+        const files = await fetchFileDiffs(repo, number, bypass);
         return NextResponse.json({ files, partial: true });
       } catch (fallbackErr) {
         return NextResponse.json({ error: `Diff too large and per-file fallback failed: ${String(fallbackErr)}` }, { status: 500 });

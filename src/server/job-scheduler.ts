@@ -2,6 +2,7 @@ import { mkdirSync } from "node:fs";
 import { v4 as uuidv4 } from "uuid";
 import { checkClaudeUserConfig } from "@/server/claude-config-guard";
 import { configuredMcpServerNames } from "@/server/mcp-discovery";
+import { isConfiguredMcpServer } from "@/server/mcp-server-names";
 import { getJobScratchpadDir } from "@/server/paths";
 import { trustDirectory } from "@/server/workspace-trust";
 import type { AfterJobsSchedule, IssueStatusSchedule, JobRun, JobRunToolUse, ScheduledJob } from "@/types";
@@ -327,8 +328,8 @@ export class JobScheduler {
     if (required.length === 0) return [];
     const cwd = job.cwd || getJobScratchpadDir(job.id);
     checkClaudeUserConfig();
-    const configured = new Set(configuredMcpServerNames(cwd));
-    return required.filter((name) => !configured.has(name));
+    const configured = configuredMcpServerNames(cwd);
+    return required.filter((name) => !isConfiguredMcpServer(name, configured));
   }
 
   private async executeJobWithRetries(job: ScheduledJob): Promise<JobRun> {

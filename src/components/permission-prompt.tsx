@@ -1,39 +1,12 @@
 "use client";
 
-import { Globe, ShieldAlert } from "lucide-react";
-import { useEffect, useMemo, useRef } from "react";
+import { Globe, ShieldAlert, TriangleAlert } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { PendingPermission } from "@/hooks/use-session";
-import { pathBasename, shortPath } from "@/lib/path";
+import { pathBasename } from "@/lib/path";
 import { isSandboxEscape, NETWORK_ACCESS_TOOL } from "@/lib/sandbox-requests";
+import { formatToolSummary } from "@/lib/tool-summary";
 import type { PermissionMode, PermissionSuggestion } from "@/types";
-
-function formatToolSummary(toolName: string, input: Record<string, unknown>): string {
-  switch (toolName) {
-    case "Bash":
-    case "bash": {
-      const cmd = (input.command as string) || "";
-      return cmd.length > 80 ? cmd.slice(0, 80) + "..." : cmd;
-    }
-    case "Write":
-    case "write":
-    case "Edit":
-    case "edit":
-    case "Read":
-    case "read": {
-      const fp = (input.file_path as string) || "";
-      return fp ? shortPath(fp) : "";
-    }
-    // The URL is the whole decision for a fetch, so put it in the summary
-    // instead of leaving it to be read out of the raw input JSON.
-    case "WebFetch":
-    case "WebSearch": {
-      const target = (input.url as string) || (input.query as string) || "";
-      return target.length > 80 ? target.slice(0, 80) + "..." : target;
-    }
-    default:
-      return "";
-  }
-}
 
 const destinationLabels: Record<string, string> = {
   session: "session",
@@ -47,7 +20,16 @@ function suggestionLabel(s: PermissionSuggestion): string {
   const dest = destinationLabels[s.destination || ""] || s.destination || "session";
 
   if (s.type === "setMode" && s.mode) {
-    return `${s.mode} mode (${dest})`;
+    // The CLI names its modes for itself ("acceptEdits"); a card offering one
+    // as an answer says what it means for the asks that follow.
+    const named: Record<string, string> = {
+      acceptEdits: "Stop asking about edits",
+      bypassPermissions: "Bypass permissions",
+      plan: "Plan mode",
+      default: "Ask every time",
+      auto: "Auto mode",
+    };
+    return `${named[s.mode] ?? `${s.mode} mode`} (${dest})`;
   }
 
   if (s.type === "addDirectories" && s.directories?.length) {
@@ -77,6 +59,46 @@ interface PermissionPromptProps {
   onRespond: (requestId: string, allowed: boolean, permissionMode?: PermissionMode, suggestionIndex?: number) => void;
 }
 
+/**
+ * What the tool is about to do, in full. A Bash call shows its command rather
+ * than the JSON that carries it — the command is the decision, and the JSON
+ * only hides it behind escapes and a field name.
+ *
+ * The text wraps rather than scrolling sideways: a command read through a
+ * horizontal scrollbar is a command you cannot read. Long input (a whole
+ * script, a file's contents) starts in a shorter box and grows to the rest on
+ * the toggle, so a card that would push Allow off the screen does not.
+ */
+function PermissionInput({ toolName, input, parsed }: { toolName: string; input: string; parsed: Record<string, unknown> }) {
+  const [expanded, setExpanded] = useState(false);
+  const COLLAPSED_CHARS = 500;
+  const command = (toolName === "Bash" || toolName === "bash") && typeof parsed.command === "string" ? parsed.command : null;
+  const text = command ?? input;
+
+  return (
+    <div className="space-y-1" data-testid="permission-input">
+      <pre
+        data-testid="permission-input-text"
+        className={`overflow-y-auto whitespace-pre-wrap [overflow-wrap:anywhere] rounded bg-black/10 p-2 text-xs leading-relaxed dark:bg-white/5 ${
+          expanded ? "max-h-[70vh]" : "max-h-40"
+        }`}
+      >
+        {text}
+      </pre>
+      {text.length > COLLAPSED_CHARS && (
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          data-testid="btn-toggle-permission-input"
+          className="text-[11px] text-muted-foreground underline underline-offset-2 hover:text-foreground"
+        >
+          {expanded ? "Show less" : `Show all (${text.length.toLocaleString()} characters)`}
+        </button>
+      )}
+    </div>
+  );
+}
+
 export function PermissionPrompt({ permission, onRespond }: PermissionPromptProps) {
   const allowRef = useRef<HTMLButtonElement>(null);
 
@@ -98,69 +120,94 @@ export function PermissionPrompt({ permission, onRespond }: PermissionPromptProp
   }
 
   const summary = formatToolSummary(permission.toolName, parsed);
-  const suggestions = permission.suggestions;
-  const hasSuggestions = suggestions && suggestions.length > 0;
+  const suggestions = permission.suggestions ?? [];
   const escapesSandbox = isSandboxEscape(parsed);
+  const isCommand = permission.toolName === "Bash" || permission.toolName === "bash";
+  // For a command the block below is the whole thing, so repeating its first
+  // line above it is noise; for everything else the summary (a path, a URL) is
+  // what the raw input hides.
+  const detail = isCommand ? "" : summary;
 
   return (
     <div className="mx-auto max-w-3xl" data-testid="permission-prompt">
-      <div className="rounded-lg border border-yellow-500/50 bg-yellow-500/10 p-4">
+      {/* A normal card with one amber rail: the rail is the whole "this needs
+          you" signal, and nothing else on the card is tinted. */}
+      <div className="rounded-lg border border-l-2 border-l-amber-500 bg-card p-4 text-sm">
         <div className="flex items-start gap-3">
-          <ShieldAlert className="h-5 w-5 shrink-0 text-yellow-500 mt-0.5" />
-          <div className="flex-1 min-w-0 space-y-2">
-            <div className="text-sm font-medium">
-              Permission requested: <span className="font-mono">{permission.toolName}</span>
+          <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
+          <div className="min-w-0 flex-1">
+            <div className="font-medium">Permission requested</div>
+            <div className="mt-0.5 truncate text-xs text-muted-foreground">
+              <span className="font-mono">{permission.toolName}</span>
+              {escapesSandbox && <span> · outside the sandbox</span>}
             </div>
-            {summary && <div className="font-mono text-xs text-muted-foreground truncate">{summary}</div>}
+            {detail && <div className="mt-1 truncate font-mono text-xs text-muted-foreground">{detail}</div>}
             {escapesSandbox && (
-              <div className="text-xs font-medium text-orange-600 dark:text-orange-400" data-testid="sandbox-escape-warning">
+              <div
+                className="mt-1.5 flex items-center gap-1.5 text-xs text-amber-600 dark:text-amber-500"
+                data-testid="sandbox-escape-warning"
+              >
+                <TriangleAlert className="h-3.5 w-3.5 shrink-0" />
                 Runs outside the sandbox, with no file or network limits.
               </div>
             )}
             {permission.input && (
-              <pre className="overflow-x-auto rounded bg-black/10 dark:bg-white/5 p-2 text-[11px] leading-relaxed max-h-32 overflow-y-auto">
-                {permission.input.length > 500 ? permission.input.slice(0, 500) + "\n... (truncated)" : permission.input}
-              </pre>
+              <div className="mt-3">
+                <PermissionInput toolName={permission.toolName} input={permission.input} parsed={parsed} />
+              </div>
             )}
-            <div className="flex flex-wrap gap-2 pt-1">
+            <div className="mt-4 flex items-center gap-2">
               <button
-                ref={allowRef}
-                onClick={() => onRespond(permission.requestId, true, "allow")}
-                className="rounded bg-primary px-3 py-1 text-xs font-medium text-primary-foreground hover:bg-primary/90"
-                data-testid="btn-allow"
+                onClick={() => onRespond(permission.requestId, false, "deny")}
+                data-testid="btn-deny"
+                className="rounded-md px-3 py-1.5 text-xs font-medium text-muted-foreground hover:bg-accent hover:text-foreground"
               >
-                Allow
+                Deny
               </button>
-              {hasSuggestions ? (
-                suggestions.map((s, i) => (
-                  <button
-                    key={i}
-                    onClick={() => onRespond(permission.requestId, true, "allow_always", i)}
-                    className="rounded bg-primary/70 px-3 py-1 text-xs font-medium text-primary-foreground hover:bg-primary/60"
-                    title={JSON.stringify(s, null, 2)}
-                  >
-                    {suggestionLabel(s)}
-                  </button>
-                ))
-              ) : (
+              <span className="flex-1" />
+              {/* Only the variants the footer has no room for: the first is the
+                  Always button beside this, so a menu of one (or none) would
+                  repeat what is already there. Widening permissions past this
+                  is the session's own settings, not a card action. */}
+              {suggestions.length > 1 && (
+                <details className="group relative" data-testid="permission-more">
+                  <summary className="cursor-pointer list-none rounded-md border px-3 py-1.5 text-xs font-medium text-muted-foreground hover:bg-accent hover:text-foreground">
+                    More
+                  </summary>
+                  <div className="absolute right-0 z-10 mt-1.5 min-w-[15rem] rounded-lg border bg-popover p-1.5 shadow-md">
+                    {suggestions.slice(1).map((s, i) => (
+                      <button
+                        key={i}
+                        onClick={() => onRespond(permission.requestId, true, "allow_always", i + 1)}
+                        title={JSON.stringify(s, null, 2)}
+                        className="block w-full rounded-md px-2.5 py-1.5 text-left text-xs hover:bg-accent"
+                      >
+                        {suggestionLabel(s)}
+                      </button>
+                    ))}
+                  </div>
+                </details>
+              )}
+              {/* The first of the CLI's own alternatives, only when it offered
+                  one. There is no cockpit-invented "Always for <tool>": an
+                  answer that saves nothing is a button that lies about what it
+                  did, and the CLI is the one that knows which rule fits. */}
+              {suggestions.length > 0 && (
                 <button
-                  onClick={() => onRespond(permission.requestId, true, "allow_always")}
-                  className="rounded bg-primary/70 px-3 py-1 text-xs font-medium text-primary-foreground hover:bg-primary/60"
+                  onClick={() => onRespond(permission.requestId, true, "allow_always", 0)}
+                  data-testid="btn-always"
+                  className="rounded-md border px-3 py-1.5 text-xs font-medium hover:bg-accent"
                 >
-                  Always for {permission.toolName}
+                  {suggestionLabel(suggestions[0])}
                 </button>
               )}
               <button
-                onClick={() => onRespond(permission.requestId, true, "allow_all")}
-                className="rounded bg-orange-600 px-3 py-1 text-xs font-medium text-white hover:bg-orange-700"
+                ref={allowRef}
+                onClick={() => onRespond(permission.requestId, true, "allow")}
+                className="rounded-md bg-primary px-3.5 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90"
+                data-testid="btn-allow"
               >
-                Bypass All
-              </button>
-              <button
-                onClick={() => onRespond(permission.requestId, false, "deny")}
-                className="rounded bg-muted px-3 py-1 text-xs font-medium text-muted-foreground hover:bg-muted/80"
-              >
-                Deny
+                Allow
               </button>
             </div>
           </div>
@@ -194,44 +241,45 @@ function NetworkAccessPrompt({
 
   return (
     <div className="mx-auto max-w-3xl" data-testid="network-access-prompt">
-      <div className="rounded-lg border border-yellow-500/50 bg-yellow-500/10 p-4">
+      <div className="rounded-lg border border-l-2 border-l-amber-500 bg-card p-4 text-sm">
         <div className="flex items-start gap-3">
-          <Globe className="h-5 w-5 shrink-0 text-yellow-500 mt-0.5" />
-          <div className="flex-1 min-w-0 space-y-2">
-            <div className="text-sm font-medium">
-              Network access requested
-              {host && (
-                <>
-                  : <span className="font-mono">{host}</span>
-                </>
-              )}
+          <Globe className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
+          <div className="min-w-0 flex-1">
+            <div className="flex items-baseline gap-2">
+              <span className="font-medium">Network access requested</span>
+              <span className="ml-auto shrink-0 font-mono text-xs text-muted-foreground">{host}</span>
             </div>
-            <div className="text-xs text-muted-foreground">
+            <div className="mt-0.5 text-xs text-muted-foreground">
               A sandboxed command wants to reach a host that isn&apos;t on the allowed list.
             </div>
-            {command && <div className="font-mono text-xs text-muted-foreground truncate">{command}</div>}
-            <div className="flex flex-wrap gap-2 pt-1">
+            {command && (
+              <pre className="mt-3 overflow-y-auto whitespace-pre-wrap [overflow-wrap:anywhere] rounded bg-black/10 p-2 font-mono text-xs leading-relaxed dark:bg-white/5">
+                {command}
+              </pre>
+            )}
+            <div className="mt-4 flex items-center gap-2">
               <button
-                ref={allowRef}
-                onClick={() => onRespond(permission.requestId, true, "allow")}
-                className="rounded bg-primary px-3 py-1 text-xs font-medium text-primary-foreground hover:bg-primary/90"
-                data-testid="btn-network-allow"
+                onClick={() => onRespond(permission.requestId, false, "deny")}
+                data-testid="btn-network-deny"
+                className="rounded-md px-3 py-1.5 text-xs font-medium text-muted-foreground hover:bg-accent hover:text-foreground"
               >
-                Allow for this session
+                Deny
               </button>
+              <span className="flex-1" />
               <button
                 onClick={() => onRespond(permission.requestId, true, "allow_always", 0)}
-                className="rounded bg-primary/70 px-3 py-1 text-xs font-medium text-primary-foreground hover:bg-primary/60"
                 data-testid="btn-network-always"
+                className="rounded-md border px-3 py-1.5 text-xs font-medium hover:bg-accent"
               >
                 {host ? `Always allow ${host}` : "Always allow this host"}
               </button>
               <button
-                onClick={() => onRespond(permission.requestId, false, "deny")}
-                className="rounded bg-muted px-3 py-1 text-xs font-medium text-muted-foreground hover:bg-muted/80"
-                data-testid="btn-network-deny"
+                ref={allowRef}
+                onClick={() => onRespond(permission.requestId, true, "allow")}
+                data-testid="btn-network-allow"
+                className="rounded-md bg-primary px-3.5 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90"
               >
-                Deny
+                Allow for this session
               </button>
             </div>
           </div>

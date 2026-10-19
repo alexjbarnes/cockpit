@@ -98,14 +98,6 @@ vi.mock("@/server/transcript-watcher", () => {
   return { TranscriptWatcher: MockTranscriptWatcher };
 });
 
-vi.mock("@/server/todo-watcher", () => {
-  class MockTodoWatcher {
-    start = vi.fn();
-    stop = vi.fn();
-  }
-  return { TodoWatcher: MockTodoWatcher };
-});
-
 import { spawn } from "node:child_process";
 import { COCKPIT_AGENT_SYSTEM_PROMPT } from "@/server/mcp/cockpit-agent-prompt";
 import { SessionManager } from "@/server/session-manager";

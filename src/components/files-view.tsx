@@ -1,12 +1,14 @@
 "use client";
 
-import { ChevronDown, ChevronUp, Eye, Loader2, Plus, Search, WrapText, X } from "lucide-react";
+import { AlertCircle, ChevronDown, ChevronUp, Eye, Loader2, Pencil, Plus, Save, Search, WrapText, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useShell } from "@/components/app-shell";
 import { CodeBlock, languageFromPath } from "@/components/code-block";
+import { CodeEditor } from "@/components/code-editor";
 import { FilePicker } from "@/components/file-picker";
 import { FileTree } from "@/components/file-tree";
 import { MarkdownRender } from "@/components/markdown-render";
+import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useWebSocket } from "@/hooks/use-websocket";
 import { pathBasename } from "@/lib/path";
@@ -127,6 +129,17 @@ export function FilesView({
   const [wrap, setWrap] = useState(false);
   const [preview, setPreview] = useState(false);
   const [imgError, setImgError] = useState(false);
+  // Editing. The draft lives here rather than inside the editor, so the
+  // watcher's re-renders cannot lose it.
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [conflictMtime, setConflictMtime] = useState<number | null>(null);
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
+  // The mtime the draft was opened from: saving sends it so the server can
+  // refuse to write over a change made while the editor was open.
+  const editBaseMtime = useRef<number | undefined>(undefined);
   const fetchRef = useRef(0);
   const contentRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -196,7 +209,9 @@ export function FilesView({
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: re-apply highlights when content or display mode changes
   useEffect(() => {
-    if (!searchOpen || !searchQuery || !contentRef.current) {
+    // The marks are DOM nodes wrapped around rendered text; the editor owns its
+    // own DOM, so highlighting is off while editing.
+    if (!searchOpen || !searchQuery || !contentRef.current || editing) {
       if (contentRef.current) clearSearchMarks(contentRef.current);
       setMatchCount(0);
       currentMatchRef.current = -1;
@@ -234,7 +249,7 @@ export function FilesView({
       cancelAnimationFrame(rafId);
       observer.disconnect();
     };
-  }, [searchOpen, searchQuery, fileData, wrap, preview]);
+  }, [searchOpen, searchQuery, fileData, wrap, preview, editing]);
 
   const handleSelectFile = useCallback(
     (filePath: string) => {
@@ -282,6 +297,13 @@ export function FilesView({
 
   // Fetch file content when selection changes
   useEffect(() => {
+    // A draft belongs to the file it was opened from, so changing file ends
+    // the edit rather than showing one file's text over another's path.
+    setEditing(false);
+    setDraft("");
+    setSaveError(null);
+    setConflictMtime(null);
+
     if (!selectedFile) {
       setFileData(null);
       return;
@@ -352,6 +374,88 @@ export function FilesView({
     });
   }, [selectedFile, subscribe]);
 
+  const startEditing = useCallback(() => {
+    if (!fileData) return;
+    setDraft(fileData.content);
+    editBaseMtime.current = fileData.mtimeMs;
+    setSaveError(null);
+    setConflictMtime(null);
+    setEditing(true);
+  }, [fileData]);
+
+  const stopEditing = useCallback(() => {
+    setEditing(false);
+    setDraft("");
+    setSaveError(null);
+    setConflictMtime(null);
+  }, []);
+
+  /** Save the draft. `expected` is the mtime to insist on; omitting it is what
+   *  the conflict banner's Overwrite does. */
+  const save = useCallback(
+    async (expected?: number) => {
+      if (!selectedFile || !fileData || saving) return;
+      setSaving(true);
+      setSaveError(null);
+      try {
+        const res = await fetch("/api/filesystem/write", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            path: selectedFile,
+            content: draft,
+            ...(expected !== undefined ? { expectedMtimeMs: expected } : {}),
+          }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (res.status === 409) {
+          setConflictMtime(typeof data.mtimeMs === "number" ? data.mtimeMs : null);
+          setSaveError("The file changed on disk since you opened it.");
+          return;
+        }
+        if (!res.ok) {
+          setSaveError(data.error || "Could not save the file");
+          return;
+        }
+        const next: FileContent = {
+          ...fileData,
+          content: draft,
+          size: data.size ?? fileData.size,
+          truncated: false,
+          mtimeMs: data.mtimeMs ?? fileData.mtimeMs,
+        };
+        fileContentCache.set(selectedFile, next);
+        setFileData(next);
+        editBaseMtime.current = next.mtimeMs;
+        stopEditing();
+      } catch {
+        setSaveError("Could not reach the server");
+      } finally {
+        setSaving(false);
+      }
+    },
+    [draft, fileData, saving, selectedFile, stopEditing],
+  );
+
+  /** Take the disk's version, throwing the draft away. */
+  const reloadFromDisk = useCallback(async () => {
+    if (!selectedFile) return;
+    const res = await fetch(`/api/filesystem/read?path=${encodeURIComponent(selectedFile)}`);
+    if (!res.ok) {
+      setSaveError("Could not read the file");
+      return;
+    }
+    const data: FileContent = await res.json();
+    fileContentCache.set(selectedFile, data);
+    setFileData(data);
+    setDraft(data.content);
+    editBaseMtime.current = data.mtimeMs;
+    setSaveError(null);
+    setConflictMtime(null);
+  }, [selectedFile]);
+
+  const dirty = editing && !!fileData && draft !== fileData.content;
+
   // No file selected
   if (!selectedFile) {
     return <div className="flex items-center justify-center h-full text-sm text-muted-foreground">Select a file to view</div>;
@@ -383,9 +487,47 @@ export function FilesView({
       <div className="shrink-0 flex items-center gap-1 border-b px-4 py-2 font-mono text-xs">
         {dirPart && <span className="text-muted-foreground">{dirPart}</span>}
         <span className="font-bold">{fileName}</span>
+        {dirty && <span className="ml-1.5 h-1.5 w-1.5 rounded-full bg-primary" title="Unsaved changes" />}
         {fileData.truncated && <span className="ml-2 text-muted-foreground">(truncated to 100KB)</span>}
         <div className="ml-auto flex items-center gap-1">
-          {isText && (
+          {editing && (
+            <>
+              <button
+                type="button"
+                onClick={() => save(editBaseMtime.current)}
+                disabled={!dirty || saving}
+                data-testid="file-save"
+                title="Save (Ctrl+S)"
+                className="flex items-center gap-1 rounded px-2 py-1 text-xs hover:bg-accent text-muted-foreground hover:text-foreground disabled:opacity-40 disabled:hover:bg-transparent"
+              >
+                {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+                Save
+              </button>
+              <button
+                type="button"
+                onClick={() => (dirty ? setConfirmDiscard(true) : stopEditing())}
+                data-testid="file-cancel"
+                title="Stop editing"
+                className="flex items-center gap-1 rounded px-2 py-1 text-xs hover:bg-accent text-muted-foreground hover:text-foreground"
+              >
+                <X className="h-3.5 w-3.5" />
+                Cancel
+              </button>
+            </>
+          )}
+          {!editing && isText && !fileData.truncated && (
+            <button
+              type="button"
+              onClick={startEditing}
+              data-testid="file-edit"
+              aria-label="Edit file"
+              title="Edit file"
+              className="flex items-center justify-center rounded p-1 hover:bg-accent text-muted-foreground"
+            >
+              <Pencil className="h-3.5 w-3.5" />
+            </button>
+          )}
+          {!editing && isText && (
             <button
               type="button"
               onClick={searchOpen ? closeSearch : openSearch}
@@ -396,7 +538,7 @@ export function FilesView({
               <Search className="h-3.5 w-3.5" />
             </button>
           )}
-          {isMarkdown && (
+          {!editing && isMarkdown && (
             <button
               type="button"
               onClick={togglePreview}
@@ -408,7 +550,7 @@ export function FilesView({
               <Eye className="h-3.5 w-3.5" />
             </button>
           )}
-          {isText && !showPreview && (
+          {!editing && isText && !showPreview && (
             <button
               type="button"
               onClick={toggleWrap}
@@ -423,7 +565,34 @@ export function FilesView({
         </div>
       </div>
 
-      {searchOpen && (
+      {saveError && (
+        <div className="shrink-0 flex items-center gap-2 border-b px-4 py-1.5 text-xs" data-testid="file-save-error">
+          <AlertCircle className="h-3.5 w-3.5 shrink-0 text-destructive" />
+          <span className="min-w-0 flex-1 truncate text-muted-foreground">{saveError}</span>
+          {conflictMtime !== null && (
+            <>
+              <button
+                type="button"
+                onClick={() => save()}
+                data-testid="file-overwrite"
+                className="rounded px-2 py-0.5 hover:bg-accent text-muted-foreground hover:text-foreground"
+              >
+                Overwrite
+              </button>
+              <button
+                type="button"
+                onClick={reloadFromDisk}
+                data-testid="file-reload"
+                className="rounded px-2 py-0.5 hover:bg-accent text-muted-foreground hover:text-foreground"
+              >
+                Reload from disk
+              </button>
+            </>
+          )}
+        </div>
+      )}
+
+      {!editing && searchOpen && (
         <div className="shrink-0 flex items-center gap-1.5 border-b px-4 py-1.5">
           <input
             ref={searchInputRef}
@@ -480,6 +649,16 @@ export function FilesView({
           </div>
         ) : fileData.binary ? (
           <div className="flex items-center justify-center flex-1 text-sm text-muted-foreground">Binary file</div>
+        ) : editing ? (
+          <div className="flex min-h-0 flex-1 flex-col" data-testid="file-editor">
+            <CodeEditor
+              value={draft}
+              onChange={setDraft}
+              language={lang}
+              onSave={() => save(editBaseMtime.current)}
+              className="min-h-0 flex-1 rounded-none border-0 [&_.cm-editor]:h-full [&_.cm-editor]:min-h-0"
+            />
+          </div>
         ) : showPreview ? (
           <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto p-4">
             <MarkdownRender content={fileData.content} />
@@ -490,6 +669,30 @@ export function FilesView({
           </div>
         )}
       </div>
+
+      <Dialog open={confirmDiscard} onOpenChange={setConfirmDiscard}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Discard changes</DialogTitle>
+          </DialogHeader>
+          <p className="mb-4 text-sm text-muted-foreground">Discard your changes to {fileName}? They cannot be recovered.</p>
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" onClick={() => setConfirmDiscard(false)}>
+              Keep editing
+            </Button>
+            <Button
+              variant="destructive"
+              data-testid="file-discard"
+              onClick={() => {
+                setConfirmDiscard(false);
+                stopEditing();
+              }}
+            >
+              Discard
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={pathInputOpen} onOpenChange={setPathInputOpen}>
         <DialogContent className="sm:max-w-lg">

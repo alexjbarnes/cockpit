@@ -2,7 +2,7 @@
 
 import { ArrowLeft, Loader2, Paperclip, Pencil, Trash2, X } from "lucide-react";
 import Link from "next/link";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { usePageHeader } from "@/components/app-shell";
 import { MarkdownRender } from "@/components/markdown-render";
@@ -11,7 +11,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { useSettings } from "@/hooks/use-settings";
-import { actorHref, actorLabel, describeActivityAction, resolveProjectStatuses, statusColor } from "@/lib/issue-display";
+import { actorHref, actorLabel, describeActivityAction, issueReturnPath, resolveProjectStatuses, statusColor } from "@/lib/issue-display";
 import { cn } from "@/lib/utils";
 import type { Issue, IssueActor, Project } from "@/types";
 
@@ -52,6 +52,8 @@ async function patchIssue(key: string, patch: Record<string, unknown>): Promise<
 export default function IssueDetailPage() {
   const { key } = useParams<{ key: string }>();
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const backTo = issueReturnPath(searchParams.get("from"));
   usePageHeader("Issue", { hideActions: true });
   const { settings, loaded: settingsLoaded } = useSettings();
 
@@ -221,7 +223,7 @@ export default function IssueDetailPage() {
         setDeleteError(body.error || `Delete failed (${res.status})`);
         return;
       }
-      router.push("/issues");
+      router.push(backTo);
     } catch (err) {
       setDeleteError(err instanceof Error ? err.message : "Delete failed");
     } finally {
@@ -242,7 +244,7 @@ export default function IssueDetailPage() {
   if (notFound || !issue) {
     return (
       <div className="flex-1 p-4">
-        <Button variant="ghost" size="sm" onClick={() => router.push("/issues")}>
+        <Button variant="ghost" size="sm" onClick={() => router.push(backTo)}>
           <ArrowLeft className="h-4 w-4 mr-1" />
           Back
         </Button>
@@ -261,7 +263,7 @@ export default function IssueDetailPage() {
     <div className="flex-1 min-h-0 overflow-y-auto p-4">
       <div className="max-w-3xl mx-auto space-y-4 pb-8">
         <div className="flex items-center gap-2">
-          <Button variant="ghost" size="icon" onClick={() => router.push("/issues")}>
+          <Button variant="ghost" size="icon" onClick={() => router.push(backTo)}>
             <ArrowLeft className="h-4 w-4" />
           </Button>
           <span className="font-mono text-sm text-muted-foreground">{issue.key}</span>

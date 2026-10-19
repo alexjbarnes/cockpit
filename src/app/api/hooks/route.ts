@@ -9,19 +9,41 @@ function authenticate(req: NextRequest): boolean {
   return !!token && validateSession(token);
 }
 
+// Every hook event the CLI documents, so the settings surface offers the same
+// set it accepts.
 const HOOK_EVENTS = [
   "SessionStart",
+  "SessionEnd",
   "UserPromptSubmit",
+  "UserPromptExpansion",
   "PreToolUse",
   "PermissionRequest",
+  "PermissionDenied",
   "PostToolUse",
   "PostToolUseFailure",
+  "PostToolBatch",
+  "Notification",
   "Stop",
+  "StopFailure",
   "SubagentStart",
   "SubagentStop",
   "PreCompact",
   "PostCompact",
-  "SessionEnd",
+  "PreModelSwitch",
+  "PostModelSwitch",
+  "Elicitation",
+  "ElicitationResult",
+  "TaskCreated",
+  "TaskCompleted",
+  "TeammateIdle",
+  "ConfigChange",
+  "InstructionsLoaded",
+  "CwdChanged",
+  "FileChanged",
+  "DirectoryAdded",
+  "Setup",
+  "WorktreeCreate",
+  "WorktreeRemove",
 ] as const;
 
 type HookEvent = (typeof HOOK_EVENTS)[number];

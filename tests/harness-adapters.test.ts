@@ -610,13 +610,16 @@ describe("ClaudePtyAdapter", () => {
       expect(runtime.notifyPermissionDecision).toHaveBeenCalledWith("req-2", { behavior: "deny", message: "no" }, { always: false });
     });
 
-    it("passes a chosen suggestion on as the card's always answer", () => {
+    it("passes a chosen suggestion back to the CLI as updatedPermissions", () => {
       const handle = adapter.spawn(baseConfig());
       const runtime = mockPtyInstances[0];
       handle.respondToPermission("tui-net", true, { host: "example.com" }, [{ type: "addRules" }]);
       expect(runtime.notifyPermissionDecision).toHaveBeenCalledWith(
         "tui-net",
-        { behavior: "allow", updatedInput: { host: "example.com" } },
+        // The suggestion is echoed in the decision: that is what makes the CLI
+        // save the rule, and the "always" flag only means anything to a TUI
+        // dialog with a don't-ask-again key.
+        { behavior: "allow", updatedInput: { host: "example.com" }, updatedPermissions: [{ type: "addRules" }] },
         { always: true },
       );
     });

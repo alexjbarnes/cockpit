@@ -133,6 +133,22 @@ describe("trustDirectory and isDirectoryTrusted", () => {
   });
 });
 
+// A trust granted now has to be in the guard's snapshot before the next check,
+// or a wipe in between would take it with it and the directory would ask again.
+describe("a granted trust is recorded at once", () => {
+  it("refreshes the reset guard's snapshot", () => {
+    writeConfig({ projects: {} });
+    const dir = "/home/dev/repos/somewhere";
+
+    expect(trustDirectory(dir)).toBe(true);
+
+    const snapshot = JSON.parse(readFileSync(path.join(cockpitDir, "claude-config-snapshot.json"), "utf-8")) as {
+      trustedProjects: string[];
+    };
+    expect(snapshot.trustedProjects).toContain(dir);
+  });
+});
+
 // The CLI owns ~/.claude.json and writes it whenever it likes, so cockpit is
 // one of two uncoordinated writers. On 2026-09-01 a non-atomic write left the
 // file as a complete document with the tail of a longer previous write still

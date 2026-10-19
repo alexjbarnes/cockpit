@@ -17,7 +17,8 @@
  *   COCKPIT_HOOK_TIMEOUT_MS             how long to wait for any other hook (default 60s)
  *
  * Usage: cockpit-hook-bridge <eventName>
- *   eventName ∈ {PreToolUse, PostToolUse, Stop, UserPromptSubmit, Notification, PermissionRequest}
+ *   eventName is whatever Claude Code was configured with (see
+ *   src/server/claude-settings.ts); the bridge does not validate it.
  *
  * NOTE: this uses node:http directly rather than the global fetch(). fetch is
  * undici, whose default headersTimeout/bodyTimeout are 5 minutes, so a held

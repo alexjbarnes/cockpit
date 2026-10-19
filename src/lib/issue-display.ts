@@ -32,6 +32,150 @@ export interface IssueStatusGroup {
 }
 
 /**
+ * The order issues appear in inside one status group. Numbered issues
+ * (`Issue.order`, set by a drag) come first in that order; unnumbered ones
+ * follow in the array order they arrived in, which is what every list showed
+ * before any of this existed — so nothing moves until a group is first
+ * dragged.
+ *
+ * A partition rather than `(a.order ?? Infinity) - (b.order ?? Infinity)`,
+ * which compares `NaN` between two unnumbered issues and leans on the engine
+ * happening to keep them put.
+ */
+export function sortIssuesByOrder(issues: Issue[]): Issue[] {
+  return rankIssues(issues).map((entry) => entry.issue);
+}
+
+/** The rank each issue currently sorts by: numbered issues keep their `order`,
+ *  and unnumbered ones are imagined after all of them, a step apart, in the
+ *  order they arrived. Sorting by this is the same as "numbered first in their
+ *  order, then the rest as they came" — but it also gives a drag something to
+ *  land *between*, including after an issue that has never been numbered. */
+export function effectiveOrders(issues: Issue[]): Map<string, number> {
+  return new Map(rankIssues(issues).map((entry) => [entry.issue.id, entry.rank]));
+}
+
+function rankIssues(issues: Issue[]): { issue: Issue; rank: number }[] {
+  const numbered = issues.filter((issue) => typeof issue.order === "number");
+  const top = numbered.reduce((max, issue) => Math.max(max, issue.order as number), 0);
+  const ranked = issues.map((issue) => ({ issue, rank: typeof issue.order === "number" ? issue.order : 0 }));
+  // Unnumbered issues are imagined after everything numbered, a step apart in
+  // the order they arrived — which is exactly where the old "numbered first,
+  // then the rest" rule put them, but now expressible as one rank so a drop can
+  // land after one of them.
+  let next = top;
+  for (const entry of ranked) {
+    if (typeof entry.issue.order !== "number") {
+      next += ORDER_STEP;
+      entry.rank = next;
+    }
+  }
+  return ranked.sort((a, b) => a.rank - b.rank);
+}
+
+/** What a drop asks the server to do: put `key` in `status`, between the two
+ *  keys the user saw around it. Either neighbour may be absent, which means the
+ *  top or the bottom of that status. `index` is the client's own copy of the
+ *  same thing — the position within the group it can see — used to render the
+ *  drop before the server answers; it is not sent. */
+export interface IssuePlacement {
+  key: string;
+  status: string;
+  index?: number;
+  beforeKey?: string;
+  afterKey?: string;
+}
+
+/** The gap the server leaves between issues when it numbers a status. */
+export const ORDER_STEP = 1000;
+
+/**
+ * The index a drop lands at, for `placementAt`: the slot the hovered row holds
+ * in its group as the user is looking at it, which is where the moved issue
+ * goes.
+ *
+ * Read off the group with the moved issue still in it. Every index taken from
+ * the shortened group is one less than that for each row below the moved one,
+ * so it is right for a drag upwards and short for a drag downwards — the whole
+ * "it lands a row or two away from where I put it" bug. Null when the drop was
+ * not on a row at all (an empty group's own body), which means the end.
+ */
+export function dropIndex(issues: Issue[], targetStatus: string, overId: string): number | null {
+  const group = sortIssuesByOrder(issues.filter((issue) => issue.status === targetStatus));
+  const index = group.findIndex((issue) => issue.id === overId || issue.key === overId);
+  return index < 0 ? null : index;
+}
+
+/**
+ * The placement for a key dropped at `index` in a status group, from the group
+ * as displayed *without* the moved issue. Neighbours are read from that list,
+ * so a filtered view asks for the position the user saw.
+ */
+export function placementAt(status: string, key: string, index: number, groupWithoutActive: string[]): IssuePlacement {
+  const after = index > 0 ? groupWithoutActive[index - 1] : undefined;
+  const before = index < groupWithoutActive.length ? groupWithoutActive[index] : undefined;
+  return {
+    key,
+    status,
+    index,
+    ...(before ? { beforeKey: before } : {}),
+    ...(after ? { afterKey: after } : {}),
+  };
+}
+
+/**
+ * The list as it should look the moment the drop lands: the moved issue takes
+ * its new status and its new position, and the group it landed in is numbered
+ * as the server is about to number it — 1000, 2000, … in the order shown. The
+ * numbering is local (this client may only hold part of the status), but the
+ * sequence is the one the user dropped into, which is what the server then
+ * makes true of the whole. Its answer replaces exactly these issues.
+ */
+export function placeOptimistically(issues: Issue[], placement: IssuePlacement): Issue[] {
+  const moved = issues.find((issue) => issue.key === placement.key);
+  if (!moved) return issues;
+
+  const group = sortIssuesByOrder(issues.filter((issue) => issue.status === placement.status && issue.key !== placement.key));
+  const index = placement.index ?? group.length;
+  const ordered = [...group.slice(0, index), moved, ...group.slice(index)];
+  const numbers = new Map(ordered.map((issue, i) => [issue.id, (i + 1) * ORDER_STEP]));
+
+  return issues.map((issue) => {
+    const order = numbers.get(issue.id);
+    if (order === undefined) return issue;
+    return { ...issue, status: placement.status, order };
+  });
+}
+
+/**
+ * The project a session's working directory belongs to: the longest `repoPath`
+ * that contains it. Segment-aware, so a project in `/repos/cockpit` does not
+ * claim a session in `/repos/cockpit-2`, and tolerant of the exact directory
+ * and of a trailing slash on either side. A `repoPath` that is not an absolute
+ * path is not a location on this machine and never matches.
+ */
+export function projectForCwd(projects: Project[], cwd: string | undefined): Project | undefined {
+  if (!cwd) return undefined;
+  const target = stripTrailingSlash(cwd);
+  if (!target) return undefined;
+
+  let best: Project | undefined;
+  for (const project of projects) {
+    if (project.archived || !project.repoPath) continue;
+    const repo = stripTrailingSlash(project.repoPath);
+    if (!repo?.startsWith("/")) continue;
+    if (target !== repo && !target.startsWith(`${repo}/`)) continue;
+    const bestRepo = best?.repoPath ? stripTrailingSlash(best.repoPath) : "";
+    if (best === undefined || repo.length > bestRepo.length) best = project;
+  }
+  return best;
+}
+
+function stripTrailingSlash(value: string): string {
+  return value.replace(/\/+$/, "");
+}
+
+/**
  * Groups issues by status: built-in statuses first in canonical lifecycle order
  * (ISSUE_STATUSES), then any custom status present in the input (in first-seen
  * order), and drops any status with zero issues so the list page never renders
@@ -39,7 +183,7 @@ export interface IssueStatusGroup {
  * key off one project's status config — a custom status shows wherever it has
  * issues; the per-project column set lives in resolveProjectStatuses / the board.
  */
-export function groupIssuesByStatus(issues: Issue[]): IssueStatusGroup[] {
+export function groupIssuesByStatus(issues: Issue[], options?: { includeEmpty?: boolean; statuses?: string[] }): IssueStatusGroup[] {
   const byStatus = new Map<string, Issue[]>();
   const customOrder: string[] = [];
   for (const issue of issues) {
@@ -51,10 +195,22 @@ export function groupIssuesByStatus(issues: Issue[]): IssueStatusGroup[] {
     }
   }
 
+  // A caller with a project in hand passes its own status list, so a status
+  // that is empty (or disabled) still renders where the project defines it.
+  const statuses = options?.statuses ?? [...ISSUE_STATUSES, ...customOrder];
   const groups: IssueStatusGroup[] = [];
-  for (const status of [...ISSUE_STATUSES, ...customOrder]) {
+  for (const status of statuses) {
     const list = byStatus.get(status);
-    if (list && list.length > 0) groups.push({ status, issues: list });
+    if (list && list.length > 0) groups.push({ status, issues: sortIssuesByOrder(list) });
+    else if (options?.includeEmpty) groups.push({ status, issues: [] });
+  }
+  // With an explicit status list, an issue sitting in a status the list does not
+  // name (disabled in the project, or removed from its config) would otherwise
+  // vanish from the view entirely — the same rule boardColumns follows.
+  for (const status of byStatus.keys()) {
+    if (statuses.includes(status)) continue;
+    const list = byStatus.get(status);
+    if (list && list.length > 0) groups.push({ status, issues: sortIssuesByOrder(list) });
   }
   return groups;
 }
@@ -379,4 +535,16 @@ export function actorHref(actor: IssueActor): string | undefined {
     default:
       return undefined;
   }
+}
+
+/**
+ * Where an issue was opened from: a `?from=` path the issue's own pages return
+ * to, so an issue opened from a session's modal closes and deletes back to that
+ * session. Only a path inside cockpit is honoured — anything else (an absolute
+ * URL, a protocol-relative `//host`, an absent value) falls back to the Issues
+ * list rather than becoming an open redirect.
+ */
+export function issueReturnPath(from: string | null | undefined): string {
+  if (!from?.startsWith("/") || from.startsWith("//")) return "/issues";
+  return from;
 }

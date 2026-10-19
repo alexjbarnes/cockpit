@@ -48,12 +48,101 @@ export function translateHookEvent(eventName: HookEventName, payload: Record<str
     // Carries nothing to render: pty-runtime reads its permission_mode.
     case "SessionStart":
       return [];
+    case "PostToolUseFailure":
+      return translatePostToolUseFailure(payload);
+    case "PermissionDenied":
+      return translatePermissionDenied(payload);
+    case "SessionEnd":
+      return [{ type: "system_message", text: `__session_end::${stringOr(payload.reason, "unknown")}` }];
+    case "Elicitation":
+      return translateElicitation(payload);
+    case "ElicitationResult":
+      return [{ type: "system_message", text: `__elicitation_result::${stringOr(payload.action, "unknown")}` }];
+    case "TaskCreated":
+      return [taskMarker("created", payload)];
+    case "TaskCompleted":
+      return [taskMarker("completed", payload)];
+    case "TeammateIdle":
+      return [{ type: "system_message", text: `__teammate_idle::${stringOr(payload.teammate_name, "")}` }];
   }
+}
+
+/**
+ * A tool that failed. The row has to be closed either way: PostToolUse fires
+ * only on success, so without this the card spins in the chat for the rest of
+ * the session and the turn reads as stuck.
+ */
+function translatePostToolUseFailure(payload: Record<string, unknown>): ParsedEvent[] {
+  const toolId = stringOr(payload.tool_use_id, "");
+  const toolInput = payload.tool_input as Record<string, unknown> | undefined;
+  const what = payload.is_timeout === true ? "Timed out" : payload.is_interrupt === true ? "Interrupted" : "Failed";
+  const error = stringOr(payload.error, "");
+  return [
+    {
+      type: "tool_result",
+      toolId: toolId || undefined,
+      toolOutput: error ? `${what}: ${error}` : what,
+      filePath: extractFilePath(toolInput),
+    },
+  ];
+}
+
+/**
+ * The auto-mode classifier refused a call. Nothing else reports it, and the
+ * reason is the only place the user can see why their session stopped doing
+ * anything — so the row is closed with it, and the marker carries it for the
+ * transcript.
+ */
+function translatePermissionDenied(payload: Record<string, unknown>): ParsedEvent[] {
+  const toolName = stringOr(payload.tool_name, "unknown");
+  const toolId = stringOr(payload.tool_use_id, "");
+  const reason = stringOr(payload.reason, "");
+  const events: ParsedEvent[] = [];
+  if (toolId) {
+    events.push({ type: "tool_result", toolId, toolOutput: reason ? `Denied: ${reason}` : "Denied" });
+  }
+  events.push({ type: "system_message", text: `__permission_denied::${toolName}::${reason}` });
+  return events;
+}
+
+/**
+ * An MCP server asking the user for input. The dialog lives in the terminal
+ * and no cockpit card can answer it, so the message says so rather than
+ * pretending otherwise — the point is that the session is waiting on a person.
+ */
+function translateElicitation(payload: Record<string, unknown>): ParsedEvent[] {
+  const server = stringOr(payload.mcp_server_name, "An MCP server");
+  const message = stringOr(payload.message, "");
+  const detail = message ? `: ${message}` : ".";
+  return [{ type: "system_message", text: `${server} is asking for input in the terminal${detail} Answer it there; cockpit cannot.` }];
+}
+
+function taskMarker(kind: "created" | "completed", payload: Record<string, unknown>): ParsedEvent {
+  const id = stringOr(payload.task_id, "");
+  const subject = stringOr(payload.task_subject, "");
+  return { type: "system_message", text: `__task_${kind}::${id}::${subject}` };
 }
 
 /** PermissionRequest payloads don't carry a request ID; cockpit synthesises one. */
 export function newPermissionRequestId(): string {
   return uuidv4();
+}
+
+/**
+ * The CLI's own "always allow" answers for the call it is asking about, out of
+ * a PermissionRequest payload: add a rule, add directories, switch mode. They
+ * are what the CLI's own dialog would offer, so the card can offer the same
+ * alternatives, and the one the user picks travels back as the decision's
+ * `updatedPermissions`.
+ *
+ * Anything that is not an object is dropped rather than passed on: the CLI
+ * validates every entry and rejects the whole answer if one is malformed.
+ */
+export function permissionSuggestionsFrom(payload: Record<string, unknown>): Record<string, unknown>[] | undefined {
+  const raw = payload.permission_suggestions;
+  if (!Array.isArray(raw)) return undefined;
+  const suggestions = raw.filter((s): s is Record<string, unknown> => !!s && typeof s === "object" && !Array.isArray(s));
+  return suggestions.length > 0 ? suggestions : undefined;
 }
 
 function translatePreToolUse(payload: Record<string, unknown>): ParsedEvent[] {
@@ -143,6 +232,7 @@ function translatePermissionRequest(payload: Record<string, unknown>): ParsedEve
       toolName,
       toolInput: toolInput ? JSON.stringify(toolInput) : "",
       rawToolInput: toolInput,
+      permissionSuggestions: permissionSuggestionsFrom(payload),
     },
   ];
 }

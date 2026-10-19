@@ -75,15 +75,7 @@ Scopes:
 
 ### Hooks
 
-`/hooks` manages event-driven automation. Hooks fire on Claude Code events:
-
-- UserPromptSubmit
-- PreToolUse (blocking; can deny a tool call)
-- PermissionRequest (blocking; can auto-allow or deny)
-- Stop
-- SubagentStop
-
-Each hook is a shell command. Scopes: Global, Project, Local (project-local, not committed to the repo).
+`/hooks` manages event-driven automation. Hooks fire on Claude Code events. The page offers the full set the CLI documents, from `SessionStart` and `UserPromptSubmit` through `PreToolUse` and `PermissionRequest` to `SessionEnd`, `Elicitation` and the task/teammate lifecycle; `PreToolUse`, `PermissionRequest` and the other blocking ones can deny or stop what they wrap. Each hook is a shell command. Scopes: Global, Project, Local (project-local, not committed to the repo).
 
 ### MCP servers
 

@@ -57,6 +57,10 @@ export interface HarnessSpawnConfig {
   willResume: boolean;
   model?: string;
   providerEnvVars?: Record<string, string>;
+  /** Whether this session may use auto permission mode. False on a model no
+   *  Anthropic account backs: auto's classifier is an Anthropic service, and
+   *  without it the CLI raises a billing-notice dialog that blocks the turn. */
+  autoModeEnabled?: boolean;
   /** Bare model id for the "subagent" slot, pre-resolved via resolveProviderModel
    *  when it differs from the main model. Maps to ANTHROPIC_SMALL_FAST_MODEL. */
   subagentModel?: string;

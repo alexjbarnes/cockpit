@@ -3,6 +3,10 @@ import { join } from "node:path";
 import { getClaudeUserConfigFile } from "@/server/paths";
 import { getSessionManager } from "@/server/singleton";
 
+// Re-exported so callers already reading this module's list can ask about a
+// name without a second import.
+export { isAccountConnector, isConfiguredMcpServer } from "@/server/mcp-server-names";
+
 function readMcpServers(filePath: string): string[] {
   try {
     if (!existsSync(filePath)) return [];
@@ -13,10 +17,6 @@ function readMcpServers(filePath: string): string[] {
   }
 }
 
-/** Names the two config files hold for `cwd`: the user's global Claude config
- *  and the project's .mcp.json. The runtime list `discoverMcpServerNames` adds
- *  on top survives a config reset, so it cannot answer whether a server is
- *  still *configured* — a job's pre-flight needs this one. */
 export function configuredMcpServerNames(cwd?: string | null): string[] {
   const globalServers = readMcpServers(getClaudeUserConfigFile());
   const projectServers = cwd ? readMcpServers(join(cwd, ".mcp.json")) : [];

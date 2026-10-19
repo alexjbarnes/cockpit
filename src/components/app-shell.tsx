@@ -6,17 +6,18 @@ import { usePathname } from "next/navigation";
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { AgentTranscriptProvider } from "@/components/agent-transcript-modal";
 import { AuthGuard } from "@/components/auth-guard";
+import { SessionIssuesButton } from "@/components/issues/session-issues-button";
 import { SearchButton } from "@/components/search-modal";
+import { SessionAlerts } from "@/components/session-alerts";
 import { Sidebar, type SidebarHandle } from "@/components/sidebar";
 import { BackgroundTasksButton } from "@/components/task-indicator";
-import { TodoIndicator } from "@/components/todo-indicator";
 import { Button } from "@/components/ui/button";
 import { UsageButton } from "@/components/usage-modal";
 import { useEmbedded } from "@/hooks/use-embedded";
 import { WebSocketProvider } from "@/hooks/use-websocket";
 import { headerActionsVisibility } from "@/lib/header-actions";
 import { isModalPath, type PageModalMessage, pageModalMessage } from "@/lib/page-modal";
-import type { BackgroundTask, InitData, TodoItem } from "@/types";
+import type { BackgroundTask, InitData } from "@/types";
 
 export interface SidebarSectionConfig {
   id: string;
@@ -53,8 +54,6 @@ interface ShellContextValue {
   setRuntime: (runtime: "pty" | "stream") => void;
   backgroundTasks: BackgroundTask[];
   setBackgroundTasks: (tasks: BackgroundTask[]) => void;
-  todos: TodoItem[];
-  setTodos: (todos: TodoItem[]) => void;
   initData: InitData | null;
   setInitData: (data: InitData | null) => void;
   sidebarSections: Map<string, SidebarSectionConfig>;
@@ -77,8 +76,6 @@ const ShellContext = createContext<ShellContextValue>({
   setRuntime: () => {},
   backgroundTasks: [],
   setBackgroundTasks: () => {},
-  todos: [],
-  setTodos: () => {},
   initData: null,
   setInitData: () => {},
   sidebarSections: new Map(),
@@ -243,7 +240,6 @@ export function AppShell({ children }: { children: ReactNode }) {
   const [sessionId, setSessionIdState] = useState<string | undefined>(undefined);
   const [sessionModel, setSessionModelState] = useState<string | undefined>(undefined);
   const [backgroundTasks, setBackgroundTasks] = useState<BackgroundTask[]>([]);
-  const [todos, setTodos] = useState<TodoItem[]>([]);
   const [initData, setInitData] = useState<InitData | null>(null);
   const [sidebarSectionsMap, setSidebarSectionsMap] = useState<Map<string, SidebarSectionConfig>>(new Map());
   const [runtime, setRuntimeState] = useState<"pty" | "stream">("stream");
@@ -327,8 +323,6 @@ export function AppShell({ children }: { children: ReactNode }) {
             setRuntime,
             backgroundTasks,
             setBackgroundTasks,
-            todos,
-            setTodos,
             initData,
             setInitData,
             sidebarSections: sidebarSectionsMap,
@@ -340,7 +334,17 @@ export function AppShell({ children }: { children: ReactNode }) {
           }}
         >
           <AgentTranscriptProvider sessionId={sessionId} cwd={cwd}>
-            <div className="fixed inset-0 flex">
+            {/* The app draws under the system bars (viewport-fit=cover), so it
+                pads its own content back out of the notch and the gesture bar. */}
+            <div
+              className="fixed inset-0 flex"
+              style={{
+                paddingTop: "env(safe-area-inset-top)",
+                paddingBottom: "env(safe-area-inset-bottom)",
+                paddingLeft: "env(safe-area-inset-left)",
+                paddingRight: "env(safe-area-inset-right)",
+              }}
+            >
               {!embedded && <Sidebar ref={sidebarRef} />}
               <div className="flex-1 min-h-0 min-w-0 flex flex-col">
                 <header className="shrink-0 flex items-center gap-2 border-b px-4 py-2 bg-background">
@@ -357,9 +361,9 @@ export function AppShell({ children }: { children: ReactNode }) {
                     <div className="flex items-center gap-2 shrink-0 ml-auto">
                       {actions.showSessionActions && (
                         <>
+                          <SessionIssuesButton />
                           {cwd && <NewTerminalButton cwd={cwd} />}
                           <SearchButton />
-                          {cwd && <TodoIndicator todos={todos} />}
                           {cwd && <BackgroundTasksButton tasks={backgroundTasks} />}
                         </>
                       )}
@@ -383,6 +387,9 @@ export function AppShell({ children }: { children: ReactNode }) {
                 <main className="flex-1 min-h-0 min-w-0 flex flex-col">{embedded && !isModalPath(pathname) ? null : children}</main>
               </div>
             </div>
+            {/* Only the real shell: the page-modal iframe renders its own, and
+                two shells would each raise a banner for the same event. */}
+            {!embedded && <SessionAlerts />}
             {embedded && <EmbeddedPageBridge pathname={pathname} />}
           </AgentTranscriptProvider>
         </ShellContext.Provider>

@@ -237,6 +237,13 @@ export default function SessionSettingsPage() {
             </p>
           </div>
         ) : null}
+        <SettingRow label="Alert me about other sessions">
+          <Toggle enabled={settings.sessionAlerts} onToggle={() => updateSetting("sessionAlerts", !settings.sessionAlerts)} />
+        </SettingRow>
+        <p className="-mt-1 pb-2 text-xs text-muted-foreground">
+          A banner at the top of the screen when a session that is not the one you are looking at finishes, asks a question, or waits for
+          approval. A permission can be approved from the banner without leaving what you were doing.
+        </p>
         <SettingRow label="Sonnet 4.6 1M context (needs usage credits)">
           <Toggle enabled={settings.allowSonnet1m} onToggle={() => updateSetting("allowSonnet1m", !settings.allowSonnet1m)} />
         </SettingRow>

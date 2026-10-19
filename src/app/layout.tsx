@@ -25,6 +25,11 @@ export const viewport: Viewport = {
   maximumScale: 1,
   userScalable: false,
   interactiveWidget: "resizes-content",
+  // Installed on Android the app otherwise stops above the gesture bar, which
+  // leaves a black block under a UI that is otherwise all one colour. Cover
+  // lets it draw under the system bars; the shell pads its content back out
+  // with env(safe-area-inset-*).
+  viewportFit: "cover",
   themeColor: [
     { media: "(prefers-color-scheme: light)", color: "#ffffff" },
     { media: "(prefers-color-scheme: dark)", color: "#1a1a1a" },

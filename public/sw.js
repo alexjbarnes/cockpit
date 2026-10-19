@@ -60,3 +60,120 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 });
+
+// ── Web Push ────────────────────────────────────────────────────────────────
+// A push from cockpit carries the inbox message that caused it: the service
+// worker has only the payload to work with, so the title, body and where a tap
+// should land all travel in it. Nothing is fetched to SHOW it — the
+// notification must appear whether or not the app is open, and whether or not
+// it can reach the server, since that is the point of a push.
+
+self.addEventListener("push", (event) => {
+  let payload = {};
+  try {
+    payload = event.data ? event.data.json() : {};
+  } catch {
+    // A push with no readable body still has to show something: a silent push
+    // is one the browser is allowed to drop.
+    payload = { title: "Cockpit", body: "" };
+  }
+  const title = payload.title || "Cockpit";
+  // Two actions is what a browser will show — Chrome's Notification.maxActions
+  // is 2 — and on Android they appear only once the notification is expanded.
+  // A permission request gets Approve and Deny; an inbox message gets its two;
+  // a push with neither is just a banner.
+  const actions = payload.approval
+    ? [
+        { action: "approve", title: "Approve" },
+        { action: "deny", title: "Deny" },
+      ]
+    : payload.messageId
+      ? [
+          { action: "mark-read", title: "Mark read" },
+          { action: "delete", title: "Delete" },
+        ]
+      : [];
+  event.waitUntil(
+    self.registration.showNotification(title, {
+      body: payload.body || "",
+      icon: "/icon-192.png",
+      // Android draws only the alpha of this one, in white: a colour icon
+      // arrives as a white square. See scripts/make-notification-badge.mjs.
+      badge: "/notification-badge.png",
+      tag: payload.tag || undefined,
+      actions,
+      // Waits on the user rather than reporting news: keep it on screen until
+      // they deal with it. Ignored where it is unsupported.
+      requireInteraction: payload.requireInteraction === true,
+      data: { url: payload.url || "/inbox", messageId: payload.messageId, approval: payload.approval },
+    })
+  );
+});
+
+// Acting on the notification itself: the same request the inbox page makes,
+// sent straight from here so it works with the app closed. The fetch is
+// same-origin, so the session cookie rides with it.
+async function actOnMessage(action, id) {
+  try {
+    const res = await fetch(`/api/inbox/${encodeURIComponent(id)}`, {
+      method: action === "delete" ? "DELETE" : "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: action === "delete" ? undefined : JSON.stringify({ read: true }),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+/** Approve or deny the permission request a notification is about, through the
+ *  same REST route the app itself would use. */
+async function actOnApproval(allowed, approval) {
+  try {
+    const res = await fetch(
+      `/api/sessions/${encodeURIComponent(approval.sessionId)}/permissions/${encodeURIComponent(approval.requestId)}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ allowed }),
+      },
+    );
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+// An action button acts and leaves the app alone. Anything else — a tap on the
+// notification body — focuses a window already showing cockpit rather than
+// opening a second one, and lands on the page the notification named.
+self.addEventListener("notificationclick", (event) => {
+  const data = event.notification.data || {};
+  if (event.action === "approve" || event.action === "deny") {
+    event.notification.close();
+    if (data.approval) {
+      event.waitUntil(actOnApproval(event.action === "approve", data.approval));
+    }
+    return;
+  }
+  if (event.action === "mark-read" || event.action === "delete") {
+    event.notification.close();
+    if (data.messageId) {
+      event.waitUntil(actOnMessage(event.action, data.messageId));
+    }
+    return;
+  }
+  event.notification.close();
+  const target = new URL(data.url || "/inbox", self.location.origin).href;
+  event.waitUntil(
+    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clients) => {
+      for (const client of clients) {
+        if (new URL(client.url).origin === self.location.origin) {
+          client.navigate(target);
+          return client.focus();
+        }
+      }
+      return self.clients.openWindow(target);
+    })
+  );
+});

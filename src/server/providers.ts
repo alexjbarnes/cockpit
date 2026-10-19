@@ -11,6 +11,9 @@ export const OPENCODE_ZEN_PROVIDER_ID = "zen";
 export const OPENCODE_ZEN_GO_PROVIDER_ID = "zen-go";
 export const DEEPSEEK_PROVIDER_ID = "deepseek";
 export const COMMANDCODE_PROVIDER_ID = "commandcode";
+export const GROQ_PROVIDER_ID = "groq";
+export const GEMINI_PROVIDER_ID = "gemini";
+export const NVIDIA_PROVIDER_ID = "nvidia";
 /** Test escape hatches mirror COCKPIT_OPENROUTER_BASE_URL. */
 export function zenBaseUrl(): string {
   return process.env.COCKPIT_ZEN_BASE_URL || "https://opencode.ai/zen/v1";
@@ -38,12 +41,31 @@ function deepseekApiRoot(): string {
   return deepseekBaseUrl().replace(/\/anthropic\/?$/, "");
 }
 
+/** Groq's OpenAI-compatible API. Its free tier is per-model and month-round:
+ *  a daily request and token allowance with no card, which is why it is here. */
+export function groqBaseUrl(): string {
+  return process.env.COCKPIT_GROQ_BASE_URL || "https://api.groq.com/openai/v1";
+}
+/** Google AI Studio's OpenAI compatibility layer. Gemini is served natively on
+ *  a different wire, so cockpit speaks to this shim and translates as usual. */
+export function geminiBaseUrl(): string {
+  return process.env.COCKPIT_GEMINI_BASE_URL || "https://generativelanguage.googleapis.com/v1beta/openai";
+}
+/** NVIDIA's build.nvidia.com NIM endpoints: free hosted models on a trial
+ *  basis (their terms say development and evaluation, not production). */
+export function nvidiaBaseUrl(): string {
+  return process.env.COCKPIT_NVIDIA_BASE_URL || "https://integrate.api.nvidia.com/v1";
+}
+
 const BUILTIN_CONFIG_IDS = new Set<string>([
   OPENROUTER_PROVIDER_ID,
   OPENCODE_ZEN_PROVIDER_ID,
   OPENCODE_ZEN_GO_PROVIDER_ID,
   DEEPSEEK_PROVIDER_ID,
   COMMANDCODE_PROVIDER_ID,
+  GROQ_PROVIDER_ID,
+  GEMINI_PROVIDER_ID,
+  NVIDIA_PROVIDER_ID,
 ]);
 
 /** Catalog-backed built-ins (openrouter, zen, zen-go, deepseek). Sessions on
@@ -70,6 +92,9 @@ const OPENAI_WIRE_BUILTINS: Record<string, { name: string; keyEnvVar: string; ba
     baseUrl: commandCodeBaseUrl,
     anthropicMessagesPath: "/messages",
   },
+  [GROQ_PROVIDER_ID]: { name: "Groq", keyEnvVar: "GROQ_API_KEY", baseUrl: groqBaseUrl },
+  [GEMINI_PROVIDER_ID]: { name: "Google AI Studio (Gemini)", keyEnvVar: "GEMINI_API_KEY", baseUrl: geminiBaseUrl },
+  [NVIDIA_PROVIDER_ID]: { name: "NVIDIA NIM", keyEnvVar: "NVIDIA_NIM_API_KEY", baseUrl: nvidiaBaseUrl },
 };
 
 function prefsDir(): string {
@@ -217,6 +242,9 @@ const BUILTIN_NAMES: Record<string, string> = {
   [OPENCODE_ZEN_GO_PROVIDER_ID]: "OpenCode Go",
   [DEEPSEEK_PROVIDER_ID]: "DeepSeek",
   [COMMANDCODE_PROVIDER_ID]: "CommandCode",
+  [GROQ_PROVIDER_ID]: "Groq",
+  [GEMINI_PROVIDER_ID]: "Google AI Studio (Gemini)",
+  [NVIDIA_PROVIDER_ID]: "NVIDIA NIM",
 };
 
 /** Persist a built-in's user state (key, enabled set, and for zen the synced
@@ -552,6 +580,119 @@ export async function syncDeepSeekModels(keyOverride?: string): Promise<SyncResu
   }
 }
 
+/**
+ * The catalog sync shared by the plain OpenAI-wire built-ins whose /models
+ * endpoint authenticates the key (Groq, Google AI Studio, NVIDIA NIM). The
+ * live list is the source of truth once a key is present; models.dev's list
+ * for the same provider is what an unconnected card can browse in the
+ * meantime. A 401/403 is the provider refusing the key — the connect route
+ * turns that into its own answer — and everything else is a transport problem,
+ * so reporting it as a rejected key would send the user off to re-paste a key
+ * that was never wrong.
+ */
+/** Ids that answer something other than /chat/completions: embeddings,
+ *  rerankers, speech and audio, image and video generators, translation
+ *  models and safety classifiers. Vision-language chat models stay — they take
+ *  an image part and answer with text like any other. */
+const NON_CHAT_MODEL =
+  /embed|rerank|whisper|orpheus|tts|voice|speech|magpie|gliner|usd|esm|cosmos|sparse|bevformer|streampetr|active-speaker|detect|diffusion|flux|image|paligemma|content-safety|safety|guard|translate|nemoretriever|video/;
+
+interface WireCatalog {
+  id: string;
+  name: string;
+  keyEnvVar: string;
+  baseUrl: () => string;
+  modelsDevId: string;
+  /** Which of the provider's ids are worth offering (Gemini's list carries
+   *  embeddings and media models too). */
+  keep?: (id: string) => boolean;
+}
+
+async function syncOpenAIWireCatalog(opts: WireCatalog, keyOverride?: string): Promise<SyncResult> {
+  const stored = loadBuiltinStored(opts.id);
+  const apiKey = keyOverride ?? stored?.envVars?.[opts.keyEnvVar];
+  try {
+    const meta = await fetchModelsDevModels(opts.modelsDevId);
+    let ids = Object.keys(meta).filter((id) => !opts.keep || opts.keep(id));
+    if (apiKey) {
+      const res = await fetch(`${opts.baseUrl()}/models`, {
+        headers: { Authorization: `Bearer ${apiKey}` },
+        signal: AbortSignal.timeout(30_000),
+      });
+      if (res.status === 401 || res.status === 403) return { ok: false, error: `${opts.name} rejected the API key`, rejected: true };
+      if (!res.ok) return { ok: false, error: `Could not reach ${opts.name} (HTTP ${res.status})` };
+      const body = (await res.json()) as { data?: Array<{ id?: string }> };
+      const live = (body.data ?? [])
+        .map((m) => m.id)
+        .filter((id): id is string => !!id)
+        .filter((id) => !opts.keep || opts.keep(id));
+      if (live.length > 0) ids = live;
+    }
+    if (ids.length === 0) return { ok: false, error: `${opts.name} returned an empty model list` };
+    const models = ids.map((id) => modelFromMeta(id, meta[id]));
+    saveSyncedBuiltin(opts.id, opts.keyEnvVar, stored, apiKey, models);
+    return { ok: true, modelCount: models.length };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+/** Groq: the most usable card-free tier of the three, per model and per day. */
+export function syncGroqModels(keyOverride?: string): Promise<SyncResult> {
+  return syncOpenAIWireCatalog(
+    {
+      id: GROQ_PROVIDER_ID,
+      name: "Groq",
+      keyEnvVar: "GROQ_API_KEY",
+      baseUrl: groqBaseUrl,
+      modelsDevId: "groq",
+      // Groq's list is small and half of it is not a chat model: whisper,
+      // orpheus speech, prompt-guard classifiers. What is left is the point of
+      // the provider.
+      keep: (id) => !NON_CHAT_MODEL.test(id),
+    },
+    keyOverride,
+  );
+}
+
+/** Google AI Studio, spoken to through its OpenAI compatibility layer. */
+export function syncGeminiModels(keyOverride?: string): Promise<SyncResult> {
+  return syncOpenAIWireCatalog(
+    {
+      id: GEMINI_PROVIDER_ID,
+      name: "Google AI Studio",
+      keyEnvVar: "GEMINI_API_KEY",
+      baseUrl: geminiBaseUrl,
+      modelsDevId: "google",
+      // Google's compatibility list carries the embedding, live-media and
+      // computer-use models beside the chat ones; the picker is for chat. The
+      // "-live" family (live-translate, *-live-preview) speaks Google's Live
+      // API over a websocket rather than /chat/completions, and computer-use is
+      // a tool-loop model, so both would fail in a session.
+      keep: (id) => /^(gemini|gemma)-/.test(id) && !NON_CHAT_MODEL.test(id) && !/aqa|native-audio|-live|computer-use|robotics|veo/.test(id),
+    },
+    keyOverride,
+  );
+}
+
+/** NVIDIA NIM: free hosted endpoints on trial terms (development and
+ *  evaluation, per their API trial agreement), not a production workhorse. */
+export function syncNvidiaModels(keyOverride?: string): Promise<SyncResult> {
+  return syncOpenAIWireCatalog(
+    {
+      id: NVIDIA_PROVIDER_ID,
+      name: "NVIDIA NIM",
+      keyEnvVar: "NVIDIA_NIM_API_KEY",
+      baseUrl: nvidiaBaseUrl,
+      modelsDevId: "nvidia",
+      // Its catalog is over a hundred ids and most of them are embeddings,
+      // rerankers, vision and video pipelines, TTS and safety classifiers.
+      keep: (id) => !NON_CHAT_MODEL.test(id),
+    },
+    keyOverride,
+  );
+}
+
 /** One entry of CommandCode's public model list. Its `supported_endpoints` is
  *  the whole reason this provider is different: the same key serves models on
  *  two wires, and the list says which. */
@@ -620,6 +761,9 @@ export function startBuiltinModelSync(): void {
       [OPENCODE_ZEN_GO_PROVIDER_ID, () => syncGoModels()],
       [DEEPSEEK_PROVIDER_ID, () => syncDeepSeekModels()],
       [COMMANDCODE_PROVIDER_ID, () => syncCommandCodeModels()],
+      [GROQ_PROVIDER_ID, () => syncGroqModels()],
+      [GEMINI_PROVIDER_ID, () => syncGeminiModels()],
+      [NVIDIA_PROVIDER_ID, () => syncNvidiaModels()],
     ];
     for (const [id, sync] of syncs) {
       const syncedAt = loadBuiltinStored(id)?.syncedAt ?? 0;
@@ -675,6 +819,13 @@ function rebuildCache(custom: Provider[]): void {
     buildOpenAIWireProvider(OPENCODE_ZEN_PROVIDER_ID, loadBuiltinStored(OPENCODE_ZEN_PROVIDER_ID)),
     buildOpenAIWireProvider(OPENCODE_ZEN_GO_PROVIDER_ID, loadBuiltinStored(OPENCODE_ZEN_GO_PROVIDER_ID)),
     buildDeepSeekProvider(loadBuiltinStored(DEEPSEEK_PROVIDER_ID)),
+    // Every id in BUILTIN_CONFIG_IDS needs a line here: this list is what the
+    // providers API and the settings page see, and a built-in missing from it
+    // has no card to connect it with, however well the rest of it works.
+    buildOpenAIWireProvider(COMMANDCODE_PROVIDER_ID, loadBuiltinStored(COMMANDCODE_PROVIDER_ID)),
+    buildOpenAIWireProvider(GROQ_PROVIDER_ID, loadBuiltinStored(GROQ_PROVIDER_ID)),
+    buildOpenAIWireProvider(GEMINI_PROVIDER_ID, loadBuiltinStored(GEMINI_PROVIDER_ID)),
+    buildOpenAIWireProvider(NVIDIA_PROVIDER_ID, loadBuiltinStored(NVIDIA_PROVIDER_ID)),
     ...custom.map((p) => ({ ...p, models: applyContextSizeOverrides(p.models, p.contextSizeOverrides) })),
   ];
   cacheMtimeMs = providersMtimeMs();
@@ -772,4 +923,17 @@ export function resolveProviderModel(modelId: string): { provider: Provider; mod
     if (model) return { provider, model };
   }
   return null;
+}
+
+/**
+ * Whether `model` runs on Anthropic — the one provider whose account backs the
+ * auto permission mode's classifier. On any other provider the classifier is
+ * not available, and the CLI's fallback is a dialog asking the user to
+ * acknowledge a billing notice, which blocks the turn until someone presses
+ * Enter in the terminal. An id no provider claims counts as Anthropic, as it
+ * always has.
+ */
+export function modelRunsOnAnthropic(model: string | undefined): boolean {
+  const resolved = resolveProviderModel(model ?? "");
+  return !resolved || resolved.provider.id === "anthropic";
 }

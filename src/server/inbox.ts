@@ -79,6 +79,7 @@ export function addInboxMessage(msg: {
     priority: entry.priority,
     source: msg.sessionId ? "session" : "inbox",
     url: `/inbox/${entry.id}`,
+    messageId: entry.id,
     providerIds: msg.notifyProviders,
   });
   return { entry, outcome };

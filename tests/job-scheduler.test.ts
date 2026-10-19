@@ -171,6 +171,34 @@ describe("JobScheduler", () => {
       expect(mcpState.checks, "the config is checked, so a wipe can be repaired before giving up").toBe(1);
     });
 
+    // Account connectors live on the Claude account, not in a config file, so
+    // the pre-flight cannot see them — and a job naming one used to fail
+    // instantly, which is every scheduled job on a machine that has one in its
+    // list.
+    it("runs a job whose only server is an account connector", async () => {
+      const job = makeJob({ mcpServers: ["claude.ai Microsoft 365"] });
+      vi.mocked(loadJobs).mockReturnValue([job]);
+      mcpState.configured = [];
+
+      const promise = scheduler.triggerJob("job-1");
+      await vi.waitFor(() => expect(sm.sendMessage).toHaveBeenCalled());
+      sm.emitEvent({ type: "message_done", message: { content: "Done." } });
+      sm.emitStatus("idle");
+
+      const run = await promise;
+      expect(run.configFailure).toBeUndefined();
+      expect(run.status).toBe("success");
+    });
+
+    it("still fails a job naming a file server that is configured nowhere", async () => {
+      const job = makeJob({ mcpServers: ["gmail"] });
+      vi.mocked(loadJobs).mockReturnValue([job]);
+      mcpState.configured = [];
+
+      const run = await scheduler.triggerJob("job-1");
+      expect(run.configFailure).toBe(true);
+    });
+
     it("runs a job whose servers are all configured", async () => {
       const job = makeJob({ mcpServers: ["gmail"] });
       vi.mocked(loadJobs).mockReturnValue([job]);

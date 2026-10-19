@@ -34,6 +34,7 @@ export interface Settings {
   issuesEnabled: boolean;
   modalPagesEnabled: boolean;
   allowSonnet1m: boolean;
+  sessionAlerts: boolean;
   terminalFontSize: number;
   terminalTheme: TerminalTheme;
   terminalScrollback: number;
@@ -55,6 +56,7 @@ const defaultSettings: Settings = {
   issuesEnabled: false,
   modalPagesEnabled: true,
   allowSonnet1m: false,
+  sessionAlerts: false,
   terminalFontSize: 14,
   terminalTheme: "dark" as TerminalTheme,
   terminalScrollback: 1000,

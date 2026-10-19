@@ -1,4 +1,5 @@
 import path from "node:path";
+import { rememberClaudeConfig } from "@/server/claude-config-guard";
 import { readClaudeUserConfig, updateClaudeUserConfig } from "@/server/claude-user-config";
 
 /**
@@ -48,7 +49,7 @@ export function isDirectoryTrusted(dir: string): boolean {
  */
 export function trustDirectory(dir: string): boolean {
   const key = path.resolve(dir);
-  return updateClaudeUserConfig((data) => {
+  const wrote = updateClaudeUserConfig((data) => {
     const projects = (data.projects ?? {}) as Record<string, Record<string, unknown>>;
     const existing = projects[key];
     // Merge rather than replace: an entry can already exist carrying the CLI's
@@ -59,4 +60,11 @@ export function trustDirectory(dir: string): boolean {
     data.projects = projects;
     return true;
   });
+  // Keep the reset guard's record current: a trust granted now and lost to a
+  // wipe before the next check would otherwise not be in the snapshot.
+  if (wrote) {
+    const read = readClaudeUserConfig();
+    if (read) rememberClaudeConfig(read.data);
+  }
+  return wrote;
 }

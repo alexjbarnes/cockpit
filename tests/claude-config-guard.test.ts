@@ -38,7 +38,11 @@ const HEALTHY = {
   numStartups: 40,
   firstStartTime: "2026-06-01T10:00:00.000Z",
   mcpServers: { gmail: { command: "npx" }, conduit: { type: "http", url: "http://example" } },
-  projects: { "/home/dev/repos/cockpit": { hasTrustDialogAccepted: true } },
+  projects: {
+    "/home/dev/repos/cockpit": { hasTrustDialogAccepted: true },
+    "/home/dev/repos/HomeLab": { hasTrustDialogAccepted: true, allowedTools: ["Bash"] },
+    "/home/dev/tmp/scratch": { lastCost: 1.5 },
+  },
 };
 
 beforeEach(() => {
@@ -72,6 +76,82 @@ describe("the reset guard", () => {
     expect(getInboxMessages()).toEqual([]);
   });
 
+  // A reset takes the whole projects map, so every directory the user had
+  // trusted starts asking again — the session that follows shows the CLI's
+  // trust card instead of starting. The snapshot carries them, and only a
+  // detected reset puts them back.
+  describe("directory trust", () => {
+    const trusted = (data: Record<string, unknown>) =>
+      Object.entries((data.projects ?? {}) as Record<string, Record<string, unknown>>)
+        .filter(([, e]) => e?.hasTrustDialogAccepted === true)
+        .map(([dir]) => dir)
+        .sort();
+
+    it("remembers the trusted directories, and only those", () => {
+      writeConfig(HEALTHY);
+      checkClaudeUserConfig();
+
+      const snapshot = JSON.parse(readFileSync(snapshotFile(), "utf-8")) as { trustedProjects: string[] };
+      expect(snapshot.trustedProjects.sort()).toEqual(["/home/dev/repos/HomeLab", "/home/dev/repos/cockpit"]);
+    });
+
+    it("puts trust back when the config comes back reset", () => {
+      writeConfig(HEALTHY);
+      checkClaudeUserConfig();
+      writeConfig({ numStartups: 2, firstStartTime: "2026-10-09T16:34:52.425Z", projects: {} });
+
+      const report = checkClaudeUserConfig();
+
+      expect(report.action).toBe("restored");
+      expect(report.trustRestored?.sort()).toEqual(["/home/dev/repos/HomeLab", "/home/dev/repos/cockpit"]);
+      expect(trusted(readConfig())).toEqual(["/home/dev/repos/HomeLab", "/home/dev/repos/cockpit"]);
+      expect(getInboxMessages()[0].body).toMatch(/Trust put back for 2 directories/);
+    });
+
+    // The reset keeps whatever the CLI wrote for a directory, and only the
+    // trust flag is cockpit's to restore.
+    it("merges into a project entry the CLI kept rather than replacing it", () => {
+      writeConfig(HEALTHY);
+      checkClaudeUserConfig();
+      writeConfig({
+        numStartups: 2,
+        firstStartTime: "2026-10-09T16:34:52.425Z",
+        projects: { "/home/dev/repos/cockpit": { lastCost: 9, allowedTools: ["Read"] } },
+      });
+
+      checkClaudeUserConfig();
+
+      expect(((readConfig().projects ?? {}) as Record<string, Record<string, unknown>>)["/home/dev/repos/cockpit"]).toEqual({
+        lastCost: 9,
+        allowedTools: ["Read"],
+        hasTrustDialogAccepted: true,
+      });
+    });
+
+    it("does not resurrect a directory the user untrusted on purpose", () => {
+      writeConfig(HEALTHY);
+      checkClaudeUserConfig();
+      writeConfig({ ...HEALTHY, numStartups: 41, projects: { "/home/dev/repos/cockpit": { hasTrustDialogAccepted: true } } });
+
+      expect(checkClaudeUserConfig().action, "a deletion is not a wipe").toBe("healthy");
+      expect(trusted(readConfig())).toEqual(["/home/dev/repos/cockpit"]);
+      const snapshot = JSON.parse(readFileSync(snapshotFile(), "utf-8")) as { trustedProjects: string[] };
+      expect(snapshot.trustedProjects, "the snapshot follows the user").toEqual(["/home/dev/repos/cockpit"]);
+    });
+
+    it("restores trust along with the servers when the config is unreadable", () => {
+      writeConfig(HEALTHY);
+      checkClaudeUserConfig();
+      writeFileSync(configFile(), "{ broken");
+
+      const report = checkClaudeUserConfig();
+
+      expect(report.action).toBe("restored");
+      expect(servers()).toEqual(["conduit", "gmail"]);
+      expect(trusted(readConfig())).toEqual(["/home/dev/repos/HomeLab", "/home/dev/repos/cockpit"]);
+    });
+  });
+
   // The wipe's signature: the CLI's fresh defaults, which carry a new
   // firstStartTime, a restarting numStartups and no mcpServers key at all.
   it("puts the servers back when the config comes back reset", () => {
@@ -81,7 +161,9 @@ describe("the reset guard", () => {
 
     const report = checkClaudeUserConfig();
 
-    expect(report).toEqual({ action: "restored", restored: ["gmail", "conduit"], missing: [], source: "snapshot" });
+    expect(report.action).toBe("restored");
+    expect(report.restored.sort()).toEqual(["conduit", "gmail"]);
+    expect(report.missing).toEqual([]);
     expect(servers()).toEqual(["conduit", "gmail"]);
     expect(readConfig().numStartups, "everything else the CLI wrote stays as it is").toBe(2);
     expect(snapshotServers()).toEqual(["conduit", "gmail"]);
@@ -147,7 +229,13 @@ describe("the reset guard", () => {
 
     expect(report.action).toBe("restored");
     expect(servers()).toEqual(["conduit", "gmail"]);
-    expect(readConfig().projects, "the backup's own state comes back too").toEqual({ "/keep/this": { allowedTools: ["Bash"] } });
+    const projects = (readConfig().projects ?? {}) as Record<string, Record<string, unknown>>;
+    expect(projects["/keep/this"], "the backup's own state comes back too").toEqual({ allowedTools: ["Bash"] });
+    expect(Object.keys(projects).sort(), "alongside the trust the snapshot put back").toEqual([
+      "/home/dev/repos/HomeLab",
+      "/home/dev/repos/cockpit",
+      "/keep/this",
+    ]);
   });
 
   it("reports rather than throwing when there is nothing to restore from", () => {
@@ -170,7 +258,9 @@ describe("the reset guard", () => {
 
     const report = checkClaudeUserConfig();
 
-    expect(report).toEqual({ action: "restored", restored: ["gmail", "conduit"], missing: [], source: "backup" });
+    expect(report.action).toBe("restored");
+    expect(report.source).toBe("backup");
+    expect(report.restored.sort()).toEqual(["conduit", "gmail"]);
     expect(servers()).toEqual(["conduit", "gmail"]);
     expect(snapshotServers()).toEqual(["conduit", "gmail"]);
   });

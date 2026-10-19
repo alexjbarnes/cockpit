@@ -6,13 +6,14 @@ import {
   DragOverlay,
   type DragStartEvent,
   PointerSensor,
-  useDraggable,
   useDroppable,
   useSensor,
   useSensors,
 } from "@dnd-kit/core";
+import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import { useMemo, useState } from "react";
-import { boardColumns } from "@/lib/issue-display";
+import { boardColumns, dropIndex, sortIssuesByOrder } from "@/lib/issue-display";
 import { cn } from "@/lib/utils";
 import type { Issue, Project } from "@/types";
 
@@ -39,13 +40,18 @@ function IssueCard({ issue, projectName }: { issue: Issue; projectName?: string 
   );
 }
 
-function DraggableCard({ issue, projectName, onClick }: { issue: Issue; projectName?: string; onClick: () => void }) {
-  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({ id: issue.id, data: { status: issue.status } });
+function SortableCard({ issue, projectName, onClick }: { issue: Issue; projectName?: string; onClick: () => void }) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: issue.id,
+    data: { status: issue.status },
+  });
   return (
     <button
       type="button"
       ref={setNodeRef}
+      data-testid={`board-card-${issue.key}`}
       onClick={onClick}
+      style={{ transform: CSS.Transform.toString(transform), transition }}
       className={cn("w-full cursor-grab active:cursor-grabbing touch-none", isDragging && "opacity-40")}
       {...listeners}
       {...attributes}
@@ -85,14 +91,16 @@ function Column({
           isOver ? "border-primary bg-primary/5" : "border-transparent bg-muted/30",
         )}
       >
-        {issues.map((issue) => (
-          <DraggableCard
-            key={issue.id}
-            issue={issue}
-            projectName={showProject ? projectNames.get(issue.projectId) : undefined}
-            onClick={() => onIssueClick(issue)}
-          />
-        ))}
+        <SortableContext id={name} items={issues.map((issue) => issue.id)} strategy={verticalListSortingStrategy}>
+          {issues.map((issue) => (
+            <SortableCard
+              key={issue.id}
+              issue={issue}
+              projectName={showProject ? projectNames.get(issue.projectId) : undefined}
+              onClick={() => onIssueClick(issue)}
+            />
+          ))}
+        </SortableContext>
       </div>
     </div>
   );
@@ -104,16 +112,18 @@ export function KanbanBoard({
   projectNames,
   showProject,
   onIssueClick,
-  onMove,
+  onDrop,
 }: {
   issues: Issue[];
   project?: Project;
   projectNames: Map<string, string>;
   showProject: boolean;
   onIssueClick: (issue: Issue) => void;
-  /** Move an issue to a new status. The page applies it optimistically and
-   *  PUTs; the board only reports the drop. */
-  onMove: (issue: Issue, toStatus: string) => void;
+  /** A card dropped at a position in a column (or in another column, which is
+   *  a status change too). The page applies it optimistically and PUTs; the
+   *  board only reports the drop. `index` counts the target column without the
+   *  dragged card, like the list's. */
+  onDrop: (key: string, toStatus: string, index: number) => void;
 }) {
   const [dragging, setDragging] = useState<Issue | null>(null);
   // 5px activation distance so a plain click still opens the issue rather than
@@ -128,6 +138,9 @@ export function KanbanBoard({
       if (list) list.push(issue);
       else map.set(issue.status, [issue]);
     }
+    // The order inside a column is the manual one, the same sequence the list
+    // shows, so a card dropped between two others means the same thing in both.
+    for (const [status, list] of map) map.set(status, sortIssuesByOrder(list));
     return map;
   }, [issues]);
 
@@ -136,10 +149,28 @@ export function KanbanBoard({
   }
   function handleEnd(e: DragEndEvent): void {
     setDragging(null);
-    const over = e.over?.id;
-    if (typeof over !== "string") return;
+    const { over } = e;
+    if (!over) return;
     const issue = issues.find((i) => i.id === e.active.id);
-    if (issue && issue.status !== over) onMove(issue, over);
+    if (!issue) return;
+
+    // `over` is a card while hovering one and the column itself while hovering
+    // its empty space; the status is the card's container either way.
+    const data = over.data.current as { sortable?: { containerId?: string }; status?: string } | undefined;
+    const targetStatus = data?.sortable?.containerId ?? data?.status ?? (typeof over.id === "string" ? over.id : undefined);
+    if (!targetStatus) return;
+
+    // The hovered card's place in its column as shown, taken with the dragged
+    // card still in it (see dropIndex): an index from the column without it is
+    // a row short on every downward drag. Null means the drop was on the
+    // column's own body, which is the end of it.
+    const column = sortIssuesByOrder(issues.filter((i) => i.status === targetStatus && i.id !== issue.id));
+    const overIndex = dropIndex(issues, targetStatus, String(over.id));
+    if (overIndex === null && targetStatus === issue.status && issue.order === undefined) {
+      // Dropped back where it started at the end of its own column: nothing to do.
+      return;
+    }
+    onDrop(issue.key, targetStatus, overIndex ?? column.length);
   }
 
   return (

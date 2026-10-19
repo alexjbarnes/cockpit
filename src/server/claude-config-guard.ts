@@ -32,6 +32,8 @@ export interface ClaudeConfigGuardReport {
   missing: string[];
   /** Where the restored servers were found, when any were. */
   source?: "snapshot" | "backup";
+  /** Directories whose trust was put back. */
+  trustRestored?: string[];
 }
 
 interface Snapshot {
@@ -39,6 +41,9 @@ interface Snapshot {
   numStartups: number | null;
   firstStartTime: string | null;
   servers: Record<string, unknown>;
+  /** Directories the user had said they trust. A reset takes the whole
+   *  `projects` map with it, and every one of them starts asking again. */
+  trustedProjects: string[];
 }
 
 const snapshotFile = () => path.join(getCockpitDir(), "claude-config-snapshot.json");
@@ -53,10 +58,19 @@ function readSnapshot(): Snapshot | null {
       numStartups: typeof parsed.numStartups === "number" ? parsed.numStartups : null,
       firstStartTime: typeof parsed.firstStartTime === "string" ? parsed.firstStartTime : null,
       servers: parsed.servers as Record<string, unknown>,
+      trustedProjects: Array.isArray(parsed.trustedProjects) ? (parsed.trustedProjects as string[]) : [],
     };
   } catch {
     return null;
   }
+}
+
+/** The directories this config has been told to trust. */
+function trustedProjectsOf(data: Record<string, unknown>): string[] {
+  const projects = (data.projects ?? {}) as Record<string, Record<string, unknown>>;
+  return Object.entries(projects)
+    .filter(([, entry]) => entry?.hasTrustDialogAccepted === true)
+    .map(([dir]) => dir);
 }
 
 function writeSnapshot(data: Record<string, unknown>): void {
@@ -66,6 +80,7 @@ function writeSnapshot(data: Record<string, unknown>): void {
     numStartups: typeof data.numStartups === "number" ? data.numStartups : null,
     firstStartTime: typeof data.firstStartTime === "string" ? data.firstStartTime : null,
     servers,
+    trustedProjects: trustedProjectsOf(data),
   };
   try {
     writeFileSync(snapshotFile(), `${JSON.stringify(snapshot, null, 2)}\n`, { mode: 0o600 });
@@ -78,6 +93,26 @@ function writeSnapshot(data: Record<string, unknown>): void {
  *  the user's (or cockpit's) intent rather than something to undo. */
 export function rememberClaudeConfig(data: Record<string, unknown>): void {
   writeSnapshot(data);
+}
+
+/**
+ * Put the snapshot's trust back into `data.projects`, merging into whatever the
+ * CLI wrote there rather than replacing it: an entry carries the CLI's own
+ * per-project state (allowed tools, MCP choices, last-run stats), and only the
+ * trust flag is being restored. Directories the reset kept are left as they are.
+ */
+function restoreTrust(data: Record<string, unknown>, snapshot: Snapshot | null): string[] {
+  if (!snapshot || snapshot.trustedProjects.length === 0) return [];
+  const projects = { ...((data.projects ?? {}) as Record<string, Record<string, unknown>>) };
+  const restored: string[] = [];
+  for (const dir of snapshot.trustedProjects) {
+    const entry = projects[dir];
+    if (entry?.hasTrustDialogAccepted === true) continue;
+    projects[dir] = { ...(entry ?? {}), hasTrustDialogAccepted: true };
+    restored.push(dir);
+  }
+  if (restored.length > 0) data.projects = projects;
+  return restored;
 }
 
 /** Servers the snapshot knows that `servers` no longer has. */
@@ -151,6 +186,7 @@ export function checkClaudeUserConfig(): ClaudeConfigGuardReport {
     const merged = { ...snapshot!.servers, ...servers };
     const restored = lost.filter((name) => name in merged);
     const next = { ...data, mcpServers: merged };
+    const trustRestored = restoreTrust(next, snapshot);
     const wrote = writeClaudeUserConfig(next);
     const missing = lost.filter((name) => !(name in merged));
     if (!wrote) {
@@ -158,8 +194,8 @@ export function checkClaudeUserConfig(): ClaudeConfigGuardReport {
       return { action: "broken", restored: [], missing: lost };
     }
     writeSnapshot(next);
-    notifyRestored(restored, missing, "snapshot");
-    return { action: "restored", restored, missing, source: "snapshot" };
+    notifyRestored(restored, missing, "snapshot", trustRestored.length);
+    return { action: "restored", restored, missing, source: "snapshot", trustRestored };
   }
 
   // Unreadable or gone: rebuild from the snapshot, over the newest backup as a
@@ -175,26 +211,30 @@ export function checkClaudeUserConfig(): ClaudeConfigGuardReport {
   const restored = Object.keys(merged);
   const missing = expected.filter((name) => !(name in merged));
   const next = { ...base, mcpServers: merged };
+  const trustRestored = restoreTrust(next, snapshot);
   if (!writeClaudeUserConfig(next)) {
     debugLog("[claude-config-guard] rebuild write failed");
     return { action: "broken", restored: [], missing: expected };
   }
   writeSnapshot(next);
   const source = snapshot ? "snapshot" : "backup";
-  notifyRestored(restored, missing, source);
-  return { action: "restored", restored, missing, source };
+  notifyRestored(restored, missing, source, trustRestored.length);
+  return { action: "restored", restored, missing, source, trustRestored };
 }
 
-function notifyRestored(restored: string[], missing: string[], source: "snapshot" | "backup"): void {
+function notifyRestored(restored: string[], missing: string[], source: "snapshot" | "backup", trustCount: number): void {
   const lines = [
-    "The CLI's user config (~/.claude.json) came back reset, which is how a run loses the MCP servers it expects.",
+    "The CLI's user config (~/.claude.json) came back reset, which is how a run loses the MCP servers it expects and every directory it was told to trust.",
     "",
     restored.length > 0
       ? `Put back from cockpit's ${source === "snapshot" ? "snapshot" : "copy of the CLI's own backups"}: ${restored.join(", ")}`
-      : "Nothing could be put back.",
+      : "No servers could be put back.",
+    trustCount > 0 ? `Trust put back for ${trustCount} director${trustCount === 1 ? "y" : "ies"}.` : "",
     missing.length > 0 ? `Still missing: ${missing.join(", ")}` : "",
   ].filter(Boolean);
-  debugLog(`[claude-config-guard] restored ${restored.length} server(s) from ${source}; missing: ${missing.join(", ") || "none"}`);
+  debugLog(
+    `[claude-config-guard] restored ${restored.length} server(s) and ${trustCount} trusted dir(s) from ${source}; missing: ${missing.join(", ") || "none"}`,
+  );
   try {
     addInboxMessage({
       title: restored.length > 0 ? "MCP servers restored after a ~/.claude.json reset" : "~/.claude.json was reset",

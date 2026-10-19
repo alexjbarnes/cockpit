@@ -203,13 +203,13 @@ export class PtySession {
   }
 
   /**
-   * Answer the CLI's workspace-trust dialog, or fail naming the directory.
+   * Notice the CLI's workspace-trust dialog, or carry on if there isn't one.
    *
-   * The Enter below still clears it on CLI versions where Yes is the default
-   * row. On 2.1.248+ nothing cockpit can type does: Enter, arrow keys and a
+   * Nothing cockpit can type answers this dialog: Enter, arrow keys and a
    * pre-set `hasTrustDialogAccepted` were each measured against the real CLI.
-   * Trust has to exist in the config before the spawn (which is what
-   * trustDirectory does for a scheduled job's directory before it spawns).
+   * Trust has to exist in the config before the spawn, which is what
+   * trustDirectory does for a scheduled job's directory before it spawns, and
+   * what the trust card does for a session whose directory is not yet trusted.
    *
    * Failing here is the point. Before this, start() went on to type the whole
    * prompt into the dialog, the CLI exited 1 under a second, and a scheduled
@@ -218,22 +218,22 @@ export class PtySession {
    */
   private async handleTrustDialog(): Promise<void> {
     const deadline = Date.now() + TRUST_DIALOG_WINDOW_MS;
-    let seen = false;
     while (Date.now() < deadline) {
       if (this.exited) return;
-      const clean = this.cleanOutput();
-      if (clean.includes("trust") || clean.includes("Yes,")) {
-        this.requirePty().write("\r");
-        seen = true;
-        break;
+      if (this.trustDialogOnScreen()) {
+        // Nothing is typed at it, deliberately. The dialog opens with its
+        // highlight on "No, exit" (measured on 2.1.296), so an Enter chooses
+        // Exit: the CLI quit with code 1 two and a half seconds in, and the
+        // session reported "claude exited during startup" instead of asking
+        // about trust. Cockpit cannot answer this dialog either way, so it
+        // waits and then says so.
+        await sleep(2000);
+        if (this.exited || !this.trustDialogOnScreen()) return;
+        throw new UntrustedWorkspaceError(this.opts.cwd);
       }
-      if (clean.length > REPL_READY_MIN_BYTES) break;
+      if (this.cleanOutput().length > REPL_READY_MIN_BYTES) return;
       await sleep(200);
     }
-    if (!seen) return;
-    await sleep(2000);
-    if (this.exited || !this.trustDialogOnScreen()) return;
-    throw new UntrustedWorkspaceError(this.opts.cwd);
   }
 
   /** Whether the trust dialog is what is currently on screen. Matched

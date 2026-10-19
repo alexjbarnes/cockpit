@@ -1308,19 +1308,6 @@ describe("WebSocket handler", () => {
       ws.close();
     });
 
-    it("forwards todos events as session:todos", async () => {
-      const session = manager.createSession("/tmp");
-      const ws = await connectWs();
-      await waitForConnect2(ws, session.id);
-
-      emitOnChannel(session.id, "todos", [{ content: "task 1", status: "pending" }]);
-      const msg = await readMessage(ws);
-      expect(msg.type).toBe("session:todos");
-      expect((msg.todos as any[])[0].content).toBe("task 1");
-
-      ws.close();
-    });
-
     it("forwards queued events as session:queued", async () => {
       const session = manager.createSession("/tmp");
       const ws = await connectWs();
@@ -2252,21 +2239,6 @@ describe("WebSocket handler", () => {
       const msgs = await msgsPromise;
 
       expect(msgs.some((m) => m.type === "session:init")).toBe(true);
-      ws.close();
-    });
-
-    it("sends todos when available", async () => {
-      const session = manager.createSession("/tmp");
-      const s = (manager as any).sessions.get(session.id)!;
-      s.todoItems = [{ content: "task 1", status: "pending" }];
-      const ws = await connectWs();
-
-      const msgsPromise = collectUntilQueued(ws, session.id);
-      ws.send(JSON.stringify({ type: "session:connect", sessionId: session.id }));
-      const msgs = await msgsPromise;
-
-      const todoMsgs = msgs.filter((m) => m.type === "session:todos");
-      expect(todoMsgs.length).toBeGreaterThan(0);
       ws.close();
     });
 

@@ -8,6 +8,13 @@ import { resolveHookBridgePath } from "./hook-bridge-path";
 const HOOK_EVENTS = [
   "PreToolUse",
   "PostToolUse",
+  // PostToolUse fires only on success. Without its failure twin a tool that
+  // errored never resolves in the chat: the card spins for the rest of the
+  // session and the turn looks stuck.
+  "PostToolUseFailure",
+  // A call the auto-mode classifier refused. Nothing else reports it, so
+  // without this hook a session blocked by the classifier looks idle.
+  "PermissionDenied",
   "Stop",
   "StopFailure",
   "UserPromptSubmit",
@@ -21,6 +28,19 @@ const HOOK_EVENTS = [
   // Registered for its payload's permission_mode, so the mode the CLI really
   // runs in is known the moment it starts rather than at the first message.
   "SessionStart",
+  // The CLI's own goodbye — a crash, an exit, a restart — which no other hook
+  // reports.
+  "SessionEnd",
+  // A dialog asking for something that is not a tool permission: an MCP
+  // elicitation, or a launched agent that wants input. Neither fires
+  // PermissionRequest, so both are invisible without these two.
+  "Elicitation",
+  "ElicitationResult",
+  // Task and teammate lifecycle, which is how work that launched an agent
+  // reports progress between its start and its Stop.
+  "TaskCreated",
+  "TaskCompleted",
+  "TeammateIdle",
 ] as const;
 type HookEvent = (typeof HOOK_EVENTS)[number];
 
@@ -44,6 +64,15 @@ export interface HookSettingsOptions {
    * own ~/.claude/settings.json (see buildSessionSandboxBlock).
    */
   sandbox?: SandboxConfig;
+  /**
+   * Whether the CLI may use auto permission mode in this session. False for a
+   * model no Anthropic account backs, because auto's classifier is served by
+   * Anthropic: without it the CLI cannot classify anything and instead raises
+   * a dialog asking the user to acknowledge a classifier billing notice,
+   * which blocks the turn with no hook to say so. Undefined leaves the user's
+   * own settings alone.
+   */
+  autoModeEnabled?: boolean;
 }
 
 export interface HookSettingsArtifact {
@@ -91,7 +120,17 @@ export async function prepareHookSettings(opts: HookSettingsOptions): Promise<Ho
       ...((base.permissions as Record<string, unknown>) ?? {}),
       allow: [...baseAllow, ...(opts.allowList ?? [])],
       deny: [...baseDeny, ...(opts.denyList ?? [])],
+      // A session whose model no Anthropic account backs cannot use auto mode
+      // for anything: its classifier is an Anthropic service, so the only
+      // thing the mode contributes is a dialog asking the user to acknowledge
+      // a billing notice, which blocks the turn. The user's own defaultMode is
+      // overridden only in that case.
+      ...(opts.autoModeEnabled === false ? { defaultMode: "manual" } : {}),
     },
+    // "disable" and not true: the CLI validates settings and skips a file with
+    // any invalid value WHOLE — hooks included — showing a settings-error
+    // dialog at startup, which is a worse stall than the one this fixes.
+    ...(opts.autoModeEnabled === false ? { disableAutoMode: "disable", useAutoModeDuringPlan: false } : {}),
     // cockpit drives the CLI programmatically and owns the bypass-mode UX
     // itself (flipping bypass on is a deliberate cockpit UI action). The CLI's
     // interactive "WARNING: Bypass Permissions mode" dialog has nowhere to go

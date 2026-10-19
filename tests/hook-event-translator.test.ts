@@ -204,6 +204,29 @@ describe("translateHookEvent", () => {
       expect(a[0].requestId).not.toBe(b[0].requestId);
     });
 
+    it("carries the CLI's own always-allow suggestions, dropping anything malformed", () => {
+      const suggestions = [
+        { type: "addDirectories", directories: ["/tmp/x/build"], destination: "session" },
+        { type: "setMode", mode: "acceptEdits", destination: "session" },
+      ];
+      const events = translateHookEvent("PermissionRequest", {
+        tool_name: "Bash",
+        tool_input: { command: "rm -rf build" },
+        permission_suggestions: [...suggestions, "nonsense", null, 7],
+      });
+
+      // The CLI validates every entry and refuses the whole answer if one is
+      // bad, so only the objects travel on.
+      expect(events[0].permissionSuggestions).toEqual(suggestions);
+    });
+
+    it("has no suggestions when the payload carries none", () => {
+      expect(translateHookEvent("PermissionRequest", { tool_name: "Bash" })[0].permissionSuggestions).toBeUndefined();
+      expect(
+        translateHookEvent("PermissionRequest", { tool_name: "Bash", permission_suggestions: [] })[0].permissionSuggestions,
+      ).toBeUndefined();
+    });
+
     it("falls back to 'unknown' toolName when missing", () => {
       const events = translateHookEvent("PermissionRequest", {});
       expect(events[0].toolName).toBe("unknown");
@@ -361,6 +384,67 @@ describe("subagent and background task hooks", () => {
       ],
     });
     expect(events[1].tasks).toEqual([{ taskId: "ok", toolUseId: "ok", status: "running", title: "Agent", description: "kept" }]);
+  });
+});
+
+// Hooks cockpit added because the chat could not see what happened without
+// them: a failed tool left its card spinning (PostToolUse fires on success
+// only), a classifier denial left no trace at all, and an MCP elicitation is
+// a dialog no card can answer.
+describe("tool failure, denial, and the dialogs that are not permissions", () => {
+  it("closes a failed tool's card with the error", () => {
+    const events = translateHookEvent("PostToolUseFailure", {
+      tool_name: "Bash",
+      tool_use_id: "call_1",
+      tool_input: { command: "ls" },
+      error: "exit status 1",
+    });
+
+    expect(events).toEqual([{ type: "tool_result", toolId: "call_1", toolOutput: "Failed: exit status 1", filePath: undefined }]);
+  });
+
+  it("names a timeout and an interrupt as themselves", () => {
+    const timedOut = translateHookEvent("PostToolUseFailure", { tool_use_id: "c", is_timeout: true, error: "no output" });
+    expect(timedOut[0].toolOutput).toBe("Timed out: no output");
+
+    const interrupted = translateHookEvent("PostToolUseFailure", { tool_use_id: "c", is_interrupt: true });
+    expect(interrupted[0].toolOutput).toBe("Interrupted");
+  });
+
+  it("closes the card for a call the auto-mode classifier refused, and keeps the reason", () => {
+    const events = translateHookEvent("PermissionDenied", {
+      tool_name: "Bash",
+      tool_use_id: "call_2",
+      reason: "denied by auto mode rules",
+    });
+
+    expect(events[0]).toEqual({ type: "tool_result", toolId: "call_2", toolOutput: "Denied: denied by auto mode rules" });
+    expect(events[1]).toEqual({ type: "system_message", text: "__permission_denied::Bash::denied by auto mode rules" });
+  });
+
+  it("surfaces an elicitation as text the user can act on", () => {
+    const events = translateHookEvent("Elicitation", { mcp_server_name: "linear", message: "Paste your API key" });
+
+    expect(events).toHaveLength(1);
+    expect(events[0].text).toContain("linear");
+    expect(events[0].text).toContain("terminal");
+    expect(events[0].text, "a marker would be stripped before the user saw it").not.toContain("__");
+  });
+
+  it("records the CLI's exit and the task lifecycle as markers", () => {
+    expect(translateHookEvent("SessionEnd", { reason: "other" })).toEqual([{ type: "system_message", text: "__session_end::other" }]);
+    expect(translateHookEvent("TaskCreated", { task_id: "t1", task_subject: "Review beans" })).toEqual([
+      { type: "system_message", text: "__task_created::t1::Review beans" },
+    ]);
+    expect(translateHookEvent("TaskCompleted", { task_id: "t1", task_subject: "Review beans" })).toEqual([
+      { type: "system_message", text: "__task_completed::t1::Review beans" },
+    ]);
+    expect(translateHookEvent("TeammateIdle", { teammate_name: "scout" })).toEqual([
+      { type: "system_message", text: "__teammate_idle::scout" },
+    ]);
+    expect(translateHookEvent("ElicitationResult", { action: "accept" })).toEqual([
+      { type: "system_message", text: "__elicitation_result::accept" },
+    ]);
   });
 });
 
