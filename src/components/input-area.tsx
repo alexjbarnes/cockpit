@@ -10,14 +10,11 @@ import {
   Eye,
   FileText,
   Hammer,
-  Layers,
   Loader2,
-  Maximize2,
   MessageSquare,
   Paperclip,
   Plug,
   RefreshCw,
-  Search,
   Send,
   Settings2,
   ShieldCheck,
@@ -33,26 +30,15 @@ import { CodeBlock, languageFromPath } from "@/components/code-block";
 import { MarkdownRender } from "@/components/markdown-render";
 import { McpStatusModal } from "@/components/mcp-status-modal";
 import { type MentionItem, MentionMenu } from "@/components/mention-menu";
-import { FreeBadge, splitProviderModelId } from "@/components/openrouter-provider";
+import { ModelSettings } from "@/components/model-settings";
 import { SlashCommandMenu } from "@/components/slash-command-menu";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { useLongPress } from "@/hooks/use-long-press";
 import { useWebSocket } from "@/hooks/use-websocket";
 import type { SlashCommand } from "@/lib/commands";
-import {
-  allowedEffortLevels,
-  CONTEXT_SIZES,
-  type ContextSize,
-  defaultForAlias,
-  describeModelSelection,
-  findModelById,
-  type ModelAlias,
-  type ModelEntry,
-  modelOneMRequiresCredits,
-  resolveProviderId,
-  versionsForAlias,
-} from "@/lib/models";
+import { THINKING_LEVELS } from "@/lib/model-picker";
+import { CONTEXT_SIZES, type ContextSize, describeModelSelection, modelOneMRequiresCredits, resolveProviderId } from "@/lib/models";
 import { detectLanguage, extensionForLabel, shouldCollapsePaste } from "@/lib/paste-detect";
 import { effectivePermissionMode, permissionModeMismatch } from "@/lib/permission-mode";
 import type {
@@ -62,7 +48,6 @@ import type {
   InitData,
   NotificationProviderEntry,
   Provider,
-  ProviderModel,
   SandboxConfig,
   SandboxSupport,
   SendOptions,
@@ -77,46 +62,6 @@ import { QueueModal } from "./queue-modal";
 import { SendModeModal } from "./send-mode-modal";
 
 const RECENT_MODELS_KEY = "cockpit-recent-models";
-
-const aliases: { value: ModelAlias; label: string }[] = [
-  { value: "haiku", label: "Haiku" },
-  { value: "sonnet", label: "Sonnet" },
-  { value: "opus", label: "Opus" },
-  { value: "fable", label: "Fable" },
-];
-
-function parseCurrentModel(
-  currentModel: string,
-  currentContextSize: ContextSize,
-): { alias: ModelAlias | null; entry: ModelEntry | null; contextSize: ContextSize } {
-  const base = currentModel.replace(/\[.*\]$/, "");
-  if (base === "opus" || base === "sonnet" || base === "haiku" || base === "fable") {
-    return { alias: base, entry: defaultForAlias(base) ?? null, contextSize: currentContextSize };
-  }
-  const entry = findModelById(base) ?? null;
-  return { alias: entry?.alias ?? null, entry, contextSize: currentContextSize };
-}
-
-function valueForEntry(entry: ModelEntry): string {
-  const versions = versionsForAlias(entry.alias);
-  const isSoleDefault = versions.length === 1 && entry.isDefault;
-  return isSoleDefault ? entry.alias : entry.modelId;
-}
-
-function valueForAlias(alias: ModelAlias): string {
-  const entry = defaultForAlias(alias);
-  if (!entry) return alias;
-  return valueForEntry(entry);
-}
-
-const thinkingLevels: { value: ThinkingLevel; label: string }[] = [
-  { value: "off", label: "Off" },
-  { value: "low", label: "Low" },
-  { value: "medium", label: "Medium" },
-  { value: "high", label: "High" },
-  { value: "xhigh", label: "XHigh" },
-  { value: "max", label: "Max" },
-];
 
 /** How tall the textarea may grow when there is plenty of room. */
 const TEXTAREA_MAX_PX = 200;
@@ -413,7 +358,6 @@ export function InputArea({
   const [inputFocused, setInputFocused] = useState(false);
   const [settingsTab, setSettingsTab] = useState<"model" | "runtime" | "notifications">("model");
   const [notifyProviders, setNotifyProviders] = useState<NotificationProviderEntry[]>([]);
-  const [modelSearch, setModelSearch] = useState("");
   const [recentModels, setRecentModels] = useState<string[]>([]);
   useEffect(() => {
     try {
@@ -908,7 +852,7 @@ export function InputArea({
   // mode does not speak for it.
   const effectiveMode = isCockpitAgent ? permissionMode : effectivePermissionMode(permissionMode, cliPermissionMode);
   const modeMismatch = isCockpitAgent ? null : permissionModeMismatch(appliedPermissionMode, cliPermissionMode);
-  const thinkingLabel = modelSelection.thinking ? (thinkingLevels.find((t) => t.value === modelSelection.thinking)?.label ?? null) : null;
+  const thinkingLabel = modelSelection.thinking ? (THINKING_LEVELS.find((t) => t.value === modelSelection.thinking)?.label ?? null) : null;
   const contextLabel = modelSelection.context ? CONTEXT_SIZES[modelSelection.context].label : null;
 
   return (
@@ -944,677 +888,411 @@ export function InputArea({
             )}
           </div>
         )}
-        {optionsOpen &&
-          (() => {
-            const parsed = parseCurrentModel(currentModel, currentContextSize);
-            const vEntries = parsed.alias ? versionsForAlias(parsed.alias) : [];
-            // Always show the version row for an Anthropic alias (single-version
-            // models render one pill); custom-provider models have no alias versions.
-            const showVRow = vEntries.length >= 1;
-            const matchesProviderModel = (p: Provider, pm: ProviderModel): boolean =>
-              currentModel === pm.modelId || currentModel === `${p.id}:${pm.modelId}`;
-            const sizes: ContextSize[] = (() => {
-              if (parsed.entry) {
-                // Sonnet 4.6's 1M needs usage credits — only offer it once opted in.
-                if (parsed.entry.oneMRequiresCredits && !allowSonnet1m) {
-                  return parsed.entry.contextSizes.filter((s) => s !== "1m");
-                }
-                return parsed.entry.contextSizes;
-              }
-              if (!providers || !currentModel) return [];
-              for (const p of providers) {
-                const m = p.models.find((pm) => matchesProviderModel(p, pm));
-                if (m) return m.contextSizes ?? [];
-              }
-              return [];
-            })();
-            const providerEffort = (() => {
-              if (!providers || !currentModel) return [];
-              for (const p of providers) {
-                const m = p.models.find((pm) => matchesProviderModel(p, pm));
-                if (m) return m.effortLevels ?? [];
-              }
-              return [];
-            })();
-            const allowed = new Set(providerEffort.length > 0 ? providerEffort : allowedEffortLevels(parsed.entry));
-            // "Off" (disable thinking) is offered whenever the model can think; the
-            // effort levels show only when allowed. It is not an --effort value.
-            const visibleLevels = thinkingLevels.filter((opt) => (opt.value === "off" ? allowed.size > 0 : allowed.has(opt.value)));
-
-            return (
-              <div
-                className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
-                onMouseDown={(e) => {
-                  if (e.target === e.currentTarget) setOptionsOpen(false);
-                }}
-              >
-                {/* One height for every tab: sized to the content, the card
+        {optionsOpen && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+            onMouseDown={(e) => {
+              if (e.target === e.currentTarget) setOptionsOpen(false);
+            }}
+          >
+            {/* One height for every tab: sized to the content, the card
                     grew and shrank as you moved between them, which reads as
                     the whole panel jumping about. The scrolling happens inside
                     the tab, not to the card. */}
-                <div className="w-full max-w-xl mx-4 rounded-lg border bg-background shadow-lg overflow-hidden flex flex-col h-[min(85vh,600px)]">
-                  {/* Header */}
-                  <div className="flex items-center justify-between px-5 py-3 border-b shrink-0">
+            <div className="w-full max-w-xl mx-4 rounded-lg border bg-background shadow-lg overflow-hidden flex flex-col h-[min(85vh,600px)]">
+              {/* Header */}
+              <div className="flex items-center justify-between px-5 py-3 border-b shrink-0">
+                <div className="flex items-center gap-2">
+                  <Settings2 className="h-4 w-4" />
+                  <h2 className="text-sm font-semibold">Session settings</h2>
+                </div>
+                <button
+                  onClick={() => setOptionsOpen(false)}
+                  className="rounded p-1 text-muted-foreground hover:text-foreground hover:bg-muted"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+
+              {/* Tabs, as a strip along the top. As a sidebar they took a
+                      third of a phone's width, and squeezed the tab beside them
+                      into scrolling sideways. */}
+              <div className="flex shrink-0 gap-1 border-b px-3">
+                {(
+                  [
+                    ["model", Brain, "Model", undefined],
+                    ["runtime", Terminal, "Harness", undefined],
+                    ["notifications", Bell, "Notifications", "settings-tab-notifications"],
+                  ] as const
+                ).map(([tab, Icon, label, testId]) => (
+                  <button
+                    key={tab}
+                    type="button"
+                    onClick={() => setSettingsTab(tab)}
+                    data-testid={testId}
+                    className={`-mb-px flex items-center gap-1.5 border-b-2 px-2.5 py-2.5 text-xs font-medium transition-colors ${
+                      settingsTab === tab
+                        ? "border-foreground text-foreground"
+                        : "border-transparent text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    <Icon className="h-3.5 w-3.5 shrink-0" />
+                    {label}
+                  </button>
+                ))}
+              </div>
+
+              {/* Tab content. The Model tab keeps its switch and search in
+                      place and scrolls inside itself; the others scroll whole. */}
+              <div className={`flex-1 min-h-0 p-4 ${settingsTab === "model" ? "flex flex-col" : "overflow-y-auto space-y-4"}`}>
+                {settingsTab === "model" && (
+                  <ModelSettings
+                    currentModel={currentModel}
+                    currentContextSize={currentContextSize}
+                    thinkingLevel={thinkingLevel}
+                    providers={providers}
+                    allowSonnet1m={allowSonnet1m}
+                    recentModels={recentModels}
+                    selection={modelSelection}
+                    onSelectModel={selectModel}
+                    onSetModel={onSetModel}
+                    onSetThinking={onSetThinking}
+                  />
+                )}
+
+                {/* Runtime tab */}
+                {settingsTab === "runtime" && (
+                  <div className="space-y-5">
                     <div className="flex items-center gap-2">
-                      <Settings2 className="h-4 w-4" />
-                      <h2 className="text-sm font-semibold">Session settings</h2>
+                      <Terminal className="h-3.5 w-3.5 text-muted-foreground" />
+                      <span className="text-xs text-muted-foreground">Agent harness:</span>
+                      <span className="text-xs font-medium text-foreground">Claude Code</span>
                     </div>
+
+                    {onSetRuntime && (
+                      <div className="flex items-center gap-2">
+                        <Zap className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                        <span className="text-xs text-muted-foreground">Backend</span>
+                        <div className="ml-auto flex gap-1">
+                          <button
+                            onClick={() => onSetRuntime("pty")}
+                            data-testid="runtime-pty"
+                            className={`rounded px-2 py-0.5 text-xs transition-colors ${
+                              currentRuntime === "pty"
+                                ? "bg-primary text-primary-foreground"
+                                : "bg-muted text-muted-foreground hover:text-foreground"
+                            }`}
+                          >
+                            PTY
+                          </button>
+                          <button
+                            onClick={() => onSetRuntime("stream")}
+                            data-testid="runtime-stream"
+                            className={`rounded px-2 py-0.5 text-xs transition-colors ${
+                              currentRuntime === "stream"
+                                ? "bg-primary text-primary-foreground"
+                                : "bg-muted text-muted-foreground hover:text-foreground"
+                            }`}
+                          >
+                            Stream
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
                     <button
-                      onClick={() => setOptionsOpen(false)}
-                      className="rounded p-1 text-muted-foreground hover:text-foreground hover:bg-muted"
+                      onClick={() => {
+                        onRestart?.();
+                        setOptionsOpen(false);
+                      }}
+                      className="flex w-full items-center justify-center gap-2 rounded-lg border border-border px-4 py-2.5 text-xs text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
                     >
-                      <X className="h-4 w-4" />
+                      <RefreshCw className="h-3.5 w-3.5" />
+                      Restart agent harness
                     </button>
+
+                    {isCockpitAgent ? (
+                      // The assistant stays a two-state toggle: bypass here
+                      // covers its tool calls only (config writes keep their
+                      // approval card), and auto never applies to it.
+                      <button
+                        onClick={() => onSetBypass(!bypassActive)}
+                        className="flex w-full items-center justify-between rounded-lg border border-border px-4 py-3 text-xs hover:bg-muted/50 transition-colors"
+                        data-testid="bypass-toggle"
+                      >
+                        <div className="flex items-center gap-3">
+                          {bypassActive ? (
+                            <ShieldOff className="h-4 w-4 text-orange-500" />
+                          ) : (
+                            <ShieldCheck className="h-4 w-4 text-muted-foreground" />
+                          )}
+                          <span className={bypassActive ? "text-orange-500 font-medium" : "text-muted-foreground"}>
+                            Bypass tool prompts
+                          </span>
+                        </div>
+                        <span
+                          className={`inline-flex h-5 w-9 items-center rounded-full transition-colors shrink-0 ${
+                            bypassActive ? "bg-orange-500" : "bg-muted-foreground/30"
+                          }`}
+                        >
+                          <span
+                            className={`inline-block h-4 w-4 rounded-full bg-white transition-transform shadow-sm ${
+                              bypassActive ? "translate-x-4.5" : "translate-x-0.5"
+                            }`}
+                          />
+                        </span>
+                      </button>
+                    ) : (
+                      <div className="rounded-lg border border-border px-4 py-3">
+                        <div className="mb-2 flex items-center gap-3">
+                          {permissionMode === "bypass" ? (
+                            <ShieldOff className="h-4 w-4 text-orange-500" />
+                          ) : (
+                            <ShieldCheck className="h-4 w-4 text-muted-foreground" />
+                          )}
+                          <span
+                            className={`text-xs font-medium ${permissionMode === "bypass" ? "text-orange-500" : "text-muted-foreground"}`}
+                          >
+                            Permissions
+                          </span>
+                        </div>
+                        <div className="flex gap-1" data-testid="permission-mode-selector">
+                          {(["manual", "auto", "bypass"] as const)
+                            .filter((m) => m !== "auto" || autoModeAvailable)
+                            .map((m) => {
+                              const active = permissionMode === m;
+                              const label = m === "manual" ? "Manual" : m === "auto" ? "Auto" : "Bypass";
+                              const activeClass = m === "bypass" ? "bg-orange-500 text-white" : "bg-primary text-primary-foreground";
+                              return (
+                                <button
+                                  key={m}
+                                  onClick={() => onSetPermissionMode(m)}
+                                  data-testid={`perm-mode-${m}`}
+                                  className={`flex-1 rounded px-2 py-1 text-xs transition-colors ${
+                                    active ? activeClass : "bg-muted text-muted-foreground hover:text-foreground"
+                                  }`}
+                                >
+                                  {label}
+                                </button>
+                              );
+                            })}
+                        </div>
+                        <p className="mt-2 text-[11px] text-muted-foreground">
+                          {permissionMode === "manual"
+                            ? "Every tool call asks first."
+                            : permissionMode === "auto"
+                              ? "Safe steps run; risky ones are blocked until you agree in chat."
+                              : "All tool calls are auto-approved."}
+                        </p>
+                        {modeMismatch && (
+                          <p className="mt-1 text-[11px] text-amber-600 dark:text-amber-400" data-testid="permission-mode-mismatch">
+                            {modeMismatch}
+                          </p>
+                        )}
+                      </div>
+                    )}
+
+                    {!isCockpitAgent && (
+                      <div className="rounded-lg border border-border px-4 py-3">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            sandboxSupport?.supported && onSetSandbox({ enabled: !sandbox.enabled, allowedDomains: sandbox.allowedDomains })
+                          }
+                          disabled={!sandboxSupport?.supported}
+                          className="flex w-full items-center justify-between text-xs disabled:opacity-60"
+                          data-testid="sandbox-toggle"
+                        >
+                          <div className="flex items-center gap-3">
+                            <Box className={`h-4 w-4 ${sandbox.enabled ? "text-emerald-500" : "text-muted-foreground"}`} />
+                            <span className={sandbox.enabled ? "text-emerald-500 font-medium" : "text-muted-foreground"}>Sandbox Bash</span>
+                          </div>
+                          <span
+                            className={`inline-flex h-5 w-9 items-center rounded-full transition-colors shrink-0 ${
+                              sandbox.enabled ? "bg-emerald-500" : "bg-muted-foreground/30"
+                            }`}
+                          >
+                            <span
+                              className={`inline-block h-4 w-4 rounded-full bg-white transition-transform shadow-sm ${
+                                sandbox.enabled ? "translate-x-4.5" : "translate-x-0.5"
+                              }`}
+                            />
+                          </span>
+                        </button>
+                        {!sandboxSupport?.supported ? (
+                          <p className="mt-2 text-[11px] text-muted-foreground">{sandboxSupport?.reason ?? "Checking sandbox support…"}</p>
+                        ) : sandbox.enabled ? (
+                          <div className="mt-3 space-y-1">
+                            <span className="text-[11px] text-muted-foreground">Extra allowed domains for this session (one per line)</span>
+                            <textarea
+                              data-testid="sandbox-domains"
+                              key={String(sandbox.enabled)}
+                              defaultValue={(sandbox.allowedDomains ?? []).join("\n")}
+                              placeholder={"github.com\n*.npmjs.org"}
+                              onBlur={(e) =>
+                                onSetSandbox({
+                                  enabled: true,
+                                  allowedDomains: e.target.value
+                                    .split("\n")
+                                    .map((d) => d.trim())
+                                    .filter(Boolean),
+                                })
+                              }
+                              rows={3}
+                              className="w-full rounded border border-border bg-background px-2 py-1 font-mono text-[11px] focus:outline-none focus:ring-1 focus:ring-ring"
+                            />
+                            <p className="text-[11px] text-muted-foreground">
+                              Bash runs isolated and its commands auto-run, even in Manual. These add to the shared rules in Settings →
+                              Sandbox, and changing them restarts the session.
+                            </p>
+                          </div>
+                        ) : (
+                          <p className="mt-2 text-[11px] text-muted-foreground">
+                            Run Bash in an OS sandbox so commands execute without prompts.
+                          </p>
+                        )}
+                      </div>
+                    )}
+
+                    {initData?.mcpServers && initData.mcpServers.length > 0 && (
+                      <button
+                        onClick={() => setMcpOpen(true)}
+                        className="flex w-full items-center justify-between rounded-lg border border-border px-4 py-3 text-xs hover:bg-muted/50 transition-colors"
+                      >
+                        <div className="flex items-center gap-3">
+                          <Plug className="h-4 w-4 text-muted-foreground" />
+                          <span className="text-muted-foreground">MCP Servers</span>
+                        </div>
+                        <span className="flex items-center gap-1 text-muted-foreground">
+                          {initData.mcpServers.filter((s) => s.status === "connected").length}/{initData.mcpServers.length}
+                          <ChevronRight className="h-3 w-3" />
+                        </span>
+                      </button>
+                    )}
                   </div>
+                )}
 
-                  {/* Body */}
-                  <div className="flex flex-1 min-h-0">
-                    {/* Sidebar tabs */}
-                    <aside className="w-32 border-r shrink-0 p-2 flex flex-col gap-1">
-                      <button
-                        onClick={() => setSettingsTab("model")}
-                        className={`flex items-center gap-2 px-3 py-2 rounded text-xs font-medium transition-colors ${
-                          settingsTab === "model"
-                            ? "bg-primary/10 text-primary border-l-2 border-primary"
-                            : "text-muted-foreground hover:text-foreground hover:bg-muted border-l-2 border-transparent"
-                        }`}
-                      >
-                        <Brain className="h-3.5 w-3.5 shrink-0" />
-                        Model
-                      </button>
-                      <button
-                        onClick={() => setSettingsTab("runtime")}
-                        className={`flex items-center gap-2 px-3 py-2 rounded text-xs font-medium transition-colors ${
-                          settingsTab === "runtime"
-                            ? "bg-primary/10 text-primary border-l-2 border-primary"
-                            : "text-muted-foreground hover:text-foreground hover:bg-muted border-l-2 border-transparent"
-                        }`}
-                      >
-                        <Terminal className="h-3.5 w-3.5 shrink-0" />
-                        Harness
-                      </button>
-                      <button
-                        onClick={() => setSettingsTab("notifications")}
-                        data-testid="settings-tab-notifications"
-                        className={`flex items-center gap-2 px-3 py-2 rounded text-xs font-medium transition-colors ${
-                          settingsTab === "notifications"
-                            ? "bg-primary/10 text-primary border-l-2 border-primary"
-                            : "text-muted-foreground hover:text-foreground hover:bg-muted border-l-2 border-transparent"
-                        }`}
-                      >
-                        <Bell className="h-3.5 w-3.5 shrink-0" />
-                        Notifications
-                      </button>
-                    </aside>
+                {/* Notifications tab: what this session sends out, and
+                          through which of the configured providers. */}
+                {settingsTab === "notifications" && (
+                  <div className="space-y-4" data-testid="settings-notifications">
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-2">
+                        <Bell className="h-3.5 w-3.5 text-muted-foreground" />
+                        <span className="text-xs font-medium text-foreground">Send notifications</span>
+                      </div>
+                      <p className="text-[11px] text-muted-foreground">
+                        One provider per session. Off means this session never messages you on its own.
+                      </p>
+                      <div className="space-y-1.5">
+                        <button
+                          onClick={() => onSetNotifications?.(null)}
+                          data-testid="notify-off"
+                          className={`flex w-full items-center justify-between rounded-lg border px-3 py-2 text-xs transition-colors ${
+                            !notifications?.providerId ? "border-primary bg-primary/10" : "border-border hover:bg-muted/50"
+                          }`}
+                        >
+                          <span>Off</span>
+                          {!notifications?.providerId && <Check className="h-3.5 w-3.5 text-primary" />}
+                        </button>
+                        {notifyProviders.map((provider) => {
+                          const selected = notifications?.providerId === provider.id;
+                          return (
+                            <button
+                              key={provider.id}
+                              onClick={() =>
+                                onSetNotifications?.({
+                                  providerId: provider.id,
+                                  events: notifications?.events ?? { finished: true, question: true, permission: true },
+                                })
+                              }
+                              data-testid={`notify-provider-${provider.id}`}
+                              className={`flex w-full items-center justify-between rounded-lg border px-3 py-2 text-xs transition-colors ${
+                                selected ? "border-primary bg-primary/10" : "border-border hover:bg-muted/50"
+                              }`}
+                            >
+                              <span className="flex items-center gap-2">
+                                {provider.name}
+                                <span className="text-muted-foreground">{provider.type}</span>
+                                {!provider.enabled && <span className="text-muted-foreground">(disabled)</span>}
+                              </span>
+                              {selected && <Check className="h-3.5 w-3.5 text-primary" />}
+                            </button>
+                          );
+                        })}
+                        {/* A provider this session chose and that has since been
+                                  deleted: saying so is better than silence. */}
+                        {notifications?.providerId && !notifyProviders.some((p) => p.id === notifications.providerId) && (
+                          <div className="flex items-center justify-between rounded-lg border border-dashed px-3 py-2 text-xs text-muted-foreground">
+                            <span>This session's provider is no longer configured</span>
+                          </div>
+                        )}
+                        {notifyProviders.length === 0 && notifications?.providerId === undefined && (
+                          <p className="text-[11px] text-muted-foreground">
+                            No providers configured yet. Add one in Settings → Notifications.
+                          </p>
+                        )}
+                      </div>
+                    </div>
 
-                    {/* Tab content */}
-                    <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-4">
-                      {/* Model tab */}
-                      {settingsTab === "model" && (
-                        <div className="space-y-3">
-                          {(() => {
-                            const q = modelSearch.trim().toLowerCase();
-                            const aliasMatches = aliases.filter((a) => !q || a.label.toLowerCase().includes(q) || a.value.includes(q));
-                            const providerGroups = (providers || [])
-                              // Built-ins list only when connected: their model
-                              // lists sync keylessly for the settings preview,
-                              // but a picker entry must be runnable.
-                              .filter((p) => p.id !== "anthropic" && (!p.isBuiltin || Object.keys(p.envVars).length > 0))
-                              .map((p) => ({
-                                provider: p,
-                                // Catalog-backed built-ins show the curated
-                                // enabled set only; manual providers show all.
-                                models: (p.isBuiltin && p.enabledModels
-                                  ? p.models.filter((m) => (p.enabledModels ?? []).includes(m.modelId))
-                                  : p.models
-                                ).filter((m) => !q || m.modelId.toLowerCase().includes(q) || m.displayName.toLowerCase().includes(q)),
-                              }))
-                              .filter((g) => g.models.length > 0);
-                            const recentRows = recentModels.filter((v) => !q || v.toLowerCase().includes(q));
-
-                            const modelRow = (
-                              key: string,
-                              selected: boolean,
-                              onClick: () => void,
-                              label: React.ReactNode,
-                              right?: React.ReactNode,
-                            ) => (
+                    {notifications?.providerId && (
+                      <div className="space-y-2">
+                        <span className="text-xs font-medium text-foreground">Tell me when</span>
+                        <div className="space-y-1.5">
+                          {(
+                            [
+                              ["finished", "A turn finishes"],
+                              ["question", "Claude asks a question"],
+                              ["permission", "A permission is waiting"],
+                            ] as const
+                          ).map(([key, label]) => {
+                            const on = notifications?.events?.[key] !== false;
+                            return (
                               <button
                                 key={key}
-                                onClick={onClick}
-                                className={`flex w-full items-start gap-3 rounded px-3 py-2 text-left text-xs transition-colors ${
-                                  selected ? "bg-primary/10 text-primary" : "hover:bg-muted text-foreground"
-                                }`}
-                              >
-                                <div className="mt-0.5 w-3 shrink-0">
-                                  {selected ? (
-                                    <Check className="h-3 w-3" />
-                                  ) : (
-                                    <div className="h-3 w-3 rounded-full border border-muted-foreground/40" />
-                                  )}
-                                </div>
-                                {label}
-                                {right}
-                              </button>
-                            );
-
-                            // providerName is passed for rows that sit outside a
-                            // provider group. The same model can be served by
-                            // several providers (Anthropic direct, OpenRouter,
-                            // Zen), so a bare name in Recent gives no clue which
-                            // one a pick would actually use.
-                            const providerModelLabel = (model: ProviderModel, providerName?: string) => {
-                              const { name, meta } = splitProviderModelId(model);
-                              const metaLine = [providerName, meta].filter(Boolean).join(" · ");
-                              return (
-                                <span className="flex min-w-0 flex-col items-start gap-0.5">
-                                  <span className="flex min-w-0 max-w-full items-start gap-2">
-                                    <span className="min-w-0 break-all font-mono font-medium">{name}</span>
-                                    {model.free && (
-                                      <span className="shrink-0">
-                                        <FreeBadge model={model} />
-                                      </span>
-                                    )}
-                                  </span>
-                                  {metaLine && <span className="max-w-full text-[10px] text-muted-foreground">{metaLine}</span>}
-                                </span>
-                              );
-                            };
-
-                            const groupLabel = (text: string) => (
-                              <p className="px-1 pt-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">{text}</p>
-                            );
-
-                            return (
-                              <>
-                                <div className="relative">
-                                  <Search className="absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-                                  <input
-                                    data-testid="model-search"
-                                    placeholder="Search models…"
-                                    value={modelSearch}
-                                    onChange={(e) => setModelSearch(e.target.value)}
-                                    className="w-full rounded border border-input bg-background py-1.5 pl-7 pr-2 text-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                                  />
-                                </div>
-                                <div className="max-h-72 space-y-1 overflow-y-auto pr-1">
-                                  {recentRows.length > 0 && (
-                                    <>
-                                      {groupLabel("Recent")}
-                                      {recentRows.map((value) => {
-                                        const colon = value.indexOf(":");
-                                        const recentProvider =
-                                          colon > 0 ? providers?.find((p) => p.id === value.slice(0, colon)) : undefined;
-                                        const bare = (colon > 0 ? value.slice(colon + 1) : value).replace(/\[.*\]$/, "");
-                                        const recentModel = recentProvider?.models.find((m) => m.modelId === bare);
-                                        const selected = currentModel === value || currentModel === bare;
-                                        // Same renderer as the provider groups; a recent whose
-                                        // model left the catalog falls back to name + provider.
-                                        const label = recentModel ? (
-                                          providerModelLabel(recentModel, recentProvider?.name)
-                                        ) : (
-                                          <span className="flex min-w-0 flex-col items-start gap-0.5">
-                                            <span className="min-w-0 break-all font-mono font-medium">
-                                              {bare.replace(/^[^/]+\//, "").replace(/:free$/, "")}
-                                            </span>
-                                            <span className="max-w-full text-[10px] text-muted-foreground">
-                                              {recentProvider?.name ?? (colon > 0 ? value.slice(0, colon) : "Anthropic")}
-                                            </span>
-                                          </span>
-                                        );
-                                        return modelRow(`recent-${value}`, selected, () => selectModel(value), label);
-                                      })}
-                                    </>
-                                  )}
-
-                                  {aliasMatches.length > 0 && (
-                                    <>
-                                      {groupLabel("Anthropic")}
-                                      {aliasMatches.map((opt) =>
-                                        modelRow(
-                                          opt.value,
-                                          parsed.alias === opt.value,
-                                          () => selectModel(valueForAlias(opt.value)),
-                                          <span className="font-mono font-medium">{opt.label}</span>,
-                                        ),
-                                      )}
-                                    </>
-                                  )}
-
-                                  {providerGroups.map(({ provider, models }) => (
-                                    <div key={provider.id}>
-                                      {groupLabel(
-                                        provider.isBuiltin
-                                          ? `${provider.name} · ${provider.enabledModels?.length ?? 0} enabled`
-                                          : provider.name,
-                                      )}
-                                      {models.map((model) => {
-                                        const qualified = `${provider.id}:${model.modelId}`;
-                                        const selected = currentModel === qualified || currentModel === model.modelId;
-                                        return modelRow(qualified, selected, () => selectModel(qualified), providerModelLabel(model));
-                                      })}
-                                    </div>
-                                  ))}
-
-                                  {recentRows.length === 0 && aliasMatches.length === 0 && providerGroups.length === 0 && (
-                                    <p className="px-1 py-3 text-xs text-muted-foreground">No models match.</p>
-                                  )}
-                                </div>
-                              </>
-                            );
-                          })()}
-
-                          {showVRow && (
-                            <div className="flex items-center gap-2 pt-1">
-                              <Layers className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                              <span className="text-xs text-muted-foreground">Version</span>
-                              <div className="ml-auto flex gap-1">
-                                {vEntries.map((entry) => (
-                                  <button
-                                    key={entry.modelId}
-                                    onClick={() => onSetModel(valueForEntry(entry))}
-                                    className={`rounded px-2 py-0.5 text-xs transition-colors ${
-                                      parsed.entry?.modelId === entry.modelId
-                                        ? "bg-primary text-primary-foreground"
-                                        : "bg-muted text-muted-foreground hover:text-foreground"
-                                    }`}
-                                  >
-                                    {entry.version}
-                                  </button>
-                                ))}
-                              </div>
-                            </div>
-                          )}
-
-                          {sizes.length >= 2 && (
-                            <div className="flex items-center gap-2">
-                              <Maximize2 className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                              <span className="text-xs text-muted-foreground">Context</span>
-                              <div className="ml-auto flex gap-1">
-                                {sizes.map((s) => (
-                                  <button
-                                    key={s}
-                                    onClick={() => onSetModel(currentModel, s)}
-                                    className={`rounded px-2 py-0.5 text-xs transition-colors ${
-                                      parsed.contextSize === s
-                                        ? "bg-primary text-primary-foreground"
-                                        : "bg-muted text-muted-foreground hover:text-foreground"
-                                    }`}
-                                  >
-                                    {CONTEXT_SIZES[s].label}
-                                  </button>
-                                ))}
-                              </div>
-                            </div>
-                          )}
-
-                          {allowed.size > 0 && (
-                            <div className="flex items-start gap-2">
-                              <Brain className="h-3.5 w-3.5 text-muted-foreground shrink-0 mt-0.5" />
-                              <span className="text-xs text-muted-foreground py-0.5 shrink-0">Thinking</span>
-                              <div className="ml-auto flex flex-wrap gap-1 justify-end">
-                                {visibleLevels.map((opt) => (
-                                  <button
-                                    key={opt.value}
-                                    onClick={() => onSetThinking(opt.value)}
-                                    data-testid={`thinking-${opt.value}`}
-                                    className={`rounded px-2 py-0.5 text-xs transition-colors ${
-                                      thinkingLevel === opt.value
-                                        ? "bg-primary text-primary-foreground"
-                                        : "bg-muted text-muted-foreground hover:text-foreground"
-                                    }`}
-                                  >
-                                    {opt.label}
-                                  </button>
-                                ))}
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      )}
-
-                      {/* Runtime tab */}
-                      {settingsTab === "runtime" && (
-                        <div className="space-y-5">
-                          <div className="flex items-center gap-2">
-                            <Terminal className="h-3.5 w-3.5 text-muted-foreground" />
-                            <span className="text-xs text-muted-foreground">Agent harness:</span>
-                            <span className="text-xs font-medium text-foreground">Claude Code</span>
-                          </div>
-
-                          {onSetRuntime && (
-                            <div className="flex items-center gap-2">
-                              <Zap className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                              <span className="text-xs text-muted-foreground">Backend</span>
-                              <div className="ml-auto flex gap-1">
-                                <button
-                                  onClick={() => onSetRuntime("pty")}
-                                  data-testid="runtime-pty"
-                                  className={`rounded px-2 py-0.5 text-xs transition-colors ${
-                                    currentRuntime === "pty"
-                                      ? "bg-primary text-primary-foreground"
-                                      : "bg-muted text-muted-foreground hover:text-foreground"
-                                  }`}
-                                >
-                                  PTY
-                                </button>
-                                <button
-                                  onClick={() => onSetRuntime("stream")}
-                                  data-testid="runtime-stream"
-                                  className={`rounded px-2 py-0.5 text-xs transition-colors ${
-                                    currentRuntime === "stream"
-                                      ? "bg-primary text-primary-foreground"
-                                      : "bg-muted text-muted-foreground hover:text-foreground"
-                                  }`}
-                                >
-                                  Stream
-                                </button>
-                              </div>
-                            </div>
-                          )}
-
-                          <button
-                            onClick={() => {
-                              onRestart?.();
-                              setOptionsOpen(false);
-                            }}
-                            className="flex w-full items-center justify-center gap-2 rounded-lg border border-border px-4 py-2.5 text-xs text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
-                          >
-                            <RefreshCw className="h-3.5 w-3.5" />
-                            Restart agent harness
-                          </button>
-
-                          {isCockpitAgent ? (
-                            // The assistant stays a two-state toggle: bypass here
-                            // covers its tool calls only (config writes keep their
-                            // approval card), and auto never applies to it.
-                            <button
-                              onClick={() => onSetBypass(!bypassActive)}
-                              className="flex w-full items-center justify-between rounded-lg border border-border px-4 py-3 text-xs hover:bg-muted/50 transition-colors"
-                              data-testid="bypass-toggle"
-                            >
-                              <div className="flex items-center gap-3">
-                                {bypassActive ? (
-                                  <ShieldOff className="h-4 w-4 text-orange-500" />
-                                ) : (
-                                  <ShieldCheck className="h-4 w-4 text-muted-foreground" />
-                                )}
-                                <span className={bypassActive ? "text-orange-500 font-medium" : "text-muted-foreground"}>
-                                  Bypass tool prompts
-                                </span>
-                              </div>
-                              <span
-                                className={`inline-flex h-5 w-9 items-center rounded-full transition-colors shrink-0 ${
-                                  bypassActive ? "bg-orange-500" : "bg-muted-foreground/30"
-                                }`}
-                              >
-                                <span
-                                  className={`inline-block h-4 w-4 rounded-full bg-white transition-transform shadow-sm ${
-                                    bypassActive ? "translate-x-4.5" : "translate-x-0.5"
-                                  }`}
-                                />
-                              </span>
-                            </button>
-                          ) : (
-                            <div className="rounded-lg border border-border px-4 py-3">
-                              <div className="mb-2 flex items-center gap-3">
-                                {permissionMode === "bypass" ? (
-                                  <ShieldOff className="h-4 w-4 text-orange-500" />
-                                ) : (
-                                  <ShieldCheck className="h-4 w-4 text-muted-foreground" />
-                                )}
-                                <span
-                                  className={`text-xs font-medium ${permissionMode === "bypass" ? "text-orange-500" : "text-muted-foreground"}`}
-                                >
-                                  Permissions
-                                </span>
-                              </div>
-                              <div className="flex gap-1" data-testid="permission-mode-selector">
-                                {(["manual", "auto", "bypass"] as const)
-                                  .filter((m) => m !== "auto" || autoModeAvailable)
-                                  .map((m) => {
-                                    const active = permissionMode === m;
-                                    const label = m === "manual" ? "Manual" : m === "auto" ? "Auto" : "Bypass";
-                                    const activeClass = m === "bypass" ? "bg-orange-500 text-white" : "bg-primary text-primary-foreground";
-                                    return (
-                                      <button
-                                        key={m}
-                                        onClick={() => onSetPermissionMode(m)}
-                                        data-testid={`perm-mode-${m}`}
-                                        className={`flex-1 rounded px-2 py-1 text-xs transition-colors ${
-                                          active ? activeClass : "bg-muted text-muted-foreground hover:text-foreground"
-                                        }`}
-                                      >
-                                        {label}
-                                      </button>
-                                    );
-                                  })}
-                              </div>
-                              <p className="mt-2 text-[11px] text-muted-foreground">
-                                {permissionMode === "manual"
-                                  ? "Every tool call asks first."
-                                  : permissionMode === "auto"
-                                    ? "Safe steps run; risky ones are blocked until you agree in chat."
-                                    : "All tool calls are auto-approved."}
-                              </p>
-                              {modeMismatch && (
-                                <p className="mt-1 text-[11px] text-amber-600 dark:text-amber-400" data-testid="permission-mode-mismatch">
-                                  {modeMismatch}
-                                </p>
-                              )}
-                            </div>
-                          )}
-
-                          {!isCockpitAgent && (
-                            <div className="rounded-lg border border-border px-4 py-3">
-                              <button
-                                type="button"
                                 onClick={() =>
-                                  sandboxSupport?.supported &&
-                                  onSetSandbox({ enabled: !sandbox.enabled, allowedDomains: sandbox.allowedDomains })
+                                  onSetNotifications?.({
+                                    ...notifications,
+                                    events: { ...notifications?.events, [key]: !on },
+                                  })
                                 }
-                                disabled={!sandboxSupport?.supported}
-                                className="flex w-full items-center justify-between text-xs disabled:opacity-60"
-                                data-testid="sandbox-toggle"
-                              >
-                                <div className="flex items-center gap-3">
-                                  <Box className={`h-4 w-4 ${sandbox.enabled ? "text-emerald-500" : "text-muted-foreground"}`} />
-                                  <span className={sandbox.enabled ? "text-emerald-500 font-medium" : "text-muted-foreground"}>
-                                    Sandbox Bash
-                                  </span>
-                                </div>
-                                <span
-                                  className={`inline-flex h-5 w-9 items-center rounded-full transition-colors shrink-0 ${
-                                    sandbox.enabled ? "bg-emerald-500" : "bg-muted-foreground/30"
-                                  }`}
-                                >
-                                  <span
-                                    className={`inline-block h-4 w-4 rounded-full bg-white transition-transform shadow-sm ${
-                                      sandbox.enabled ? "translate-x-4.5" : "translate-x-0.5"
-                                    }`}
-                                  />
-                                </span>
-                              </button>
-                              {!sandboxSupport?.supported ? (
-                                <p className="mt-2 text-[11px] text-muted-foreground">
-                                  {sandboxSupport?.reason ?? "Checking sandbox support…"}
-                                </p>
-                              ) : sandbox.enabled ? (
-                                <div className="mt-3 space-y-1">
-                                  <span className="text-[11px] text-muted-foreground">
-                                    Extra allowed domains for this session (one per line)
-                                  </span>
-                                  <textarea
-                                    data-testid="sandbox-domains"
-                                    key={String(sandbox.enabled)}
-                                    defaultValue={(sandbox.allowedDomains ?? []).join("\n")}
-                                    placeholder={"github.com\n*.npmjs.org"}
-                                    onBlur={(e) =>
-                                      onSetSandbox({
-                                        enabled: true,
-                                        allowedDomains: e.target.value
-                                          .split("\n")
-                                          .map((d) => d.trim())
-                                          .filter(Boolean),
-                                      })
-                                    }
-                                    rows={3}
-                                    className="w-full rounded border border-border bg-background px-2 py-1 font-mono text-[11px] focus:outline-none focus:ring-1 focus:ring-ring"
-                                  />
-                                  <p className="text-[11px] text-muted-foreground">
-                                    Bash runs isolated and its commands auto-run, even in Manual. These add to the shared rules in Settings
-                                    → Sandbox, and changing them restarts the session.
-                                  </p>
-                                </div>
-                              ) : (
-                                <p className="mt-2 text-[11px] text-muted-foreground">
-                                  Run Bash in an OS sandbox so commands execute without prompts.
-                                </p>
-                              )}
-                            </div>
-                          )}
-
-                          {initData?.mcpServers && initData.mcpServers.length > 0 && (
-                            <button
-                              onClick={() => setMcpOpen(true)}
-                              className="flex w-full items-center justify-between rounded-lg border border-border px-4 py-3 text-xs hover:bg-muted/50 transition-colors"
-                            >
-                              <div className="flex items-center gap-3">
-                                <Plug className="h-4 w-4 text-muted-foreground" />
-                                <span className="text-muted-foreground">MCP Servers</span>
-                              </div>
-                              <span className="flex items-center gap-1 text-muted-foreground">
-                                {initData.mcpServers.filter((s) => s.status === "connected").length}/{initData.mcpServers.length}
-                                <ChevronRight className="h-3 w-3" />
-                              </span>
-                            </button>
-                          )}
-                        </div>
-                      )}
-
-                      {/* Notifications tab: what this session sends out, and
-                          through which of the configured providers. */}
-                      {settingsTab === "notifications" && (
-                        <div className="space-y-4" data-testid="settings-notifications">
-                          <div className="space-y-2">
-                            <div className="flex items-center gap-2">
-                              <Bell className="h-3.5 w-3.5 text-muted-foreground" />
-                              <span className="text-xs font-medium text-foreground">Send notifications</span>
-                            </div>
-                            <p className="text-[11px] text-muted-foreground">
-                              One provider per session. Off means this session never messages you on its own.
-                            </p>
-                            <div className="space-y-1.5">
-                              <button
-                                onClick={() => onSetNotifications?.(null)}
-                                data-testid="notify-off"
+                                data-testid={`notify-event-${key}`}
                                 className={`flex w-full items-center justify-between rounded-lg border px-3 py-2 text-xs transition-colors ${
-                                  !notifications?.providerId ? "border-primary bg-primary/10" : "border-border hover:bg-muted/50"
+                                  on ? "border-primary bg-primary/10" : "border-border hover:bg-muted/50"
                                 }`}
                               >
-                                <span>Off</span>
-                                {!notifications?.providerId && <Check className="h-3.5 w-3.5 text-primary" />}
+                                <span>{label}</span>
+                                {on && <Check className="h-3.5 w-3.5 text-primary" />}
                               </button>
-                              {notifyProviders.map((provider) => {
-                                const selected = notifications?.providerId === provider.id;
-                                return (
-                                  <button
-                                    key={provider.id}
-                                    onClick={() =>
-                                      onSetNotifications?.({
-                                        providerId: provider.id,
-                                        events: notifications?.events ?? { finished: true, question: true, permission: true },
-                                      })
-                                    }
-                                    data-testid={`notify-provider-${provider.id}`}
-                                    className={`flex w-full items-center justify-between rounded-lg border px-3 py-2 text-xs transition-colors ${
-                                      selected ? "border-primary bg-primary/10" : "border-border hover:bg-muted/50"
-                                    }`}
-                                  >
-                                    <span className="flex items-center gap-2">
-                                      {provider.name}
-                                      <span className="text-muted-foreground">{provider.type}</span>
-                                      {!provider.enabled && <span className="text-muted-foreground">(disabled)</span>}
-                                    </span>
-                                    {selected && <Check className="h-3.5 w-3.5 text-primary" />}
-                                  </button>
-                                );
-                              })}
-                              {/* A provider this session chose and that has since been
-                                  deleted: saying so is better than silence. */}
-                              {notifications?.providerId && !notifyProviders.some((p) => p.id === notifications.providerId) && (
-                                <div className="flex items-center justify-between rounded-lg border border-dashed px-3 py-2 text-xs text-muted-foreground">
-                                  <span>This session's provider is no longer configured</span>
-                                </div>
-                              )}
-                              {notifyProviders.length === 0 && notifications?.providerId === undefined && (
-                                <p className="text-[11px] text-muted-foreground">
-                                  No providers configured yet. Add one in Settings → Notifications.
-                                </p>
-                              )}
-                            </div>
-                          </div>
-
-                          {notifications?.providerId && (
-                            <div className="space-y-2">
-                              <span className="text-xs font-medium text-foreground">Tell me when</span>
-                              <div className="space-y-1.5">
-                                {(
-                                  [
-                                    ["finished", "A turn finishes"],
-                                    ["question", "Claude asks a question"],
-                                    ["permission", "A permission is waiting"],
-                                  ] as const
-                                ).map(([key, label]) => {
-                                  const on = notifications?.events?.[key] !== false;
-                                  return (
-                                    <button
-                                      key={key}
-                                      onClick={() =>
-                                        onSetNotifications?.({
-                                          ...notifications,
-                                          events: { ...notifications?.events, [key]: !on },
-                                        })
-                                      }
-                                      data-testid={`notify-event-${key}`}
-                                      className={`flex w-full items-center justify-between rounded-lg border px-3 py-2 text-xs transition-colors ${
-                                        on ? "border-primary bg-primary/10" : "border-border hover:bg-muted/50"
-                                      }`}
-                                    >
-                                      <span>{label}</span>
-                                      {on && <Check className="h-3.5 w-3.5 text-primary" />}
-                                    </button>
-                                  );
-                                })}
-                              </div>
-                            </div>
-                          )}
+                            );
+                          })}
                         </div>
-                      )}
-                    </div>
+                      </div>
+                    )}
                   </div>
+                )}
+              </div>
 
-                  {/* Footer */}
-                  <div className="flex items-center justify-end px-5 py-3 border-t shrink-0">
-                    <div className="flex gap-2">
-                      <button
-                        onClick={() => setOptionsOpen(false)}
-                        className="px-3 py-1.5 text-xs rounded-md border border-input text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
-                      >
-                        Cancel
-                      </button>
-                      <button
-                        onClick={() => setOptionsOpen(false)}
-                        className="px-4 py-1.5 text-xs rounded-md bg-primary text-primary-foreground hover:brightness-110 transition-all"
-                      >
-                        Done
-                      </button>
-                    </div>
-                  </div>
+              {/* Footer */}
+              <div className="flex items-center justify-end px-5 py-3 border-t shrink-0">
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => setOptionsOpen(false)}
+                    className="px-3 py-1.5 text-xs rounded-md border border-input text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={() => setOptionsOpen(false)}
+                    className="px-4 py-1.5 text-xs rounded-md bg-primary text-primary-foreground hover:brightness-110 transition-all"
+                  >
+                    Done
+                  </button>
                 </div>
               </div>
-            );
-          })()}
+            </div>
+          </div>
+        )}
         {hasAttachments && (
           <div className="mb-1 flex gap-2 flex-wrap px-9">
             {pendingImages.map((img, i) => (
