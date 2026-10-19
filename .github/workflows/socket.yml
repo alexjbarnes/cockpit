@@ -61,13 +61,19 @@ jobs:
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             PR_NUMBER=${{ github.event.pull_request.number }}
           fi
+          # The CLI sends the commit message in the scan request's URL, and a
+          # release's squash commit carries every message since the branches
+          # split (256 KB for 0.9.0), which Socket refuses as too long (HTTP
+          # 414). Every release push to main failed this way. The subject line
+          # is enough to name the commit.
+          COMMIT_SUBJECT=$(git -C "$GITHUB_WORKSPACE" log -1 --format=%s)
           # Retry only transient Socket API failures (e.g. a 429 rate limit);
           # fail fast on a real policy violation so a genuine finding still blocks.
           set +e
           attempt=1
           max=3
           while true; do
-            socketcli --target-path "$GITHUB_WORKSPACE" --scm github --pr-number "$PR_NUMBER" 2>&1 | tee /tmp/socket-out.txt
+            socketcli --target-path "$GITHUB_WORKSPACE" --scm github --pr-number "$PR_NUMBER" --commit-message "$COMMIT_SUBJECT" 2>&1 | tee /tmp/socket-out.txt
             rc=${PIPESTATUS[0]}
             if [ "$rc" -eq 0 ]; then
               break
