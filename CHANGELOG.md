@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Internal
 - The Socket scan of `main` passes the commit's subject line rather than its whole message. A release's squash commit carries every message since the branches split, and Socket refused the request as too long, so the scan had failed on every release since at least June.
+- The server build empties `dist/` before compiling. It only ever added to it, so a deleted server file kept shipping as its old compiled copy: 0.9.0 carried the removed todo watcher's.
 
 ## [0.9.0] - 2026-10-19
 
