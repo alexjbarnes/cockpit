@@ -50,6 +50,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Internal
 - The GitHub routes share one `gh` helper (`src/server/gh.ts`) instead of eight copies of it, and the Model tab's logic lives in `src/lib/model-picker.ts` with its own tests.
+- Dependency updates (lucide-react, the Radix slot, uuid, Playwright and Vitest), and newer versions of the GitHub Actions CI runs on.
 
 ## [0.8.0] - 2026-10-10
 
