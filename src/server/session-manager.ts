@@ -43,7 +43,7 @@ import type {
 } from "@/types";
 import { debugLog, isDebugEnabled, logDiag, logRawLine } from "./debug-logger";
 import { getDefaults } from "./defaults";
-import { ONE_M_CREDITS_REQUIRED, type ParsedEvent, TURN_CONTINUES } from "./event-parser";
+import { ONE_M_CREDITS_REQUIRED, type ParsedEvent, REQUEST_SETTLED, TURN_CONTINUES } from "./event-parser";
 import { getHarnessAdapter } from "./harness/registry";
 import type { HarnessProcess, HarnessProcessCallbacks, HarnessSpawnConfig } from "./harness/types";
 import { getJob, getJobSessionIds } from "./job-storage";
@@ -1998,6 +1998,11 @@ export class SessionManager {
       }
       if (sysMsg.startsWith("__agents::")) {
         this.notifyAgentsChanged(session, sessionId, Number(sysMsg.slice("__agents::".length)) || 0);
+        continue;
+      }
+      if (sysMsg.startsWith(REQUEST_SETTLED)) {
+        // Answered in the terminal, so its card has nothing left to decide.
+        this.dropPendingRequest(session, sessionId, sysMsg.slice(REQUEST_SETTLED.length));
         continue;
       }
       if (sysMsg === "__compact::hook_start") {

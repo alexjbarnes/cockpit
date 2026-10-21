@@ -5,7 +5,7 @@ import { sandboxEscapePossible } from "./claude-sandbox-rules";
 import { cleanupHookSettings, prepareHookSettings } from "./claude-settings";
 import { fetchCliInitData } from "./cli-init-fetch";
 import { logDiag } from "./debug-logger";
-import { ONE_M_CREDITS_REQUIRED, type ParsedEvent, TURN_CONTINUES } from "./event-parser";
+import { ONE_M_CREDITS_REQUIRED, type ParsedEvent, REQUEST_SETTLED, TURN_CONTINUES } from "./event-parser";
 import { newPermissionRequestId, permissionSuggestionsFrom, translateHookEvent } from "./hook-event-translator";
 import type { HookResponse, HookRouter, PermissionDecision, SessionHookHandler } from "./hook-router";
 import { PtySession } from "./pty-session";
@@ -71,6 +71,9 @@ const MID_TURN_CONFIRM_MS = 5000;
 const HELD_TAKE_UP_MS = 5000;
 const HELD_POLL_MS = 250;
 const NETWORK_DIALOG_TITLE = "Network request outside of sandbox";
+/** Ceiling on tool calls remembered between PreToolUse and PostToolUse, so a
+ *  call that never finishes (interrupted mid-tool) cannot pile up. */
+const MAX_TOOL_CALLS_TRACKED = 200;
 
 function stringOrEmpty(value: unknown): string {
   return typeof value === "string" ? value : "";
@@ -83,10 +86,17 @@ export class PtyRuntime {
   /** This spawn's hook registration, so cleanup removes only its own. */
   private hookToken: string | undefined;
   private telemetryToken: string | null = null;
-  /** Hook requests awaiting a decision, by request id. The tool name rides
-   *  along so onNotification can tell whether a rendered dialog belongs to a
-   *  request the user already has a card for. */
-  private readonly pendingPermissions = new Map<string, { resolve: (decision: PermissionDecision) => void; toolName: string }>();
+  /** Hook requests awaiting a decision, by request id. The tool call's id
+   *  rides along when it is known, so a request the CLI settled without
+   *  cockpit can be released when that call finishes (settleToolCall). */
+  private readonly pendingPermissions = new Map<
+    string,
+    { resolve: (decision: PermissionDecision) => void; toolName: string; toolUseId?: string }
+  >();
+  /** Tool calls between their PreToolUse and their PostToolUse, by
+   *  tool_use_id. A PermissionRequest names no id of its own, so this is how
+   *  one is tied to its call (callAwaitingPermission). */
+  private readonly toolCallsInFlight = new Map<string, { tool: string; input: string }>();
   /** Synthetic requests for TUI-only dialogs (see onNotification), by id:
    *  answered with keystrokes into the PTY, not through the hook response
    *  channel. A network dialog also carries the host it asks about. */
@@ -744,6 +754,7 @@ export class PtyRuntime {
     this.pendingPermissions.clear();
     this.pendingTuiDialogs.clear();
     // The process is going away, so nothing it launched is still running.
+    this.toolCallsInFlight.clear();
     this.runningTasks.clear();
     this.turnInProgress = false;
     this.heldMidTurn = [];
@@ -880,8 +891,9 @@ export class PtyRuntime {
         console.log(`[pty-runtime] PreToolUse: tool=${toolName} cli_session=${cliSession} tool_use_id=${toolUseId}`);
         this.notePayloadMode(payload, "PreToolUse");
         // Remembered so a later TUI-only permission dialog (see onNotification)
-        // can name the tool it is actually gating.
+        // can name the tool it is most likely gating.
         this.lastPreToolUse = { tool: toolName, input: payload.tool_input as Record<string, unknown> | undefined };
+        this.noteToolCall(payload, toolName);
         let events = translateHookEvent("PreToolUse", payload);
         if (this.turnEnded && this.runningTasks.size > 0) {
           // The turn is over and background work is still going, so this tool
@@ -900,6 +912,7 @@ export class PtyRuntime {
         const toolUseId = typeof payload.tool_use_id === "string" ? payload.tool_use_id.slice(0, 12) : "none";
         logDiag(this.opts.sessionId, "hook:PostToolUse", { tool: toolName, toolUseId });
         console.log(`[pty-runtime] PostToolUse: tool=${toolName} cli_session=${cliSession} tool_use_id=${toolUseId}`);
+        this.settleToolCall(payload);
         this.emit(translateHookEvent("PostToolUse", payload));
       },
       // Fires as the CLI starts (and on resume, /clear and compaction). It is
@@ -915,6 +928,7 @@ export class PtyRuntime {
           error: String(payload.error ?? "").slice(0, 160),
           isTimeout: payload.is_timeout === true,
         });
+        this.settleToolCall(payload);
         this.emit(translateHookEvent("PostToolUseFailure", payload));
       },
       onPermissionDenied: (payload) => {
@@ -1142,6 +1156,12 @@ export class PtyRuntime {
         // The CLI types every notification, and the type is stable where the
         // wording is not. The message check stays for older payloads.
         const type = typeof payload.notification_type === "string" ? payload.notification_type : "";
+        // Every typed notification belongs in the log, so a session that
+        // behaved oddly can be read back. idle_prompt fires at every turn end
+        // and is not worth the line.
+        if (type && type !== "idle_prompt") {
+          logDiag(this.opts.sessionId, "pty:notification", { type, message: message.slice(0, 120) });
+        }
         if (/sandboxed command needs network access/i.test(message)) {
           void this.raiseNetworkAccessRequest();
           return;
@@ -1162,21 +1182,25 @@ export class PtyRuntime {
         // The type is the reliable signal; the wording check stays because it
         // is what carried this before the type was read at all.
         if (type === "permission_prompt" || type === "worker_permission_prompt" || /needs your permission/i.test(message)) {
-          const tool = this.lastPreToolUse?.tool ?? "unknown";
           // The CLI notifies for a dialog it rendered itself AND for one it is
-          // waiting on cockpit's hook response for. Rescuing the second kind
-          // raises a second request for the same tool, and because it carries a
-          // different id the client's per-id dedupe can't collapse it — the user
-          // gets two identical cards (seen with AskUserQuestion). Worse, only the
-          // hook request can actually be answered: a synthetic one is answered
-          // with a "1" keystroke, which for a question card blind-selects the
-          // first option. A still-pending hook request is proof the CLI has a
-          // channel back, so leave that card alone. Once it has been answered,
-          // a notification is the genuine article and gets rescued as before.
-          if ([...this.pendingPermissions.values()].some((p) => p.toolName === tool)) {
-            logDiag(this.opts.sessionId, "pty:tui-dialog-skipped-hook-pending", { tool });
+          // waiting on cockpit's hook response for, and nothing says which: the
+          // message names no tool, and the last tool seen need not be the one
+          // asking, since a background agent's calls carry on while a dialog
+          // waits (a question up, the agent running Bash). Rescuing
+          // a dialog that has a hook request gives the user a second card, and
+          // a rescued dialog is answered with keys, which land on whatever
+          // dialog is on screen: under bypass the "1" meant for a phantom Bash
+          // prompt picked the question's first option. While any hook request
+          // waits, the CLI has a channel back and nothing is rescued. Requests
+          // the CLI settles without cockpit are released as their tool calls
+          // finish (settleToolCall), so a stale one does not hold this off.
+          if (this.pendingPermissions.size > 0) {
+            logDiag(this.opts.sessionId, "pty:tui-dialog-skipped-hook-pending", {
+              pending: [...this.pendingPermissions.values()].map((p) => p.toolName),
+            });
             return;
           }
+          const tool = this.lastPreToolUse?.tool ?? "unknown";
           const requestId = `tui-${newPermissionRequestId()}`;
           this.pendingTuiDialogs.set(requestId, { kind: "permission" });
           logDiag(this.opts.sessionId, "pty:tui-dialog-detected", { requestId, lastTool: this.lastPreToolUse?.tool ?? null });
@@ -1191,13 +1215,8 @@ export class PtyRuntime {
             },
           ]);
         }
-        // Everything else the CLI notifies about — auth_success, quota_*,
-        // agent_completed, model fallbacks — needs no action here, but the
-        // type belongs in the log so a session that behaved oddly can be read
-        // back. idle_prompt fires at every turn end and is not worth the line.
-        if (type && type !== "idle_prompt") {
-          logDiag(this.opts.sessionId, "pty:notification", { type, message: message.slice(0, 120) });
-        }
+        // Everything else the CLI notifies about (auth_success, quota_*,
+        // agent_completed, model fallbacks) needs no action here.
       },
       onPermissionRequest: (payload) => this.handlePermissionRequest(payload),
     };
@@ -1308,6 +1327,51 @@ export class PtyRuntime {
     };
   }
 
+  /** Remember a tool call from its PreToolUse until it finishes. */
+  private noteToolCall(payload: Record<string, unknown>, tool: string): void {
+    const id = stringOrEmpty(payload.tool_use_id);
+    if (!id) return;
+    this.toolCallsInFlight.set(id, { tool, input: JSON.stringify(payload.tool_input ?? null) });
+    if (this.toolCallsInFlight.size > MAX_TOOL_CALLS_TRACKED) {
+      const oldest = this.toolCallsInFlight.keys().next().value;
+      if (oldest !== undefined) this.toolCallsInFlight.delete(oldest);
+    }
+  }
+
+  /**
+   * The call a PermissionRequest is about. Its payload names no tool_use_id,
+   * but the call's PreToolUse, which always comes first, does and carries the
+   * same input. Two unclaimed calls alike in tool and input cannot be told
+   * apart, and tying the wrong one would release a request still waiting, so
+   * then nothing is tied.
+   */
+  private callAwaitingPermission(tool: string, input: unknown): string | undefined {
+    const key = JSON.stringify(input ?? null);
+    const claimed = new Set([...this.pendingPermissions.values()].map((p) => p.toolUseId));
+    const candidates = [...this.toolCallsInFlight].filter(([id, call]) => call.tool === tool && call.input === key && !claimed.has(id));
+    return candidates.length === 1 ? candidates[0][0] : undefined;
+  }
+
+  /**
+   * A tool call has finished, so whatever permission it asked for has been
+   * decided. A request of cockpit's still waiting on it was decided without
+   * cockpit, in the terminal, and the CLI has stopped listening for its
+   * answer. It is released so its hook bridge can exit, its card goes, and it
+   * no longer counts as a dialog waiting on its hook (see onNotification).
+   */
+  private settleToolCall(payload: Record<string, unknown>): void {
+    const id = stringOrEmpty(payload.tool_use_id);
+    if (!id) return;
+    this.toolCallsInFlight.delete(id);
+    for (const [requestId, pending] of this.pendingPermissions) {
+      if (pending.toolUseId !== id) continue;
+      this.pendingPermissions.delete(requestId);
+      logDiag(this.opts.sessionId, "pty:permission-settled-in-terminal", { requestId, toolName: pending.toolName });
+      pending.resolve({ behavior: "deny", message: "already answered in the terminal" });
+      this.emit([{ type: "system_message", text: `${REQUEST_SETTLED}${requestId}` }]);
+    }
+  }
+
   private handlePermissionRequest(payload: Record<string, unknown>): Promise<PermissionDecision> {
     const requestId = newPermissionRequestId();
     const toolName = typeof payload.tool_name === "string" ? payload.tool_name : "unknown";
@@ -1329,9 +1393,10 @@ export class PtyRuntime {
       permissionSuggestions: permissionSuggestionsFrom(payload),
     };
 
-    logDiag(this.opts.sessionId, "pty:permission-request", { requestId, toolName });
+    const toolUseId = this.callAwaitingPermission(toolName, toolInput);
+    logDiag(this.opts.sessionId, "pty:permission-request", { requestId, toolName, tied: !!toolUseId });
     return new Promise<PermissionDecision>((resolve) => {
-      this.pendingPermissions.set(requestId, { resolve, toolName });
+      this.pendingPermissions.set(requestId, { resolve, toolName, toolUseId });
       try {
         this.opts.onEvents([event]);
       } catch (err) {

@@ -17,6 +17,13 @@ export const ONE_M_CREDITS_REQUIRED = "__1m_credits_required__";
  */
 export const TURN_CONTINUES = "__turn_continues";
 
+/**
+ * Prefix of the system message pty-runtime sends, followed by a request id,
+ * when the CLI decided a permission or question without cockpit (it was
+ * answered in the terminal). The session manager drops that request's card.
+ */
+export const REQUEST_SETTLED = "__request_settled::";
+
 export interface ParsedEvent {
   type:
     | "text_delta"

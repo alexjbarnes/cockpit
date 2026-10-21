@@ -129,7 +129,7 @@ vi.mock("@/server/transcript-watcher", () => {
   return { TranscriptWatcher: MockTranscriptWatcher };
 });
 
-import { ONE_M_CREDITS_REQUIRED } from "@/server/event-parser";
+import { ONE_M_CREDITS_REQUIRED, REQUEST_SETTLED } from "@/server/event-parser";
 import { buildContent } from "@/server/harness/claude-stream-adapter";
 import { SessionManager } from "@/server/session-manager";
 import { createStreamState } from "@/server/stream-processor";
@@ -602,6 +602,22 @@ describe("SessionManager", () => {
       // to resume. It stays queued; message_done flushes it at the real end.
       expect(s.queuedMessages).toHaveLength(1);
       expect(s.info.status).toBe("running");
+    });
+
+    // A question or permission answered in the terminal has nothing left for
+    // its card to decide, so the runtime's word drops it, quietly.
+    it("drops the card of a request the CLI settled without cockpit", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      manager.addPendingRequest(session.id, { type: "question", requestId: "req-1", toolName: "AskUserQuestion", toolInput: "{}" });
+      manager.addPendingRequest(session.id, { type: "permission", requestId: "req-2", toolName: "Bash", toolInput: "{}" });
+      const shown: string[] = [];
+      manager.onSystem(session.id, (msg) => shown.push(msg));
+
+      (manager as any).applyProcessedResult(s, session.id, postCompactResult(`${REQUEST_SETTLED}req-1`));
+
+      expect(manager.getPendingRequests(session.id).map((r) => r.requestId)).toEqual(["req-2"]);
+      expect(shown).toEqual([]);
     });
 
     it("handles slash commands", () => {
