@@ -13,6 +13,8 @@ export interface IngestMeta {
   kind: OtlpKind;
   receivedMs: number;
   gzip: boolean;
+  /** OTLP's JSON or protobuf encoding, from the request's content type. */
+  encoding: "json" | "protobuf";
 }
 
 export interface WorkerInit {

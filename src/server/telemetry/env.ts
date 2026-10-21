@@ -4,10 +4,14 @@
  *
  * Settings precedence decides most of this. A session's --settings file (where
  * cockpit writes these) beats the user's and the project's settings and the
- * process env for the same key, but organisation-managed settings beat it. So:
- * - every signal also gets its own endpoint, protocol and headers keys, which
- *   win over a general protocol an organisation sets (one this user's
- *   organisation sets to http/protobuf, which cockpit's receiver cannot read);
+ * process env for the same key, but managed settings beat it, and more than key
+ * for key: when they set a general OTLP protocol, endpoint or headers, Claude
+ * Code removes every per-signal value set below them (CLI 2.1.217 and later).
+ * So:
+ * - cockpit asks for http/protobuf, OTel's default, and its receiver reads JSON
+ *   as well, so an HTTP protocol chosen there of either kind still lands;
+ * - gRPC chosen there cannot reach an HTTP receiver, so it leaves the session
+ *   alone;
  * - when a source cockpit does not control names a destination, cockpit leaves
  *   telemetry alone for that session rather than either diverting someone's
  *   pipeline or, worse, switching on prompt capture into a collector whose
@@ -44,7 +48,7 @@ export function buildTelemetryEnv(o: TelemetryEnvOptions): Record<string, string
     OTEL_METRICS_EXPORTER: "otlp",
     OTEL_LOGS_EXPORTER: "otlp",
     OTEL_TRACES_EXPORTER: "otlp",
-    OTEL_EXPORTER_OTLP_PROTOCOL: "http/json",
+    OTEL_EXPORTER_OTLP_PROTOCOL: "http/protobuf",
     OTEL_EXPORTER_OTLP_ENDPOINT: base,
     OTEL_EXPORTER_OTLP_HEADERS: header,
     OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE: "delta",
@@ -62,7 +66,7 @@ export function buildTelemetryEnv(o: TelemetryEnvOptions): Record<string, string
     OTEL_RESOURCE_ATTRIBUTES: [...others, own].join(","),
   };
   for (const s of SIGNALS) {
-    env[`OTEL_EXPORTER_OTLP_${s}_PROTOCOL`] = "http/json";
+    env[`OTEL_EXPORTER_OTLP_${s}_PROTOCOL`] = "http/protobuf";
     // Per-signal endpoints are used as given, with no /v1/<signal> appended.
     env[`OTEL_EXPORTER_OTLP_${s}_ENDPOINT`] = `${base}/v1/${s.toLowerCase()}`;
     env[`OTEL_EXPORTER_OTLP_${s}_HEADERS`] = header;
@@ -81,7 +85,7 @@ export interface SettingsSource {
   env: Record<string, unknown>;
   /** The whole settings object, for keys outside `env` (otelHeadersHelper). */
   settings?: Record<string, unknown>;
-  /** Organisation-managed: beats cockpit's settings file key for key. */
+  /** Managed settings: beat cockpit's settings file key for key. */
   managed?: boolean;
 }
 
@@ -91,6 +95,7 @@ export interface ExternalOtel {
 }
 
 const DESTINATION_KEY = /^(OTEL_EXPORTER_OTLP(_(METRICS|LOGS|TRACES))?_(ENDPOINT|HEADERS)|BETA_TRACING_ENDPOINT)$/;
+const PROTOCOL_KEY = /^OTEL_EXPORTER_OTLP(_(METRICS|LOGS|TRACES))?_PROTOCOL$/;
 
 function isTruthy(v: unknown): boolean {
   if (typeof v !== "string") return v === true || (typeof v === "number" && v !== 0);
@@ -114,16 +119,20 @@ function destination(s: SettingsSource): string | null {
  * prompt and tool switches would flow there. A destination anywhere else means
  * yes only if telemetry is already switched on somewhere, because only then is
  * it someone's working pipeline; otherwise it is a stray variable cockpit's
- * own keys override anyway. Switching telemetry on, or choosing an exporter or
- * a protocol, without a destination (this user's organisation does exactly
- * that) is taken over: the per-signal keys put every signal on cockpit's
- * receiver in JSON.
+ * own keys override anyway. Switching telemetry on, choosing an exporter, or
+ * choosing an HTTP protocol without a destination is taken over. A managed
+ * gRPC protocol is not: cockpit's receiver speaks HTTP only, so nothing would
+ * arrive.
  */
 export function assessExternalOtel(sources: SettingsSource[]): ExternalOtel {
   const enabled = sources.some((s) => isTruthy(s.env?.CLAUDE_CODE_ENABLE_TELEMETRY));
   for (const s of sources) {
     const key = destination(s);
     if (key && (s.managed || enabled)) return { skip: { source: s.label, key } };
+    if (!s.managed) continue;
+    for (const [k, v] of Object.entries(s.env ?? {})) {
+      if (PROTOCOL_KEY.test(k) && typeof v === "string" && v.trim().toLowerCase() === "grpc") return { skip: { source: s.label, key: k } };
+    }
   }
   return { skip: null };
 }
@@ -150,7 +159,7 @@ export function managedSettingsDir(platform: NodeJS.Platform = process.platform)
 }
 
 /**
- * The organisation-managed settings cockpit can see: the server-managed
+ * The managed settings cockpit can see: the server-managed
  * settings the CLI caches in its config dir, and the managed-settings files
  * (with their drop-in directory) in the system directory. MDM profiles and the
  * Windows registry are not read.

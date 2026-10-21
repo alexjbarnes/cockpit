@@ -16,7 +16,7 @@ class FakeWorker extends EventEmitter implements WorkerLike {
   }
 }
 
-const meta: IngestMeta = { sessionId: "s", spawnId: "sp", kind: "logs", receivedMs: 1, gzip: false };
+const meta: IngestMeta = { sessionId: "s", spawnId: "sp", kind: "logs", receivedMs: 1, gzip: false, encoding: "json" };
 
 async function started(opts: { queueLimitBytes?: number; requestTimeoutMs?: number } = {}) {
   const worker = new FakeWorker();

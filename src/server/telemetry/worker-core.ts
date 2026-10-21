@@ -6,6 +6,7 @@
 import { gunzipSync } from "node:zlib";
 import { TelemetryDb, TelemetryDbError } from "./db";
 import { parseOtlp } from "./otlp";
+import { decodeOtlpProtobuf } from "./otlp-proto";
 import type { WorkerInit, WorkerRequest, WorkerResponse } from "./protocol";
 import { loadSqlite, type SqliteLoad } from "./sqlite";
 
@@ -60,7 +61,8 @@ export function createWorkerCore(db: TelemetryDb, post: (r: WorkerResponse) => v
       try {
         let raw = Buffer.from(msg.body.buffer, msg.body.byteOffset, msg.body.byteLength);
         if (msg.meta.gzip) raw = gunzipSync(raw, { maxOutputLength: MAX_INFLATED_BYTES });
-        const batch = parseOtlp(msg.meta.kind, JSON.parse(raw.toString("utf8")), msg.meta.receivedMs);
+        const payload = msg.meta.encoding === "protobuf" ? decodeOtlpProtobuf(msg.meta.kind, raw) : JSON.parse(raw.toString("utf8"));
+        const batch = parseOtlp(msg.meta.kind, payload, msg.meta.receivedMs);
         const records = db.ingest({ sessionId: msg.meta.sessionId, spawnId: msg.meta.spawnId, receivedMs: msg.meta.receivedMs }, batch);
         post({ type: "ack", bytes, records, skipped: batch.skipped });
       } catch (err) {

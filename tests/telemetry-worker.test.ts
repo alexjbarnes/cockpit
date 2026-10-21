@@ -1,6 +1,6 @@
 // The telemetry worker's logic, run in-process: what it does with a batch, a
 // question, and a database it cannot open.
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gzipSync } from "node:zlib";
@@ -20,7 +20,7 @@ const logs = (body: string) => ({
   ],
 });
 const bytes = (v: unknown) => new Uint8Array(Buffer.from(JSON.stringify(v)));
-const meta = { sessionId: "sess", spawnId: "spawn", kind: "logs" as const, receivedMs: 1_000, gzip: false };
+const meta = { sessionId: "sess", spawnId: "spawn", kind: "logs" as const, receivedMs: 1_000, gzip: false, encoding: "json" as const };
 
 describe("openStore", () => {
   it("says why when SQLite is missing", () => {
@@ -73,6 +73,14 @@ describe.skipIf(!sqlite)("createWorkerCore", () => {
       { type: "ack", bytes: plain.byteLength, records: 1, skipped: 0 },
       { type: "ack", bytes: zipped.byteLength, records: 1, skipped: 0 },
     ]);
+  });
+
+  it("stores a protobuf batch, which is how managed settings may make the CLI send it", () => {
+    const capture = JSON.parse(readFileSync(join(__dirname, "fixtures/otlp-protobuf-capture.json"), "utf8")) as Record<string, string>;
+    const body = new Uint8Array(Buffer.from(capture.logs, "base64"));
+    core.handle({ type: "ingest", meta: { ...meta, encoding: "protobuf" }, body });
+    expect(posted[0]).toEqual({ type: "ack", bytes: body.byteLength, records: 11, skipped: 0 });
+    expect(db.stats("sess").byName?.["claude_code.user_prompt"]).toBe(1);
   });
 
   it("acknowledges a batch it could not read, saying why", () => {

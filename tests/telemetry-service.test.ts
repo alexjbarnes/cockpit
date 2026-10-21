@@ -125,7 +125,14 @@ describe("TelemetryService", () => {
     const reply = await post(url, { path: "/otel/v1/traces", headers: auth(t), body: '{"resourceSpans":[]}' });
     expect(reply).toMatchObject({ status: 200, body: "{}" });
     expect(store.received).toHaveLength(1);
-    expect(store.received[0].meta).toEqual({ sessionId: "sess-a", spawnId, kind: "traces", receivedMs: now, gzip: false });
+    expect(store.received[0].meta).toEqual({
+      sessionId: "sess-a",
+      spawnId,
+      kind: "traces",
+      receivedMs: now,
+      gzip: false,
+      encoding: "json",
+    });
     expect(Buffer.from(store.received[0].body).toString()).toBe('{"resourceSpans":[]}');
     const zipped = await post(url, {
       path: "/otel/v1/metrics?x=1",
@@ -134,6 +141,11 @@ describe("TelemetryService", () => {
     });
     expect(zipped.status).toBe(200);
     expect(store.received[1].meta).toMatchObject({ kind: "metrics", gzip: true });
+    // Protobuf, which managed settings can pin whatever cockpit asks for.
+    for (const type of ["application/x-protobuf", "application/protobuf"]) {
+      expect((await post(url, { headers: { ...auth(t), "content-type": type }, body: Buffer.from([0x0a, 0x00]) })).status).toBe(200);
+    }
+    expect(store.received.slice(2).map((r) => r.meta.encoding)).toEqual(["protobuf", "protobuf"]);
     // Nothing logged per request: these arrive every few seconds per session.
     expect(console.log).not.toHaveBeenCalled();
   });
@@ -147,9 +159,9 @@ describe("TelemetryService", () => {
     expect((await service.stats()).dropped.unknownToken).toBe(2);
   });
 
-  it("refuses anything but JSON, a body over the limit, a wrong path and a wrong method", async () => {
+  it("refuses anything but OTLP's two HTTP encodings, a body over the limit, a wrong path and a wrong method", async () => {
     const { token: t } = await token();
-    expect((await post(url, { headers: { ...auth(t), "content-type": "application/x-protobuf" } })).status).toBe(415);
+    expect((await post(url, { headers: { ...auth(t), "content-type": "text/plain" } })).status).toBe(415);
     expect((await post(url, { headers: auth(t), body: "x".repeat(65) })).status).toBe(413);
     expect((await post(url, { headers: auth(t), body: "x".repeat(200), chunked: true })).status).toBe(413);
     expect((await post(url, { path: "/otel/v1/profiles", headers: auth(t) })).status).toBe(404);

@@ -384,7 +384,7 @@ describe("prepareHookSettings telemetry", () => {
     const env = settings.env as Record<string, string>;
     expect(env.KEEP).toBe("1");
     expect(env.CLAUDE_CODE_ENABLE_TELEMETRY).toBe("1");
-    expect(env.OTEL_EXPORTER_OTLP_PROTOCOL).toBe("http/json");
+    expect(env.OTEL_EXPORTER_OTLP_PROTOCOL).toBe("http/protobuf");
     expect(env.OTEL_EXPORTER_OTLP_LOGS_ENDPOINT).toBe("http://127.0.0.1:4567/otel/v1/logs");
     expect(env.OTEL_EXPORTER_OTLP_HEADERS).toBe("x-cockpit-otel-token=tel-token");
     expect(env.OTEL_RESOURCE_ATTRIBUTES).toBe("team=core,cockpit.session_id=tel-on");
@@ -400,17 +400,17 @@ describe("prepareHookSettings telemetry", () => {
     expect(settings.env).toEqual({ KEEP: "1" });
   });
 
-  it("takes over an organisation that only switches telemetry on", async () => {
-    // What this user's organisation does: telemetry on, protocol protobuf, no
-    // destination. Managed beats the session's file key for key, so the
-    // general protocol is theirs, and the per-signal keys are what put every
-    // signal on cockpit's receiver in JSON.
+  it("takes over managed settings that only switch telemetry on", async () => {
+    // Telemetry on and a protocol chosen, with no destination. A managed
+    // general protocol also removes every per-signal protocol set below it, so
+    // batches arrive in that one whatever cockpit asks for; the receiver reads
+    // both HTTP encodings.
     write(join(claudeDir, "remote-settings.json"), {
       env: { CLAUDE_CODE_ENABLE_TELEMETRY: "1", OTEL_METRICS_EXPORTER: "otlp", OTEL_EXPORTER_OTLP_PROTOCOL: "http/protobuf" },
     });
     const { artifact, settings } = await prepare("tel-org");
     expect(artifact.telemetry).toEqual({ status: "applied" });
-    expect(settings.env?.OTEL_EXPORTER_OTLP_METRICS_PROTOCOL).toBe("http/json");
+    expect(settings.env?.OTEL_EXPORTER_OTLP_METRICS_PROTOCOL).toBe("http/protobuf");
     expect(settings.env?.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT).toBe("http://127.0.0.1:4567/otel/v1/traces");
   });
 

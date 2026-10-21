@@ -184,7 +184,11 @@ export class TelemetryService implements TelemetrySpawner {
       this.dropped.unknownToken++;
       return reply(res, 403, { close: true });
     }
-    if (!/^application\/json\b/i.test(String(req.headers["content-type"] ?? ""))) {
+    // Both OTLP encodings over HTTP: cockpit asks for protobuf, and managed
+    // settings can pin either, overriding what cockpit asks for.
+    const type = String(req.headers["content-type"] ?? "");
+    const encoding = /^application\/json\b/i.test(type) ? "json" : /^application\/(x-)?protobuf\b/i.test(type) ? "protobuf" : null;
+    if (!encoding) {
       this.dropped.unsupportedType++;
       return reply(res, 415, { close: true });
     }
@@ -212,6 +216,7 @@ export class TelemetryService implements TelemetrySpawner {
             kind: match[1] as OtlpKind,
             receivedMs: this.now(),
             gzip: /gzip/i.test(String(req.headers["content-encoding"] ?? "")),
+            encoding,
           },
           body,
         )

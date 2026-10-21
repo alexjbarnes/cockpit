@@ -22,7 +22,7 @@ describe("buildTelemetryEnv", () => {
       OTEL_METRICS_EXPORTER: "otlp",
       OTEL_LOGS_EXPORTER: "otlp",
       OTEL_TRACES_EXPORTER: "otlp",
-      OTEL_EXPORTER_OTLP_PROTOCOL: "http/json",
+      OTEL_EXPORTER_OTLP_PROTOCOL: "http/protobuf",
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://127.0.0.1:9000/otel",
       OTEL_EXPORTER_OTLP_HEADERS: "x-cockpit-otel-token=tok",
       OTEL_RESOURCE_ATTRIBUTES: "cockpit.session_id=sess",
@@ -31,7 +31,7 @@ describe("buildTelemetryEnv", () => {
     // whose endpoints are used exactly as given.
     for (const s of ["metrics", "logs", "traces"]) {
       const S = s.toUpperCase();
-      expect(env[`OTEL_EXPORTER_OTLP_${S}_PROTOCOL`]).toBe("http/json");
+      expect(env[`OTEL_EXPORTER_OTLP_${S}_PROTOCOL`]).toBe("http/protobuf");
       expect(env[`OTEL_EXPORTER_OTLP_${S}_ENDPOINT`]).toBe(`http://127.0.0.1:9000/otel/v1/${s}`);
       expect(env[`OTEL_EXPORTER_OTLP_${S}_HEADERS`]).toBe("x-cockpit-otel-token=tok");
     }
@@ -75,6 +75,16 @@ describe("assessExternalOtel", () => {
       env: { CLAUDE_CODE_ENABLE_TELEMETRY: "1", OTEL_METRICS_EXPORTER: "otlp", OTEL_EXPORTER_OTLP_PROTOCOL: "http/protobuf" },
     };
     expect(assessExternalOtel([org])).toEqual({ skip: null });
+  });
+
+  it("steps aside for a managed gRPC protocol, which cannot reach an HTTP receiver, and takes over an HTTP one", () => {
+    const managed = (env: Record<string, string>) => assessExternalOtel([{ label: "managed", managed: true, env }]).skip;
+    expect(managed({ OTEL_EXPORTER_OTLP_PROTOCOL: "grpc" })).toEqual({ source: "managed", key: "OTEL_EXPORTER_OTLP_PROTOCOL" });
+    expect(managed({ OTEL_EXPORTER_OTLP_LOGS_PROTOCOL: " GRPC " })).toEqual({ source: "managed", key: "OTEL_EXPORTER_OTLP_LOGS_PROTOCOL" });
+    expect(managed({ OTEL_EXPORTER_OTLP_PROTOCOL: "http/protobuf" })).toBeNull();
+    expect(managed({ OTEL_EXPORTER_OTLP_PROTOCOL: "http/json" })).toBeNull();
+    // A developer's own gRPC loses to the session's settings file.
+    expect(assessExternalOtel([{ label: "user", env: { OTEL_EXPORTER_OTLP_PROTOCOL: "grpc" } }]).skip).toBeNull();
   });
 
   it("always steps aside for a managed destination, whose address it could not override", () => {

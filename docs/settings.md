@@ -121,7 +121,7 @@ Settings → Appearance → Experimental → Telemetry. Off by default. When on,
 It is stored in `~/.cockpit/telemetry.db`, a SQLite database readable only by you, for 30 days. Past 2 GB the oldest prompt and tool text goes first, so the numbers outlast it. Read it through `GET /api/telemetry` (filters: `session`, `cliSession`, `signal`, `name`, `since`, `until`; paging: `order=time|ingest`, `cursor`, `after`, `limit`; `content=inline` puts long text back) and `GET /api/telemetry/stats`.
 
 - Needs Node 22.13 or later, whose built-in SQLite it uses. On an older Node the switch is disabled and says why.
-- A session leaves telemetry alone if Claude Code is already sending it somewhere: an endpoint, headers or a headers helper in managed settings, or in your own settings or environment while telemetry is switched on there. The stats say which key decided it.
+- A session leaves telemetry alone if Claude Code is already sending it somewhere: an endpoint, headers or a headers helper in managed settings, or in your own settings or environment while telemetry is switched on there. It does the same when managed settings choose the gRPC protocol, which cockpit cannot receive; a managed `http/protobuf` or `http/json` is fine, since cockpit reads both. The stats say which key decided it.
 - The CLI's telemetry is in beta, so names and attributes can change between versions. `cost_usd` is the CLI's estimate at Anthropic's prices, and is wrong for other providers' models.
 - Stream-runtime sessions do not send any.
 
