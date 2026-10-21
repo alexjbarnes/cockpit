@@ -210,3 +210,88 @@ test("deleting an issue opened from a session comes back to that session", async
     rmSync(repoPath, { recursive: true, force: true });
   }
 });
+
+test("on a phone, comments stay inside the issue page and the session's list keeps its place across a delete", async ({
+  page,
+  harness,
+}) => {
+  test.setTimeout(180_000);
+  await page.setViewportSize({ width: 393, height: 760 });
+  const repoPath = mkdtempSync(path.join(tmpdir(), "cockpit-it-issues-place-"));
+  try {
+    await page.request.patch(`${harness.cockpitUrl}/api/defaults`, { data: { issuesEnabled: true } });
+    const projectRes = await page.request.post(`${harness.cockpitUrl}/api/projects`, {
+      data: { name: "Place project", prefix: "PLC", repoPath },
+    });
+    const { project } = (await projectRes.json()) as { project: { id: string } };
+    // Comments the way agents write them: long paths and identifiers with no
+    // break in them, which ran off the card on a phone.
+    const comment =
+      "**The sweep already keys on product id.** `MarkMissingBeansUnavailable` (`internal/repository/marketplace.go:812`) " +
+      "matches on `b.shopify_product_id != ALL($2)`, and keys look like `{roaster_slug}/{bean_slug}/{image_id}{ext}`.";
+    for (let i = 1; i <= 30; i++) {
+      const res = await page.request.post(`${harness.cockpitUrl}/api/issues`, {
+        data: { projectId: project.id, title: `Place issue ${i} with a title long enough to wrap` },
+      });
+      const { issue } = (await res.json()) as { issue: { key: string } };
+      await page.request.post(`${harness.cockpitUrl}/api/issues/${issue.key}/comments`, { data: { body: comment } });
+    }
+
+    harness.trustWorkDir(repoPath);
+    const sessionRes = await page.request.post(`${harness.cockpitUrl}/api/sessions`, { data: { cwd: repoPath, runtime: "pty" } });
+    const { sessionId } = (await sessionRes.json()) as { sessionId: string };
+    await page.goto(`${harness.cockpitUrl}/sessions/${sessionId}?cwd=${encodeURIComponent(repoPath)}`);
+    await page.getByTestId("session-issues").click();
+    const list = page.getByTestId("session-issues-list");
+    await expect(list.getByRole("button", { name: /\bPLC-1\b/ }).first()).toBeVisible({ timeout: 15_000 });
+
+    // Well down the list, then open a row that is on screen.
+    await list.evaluate((el) => {
+      el.scrollTop = Math.round((el.scrollHeight - el.clientHeight) * 0.6);
+    });
+    await page.waitForTimeout(400);
+    const before = await list.evaluate((el) => el.scrollTop);
+    expect(before).toBeGreaterThan(200);
+    const key = await list.evaluate((el) => {
+      const top = el.getBoundingClientRect().top;
+      const row = [...el.querySelectorAll("[role=button]")].find(
+        (r) => r.getBoundingClientRect().top > top + 40 && /PLC-\d+/.test(r.textContent ?? ""),
+      );
+      return row?.textContent?.match(/PLC-\d+/)?.[0] ?? "";
+    });
+    await list
+      .getByRole("button", { name: new RegExp(`\\b${key}\\b`) })
+      .first()
+      .click();
+    await expect(page).toHaveURL(new RegExp(`/issues/${key}\\?from=`), { timeout: 15_000 });
+    await expect(page.getByText("Comments (1)")).toBeVisible({ timeout: 15_000 });
+
+    // Nothing on the page is wider than the phone.
+    const sideways = await page.evaluate(() =>
+      Math.max(
+        document.documentElement.scrollWidth - document.documentElement.clientWidth,
+        ...[...document.querySelectorAll("div")]
+          .filter((d) => getComputedStyle(d).overflowY === "auto")
+          .map((d) => d.scrollWidth - d.clientWidth),
+      ),
+    );
+    expect(sideways, "the issue page scrolls sideways").toBeLessThanOrEqual(1);
+
+    await page.locator("button.text-destructive").first().click();
+    await page.locator("button[class*='destructive']").last().click();
+    await expect(page).toHaveURL(new RegExp(`/sessions/${sessionId}\\?`), { timeout: 15_000 });
+
+    // The list it left, where it left it, without the issue just deleted.
+    await expect(list).toBeVisible({ timeout: 15_000 });
+    await expect(list.getByRole("button", { name: new RegExp(`\\b${key}\\b`) })).toHaveCount(0);
+    await expect.poll(() => list.evaluate((el) => el.scrollTop), { timeout: 10_000 }).toBeGreaterThan(before - 80);
+
+    // Closing the list forgets the place: opened again, it starts at the top.
+    await page.getByRole("button", { name: "Close" }).click();
+    await page.getByTestId("session-issues").click();
+    await expect(list.getByRole("button", { name: /\bPLC-1\b/ }).first()).toBeVisible({ timeout: 15_000 });
+    expect(await list.evaluate((el) => el.scrollTop)).toBe(0);
+  } finally {
+    rmSync(repoPath, { recursive: true, force: true });
+  }
+});

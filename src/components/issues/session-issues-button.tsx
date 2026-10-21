@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useShell } from "@/components/app-shell";
 import { IssueList } from "@/components/issues/issue-list";
 import { Button } from "@/components/ui/button";
+import { useScrollRestoration } from "@/hooks/use-scroll-restoration";
 import { useSettings } from "@/hooks/use-settings";
 import { groupIssuesByStatus, type IssuePlacement, projectForCwd, resolveProjectStatuses } from "@/lib/issue-display";
 import { mergeIssueChanges, resolveIssueDrop, sendIssuePlacement } from "@/lib/issue-drag";
@@ -39,22 +40,47 @@ export function SessionIssuesButton() {
     return () => window.removeEventListener("popstate", syncOpenFromUrl);
   }, [syncOpenFromUrl]);
 
-  const setOpenInUrl = useCallback((next: boolean) => {
-    const params = new URLSearchParams(window.location.search);
-    if (next) params.set("issues", "1");
-    else params.delete("issues");
-    const query = params.toString();
-    // replaceState, not a router push: this is a query flag the page reads, and
-    // it must not add a history entry of its own between the session and Back.
-    window.history.replaceState(null, "", `${window.location.pathname}${query ? `?${query}` : ""}`);
-    setOpen(next);
-  }, []);
   const [issues, setIssues] = useState<Issue[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
-  const [projectId, setProjectId] = useState<string>("");
+  // Null until chosen: "" is a choice (All projects), not the absence of one.
+  const [projectId, setProjectId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [moveError, setMoveError] = useState<string | null>(null);
   const dropGuard = useRef(createStaleGuard()).current;
+
+  // Where the list was, kept for this session's tab, so coming back from an
+  // issue (Back, or deleting it) finds the list as it was left: the same
+  // project and the same scroll position. Opening the list afresh forgets both.
+  const scrollKey = `session-issues-scroll:${pathname ?? ""}`;
+  const projectKey = `session-issues-project:${pathname ?? ""}`;
+  const listRef = useScrollRestoration<HTMLDivElement>(scrollKey);
+
+  const setOpenInUrl = useCallback(
+    (next: boolean) => {
+      if (!next) {
+        setProjectId(null);
+        // After the list has unmounted: on its way out the scroll restorer
+        // saves the position one last time, which would undo an earlier remove.
+        setTimeout(() => {
+          try {
+            sessionStorage.removeItem(scrollKey);
+            sessionStorage.removeItem(projectKey);
+          } catch {
+            // storage unavailable: nothing to forget
+          }
+        }, 0);
+      }
+      const params = new URLSearchParams(window.location.search);
+      if (next) params.set("issues", "1");
+      else params.delete("issues");
+      const query = params.toString();
+      // replaceState, not a router push: this is a query flag the page reads, and
+      // it must not add a history entry of its own between the session and Back.
+      window.history.replaceState(null, "", `${window.location.pathname}${query ? `?${query}` : ""}`);
+      setOpen(next);
+    },
+    [scrollKey, projectKey],
+  );
 
   // The shell's settings are its own instance of the hook, so a toggle in
   // Settings would leave this button stale until a reload; the sidebar has the
@@ -74,15 +100,40 @@ export function SessionIssuesButton() {
       const projectsData = projectsRes.ok ? ((await projectsRes.json()) as { projects: Project[] }) : { projects: [] };
       setIssues(issuesData.issues ?? []);
       setProjects(projectsData.projects ?? []);
-      setProjectId((current) => current || projectForCwd(projectsData.projects ?? [], cwd)?.id || "");
+      setProjectId((current) => {
+        if (current !== null) return current;
+        let stored: string | null = null;
+        try {
+          stored = sessionStorage.getItem(projectKey);
+        } catch {
+          // storage unavailable: fall back to this session's project
+        }
+        return stored ?? projectForCwd(projectsData.projects ?? [], cwd)?.id ?? "";
+      });
     } finally {
       setLoading(false);
     }
-  }, [cwd]);
+  }, [cwd, projectKey]);
 
+  const chooseProject = useCallback(
+    (id: string) => {
+      setProjectId(id);
+      try {
+        sessionStorage.setItem(projectKey, id);
+      } catch {
+        // storage unavailable: the choice lasts as long as this page does
+      }
+    },
+    [projectKey],
+  );
+
+  // Fetched every time the list is shown on a session, including on the way
+  // back from an issue: this component outlives the issue page (it renders
+  // nothing there), so without it a deleted issue would still be listed.
+  const shown = open && !!pathname?.startsWith("/sessions/");
   useEffect(() => {
-    if (open) load();
-  }, [open, load]);
+    if (shown) load();
+  }, [shown, load]);
 
   const handleDrop = useCallback(
     async (activeKey: string, targetStatus: string, targetIndex: number) => {
@@ -150,8 +201,8 @@ export function SessionIssuesButton() {
               <ClipboardList className="h-4 w-4 text-muted-foreground" />
               <h2 className="text-sm font-semibold">Issues</h2>
               <select
-                value={projectId}
-                onChange={(e) => setProjectId(e.target.value)}
+                value={projectId ?? ""}
+                onChange={(e) => chooseProject(e.target.value)}
                 data-testid="session-issues-project"
                 className="ml-2 rounded-md border bg-background px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-ring"
               >
@@ -176,13 +227,15 @@ export function SessionIssuesButton() {
               </button>
             </div>
 
-            <div className="min-h-0 flex-1 overflow-y-auto p-3">
+            <div ref={listRef} className="min-h-0 flex-1 overflow-y-auto p-3" data-testid="session-issues-list">
               {moveError && (
                 <div className="mb-3 rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive">
                   {moveError}
                 </div>
               )}
-              {loading ? (
+              {/* A refresh keeps the list on screen: swapping it for a spinner
+                  would drop the scroll position just restored. */}
+              {loading && issues.length === 0 ? (
                 <div className="flex items-center justify-center py-10">
                   <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
                 </div>
