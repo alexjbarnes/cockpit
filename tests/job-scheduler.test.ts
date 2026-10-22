@@ -2031,6 +2031,103 @@ describe("jobs that wait on other jobs", () => {
     expect(runs).toHaveBeenCalledWith(report);
   });
 
+  it("counts only a success from a run that started after its own last run started", () => {
+    // Collect's run was already going when Report last started, and ended
+    // after it, so Report could not have seen what it collected.
+    const report = waiting(["collect"]);
+    vi.mocked(loadJobs).mockReturnValue([collect, report]);
+    const reportStart = Date.now() - 600000;
+    withRuns({
+      collect: [{ ...runOf("collect", "success", reportStart + 300000), startedAt: reportStart - 60000 }],
+      report: [{ ...runOf("report", "success", reportStart + 60000), startedAt: reportStart }],
+    });
+    const runs = spyOnRuns();
+
+    (scheduler as any).startJobsWaitingOn(collect);
+    (scheduler as any).tick();
+
+    expect(runs).not.toHaveBeenCalled();
+  });
+
+  it("does not start while a job it waits on is running again", () => {
+    const report = waiting(["collect", "fetch"]);
+    vi.mocked(loadJobs).mockReturnValue([collect, fetchJob, report]);
+    withRuns({ collect: [runOf("collect", "success", Date.now() - 5000)], fetch: [runOf("fetch", "success", Date.now())] });
+    (scheduler as any).runningJobs.set("collect", runOf("collect", "running", Date.now()));
+    const runs = spyOnRuns();
+
+    (scheduler as any).startJobsWaitingOn(fetchJob);
+    (scheduler as any).tick();
+
+    expect(runs).not.toHaveBeenCalled();
+  });
+
+  it("waits while a job it waits on is between attempts, and starts once it succeeds", async () => {
+    vi.useFakeTimers();
+    try {
+      const flaky = makeJob({ id: "collect", name: "Collect", maxRetries: 1 });
+      const report = waiting(["collect", "fetch"]);
+      vi.mocked(loadJobs).mockReturnValue([flaky, fetchJob, report]);
+      withRuns({ collect: [runOf("collect", "success", Date.now() - 5000)], fetch: [runOf("fetch", "success", Date.now())] });
+      const attempts = vi
+        .spyOn(scheduler, "executeJob")
+        .mockResolvedValueOnce(runOf("collect", "failure", Date.now()))
+        .mockResolvedValueOnce(runOf("collect", "success", Date.now()))
+        .mockResolvedValue(runOf("report", "success", Date.now()));
+
+      const collecting = (scheduler as any).executeJobWithRetries(flaky);
+      await vi.advanceTimersByTimeAsync(1000);
+      (scheduler as any).startJobsWaitingOn(fetchJob);
+      expect(attempts).not.toHaveBeenCalledWith(report, expect.anything());
+
+      await vi.advanceTimersByTimeAsync(6000);
+      await collecting;
+      expect(attempts).toHaveBeenCalledWith(report, expect.anything());
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stays held while any start of a job it waits on is still going", async () => {
+    const report = waiting(["collect"]);
+    vi.mocked(loadJobs).mockReturnValue([collect, report]);
+    withRuns({ collect: [runOf("collect", "success", Date.now() - 5000)] });
+    let finish: (run: JobRun) => void = () => {};
+    const attempts = vi
+      .spyOn(scheduler, "executeJob")
+      .mockReturnValueOnce(
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+      )
+      .mockRejectedValueOnce(new Error("Could not acquire job lock"))
+      .mockResolvedValue(runOf("report", "success", Date.now()));
+
+    const first = (scheduler as any).executeJobWithRetries(collect);
+    // Run Now while it runs: the second start is refused by the lock.
+    await expect((scheduler as any).executeJobWithRetries(collect)).rejects.toThrow("lock");
+    (scheduler as any).tick();
+    expect(attempts).not.toHaveBeenCalledWith(report, expect.anything());
+
+    finish(runOf("collect", "success", Date.now()));
+    await first;
+    expect(attempts).toHaveBeenCalledWith(report, expect.anything());
+  });
+
+  it("waits for a job it waits on that the clock starts in the same tick", () => {
+    const report = waiting(["collect"]);
+    const due = makeJob({ id: "collect", name: "Collect", schedules: [{ type: "cron", expression: "* * * * *" }] });
+    // Listed first, so it is looked at before the job it waits on starts.
+    vi.mocked(loadJobs).mockReturnValue([report, due]);
+    withRuns({ collect: [runOf("collect", "success", Date.now() - 120000)] });
+    const attempts = vi.spyOn(scheduler, "executeJob").mockReturnValue(new Promise(() => {}));
+
+    (scheduler as any).tick();
+
+    expect(attempts).toHaveBeenCalledWith(due, expect.anything());
+    expect(attempts).not.toHaveBeenCalledWith(report, expect.anything());
+  });
+
   it("does not run for completions from before it was set up", () => {
     const report = waiting(["collect"], { createdAt: Date.now(), updatedAt: Date.now() });
     vi.mocked(loadJobs).mockReturnValue([collect, report]);

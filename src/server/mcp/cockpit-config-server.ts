@@ -355,7 +355,7 @@ const JOB_SCHEDULE_SCHEMA = {
           type: "array",
           items: { type: "string" },
           description:
-            "Ids of jobs (from list_jobs) this one waits on. It runs once every one of them has completed successfully since it last ran; a failed run holds it back until that job next succeeds. A job cannot wait on itself or on a job that waits on it.",
+            "Ids of jobs (from list_jobs) this one waits on. It runs once every one of them has succeeded in a run that started after its own last run started, and not while any of them is running or waiting to retry; a failed run holds it back until that job next succeeds. A job cannot wait on itself or on a job that waits on it.",
         },
       },
       required: ["type", "jobIds"],
@@ -1028,7 +1028,7 @@ async function handleToolCall(
             'mcpToolFilters: { "<serverName>": ["tool", ...] } limits an enabled server; omitted servers expose all tools.',
             "inboxOutput posts the final message to the cockpit inbox; notifyProviders pushes it to the named notifyTargets ids.",
             "onIssueStatus schedules: status is a built-in, or a custom status of the named project (from list_projects); project ids come from list_projects.",
-            "afterJobs schedules: jobIds come from list_jobs. The job runs when all of them have succeeded since its own last run, so it can chain after jobs on any schedule; it can sit alongside a time schedule.",
+            "afterJobs schedules: jobIds come from list_jobs. The job runs when all of them have succeeded in runs that started after its own last run started and none of them is still running, so it can chain after jobs on any schedule; it can sit alongside a time schedule.",
           ],
         };
         return { content: [{ type: "text", text: JSON.stringify(options, null, 2) }] };

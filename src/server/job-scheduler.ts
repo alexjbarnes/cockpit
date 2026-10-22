@@ -237,26 +237,26 @@ function countMatchingIssues(sched: IssueStatusSchedule): number {
   return projects.reduce((n, p) => n + loadIssues(p.id).filter((i) => i.status === sched.status).length, 0);
 }
 
-/** When a job last completed successfully, or 0 if it never has. */
-function lastSuccessAt(jobId: string): number {
-  return loadRuns(jobId).reduce(
-    (latest, r) => (r.status === "success" && (r.completedAt ?? 0) > latest ? (r.completedAt ?? 0) : latest),
-    0,
-  );
+/** Whether a job succeeded in a run that started after `since`. */
+function succeededSince(jobId: string, since: number): boolean {
+  return loadRuns(jobId).some((r) => r.status === "success" && r.startedAt > since);
 }
 
 /**
- * Whether a job waiting on others is due: every job one of its afterJobs
- * schedules lists has completed successfully since this job last started, or
- * since it was last saved if it has never run. Measured from persisted runs,
- * not from events, so a completion the scheduler missed (a restart, or this
- * job still running when its last dependency finished) is still caught.
+ * Whether a job waiting on others is due: none of the jobs its afterJobs
+ * schedules list is busy, and every job one of them lists has succeeded in a
+ * run that started after this job last started, or after it was last saved
+ * if it has never run. A run already going when this job started can end
+ * after it, but this job could not have seen what it produced, so it waits
+ * for the next. Measured from persisted runs, not from events, so a
+ * completion the scheduler missed (a restart, or this job still running when
+ * its last dependency finished) is still caught.
  */
-function dependenciesMet(job: ScheduledJob): boolean {
+function dependenciesMet(job: ScheduledJob, busy: (jobId: string) => boolean): boolean {
   const waits = getJobSchedules(job).filter((s): s is AfterJobsSchedule => s.type === "afterJobs");
-  if (waits.length === 0) return false;
+  if (waits.length === 0 || waits.some((s) => s.jobIds.some(busy))) return false;
   const since = getLatestRun(job.id)?.startedAt ?? (job.updatedAt || job.createdAt);
-  return waits.some((s) => s.jobIds.length > 0 && s.jobIds.every((id) => lastSuccessAt(id) > since));
+  return waits.some((s) => s.jobIds.length > 0 && s.jobIds.every((id) => succeededSince(id, since)));
 }
 
 export class JobScheduler {
@@ -264,6 +264,9 @@ export class JobScheduler {
   private timer: ReturnType<typeof setInterval> | null = null;
   private lastFiredAt = new Map<string, Date>();
   private runningJobs = new Map<string, JobRun>();
+  /** Jobs started and not yet past their last attempt, the wait before a
+   *  retry included, counted per start. */
+  private activeJobs = new Map<string, number>();
   private jobResolvers = new Map<string, (run: JobRun) => void>();
   private lastPruneAt = 0;
   private lastConfigCheckAt = 0;
@@ -304,6 +307,11 @@ export class JobScheduler {
     return new Map(this.runningJobs);
   }
 
+  /** Running, or started and waiting to retry. */
+  private isBusy(jobId: string): boolean {
+    return this.runningJobs.has(jobId) || this.activeJobs.has(jobId);
+  }
+
   async triggerJob(jobId: string): Promise<JobRun> {
     const jobs = loadJobs();
     const job = jobs.find((j) => j.id === jobId);
@@ -333,6 +341,22 @@ export class JobScheduler {
   }
 
   private async executeJobWithRetries(job: ScheduledJob): Promise<JobRun> {
+    this.activeJobs.set(job.id, (this.activeJobs.get(job.id) ?? 0) + 1);
+    let run: JobRun;
+    try {
+      run = await this.runAttempts(job);
+    } finally {
+      const left = (this.activeJobs.get(job.id) ?? 1) - 1;
+      if (left > 0) this.activeJobs.set(job.id, left);
+      else this.activeJobs.delete(job.id);
+    }
+    // Only now that this job no longer counts as busy, or the jobs waiting on
+    // it would keep waiting.
+    if (run.status === "success") this.startJobsWaitingOn(job);
+    return run;
+  }
+
+  private async runAttempts(job: ScheduledJob): Promise<JobRun> {
     // W6j: a job whose model is gone from the provider catalog fails before
     // the CLI spawns — no lock, no session, no substitution onto another
     // model, and no retry (the failure is deterministic). The operator fixes
@@ -414,7 +438,6 @@ export class JobScheduler {
       logDiag(job.id, "job:retry", { attempt: attempt + 1, maxRetries, prevRunId: run.id, error: run.error });
       await new Promise((r) => setTimeout(r, RETRY_BACKOFF_MS));
     }
-    if (run.status === "success") this.startJobsWaitingOn(job);
     return run;
   }
 
@@ -422,9 +445,9 @@ export class JobScheduler {
    *  they wait on. One still waiting on another job keeps waiting. */
   private startJobsWaitingOn(finished: ScheduledJob): void {
     for (const job of loadJobs()) {
-      if (!job.enabled || this.runningJobs.has(job.id)) continue;
+      if (!job.enabled || this.isBusy(job.id)) continue;
       const waitsOnFinished = getJobSchedules(job).some((s) => s.type === "afterJobs" && s.jobIds.includes(finished.id));
-      if (!waitsOnFinished || !dependenciesMet(job)) continue;
+      if (!waitsOnFinished || !dependenciesMet(job, (id) => this.isBusy(id))) continue;
       logDiag(job.id, "job:dependencies-met", { after: finished.id });
       console.log(`[scheduler] starting job ${job.name}: the jobs it waits on have completed`);
       this.lastFiredAt.set(job.id, new Date());
@@ -542,6 +565,7 @@ export class JobScheduler {
     }
 
     const jobs = loadJobs();
+    const notDue: ScheduledJob[] = [];
 
     for (const job of jobs) {
       if (!job.enabled) continue;
@@ -570,16 +594,25 @@ export class JobScheduler {
         }
       }
 
-      // Normally started the moment its last dependency succeeds; checked here
-      // too for one that was missed then.
-      if (!shouldFire && dependenciesMet(job)) shouldFire = true;
-
-      if (shouldFire) {
-        this.lastFiredAt.set(job.id, now);
-        this.executeJobWithRetries(job).catch((err) => {
-          console.error(`[scheduler] failed to execute job ${job.name}:`, err);
-        });
+      if (!shouldFire) {
+        notDue.push(job);
+        continue;
       }
+      this.lastFiredAt.set(job.id, now);
+      this.executeJobWithRetries(job).catch((err) => {
+        console.error(`[scheduler] failed to execute job ${job.name}:`, err);
+      });
+    }
+
+    // A job waiting on others is normally started the moment its last one
+    // succeeds; checked here too for one missed then. Checked after the clock's
+    // starts, so a job it waits on that is due this minute counts as busy.
+    for (const job of notDue) {
+      if (this.isBusy(job.id) || !dependenciesMet(job, (id) => this.isBusy(id))) continue;
+      this.lastFiredAt.set(job.id, now);
+      this.executeJobWithRetries(job).catch((err) => {
+        console.error(`[scheduler] failed to execute job ${job.name}:`, err);
+      });
     }
   }
 
