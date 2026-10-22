@@ -1,6 +1,6 @@
 // The chat's own scroll anchoring for messages added above the reader.
 import { describe, expect, it } from "vitest";
-import { anchorCorrection, anchorFromItems } from "@/lib/reading-anchor";
+import { anchorCorrection, anchorFromItems, type MeasuredItem } from "@/lib/reading-anchor";
 
 describe("anchorFromItems", () => {
   const items = [
@@ -8,19 +8,36 @@ describe("anchorFromItems", () => {
     { id: "b", top: -100, bottom: 40 },
     { id: "c", top: 40, bottom: 200 },
   ];
+  const from = (list: MeasuredItem[], viewTop: number) => anchorFromItems(list.length, (i) => list[i], viewTop);
 
   it("is the first message still showing at the top of the view", () => {
-    expect(anchorFromItems(items, 0)).toEqual({ id: "b", offset: -100 });
+    expect(from(items, 0)).toEqual({ id: "b", offset: -100 });
+    expect(from(items, -500)).toEqual({ id: "a", offset: 200 });
   });
 
   it("measures from the top of the scroller, wherever that is on the page", () => {
-    expect(anchorFromItems(items, 30)).toEqual({ id: "b", offset: -130 });
+    expect(from(items, 30)).toEqual({ id: "b", offset: -130 });
   });
 
   it("skips an item with no id, and is nothing when nothing is in view", () => {
-    expect(anchorFromItems([{ id: "", top: 0, bottom: 50 }, ...items.slice(2)], 0)).toEqual({ id: "c", offset: 40 });
-    expect(anchorFromItems(items, 500)).toBeNull();
-    expect(anchorFromItems([], 0)).toBeNull();
+    expect(from([{ id: "", top: 0, bottom: 50 }, ...items.slice(2)], 0)).toEqual({ id: "c", offset: 40 });
+    expect(from(items, 500)).toBeNull();
+    expect(from([], 0)).toBeNull();
+  });
+
+  it("measures a handful of a long chat's messages, not every one above the reader", () => {
+    const long = Array.from({ length: 1000 }, (_, i) => ({ id: `m${i}`, top: i * 100, bottom: (i + 1) * 100 }));
+    let measured = 0;
+    const anchor = anchorFromItems(
+      long.length,
+      (i) => {
+        measured++;
+        return long[i];
+      },
+      74_050,
+    );
+    expect(anchor).toEqual({ id: "m740", offset: -50 });
+    expect(measured).toBeLessThanOrEqual(12);
   });
 });
 
