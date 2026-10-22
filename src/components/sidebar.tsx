@@ -6,6 +6,7 @@ import { CSS } from "@dnd-kit/utilities";
 import {
   Bot,
   CalendarClock,
+  ChartLine,
   Check,
   ClipboardList,
   ExternalLink,
@@ -741,11 +742,14 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
           )}
         </div>
 
-        <div className="border-t px-3 py-2 flex items-center justify-end gap-2">
+        {/* Wraps rather than overflowing: with every page switched on the
+            buttons need more than the sidebar's narrowest width. */}
+        <div className="border-t px-3 py-2 flex flex-wrap items-center justify-end gap-2">
           <AssistantButton dot={dot} onClick={openAssistant} />
           <JobsButton onClick={() => openPage("/jobs")} />
           <InboxButton onClick={() => openPage("/inbox")} />
           {settings.issuesEnabled && <IssuesButton onClick={() => openPage("/issues")} />}
+          {settings.telemetryEnabled && <InsightsButton onClick={() => openPage("/insights")} />}
           <Button
             variant="ghost"
             size="icon"
@@ -1205,6 +1209,21 @@ function IssuesButton({ onClick }: { onClick: () => void }) {
       title="Issues"
     >
       <ClipboardList className="h-4 w-4" />
+    </Button>
+  );
+}
+
+function InsightsButton({ onClick }: { onClick: () => void }) {
+  return (
+    <Button
+      variant="ghost"
+      size="icon"
+      className="shrink-0 h-8 w-8 text-muted-foreground hover:text-foreground"
+      onClick={onClick}
+      title="Insights"
+      data-testid="sidebar-insights"
+    >
+      <ChartLine className="h-4 w-4" />
     </Button>
   );
 }

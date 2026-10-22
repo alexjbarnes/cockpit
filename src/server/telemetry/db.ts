@@ -12,7 +12,16 @@
 import { createHash } from "node:crypto";
 import { closeSync, existsSync, mkdirSync, openSync, renameSync, statSync } from "node:fs";
 import path from "node:path";
-import type { TelemetryPage, TelemetryQuery, TelemetryRecord, TelemetrySignal, TelemetrySource, TelemetryStoreStats } from "@/types";
+import type {
+  InsightsQuery,
+  TelemetryPage,
+  TelemetryQuery,
+  TelemetryRecord,
+  TelemetrySignal,
+  TelemetrySource,
+  TelemetryStoreStats,
+} from "@/types";
+import { InsightsReader, type RawInsights } from "./insights-sql";
 import type { ParsedBatch } from "./otlp";
 import type { SqliteModule } from "./sqlite";
 
@@ -434,6 +443,11 @@ export class TelemetryDb {
     const last = page[page.length - 1];
     const nextCursor = more && last ? (ingestOrder ? String(num(last.id)) : `${num(last.time_ms)}:${num(last.id)}`) : null;
     return { records, sources, nextCursor };
+  }
+
+  /** One Insights view's numbers, unpriced and unlabelled (insights-sql.ts). */
+  insights(q: InsightsQuery): RawInsights {
+    return new InsightsReader((sql, ...params) => this.all(sql, ...params), q).read();
   }
 
   private pragma(name: string): number {

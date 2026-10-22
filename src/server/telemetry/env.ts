@@ -30,6 +30,9 @@ export interface TelemetryEnvOptions {
   baseUrl: string;
   token: string;
   sessionId: string;
+  /** The provider serving this spawn's model. Telemetry carries only the bare
+   *  model id, which more than one provider can list at different prices. */
+  providerId?: string;
   /** OTEL_RESOURCE_ATTRIBUTES the CLI would otherwise have, kept alongside cockpit's. */
   existingResourceAttributes?: string;
 }
@@ -37,11 +40,15 @@ export interface TelemetryEnvOptions {
 export function buildTelemetryEnv(o: TelemetryEnvOptions): Record<string, string> {
   const base = `${o.baseUrl}/otel`;
   const header = `${TELEMETRY_TOKEN_HEADER}=${o.token}`;
-  const own = `cockpit.session_id=${o.sessionId}`;
+  // Values are percent-encoded, as OTEL_RESOURCE_ATTRIBUTES requires.
+  const own = [
+    `cockpit.session_id=${encodeURIComponent(o.sessionId)}`,
+    ...(o.providerId ? [`cockpit.provider=${encodeURIComponent(o.providerId)}`] : []),
+  ];
   const others = (o.existingResourceAttributes ?? "")
     .split(",")
     .map((s) => s.trim())
-    .filter((s) => s && !s.startsWith("cockpit.session_id="));
+    .filter((s) => s && !s.startsWith("cockpit.session_id=") && !s.startsWith("cockpit.provider="));
   const env: Record<string, string> = {
     CLAUDE_CODE_ENABLE_TELEMETRY: "1",
     CLAUDE_CODE_ENHANCED_TELEMETRY_BETA: "1",
@@ -63,7 +70,7 @@ export function buildTelemetryEnv(o: TelemetryEnvOptions): Record<string, string
     OTEL_METRICS_INCLUDE_VERSION: "true",
     OTEL_METRICS_INCLUDE_ENTRYPOINT: "true",
     OTEL_METRICS_INCLUDE_REPOSITORY: "true",
-    OTEL_RESOURCE_ATTRIBUTES: [...others, own].join(","),
+    OTEL_RESOURCE_ATTRIBUTES: [...others, ...own].join(","),
   };
   for (const s of SIGNALS) {
     env[`OTEL_EXPORTER_OTLP_${s}_PROTOCOL`] = "http/protobuf";

@@ -3,8 +3,9 @@
  * PTY runtime uses to give a spawn its telemetry. Types only.
  */
 
-import type { TelemetryPage, TelemetryQuery, TelemetryStoreStats } from "@/types";
+import type { InsightsQuery, TelemetryPage, TelemetryQuery, TelemetryStoreStats } from "@/types";
 import type { DbOptions } from "./db";
+import type { RawInsights } from "./insights-sql";
 import type { OtlpKind } from "./otlp";
 
 export interface IngestMeta {
@@ -24,16 +25,29 @@ export interface WorkerInit {
   pruneEveryMs?: number;
 }
 
+/** A record cockpit writes itself, beside what the CLI sends: who answered a
+ *  permission prompt, which no telemetry of the CLI's can say. */
+export interface LocalRecord {
+  name: string;
+  timeMs: number;
+  endMs?: number;
+  /** A duration in ms, like a span's. */
+  value?: number;
+  attrs: Record<string, unknown>;
+}
+
 export type WorkerRequest =
   | { type: "ingest"; meta: IngestMeta; body: Uint8Array }
+  | { type: "ingest-local"; sessionId: string; receivedMs: number; records: LocalRecord[] }
   | { type: "query"; id: number; query: TelemetryQuery }
-  | { type: "stats"; id: number; sessionId?: string };
+  | { type: "stats"; id: number; sessionId?: string }
+  | { type: "insights"; id: number; query: InsightsQuery };
 
 export type WorkerResponse =
   | { type: "ready"; available: true }
   | { type: "ready"; available: false; reason: string }
   | { type: "ack"; bytes: number; records: number; skipped: number; error?: string }
-  | { type: "result"; id: number; result?: TelemetryPage | TelemetryStoreStats; error?: string };
+  | { type: "result"; id: number; result?: TelemetryPage | TelemetryStoreStats | RawInsights; error?: string };
 
 /** What a spawn needs to send cockpit its telemetry. */
 export interface TelemetrySpawn {
@@ -52,4 +66,6 @@ export interface TelemetrySpawner {
   /** The spawn is over. Its token keeps working for a short grace period, so
    *  the batch a dying CLI flushes on its way out still lands. */
   endSpawn(token: string, graceMs?: number): void;
+  /** Store records of cockpit's own for this session, when telemetry is on. */
+  recordLocal(sessionId: string, records: LocalRecord[]): void;
 }

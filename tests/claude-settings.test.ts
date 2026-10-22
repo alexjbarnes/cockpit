@@ -351,7 +351,7 @@ describe("prepareHookSettings telemetry", () => {
     writeFileSync(file, JSON.stringify(content));
     files.push(file);
   };
-  const prepare = async (id: string, extra: { cwd?: string; telemetry?: typeof telemetry } = { telemetry }) => {
+  const prepare = async (id: string, extra: { cwd?: string; telemetry?: typeof telemetry & { providerId?: string } } = { telemetry }) => {
     ids.push(id);
     const artifact = await prepareHookSettings({ sessionId: id, hookUrl: "http://127.0.0.1:1", hookToken: "tok", ...extra });
     return { artifact, settings: JSON.parse(readFileSync(artifact.settingsPath, "utf-8")) as { env?: Record<string, string> } };
@@ -390,6 +390,11 @@ describe("prepareHookSettings telemetry", () => {
     expect(env.OTEL_RESOURCE_ATTRIBUTES).toBe("team=core,cockpit.session_id=tel-on");
     // The token travels in the file, which only its owner can read.
     expect(statSync(artifact.settingsPath).mode & 0o077).toBe(0);
+  });
+
+  it("names the spawn's provider on its telemetry", async () => {
+    const { settings } = await prepare("tel-provider", { telemetry: { ...telemetry, providerId: "zen-go" } });
+    expect(settings.env?.OTEL_RESOURCE_ATTRIBUTES).toBe("cockpit.session_id=tel-provider,cockpit.provider=zen-go");
   });
 
   it("leaves a session alone when managed settings send its telemetry somewhere", async () => {

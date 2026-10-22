@@ -889,3 +889,266 @@ export interface TelemetryStats {
   ingest: { batches: number; records: number; skipped: number; failed: number; pendingBytes: number; lastError?: string };
   store: TelemetryStoreStats | null;
 }
+
+/** The Insights page's tabs, and the two views a session or turn adds. */
+export type InsightsView = "overview" | "spend" | "speed" | "tools" | "health" | "activity" | "turns" | "turn" | "context";
+export type InsightsRangeKey = "24h" | "7d" | "30d";
+
+export interface InsightsQuery {
+  view: InsightsView;
+  range: InsightsRangeKey;
+  /** Inclusive start and exclusive end, ms since the epoch, on bucket
+   *  boundaries in the viewer's timezone. */
+  since: number;
+  until: number;
+  bucketMs: number;
+  /** Minutes the viewer's clock is ahead of UTC. */
+  tzOffsetMin: number;
+  session?: string;
+  /** Trace id of one turn, for the turn view. */
+  turn?: string;
+}
+
+/** Spend, priced by the provider that served it. */
+export interface InsightsMoney {
+  usd: number;
+  /** The part of usd that is Claude Code's own figure at API prices
+   *  (Anthropic's models, which a subscription does not bill per request). */
+  apiEquivalentUsd: number;
+  /** Requests on models with no known price: their tokens count, their cost
+   *  is not in usd. */
+  unpricedRequests: number;
+}
+
+export interface InsightsTokens {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+}
+
+/** One line or stack of a chart, a value per bucket (null where there is none). */
+export interface InsightsSeries {
+  key: string;
+  label: string;
+  values: Array<number | null>;
+}
+
+export interface InsightsSessionLabel {
+  id: string;
+  name: string;
+  cwd?: string;
+  project?: { key: string; label: string };
+  job?: { id: string; name: string };
+  models: string[];
+  providers: string[];
+  firstMs?: number;
+  lastMs?: number;
+}
+
+export interface InsightsSpendRow {
+  key: string;
+  label: string;
+  spend: InsightsMoney;
+  tokens: number;
+  requests: number;
+}
+
+export interface InsightsDurations {
+  count: number;
+  p50: number | null;
+  p90: number | null;
+}
+
+interface InsightsBase {
+  query: InsightsQuery;
+  /** Start of each bucket in the range. */
+  buckets: number[];
+  /** Every session the payload names, by id. */
+  sessions: Record<string, InsightsSessionLabel>;
+}
+
+export interface InsightsOverview extends InsightsBase {
+  view: "overview";
+  totals: {
+    spend: InsightsMoney;
+    requests: number;
+    tokens: InsightsTokens;
+    /** Cache reads over everything sent: null with nothing sent. */
+    cacheHitRate: number | null;
+    turns: number;
+    medianTurnMs: number | null;
+    toolCalls: number;
+    toolFailures: number;
+    /** Time permission prompts waited on the user, from cockpit's own records. */
+    waitingMs: number;
+    waits: number;
+    apiErrors: number;
+    retries: number;
+    linesAdded: number;
+    linesRemoved: number;
+    prompts: number;
+  };
+  spendByModel: InsightsSeries[];
+  topSessions: Array<{ sessionId: string; spend: InsightsMoney; tokens: number; turns: number }>;
+}
+
+export interface InsightsSpend extends InsightsBase {
+  view: "spend";
+  byModel: InsightsSeries[];
+  byProvider: InsightsSeries[];
+  tokens: InsightsSeries[];
+  cacheHitRate: Array<number | null>;
+  purposes: InsightsSpendRow[];
+  efforts: InsightsSpendRow[];
+  rankedSessions: Array<InsightsSpendRow & { sessionId: string; turns: number }>;
+  rankedProjects: Array<InsightsSpendRow & { sessions: number }>;
+  rankedJobs: Array<InsightsSpendRow & { sessions: number }>;
+  topTurns: Array<{
+    sessionId: string;
+    traceId: string | null;
+    timeMs: number;
+    prompt: string | null;
+    spend: InsightsMoney;
+    tokens: number;
+  }>;
+  /** Models with no price, whose requests are left out of spend. */
+  unpricedModels: string[];
+}
+
+export interface InsightsSpeed extends InsightsBase {
+  view: "speed";
+  models: Array<{
+    model: string;
+    providers: string[];
+    requests: number;
+    errors: number;
+    ttft: InsightsDurations;
+    response: InsightsDurations;
+    /** Output tokens per second after the first token. */
+    outputTps: number | null;
+  }>;
+  /** Median time to first token per bucket, a line per model. */
+  ttftTrend: InsightsSeries[];
+  turnDurations: Array<{ fromMs: number; toMs: number | null; count: number }>;
+  turnTime: { turns: number; modelMs: number; toolsMs: number; waitingMs: number; otherMs: number };
+}
+
+export interface InsightsTools extends InsightsBase {
+  view: "tools";
+  tools: Array<{ name: string; calls: number; failures: number; p50Ms: number | null; p90Ms: number | null; totalMs: number }>;
+  programs: Array<{ name: string; calls: number; failures: number; p90Ms: number | null; totalMs: number }>;
+  slowestCommands: Array<{ command: string; durationMs: number; timeMs: number; sessionId: string; success: boolean | null }>;
+  mcpServers: Array<{ server: string; calls: number; failures: number; totalMs: number; tools: Array<{ name: string; calls: number }> }>;
+  files: Array<{ path: string; touches: number; edits: number }>;
+  waiting: {
+    byTool: Array<{ tool: string; waits: number; totalMs: number; p50Ms: number | null }>;
+    answeredBy: Record<string, number>;
+    allowed: number;
+    denied: number;
+    totalMs: number;
+    /** Calls the user's permission rules allowed without asking. */
+    rulesApproved: number;
+  };
+}
+
+export interface InsightsHealth extends InsightsBase {
+  view: "health";
+  apiErrors: Array<{ model: string; status: string; count: number; lastMessage: string | null; lastMs: number }>;
+  errorsByBucket: InsightsSeries[];
+  retries: Array<{ model: string; retries: number; requests: number }>;
+  toolFailures: Array<{
+    tool: string;
+    failures: number;
+    calls: number;
+    recent: Array<{ detail: string | null; timeMs: number; sessionId: string }>;
+  }>;
+  mcpServers: Array<{
+    server: string;
+    attempts: number;
+    failures: number;
+    p50Ms: number | null;
+    maxMs: number | null;
+    lastStatus: string | null;
+  }>;
+  hooks: Array<{
+    event: string;
+    runs: number;
+    totalMs: number;
+    p90Ms: number | null;
+    maxMs: number | null;
+    blocking: number;
+    errors: number;
+  }>;
+}
+
+export interface InsightsActivity extends InsightsBase {
+  view: "activity";
+  lines: InsightsSeries[];
+  linesTotal: { added: number; removed: number };
+  editsByLanguage: Array<{ language: string; accepted: number; rejected: number }>;
+  commits: number;
+  pullRequests: number;
+  prompts: InsightsSeries[];
+  /** Prompts by weekday (0 Monday … 6 Sunday) and hour, in the viewer's time. */
+  heatmap: number[][];
+}
+
+export interface InsightsTurnSummary {
+  traceId: string;
+  startMs: number;
+  durationMs: number;
+  prompt: string | null;
+  spend: InsightsMoney;
+  tokens: number;
+  requests: number;
+  toolCalls: number;
+  errors: number;
+  modelMs: number;
+  toolsMs: number;
+  waitingMs: number;
+  otherMs: number;
+}
+
+export interface InsightsTurns extends InsightsBase {
+  view: "turns";
+  turns: InsightsTurnSummary[];
+}
+
+export interface InsightsTimelineRow {
+  id: string;
+  parentId: string | null;
+  kind: "request" | "tool" | "hook";
+  label: string;
+  detail: string | null;
+  startMs: number;
+  endMs: number;
+  success: boolean | null;
+  /** A tool's wait on the user and its run, inside the row's span. */
+  segments: Array<{ kind: "waiting" | "running"; startMs: number; endMs: number }>;
+  tokens?: InsightsTokens;
+  ttftMs?: number | null;
+  attempt?: number | null;
+  spend?: InsightsMoney;
+}
+
+export interface InsightsTurn extends InsightsBase {
+  view: "turn";
+  turn: (InsightsTurnSummary & { rows: InsightsTimelineRow[] }) | null;
+}
+
+export interface InsightsContext extends InsightsBase {
+  view: "context";
+  points: Array<{ timeMs: number; tokens: number; model: string; compaction: boolean }>;
+}
+
+export type InsightsPayload =
+  | InsightsOverview
+  | InsightsSpend
+  | InsightsSpeed
+  | InsightsTools
+  | InsightsHealth
+  | InsightsActivity
+  | InsightsTurns
+  | InsightsTurn
+  | InsightsContext;

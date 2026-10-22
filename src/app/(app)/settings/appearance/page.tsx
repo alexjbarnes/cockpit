@@ -220,7 +220,7 @@ export default function AppearanceSettingsPage() {
           </SettingRow>
           <SettingRow
             label="Pages in a modal"
-            hint="Open Jobs, Inbox, Issues and Settings in a modal over your session instead of leaving it. Turn off to navigate to the page itself."
+            hint="Open Jobs, Inbox, Issues, Insights and Settings in a modal over your session instead of leaving it. Turn off to navigate to the page itself."
           >
             <Toggle enabled={settings.modalPagesEnabled} onToggle={() => updateSetting("modalPagesEnabled", !settings.modalPagesEnabled)} />
           </SettingRow>
@@ -228,7 +228,7 @@ export default function AppearanceSettingsPage() {
             label="Telemetry"
             hint={
               telemetryBlocked ??
-              "Record everything Claude Code reports about sessions started from now on, prompts and tool output included. Kept for 30 days."
+              "Record everything Claude Code reports about sessions started from now on, prompts and tool output included, and chart it under Insights in the sidebar. Kept for 30 days."
             }
           >
             <Toggle

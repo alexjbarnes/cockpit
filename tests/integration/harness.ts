@@ -65,6 +65,9 @@ export interface HarnessOptions {
   /** Switch telemetry on in defaults.json, so sessions send their
    *  OpenTelemetry to this cockpit's receiver. */
   telemetry?: boolean;
+  /** Runs once the config is seeded and before cockpit starts, to add files
+   *  of a spec's own to it (a telemetry store, providers, session prefs). */
+  prepare?: (dirs: { configDir: string; claudeDir: string }) => void;
 }
 
 // Process groups (pgids) of cockpit servers still running in this worker.
@@ -121,6 +124,7 @@ export async function startHarness(opts: HarnessOptions = {}): Promise<Harness> 
     deepseekViaMock: opts.deepseekViaMock,
     telemetry: opts.telemetry,
   });
+  opts.prepare?.({ configDir, claudeDir });
 
   const cockpitPort = await getFreePort();
   const cockpitToken = uuidv4();

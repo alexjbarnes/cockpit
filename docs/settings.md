@@ -125,6 +125,21 @@ It is stored in `~/.cockpit/telemetry.db`, a SQLite database readable only by yo
 - The CLI's telemetry is in beta, so names and attributes can change between versions. `cost_usd` is the CLI's estimate at Anthropic's prices, and is wrong for other providers' models.
 - Stream-runtime sessions do not send any.
 
+### Insights
+
+While telemetry is on, the sidebar footer's chart button opens Insights (`/insights`), which charts what is stored over the last 24 hours, 7 days or 30 days:
+
+- **Overview**: spend, tokens and cache use, turns, tool calls, time waiting on you, API errors, lines changed and prompts, with spend per day by model and the sessions that cost most.
+- **Spend**: spend per day by model or provider, tokens by kind with the cache hit rate, what the spend went on (conversation, subagents, session titles, web fetches) and at which effort level, sessions, projects and scheduled jobs ranked by spend, and the most expensive turns.
+- **Speed**: each model's time to first token, response time and output speed, typical and slowest tenth, how long turns take, and where their time goes (model, tools, waiting for approval, other).
+- **Tools**: calls, failures and time per tool, Bash by program and the slowest commands, MCP tools by server, the files touched most, and who answered permission prompts.
+- **Health**: API errors and retries, tool failures, MCP servers that failed to connect, and the time Claude Code spent running hooks.
+- **Activity**: lines added and removed, edits by language, commits and pull requests, prompts per day and by weekday and hour.
+
+Tapping a session anywhere it is listed, or **Session insights** in a session's context ring, narrows every tab to that session and adds **Turns** (each turn split into where its time went, opening into a timeline of its requests and tool calls) and **Context** (how full the context was at each request).
+
+Spend is priced by the provider that served each request. Anthropic's models use Claude Code's own figure, which is what the requests would cost at API prices; other providers' models use the provider's catalogue prices at the time you look, and a model with no price is counted as unpriced rather than free. The provider is recorded with each session's telemetry; for telemetry recorded before that, it comes from the session's model setting. Your own active time is not shown: Claude Code only counts typing in its own terminal, which cockpit replaces. Who answered a permission prompt (you, bypass, cockpit's rules or the terminal) is recorded by cockpit from this release on.
+
 ## Inbox
 
 The inbox at `/inbox` collects messages from scheduled job completions and system events. Each message has a title, body, priority level (info, warning, error), and timestamp.

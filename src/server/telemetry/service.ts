@@ -8,10 +8,11 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { TelemetryPage, TelemetryQuery, TelemetryStats } from "@/types";
+import type { InsightsQuery, TelemetryPage, TelemetryQuery, TelemetryStats } from "@/types";
 import { TELEMETRY_TOKEN_HEADER } from "./env";
+import { InsightsReader, type RawInsights } from "./insights-sql";
 import type { OtlpKind } from "./otlp";
-import type { TelemetryOutcome, TelemetrySpawn, TelemetrySpawner, WorkerInit } from "./protocol";
+import type { LocalRecord, TelemetryOutcome, TelemetrySpawn, TelemetrySpawner, WorkerInit } from "./protocol";
 import { loadSqlite, type SqliteLoad } from "./sqlite";
 import { type StoreLike, TelemetryStoreClient } from "./store-client";
 
@@ -229,10 +230,24 @@ export class TelemetryService implements TelemetrySpawner {
     reply(res, 200);
   }
 
+  /** Cockpit's own records for a session, stored only while telemetry is on
+   *  and the store is running: never the reason it starts. */
+  recordLocal(sessionId: string, records: LocalRecord[]): void {
+    if (records.length === 0 || !this.isEnabled() || !this.store?.available) return;
+    this.store.ingestLocal(sessionId, this.now(), records);
+  }
+
   async query(q: TelemetryQuery): Promise<TelemetryPage> {
     const store = await this.readableStore();
     if (!store?.available) return { records: [], sources: {}, nextCursor: null };
     return store.query(q);
+  }
+
+  /** One Insights view's numbers; empty ones when there is nothing to read. */
+  async insights(q: InsightsQuery): Promise<RawInsights> {
+    const store = await this.readableStore();
+    if (!store?.available) return new InsightsReader(() => [], q).read();
+    return store.insights(q);
   }
 
   async stats(sessionId?: string): Promise<TelemetryStats> {

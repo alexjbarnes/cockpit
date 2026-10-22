@@ -7,8 +7,9 @@
 
 import path from "node:path";
 import { Worker } from "node:worker_threads";
-import type { TelemetryPage, TelemetryQuery, TelemetryStoreStats } from "@/types";
-import type { IngestMeta, WorkerInit, WorkerRequest, WorkerResponse } from "./protocol";
+import type { InsightsQuery, TelemetryPage, TelemetryQuery, TelemetryStoreStats } from "@/types";
+import type { RawInsights } from "./insights-sql";
+import type { IngestMeta, LocalRecord, WorkerInit, WorkerRequest, WorkerResponse } from "./protocol";
 
 export interface WorkerLike {
   postMessage(msg: WorkerRequest, transfer?: ArrayBuffer[]): void;
@@ -37,14 +38,18 @@ export interface StoreLike {
   readonly pendingBytes: number;
   readonly counters: IngestCounters;
   ingest(meta: IngestMeta, body: Uint8Array): IngestResult;
+  ingestLocal(sessionId: string, receivedMs: number, records: LocalRecord[]): IngestResult;
   query(q: TelemetryQuery): Promise<TelemetryPage>;
   stats(sessionId?: string): Promise<TelemetryStoreStats>;
+  insights(q: InsightsQuery): Promise<RawInsights>;
 }
 
 export interface StoreClientOptions {
   workerFactory?: WorkerFactory;
   readyTimeoutMs?: number;
   requestTimeoutMs?: number;
+  /** An Insights view reads a range of records, so it gets longer than a page. */
+  insightsTimeoutMs?: number;
   /** Bytes handed to the worker and not yet stored, past which ingest says "full". */
   queueLimitBytes?: number;
 }
@@ -77,6 +82,7 @@ export class TelemetryStoreClient implements StoreLike {
   private readonly pending = new Map<number, Pending>();
   readonly counters: IngestCounters = { batches: 0, records: 0, skipped: 0, failed: 0 };
   private readonly requestTimeoutMs: number;
+  private readonly insightsTimeoutMs: number;
   private readonly queueLimitBytes: number;
 
   private constructor(
@@ -84,6 +90,7 @@ export class TelemetryStoreClient implements StoreLike {
     opts: StoreClientOptions,
   ) {
     this.requestTimeoutMs = opts.requestTimeoutMs ?? 10_000;
+    this.insightsTimeoutMs = opts.insightsTimeoutMs ?? 20_000;
     this.queueLimitBytes = opts.queueLimitBytes ?? 256 * 1024 * 1024;
   }
 
@@ -187,14 +194,21 @@ export class TelemetryStoreClient implements StoreLike {
     return "queued";
   }
 
-  private request<T>(msg: (id: number) => WorkerRequest): Promise<T> {
+  /** Hand cockpit's own records to the worker without waiting. */
+  ingestLocal(sessionId: string, receivedMs: number, records: LocalRecord[]): IngestResult {
+    if (!this._available) return "unavailable";
+    this.worker.postMessage({ type: "ingest-local", sessionId, receivedMs, records });
+    return "queued";
+  }
+
+  private request<T>(msg: (id: number) => WorkerRequest, timeoutMs = this.requestTimeoutMs): Promise<T> {
     if (!this._available) return Promise.reject(new Error(this._reason ?? "telemetry store unavailable"));
     const id = this.nextId++;
     return new Promise<T>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
-        reject(new Error(`telemetry worker did not answer within ${this.requestTimeoutMs} ms`));
-      }, this.requestTimeoutMs);
+        reject(new Error(`telemetry worker did not answer within ${timeoutMs} ms`));
+      }, timeoutMs);
       this.pending.set(id, { resolve: resolve as (v: never) => void, reject, timer });
       this.worker.postMessage(msg(id));
     });
@@ -206,5 +220,9 @@ export class TelemetryStoreClient implements StoreLike {
 
   stats(sessionId?: string): Promise<TelemetryStoreStats> {
     return this.request((id) => ({ type: "stats", id, sessionId }));
+  }
+
+  insights(q: InsightsQuery): Promise<RawInsights> {
+    return this.request((id) => ({ type: "insights", id, query: q }), this.insightsTimeoutMs);
   }
 }

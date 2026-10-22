@@ -18,7 +18,7 @@ class FakeWorker extends EventEmitter implements WorkerLike {
 
 const meta: IngestMeta = { sessionId: "s", spawnId: "sp", kind: "logs", receivedMs: 1, gzip: false, encoding: "json" };
 
-async function started(opts: { queueLimitBytes?: number; requestTimeoutMs?: number } = {}) {
+async function started(opts: { queueLimitBytes?: number; requestTimeoutMs?: number; insightsTimeoutMs?: number } = {}) {
   const worker = new FakeWorker();
   const pending = TelemetryStoreClient.start({ file: "/x" }, { workerFactory: () => worker, ...opts });
   worker.reply({ type: "ready", available: true });
@@ -119,6 +119,32 @@ describe("TelemetryStoreClient at work", () => {
     const page = store.query({});
     const check = expect(page).rejects.toThrow("telemetry worker did not answer within 100 ms");
     await vi.advanceTimersByTimeAsync(100);
+    await check;
+  });
+
+  it("hands cockpit's own records over without waiting, and refuses them once unavailable", async () => {
+    const { worker, store } = await started();
+    const records = [{ name: "cockpit.permission_answer", timeMs: 1, attrs: { answered_by: "you" } }];
+    expect(store.ingestLocal("s", 5, records)).toBe("queued");
+    expect(worker.sent[0].msg).toEqual({ type: "ingest-local", sessionId: "s", receivedMs: 5, records });
+    worker.emit("exit", 1);
+    expect(store.ingestLocal("s", 6, records)).toBe("unavailable");
+  });
+
+  it("gives an Insights view longer than a page to come back", async () => {
+    vi.useFakeTimers();
+    const { worker, store } = await started({ requestTimeoutMs: 100, insightsTimeoutMs: 300 });
+    const query = { view: "overview" as const, range: "7d" as const, since: 0, until: 1, bucketMs: 1, tzOffsetMin: 0 };
+    const answered = store.insights(query);
+    const id = (worker.sent[0].msg as { id: number }).id;
+    expect(worker.sent[0].msg).toEqual({ type: "insights", id, query });
+    await vi.advanceTimersByTimeAsync(150);
+    worker.reply({ type: "result", id, result: { view: "context", seen: [], points: [] } });
+    await expect(answered).resolves.toEqual({ view: "context", seen: [], points: [] });
+
+    const slow = store.insights(query);
+    const check = expect(slow).rejects.toThrow("telemetry worker did not answer within 300 ms");
+    await vi.advanceTimersByTimeAsync(300);
     await check;
   });
 

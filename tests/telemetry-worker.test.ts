@@ -102,6 +102,36 @@ describe.skipIf(!sqlite)("createWorkerCore", () => {
     expect(failed).toEqual({ type: "result", id: 9, error: "disk on fire" });
   });
 
+  it("stores cockpit's own records under the session, as cockpit's", () => {
+    core.handle({
+      type: "ingest-local",
+      sessionId: "sess",
+      receivedMs: 1_000,
+      records: [{ name: "cockpit.permission_answer", timeMs: 900, endMs: 1_000, value: 100, attrs: { answered_by: "you" } }],
+    });
+    expect(posted).toEqual([{ type: "ack", bytes: 0, records: 1, skipped: 0 }]);
+    const page = db.query({ session: "sess", name: "cockpit.permission_answer" });
+    expect(page.records[0]).toMatchObject({ signal: "log", value: 100, attrs: { answered_by: "you" } });
+    expect(Object.values(page.sources)[0]).toMatchObject({ spawnId: "cockpit", resource: { "service.name": "cockpit" } });
+
+    vi.spyOn(db, "ingest").mockImplementationOnce(() => {
+      throw new Error("locked");
+    });
+    core.handle({ type: "ingest-local", sessionId: "sess", receivedMs: 1, records: [] });
+    expect(posted[1]).toEqual({ type: "ack", bytes: 0, records: 0, skipped: 0, error: "locked" });
+  });
+
+  it("answers an Insights view by id", () => {
+    core.handle({ type: "ingest", meta, body: bytes(logs("claude_code.user_prompt")) });
+    core.handle({
+      type: "insights",
+      id: 3,
+      query: { view: "activity", range: "24h", since: 0, until: 3_600_000, bucketMs: 3_600_000, tzOffsetMin: 0 },
+    });
+    // The prompt has no time of its own, so it is filed at its arrival, in the first hour.
+    expect(posted[1]).toMatchObject({ type: "result", id: 3, result: { view: "activity", prompts: [1] } });
+  });
+
   it("prunes on start and on a timer, one pass at a time", async () => {
     const steps = vi.spyOn(db, "pruneStep");
     // A pass already running is joined, not started twice.

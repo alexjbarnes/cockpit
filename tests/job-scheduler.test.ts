@@ -370,7 +370,15 @@ describe("JobScheduler", () => {
       sm.emitStatus("idle");
 
       await promise;
-      expect(sm.respondToPermission).toHaveBeenCalledWith("session-1", "perm-1", true, { command: "rm -rf /" });
+      expect(sm.respondToPermission).toHaveBeenCalledWith(
+        "session-1",
+        "perm-1",
+        true,
+        { command: "rm -rf /" },
+        undefined,
+        undefined,
+        "bypass",
+      );
     });
 
     it("checks allowedTools for permission requests when not bypassing", async () => {
@@ -395,8 +403,8 @@ describe("JobScheduler", () => {
       sm.emitStatus("idle");
 
       await promise;
-      expect(sm.respondToPermission).toHaveBeenCalledWith("session-1", "perm-read", true, {});
-      expect(sm.respondToPermission).toHaveBeenCalledWith("session-1", "perm-write", false, undefined);
+      expect(sm.respondToPermission).toHaveBeenCalledWith("session-1", "perm-read", true, {}, undefined, undefined, "cockpit");
+      expect(sm.respondToPermission).toHaveBeenCalledWith("session-1", "perm-write", false, undefined, undefined, undefined, "cockpit");
     });
 
     it("creates session with bypass when bypassPermissions is true", async () => {
@@ -729,7 +737,7 @@ describe("isToolAllowed (via permission flow)", () => {
     sm.emitStatus("idle");
     await promise;
 
-    expect(sm.respondToPermission).toHaveBeenCalledWith("session-1", "p1", true, {});
+    expect(sm.respondToPermission).toHaveBeenCalledWith("session-1", "p1", true, {}, undefined, undefined, "cockpit");
   });
 
   it("allows Bash with matching command prefix", async () => {
@@ -747,7 +755,15 @@ describe("isToolAllowed (via permission flow)", () => {
     sm.emitStatus("idle");
     await promise;
 
-    expect(sm.respondToPermission).toHaveBeenCalledWith("session-1", "p1", true, { command: "git status" });
+    expect(sm.respondToPermission).toHaveBeenCalledWith(
+      "session-1",
+      "p1",
+      true,
+      { command: "git status" },
+      undefined,
+      undefined,
+      "cockpit",
+    );
   });
 
   it("denies Bash with shell operators even when command prefix matches", async () => {
@@ -765,7 +781,7 @@ describe("isToolAllowed (via permission flow)", () => {
     sm.emitStatus("idle");
     await promise;
 
-    expect(sm.respondToPermission).toHaveBeenCalledWith("session-1", "p1", false, undefined);
+    expect(sm.respondToPermission).toHaveBeenCalledWith("session-1", "p1", false, undefined, undefined, undefined, "cockpit");
   });
 
   // Quote-aware operator scanning. The blanket regex this replaced refused any
@@ -841,7 +857,7 @@ describe("isToolAllowed (via permission flow)", () => {
     sm.emitStatus("idle");
     await promise;
 
-    expect(sm.respondToPermission).toHaveBeenCalledWith("session-1", "p1", false, undefined);
+    expect(sm.respondToPermission).toHaveBeenCalledWith("session-1", "p1", false, undefined, undefined, undefined, "cockpit");
   });
 });
 
@@ -1008,7 +1024,7 @@ describe("Bash tool restriction edge cases", () => {
     sm.emitStatus("idle");
     await promise;
 
-    expect(sm.respondToPermission).toHaveBeenCalledWith("session-1", "p1", true, { command: "ls" });
+    expect(sm.respondToPermission).toHaveBeenCalledWith("session-1", "p1", true, { command: "ls" }, undefined, undefined, "cockpit");
   });
 
   it("falls back to raw toolInput when JSON parse fails", async () => {
@@ -1026,7 +1042,7 @@ describe("Bash tool restriction edge cases", () => {
     sm.emitStatus("idle");
     await promise;
 
-    expect(sm.respondToPermission).toHaveBeenCalledWith("session-1", "p1", true, { command: "ls -la" });
+    expect(sm.respondToPermission).toHaveBeenCalledWith("session-1", "p1", true, { command: "ls -la" }, undefined, undefined, "cockpit");
   });
 
   it("denies Bash with pipe operator", async () => {
@@ -1044,7 +1060,7 @@ describe("Bash tool restriction edge cases", () => {
     sm.emitStatus("idle");
     await promise;
 
-    expect(sm.respondToPermission).toHaveBeenCalledWith("session-1", "p1", false, undefined);
+    expect(sm.respondToPermission).toHaveBeenCalledWith("session-1", "p1", false, undefined, undefined, undefined, "cockpit");
   });
 
   it("denies Bash with background operator", async () => {
@@ -1062,7 +1078,7 @@ describe("Bash tool restriction edge cases", () => {
     sm.emitStatus("idle");
     await promise;
 
-    expect(sm.respondToPermission).toHaveBeenCalledWith("session-1", "p1", false, undefined);
+    expect(sm.respondToPermission).toHaveBeenCalledWith("session-1", "p1", false, undefined, undefined, undefined, "cockpit");
   });
 
   it("denies Bash when command does not match restriction prefix", async () => {
@@ -1080,7 +1096,7 @@ describe("Bash tool restriction edge cases", () => {
     sm.emitStatus("idle");
     await promise;
 
-    expect(sm.respondToPermission).toHaveBeenCalledWith("session-1", "p1", false, undefined);
+    expect(sm.respondToPermission).toHaveBeenCalledWith("session-1", "p1", false, undefined, undefined, undefined, "cockpit");
   });
 });
 
@@ -1109,7 +1125,7 @@ describe("MCP tool permissions (via permission flow)", () => {
     sm.emitStatus("idle");
     await promise;
 
-    expect(sm.respondToPermission).toHaveBeenCalledWith("session-1", "p1", true, {});
+    expect(sm.respondToPermission).toHaveBeenCalledWith("session-1", "p1", true, {}, undefined, undefined, "cockpit");
   });
 
   it("denies MCP tool when server is not in mcpServers list", async () => {
@@ -1127,7 +1143,7 @@ describe("MCP tool permissions (via permission flow)", () => {
     sm.emitStatus("idle");
     await promise;
 
-    expect(sm.respondToPermission).toHaveBeenCalledWith("session-1", "p1", false, undefined);
+    expect(sm.respondToPermission).toHaveBeenCalledWith("session-1", "p1", false, undefined, undefined, undefined, "cockpit");
   });
 
   it("filters MCP tools by mcpToolFilters when provided", async () => {
@@ -1156,8 +1172,8 @@ describe("MCP tool permissions (via permission flow)", () => {
     sm.emitStatus("idle");
     await promise;
 
-    expect(sm.respondToPermission).toHaveBeenCalledWith("session-1", "p1", true, {});
-    expect(sm.respondToPermission).toHaveBeenCalledWith("session-1", "p2", false, undefined);
+    expect(sm.respondToPermission).toHaveBeenCalledWith("session-1", "p1", true, {}, undefined, undefined, "cockpit");
+    expect(sm.respondToPermission).toHaveBeenCalledWith("session-1", "p2", false, undefined, undefined, undefined, "cockpit");
   });
 
   // The CLI does not normalise a server's name into its tool names: a server
@@ -1221,7 +1237,15 @@ describe("MCP tool permissions (via permission flow)", () => {
     sm.emitStatus("idle");
     await promise;
 
-    expect(sm.respondToPermission).toHaveBeenCalledWith("session-1", "p1", true, { server: "linear", tool: "list_issues" });
+    expect(sm.respondToPermission).toHaveBeenCalledWith(
+      "session-1",
+      "p1",
+      true,
+      { server: "linear", tool: "list_issues" },
+      undefined,
+      undefined,
+      "cockpit",
+    );
   });
 
   it("allows MCP tool via colon filter with server:* wildcard", async () => {
@@ -1243,7 +1267,15 @@ describe("MCP tool permissions (via permission flow)", () => {
     sm.emitStatus("idle");
     await promise;
 
-    expect(sm.respondToPermission).toHaveBeenCalledWith("session-1", "p1", true, { server: "linear", tool: "anything" });
+    expect(sm.respondToPermission).toHaveBeenCalledWith(
+      "session-1",
+      "p1",
+      true,
+      { server: "linear", tool: "anything" },
+      undefined,
+      undefined,
+      "cockpit",
+    );
   });
 
   it("denies MCP tool when colon filter server does not match", async () => {
@@ -1265,7 +1297,7 @@ describe("MCP tool permissions (via permission flow)", () => {
     sm.emitStatus("idle");
     await promise;
 
-    expect(sm.respondToPermission).toHaveBeenCalledWith("session-1", "p1", false, undefined);
+    expect(sm.respondToPermission).toHaveBeenCalledWith("session-1", "p1", false, undefined, undefined, undefined, "cockpit");
   });
 
   it("skips colon filter when toolInput is invalid JSON", async () => {
@@ -1287,7 +1319,7 @@ describe("MCP tool permissions (via permission flow)", () => {
     sm.emitStatus("idle");
     await promise;
 
-    expect(sm.respondToPermission).toHaveBeenCalledWith("session-1", "p1", false, undefined);
+    expect(sm.respondToPermission).toHaveBeenCalledWith("session-1", "p1", false, undefined, undefined, undefined, "cockpit");
   });
 
   it("returns null for non-MCP tools", async () => {
@@ -1305,7 +1337,7 @@ describe("MCP tool permissions (via permission flow)", () => {
     sm.emitStatus("idle");
     await promise;
 
-    expect(sm.respondToPermission).toHaveBeenCalledWith("session-1", "p1", true, {});
+    expect(sm.respondToPermission).toHaveBeenCalledWith("session-1", "p1", true, {}, undefined, undefined, "cockpit");
   });
 
   it("normalizes server names with special characters", async () => {
@@ -1323,7 +1355,7 @@ describe("MCP tool permissions (via permission flow)", () => {
     sm.emitStatus("idle");
     await promise;
 
-    expect(sm.respondToPermission).toHaveBeenCalledWith("session-1", "p1", true, {});
+    expect(sm.respondToPermission).toHaveBeenCalledWith("session-1", "p1", true, {}, undefined, undefined, "cockpit");
   });
 });
 

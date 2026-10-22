@@ -7,8 +7,9 @@ import { fetchCliInitData } from "./cli-init-fetch";
 import { logDiag } from "./debug-logger";
 import { ONE_M_CREDITS_REQUIRED, type ParsedEvent, REQUEST_SETTLED, TURN_CONTINUES } from "./event-parser";
 import { newPermissionRequestId, permissionSuggestionsFrom, translateHookEvent } from "./hook-event-translator";
-import type { HookResponse, HookRouter, PermissionDecision, SessionHookHandler } from "./hook-router";
+import type { HookResponse, HookRouter, PermissionAnswerer, PermissionDecision, SessionHookHandler } from "./hook-router";
 import { PtySession } from "./pty-session";
+import { PERMISSION_ANSWER } from "./telemetry/insights-sql";
 import type { TelemetrySpawner } from "./telemetry/protocol";
 import { countTranscriptMessages, promptMatchKey, TranscriptPromptFollower, type TranscriptPrompts } from "./transcript";
 
@@ -46,6 +47,8 @@ export interface PtyRuntimeOptions {
   expectedPermissionMode?: "manual" | "auto" | "plan";
   /** Cockpit's OpenTelemetry receiver, when telemetry is switched on. */
   telemetry?: TelemetrySpawner;
+  /** The provider serving the session's model, stamped on its telemetry. */
+  providerId?: string;
 }
 
 /**
@@ -86,12 +89,15 @@ export class PtyRuntime {
   /** This spawn's hook registration, so cleanup removes only its own. */
   private hookToken: string | undefined;
   private telemetryToken: string | null = null;
+  /** Whether this spawn's telemetry reaches cockpit, so cockpit's own
+   *  records for it are worth keeping. */
+  private telemetryApplied = false;
   /** Hook requests awaiting a decision, by request id. The tool call's id
    *  rides along when it is known, so a request the CLI settled without
    *  cockpit can be released when that call finishes (settleToolCall). */
   private readonly pendingPermissions = new Map<
     string,
-    { resolve: (decision: PermissionDecision) => void; toolName: string; toolUseId?: string }
+    { resolve: (decision: PermissionDecision) => void; toolName: string; toolUseId?: string; raisedAt: number }
   >();
   /** Tool calls between their PreToolUse and their PostToolUse, by
    *  tool_use_id. A PermissionRequest names no id of its own, so this is how
@@ -100,7 +106,10 @@ export class PtyRuntime {
   /** Synthetic requests for TUI-only dialogs (see onNotification), by id:
    *  answered with keystrokes into the PTY, not through the hook response
    *  channel. A network dialog also carries the host it asks about. */
-  private readonly pendingTuiDialogs = new Map<string, { kind: "permission" } | { kind: "network"; host?: string; command?: string }>();
+  private readonly pendingTuiDialogs = new Map<
+    string,
+    ({ kind: "permission"; tool: string } | { kind: "network"; host?: string; command?: string }) & { raisedAt: number }
+  >();
   /** The permission mode the CLI last reported in a hook payload. */
   private cliPermissionMode: string | undefined;
   private lastPreToolUse: { tool: string; input?: Record<string, unknown> } | null = null;
@@ -210,9 +219,10 @@ export class PtyRuntime {
         sandbox: this.opts.sandbox,
         autoModeEnabled: this.opts.autoModeEnabled,
         cwd,
-        telemetry: telemetry ? { token: telemetry.token, baseUrl: hookRouter.getUrl() } : undefined,
+        telemetry: telemetry ? { token: telemetry.token, baseUrl: hookRouter.getUrl(), providerId: this.opts.providerId } : undefined,
       });
       if (telemetry && prepared.telemetry) this.opts.telemetry?.noteOutcome(telemetry.token, prepared.telemetry);
+      this.telemetryApplied = prepared.telemetry?.status === "applied";
     } catch (err) {
       await this.cleanup();
       throw err;
@@ -665,9 +675,11 @@ export class PtyRuntime {
     this.pty.sendKey("\x1b");
     for (const [, pending] of this.pendingPermissions) {
       pending.resolve({ behavior: "deny", message: "interrupted" });
+      this.recordAnswer(pending, "interrupted", "deny");
     }
     this.pendingPermissions.clear();
     // The Esc above dismissed any rendered TUI dialog with it.
+    for (const dialog of this.pendingTuiDialogs.values()) this.recordAnswer(this.dialogAsked(dialog), "interrupted", "deny");
     this.pendingTuiDialogs.clear();
     // Esc also makes the CLI take up what is waiting in its queue, at once, as
     // a turn of its own. That turn opens with no UserPromptSubmit (the hook ran
@@ -750,8 +762,10 @@ export class PtyRuntime {
     // Resolve any in-flight permission promises so the bridge subprocess can exit.
     for (const [, pending] of this.pendingPermissions) {
       pending.resolve({ behavior: "deny", message: "session ended" });
+      this.recordAnswer(pending, "ended", "deny");
     }
     this.pendingPermissions.clear();
+    for (const dialog of this.pendingTuiDialogs.values()) this.recordAnswer(this.dialogAsked(dialog), "ended", "deny");
     this.pendingTuiDialogs.clear();
     // The process is going away, so nothing it launched is still running.
     this.toolCallsInFlight.clear();
@@ -815,8 +829,14 @@ export class PtyRuntime {
   }
 
   /** Called by SessionManager.respondToPermission when this session is on the
-   *  pty runtime. `always` is the user's "don't ask again" choice. */
-  notifyPermissionDecision(requestId: string, decision: PermissionDecision, opts?: { always?: boolean }): boolean {
+   *  pty runtime. `always` is the user's "don't ask again" choice;
+   *  `answeredBy` says who decided, for the record telemetry cannot keep. */
+  notifyPermissionDecision(
+    requestId: string,
+    decision: PermissionDecision,
+    opts?: { always?: boolean; answeredBy?: PermissionAnswerer },
+  ): boolean {
+    const answeredBy = opts?.answeredBy ?? "you";
     // A TUI-only dialog has no hook response channel — the CLI refused the
     // hook's allow (frontier models require interactive confirmation for
     // self-modifying writes), or the dialog is one the CLI never routes
@@ -837,6 +857,7 @@ export class PtyRuntime {
         // goes. A yes is raised again, to answer once the screen shows its host.
         if (decision.behavior !== "allow") {
           this.pendingTuiDialogs.delete(requestId);
+          this.recordAnswer(this.dialogAsked(dialog), answeredBy, "deny");
           logDiag(this.opts.sessionId, "pty:network-dialog-deny-not-shown", { requestId, host: dialog.host ?? null });
           return true;
         }
@@ -851,6 +872,7 @@ export class PtyRuntime {
         return false;
       }
       this.pendingTuiDialogs.delete(requestId);
+      this.recordAnswer(this.dialogAsked(dialog), answeredBy, decision.behavior);
       const key = decision.behavior !== "allow" ? "\x1b" : dialog.kind === "network" && opts?.always ? "2" : "1";
       logDiag(this.opts.sessionId, "pty:tui-dialog-decision", {
         requestId,
@@ -876,7 +898,54 @@ export class PtyRuntime {
       pending: this.pendingPermissions.size,
     });
     pending.resolve(decision);
+    this.recordAnswer(pending, answeredBy, decision.behavior);
     return true;
+  }
+
+  /** What a rendered dialog was asking about, for its answer's record. */
+  private dialogAsked(dialog: { kind: "permission"; tool: string; raisedAt: number } | { kind: "network"; raisedAt: number }): {
+    toolName: string;
+    raisedAt: number;
+  } {
+    return { toolName: dialog.kind === "network" ? NETWORK_ACCESS_TOOL : dialog.tool, raisedAt: dialog.raisedAt };
+  }
+
+  /**
+   * Store who answered a prompt and how long it waited. Telemetry times the
+   * wait (tool.blocked_on_user) but cannot say whether the user or cockpit's
+   * bypass answered, which is the difference between waiting on the user and
+   * not; the tool call's id lets Insights join the two.
+   */
+  private recordAnswer(
+    asked: { toolName: string; toolUseId?: string; raisedAt: number },
+    answeredBy: PermissionAnswerer,
+    decision: PermissionDecision["behavior"],
+  ): void {
+    if (!this.telemetryApplied) return;
+    const now = Date.now();
+    const kind =
+      asked.toolName === "AskUserQuestion"
+        ? "question"
+        : asked.toolName === "ExitPlanMode"
+          ? "plan"
+          : asked.toolName === NETWORK_ACCESS_TOOL
+            ? "network"
+            : "permission";
+    this.opts.telemetry?.recordLocal(this.opts.sessionId, [
+      {
+        name: PERMISSION_ANSWER,
+        timeMs: asked.raisedAt,
+        endMs: now,
+        value: now - asked.raisedAt,
+        attrs: {
+          tool_name: asked.toolName,
+          ...(asked.toolUseId ? { tool_use_id: asked.toolUseId } : {}),
+          kind,
+          answered_by: answeredBy,
+          decision,
+        },
+      },
+    ]);
   }
 
   private buildHandler(): SessionHookHandler {
@@ -1202,7 +1271,7 @@ export class PtyRuntime {
           }
           const tool = this.lastPreToolUse?.tool ?? "unknown";
           const requestId = `tui-${newPermissionRequestId()}`;
-          this.pendingTuiDialogs.set(requestId, { kind: "permission" });
+          this.pendingTuiDialogs.set(requestId, { kind: "permission", tool, raisedAt: Date.now() });
           logDiag(this.opts.sessionId, "pty:tui-dialog-detected", { requestId, lastTool: this.lastPreToolUse?.tool ?? null });
           this.emit([
             {
@@ -1250,7 +1319,7 @@ export class PtyRuntime {
     const requestId = `tui-${newPermissionRequestId()}`;
     const lastCommand = this.lastPreToolUse?.tool === "Bash" ? this.lastPreToolUse.input?.command : undefined;
     const command = typeof lastCommand === "string" ? lastCommand : undefined;
-    this.pendingTuiDialogs.set(requestId, { kind: "network", host, command });
+    this.pendingTuiDialogs.set(requestId, { kind: "network", host, command, raisedAt: Date.now() });
     logDiag(this.opts.sessionId, "pty:network-dialog-detected", { requestId, host: host ?? null });
     this.emitNetworkRequest(requestId, host, command);
   }
@@ -1368,6 +1437,9 @@ export class PtyRuntime {
       this.pendingPermissions.delete(requestId);
       logDiag(this.opts.sessionId, "pty:permission-settled-in-terminal", { requestId, toolName: pending.toolName });
       pending.resolve({ behavior: "deny", message: "already answered in the terminal" });
+      // The terminal's answer is not reported. A call that went on to succeed
+      // was allowed; one that failed may have been refused.
+      this.recordAnswer(pending, "terminal", payload.hook_event_name === "PostToolUse" ? "allow" : "deny");
       this.emit([{ type: "system_message", text: `${REQUEST_SETTLED}${requestId}` }]);
     }
   }
@@ -1396,7 +1468,7 @@ export class PtyRuntime {
     const toolUseId = this.callAwaitingPermission(toolName, toolInput);
     logDiag(this.opts.sessionId, "pty:permission-request", { requestId, toolName, tied: !!toolUseId });
     return new Promise<PermissionDecision>((resolve) => {
-      this.pendingPermissions.set(requestId, { resolve, toolName, toolUseId });
+      this.pendingPermissions.set(requestId, { resolve, toolName, toolUseId, raisedAt: Date.now() });
       try {
         this.opts.onEvents([event]);
       } catch (err) {

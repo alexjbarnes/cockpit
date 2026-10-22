@@ -13,7 +13,7 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { APIRequestContext } from "@playwright/test";
-import type { TelemetryPage, TelemetryRecord, TelemetryStats } from "../../src/types";
+import type { InsightsOverview, InsightsTools, InsightsTurns, TelemetryPage, TelemetryRecord, TelemetryStats } from "../../src/types";
 import { textResponse, toolUseResponse } from "../mock-api/builder";
 import { expect, test } from "./fixtures";
 
@@ -60,6 +60,9 @@ function script(harness: import("./harness").Harness) {
     { match: '"json_schema"', events: textResponse('{"title":"Telemetry"}') },
     // Output well over the 4 KB kept inline: 2000 numbered lines.
     { events: toolUseResponse("Bash", { command: "seq 1 2000 # telemetry-probe", description: "Probe" }) },
+    // A command that writes, which the CLI asks permission for (seq is one it
+    // allows by itself), so cockpit answers a prompt and records who did.
+    { events: toolUseResponse("Bash", { command: "touch telemetry-probe.txt", description: "Write" }) },
     { events: textResponse("Done.") },
   ]);
 }
@@ -131,6 +134,32 @@ test.describe("with telemetry switched on", () => {
       expect(stats.dropped.unknownToken).toBe(0);
       expect(stats.dropped.unsupportedType).toBe(0);
       expect(stats.store?.byName?.["claude_code.api_request"]).toBeGreaterThan(0);
+
+      // The spawn named the provider serving its model on every record, which
+      // is what Insights prices by: the harness runs its sessions on "mock".
+      const first = (await (
+        await page.request.get(`${harness.cockpitUrl}/api/telemetry?session=${sessionId}&limit=1`)
+      ).json()) as TelemetryPage;
+      expect(Object.values(first.sources).map((s) => s.resource["cockpit.provider"])).toEqual(["mock"]);
+
+      // Insights reads the turn back, and knows the Bash call's prompt was
+      // answered by bypass, which the harness runs sessions in, not by a person.
+      const insights = async <T>(view: string) =>
+        (await (
+          await page.request.get(`${harness.cockpitUrl}/api/telemetry/insights?view=${view}&range=24h&session=${sessionId}`)
+        ).json()) as T;
+      const overview = await insights<InsightsOverview>("overview");
+      expect(overview.totals).toMatchObject({ turns: 1, waits: 0, waitingMs: 0 });
+      expect(overview.totals.requests).toBeGreaterThan(0);
+      expect(overview.totals.toolCalls).toBeGreaterThan(0);
+      expect(overview.sessions[sessionId].providers).toEqual(["mock"]);
+      await expect
+        .poll(async () => (await insights<InsightsTools>("tools")).waiting.answeredBy.bypass ?? 0, { timeout: 15_000 })
+        .toBeGreaterThan(0);
+      const turns = await insights<InsightsTurns>("turns");
+      expect(turns.turns).toHaveLength(1);
+      expect(turns.turns[0].prompt).toContain("record this turn please");
+      expect(turns.turns[0].toolCalls).toBeGreaterThan(0);
     } finally {
       rmSync(workDir, { recursive: true, force: true });
     }

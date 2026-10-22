@@ -4436,7 +4436,7 @@ describe("SessionManager", () => {
         snapshot: null,
       };
       (manager as any).applyProcessedResult(s, session.id, result);
-      expect(respondToPermission).toHaveBeenCalledWith("req-1", true, {}, undefined, undefined);
+      expect(respondToPermission).toHaveBeenCalledWith("req-1", true, {}, undefined, undefined, "cockpit");
     });
 
     it("handles auto_deny permission action", () => {
@@ -4457,7 +4457,7 @@ describe("SessionManager", () => {
         snapshot: null,
       };
       (manager as any).applyProcessedResult(s, session.id, result);
-      expect(respondToPermission).toHaveBeenCalledWith("req-1", false, undefined, undefined, "blocked");
+      expect(respondToPermission).toHaveBeenCalledWith("req-1", false, undefined, undefined, "blocked", "cockpit");
     });
 
     it("stores pending request for normal permission action", () => {
@@ -5544,7 +5544,15 @@ describe("SessionManager", () => {
       };
 
       (manager as any).applyProcessedResult(s, session.id, result);
-      expect(respondToPermission).toHaveBeenCalledWith(session.id, "req-1", true, { file_path: "/tmp/test.txt" });
+      expect(respondToPermission).toHaveBeenCalledWith(
+        session.id,
+        "req-1",
+        true,
+        { file_path: "/tmp/test.txt" },
+        undefined,
+        undefined,
+        "cockpit",
+      );
     });
 
     it("auto-denies Bash tool", () => {
@@ -5579,6 +5587,7 @@ describe("SessionManager", () => {
         undefined,
         undefined,
         "This tool is not available in the cockpit assistant",
+        "cockpit",
       );
     });
 
@@ -5638,7 +5647,7 @@ describe("SessionManager", () => {
       };
 
       (manager as any).applyProcessedResult(s, session.id, result);
-      expect(respondToPermission).toHaveBeenCalledWith(session.id, "req-list", true, {});
+      expect(respondToPermission).toHaveBeenCalledWith(session.id, "req-list", true, {}, undefined, undefined, "cockpit");
     });
 
     it("stores mcp__cockpit-config__run_job as PendingRequest with configProposal", () => {
@@ -5785,7 +5794,7 @@ describe("SessionManager", () => {
         systemMessages: [],
       });
 
-      expect(respondToPermission).toHaveBeenCalledWith(session.id, "req-getjob", true, { id: "job-1" });
+      expect(respondToPermission).toHaveBeenCalledWith(session.id, "req-getjob", true, { id: "job-1" }, undefined, undefined, "cockpit");
       expect(s.pendingRequests.has("req-getjob")).toBe(false);
     });
 
@@ -5814,7 +5823,15 @@ describe("SessionManager", () => {
         systemMessages: [],
       });
 
-      expect(respondToPermission).toHaveBeenCalledWith(session.id, "req-fetch-bypass", true, { url: "https://example.test/x" });
+      expect(respondToPermission).toHaveBeenCalledWith(
+        session.id,
+        "req-fetch-bypass",
+        true,
+        { url: "https://example.test/x" },
+        undefined,
+        undefined,
+        "bypass",
+      );
       expect(s.pendingRequests.has("req-fetch-bypass")).toBe(false);
     });
 
@@ -5880,6 +5897,7 @@ describe("SessionManager", () => {
         undefined,
         undefined,
         "This tool is not available in the cockpit assistant",
+        "cockpit",
       );
     });
 

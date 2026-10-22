@@ -41,6 +41,14 @@ export interface PermissionDecision {
   updatedPermissions?: Record<string, unknown>[];
 }
 
+/**
+ * Who decided a permission prompt: the user; cockpit's bypass; cockpit's own
+ * rules (a job's allowed tools, the assistant's read-only tools); the
+ * terminal, without cockpit; or nobody, because the turn was interrupted or
+ * the session ended. Recorded with telemetry, which cannot tell them apart.
+ */
+export type PermissionAnswerer = "you" | "bypass" | "cockpit" | "terminal" | "interrupted" | "ended";
+
 type HookCallbackReturn = Promise<HookResponse | undefined> | HookResponse | undefined;
 type HookCallback = (payload: Record<string, unknown>) => HookCallbackReturn;
 

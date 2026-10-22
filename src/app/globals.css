@@ -34,6 +34,21 @@
   --radius: 0.625rem;
 }
 
+/* Chart series, in the order Insights hands them out, chosen to stay apart in
+   both themes (the dark set below is lighter, for contrast). Plain variables
+   rather than @theme ones: charts read them with var() in SVG, which Tailwind
+   does not count as a use, so as theme tokens they would be left out. */
+:root {
+  --chart-1: oklch(0.6 0.17 255);
+  --chart-2: oklch(0.62 0.18 300);
+  --chart-3: oklch(0.65 0.15 160);
+  --chart-4: oklch(0.72 0.16 75);
+  --chart-5: oklch(0.62 0.2 15);
+  --chart-6: oklch(0.68 0.12 210);
+  --chart-7: oklch(0.7 0.16 130);
+  --chart-8: oklch(0.66 0.17 45);
+}
+
 @layer base {
   * {
     @apply border-border;
@@ -267,4 +282,12 @@ pre::-webkit-scrollbar-corner,
   --color-border: oklch(0.335 0 0);
   --color-input: oklch(0.335 0 0);
   --color-ring: oklch(0.556 0 0);
+  --chart-1: oklch(0.7 0.15 255);
+  --chart-2: oklch(0.72 0.16 300);
+  --chart-3: oklch(0.75 0.14 160);
+  --chart-4: oklch(0.8 0.15 75);
+  --chart-5: oklch(0.72 0.18 15);
+  --chart-6: oklch(0.78 0.11 210);
+  --chart-7: oklch(0.8 0.15 130);
+  --chart-8: oklch(0.76 0.15 45);
 }

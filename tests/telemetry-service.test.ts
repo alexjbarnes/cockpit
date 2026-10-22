@@ -4,7 +4,8 @@ import { request } from "node:http";
 import { gzipSync } from "node:zlib";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, type Mock, vi } from "vitest";
 import { HookRouter } from "@/server/hook-router";
-import type { IngestMeta, WorkerInit } from "@/server/telemetry/protocol";
+import type { RawInsights } from "@/server/telemetry/insights-sql";
+import type { IngestMeta, LocalRecord, WorkerInit } from "@/server/telemetry/protocol";
 import { TelemetryService } from "@/server/telemetry/service";
 import type { IngestResult, StoreLike } from "@/server/telemetry/store-client";
 
@@ -15,10 +16,27 @@ class FakeStore implements StoreLike {
   counters = { batches: 2, records: 5, skipped: 0, failed: 1, lastError: "bad json" };
   next: IngestResult = "queued";
   received: { meta: IngestMeta; body: Uint8Array }[] = [];
+  local: { sessionId: string; receivedMs: number; records: LocalRecord[] }[] = [];
   statsError = false;
   ingest(meta: IngestMeta, body: Uint8Array): IngestResult {
     this.received.push({ meta, body });
     return this.next;
+  }
+  ingestLocal(sessionId: string, receivedMs: number, records: LocalRecord[]): IngestResult {
+    this.local.push({ sessionId, receivedMs, records });
+    return "queued";
+  }
+  async insights(): Promise<RawInsights> {
+    return {
+      view: "activity",
+      seen: [],
+      lines: { added: [1], removed: [0] },
+      editsByLanguage: [],
+      commits: 2,
+      pullRequests: 0,
+      prompts: [3],
+      heatmap: [],
+    };
   }
   async query() {
     return { records: [], sources: {}, nextCursor: "next" };
@@ -242,6 +260,57 @@ describe("TelemetryService", () => {
     store.reason = "worker exited";
     expect(await service.query({})).toEqual({ records: [], sources: {}, nextCursor: null });
     expect(await service.stats()).toMatchObject({ available: false, reason: "worker exited" });
+  });
+});
+
+describe("TelemetryService, cockpit's own records and Insights", () => {
+  const query = { view: "activity" as const, range: "24h" as const, since: 0, until: 3_600_000, bucketMs: 3_600_000, tzOffsetMin: 0 };
+  let store: FakeStore;
+  let enabled: boolean;
+  const make = (file = "/nonexistent/telemetry.db") =>
+    new TelemetryService({
+      dbFile: file,
+      isEnabled: () => enabled,
+      startStore: async () => store,
+      probe: () => ({ sqlite: null, reason: "probe says no" }),
+      now: () => 42,
+    });
+
+  beforeEach(() => {
+    store = new FakeStore();
+    enabled = true;
+    vi.spyOn(console, "log").mockImplementation(() => {});
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  it("stores cockpit's records only while switched on with the store running, and never starts it for them", async () => {
+    const service = make();
+    const record: LocalRecord = { name: "cockpit.permission_answer", timeMs: 1, attrs: { answered_by: "you" } };
+    service.recordLocal("sess", [record]);
+    expect(store.local).toEqual([]);
+
+    await service.beginSpawn("sess", "cli");
+    service.recordLocal("sess", []);
+    service.recordLocal("sess", [record]);
+    expect(store.local).toEqual([{ sessionId: "sess", receivedMs: 42, records: [record] }]);
+
+    enabled = false;
+    service.recordLocal("sess", [record]);
+    store.available = false;
+    enabled = true;
+    service.recordLocal("sess", [record]);
+    expect(store.local).toHaveLength(1);
+  });
+
+  it("answers an Insights view from the store, or an empty one when there is nothing to read", async () => {
+    enabled = false;
+    const empty = await make().insights(query);
+    expect(empty).toMatchObject({ view: "activity", commits: 0, prompts: [0] });
+
+    enabled = true;
+    const service = make();
+    await service.beginSpawn("sess", "cli");
+    expect(await service.insights(query)).toMatchObject({ view: "activity", commits: 2 });
   });
 });
 

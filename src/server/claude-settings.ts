@@ -84,8 +84,9 @@ export interface HookSettingsOptions {
   /** Where the session runs. Its project settings are read only to see whether
    *  the user already sends this CLI's telemetry somewhere. */
   cwd?: string;
-  /** Send the CLI's OpenTelemetry to cockpit's receiver under this token. */
-  telemetry?: { token: string; baseUrl: string };
+  /** Send the CLI's OpenTelemetry to cockpit's receiver under this token,
+   *  naming the provider that serves the spawn's model. */
+  telemetry?: { token: string; baseUrl: string; providerId?: string };
 }
 
 export interface HookSettingsArtifact {
@@ -197,6 +198,7 @@ async function telemetrySettings(
       baseUrl: telemetry.baseUrl,
       token: telemetry.token,
       sessionId: opts.sessionId,
+      providerId: telemetry.providerId,
       existingResourceAttributes: typeof existing === "string" ? existing : undefined,
     }),
     outcome: { status: "applied" },

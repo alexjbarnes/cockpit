@@ -758,7 +758,7 @@ export class JobScheduler {
       } else if (event.type === "permission_request" && event.requestId) {
         if (job.bypassPermissions) {
           jlog("permission", { toolName: event.toolName ?? "unknown", requestId: event.requestId, bypass: true, allowed: true });
-          this.sessionManager.respondToPermission(sessionId, event.requestId, true, event.rawToolInput);
+          this.sessionManager.respondToPermission(sessionId, event.requestId, true, event.rawToolInput, undefined, undefined, "bypass");
         } else {
           const toolName = event.toolName || "unknown";
           const inputStr = event.toolInput || "";
@@ -787,7 +787,15 @@ export class JobScheduler {
             allowed,
             enabledServers: [...enabledServers],
           });
-          this.sessionManager.respondToPermission(sessionId, event.requestId, allowed, allowed ? (event.rawToolInput ?? {}) : undefined);
+          this.sessionManager.respondToPermission(
+            sessionId,
+            event.requestId,
+            allowed,
+            allowed ? (event.rawToolInput ?? {}) : undefined,
+            undefined,
+            undefined,
+            "cockpit",
+          );
 
           const permEntry: JobRunToolUse = {
             name: toolName,

@@ -63,6 +63,17 @@ describe("buildTelemetryEnv", () => {
     });
     expect(merged.OTEL_RESOURCE_ATTRIBUTES).toBe("team=core,env=dev,cockpit.session_id=new");
   });
+
+  it("names the provider serving the spawn, encoded, replacing one already there", () => {
+    const env = buildTelemetryEnv({
+      baseUrl: "http://127.0.0.1:1",
+      token: "t",
+      sessionId: "s 1",
+      providerId: "zen-go",
+      existingResourceAttributes: "cockpit.provider=stale,team=core",
+    });
+    expect(env.OTEL_RESOURCE_ATTRIBUTES).toBe("team=core,cockpit.session_id=s%201,cockpit.provider=zen-go");
+  });
 });
 
 describe("assessExternalOtel", () => {

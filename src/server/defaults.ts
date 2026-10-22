@@ -44,7 +44,7 @@ export interface AppDefaults {
    */
   issuesEnabled: boolean;
   /**
-   * Open the sidebar footer's pages (jobs, inbox, issues, settings) in a modal
+   * Open the sidebar footer's pages (jobs, inbox, issues, insights, settings) in a modal
    * over the current page instead of navigating away from it. On by default;
    * turning it off restores navigating to the page itself. See
    * src/lib/page-modal.ts.

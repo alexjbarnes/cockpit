@@ -5,7 +5,7 @@
 
 import { gunzipSync } from "node:zlib";
 import { TelemetryDb, TelemetryDbError } from "./db";
-import { parseOtlp } from "./otlp";
+import { type ParsedBatch, parseOtlp } from "./otlp";
 import { decodeOtlpProtobuf } from "./otlp-proto";
 import type { WorkerInit, WorkerRequest, WorkerResponse } from "./protocol";
 import { loadSqlite, type SqliteLoad } from "./sqlite";
@@ -13,6 +13,8 @@ import { loadSqlite, type SqliteLoad } from "./sqlite";
 const DEFAULT_PRUNE_EVERY_MS = 10 * 60 * 1000;
 /** Ceiling on what a gzip body may inflate to. */
 const MAX_INFLATED_BYTES = 256 * 1024 * 1024;
+/** The spawn id cockpit's own records are stored under. */
+export const LOCAL_SPAWN = "cockpit";
 
 export function openStore(init: WorkerInit, load: () => SqliteLoad = () => loadSqlite()): { db: TelemetryDb } | { reason: string } {
   const loaded = load();
@@ -56,25 +58,45 @@ export function createWorkerCore(db: TelemetryDb, post: (r: WorkerResponse) => v
   };
 
   const handle = (msg: WorkerRequest): void => {
-    if (msg.type === "ingest") {
-      const bytes = msg.body.byteLength;
-      try {
-        let raw = Buffer.from(msg.body.buffer, msg.body.byteOffset, msg.body.byteLength);
-        if (msg.meta.gzip) raw = gunzipSync(raw, { maxOutputLength: MAX_INFLATED_BYTES });
-        const payload = msg.meta.encoding === "protobuf" ? decodeOtlpProtobuf(msg.meta.kind, raw) : JSON.parse(raw.toString("utf8"));
-        const batch = parseOtlp(msg.meta.kind, payload, msg.meta.receivedMs);
-        const records = db.ingest({ sessionId: msg.meta.sessionId, spawnId: msg.meta.spawnId, receivedMs: msg.meta.receivedMs }, batch);
-        post({ type: "ack", bytes, records, skipped: batch.skipped });
-      } catch (err) {
-        post({ type: "ack", bytes, records: 0, skipped: 0, error: err instanceof Error ? err.message : String(err) });
+    switch (msg.type) {
+      case "ingest": {
+        const bytes = msg.body.byteLength;
+        try {
+          let raw = Buffer.from(msg.body.buffer, msg.body.byteOffset, msg.body.byteLength);
+          if (msg.meta.gzip) raw = gunzipSync(raw, { maxOutputLength: MAX_INFLATED_BYTES });
+          const payload = msg.meta.encoding === "protobuf" ? decodeOtlpProtobuf(msg.meta.kind, raw) : JSON.parse(raw.toString("utf8"));
+          const batch = parseOtlp(msg.meta.kind, payload, msg.meta.receivedMs);
+          const records = db.ingest({ sessionId: msg.meta.sessionId, spawnId: msg.meta.spawnId, receivedMs: msg.meta.receivedMs }, batch);
+          post({ type: "ack", bytes, records, skipped: batch.skipped });
+        } catch (err) {
+          post({ type: "ack", bytes, records: 0, skipped: 0, error: err instanceof Error ? err.message : String(err) });
+        }
+        return;
       }
-      return;
-    }
-    try {
-      const result = msg.type === "query" ? db.query(msg.query) : db.stats(msg.sessionId);
-      post({ type: "result", id: msg.id, result });
-    } catch (err) {
-      post({ type: "result", id: msg.id, error: err instanceof Error ? err.message : String(err) });
+      case "ingest-local": {
+        try {
+          const batch: ParsedBatch = {
+            sources: [{ resource: { "service.name": "cockpit" }, scope: {} }],
+            records: msg.records.map((r) => ({ signal: "log" as const, ...r, source: 0 })),
+            skipped: 0,
+          };
+          const records = db.ingest({ sessionId: msg.sessionId, spawnId: LOCAL_SPAWN, receivedMs: msg.receivedMs }, batch);
+          post({ type: "ack", bytes: 0, records, skipped: 0 });
+        } catch (err) {
+          post({ type: "ack", bytes: 0, records: 0, skipped: 0, error: err instanceof Error ? err.message : String(err) });
+        }
+        return;
+      }
+      case "query":
+      case "stats":
+      case "insights":
+        try {
+          const result =
+            msg.type === "query" ? db.query(msg.query) : msg.type === "stats" ? db.stats(msg.sessionId) : db.insights(msg.query);
+          post({ type: "result", id: msg.id, result });
+        } catch (err) {
+          post({ type: "result", id: msg.id, error: err instanceof Error ? err.message : String(err) });
+        }
     }
   };
 
