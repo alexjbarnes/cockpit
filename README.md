@@ -73,7 +73,7 @@ The startup log prints usable connection URLs (local and network). Open http://l
 
 ## Prerequisites
 
-- Node.js >= 20 (22.13 or later for the experimental telemetry)
+- Node.js 22.23.4, 24.22.1 or 26.12.1, or a later release of the same line. Earlier releases still trust certificates issued under the eMudhra intermediate CA keys that were reported compromised.
 - [Claude Code CLI](https://www.npmjs.com/package/@anthropic-ai/claude-code) installed and on PATH
 - An Anthropic API key configured for Claude Code
 - [GitHub CLI](https://cli.github.com/) (`gh`) authenticated, if you want PR reviews

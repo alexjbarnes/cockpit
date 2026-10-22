@@ -20,6 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A session that restarts quickly keeps its hooks.** When a session respawned before its old process had finished cleaning up, the old cleanup removed the new process's registration, and every hook the new one sent was refused. Cleanup now removes only its own.
 - **Saving a setting no longer stores the issue tracker's override.** `COCKPIT_ISSUES_ENABLED` (which `make start` sets) was meant to apply only to the run that set it, but any change in Settings wrote it into `defaults.json`, where it outlived the run.
 
+### Security
+- **Cockpit needs a Node release that refuses eMudhra's compromised CA keys.** Node 22.23.4, 24.22.1 and 26.12.1 reject any certificate chain through the eight eMudhra intermediate CA keys reported compromised, which earlier releases still trust, and update the bundled root certificates. The minimum Node is now one of those, or a later release of the same line. Node 20, 23 and 25 get no fix and are no longer supported.
+
 ### Internal
 - The Socket scan of `main` passes the commit's subject line rather than its whole message. A release's squash commit carries every message since the branches split, and Socket refused the request as too long, so the scan had failed on every release since at least June.
 - The server build empties `dist/` before compiling. It only ever added to it, so a deleted server file kept shipping as its old compiled copy: 0.9.0 carried the removed todo watcher's.
