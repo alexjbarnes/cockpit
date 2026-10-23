@@ -26,6 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Cockpit needs a Node release that refuses eMudhra's compromised CA keys.** Node 22.23.4, 24.22.1 and 26.12.1 reject any certificate chain through the eight eMudhra intermediate CA keys reported compromised, which earlier releases still trust, and update the bundled root certificates. The minimum Node is now one of those, or a later release of the same line. Node 20, 23 and 25 get no fix and are no longer supported.
 
 ### Internal
+- The README's screenshots are replaced by a tour video. `scripts/tour` records it from a throwaway workspace: made-up repos and data, the real Claude CLI against a scripted stand-in API, filmed in Chromium and encoded with ffmpeg.
 - The Socket scan of `main` passes the commit's subject line rather than its whole message. A release's squash commit carries every message since the branches split, and Socket refused the request as too long, so the scan had failed on every release since at least June.
 - The server build empties `dist/` before compiling. It only ever added to it, so a deleted server file kept shipping as its old compiled copy: 0.9.0 carried the removed todo watcher's.
 

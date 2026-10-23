@@ -34,27 +34,11 @@ PR reviews are a first-class flow. Pick an org, pick a repo, pick a PR. Cockpit 
 
 Run it on your laptop the way you'd run the TUI. Or run it on a home server and reach it from your phone. Same UI either way.
 
-## Screenshots
+## See it in action
 
-<p align="center">
-  <a href="docs/screenshots/chat-view.png"><img src="docs/screenshots/chat-view.png" width="48%" alt="Chat view with sessions sidebar" /></a>
-  <a href="docs/screenshots/session-settings.png"><img src="docs/screenshots/session-settings.png" width="48%" alt="Per-session settings popover" /></a>
-</p>
+https://github.com/user-attachments/assets/95241a55-8cc7-48b2-8f9b-b2ed58b8dfe2
 
-<p align="center">
-  <a href="docs/screenshots/scheduled-jobs.png"><img src="docs/screenshots/scheduled-jobs.png" width="48%" alt="Scheduled jobs page" /></a>
-  <a href="docs/screenshots/pr-review.png"><img src="docs/screenshots/pr-review.png" width="48%" alt="Pull request review with diff and chat" /></a>
-</p>
-
-<p align="center">
-  <a href="docs/screenshots/message-search.png"><img src="docs/screenshots/message-search.png" width="48%" alt="Message search across the transcript" /></a>
-  <a href="docs/screenshots/settings.png"><img src="docs/screenshots/settings.png" width="48%" alt="Settings page" /></a>
-</p>
-
-<p align="center">
-  <a href="docs/screenshots/context-usage.png"><img src="docs/screenshots/context-usage.png" width="48%" alt="Context window usage modal" /></a>
-  <a href="docs/screenshots/account-usage.png"><img src="docs/screenshots/account-usage.png" width="48%" alt="Account usage modal" /></a>
-</p>
+A tour in under two minutes: sessions running side by side, the real Claude Code making a change and testing it, a file and a terminal next to the chat, switching model mid-session, providers, Insights, the issue tracker, the Cockpit Assistant setting up a job, scheduled jobs and their inbox, and approving a push from a phone notification. Everything in it is made up: [`scripts/tour`](scripts/tour) records it from a throwaway workspace.
 
 ## Quick start
 
