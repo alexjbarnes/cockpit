@@ -27,6 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Internal
 - The README's screenshots are replaced by a tour video. `scripts/tour` records it from a throwaway workspace: made-up repos and data, the real Claude CLI against a scripted stand-in API, filmed in Chromium and encoded with ffmpeg.
+- The README is rewritten as a short list of what Cockpit does, in the order the tour shows it. It names all eight built-in providers, and asks for a signed-in Claude Code CLI rather than an API key, since a subscription works too.
 - The Socket scan of `main` passes the commit's subject line rather than its whole message. A release's squash commit carries every message since the branches split, and Socket refused the request as too long, so the scan had failed on every release since at least June.
 - The server build empties `dist/` before compiling. It only ever added to it, so a deleted server file kept shipping as its old compiled copy: 0.9.0 carried the removed todo watcher's.
 
