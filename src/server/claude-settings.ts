@@ -4,6 +4,14 @@ import path from "node:path";
 import { getClaudeDir, getCockpitCacheDir, getCockpitDir } from "@/server/paths";
 import type { SandboxConfig } from "@/types";
 import { resolveHookBridgePath } from "./hook-bridge-path";
+import {
+  assessExternalOtel,
+  buildTelemetryEnv,
+  readManagedSettingsSources,
+  readProjectSettingsSources,
+  type SettingsSource,
+} from "./telemetry/env";
+import type { TelemetryOutcome } from "./telemetry/protocol";
 
 const HOOK_EVENTS = [
   "PreToolUse",
@@ -73,6 +81,12 @@ export interface HookSettingsOptions {
    * own settings alone.
    */
   autoModeEnabled?: boolean;
+  /** Where the session runs. Its project settings are read only to see whether
+   *  the user already sends this CLI's telemetry somewhere. */
+  cwd?: string;
+  /** Send the CLI's OpenTelemetry to cockpit's receiver under this token,
+   *  naming the provider that serves the spawn's model. */
+  telemetry?: { token: string; baseUrl: string; providerId?: string };
 }
 
 export interface HookSettingsArtifact {
@@ -80,6 +94,8 @@ export interface HookSettingsArtifact {
   settingsPath: string;
   /** Env vars to set on the claude spawn so the bridge can authenticate. */
   env: Record<string, string>;
+  /** How telemetry came out, when it was asked for. */
+  telemetry?: TelemetryOutcome;
 }
 
 /**
@@ -112,6 +128,8 @@ export async function prepareHookSettings(opts: HookSettingsOptions): Promise<Ho
   // changes. A copy frozen in here at spawn would keep a rule the user has
   // since removed alive until the session restarts.
   const { sandbox: _userSandbox, ...userSettings } = base;
+  const dir = await resolveSettingsDir();
+  const telemetry = opts.telemetry ? await telemetrySettings(opts, base) : undefined;
 
   const settings = {
     ...userSettings,
@@ -139,10 +157,12 @@ export async function prepareHookSettings(opts: HookSettingsOptions): Promise<Ho
     // Per-session thinking on/off. cockpit's selector is authoritative, so this
     // overrides any user-global alwaysThinkingEnabled when explicitly provided.
     ...(opts.thinkingEnabled !== undefined ? { alwaysThinkingEnabled: opts.thinkingEnabled } : {}),
-    sandbox: buildSessionSandboxBlock(opts.sandbox),
+    sandbox: buildSessionSandboxBlock(opts.sandbox, dir),
+    // Cockpit's telemetry settings go over the user's own env: this file is
+    // the only place they beat the user's settings and the process env.
+    ...(telemetry?.env ? { env: { ...(isPlainObject(base.env) ? base.env : {}), ...telemetry.env } } : {}),
   };
 
-  const dir = await resolveSettingsDir();
   const settingsPath = path.join(dir, `${opts.sessionId}.json`);
   await writeFile(settingsPath, JSON.stringify(settings, null, 2), { mode: 0o600 });
 
@@ -153,6 +173,35 @@ export async function prepareHookSettings(opts: HookSettingsOptions): Promise<Ho
       COCKPIT_HOOK_TOKEN: opts.hookToken,
       COCKPIT_SESSION_ID: opts.sessionId,
     },
+    ...(telemetry ? { telemetry: telemetry.outcome } : {}),
+  };
+}
+
+/** The telemetry env for this session, or why it is left alone. */
+async function telemetrySettings(
+  opts: HookSettingsOptions,
+  base: Record<string, unknown>,
+): Promise<{ env?: Record<string, string>; outcome: TelemetryOutcome }> {
+  const telemetry = opts.telemetry as NonNullable<HookSettingsOptions["telemetry"]>;
+  const userEnv = isPlainObject(base.env) ? base.env : {};
+  const sources: SettingsSource[] = [
+    { label: "cockpit's environment", env: process.env },
+    { label: "user settings", env: userEnv, settings: base },
+    ...(opts.cwd ? await readProjectSettingsSources(opts.cwd) : []),
+    ...(await readManagedSettingsSources(getClaudeDir())),
+  ];
+  const external = assessExternalOtel(sources);
+  if (external.skip) return { outcome: { status: "skipped", ...external.skip } };
+  const existing = userEnv.OTEL_RESOURCE_ATTRIBUTES ?? process.env.OTEL_RESOURCE_ATTRIBUTES;
+  return {
+    env: buildTelemetryEnv({
+      baseUrl: telemetry.baseUrl,
+      token: telemetry.token,
+      sessionId: opts.sessionId,
+      providerId: telemetry.providerId,
+      existingResourceAttributes: typeof existing === "string" ? existing : undefined,
+    }),
+    outcome: { status: "applied" },
   };
 }
 
@@ -238,10 +287,14 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
  * key cockpit signs its login tokens with and the providers' API keys, and a
  * sandboxed command that could read the one and reach cockpit's port could sign
  * itself in and open a terminal outside the sandbox.
+ *
+ * The sessions' own settings files are fenced the same way: each holds its
+ * session's telemetry token, which a sandboxed command in another session has
+ * no business reading.
  */
-function buildSessionSandboxBlock(sandbox: SandboxConfig | undefined): Record<string, unknown> {
+function buildSessionSandboxBlock(sandbox: SandboxConfig | undefined, settingsDir: string): Record<string, unknown> {
   const enabled = sandbox?.enabled === true;
-  const filesystem: Record<string, unknown> = { denyRead: [getCockpitDir()] };
+  const filesystem: Record<string, unknown> = { denyRead: [getCockpitDir(), settingsDir] };
   // A job's storage folder sits inside the denied directory. A narrower allow
   // beats the wider deny, so the job's shell can keep state between runs while
   // the rest of cockpit's directory, and every other job's folder, stay closed.

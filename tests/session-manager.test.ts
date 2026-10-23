@@ -108,6 +108,7 @@ vi.mock("@/server/pty-runtime", () => {
 });
 
 vi.mock("@/server/singleton", () => ({
+  getTelemetry: vi.fn(() => null),
   getHookRouter: vi.fn(() => ({
     register: vi.fn(),
     unregister: vi.fn(),
@@ -128,7 +129,7 @@ vi.mock("@/server/transcript-watcher", () => {
   return { TranscriptWatcher: MockTranscriptWatcher };
 });
 
-import { ONE_M_CREDITS_REQUIRED } from "@/server/event-parser";
+import { ONE_M_CREDITS_REQUIRED, REQUEST_SETTLED } from "@/server/event-parser";
 import { buildContent } from "@/server/harness/claude-stream-adapter";
 import { SessionManager } from "@/server/session-manager";
 import { createStreamState } from "@/server/stream-processor";
@@ -601,6 +602,22 @@ describe("SessionManager", () => {
       // to resume. It stays queued; message_done flushes it at the real end.
       expect(s.queuedMessages).toHaveLength(1);
       expect(s.info.status).toBe("running");
+    });
+
+    // A question or permission answered in the terminal has nothing left for
+    // its card to decide, so the runtime's word drops it, quietly.
+    it("drops the card of a request the CLI settled without cockpit", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      manager.addPendingRequest(session.id, { type: "question", requestId: "req-1", toolName: "AskUserQuestion", toolInput: "{}" });
+      manager.addPendingRequest(session.id, { type: "permission", requestId: "req-2", toolName: "Bash", toolInput: "{}" });
+      const shown: string[] = [];
+      manager.onSystem(session.id, (msg) => shown.push(msg));
+
+      (manager as any).applyProcessedResult(s, session.id, postCompactResult(`${REQUEST_SETTLED}req-1`));
+
+      expect(manager.getPendingRequests(session.id).map((r) => r.requestId)).toEqual(["req-2"]);
+      expect(shown).toEqual([]);
     });
 
     it("handles slash commands", () => {
@@ -4419,7 +4436,7 @@ describe("SessionManager", () => {
         snapshot: null,
       };
       (manager as any).applyProcessedResult(s, session.id, result);
-      expect(respondToPermission).toHaveBeenCalledWith("req-1", true, {}, undefined, undefined);
+      expect(respondToPermission).toHaveBeenCalledWith("req-1", true, {}, undefined, undefined, "cockpit");
     });
 
     it("handles auto_deny permission action", () => {
@@ -4440,7 +4457,7 @@ describe("SessionManager", () => {
         snapshot: null,
       };
       (manager as any).applyProcessedResult(s, session.id, result);
-      expect(respondToPermission).toHaveBeenCalledWith("req-1", false, undefined, undefined, "blocked");
+      expect(respondToPermission).toHaveBeenCalledWith("req-1", false, undefined, undefined, "blocked", "cockpit");
     });
 
     it("stores pending request for normal permission action", () => {
@@ -5527,7 +5544,15 @@ describe("SessionManager", () => {
       };
 
       (manager as any).applyProcessedResult(s, session.id, result);
-      expect(respondToPermission).toHaveBeenCalledWith(session.id, "req-1", true, { file_path: "/tmp/test.txt" });
+      expect(respondToPermission).toHaveBeenCalledWith(
+        session.id,
+        "req-1",
+        true,
+        { file_path: "/tmp/test.txt" },
+        undefined,
+        undefined,
+        "cockpit",
+      );
     });
 
     it("auto-denies Bash tool", () => {
@@ -5562,6 +5587,7 @@ describe("SessionManager", () => {
         undefined,
         undefined,
         "This tool is not available in the cockpit assistant",
+        "cockpit",
       );
     });
 
@@ -5621,7 +5647,7 @@ describe("SessionManager", () => {
       };
 
       (manager as any).applyProcessedResult(s, session.id, result);
-      expect(respondToPermission).toHaveBeenCalledWith(session.id, "req-list", true, {});
+      expect(respondToPermission).toHaveBeenCalledWith(session.id, "req-list", true, {}, undefined, undefined, "cockpit");
     });
 
     it("stores mcp__cockpit-config__run_job as PendingRequest with configProposal", () => {
@@ -5768,7 +5794,7 @@ describe("SessionManager", () => {
         systemMessages: [],
       });
 
-      expect(respondToPermission).toHaveBeenCalledWith(session.id, "req-getjob", true, { id: "job-1" });
+      expect(respondToPermission).toHaveBeenCalledWith(session.id, "req-getjob", true, { id: "job-1" }, undefined, undefined, "cockpit");
       expect(s.pendingRequests.has("req-getjob")).toBe(false);
     });
 
@@ -5797,7 +5823,15 @@ describe("SessionManager", () => {
         systemMessages: [],
       });
 
-      expect(respondToPermission).toHaveBeenCalledWith(session.id, "req-fetch-bypass", true, { url: "https://example.test/x" });
+      expect(respondToPermission).toHaveBeenCalledWith(
+        session.id,
+        "req-fetch-bypass",
+        true,
+        { url: "https://example.test/x" },
+        undefined,
+        undefined,
+        "bypass",
+      );
       expect(s.pendingRequests.has("req-fetch-bypass")).toBe(false);
     });
 
@@ -5863,6 +5897,7 @@ describe("SessionManager", () => {
         undefined,
         undefined,
         "This tool is not available in the cockpit assistant",
+        "cockpit",
       );
     });
 

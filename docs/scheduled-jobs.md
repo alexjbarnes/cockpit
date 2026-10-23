@@ -76,8 +76,10 @@ For enabled servers you can also restrict which tools are callable:
 
 ## Chaining jobs
 
-An **After jobs** schedule makes a job wait on others. Pick the jobs it waits on, and it runs as soon as every one of them has completed successfully since its own last run. A job that has never run counts from when it was last saved, so setting one up does not fire it on old runs.
+An **After jobs** schedule makes a job wait on others. Pick the jobs it waits on, and it runs as soon as every one of them has succeeded in a run that started after its own last run started. A job that has never run counts from when it was last saved, so setting one up does not fire it on old runs.
 
+- It does not start while a job it waits on is running, or waiting to retry a failed attempt. It starts when that run succeeds.
+- A run that was already going when it last started does not count, even if it finished afterwards, because the waiting job could not have seen what that run produced. The next run of that job does.
 - A failed run of a job it waits on holds it back until that job next succeeds. A disabled job it waits on holds it back too.
 - A manual Run Now of a job counts like a scheduled one, so it starts the jobs waiting on it.
 - If a job it waits on finishes twice before it gets to run, it runs once.

@@ -420,7 +420,10 @@ export default function IssueDetailPage() {
                   <ActorName actor={c.author} className="font-medium text-foreground" />
                   <span>{formatDate(c.createdAt)}</span>
                 </div>
-                <MarkdownRender content={c.body} variant="lite" />
+                {/* The description's rendering, not the lite one: comments carry
+                    the same long paths and code, and lite has nothing to wrap
+                    them, so on a phone they ran off the card. */}
+                <MarkdownRender content={c.body} variant="full" />
               </div>
             ))}
 

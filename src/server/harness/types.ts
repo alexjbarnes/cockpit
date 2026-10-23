@@ -1,5 +1,6 @@
 import type { ContextSize } from "@/lib/models";
 import type { ParsedEvent } from "@/server/event-parser";
+import type { PermissionAnswerer } from "@/server/hook-router";
 import type { SessionRuntime } from "@/server/session-prefs";
 import type {
   ChatMessage,
@@ -61,6 +62,9 @@ export interface HarnessSpawnConfig {
    *  Anthropic account backs: auto's classifier is an Anthropic service, and
    *  without it the CLI raises a billing-notice dialog that blocks the turn. */
   autoModeEnabled?: boolean;
+  /** The provider serving the session's model, stamped on its telemetry so
+   *  its spend is priced by that provider. */
+  providerId?: string;
   /** Bare model id for the "subagent" slot, pre-resolved via resolveProviderModel
    *  when it differs from the main model. Maps to ANTHROPIC_SMALL_FAST_MODEL. */
   subagentModel?: string;
@@ -109,6 +113,7 @@ export interface HarnessProcess {
     toolInput?: Record<string, unknown>,
     permissionSuggestions?: Record<string, unknown>[],
     denyReason?: string,
+    answeredBy?: PermissionAnswerer,
   ): boolean;
   /** Raw control-protocol write (control_request-shaped JSON), when the
    *  transport has a live channel for one. Absent (not just false) tells the

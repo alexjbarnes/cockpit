@@ -43,9 +43,10 @@ import type {
 } from "@/types";
 import { debugLog, isDebugEnabled, logDiag, logRawLine } from "./debug-logger";
 import { getDefaults } from "./defaults";
-import { ONE_M_CREDITS_REQUIRED, type ParsedEvent, TURN_CONTINUES } from "./event-parser";
+import { ONE_M_CREDITS_REQUIRED, type ParsedEvent, REQUEST_SETTLED, TURN_CONTINUES } from "./event-parser";
 import { getHarnessAdapter } from "./harness/registry";
 import type { HarnessProcess, HarnessProcessCallbacks, HarnessSpawnConfig } from "./harness/types";
+import type { PermissionAnswerer } from "./hook-router";
 import { getJob, getJobSessionIds } from "./job-storage";
 import { COCKPIT_AGENT_SYSTEM_PROMPT } from "./mcp/cockpit-agent-prompt";
 import { clearToken, type RunContext, registerAuthToken, registerRunContext, registerSessionContext } from "./mcp/run-context";
@@ -1209,12 +1210,14 @@ export class SessionManager {
     toolInput?: Record<string, unknown>,
     permissionSuggestions?: Record<string, unknown>[],
     denyReason?: string,
+    /** Every caller that decides without the user says so. */
+    answeredBy: PermissionAnswerer = "you",
   ): boolean {
     const session = this.sessions.get(sessionId);
     if (!session?.harnessProcess?.isAlive) return false;
 
     this.dropPendingRequest(session, sessionId, requestId);
-    return session.harnessProcess.respondToPermission(requestId, allowed, toolInput, permissionSuggestions, denyReason);
+    return session.harnessProcess.respondToPermission(requestId, allowed, toolInput, permissionSuggestions, denyReason, answeredBy);
   }
 
   private sendPermissionMode(session: Session, sessionId: string, mode: "manual" | "auto" | "bypassPermissions"): void {
@@ -2000,6 +2003,11 @@ export class SessionManager {
         this.notifyAgentsChanged(session, sessionId, Number(sysMsg.slice("__agents::".length)) || 0);
         continue;
       }
+      if (sysMsg.startsWith(REQUEST_SETTLED)) {
+        // Answered in the terminal, so its card has nothing left to decide.
+        this.dropPendingRequest(session, sessionId, sysMsg.slice(REQUEST_SETTLED.length));
+        continue;
+      }
       if (sysMsg === "__compact::hook_start") {
         if (!session.compacting) {
           logDiag(sessionId, "compact:hook-start");
@@ -2085,9 +2093,9 @@ export class SessionManager {
     const bypassedRequestIds = new Set<string>();
     for (const pa of result.permissionActions) {
       if (pa.type === "auto_approve") {
-        this.respondToPermission(sessionId, pa.requestId, true, pa.rawToolInput);
+        this.respondToPermission(sessionId, pa.requestId, true, pa.rawToolInput, undefined, undefined, "cockpit");
       } else if (pa.type === "auto_deny") {
-        this.respondToPermission(sessionId, pa.requestId, false, undefined, undefined, pa.denyReason);
+        this.respondToPermission(sessionId, pa.requestId, false, undefined, undefined, pa.denyReason, "cockpit");
       } else if (session.cockpitAgent && pa.toolName !== "AskUserQuestion" && !AGENT_PROMPTED_TOOLS.has(pa.toolName)) {
         const tool = pa.toolName;
         const isReadOnlyBuiltin = ["Read", "Grep", "Glob"].includes(tool);
@@ -2102,7 +2110,7 @@ export class SessionManager {
         });
 
         if (isReadOnlyBuiltin || isCockpitRead) {
-          this.respondToPermission(sessionId, pa.requestId, true, pa.rawToolInput);
+          this.respondToPermission(sessionId, pa.requestId, true, pa.rawToolInput, undefined, undefined, "cockpit");
         } else if (isCockpitWrite) {
           const suffix = tool.replace("mcp__cockpit-config__", "");
           const parts = suffix.split("_");
@@ -2135,6 +2143,7 @@ export class SessionManager {
             undefined,
             undefined,
             "This tool is not available in the cockpit assistant",
+            "cockpit",
           );
         }
         // Reached by the assistant only for AGENT_PROMPTED_TOOLS, so bypass
@@ -2160,7 +2169,7 @@ export class SessionManager {
         !ALWAYS_ASK_TOOLS.has(pa.toolName) &&
         !widensSandbox(pa.toolName, pa.rawToolInput)
       ) {
-        this.respondToPermission(sessionId, pa.requestId, true, pa.rawToolInput);
+        this.respondToPermission(sessionId, pa.requestId, true, pa.rawToolInput, undefined, undefined, "bypass");
         bypassedRequestIds.add(pa.requestId);
       } else {
         const planPath = pa.toolName === "ExitPlanMode" ? findLatestPlanFile() : undefined;
@@ -2839,6 +2848,7 @@ Additional Cockpit rules beyond the CLI's defaults:
       // provider that answers for it decides whether auto mode's classifier
       // exists at all for this session.
       autoModeEnabled: this.isAnthropicSession(session),
+      providerId: this.slotProviderId(session.info.model),
       subagentModel,
       contextSize: effectiveContextSize,
       thinkingLevel: session.thinkingLevel,

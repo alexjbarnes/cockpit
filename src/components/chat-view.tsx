@@ -125,11 +125,12 @@ export function ChatView({
   const ignoreScrollUntil = useRef(0);
   const [renderWindow, setRenderWindow] = useState(INITIAL_WINDOW);
   const expandThrottleRef = useRef(0);
-  // Where the reader is while older messages may land above them: recorded on
-  // scroll near the top (where scrolling grows the render window or asks for
-  // older history) and while such a request is still in flight.
+  // Where the reader is, for when older messages land above them: recorded on
+  // every scroll. Older history can arrive well after it was asked for, by
+  // which time the reader may have moved on, by scrolling or by a tool card
+  // scrolling itself into view; a place noted only near the top put them back
+  // where they had been when it was asked for.
   const readingAnchorRef = useRef<ReadingAnchor | null>(null);
-  const topInsertPendingRef = useRef(false);
   const { selectedIds, selectionMode, enterSelection, toggleSelect, clearSelection, copySelected } = useMessageSelection();
   const expandedToolIdsRef = useRef<Set<string>>(new Set());
   const [isTouch, setIsTouch] = useState(false);
@@ -308,14 +309,12 @@ export function ChatView({
   const recordReadingAnchor = useCallback(() => {
     const el = scrollRef.current;
     if (!el) return;
-    const viewTop = el.getBoundingClientRect().top;
-    const items: { id: string; top: number; bottom: number }[] = [];
-    for (const node of el.querySelectorAll<HTMLElement>("[data-message-id]")) {
-      const r = node.getBoundingClientRect();
-      items.push({ id: node.dataset.messageId ?? "", top: r.top, bottom: r.bottom });
-      if (r.bottom > viewTop) break;
-    }
-    readingAnchorRef.current = anchorFromItems(items, viewTop);
+    const nodes = el.querySelectorAll<HTMLElement>("[data-message-id]");
+    const measure = (i: number) => {
+      const r = nodes[i].getBoundingClientRect();
+      return { id: nodes[i].dataset.messageId ?? "", top: r.top, bottom: r.bottom };
+    };
+    readingAnchorRef.current = anchorFromItems(nodes.length, measure, el.getBoundingClientRect().top);
   }, []);
 
   // Older messages landed above the reader: put the message they were reading
@@ -335,7 +334,6 @@ export function ChatView({
     if (!node) return;
     const correction = anchorCorrection(anchor, node.getBoundingClientRect().top - el.getBoundingClientRect().top);
     if (correction !== 0) el.scrollTop += correction;
-    topInsertPendingRef.current = false;
   }, [firstRenderedId, topSpinner]);
 
   const handleScroll = useCallback(() => {
@@ -346,14 +344,12 @@ export function ChatView({
     stickToBottom.current = distanceFromBottom < 80;
     setShowScrollDown(distanceFromBottom > 300);
 
-    if (el.scrollTop < 800 || topInsertPendingRef.current) recordReadingAnchor();
+    recordReadingAnchor();
     if (el.scrollTop < 800 && Date.now() > expandThrottleRef.current) {
       expandThrottleRef.current = Date.now() + 100;
       if (hasMoreAbove) {
-        topInsertPendingRef.current = true;
         setRenderWindow((w) => w + WINDOW_INCREMENT);
       } else if (hasMoreHistory && !loadingMore) {
-        topInsertPendingRef.current = true;
         requestMoreHistory();
       }
     }

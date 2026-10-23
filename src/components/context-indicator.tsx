@@ -1,8 +1,10 @@
 "use client";
 
-import { Shrink, X } from "lucide-react";
+import { ChartLine, Shrink, X } from "lucide-react";
+import Link from "next/link";
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { useSettings } from "@/hooks/use-settings";
 import type { ContextUsage } from "@/types";
 
 interface ContextIndicatorProps {
@@ -26,6 +28,7 @@ function formatTokens(n: number): string {
 
 export function ContextIndicator({ usage, sessionId, cwd, onCompact }: ContextIndicatorProps) {
   const [open, setOpen] = useState(false);
+  const { settings } = useSettings();
   const [totals, setTotals] = useState<TokenTotals | null>(null);
   useEffect(() => {
     if (!open) return;
@@ -161,6 +164,16 @@ export function ContextIndicator({ usage, sessionId, cwd, onCompact }: ContextIn
                 </dl>
                 {hitRate === null && <p className="mt-2 text-xs text-muted-foreground">No completed turns yet.</p>}
               </div>
+            )}
+            {settings.telemetryEnabled && (
+              <Link
+                href={`/insights?session=${encodeURIComponent(sessionId)}`}
+                className="mt-4 flex items-center justify-center gap-2 rounded-md border px-3 py-1.5 text-sm hover:bg-muted"
+                data-testid="session-insights-link"
+              >
+                <ChartLine className="h-3.5 w-3.5" />
+                Session insights
+              </Link>
             )}
             {onCompact && (
               <Button

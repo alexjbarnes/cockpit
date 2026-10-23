@@ -114,6 +114,32 @@ Use the Test button to send a test notification to each configured provider.
 
 Configuration is stored in `~/.cockpit/notifications.json`.
 
+## Telemetry (experimental)
+
+Settings → Appearance → Experimental → Telemetry. Off by default. When on, every session started afterwards sends Claude Code's OpenTelemetry to cockpit: metrics (tokens, cost, active time, lines changed), events (each prompt, API request, tool decision and tool result) and traces (each turn, API call and tool call, with timings). Prompts, replies, tool input and tool output are included. Raw API request bodies are not.
+
+It is stored in `~/.cockpit/telemetry.db`, a SQLite database readable only by you, for 30 days. Past 2 GB the oldest prompt and tool text goes first, so the numbers outlast it. Read it through `GET /api/telemetry` (filters: `session`, `cliSession`, `signal`, `name`, `since`, `until`; paging: `order=time|ingest`, `cursor`, `after`, `limit`; `content=inline` puts long text back) and `GET /api/telemetry/stats`.
+
+- Needs Node 22.13 or later, whose built-in SQLite it uses. On an older Node the switch is disabled and says why.
+- A session leaves telemetry alone if Claude Code is already sending it somewhere: an endpoint, headers or a headers helper in managed settings, or in your own settings or environment while telemetry is switched on there. It does the same when managed settings choose the gRPC protocol, which cockpit cannot receive; a managed `http/protobuf` or `http/json` is fine, since cockpit reads both. The stats say which key decided it.
+- The CLI's telemetry is in beta, so names and attributes can change between versions. `cost_usd` is the CLI's estimate at Anthropic's prices, and is wrong for other providers' models.
+- Stream-runtime sessions do not send any.
+
+### Insights
+
+While telemetry is on, the sidebar footer's chart button opens Insights (`/insights`), which charts what is stored over the last 24 hours, 7 days or 30 days:
+
+- **Overview**: spend, tokens and cache use, turns, tool calls, time waiting on you, API errors, lines changed and prompts, with spend per day by model and the sessions that cost most.
+- **Spend**: spend per day by model or provider, tokens by kind with the cache hit rate, what the spend went on (conversation, subagents, session titles, web fetches) and at which effort level, sessions, projects and scheduled jobs ranked by spend, and the most expensive turns.
+- **Speed**: each model's time to first token, response time and output speed, typical and slowest tenth, how long turns take, and where their time goes (model, tools, waiting for approval, other).
+- **Tools**: calls, failures and time per tool, Bash by program and the slowest commands, MCP tools by server, the files touched most, and who answered permission prompts.
+- **Health**: API errors and retries, tool failures, MCP servers that failed to connect, and the time Claude Code spent running hooks.
+- **Activity**: lines added and removed, edits by language, commits and pull requests, prompts per day and by weekday and hour.
+
+Tapping a session anywhere it is listed, or **Session insights** in a session's context ring, narrows every tab to that session and adds **Turns** (each turn split into where its time went, opening into a timeline of its requests and tool calls) and **Context** (how full the context was at each request).
+
+Spend is priced by the provider that served each request. Anthropic's models use Claude Code's own figure, which is what the requests would cost at API prices; other providers' models use the provider's catalogue prices at the time you look, and a model with no price is counted as unpriced rather than free. The provider is recorded with each session's telemetry; for telemetry recorded before that, it comes from the session's model setting. Your own active time is not shown: Claude Code only counts typing in its own terminal, which cockpit replaces. Who answered a permission prompt (you, bypass, cockpit's rules or the terminal) is recorded by cockpit from this release on.
+
 ## Inbox
 
 The inbox at `/inbox` collects messages from scheduled job completions and system events. Each message has a title, body, priority level (info, warning, error), and timestamp.
@@ -134,6 +160,8 @@ Inbox messages are stored in `~/.cockpit/inbox.jsonl`. When a message arrives, i
 | `COCKPIT_CACHE_DIR` | Location of per-session caches (hook settings, attachments) | `~/.cache/cockpit` |
 | `COCKPIT_DEBUG` | Set to `1` to write a structured debug log (see Troubleshooting) | unset |
 | `COCKPIT_TOKEN` | Auth-bypass token for automated/embedded use; requests presenting it skip the login. Keep it secret | unset |
+| `COCKPIT_ISSUES_ENABLED` | `1` or `0` overrides the issue tracker switch for this run, without saving it | unset |
+| `COCKPIT_TELEMETRY_ENABLED` | `1` or `0` overrides the telemetry switch for this run, without saving it | unset |
 
 Setting `COCKPIT_CONFIG_DIR` and `CLAUDE_CONFIG_DIR` lets you run fully isolated Cockpit instances side by side.
 
@@ -153,6 +181,7 @@ Cockpit config paths are under `COCKPIT_CONFIG_DIR` (default `~/.cockpit`); Clau
 | `~/.cockpit/scheduled-jobs.json` | Scheduled job definitions |
 | `~/.cockpit/job-runs/` | Scheduled job run history |
 | `~/.cockpit/job-locks/` | Scheduled job locks |
+| `~/.cockpit/telemetry.db` | Recorded telemetry, when switched on |
 | `~/.claude/cockpit/pinned_sessions.json` | Pinned session list |
 | `~/.claude/plans/` | Plan files written by Claude |
 | `~/.claude/agents/` | Global agents |

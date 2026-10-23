@@ -3,9 +3,10 @@ import path from "node:path";
 import { v4 as uuidv4 } from "uuid";
 import { CONTEXT_SIZES, DEFAULT_CONTEXT_SIZE } from "@/lib/models";
 import { getClaudeBin, supportedPermissionModes } from "@/server/claude-bin";
+import type { PermissionAnswerer } from "@/server/hook-router";
 import { getCockpitCacheDir } from "@/server/paths";
 import { PtyRuntime } from "@/server/pty-runtime";
-import { getHookRouter } from "@/server/singleton";
+import { getHookRouter, getTelemetry } from "@/server/singleton";
 import { TranscriptWatcher } from "@/server/transcript-watcher";
 import type { DocumentAttachment, ImageAttachment } from "@/types";
 import type { HarnessAdapter, HarnessProcess, HarnessSpawnConfig } from "./types";
@@ -120,6 +121,7 @@ class ClaudePtyProcess implements HarnessProcess {
     toolInput?: Record<string, unknown>,
     permissionSuggestions?: unknown,
     denyReason?: string,
+    answeredBy: PermissionAnswerer = "you",
   ): boolean {
     const chosen = Array.isArray(permissionSuggestions) ? (permissionSuggestions as Record<string, unknown>[]) : [];
     return this.runtime.notifyPermissionDecision(
@@ -136,7 +138,7 @@ class ClaudePtyProcess implements HarnessProcess {
         : { behavior: "deny", message: denyReason ?? "User denied" },
       // A chosen suggestion is the card's "always" answer. Only a TUI dialog
       // that has a "don't ask again" key of its own does anything with it.
-      { always: chosen.length > 0 },
+      { always: chosen.length > 0, answeredBy },
     );
   }
 
@@ -238,6 +240,8 @@ export class ClaudePtyAdapter implements HarnessAdapter {
         : config.permissionMode === "auto" && supportedPermissionModes().has("auto")
           ? "auto"
           : "manual",
+      telemetry: getTelemetry() ?? undefined,
+      providerId: config.providerId,
       onEvents: (events) => config.callbacks.onParsedEvents(events),
       onError: (err) => config.callbacks.onError(err),
       onExit: ({ exitCode, signal }) => {

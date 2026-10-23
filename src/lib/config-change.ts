@@ -32,6 +32,7 @@ const DOMAIN_LABELS: Record<string, Record<string, string>> = {
     reviewsEnabled: "Reviews enabled",
     issuesEnabled: "Issues enabled",
     modalPagesEnabled: "Pages open in a modal",
+    telemetryEnabled: "Telemetry recorded",
     bypassAllPermissions: "Bypass all permissions",
     permissionMode: "Default permission mode",
     sandbox: "Default sandbox",

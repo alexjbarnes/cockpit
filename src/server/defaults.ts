@@ -44,12 +44,19 @@ export interface AppDefaults {
    */
   issuesEnabled: boolean;
   /**
-   * Open the sidebar footer's pages (jobs, inbox, issues, settings) in a modal
+   * Open the sidebar footer's pages (jobs, inbox, issues, insights, settings) in a modal
    * over the current page instead of navigating away from it. On by default;
    * turning it off restores navigating to the page itself. See
    * src/lib/page-modal.ts.
    */
   modalPagesEnabled: boolean;
+  /**
+   * Record everything Claude Code reports over OpenTelemetry (metrics, events
+   * and traces, prompt and tool content included) into cockpit's own
+   * telemetry database. Off by default: it is experimental, and it stores the
+   * conversation a second time. See src/server/telemetry/.
+   */
+  telemetryEnabled: boolean;
   /**
    * Opt in to Sonnet 4.6's 1M context window. Off by default because it needs
    * usage credits (claude.ai/settings/usage) and silently runs at 200K without
@@ -82,21 +89,36 @@ const fallback: AppDefaults = {
   sessionAlerts: false,
   issuesEnabled: false,
   modalPagesEnabled: true,
+  telemetryEnabled: false,
   allowSonnet1m: false,
 };
 
 /**
- * Env override for the experimental issue tracker, so a dev run can start with
- * it on without flipping the Settings toggle — and, because it never reaches
- * defaults.json, without leaving it on for the next ordinary run. Unset (the
- * normal case) changes nothing; any other value than the two recognised below
+ * Env overrides for experimental switches, so a dev run can start with one on
+ * without flipping its Settings toggle. They apply only when reading, never
+ * reach defaults.json, and so never outlive the run that set them. Unset (the
+ * normal case) changes nothing; a value other than the four recognised below
  * is ignored rather than guessed at.
  */
-function issuesEnabledOverride(): boolean | undefined {
-  const raw = process.env.COCKPIT_ISSUES_ENABLED;
+const ENV_OVERRIDES = {
+  issuesEnabled: "COCKPIT_ISSUES_ENABLED",
+  telemetryEnabled: "COCKPIT_TELEMETRY_ENABLED",
+} as const satisfies Partial<Record<keyof AppDefaults, string>>;
+
+function envOverride(name: string): boolean | undefined {
+  const raw = process.env[name];
   if (raw === "1" || raw === "true") return true;
   if (raw === "0" || raw === "false") return false;
   return undefined;
+}
+
+function applyEnvOverrides(d: AppDefaults): AppDefaults {
+  const out = { ...d };
+  for (const [key, name] of Object.entries(ENV_OVERRIDES) as [keyof typeof ENV_OVERRIDES, string][]) {
+    const value = envOverride(name);
+    if (value !== undefined) out[key] = value;
+  }
+  return out;
 }
 
 const PERMISSION_MODES: readonly string[] = ["manual", "auto", "bypass"] satisfies SessionPermissionMode[];
@@ -130,9 +152,8 @@ function parseSandbox(v: unknown): SandboxConfig | undefined {
   return domains.length > 0 ? { enabled, allowedDomains: domains } : { enabled };
 }
 
-export function getDefaults(): AppDefaults {
-  const override = issuesEnabledOverride();
-  const withOverride = (d: AppDefaults): AppDefaults => (override === undefined ? d : { ...d, issuesEnabled: override });
+/** The defaults as stored, without the env overrides. */
+function readStoredDefaults(): AppDefaults {
   try {
     const raw = JSON.parse(readFileSync(defaultsFile(), "utf-8"));
     if (raw.model && !raw.modelSlots) {
@@ -141,16 +162,22 @@ export function getDefaults(): AppDefaults {
     }
     normalisePermissionMode(raw);
     raw.sandbox = parseSandbox(raw.sandbox) ?? fallback.sandbox;
-    return withOverride({ ...fallback, ...raw });
+    return { ...fallback, ...raw };
   } catch {
-    return withOverride({ ...fallback });
+    return { ...fallback };
   }
 }
 
+export function getDefaults(): AppDefaults {
+  return applyEnvOverrides(readStoredDefaults());
+}
+
 /** `bypassAllPermissions` is accepted for a client still showing the old
- *  toggle, and stored as the mode it meant unless the same write names one. */
+ *  toggle, and stored as the mode it meant unless the same write names one.
+ *  Built on the stored values, so an env override in force is not written
+ *  back; what it returns is what reads will see, overrides included. */
 export function setDefaults(partial: Partial<AppDefaults> & { bypassAllPermissions?: boolean }): AppDefaults {
-  const current = getDefaults();
+  const current = readStoredDefaults();
   const next: Record<string, unknown> = { ...partial };
   if (typeof next.bypassAllPermissions === "boolean" && next.permissionMode === undefined) {
     next.permissionMode = next.bypassAllPermissions ? "bypass" : "manual";
@@ -171,5 +198,5 @@ export function setDefaults(partial: Partial<AppDefaults> & { bypassAllPermissio
   } catch {
     // best effort
   }
-  return updated;
+  return applyEnvOverrides(updated);
 }

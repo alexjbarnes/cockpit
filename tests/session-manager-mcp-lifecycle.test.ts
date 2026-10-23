@@ -82,6 +82,7 @@ vi.mock("@/server/mcp/run-context", () => ({
 
 const mockGetUrl = vi.fn(() => "http://127.0.0.1:9999");
 vi.mock("@/server/singleton", () => ({
+  getTelemetry: vi.fn(() => null),
   getHookRouter: vi.fn(() => ({
     register: vi.fn(() => "hook-token"),
     unregister: vi.fn(),

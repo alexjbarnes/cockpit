@@ -13,7 +13,9 @@ function ExternalLink(props: React.AnchorHTMLAttributes<HTMLAnchorElement>) {
 const fullComponents = { pre: MarkdownCodeBlock, a: ExternalLink };
 const liteComponents = { a: ExternalLink };
 const FULL_PROSE = "message-prose prose prose-sm max-w-none dark:prose-invert";
-const LITE_PROSE = "prose prose-sm max-w-none dark:prose-invert";
+// A long path or token with no break in it still wraps rather than widening
+// whatever holds it.
+const LITE_PROSE = "prose prose-sm max-w-none dark:prose-invert [overflow-wrap:anywhere]";
 
 interface MarkdownRenderProps {
   content: string;

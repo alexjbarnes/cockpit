@@ -6,7 +6,7 @@
 // of TUI-only dialogs (frontier models refuse a PermissionRequest-hook allow
 // for self-modifying writes) with its keystroke answer path.
 import { describe, expect, it, vi } from "vitest";
-import type { ParsedEvent } from "@/server/event-parser";
+import { type ParsedEvent, REQUEST_SETTLED } from "@/server/event-parser";
 import { PtyRuntime } from "@/server/pty-runtime";
 
 vi.mock("@/server/debug-logger", () => ({
@@ -214,6 +214,215 @@ describe("TUI-only permission dialog rescue", () => {
     const rescued = events.filter((e) => e.type === "permission_request").at(-1);
     expect(rescued?.requestId?.startsWith("tui-")).toBe(true);
     expect(rescued?.interactiveOnly).toBe(true);
+  });
+
+  // A background agent's Bash can run while a question waits on its hook, so
+  // the last tool seen is Bash. A tui- card raised for it would be answered in
+  // bypass with "1", which the question on screen takes as its first option.
+  it("raises nothing while any hook request waits, whatever tool ran last", () => {
+    const { runtime, events } = makeRuntime("manual");
+    const handler = (runtime as never as { buildHandler(): Record<string, (p: Record<string, unknown>) => unknown> }).buildHandler();
+    const question = { questions: [{ question: "Which?", header: "Pick", options: [] }] };
+
+    handler.onPreToolUse({ tool_name: "AskUserQuestion", tool_input: question, tool_use_id: "toolu_q" });
+    handler.onPermissionRequest({ tool_name: "AskUserQuestion", tool_input: question });
+    handler.onPreToolUse({ tool_name: "Bash", tool_input: { command: "ls" }, tool_use_id: "toolu_agent", agent_id: "a1" });
+    handler.onPostToolUse({ tool_name: "Bash", tool_input: { command: "ls" }, tool_use_id: "toolu_agent", agent_id: "a1" });
+    handler.onNotification({ message: "Claude needs your permission", notification_type: "permission_prompt" });
+
+    const requests = events.filter((e) => e.type === "permission_request");
+    expect(requests.map((r) => r.toolName)).toEqual(["AskUserQuestion"]);
+  });
+
+  describe("a request answered in the terminal", () => {
+    function settled(events: ParsedEvent[]): string[] {
+      return events
+        .filter((e) => e.type === "system_message" && (e.text ?? "").startsWith(REQUEST_SETTLED))
+        .map((e) => (e.text as string).slice(REQUEST_SETTLED.length));
+    }
+
+    it("is released when its call finishes, so its card goes and later dialogs are rescued", async () => {
+      const { runtime, events } = makeRuntime("manual");
+      const handler = (runtime as never as { buildHandler(): Record<string, (p: Record<string, unknown>) => unknown> }).buildHandler();
+      const question = { questions: [{ question: "Which?", header: "Pick", options: [] }] };
+
+      handler.onPreToolUse({ tool_name: "AskUserQuestion", tool_input: question, tool_use_id: "toolu_q" });
+      const answer = handler.onPermissionRequest({ tool_name: "AskUserQuestion", tool_input: question }) as Promise<unknown>;
+      const hookRequest = events.find((e) => e.type === "permission_request");
+      // Answered in the terminal: the call finishes with no decision from cockpit.
+      handler.onPostToolUse({ tool_name: "AskUserQuestion", tool_input: question, tool_use_id: "toolu_q" });
+
+      await expect(answer).resolves.toMatchObject({ behavior: "deny" });
+      expect(settled(events)).toEqual([hookRequest?.requestId]);
+      expect(runtime.notifyPermissionDecision(hookRequest?.requestId as string, { behavior: "allow" })).toBe(false);
+
+      // Nothing waits on a hook any more, so the CLI's own dialog is the genuine article.
+      handler.onPreToolUse({ tool_name: "Write", tool_input: { file_path: "/x/.claude/a" }, tool_use_id: "toolu_w" });
+      handler.onNotification({ message: "Claude needs your permission", notification_type: "permission_prompt" });
+      expect(
+        events
+          .filter((e) => e.type === "permission_request")
+          .at(-1)
+          ?.requestId?.startsWith("tui-"),
+      ).toBe(true);
+    });
+
+    it("is released by a failed call too", () => {
+      const { runtime, events } = makeRuntime("manual");
+      const handler = (runtime as never as { buildHandler(): Record<string, (p: Record<string, unknown>) => unknown> }).buildHandler();
+      handler.onPreToolUse({ tool_name: "Bash", tool_input: { command: "make" }, tool_use_id: "toolu_b" });
+      void handler.onPermissionRequest({ tool_name: "Bash", tool_input: { command: "make" } });
+      handler.onPostToolUseFailure({ tool_name: "Bash", tool_input: { command: "make" }, tool_use_id: "toolu_b", error: "exit 2" });
+      expect(settled(events)).toHaveLength(1);
+    });
+
+    it("is left alone while another call finishes", () => {
+      const { runtime, events } = makeRuntime("manual");
+      const handler = (runtime as never as { buildHandler(): Record<string, (p: Record<string, unknown>) => unknown> }).buildHandler();
+      handler.onPreToolUse({ tool_name: "Bash", tool_input: { command: "make" }, tool_use_id: "toolu_b" });
+      void handler.onPermissionRequest({ tool_name: "Bash", tool_input: { command: "make" } });
+      handler.onPreToolUse({ tool_name: "Read", tool_input: { file_path: "/x" }, tool_use_id: "toolu_r" });
+      handler.onPostToolUse({ tool_name: "Read", tool_input: { file_path: "/x" }, tool_use_id: "toolu_r" });
+      handler.onPostToolUse({ tool_name: "Bash", tool_input: { command: "make" } });
+      expect(settled(events)).toEqual([]);
+    });
+
+    // Two waiting calls alike in tool and input cannot be told apart, and
+    // releasing the wrong one would deny a request the CLI is still waiting on.
+    it("is never tied to a call it cannot tell from another", () => {
+      const { runtime, events } = makeRuntime("manual");
+      const handler = (runtime as never as { buildHandler(): Record<string, (p: Record<string, unknown>) => unknown> }).buildHandler();
+      handler.onPreToolUse({ tool_name: "Bash", tool_input: { command: "make" }, tool_use_id: "toolu_1" });
+      handler.onPreToolUse({ tool_name: "Bash", tool_input: { command: "make" }, tool_use_id: "toolu_2" });
+      void handler.onPermissionRequest({ tool_name: "Bash", tool_input: { command: "make" } });
+      handler.onPostToolUse({ tool_name: "Bash", tool_input: { command: "make" }, tool_use_id: "toolu_1" });
+      expect(settled(events)).toEqual([]);
+    });
+
+    it("keeps only the latest calls in memory", () => {
+      const { runtime } = makeRuntime("manual");
+      const handler = (runtime as never as { buildHandler(): Record<string, (p: Record<string, unknown>) => unknown> }).buildHandler();
+      for (let i = 0; i < 250; i++) handler.onPreToolUse({ tool_name: "Read", tool_input: { n: i }, tool_use_id: `toolu_${i}` });
+      const inFlight = (runtime as never as { toolCallsInFlight: Map<string, unknown> }).toolCallsInFlight;
+      expect(inFlight.size).toBe(200);
+      expect(inFlight.has("toolu_249")).toBe(true);
+      expect(inFlight.has("toolu_0")).toBe(false);
+    });
+  });
+});
+
+// Telemetry times a prompt's wait but cannot say who answered it, which is the
+// difference between waiting on the user and cockpit's bypass answering at
+// once. The runtime records that itself, tied to the tool call.
+describe("who answered a prompt", () => {
+  function withTelemetry(applied = true) {
+    const recorded: Array<{ sessionId: string; records: Array<{ name: string; value?: number; attrs: Record<string, unknown> }> }> = [];
+    const telemetry = {
+      beginSpawn: vi.fn(),
+      noteOutcome: vi.fn(),
+      endSpawn: vi.fn(),
+      recordLocal: (sessionId: string, records: Array<{ name: string; value?: number; attrs: Record<string, unknown> }>) =>
+        recorded.push({ sessionId, records }),
+    };
+    const runtime = new PtyRuntime({
+      sessionId: "s-answers",
+      cwd: "/tmp",
+      cliSessionId: "cli-1",
+      hookRouter: { register: vi.fn(), unregister: vi.fn() } as never,
+      onEvents: () => {},
+      onError: () => {},
+      onExit: () => {},
+      telemetry: telemetry as never,
+    });
+    (runtime as never as { telemetryApplied: boolean }).telemetryApplied = applied;
+    const handler = (runtime as never as { buildHandler(): Record<string, (p: Record<string, unknown>) => unknown> }).buildHandler();
+    const answers = () =>
+      recorded.flatMap((r) => r.records.map((x): Record<string, unknown> => ({ session: r.sessionId, name: x.name, ...x.attrs })));
+    return { runtime, handler, answers, recorded };
+  }
+
+  const ask = (handler: Record<string, (p: Record<string, unknown>) => unknown>, tool: string, id: string) => {
+    handler.onPreToolUse({ tool_name: tool, tool_input: { id }, tool_use_id: id });
+    void handler.onPermissionRequest({ tool_name: tool, tool_input: { id } });
+  };
+
+  const requestIds = (runtime: PtyRuntime) => [
+    ...(runtime as never as { pendingPermissions: Map<string, unknown> }).pendingPermissions.keys(),
+  ];
+
+  it("records the user's answer and the bypass's, each tied to its call", () => {
+    const { runtime, handler, answers, recorded } = withTelemetry();
+    ask(handler, "AskUserQuestion", "toolu_q");
+    ask(handler, "Bash", "toolu_b");
+    const [question, bash] = requestIds(runtime);
+    runtime.notifyPermissionDecision(question, { behavior: "allow" });
+    runtime.notifyPermissionDecision(bash, { behavior: "deny", message: "no" }, { answeredBy: "bypass" });
+    expect(answers()).toEqual([
+      {
+        session: "s-answers",
+        name: "cockpit.permission_answer",
+        tool_name: "AskUserQuestion",
+        tool_use_id: "toolu_q",
+        kind: "question",
+        answered_by: "you",
+        decision: "allow",
+      },
+      {
+        session: "s-answers",
+        name: "cockpit.permission_answer",
+        tool_name: "Bash",
+        tool_use_id: "toolu_b",
+        kind: "permission",
+        answered_by: "bypass",
+        decision: "deny",
+      },
+    ]);
+    expect(recorded[0].records[0].value).toBeGreaterThanOrEqual(0);
+  });
+
+  it("records an answer given in the terminal, and the ones an interrupt or the end of the session leaves", async () => {
+    const { runtime, handler, answers } = withTelemetry();
+    (runtime as never as { pty: unknown }).pty = { sendKey: vi.fn(), kill: vi.fn() };
+    ask(handler, "ExitPlanMode", "toolu_plan");
+    handler.onPostToolUse({ hook_event_name: "PostToolUse", tool_name: "ExitPlanMode", tool_use_id: "toolu_plan" });
+    ask(handler, "Write", "toolu_w");
+    handler.onPostToolUseFailure({ hook_event_name: "PostToolUseFailure", tool_name: "Write", tool_use_id: "toolu_w" });
+    ask(handler, "Edit", "toolu_e");
+    runtime.interrupt();
+    ask(handler, "Read", "toolu_r");
+    await runtime.kill();
+    expect(answers().map((a) => [a.tool_name, a.kind, a.answered_by, a.decision])).toEqual([
+      ["ExitPlanMode", "plan", "terminal", "allow"],
+      ["Write", "permission", "terminal", "deny"],
+      ["Edit", "permission", "interrupted", "deny"],
+      ["Read", "permission", "ended", "deny"],
+    ]);
+  });
+
+  it("records a dialog answered with keys, naming the tool it asked about", () => {
+    const { runtime, handler, answers } = withTelemetry();
+    (runtime as never as { pty: unknown }).pty = { sendKey: vi.fn() };
+    handler.onPreToolUse({ tool_name: "Write", tool_input: { file_path: "/x/.claude/a" }, tool_use_id: "toolu_d" });
+    handler.onNotification({ message: "Claude needs your permission", notification_type: "permission_prompt" });
+    const [dialog] = [...(runtime as never as { pendingTuiDialogs: Map<string, unknown> }).pendingTuiDialogs.keys()];
+    runtime.notifyPermissionDecision(dialog, { behavior: "allow" }, { answeredBy: "bypass" });
+    expect(answers()).toEqual([
+      {
+        session: "s-answers",
+        name: "cockpit.permission_answer",
+        tool_name: "Write",
+        kind: "permission",
+        answered_by: "bypass",
+        decision: "allow",
+      },
+    ]);
+  });
+
+  it("records nothing for a spawn whose telemetry does not reach cockpit", () => {
+    const { runtime, handler, answers } = withTelemetry(false);
+    ask(handler, "Bash", "toolu_x");
+    runtime.notifyPermissionDecision(requestIds(runtime)[0], { behavior: "allow" });
+    expect(answers()).toEqual([]);
   });
 });
 

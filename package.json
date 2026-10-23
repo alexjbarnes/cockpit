@@ -1,6 +1,6 @@
 {
   "name": "@alexjbarnes/cockpit",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "description": "Web UI for Claude Code: parallel sessions on any device, scheduled jobs, PR reviews, and any model provider",
   "license": "Apache-2.0",
   "author": "Alex Barnes (https://github.com/alexjbarnes)",
@@ -42,11 +42,11 @@
     "postcss.config.mjs"
   ],
   "engines": {
-    "node": ">=20.0.0"
+    "node": "^22.23.4 || ^24.22.1 || >=26.12.1"
   },
   "scripts": {
     "dev": "tsx watch --env-file=.env.development server.ts",
-    "build": "unset TURBOPACK && next build --webpack && tsc -p tsconfig.server.json && tsc-alias -p tsconfig.server.json",
+    "build": "unset TURBOPACK && next build --webpack && rm -rf dist && tsc -p tsconfig.server.json && tsc-alias -p tsconfig.server.json",
     "start": "NODE_ENV=production node --env-file=.env.production dist/server.js",
     "lint": "biome check src/ tests/ server.ts",
     "lint:fix": "biome check --fix src/ tests/ server.ts",
@@ -75,7 +75,7 @@
     "clsx": "^2",
     "codemirror": "^6.0.2",
     "lucide-react": "^1.26.0",
-    "next": "16.4.0",
+    "next": "16.4.2",
     "node-pty": "^1.2.0-beta.13",
     "react": "19.3.0",
     "react-dom": "19.3.0",

@@ -13,12 +13,31 @@ export interface ReadingAnchor {
   offset: number;
 }
 
-/** The first message whose bottom is below the top of the view: the one being
- *  read. Items are in document order, measured in the same coordinates as
- *  `viewTop`. */
-export function anchorFromItems(items: { id: string; top: number; bottom: number }[], viewTop: number): ReadingAnchor | null {
-  for (const item of items) {
-    if (item.id && item.bottom > viewTop) return { id: item.id, offset: item.top - viewTop };
+/** One message as the chat measures it, in the same coordinates as the top of
+ *  the view. */
+export interface MeasuredItem {
+  id: string;
+  top: number;
+  bottom: number;
+}
+
+/**
+ * The first message whose bottom is below the top of the view: the one being
+ * read. Messages stack in document order, so their bottoms only grow, and
+ * halving finds it in a few measurements rather than one per message above the
+ * reader, which matters on every scroll of a long chat.
+ */
+export function anchorFromItems(count: number, itemAt: (index: number) => MeasuredItem, viewTop: number): ReadingAnchor | null {
+  let lo = 0;
+  let hi = count;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (itemAt(mid).bottom > viewTop) hi = mid;
+    else lo = mid + 1;
+  }
+  for (let i = lo; i < count; i++) {
+    const item = itemAt(i);
+    if (item.id) return { id: item.id, offset: item.top - viewTop };
   }
   return null;
 }

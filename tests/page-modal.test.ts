@@ -3,7 +3,7 @@ import { isModalPath, pageModalMessage, parsePageModalMessage } from "@/lib/page
 
 describe("isModalPath", () => {
   it("takes the footer's pages and the pages they link to", () => {
-    for (const p of ["/jobs", "/jobs/abc/edit", "/jobs/abc/runs/r1", "/inbox", "/inbox/m1", "/issues", "/issues/CK-1"]) {
+    for (const p of ["/jobs", "/jobs/abc/edit", "/jobs/abc/runs/r1", "/inbox", "/inbox/m1", "/issues", "/issues/CK-1", "/insights"]) {
       expect(isModalPath(p), p).toBe(true);
     }
     for (const p of ["/settings", "/settings/session", "/agents/reviewer", "/mcp-servers", "/plugins", "/claude-md/edit"]) {

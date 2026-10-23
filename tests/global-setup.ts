@@ -40,6 +40,14 @@ for (const key of Object.keys(process.env)) {
 // still assign it at module scope, which runs after this.
 delete process.env.CLAUDE_CONFIG_DIR;
 
+// And the CLI's telemetry settings: cockpit reads them to decide whether a
+// session's telemetry is already someone else's, and a session inherits
+// CLAUDE_CODE_ENABLE_TELEMETRY from organisation-managed settings, so a run
+// inside one would see a pipeline a plain shell does not.
+for (const key of Object.keys(process.env)) {
+  if (key.startsWith("OTEL_") || key === "CLAUDE_CODE_ENABLE_TELEMETRY") delete process.env[key];
+}
+
 const dir = mkdtempSync(path.join(tmpdir(), "cockpit-vitest-"));
 process.env.COCKPIT_CONFIG_DIR = dir;
 

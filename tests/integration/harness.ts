@@ -62,6 +62,12 @@ export interface HarnessOptions {
    *  COCKPIT_DEEPSEEK_BASE_URL at the mock API, so deepseek sessions run
    *  CLI → cockpit proxy (anthropic passthrough) → mock /v1/messages. */
   deepseekViaMock?: boolean;
+  /** Switch telemetry on in defaults.json, so sessions send their
+   *  OpenTelemetry to this cockpit's receiver. */
+  telemetry?: boolean;
+  /** Runs once the config is seeded and before cockpit starts, to add files
+   *  of a spec's own to it (a telemetry store, providers, session prefs). */
+  prepare?: (dirs: { configDir: string; claudeDir: string }) => void;
 }
 
 // Process groups (pgids) of cockpit servers still running in this worker.
@@ -116,7 +122,9 @@ export async function startHarness(opts: HarnessOptions = {}): Promise<Harness> 
     zenViaMock: opts.zenViaMock,
     groqViaMock: opts.groqViaMock,
     deepseekViaMock: opts.deepseekViaMock,
+    telemetry: opts.telemetry,
   });
+  opts.prepare?.({ configDir, claudeDir });
 
   const cockpitPort = await getFreePort();
   const cockpitToken = uuidv4();
@@ -183,6 +191,7 @@ interface SeedOpts {
    *  run against it. */
   groqViaMock?: boolean;
   deepseekViaMock?: boolean;
+  telemetry?: boolean;
 }
 
 /** Catalog model id used by the OpenRouter integration seeding. */
@@ -351,6 +360,7 @@ function seedConfig(opts: SeedOpts): void {
         modelSlots: { main: "mock:claude-sonnet-4-6", mainContext: "200k" },
         thinkingLevel: opts.thinkingLevel ?? "high",
         permissionMode: "bypass",
+        ...(opts.telemetry ? { telemetryEnabled: true } : {}),
       },
       null,
       2,
@@ -385,13 +395,16 @@ interface SpawnOpts {
  * assistant text renders, and every spec that asserts on output fails with
  * "element not found" — while the mock shows the request arriving and the
  * status going running then idle, which reads like a cockpit bug rather than a
- * harness one. Keeps CLAUDE_CONFIG_DIR and CLAUDE_BIN: neither carries the
+ * harness one. Telemetry settings go too (see the loop). Keeps CLAUDE_CONFIG_DIR and CLAUDE_BIN: neither carries the
  * prefix, and the harness sets both deliberately.
  */
 function envWithoutClaudeCodeSession(): Record<string, string | undefined> {
   const clean: Record<string, string | undefined> = {};
   for (const [key, value] of Object.entries(process.env)) {
     if (key === "CLAUDECODE" || key.startsWith("CLAUDE_CODE_")) continue;
+    // The launching shell's own telemetry setup, or a switch only `make start`
+    // meant for the live server, would decide what a spec's sessions send.
+    if (key.startsWith("OTEL_") || key === "COCKPIT_TELEMETRY_ENABLED") continue;
     clean[key] = value;
   }
   return clean;

@@ -67,6 +67,7 @@ vi.mock("@/server/pty-runtime", () => {
 let mockHookRouter: unknown = { register: vi.fn(), unregister: vi.fn() };
 vi.mock("@/server/singleton", () => ({
   getHookRouter: vi.fn(() => mockHookRouter),
+  getTelemetry: vi.fn(() => null),
   getCockpitMcp: vi.fn(() => null),
 }));
 
@@ -424,6 +425,11 @@ describe("ClaudePtyAdapter", () => {
   // outright ("auto-mode safety classifier down"). Permissions are cockpit's
   // job anyway — its cards answer the PermissionRequest hook — so the mode is
   // asked for rather than inherited.
+  it("hands the runtime the provider serving the session, for its telemetry", () => {
+    adapter.spawn({ ...baseConfig(), providerId: "zen-go" });
+    expect(mockPtyInstances[0].opts.providerId).toBe("zen-go");
+  });
+
   describe("permission mode", () => {
     it("asks for manual when neither plan nor bypass applies", () => {
       adapter.spawn(baseConfig());
@@ -603,11 +609,15 @@ describe("ClaudePtyAdapter", () => {
       expect(runtime.notifyPermissionDecision).toHaveBeenCalledWith(
         "req-1",
         { behavior: "allow", updatedInput: { command: "ls" } },
-        { always: false },
+        { always: false, answeredBy: "you" },
       );
 
-      handle.respondToPermission("req-2", false, undefined, undefined, "no");
-      expect(runtime.notifyPermissionDecision).toHaveBeenCalledWith("req-2", { behavior: "deny", message: "no" }, { always: false });
+      handle.respondToPermission("req-2", false, undefined, undefined, "no", "bypass");
+      expect(runtime.notifyPermissionDecision).toHaveBeenCalledWith(
+        "req-2",
+        { behavior: "deny", message: "no" },
+        { always: false, answeredBy: "bypass" },
+      );
     });
 
     it("passes a chosen suggestion back to the CLI as updatedPermissions", () => {
@@ -620,7 +630,7 @@ describe("ClaudePtyAdapter", () => {
         // save the rule, and the "always" flag only means anything to a TUI
         // dialog with a don't-ask-again key.
         { behavior: "allow", updatedInput: { host: "example.com" }, updatedPermissions: [{ type: "addRules" }] },
-        { always: true },
+        { always: true, answeredBy: "you" },
       );
     });
 

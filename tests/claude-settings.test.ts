@@ -1,15 +1,19 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanupHookSettings, prepareHookSettings } from "@/server/claude-settings";
 import { resolveHookBridgePath } from "@/server/hook-bridge-path";
-import { getCockpitDir } from "@/server/paths";
+import { getCockpitCacheDir, getCockpitDir } from "@/server/paths";
 
 // The user's own Claude settings feed every session file, so each run gets a
 // throwaway one instead of the developer's real ~/.claude.
 const claudeDir = mkdtempSync(join(tmpdir(), "cockpit-claude-settings-"));
 process.env.CLAUDE_CONFIG_DIR = claudeDir;
+
+/** What a sandboxed command may not read: cockpit's directory, and the
+ *  sessions' own settings files, which hold their telemetry tokens. */
+const fenced = () => [getCockpitDir(), join(getCockpitCacheDir(), "hook-settings")];
 
 describe("prepareHookSettings", () => {
   const cleanupIds: string[] = [];
@@ -99,7 +103,7 @@ describe("prepareHookSettings", () => {
       });
       return JSON.parse(readFileSync(settingsPath, "utf-8")) as Record<string, unknown>;
     };
-    const fence = { denyRead: [getCockpitDir()] };
+    const fence = { denyRead: fenced() };
 
     // Off is written as off, so the session's switch decides even when another
     // source turns the sandbox on; the fence is there for exactly that case.
@@ -125,7 +129,7 @@ describe("prepareHookSettings", () => {
       });
       return JSON.parse(readFileSync(settingsPath, "utf-8")) as { sandbox: Record<string, unknown> };
     };
-    const fence = [getCockpitDir()];
+    const fence = fenced();
     const jobA = join(getCockpitDir(), "jobs", "job-a");
     const jobB = join(getCockpitDir(), "jobs", "job-b");
 
@@ -205,7 +209,7 @@ describe("prepareHookSettings", () => {
       // when it changes, so a copy here would only go stale.
       expect(parsed.sandbox).toEqual({
         enabled: true,
-        filesystem: { denyRead: [getCockpitDir()] },
+        filesystem: { denyRead: fenced() },
         network: { allowedDomains: ["session.example.com"] },
       });
       // Everything else in the user's settings is still carried over.
@@ -334,5 +338,106 @@ describe("prepareHookSettings", () => {
         } catch {}
       }
     }
+  });
+});
+
+describe("prepareHookSettings telemetry", () => {
+  const telemetry = { token: "tel-token", baseUrl: "http://127.0.0.1:4567" };
+  const files: string[] = [];
+  const ids: string[] = [];
+
+  const write = (file: string, content: unknown) => {
+    mkdirSync(join(file, ".."), { recursive: true });
+    writeFileSync(file, JSON.stringify(content));
+    files.push(file);
+  };
+  const prepare = async (id: string, extra: { cwd?: string; telemetry?: typeof telemetry & { providerId?: string } } = { telemetry }) => {
+    ids.push(id);
+    const artifact = await prepareHookSettings({ sessionId: id, hookUrl: "http://127.0.0.1:1", hookToken: "tok", ...extra });
+    return { artifact, settings: JSON.parse(readFileSync(artifact.settingsPath, "utf-8")) as { env?: Record<string, string> } };
+  };
+
+  afterEach(async () => {
+    while (files.length) {
+      try {
+        unlinkSync(files.pop() as string);
+      } catch {}
+    }
+    while (ids.length) await cleanupHookSettings(ids.pop() as string);
+  });
+
+  it("writes nothing of its own when not asked, leaving the user's env exactly as it was", async () => {
+    write(join(claudeDir, "settings.json"), { env: { KEEP: "1" } });
+    const { artifact, settings } = await prepare("tel-off", {});
+    expect(artifact.telemetry).toBeUndefined();
+    expect(settings.env).toEqual({ KEEP: "1" });
+  });
+
+  it("points every signal at cockpit, over the user's own env", async () => {
+    // A protocol and resource attributes of the user's own, with telemetry not
+    // switched on anywhere: not a pipeline, so cockpit's keys win.
+    write(join(claudeDir, "settings.json"), {
+      env: { KEEP: "1", OTEL_EXPORTER_OTLP_PROTOCOL: "grpc", OTEL_RESOURCE_ATTRIBUTES: "team=core" },
+    });
+    const { artifact, settings } = await prepare("tel-on");
+    expect(artifact.telemetry).toEqual({ status: "applied" });
+    const env = settings.env as Record<string, string>;
+    expect(env.KEEP).toBe("1");
+    expect(env.CLAUDE_CODE_ENABLE_TELEMETRY).toBe("1");
+    expect(env.OTEL_EXPORTER_OTLP_PROTOCOL).toBe("http/protobuf");
+    expect(env.OTEL_EXPORTER_OTLP_LOGS_ENDPOINT).toBe("http://127.0.0.1:4567/otel/v1/logs");
+    expect(env.OTEL_EXPORTER_OTLP_HEADERS).toBe("x-cockpit-otel-token=tel-token");
+    expect(env.OTEL_RESOURCE_ATTRIBUTES).toBe("team=core,cockpit.session_id=tel-on");
+    // The token travels in the file, which only its owner can read.
+    expect(statSync(artifact.settingsPath).mode & 0o077).toBe(0);
+  });
+
+  it("names the spawn's provider on its telemetry", async () => {
+    const { settings } = await prepare("tel-provider", { telemetry: { ...telemetry, providerId: "zen-go" } });
+    expect(settings.env?.OTEL_RESOURCE_ATTRIBUTES).toBe("cockpit.session_id=tel-provider,cockpit.provider=zen-go");
+  });
+
+  it("leaves a session alone when managed settings send its telemetry somewhere", async () => {
+    write(join(claudeDir, "settings.json"), { env: { KEEP: "1" } });
+    write(join(claudeDir, "remote-settings.json"), { env: { OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example" } });
+    const { artifact, settings } = await prepare("tel-managed");
+    expect(artifact.telemetry).toEqual({ status: "skipped", source: "server-managed settings", key: "OTEL_EXPORTER_OTLP_ENDPOINT" });
+    expect(settings.env).toEqual({ KEEP: "1" });
+  });
+
+  it("takes over managed settings that only switch telemetry on", async () => {
+    // Telemetry on and a protocol chosen, with no destination. A managed
+    // general protocol also removes every per-signal protocol set below it, so
+    // batches arrive in that one whatever cockpit asks for; the receiver reads
+    // both HTTP encodings.
+    write(join(claudeDir, "remote-settings.json"), {
+      env: { CLAUDE_CODE_ENABLE_TELEMETRY: "1", OTEL_METRICS_EXPORTER: "otlp", OTEL_EXPORTER_OTLP_PROTOCOL: "http/protobuf" },
+    });
+    const { artifact, settings } = await prepare("tel-org");
+    expect(artifact.telemetry).toEqual({ status: "applied" });
+    expect(settings.env?.OTEL_EXPORTER_OTLP_METRICS_PROTOCOL).toBe("http/protobuf");
+    expect(settings.env?.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT).toBe("http://127.0.0.1:4567/otel/v1/traces");
+  });
+
+  it("respects a pipeline of the user's own or the project's", async () => {
+    write(join(claudeDir, "settings.json"), {
+      env: { CLAUDE_CODE_ENABLE_TELEMETRY: "1", OTEL_EXPORTER_OTLP_ENDPOINT: "http://localhost:4318" },
+    });
+    expect((await prepare("tel-user")).artifact.telemetry).toEqual({
+      status: "skipped",
+      source: "user settings",
+      key: "OTEL_EXPORTER_OTLP_ENDPOINT",
+    });
+    unlinkSync(files.pop() as string);
+
+    const project = mkdtempSync(join(tmpdir(), "cockpit-tel-project-"));
+    write(join(project, ".claude", "settings.json"), {
+      env: { CLAUDE_CODE_ENABLE_TELEMETRY: "1", OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: "http://x" },
+    });
+    expect((await prepare("tel-project", { cwd: project, telemetry })).artifact.telemetry).toEqual({
+      status: "skipped",
+      source: ".claude/settings.json",
+      key: "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
+    });
   });
 });
