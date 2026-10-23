@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Saving a setting no longer stores the issue tracker's override.** `COCKPIT_ISSUES_ENABLED` (which `make start` sets) was meant to apply only to the run that set it, but any change in Settings wrote it into `defaults.json`, where it outlived the run.
 
 ### Security
+- **Next.js 16.4.2.** 16.4.0 is affected by GHSA-2464-fhr4-w9xw (remote code execution through image optimisation of SVG files), GHSA-673q-mjm6-r5xr (remote code execution in `use cache` functions returning typed arrays) and GHSA-p3m5-59mp-jv5r (denial of service through Server Actions), all fixed in 16.4.1. Next's build also stops in a terminal to offer an upgrade while an advisory covers the installed version, which held `make start` at a prompt.
 - **Cockpit needs a Node release that refuses eMudhra's compromised CA keys.** Node 22.23.4, 24.22.1 and 26.12.1 reject any certificate chain through the eight eMudhra intermediate CA keys reported compromised, which earlier releases still trust, and update the bundled root certificates. The minimum Node is now one of those, or a later release of the same line. Node 20, 23 and 25 get no fix and are no longer supported.
 
 ### Internal
