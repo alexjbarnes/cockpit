@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - **A long session no longer opens to an empty chat.** Cockpit showed a session's history from the last 150 lines of its transcript. Claude Code 2.1.303 also records every API request there, in lines the chat never shows, and the first request after a restart or a model switch writes hundreds of them, so the history could hold no messages at all and left nothing to scroll back from. Cockpit now counts only the lines a chat is built from, and reads further back while a page would otherwise be empty. Paging back also starts exactly where the last page ended, so a message next to an emoji or accented text is no longer dropped at the join, and a transcript small enough to read in one go no longer hides its earliest messages.
+- **Showing all of a project's sessions no longer stalls the server.** Finding a session's settings scanned an entry for every session and job run there has ever been, about 2ms a time with 12,000 of them, so listing a project with a thousand sessions held the server, and every page's connection, for more than two seconds. The lookup is indexed now.
 
 ## [0.10.0] - 2026-10-23
 

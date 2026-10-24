@@ -96,6 +96,38 @@ describe("session-prefs", () => {
     expect(findChainForCliSession("cli-z")).toBeNull();
   });
 
+  it("findChainForCliSession picks the first entry that names an id, as a scan of the file would", async () => {
+    mockReadFileSync.mockReturnValue(
+      JSON.stringify({
+        plain: { name: "no chain" },
+        cockpit1: { cliSessionId: "cli-a", previousCliSessionIds: ["cli-x", "cli-b"] },
+        cockpit2: { cliSessionId: "cli-x", previousCliSessionIds: ["cli-y"] },
+      }),
+    );
+    const { findChainForCliSession } = await import("@/server/session-prefs");
+    expect(findChainForCliSession("cli-x")).toEqual({ cockpitId: "cockpit1", truncatedPrevIds: [] });
+    expect(findChainForCliSession("cli-b")).toEqual({ cockpitId: "cockpit1", truncatedPrevIds: ["cli-x"] });
+    expect(findChainForCliSession("cli-y")).toEqual({ cockpitId: "cockpit2", truncatedPrevIds: [] });
+  });
+
+  it("chain lookups follow chains written and deleted while the file is unchanged on disk", async () => {
+    // A steady stamp keeps the cache trusted, so only the writes themselves can
+    // tell the lookup its index is out of date.
+    mockStatSync.mockReturnValue({ mtimeMs: 1, size: 100 } as ReturnType<typeof statSync>);
+    mockReadFileSync.mockReturnValue(JSON.stringify({ cockpit1: { cliSessionId: "cli-a", previousCliSessionIds: ["cli-b"] } }));
+    const { deleteSessionPrefs, findChainForCliSession, getSessionPrefs, setSessionPrefs } = await import("@/server/session-prefs");
+    expect(findChainForCliSession("cli-n")).toBeNull();
+
+    setSessionPrefs("cockpit2", { name: "Second", cliSessionId: "cli-n", previousCliSessionIds: ["cli-m"] });
+    expect(findChainForCliSession("cli-m")).toEqual({ cockpitId: "cockpit2", truncatedPrevIds: [] });
+    expect(getSessionPrefs("cli-n")?.name).toBe("Second");
+
+    deleteSessionPrefs("cockpit2");
+    expect(findChainForCliSession("cli-m")).toBeNull();
+    expect(findChainForCliSession("cli-b")).toEqual({ cockpitId: "cockpit1", truncatedPrevIds: [] });
+    expect(mockReadFileSync).toHaveBeenCalledOnce();
+  });
+
   it("getSessionPrefs resolves via chain when direct key not found", async () => {
     mockReadFileSync.mockReturnValue(
       JSON.stringify({
