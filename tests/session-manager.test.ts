@@ -3776,6 +3776,29 @@ describe("SessionManager", () => {
     });
   });
 
+  describe("transcript updates", () => {
+    const message = (id: string, content: string) => ({ id, role: "assistant", content, toolUses: [], blocks: [], timestamp: 1 });
+
+    it("sends pages a transcript tail only when it differs from the last one sent", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      const sent: unknown[] = [];
+      s.emitter.on("transcript", (_id: string, messages: unknown) => sent.push(messages));
+      const usage: unknown[] = [];
+      s.emitter.on("usage", (_id: string, u: unknown) => usage.push(u));
+      const { callbacks } = (manager as any).buildHarnessCallbacks(s, session.id, createStreamState());
+
+      callbacks.onTranscriptUpdate([message("a1", "Working on it")], { used: 1000, total: 200_000 });
+      // The CLI appended records the chat never shows: the same tail again.
+      callbacks.onTranscriptUpdate([message("a1", "Working on it")], { used: 1000, total: 200_000 });
+      callbacks.onTranscriptUpdate([message("a1", "Working on it. Done.")], { used: 1200, total: 200_000 });
+
+      expect(sent).toEqual([[message("a1", "Working on it")], [message("a1", "Working on it. Done.")]]);
+      // Everything else an update drives still runs on every one.
+      expect(usage).toHaveLength(3);
+    });
+  });
+
   describe("sendMessage branches", () => {
     it("returns false for unknown session", () => {
       expect(manager.sendMessage("nonexistent", "hello")).toBe(false);

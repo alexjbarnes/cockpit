@@ -146,6 +146,9 @@ interface Session {
    * taken past the compaction's lines.
    */
   pendingCompactFlush: boolean;
+  /** The last transcript tail sent to pages, serialised, so an update that
+   *  changes nothing they show is not sent again. */
+  lastTranscriptJson?: string;
   /**
    * When the pending compaction was requested (ms since epoch). A compaction
    * marker or reply in the transcript is this compaction's outcome only if it
@@ -2996,7 +2999,16 @@ Additional Cockpit rules beyond the CLI's defaults:
         }
       },
       onTranscriptUpdate: (messages, lastUsage) => {
-        session.emitter.emit("transcript", sessionId, messages);
+        // The watcher reports every write to the file, and most of the CLI's
+        // writes are records the chat never shows (each API request and its
+        // blobs). Each update is the whole tail, tens to hundreds of KB, so a
+        // repeat went to every page for nothing, and on a phone it held up the
+        // heartbeat behind it.
+        const json = JSON.stringify(messages);
+        if (json !== session.lastTranscriptJson) {
+          session.lastTranscriptJson = json;
+          session.emitter.emit("transcript", sessionId, messages);
+        }
         // The latest compaction's marker, not one an earlier compaction left in the tail.
         const compacted = messages.some((m) => m.content === "__compacted__" && m.timestamp >= session.compactRequestedAt);
         if (lastUsage) {
