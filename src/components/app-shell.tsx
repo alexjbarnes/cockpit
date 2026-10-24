@@ -2,7 +2,7 @@
 
 import { Menu, Terminal, X } from "lucide-react";
 import Image from "next/image";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { AgentTranscriptProvider } from "@/components/agent-transcript-modal";
 import { AuthGuard } from "@/components/auth-guard";
@@ -231,6 +231,30 @@ function EmbeddedPageBridge({ pathname }: { pathname: string }) {
   return null;
 }
 
+/** Goes where a tapped notification points, when the service worker asks
+ *  (see notificationclick in sw.js). Moving within the app keeps its connection
+ *  and what it has loaded; the worker reloads the page only if nobody answers. */
+function ServiceWorkerNavigation() {
+  const router = useRouter();
+
+  useEffect(() => {
+    const sw = typeof navigator === "undefined" ? undefined : navigator.serviceWorker;
+    if (!sw) return;
+    const onMessage = (event: MessageEvent) => {
+      if (event.data?.type !== "cockpit:navigate" || typeof event.data.url !== "string") return;
+      const url = new URL(event.data.url, window.location.origin);
+      if (url.origin !== window.location.origin) return;
+      router.push(url.pathname + url.search + url.hash);
+      event.ports[0]?.postMessage(true);
+    };
+    sw.addEventListener("message", onMessage);
+    sw.startMessages();
+    return () => sw.removeEventListener("message", onMessage);
+  }, [router]);
+
+  return null;
+}
+
 export function AppShell({ children }: { children: ReactNode }) {
   const sidebarRef = useRef<SidebarHandle>(null);
   const embedded = useEmbedded();
@@ -390,6 +414,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             {/* Only the real shell: the page-modal iframe renders its own, and
                 two shells would each raise a banner for the same event. */}
             {!embedded && <SessionAlerts />}
+            {!embedded && <ServiceWorkerNavigation />}
             {embedded && <EmbeddedPageBridge pathname={pathname} />}
           </AgentTranscriptProvider>
         </ShellContext.Provider>

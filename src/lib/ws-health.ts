@@ -29,3 +29,16 @@ export function socketHealth(readyState: number, createdAt: number, now: number)
 export function aliveAtPongDeadline(pingSentAt: number, lastReceivedAt: number): boolean {
   return lastReceivedAt >= pingSentAt;
 }
+
+/** How long a phone can be in the background before its socket is replaced on
+ *  return rather than tested. In the debug log, a phone back within 5 s kept
+ *  its socket 66 times out of 68, and one away 15 s or more lost it 18 times
+ *  out of 19. */
+export const RESUME_RECONNECT_MS = 10_000;
+
+/** Whether to replace the socket straight away on coming back from the
+ *  background. Testing a dead one costs the whole pong timeout before the
+ *  reconnect even starts. A desktop keeps its socket, so it is tested. */
+export function replaceOnResume(hiddenForMs: number, coarsePointer: boolean): boolean {
+  return coarsePointer && hiddenForMs >= RESUME_RECONNECT_MS;
+}

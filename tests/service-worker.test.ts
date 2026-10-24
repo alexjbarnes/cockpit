@@ -9,8 +9,24 @@ import { describe, expect, it, vi } from "vitest";
 
 interface FakeClient {
   url: string;
+  frameType?: string;
   navigate: ReturnType<typeof vi.fn>;
   focus: ReturnType<typeof vi.fn>;
+  postMessage: ReturnType<typeof vi.fn>;
+}
+
+/** A window client. One that `answers` takes the worker's request to move
+ *  itself, as the app's shell does. */
+function fakeClient(url: string, { answers = true, frameType = "top-level" } = {}): FakeClient {
+  return {
+    url,
+    frameType,
+    navigate: vi.fn(() => Promise.resolve()),
+    focus: vi.fn(() => Promise.resolve()),
+    postMessage: vi.fn((_message: unknown, ports: MessagePort[]) => {
+      if (answers) ports[0].postMessage(true);
+    }),
+  };
 }
 
 function loadServiceWorker() {
@@ -50,6 +66,9 @@ function loadServiceWorker() {
     },
     URL,
     console,
+    MessageChannel,
+    setTimeout,
+    clearTimeout,
   };
   vm.createContext(sandbox);
   vm.runInContext(code, sandbox);
@@ -183,15 +202,70 @@ describe("service worker notification buttons", () => {
     expect(sw.opened).toEqual(["https://cockpit.example/inbox/abc"]);
   });
 
-  it("focuses a window already showing cockpit instead of opening a second one", async () => {
+  it("focuses a window already showing cockpit and has it move there itself", async () => {
     const sw = loadServiceWorker();
-    const client: FakeClient = { url: "https://cockpit.example/sessions", navigate: vi.fn(), focus: vi.fn() };
+    const client = fakeClient("https://cockpit.example/sessions");
     sw.clients.push(client);
 
     await click(sw, "", { url: "/inbox/abc" });
 
-    expect(client.navigate).toHaveBeenCalledWith("https://cockpit.example/inbox/abc");
     expect(client.focus).toHaveBeenCalled();
-    expect(sw.opened).toEqual([]);
+    // The second argument is the reply port, from the worker's own realm.
+    expect(client.postMessage.mock.calls[0][0]).toEqual({ type: "cockpit:navigate", url: "https://cockpit.example/inbox/abc" });
+    // A reload would drop the app's connection and everything it had loaded.
+    expect(client.navigate).not.toHaveBeenCalled();
+    expect(sw.opened, "no second window").toEqual([]);
+  });
+
+  it("reloads a window into the page when it does not answer", async () => {
+    vi.useFakeTimers();
+    try {
+      const sw = loadServiceWorker();
+      const client = fakeClient("https://cockpit.example/sessions", { answers: false });
+      sw.clients.push(client);
+
+      const tapped = click(sw, "", { url: "/inbox/abc" });
+      await vi.advanceTimersByTimeAsync(1500);
+      await tapped;
+
+      expect(client.navigate).toHaveBeenCalledWith("https://cockpit.example/inbox/abc");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("only focuses a window already on the page", async () => {
+    const sw = loadServiceWorker();
+    const client = fakeClient("https://cockpit.example/inbox/abc");
+    sw.clients.push(client);
+
+    await click(sw, "", { url: "/inbox/abc" });
+
+    expect(client.focus).toHaveBeenCalled();
+    expect(client.postMessage).not.toHaveBeenCalled();
+    expect(client.navigate).not.toHaveBeenCalled();
+  });
+
+  it("leaves the page modal's frame alone and moves the window around it", async () => {
+    const sw = loadServiceWorker();
+    const frame = fakeClient("https://cockpit.example/inbox?embedded=1", { frameType: "nested" });
+    const window = fakeClient("https://cockpit.example/sessions");
+    sw.clients.push(frame, window);
+
+    await click(sw, "", { url: "/jobs" });
+
+    expect(frame.postMessage).not.toHaveBeenCalled();
+    expect(window.postMessage.mock.calls[0][0]).toEqual({ type: "cockpit:navigate", url: "https://cockpit.example/jobs" });
+  });
+
+  it("still focuses the window when the browser refuses focus", async () => {
+    const sw = loadServiceWorker();
+    const client = fakeClient("https://cockpit.example/sessions");
+    client.focus.mockImplementation(() => Promise.reject(new Error("Not allowed to focus a window")));
+    sw.clients.push(client);
+
+    await click(sw, "", { url: "/jobs" });
+
+    expect(client.postMessage).toHaveBeenCalled();
   });
 });

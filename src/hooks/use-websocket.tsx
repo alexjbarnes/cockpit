@@ -1,7 +1,7 @@
 "use client";
 
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useRef, useState } from "react";
-import { aliveAtPongDeadline, PONG_TIMEOUT_MS, socketHealth } from "@/lib/ws-health";
+import { aliveAtPongDeadline, PONG_TIMEOUT_MS, replaceOnResume, socketHealth } from "@/lib/ws-health";
 import type { ClientMessage, ServerMessage } from "@/types";
 
 type MessageHandler = (msg: ServerMessage) => void;
@@ -32,6 +32,9 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
   /** When the current socket was created, and when anything last arrived on it. */
   const createdAt = useRef(0);
   const lastReceivedAt = useRef(0);
+  /** Wall-clock time the page was hidden, or 0 while it is visible. The
+   *  monotonic clock can stand still while a phone is locked. */
+  const hiddenAt = useRef(0);
 
   const scheduleReconnect = useCallback(() => {
     if (!mountedRef.current) return;
@@ -234,6 +237,8 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
       if (document.visibilityState === "visible") {
         console.log(`[ws] page visible (hasWs=${!!wsRef.current}, connecting=${connectingRef.current})`);
         startHealthCheck();
+        const hiddenFor = hiddenAt.current ? Date.now() - hiddenAt.current : 0;
+        hiddenAt.current = 0;
 
         // Immediate check on becoming visible
         if (!wsRef.current && !connectingRef.current) {
@@ -243,8 +248,14 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
           connectRef.current?.();
           return;
         }
+        if (wsRef.current && replaceOnResume(hiddenFor, window.matchMedia("(pointer: coarse)").matches)) {
+          console.log(`[ws] back after ${Math.round(hiddenFor / 1000)}s in the background, replacing the connection`);
+          tearDownAndReconnect();
+          return;
+        }
         check();
       } else {
+        hiddenAt.current = Date.now();
         clearInterval(healthTimer.current);
       }
     };

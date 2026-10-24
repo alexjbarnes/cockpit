@@ -128,3 +128,60 @@ test.describe("websocket health on a slow link", () => {
     }
   });
 });
+
+/** Tells the page it went to the background, or came back. */
+async function setVisibility(page: Page, state: "hidden" | "visible"): Promise<void> {
+  await page.evaluate((s) => {
+    Object.defineProperty(document, "visibilityState", { configurable: true, get: () => s });
+    document.dispatchEvent(new Event("visibilitychange"));
+  }, state);
+}
+
+test.describe("a phone coming back from the background", () => {
+  test.use({ viewport: { width: 393, height: 760 }, hasTouch: true, isMobile: true });
+
+  test("replaces its connection at once rather than testing a dead one", async ({ page, harness }) => {
+    const workDir = mkdtempSync(path.join(tmpdir(), "cockpit-it-resume-"));
+    mkdirSync(path.join(workDir, ".git"), { recursive: true });
+    harness.trustWorkDir(workDir);
+    try {
+      // Each socket's opening time, and a switch that makes the current one go
+      // quiet the way a phone's does while the app is suspended.
+      const opened: number[] = [];
+      let cut = false;
+      await page.routeWebSocket(/\/ws(\?|$)/, (ws) => {
+        opened.push(Date.now());
+        const mine = opened.length;
+        const server = ws.connectToServer();
+        ws.onMessage((message) => server.send(message));
+        server.onMessage((message) => {
+          if (cut && mine === opened.length) return;
+          try {
+            ws.send(message);
+          } catch {
+            // The page closed this socket meanwhile.
+          }
+        });
+      });
+
+      const sessionId = await createSession(page, harness, workDir);
+      await page.goto(`${harness.cockpitUrl}/sessions/${sessionId}?cwd=${encodeURIComponent(workDir)}`);
+      await expect(page.getByTestId("btn-send")).toBeVisible({ timeout: 15_000 });
+      expect(await page.evaluate(() => window.matchMedia("(pointer: coarse)").matches)).toBe(true);
+
+      await setVisibility(page, "hidden");
+      cut = true;
+      await page.waitForTimeout(10_500);
+      const back = Date.now();
+      await setVisibility(page, "visible");
+
+      // Testing the dead socket first would leave the page waiting for a pong
+      // that never comes.
+      await expect.poll(() => opened.length, { timeout: 1500 }).toBe(2);
+      expect(opened[1] - back).toBeLessThan(1500);
+      await expect(page.getByTestId("btn-send")).toBeVisible({ timeout: 10_000 });
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+});

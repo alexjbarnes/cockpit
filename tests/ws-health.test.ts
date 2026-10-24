@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { aliveAtPongDeadline, CONNECT_TIMEOUT_MS, socketHealth } from "@/lib/ws-health";
+import { aliveAtPongDeadline, CONNECT_TIMEOUT_MS, RESUME_RECONNECT_MS, replaceOnResume, socketHealth } from "@/lib/ws-health";
 
 const CONNECTING = 0;
 const OPEN = 1;
@@ -35,5 +35,21 @@ describe("aliveAtPongDeadline", () => {
 
   it("counts a socket silent since the ping as dead", () => {
     expect(aliveAtPongDeadline(1_000, 999)).toBe(false);
+  });
+});
+
+describe("replaceOnResume", () => {
+  it("replaces a phone's socket after a spell in the background", () => {
+    expect(replaceOnResume(RESUME_RECONNECT_MS, true)).toBe(true);
+    expect(replaceOnResume(10 * 60_000, true)).toBe(true);
+  });
+
+  it("tests a phone's socket after a moment away, which it usually survives", () => {
+    expect(replaceOnResume(RESUME_RECONNECT_MS - 1, true)).toBe(false);
+    expect(replaceOnResume(0, true)).toBe(false);
+  });
+
+  it("tests a desktop's socket however long it was away", () => {
+    expect(replaceOnResume(10 * 60_000, false)).toBe(false);
   });
 });
