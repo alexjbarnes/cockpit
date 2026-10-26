@@ -1250,11 +1250,11 @@ describe("cockpit-config MCP server (in-process HTTP)", () => {
     });
 
     it("update_settings allows modelSlots", async () => {
-      const modelSlots = { main: "claude-opus-4-5-20251101", mainContext: "100k" };
+      const modelSlots = { main: "claude-opus-4-5-20251101", mainContext: "1m" };
       await callTool("update_settings", { modelSlots });
       const settings = (await callToolParsed("get_settings")) as { modelSlots?: Record<string, string> };
       expect(settings.modelSlots?.main).toBe("claude-opus-4-5-20251101");
-      expect(settings.modelSlots?.mainContext).toBe("100k");
+      expect(settings.modelSlots?.mainContext).toBe("1m");
     });
   });
 

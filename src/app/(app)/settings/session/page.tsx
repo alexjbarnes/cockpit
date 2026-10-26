@@ -1,37 +1,22 @@
 "use client";
 
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, ChevronDown } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { usePageHeader } from "@/components/app-shell";
+import { ModelPickerList } from "@/components/model-picker-list";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { type ThinkingLevel, useSettings } from "@/hooks/use-settings";
-import {
-  allowedEffortLevels,
-  CONTEXT_SIZES,
-  type ContextSize,
-  defaultForAlias,
-  type ModelAlias,
-  recommendedEffort,
-  resolveModel,
-  versionsForAlias,
-} from "@/lib/models";
-import type { SandboxSupport, SessionPermissionMode } from "@/types";
+import { ALL_PROVIDERS, defaultSelectionFor, modelTuning, valueForEntry } from "@/lib/model-picker";
+import { CONTEXT_SIZES, type ContextSize, describeModelSelection } from "@/lib/models";
+import type { Provider, SandboxSupport, SessionPermissionMode } from "@/types";
 
 // Bypass keeps the orange the session panel uses for it, as a warning.
 const permissionOptions: { value: SessionPermissionMode; label: string; activeClassName?: string }[] = [
   { value: "manual", label: "Manual" },
   { value: "auto", label: "Auto" },
   { value: "bypass", label: "Bypass", activeClassName: "bg-orange-500 text-white hover:bg-orange-500/90" },
-];
-
-const thinkingOptions: { value: ThinkingLevel; label: string }[] = [
-  { value: "off", label: "Off" },
-  { value: "low", label: "Low" },
-  { value: "medium", label: "Medium" },
-  { value: "high", label: "High" },
-  { value: "xhigh", label: "XHigh" },
-  { value: "max", label: "Max" },
 ];
 
 function Toggle({ enabled, color, disabled, onToggle }: { enabled: boolean; color?: string; disabled?: boolean; onToggle: () => void }) {
@@ -49,9 +34,9 @@ function Toggle({ enabled, color, disabled, onToggle }: { enabled: boolean; colo
 
 function SettingRow({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="flex items-start justify-between py-2.5 text-sm">
-      <span className="py-1">{label}</span>
-      {children}
+    <div className="flex items-start justify-between gap-3 py-2.5 text-sm">
+      <span className="shrink-0 py-1">{label}</span>
+      <div className="min-w-0">{children}</div>
     </div>
   );
 }
@@ -98,48 +83,45 @@ export default function SessionSettingsPage() {
       );
   }, []);
 
+  // Every model a session can run: the Anthropic aliases and each connected
+  // provider's catalogue, the same list the session panel picks from.
+  const [providers, setProviders] = useState<Provider[]>([]);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [providerFilter, setProviderFilter] = useState(ALL_PROVIDERS);
+  useEffect(() => {
+    fetch("/api/providers")
+      .then((res) => res.json())
+      .then((data) => {
+        if (Array.isArray(data)) setProviders(data);
+      })
+      .catch(() => {});
+  }, []);
+
   const mainModel = settings.modelSlots?.main ?? "sonnet";
   const mainContext: ContextSize = settings.modelSlots?.mainContext ?? "200k";
-  const entry = resolveModel(mainModel);
-  const selectedAlias = entry?.alias || "sonnet";
-  const versions = versionsForAlias(selectedAlias);
-  const showVersions = versions.length > 1;
-  const effortLevels = allowedEffortLevels(entry);
-  const visibleThinking = thinkingOptions.filter((opt) =>
-    opt.value === "off" ? effortLevels.length > 0 : effortLevels.includes(opt.value as ThinkingLevel),
-  );
-  // Sonnet 4.6's 1M needs usage credits, so only offer it as a default when the
-  // user has opted in. Other models' sizes are unchanged.
-  const availableContextSizes = (entry?.contextSizes ?? []).filter(
-    (s) => s !== "1m" || !entry?.oneMRequiresCredits || settings.allowSonnet1m,
-  );
+  const tuning = modelTuning(mainModel, mainContext, providers, settings.allowSonnet1m);
+  const selection = describeModelSelection(mainModel, settings.thinkingLevel, mainContext, providers);
+  const contextSizes = tuning.contextSizes;
+  const shownContext = contextSizes.includes(mainContext) ? mainContext : (contextSizes[0] ?? "200k");
+  const versions = tuning.versions;
 
-  function selectAlias(alias: ModelAlias) {
-    const def = defaultForAlias(alias);
-    if (!def) return;
-    updateSetting("modelSlots", {
-      ...settings.modelSlots,
-      main: def.modelId,
-      mainContext: def.contextSizes.includes(mainContext) ? mainContext : (def.contextSizes[0] ?? "200k"),
-    });
-    const rec = recommendedEffort(def);
-    if (rec) updateSetting("thinkingLevel", rec);
+  function pickModel(value: string) {
+    const next = defaultSelectionFor(
+      value,
+      { contextSize: mainContext, thinkingLevel: settings.thinkingLevel },
+      providers,
+      settings.allowSonnet1m,
+    );
+    updateSetting("modelSlots", { ...settings.modelSlots, main: next.model, mainContext: next.contextSize });
+    if (next.thinkingLevel !== settings.thinkingLevel) updateSetting("thinkingLevel", next.thinkingLevel);
+    setPickerOpen(false);
   }
 
-  function selectVersion(version: string) {
-    const ver = versions.find((m) => m.version === version);
+  function selectVersion(modelId: string) {
+    const ver = versions.find((m) => m.modelId === modelId);
     if (!ver) return;
-    const nextSlots = {
-      ...settings.modelSlots,
-      main: ver.modelId,
-      mainContext: ver.contextSizes.includes(mainContext) ? mainContext : (ver.contextSizes[0] ?? "200k"),
-    };
-    updateSetting("modelSlots", nextSlots);
-    const levels = allowedEffortLevels(ver);
-    if (!levels.includes(settings.thinkingLevel)) {
-      const rec = recommendedEffort(ver);
-      if (rec) updateSetting("thinkingLevel", rec);
-    }
+    pickModel(valueForEntry(ver));
   }
 
   return (
@@ -150,46 +132,46 @@ export default function SessionSettingsPage() {
       </Button>
       <div className="space-y-1">
         <SettingRow label="Model">
-          <ButtonGroup
-            options={
-              [
-                { value: "haiku", label: "Haiku" },
-                { value: "sonnet", label: "Sonnet" },
-                { value: "opus", label: "Opus" },
-                { value: "fable", label: "Fable" },
-              ] as { value: string; label: string }[]
-            }
-            value={selectedAlias}
-            onChange={(v) => selectAlias(v as ModelAlias)}
-          />
+          <Button
+            variant="outline"
+            size="sm"
+            data-testid="default-model-open"
+            onClick={() => setPickerOpen(true)}
+            className="max-w-72 justify-between gap-2 font-normal"
+          >
+            <span className="truncate">{selection.provider ? `${selection.provider} · ${selection.label}` : selection.label}</span>
+            <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+          </Button>
         </SettingRow>
-        {showVersions && (
+        {versions.length > 1 && (
           <SettingRow label="Version">
             <ButtonGroup
-              options={versions.map((m) => ({ value: m.version, label: m.version }))}
-              value={entry?.version || versions[0].version}
+              options={versions.map((m) => ({ value: m.modelId, label: m.version }))}
+              value={tuning.parsed.entry?.modelId ?? versions[0].modelId}
               onChange={selectVersion}
             />
           </SettingRow>
         )}
-        {entry && availableContextSizes.length >= 2 && (
+        {contextSizes.length >= 2 && (
           <SettingRow label="Context">
             <ButtonGroup
-              options={availableContextSizes.map((s) => ({ value: s, label: CONTEXT_SIZES[s].label }))}
-              value={availableContextSizes.includes(mainContext) ? mainContext : "200k"}
-              onChange={(v) =>
-                updateSetting("modelSlots", {
-                  ...settings.modelSlots,
-                  main: entry.modelId,
-                  mainContext: v,
-                })
-              }
+              options={contextSizes.map((s) => ({ value: s, label: CONTEXT_SIZES[s].label }))}
+              value={shownContext}
+              onChange={(v) => updateSetting("modelSlots", { ...settings.modelSlots, main: mainModel, mainContext: v })}
             />
           </SettingRow>
         )}
-        {visibleThinking.length > 0 && (
+        {tuning.thinkingLevels.length > 0 ? (
           <SettingRow label="Thinking">
-            <ButtonGroup options={visibleThinking} value={settings.thinkingLevel} onChange={(v) => updateSetting("thinkingLevel", v)} />
+            <ButtonGroup
+              options={tuning.thinkingLevels}
+              value={settings.thinkingLevel}
+              onChange={(v: ThinkingLevel) => updateSetting("thinkingLevel", v)}
+            />
+          </SettingRow>
+        ) : (
+          <SettingRow label="Thinking">
+            <span className="text-xs text-muted-foreground">{selection.label} has no thinking levels.</span>
           </SettingRow>
         )}
         <SettingRow label="Permission mode">
@@ -248,6 +230,23 @@ export default function SessionSettingsPage() {
           <Toggle enabled={settings.allowSonnet1m} onToggle={() => updateSetting("allowSonnet1m", !settings.allowSonnet1m)} />
         </SettingRow>
       </div>
+
+      <Dialog open={pickerOpen} onOpenChange={setPickerOpen}>
+        <DialogContent className="flex h-[min(80vh,560px)] max-w-xl flex-col p-4">
+          <DialogTitle className="mb-3 shrink-0 text-sm font-medium">Default model</DialogTitle>
+          <ModelPickerList
+            currentModel={mainModel}
+            providers={providers}
+            recentModels={[]}
+            onSelectModel={pickModel}
+            tuning={tuning}
+            query={query}
+            onQuery={setQuery}
+            providerFilter={providerFilter}
+            onProviderFilter={setProviderFilter}
+          />
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

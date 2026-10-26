@@ -361,6 +361,10 @@ export class SessionManager {
       modelSlots.main,
       isCockpitAgent,
     );
+    // The thinking default applies to whatever model is the default too, which
+    // may be another provider's: its spawn ignores an effort it cannot run, so
+    // the level is settled here the way a model switch settles it.
+    const thinkingLevel = this.startingThinkingLevel(modelSlots.main, defaults.thinkingLevel);
     // The assistant has no sandbox control. A job passes its own switch, so
     // the default for interactive sessions never decides a job's sandbox.
     const sandbox: SandboxConfig = isCockpitAgent ? { enabled: false } : enforceableSandbox(options?.sandbox ?? defaults.sandbox);
@@ -390,7 +394,7 @@ export class SessionManager {
       compacting: false,
       pendingCompactFlush: false,
       compactRequestedAt: 0,
-      thinkingLevel: defaults.thinkingLevel,
+      thinkingLevel,
       streamState: null,
       contextUsage: null,
       contextWindowSize: this.resolveContextWindow(info.model, info.contextSize ?? DEFAULT_CONTEXT_SIZE),
@@ -424,7 +428,7 @@ export class SessionManager {
       model: modelSlots.main,
       contextSize: info.contextSize,
       modelSlots,
-      thinkingLevel: defaults.thinkingLevel,
+      thinkingLevel,
       runtime: rt,
       permissionMode,
       sandbox,
@@ -2704,6 +2708,18 @@ Additional Cockpit rules beyond the CLI's defaults:
     // the same session — two processes racing on the same --session-id.
     if (!session || session.harnessProcess?.isAlive || session.spawning) return;
     this.spawnProcess(session, sessionId);
+  }
+
+  /** The thinking level a new session starts with. The configured default
+   *  stands when the model can run it (or has no thinking at all, in which case
+   *  its spawn passes no effort). Otherwise the model's recommended level for
+   *  Anthropic's, or the last one it offers for a provider's. */
+  private startingThinkingLevel(modelId: string | undefined, level: ThinkingLevel): ThinkingLevel {
+    const entry = resolveModel(modelId);
+    if (entry) return coerceEffort(level, entry) ?? level;
+    const levels = this.modelEffortLevels(modelId);
+    if (levels.length === 0 || level === "off" || levels.includes(level)) return level;
+    return levels[levels.length - 1];
   }
 
   /** Check effort levels for built-in models or custom provider models. */

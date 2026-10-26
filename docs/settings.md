@@ -12,9 +12,9 @@ To reset the password: set `COCKPIT_RESET_PASSWORD=true` and restart.
 
 The Settings page picks the defaults for new sessions:
 
-- Model. Built-in Haiku, Sonnet, or Opus with a version switcher, or any model from a connected gateway or custom provider (see [Providers](#providers)). Models can be set per slot: main, subagent, and fast.
-- Context size. 200K (default) or 1M, for models that support both.
-- Thinking level. Low, Medium, High, XHigh, Max. Trades latency for depth of reasoning. Only the levels the model supports are offered.
+- Model. The picker lists Anthropic's Haiku, Sonnet, Opus and Fable with their versions, and every model from a connected gateway or custom provider (see [Providers](providers.md)), with a search and a provider filter. A provider's model is stored qualified, `provider:model`. Models can be set per slot: main, subagent, and fast.
+- Context size. 200K (default) or 1M, for models that support both. A provider's model offers whichever sizes its catalogue declares.
+- Thinking level. Low, Medium, High, XHigh, Max. Trades latency for depth of reasoning. Only the levels the model supports are offered, and picking a model that cannot run the current level moves it to one it can.
 - Default runtime is Stream; choose Stream or PTY per session (see [Sessions: runtime mode](sessions.md#runtime-mode)).
 - Permission bypass. Off by default. When on, Claude skips permission prompts. An orange warning is shown when active.
 - Sandbox Bash. Off by default. When on, new sessions run Bash in the OS sandbox, with any domains listed here added to the shared rules below.

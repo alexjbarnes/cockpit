@@ -1,7 +1,8 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { CONTEXT_SIZES, type ContextSize } from "@/lib/models";
 import { getCockpitDir } from "@/server/paths";
-import type { ModelSlots, SandboxConfig, SessionPermissionMode, ThinkingLevel } from "@/types";
+import { type ModelSlots, type SandboxConfig, type SessionPermissionMode, THINKING_LEVELS, type ThinkingLevel } from "@/types";
 
 export type DiffStyle = "split" | "unified";
 
@@ -136,6 +137,21 @@ function normalisePermissionMode(raw: Record<string, unknown>): void {
   if (!isPermissionMode(raw.permissionMode)) raw.permissionMode = legacy === true ? "bypass" : fallback.permissionMode;
 }
 
+/** A model slot set as it may be stored or sent. `main` is any model a session
+ *  can run, Anthropic's or a provider's (qualified `provider:model`), so it is
+ *  only checked for being a non-empty string; the context size and the other
+ *  slots are kept when they are of the right shape and dropped otherwise. */
+function parseModelSlots(v: unknown): ModelSlots | undefined {
+  if (typeof v !== "object" || v === null) return undefined;
+  const { main, mainContext, subagent, fast } = v as Record<string, unknown>;
+  if (typeof main !== "string" || !main.trim()) return undefined;
+  const slots: ModelSlots = { main: main.trim() };
+  if (typeof mainContext === "string" && mainContext in CONTEXT_SIZES) slots.mainContext = mainContext as ContextSize;
+  if (typeof subagent === "string" && subagent.trim()) slots.subagent = subagent.trim();
+  if (typeof fast === "string" && fast.trim()) slots.fast = fast.trim();
+  return slots;
+}
+
 /** A sandbox config as it may be stored or sent: `enabled` must be a boolean,
  *  and the allowlist keeps only non-empty strings, trimmed. Anything else is
  *  not a config, and the caller falls back rather than guessing. */
@@ -186,6 +202,14 @@ export function setDefaults(partial: Partial<AppDefaults> & { bypassAllPermissio
   // The route hands its body straight through, so an unknown mode is dropped
   // here rather than written and then silently read back as manual.
   if (next.permissionMode !== undefined && !isPermissionMode(next.permissionMode)) delete next.permissionMode;
+  if (next.modelSlots !== undefined) {
+    const slots = parseModelSlots(next.modelSlots);
+    if (slots) next.modelSlots = slots;
+    else delete next.modelSlots;
+  }
+  if (next.thinkingLevel !== undefined && !(THINKING_LEVELS as readonly string[]).includes(next.thinkingLevel as string)) {
+    delete next.thinkingLevel;
+  }
   if (next.sandbox !== undefined) {
     const sandbox = parseSandbox(next.sandbox);
     if (sandbox) next.sandbox = sandbox;

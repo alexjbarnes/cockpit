@@ -3776,6 +3776,35 @@ describe("SessionManager", () => {
     });
   });
 
+  describe("a new session's thinking level", () => {
+    const providerFile = JSON.stringify([
+      {
+        id: "zen",
+        name: "OpenCode Zen",
+        isBuiltin: true,
+        envVars: {},
+        enabledModels: ["kimi-k3"],
+        models: [{ modelId: "kimi-k3", displayName: "Kimi K3", effortLevels: ["medium", "high"], contextSizes: ["200k"] }],
+      },
+    ]);
+
+    it("settles on a level the provider's default model offers", async () => {
+      const { writeFileSync } = await import("node:fs");
+      const { join } = await import("node:path");
+      writeFileSync(join(process.env.COCKPIT_CONFIG_DIR!, "providers.json"), providerFile);
+
+      expect((manager as any).startingThinkingLevel("zen:kimi-k3", "xhigh")).toBe("high");
+      expect((manager as any).startingThinkingLevel("zen:kimi-k3", "medium")).toBe("medium");
+      // A model with no thinking keeps the configured default harmless.
+      expect((manager as any).startingThinkingLevel("zen:ds-free", "high")).toBe("high");
+    });
+
+    it("leaves an Anthropic default alone when it can run the level", () => {
+      expect((manager as any).startingThinkingLevel("sonnet", "high")).toBe("high");
+      expect((manager as any).startingThinkingLevel("claude-sonnet-4-6", "xhigh")).toBe("medium");
+    });
+  });
+
   describe("transcript updates", () => {
     const message = (id: string, content: string) => ({ id, role: "assistant", content, toolUses: [], blocks: [], timestamp: 1 });
 

@@ -312,6 +312,35 @@ describe("defaults", () => {
     });
   });
 
+  it("stores any provider's model as the default, keeping only well-shaped slots", async () => {
+    const fs = await import("node:fs");
+    vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify({}));
+
+    const { setDefaults } = await import("@/server/defaults");
+    const result = setDefaults({
+      modelSlots: { main: "  zen:kimi-k3 ", mainContext: "1m", subagent: "claude-haiku-5-5", fast: "" },
+    });
+
+    expect(result.modelSlots).toEqual({ main: "zen:kimi-k3", mainContext: "1m", subagent: "claude-haiku-5-5" });
+  });
+
+  it("refuses a default with no model, an unknown context size or an unknown thinking level", async () => {
+    const fs = await import("node:fs");
+    vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify({}));
+
+    const { setDefaults } = await import("@/server/defaults");
+    const result = setDefaults({
+      modelSlots: { main: "   ", mainContext: "1m" },
+      thinkingLevel: "turbo" as never,
+    });
+
+    expect(result.modelSlots).toEqual({ main: "sonnet" });
+    expect(result.thinkingLevel).toBe("high");
+
+    const kept = setDefaults({ modelSlots: { main: "zen:kimi-k3", mainContext: "2m" as never } });
+    expect(kept.modelSlots).toEqual({ main: "zen:kimi-k3" });
+  });
+
   it("setDefaults handles write failure gracefully", async () => {
     const fs = await import("node:fs");
     vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify({}));
