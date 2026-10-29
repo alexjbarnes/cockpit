@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { validateSession } from "@/server/auth";
 import { debugLog } from "@/server/debug-logger";
+import { getSessionPrefs } from "@/server/session-prefs";
 import { getSessionManager } from "@/server/singleton";
 import { scanSessionsByIds } from "@/server/transcript";
 import type { SessionInfo } from "@/types";
@@ -17,25 +18,52 @@ export async function GET(req: NextRequest) {
   }
 
   const idsParam = req.nextUrl.searchParams.get("ids") || "";
-  const ids = idsParam
+  const requested = idsParam
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean);
-  if (ids.length === 0) {
+  if (requested.length === 0) {
     return NextResponse.json({ sessions: [] });
   }
 
-  const sessions = await scanSessionsByIds(ids);
-  debugLog(`[api/sessions/by-ids] scanSessionsByIds(${ids.length} ids) took ${(performance.now() - t0).toFixed(0)}ms`);
+  // A pinned id is not always a transcript's name. A session that ran /clear
+  // keeps its cockpit id while the conversation moves to a new CLI id, and an
+  // older CLI id is no filename either, so the pin is resolved through the
+  // prefs chain and answered under the id the caller asked for.
+  const prefsById = new Map(requested.map((id) => [id, getSessionPrefs(id)]));
+  const candidates = new Set<string>();
+  for (const id of requested) {
+    candidates.add(id);
+    const prefs = prefsById.get(id);
+    for (const c of [prefs?.cliSessionId, ...(prefs?.previousCliSessionIds ?? [])]) {
+      if (c) candidates.add(c);
+    }
+  }
+  const scanned = await scanSessionsByIds([...candidates]);
+  const byScanId = new Map(scanned.map((s) => [s.id, s]));
+  debugLog(
+    `[api/sessions/by-ids] scanSessionsByIds(${candidates.size} ids for ${requested.length} pins) took ${(performance.now() - t0).toFixed(0)}ms`,
+  );
 
   const manager = getSessionManager();
   const activeMap = new Map(manager.listActiveSessions().map((s) => [s.id, s]));
   const knownMap = new Map(manager.listKnownSessions().map((s) => [s.id, s]));
 
+  const sessions: SessionInfo[] = [];
   const found = new Set<string>();
-  for (const session of sessions) {
-    found.add(session.id);
-    const running = activeMap.get(session.id);
+  const seen = new Set<string>();
+  for (const id of requested) {
+    const prefs = prefsById.get(id);
+    const chain = [prefs?.cliSessionId, id, ...(prefs?.previousCliSessionIds ?? [])].filter((c): c is string => !!c);
+    // A session created in this process but not yet written to a transcript is
+    // only in the manager, under the id it was created with.
+    const hit = chain.map((c) => byScanId.get(c) ?? knownMap.get(c)).find((s): s is SessionInfo => !!s);
+    if (!hit || seen.has(hit.id)) continue;
+    seen.add(hit.id);
+    found.add(id);
+
+    const session: SessionInfo = { ...hit, id };
+    const running = activeMap.get(hit.id) ?? activeMap.get(id);
     if (running) {
       session.status = running.status;
       session.pendingRequestCount = running.pendingRequestCount;
@@ -44,22 +72,12 @@ export async function GET(req: NextRequest) {
       // seconds and the background-agent dot went out.
       session.agentCount = running.agentCount;
     }
-    const mem = knownMap.get(session.id);
+    const mem = knownMap.get(hit.id) ?? knownMap.get(id);
     if (mem) {
       session.name = mem.name;
     }
+    sessions.push(session);
   }
 
-  // Include in-memory sessions matching the requested IDs that have no
-  // transcript file yet (newly created sessions)
-  const requested = new Set(ids);
-  for (const mem of knownMap.values()) {
-    if (requested.has(mem.id) && !found.has(mem.id)) {
-      sessions.push(mem);
-      found.add(mem.id);
-    }
-  }
-
-  const result: SessionInfo[] = sessions;
-  return NextResponse.json({ sessions: result, foundIds: [...found] });
+  return NextResponse.json({ sessions, foundIds: [...found] });
 }

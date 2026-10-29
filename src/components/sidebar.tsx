@@ -360,6 +360,9 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
   }, []);
 
   const prevStatusRef = useRef<Map<string, string>>(new Map());
+  /** The pins as the server has them, including ones this page cannot render,
+   *  so a reorder persists those too rather than dropping them. */
+  const pinnedIdsRef = useRef<string[]>([]);
   const staleGuard = useRef(createStaleGuard()).current;
   const assistantStaleGuard = useRef(createStaleGuard()).current;
 
@@ -475,29 +478,19 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
     if (!res || isStale()) return;
 
     const fetchedSessions: SessionInfo[] = (res.sessions || []).filter((s: SessionInfo) => !s.cwd.endsWith(".cockpit/reviews"));
-    const foundIds: string[] = Array.isArray(res.foundIds) ? res.foundIds : fetchedSessions.map((s) => s.id);
-    const foundSet = new Set(foundIds);
 
-    // Preserve the user's pinned ordering
+    // Preserve the user's pinned ordering. A pin whose session this response
+    // does not carry is left in the file and simply not rendered here: the
+    // response can come back partial (a transcript being written, a scan
+    // racing a server start, a session whose id moved on /clear), and deleting
+    // from one of those lost the user's whole pinned list. Pins are removed
+    // where they are removed deliberately: closing or deleting a session.
+    pinnedIdsRef.current = pinnedIds;
     const byId = new Map(fetchedSessions.map((s) => [s.id, s]));
     const visible: SessionInfo[] = [];
-    const survivingIds: string[] = [];
     for (const id of pinnedIds) {
       const s = byId.get(id);
-      if (s) {
-        visible.push(s);
-        survivingIds.push(id);
-      }
-    }
-
-    // Drop pins whose session files no longer exist (server confirms via foundIds)
-    const hasOrphans = pinnedIds.some((id) => !foundSet.has(id));
-    if (hasOrphans) {
-      fetch("/api/sessions/pinned", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ pinned: survivingIds }),
-      }).catch(() => {});
+      if (s) visible.push(s);
     }
 
     for (const s of visible) {
@@ -591,10 +584,14 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
 
       const next = arrayMove(sessions, oldIndex, newIndex);
       setSessions(next);
+      // Pins this page cannot render keep their place in the file too, or a
+      // reorder would delete them.
+      const order = next.map((s) => s.id);
+      const hidden = pinnedIdsRef.current.filter((id) => !order.includes(id));
       fetch("/api/sessions/pinned", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ pinned: next.map((s) => s.id) }),
+        body: JSON.stringify({ pinned: [...order, ...hidden] }),
       }).catch((err) => console.error("Failed to persist sidebar order", err));
     },
     [sessions],
@@ -791,27 +788,17 @@ function RecentReviewsSection({ onNavigate, onWatchIds }: { onNavigate: () => vo
     if (!res) return;
 
     const sessions: SessionInfo[] = res.sessions || [];
-    const foundIds: string[] = Array.isArray(res.foundIds) ? res.foundIds : sessions.map((s: SessionInfo) => s.id);
-    const foundSet = new Set(foundIds);
 
+    // Same rule as the sessions above: a review pin the response does not
+    // carry is left in the file rather than deleted from one partial answer.
     const byId = new Map(sessions.map((s) => [s.id, s]));
     const visible: ReviewSession[] = [];
-    const survivingIds: string[] = [];
     for (const id of pinnedIds) {
       const s = byId.get(id);
       if (s) {
         const parsed = parseReviewSession(s);
         if (parsed) visible.push(parsed);
-        survivingIds.push(id);
       }
-    }
-
-    if (pinnedIds.some((id) => !foundSet.has(id))) {
-      fetch("/api/reviews/pinned", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ pinned: survivingIds }),
-      }).catch(() => {});
     }
 
     setReviews(visible);
