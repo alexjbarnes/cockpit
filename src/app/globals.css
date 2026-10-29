@@ -1,5 +1,9 @@
 @import "tailwindcss";
 @import "@xterm/xterm/css/xterm.css";
+/* What the `prose` classes on Markdown actually mean. Without it they matched
+   nothing, and every heading, list marker and table in a preview was left to
+   Tailwind's reset. */
+@plugin "@tailwindcss/typography";
 
 @font-face {
   font-family: "Symbols Nerd Font Mono";
