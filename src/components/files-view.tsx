@@ -368,10 +368,22 @@ export function FilesView({
       } catch {}
     };
 
-    return subscribe((msg) => {
+    const unsubscribe = subscribe((msg) => {
       if (msg.type !== "session:fs_changed") return;
       refresh();
     });
+    // A stat every few seconds while the page is visible, so an open file still
+    // refreshes if the directory watcher has stopped, or if the file sits
+    // outside the watched directory. refresh() asks for the mtime alone and
+    // fetches the content only when it changed.
+    const poll = setInterval(() => {
+      if (document.visibilityState === "visible") void refresh();
+    }, 5_000);
+
+    return () => {
+      unsubscribe();
+      clearInterval(poll);
+    };
   }, [selectedFile, subscribe]);
 
   const startEditing = useCallback(() => {
