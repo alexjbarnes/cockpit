@@ -1558,7 +1558,10 @@ export class SessionManager {
    *  contextLength; the enum default covers the rest. */
   private resolveContextWindow(model: string | undefined, size: ContextSize): number {
     const resolved = model ? resolveProviderModel(model) : null;
-    if (resolved?.model.contextSizes.includes(size)) return contextSizeToWindow(size);
+    // A provider entry written before contextSizes existed has none: fall
+    // through to its contextLength, and to the enum default when that is
+    // absent too.
+    if (resolved?.model.contextSizes?.includes(size)) return contextSizeToWindow(size);
     if (resolved?.model.contextLength && resolved.model.contextLength > 0) return resolved.model.contextLength;
     return contextSizeToWindow(size);
   }
@@ -2800,7 +2803,7 @@ Additional Cockpit rules beyond the CLI's defaults:
       // auto-compact with the model's real window. A curated 200k/1m model
       // follows the session's pick, mirroring resolveContextWindow so the
       // gauge and the CLI always agree on the denominator.
-      if (resolved.model.contextSizes.includes(effectiveContextSize)) {
+      if (resolved.model.contextSizes?.includes(effectiveContextSize)) {
         providerEnvVars.CLAUDE_CODE_MAX_CONTEXT_TOKENS = String(contextSizeToWindow(effectiveContextSize));
       } else if (resolved.model.contextLength && resolved.model.contextLength > 0) {
         providerEnvVars.CLAUDE_CODE_MAX_CONTEXT_TOKENS = String(resolved.model.contextLength);

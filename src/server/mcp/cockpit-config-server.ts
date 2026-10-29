@@ -995,8 +995,8 @@ async function handleToolCall(
             model: p.id === "anthropic" ? m.modelId : `${p.id}:${m.modelId}`,
             name: m.displayName,
             provider: p.name,
-            ...(m.contextSizes.length > 0 ? { contextSizes: m.contextSizes } : {}),
-            ...(m.effortLevels.length > 0 ? { thinkingLevels: m.effortLevels } : {}),
+            ...((m.contextSizes?.length ?? 0) > 0 ? { contextSizes: m.contextSizes } : {}),
+            ...((m.effortLevels?.length ?? 0) > 0 ? { thinkingLevels: m.effortLevels } : {}),
             ...(m.free ? { free: true } : {}),
           }));
         });

@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("node:child_process", () => ({
   spawn: vi.fn(() => {
@@ -3773,6 +3773,36 @@ describe("SessionManager", () => {
 
       expect(errors).toContain("Overloaded (HTTP 529)");
       expect(s.info.contextSize).toBe("1m"); // ordinary error must not revert
+    });
+  });
+
+  describe("a provider model written before contextSizes existed", () => {
+    const legacy = JSON.stringify([
+      {
+        id: "mock",
+        name: "Mock",
+        envVars: {},
+        models: [
+          { modelId: "legacy-flat", displayName: "Legacy flat" },
+          { modelId: "legacy-length", displayName: "Legacy with a length", contextLength: 128_000 },
+        ],
+      },
+    ]);
+
+    it("falls back to its contextLength, or the chosen size, instead of throwing", async () => {
+      const { writeFileSync } = await import("node:fs");
+      const { join } = await import("node:path");
+      writeFileSync(join(process.env.COCKPIT_CONFIG_DIR!, "providers.json"), legacy);
+
+      expect((manager as any).resolveContextWindow("mock:legacy-flat", "200k")).toBe(200_000);
+      expect((manager as any).resolveContextWindow("mock:legacy-length", "200k")).toBe(128_000);
+    });
+
+    // The provider cache reloads on the file's mtime, which this filesystem
+    // records in 10ms steps: the next test's seed must land in a later step or
+    // it reads this file instead.
+    afterEach(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 25));
     });
   });
 
