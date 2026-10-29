@@ -1,6 +1,5 @@
-import { copyFile, mkdir, readFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { writeJsonAtomic } from "@/server/atomic-write";
 import { getClaudeDir, getCockpitDir } from "@/server/paths";
 
 /**
@@ -62,8 +61,12 @@ export async function readPinned(list: PinnedList): Promise<string[]> {
 }
 
 export async function writePinned(list: PinnedList, ids: string[]): Promise<void> {
-  // Atomic, like every other store cockpit owns: a read that lands mid-write
-  // must not see a truncated list, which readPinned would fall back from to the
-  // legacy file, writing that old list back over the current one.
-  writeJsonAtomic(currentFile(list), ids);
+  // Write-then-rename, like every other store cockpit owns: a read that lands
+  // mid-write must not see a truncated list, which readPinned would fall back
+  // from to the legacy file, copying that old list back over the current one.
+  const file = currentFile(list);
+  await mkdir(path.dirname(file), { recursive: true });
+  const tmp = `${file}.tmp-${process.pid}`;
+  await writeFile(tmp, `${JSON.stringify(ids, null, 2)}\n`);
+  await rename(tmp, file);
 }

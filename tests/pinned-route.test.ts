@@ -5,6 +5,8 @@ vi.mock("node:fs/promises", () => ({
   readFile: vi.fn(),
   writeFile: vi.fn(),
   mkdir: vi.fn(),
+  // writePinned writes a temp file and renames it into place.
+  rename: vi.fn(),
 }));
 
 vi.mock("@/server/auth", () => ({
