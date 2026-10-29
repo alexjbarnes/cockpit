@@ -106,24 +106,38 @@ function StatusEditor({ form, setForm }: { form: FormState; setForm: (f: FormSta
       {form.customStatuses.length > 0 && (
         <div className="space-y-1.5">
           {form.customStatuses.map((c) => (
-            <div key={c.name} className="flex items-center gap-2 rounded border px-2 py-1.5">
-              <span
-                className={cn("h-2.5 w-2.5 shrink-0 rounded-full", statusColor(c.name, { customStatuses: form.customStatuses } as Project))}
-              />
-              <span className="truncate text-xs font-medium">{c.name}</span>
-              <div className="ml-auto flex items-center gap-1">
+            // The palette sits under the name rather than beside it: fourteen
+            // swatches are wider than a phone's dialog, and beside the name they
+            // squeezed it to nothing, leaving a row of dots and a bin.
+            <div key={c.name} className="space-y-1.5 rounded border px-2 py-1.5">
+              <div className="flex items-center gap-2">
+                <span
+                  className={cn(
+                    "h-2.5 w-2.5 shrink-0 rounded-full",
+                    statusColor(c.name, { customStatuses: form.customStatuses } as Project),
+                  )}
+                />
+                <span className="min-w-0 flex-1 truncate text-xs font-medium">{c.name}</span>
+                <button
+                  type="button"
+                  onClick={() => removeCustom(c.name)}
+                  className="shrink-0 text-muted-foreground hover:text-destructive"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </button>
+              </div>
+              <div className="flex flex-wrap gap-1">
                 {LABEL_COLORS.map((color) => (
                   <button
                     key={color}
                     type="button"
                     aria-label={`colour ${color}`}
+                    aria-pressed={c.color === color}
+                    data-testid={`custom-status-colour-${c.name}-${color}`}
                     onClick={() => setColor(c.name, color)}
                     className={cn("h-3.5 w-3.5 rounded-full", color, c.color === color ? "ring-2 ring-offset-1 ring-foreground" : "")}
                   />
                 ))}
-                <button type="button" onClick={() => removeCustom(c.name)} className="ml-1 text-muted-foreground hover:text-destructive">
-                  <Trash2 className="h-3.5 w-3.5" />
-                </button>
               </div>
             </div>
           ))}
@@ -148,6 +162,12 @@ function StatusEditor({ form, setForm }: { form: FormState; setForm: (f: FormSta
         </Button>
       </div>
       {trimmed !== "" && !canAdd && <p className="text-xs text-destructive">That name is already a status.</p>}
+      {form.customStatuses.length > 0 && (
+        <p className="text-xs text-muted-foreground">
+          A custom status is added to the list as you type its name, and its colour is set here. Both are stored when the project is saved,
+          with the Save button below.
+        </p>
+      )}
     </div>
   );
 }
@@ -296,7 +316,13 @@ export default function ProjectsSettingsPage() {
                   </div>
                   {p.repoPath && <div className="text-xs text-muted-foreground truncate font-mono mt-0.5">{p.repoPath}</div>}
                 </div>
-                <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0" onClick={() => startEdit(p)}>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8 shrink-0"
+                  data-testid={`edit-project-${p.id}`}
+                  onClick={() => startEdit(p)}
+                >
                   <Pencil className="h-3.5 w-3.5" />
                 </Button>
                 <Button
