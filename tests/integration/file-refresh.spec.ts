@@ -43,6 +43,8 @@ test("an open Markdown preview shows a change made on disk", async ({ page, harn
     await page.waitForTimeout(5000);
 
     await page.getByText("Session Files", { exact: true }).click();
+    // The tree is fetched; under load it can take a while to list the file.
+    await expect(page.getByText("NOTE.md", { exact: true }).first()).toBeVisible({ timeout: 30_000 });
     await page.getByText("NOTE.md", { exact: true }).first().click();
     await page.getByTitle("Show preview").click();
     await expect(page.getByRole("heading", { name: "One" })).toBeVisible();
