@@ -30,6 +30,10 @@ export interface SessionPrefs {
   previousCliSessionIds?: string[];
   openTabs?: PersistedTab[];
   activeTabId?: string;
+  /** The split view: the tab shown in the right pane, and every tab that
+   *  belongs to it. Null or absent means no split. */
+  splitTabId?: string | null;
+  rightPaneTabIds?: string[];
   runtime?: SessionRuntime;
   cockpitAgent?: boolean;
   /** Alerts this session sends out. Absent means silent. */

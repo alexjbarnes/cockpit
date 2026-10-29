@@ -3,6 +3,7 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { disposeTerminalInstance } from "@/components/terminal-panel";
 import { pathBasename } from "@/lib/path";
+import { restoreSplit, tabLayoutSignature } from "@/lib/tab-restore";
 
 interface ChatTab {
   type: "chat";
@@ -77,10 +78,15 @@ function terminalTabId(terminalId: string): string {
   return "terminal::" + terminalId;
 }
 
-// Identity of the open-tab set (order included). Used to tell a structural change
-// (a tab opened or closed -> persist immediately) from active-tab churn (debounce).
-function tabSig(tabs: Tab[]): string {
-  return tabs.map((t) => t.id).join("|");
+// Identity of the layout (tabs, order and split). Used to tell a structural
+// change (a tab opened or closed, the split moved -> persist immediately) from
+// active-tab churn (debounce).
+function stateSig(state: TabState): string {
+  return tabLayoutSignature(
+    state.tabs.map((t) => t.id),
+    state.splitTabId,
+    state.rightPaneTabIds,
+  );
 }
 
 const stateCache = new Map<string, TabState>();
@@ -134,14 +140,14 @@ export function TabProvider({ sessionId, children }: { sessionId: string; childr
   const [state, setState] = useState<TabState>(() => stateCache.get(sessionId) || DEFAULT_STATE);
   const loadedForRef = useRef<string | null>(stateCache.has(sessionId) ? sessionId : null);
   const saveTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
-  const lastTabSigRef = useRef<string>(tabSig((stateCache.get(sessionId) ?? DEFAULT_STATE).tabs));
+  const lastTabSigRef = useRef<string>(stateSig(stateCache.get(sessionId) ?? DEFAULT_STATE));
 
   useEffect(() => {
     if (loadedForRef.current === sessionId) return;
     if (stateCache.has(sessionId)) {
       const cached = stateCache.get(sessionId)!;
       setState(cached);
-      lastTabSigRef.current = tabSig(cached.tabs);
+      lastTabSigRef.current = stateSig(cached);
       loadedForRef.current = sessionId;
       return;
     }
@@ -153,10 +159,17 @@ export function TabProvider({ sessionId, children }: { sessionId: string; childr
         if (data?.openTabs?.length) {
           const tabs = deserializeTabs(data.openTabs);
           const activeTabId = data.activeTabId && tabs.some((t: Tab) => t.id === data.activeTabId) ? data.activeTabId : "chat";
-          const loaded: TabState = { tabs, activeTabId, splitTabId: null, rightPaneTabIds: [] };
+          // The split is restored too: a reload should land on the layout the
+          // user left, not just the same tabs.
+          const { splitTabId, rightPaneTabIds } = restoreSplit(
+            data.splitTabId,
+            data.rightPaneTabIds,
+            tabs.map((t) => t.id),
+          );
+          const loaded: TabState = { tabs, activeTabId, splitTabId, rightPaneTabIds };
           setState(loaded);
           stateCache.set(sessionId, loaded);
-          lastTabSigRef.current = tabSig(loaded.tabs);
+          lastTabSigRef.current = stateSig(loaded);
         }
         loadedForRef.current = sessionId;
       })
@@ -173,7 +186,7 @@ export function TabProvider({ sessionId, children }: { sessionId: string; childr
     if (loadedForRef.current !== sessionId) return;
     stateCache.set(sessionId, state);
 
-    const sig = tabSig(state.tabs);
+    const sig = stateSig(state);
     const structural = sig !== lastTabSigRef.current;
     lastTabSigRef.current = sig;
 
@@ -182,7 +195,12 @@ export function TabProvider({ sessionId, children }: { sessionId: string; childr
       fetch(`/api/sessions/${sessionId}/tabs`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ openTabs, activeTabId: state.activeTabId }),
+        body: JSON.stringify({
+          openTabs,
+          activeTabId: state.activeTabId,
+          splitTabId: state.splitTabId,
+          rightPaneTabIds: state.rightPaneTabIds,
+        }),
         // Survive a teardown right after the write is issued (reload, or a
         // trackpad swipe-back the instant a terminal opens).
         keepalive: true,
@@ -199,7 +217,7 @@ export function TabProvider({ sessionId, children }: { sessionId: string; childr
       saveTimer.current = setTimeout(persist, 300);
     }
     return () => clearTimeout(saveTimer.current);
-  }, [sessionId, state.tabs, state.activeTabId]);
+  }, [sessionId, state.tabs, state.activeTabId, state.splitTabId, state.rightPaneTabIds]);
 
   const openFile = useCallback((filePath: string) => {
     const id = fileTabId(filePath);
