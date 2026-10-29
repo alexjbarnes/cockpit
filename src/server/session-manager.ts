@@ -3017,6 +3017,17 @@ Additional Cockpit rules beyond the CLI's defaults:
           this.flushQueuedMessage(session, sessionId);
         }
       },
+      onCwdChanged: (cwd) => {
+        // EnterWorktree moves the CLI into a git worktree. The session keeps
+        // its original cwd as who it is; the worktree is where its files and
+        // diffs are now, and the UI points at it until the CLI comes back.
+        const worktreeCwd = cwd === session.info.cwd ? undefined : cwd;
+        if (worktreeCwd === session.info.worktreeCwd) return;
+        this.log(sessionId, `cwd changed: ${cwd}`);
+        if (worktreeCwd) session.info.worktreeCwd = worktreeCwd;
+        else delete session.info.worktreeCwd;
+        session.emitter.emit("info_updated", sessionId, { ...session.info });
+      },
       onTranscriptUpdate: (messages, lastUsage) => {
         // The watcher reports every write to the file, and most of the CLI's
         // writes are records the chat never shows (each API request and its

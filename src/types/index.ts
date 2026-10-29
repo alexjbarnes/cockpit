@@ -4,6 +4,10 @@ export interface SessionInfo {
   id: string;
   name: string;
   cwd: string;
+  /** Where the CLI is working now, when it is not `cwd`: EnterWorktree moves a
+   *  session into a git worktree, and the file tree, diffs and changes follow
+   *  it. Live only, cleared when the CLI is back in `cwd`. */
+  worktreeCwd?: string;
   createdAt: number;
   lastActiveAt: number;
   status: "idle" | "running";

@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **A session that moves into a git worktree follows it.** Claude Code's `EnterWorktree` moves a session's working directory, and every hook payload names where it now is. Cockpit shows a Worktree tag above the tabs, and the session files tree, diffs, changes view and new terminals read from the worktree, so its edits are visible instead of an unchanged original checkout. The worktree is live state: the session keeps the directory it was created in, and a restarted CLI starts back there.
 - **A new session's default model can be any provider's, not just Anthropic's.** Session Defaults offered the four Anthropic aliases, so a gateway or custom provider could only be the default by hand-editing `defaults.json`, though the server already started sessions on a qualified `provider:model` there. The Model row now opens the same picker the session panel uses: Anthropic's models, every connected provider's catalogue, a search and a provider filter. The context and thinking rows follow the chosen model, and a thinking level the model cannot run moves to one it can, as switching inside a session already did.
 
 ### Fixed

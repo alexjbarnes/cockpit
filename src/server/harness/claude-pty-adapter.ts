@@ -242,6 +242,7 @@ export class ClaudePtyAdapter implements HarnessAdapter {
           : "manual",
       telemetry: getTelemetry() ?? undefined,
       providerId: config.providerId,
+      onCwdChanged: (cwd) => config.callbacks.onCwdChanged?.(cwd),
       onEvents: (events) => config.callbacks.onParsedEvents(events),
       onError: (err) => config.callbacks.onError(err),
       onExit: ({ exitCode, signal }) => {

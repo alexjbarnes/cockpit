@@ -78,6 +78,15 @@ test("a session that enters a worktree keeps its conversation and goes on replyi
     expect(transcriptDirs(harness.claudeDir, sessionId)).toEqual([worktree.replace(/[/.]/g, "-")]);
     await expect(page.locator("[data-message-id]").filter({ hasText: "go into the worktree" })).toBeVisible();
 
+    // Its hook payloads carry the new working directory, so the session says
+    // which worktree it is in and its files come from there. A file that only
+    // exists in the worktree is the proof the tree followed.
+    await expect(page.getByTestId("worktree-tag")).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId("worktree-tag")).toContainText("repo-feature");
+    writeFileSync(path.join(worktree, "feature.txt"), "made in the worktree\n");
+    await page.getByText("Session Files", { exact: true }).click();
+    await expect(page.getByText("feature.txt", { exact: true }).first()).toBeVisible({ timeout: 30_000 });
+
     harness.mock.setScript([{ events: second }]);
     await send(page, "still there?");
     await expect(page.getByText("Still here after the move.")).toBeVisible({ timeout: 30_000 });

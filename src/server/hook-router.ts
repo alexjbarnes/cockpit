@@ -53,6 +53,9 @@ type HookCallbackReturn = Promise<HookResponse | undefined> | HookResponse | und
 type HookCallback = (payload: Record<string, unknown>) => HookCallbackReturn;
 
 export interface SessionHookHandler {
+  /** Every hook payload carries the CLI's working directory. EnterWorktree
+   *  moves it, and this is how cockpit hears about it. */
+  onCwdChanged?: (cwd: string) => void;
   onPreToolUse?: HookCallback;
   onPostToolUse?: HookCallback;
   onPostToolUseFailure?: HookCallback;
@@ -233,6 +236,9 @@ export class HookRouter {
   }
 
   private async dispatch(handler: SessionHookHandler, eventName: HookEventName, payload: Record<string, unknown>): Promise<HookResponse> {
+    // Read before dispatching, so a directory change is known even if the
+    // event's own handler does nothing with it.
+    if (typeof payload.cwd === "string") handler.onCwdChanged?.(payload.cwd);
     if (eventName === "PermissionRequest") {
       if (!handler.onPermissionRequest) {
         return { stdout: permissionAllowJson(), exitCode: 0 };

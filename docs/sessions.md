@@ -51,7 +51,9 @@ Long histories use windowed rendering. The initial view loads 50 messages, with 
 
 ## Tabbed layout
 
-A session view is a set of tabs. Alongside the chat you can open file, diff, and changes tabs, plus an [embedded terminal](terminal.md). On wider screens you can split into two panes and drag tabs between them. Tabs persist across page refreshes, so your layout comes back when you return.
+A session view is a set of tabs. Alongside the chat you can open file, diff, and changes tabs, plus an [embedded terminal](terminal.md). On wider screens you can split into two panes and drag tabs between them. Tabs and the split persist across page refreshes, so your layout comes back when you return.
+
+When Claude Code moves into a git worktree (the `EnterWorktree` tool), the session follows it: a Worktree tag above the tabs names it, and the file tree, diffs, changes view and new terminals read from the worktree. The session itself keeps the directory it was created in, and a restarted CLI starts back there.
 
 ## Session settings
 

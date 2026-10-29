@@ -46,6 +46,9 @@ export interface HarnessProcessCallbacks {
   /** PTY-only: fed by tailing the harness's on-disk transcript, its one source
    *  of truth for content since it has no structured stdout to parse. */
   onTranscriptUpdate?(messages: ChatMessage[], lastUsage: { used: number } | null): void;
+  /** PTY-only: the CLI's working directory, as its hook payloads report it.
+   *  Fires when EnterWorktree moves the session elsewhere. */
+  onCwdChanged?(cwd: string): void;
 }
 
 /** Fully-resolved spawn config. SessionManager decides *what* to run (model

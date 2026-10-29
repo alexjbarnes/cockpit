@@ -3835,6 +3835,30 @@ describe("SessionManager", () => {
     });
   });
 
+  describe("a session that enters a worktree", () => {
+    it("records the worktree as live state and clears it when the CLI returns", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      const updates: Array<{ worktreeCwd?: string }> = [];
+      s.emitter.on("info_updated", (_id: string, info: { worktreeCwd?: string }) => updates.push({ ...info }));
+      const { callbacks } = (manager as any).buildHarnessCallbacks(s, session.id, createStreamState());
+
+      callbacks.onCwdChanged("/tmp");
+      expect(updates).toHaveLength(0);
+
+      callbacks.onCwdChanged("/worktrees/feature");
+      expect(s.info.worktreeCwd).toBe("/worktrees/feature");
+      expect(updates.at(-1)?.worktreeCwd).toBe("/worktrees/feature");
+
+      callbacks.onCwdChanged("/worktrees/feature");
+      expect(updates).toHaveLength(1);
+
+      callbacks.onCwdChanged("/tmp");
+      expect(s.info.worktreeCwd).toBeUndefined();
+      expect(updates).toHaveLength(2);
+    });
+  });
+
   describe("transcript updates", () => {
     const message = (id: string, content: string) => ({ id, role: "assistant", content, toolUses: [], blocks: [], timestamp: 1 });
 
