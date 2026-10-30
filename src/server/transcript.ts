@@ -1197,6 +1197,46 @@ export async function findSessionCwd(sessionId: string): Promise<string | null> 
   return null;
 }
 
+/**
+ * The working directory the newest transcript entries name. Claude Code writes
+ * `cwd` on its conversation entries, and a session relocated into a worktree
+ * appends a `relocatedCwd` record, so the tail says where the CLI last was.
+ * Only the tail is read, so a long history costs one small read. Used to give
+ * sessions created before the worktree was stored the directory they are in.
+ */
+export async function readTranscriptCwd(sessionId: string, cwd: string): Promise<string | null> {
+  const filePath = getTranscriptPath(sessionId, cwd);
+  if (!existsSync(filePath)) return null;
+  let handle: Awaited<ReturnType<typeof open>> | null = null;
+  try {
+    handle = await open(filePath, "r");
+    const { size } = await handle.stat();
+    if (size === 0) return null;
+    const length = Math.min(size, 256 * 1024);
+    const buffer = Buffer.alloc(length);
+    await handle.read(buffer, 0, length, size - length);
+    const lines = buffer.toString("utf-8").split("\n");
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const line = lines[i].trim();
+      if (!line.startsWith("{")) continue;
+      let entry: { cwd?: unknown; relocatedCwd?: unknown };
+      try {
+        entry = JSON.parse(line);
+      } catch {
+        // The first line is partial when the tail did not start at byte 0.
+        continue;
+      }
+      if (typeof entry.cwd === "string" && entry.cwd) return entry.cwd;
+      if (typeof entry.relocatedCwd === "string" && entry.relocatedCwd) return entry.relocatedCwd;
+    }
+    return null;
+  } catch {
+    return null;
+  } finally {
+    if (handle) await handle.close().catch(() => {});
+  }
+}
+
 export async function scanAllSessions(): Promise<SessionGroup[]> {
   const projectsDir = path.join(getClaudeDir(), "projects");
   if (!existsSync(projectsDir)) return [];

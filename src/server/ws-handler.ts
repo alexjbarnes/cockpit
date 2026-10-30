@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import type { Server as HTTPServer, IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
 import { WebSocket, WebSocketServer } from "ws";
@@ -13,6 +14,7 @@ import { SessionManager } from "./session-manager";
 import { getSessionPrefs } from "./session-prefs";
 import { forgetViewer, setViewer } from "./session-viewers";
 import type { TerminalManager } from "./terminal-manager";
+import { readTranscriptCwd } from "./transcript";
 
 const RESIZE_PREFIX = "\x01R";
 
@@ -320,10 +322,18 @@ export function createWebSocketHandler(
           );
 
           if (msg.historyView && msg.cwd) {
-            sessionManager.getCliSessionView(msg.sessionId, msg.cwd).then((result) => {
+            const historyCwd = msg.cwd;
+            sessionManager.getCliSessionView(msg.sessionId, historyCwd).then(async (result) => {
               if (!result) {
                 send(ws, { type: "session:error", sessionId: msg.sessionId, error: "Session not found" });
                 return;
+              }
+              // A session whose worktree was never stored still says where it
+              // last was in its transcript; history view has no manager entry
+              // for a hook to correct, so read it here.
+              const transcriptCwd = await readTranscriptCwd(msg.sessionId, historyCwd);
+              if (transcriptCwd && transcriptCwd !== historyCwd && existsSync(transcriptCwd)) {
+                result.info.worktreeCwd = transcriptCwd;
               }
               debugLog(`[ws:${wsId}] session ${sid} history view loaded in ${(performance.now() - t0).toFixed(0)}ms`);
               send(ws, {
@@ -372,7 +382,7 @@ export function createWebSocketHandler(
           const sessionPromise = msg.cwd
             ? sessionManager.getSessionByCwd(msg.sessionId, msg.cwd)
             : sessionManager.getSession(msg.sessionId);
-          sessionPromise.then((session) => {
+          sessionPromise.then(async (session) => {
             if (!session) {
               debugLog(`[ws:${wsId}] session ${sid} not found`);
               send(ws, {
@@ -392,6 +402,11 @@ export function createWebSocketHandler(
             sessionManager.ensureProcess(msg.sessionId);
             const tSpawn = performance.now();
             debugLog(`[ws:${wsId}] session ${sid} ensureProcess in ${(tSpawn - tLoaded).toFixed(0)}ms`);
+
+            // Before the info goes out: a session created before the worktree
+            // was stored recovers it from its transcript. No-op when it already
+            // has one, and once per session per process.
+            await sessionManager.hydrateWorktreeFromTranscript(msg.sessionId);
 
             // Clean up previous subscriptions for this session
             const prev = sessionCleanups.get(msg.sessionId);

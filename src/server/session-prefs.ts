@@ -38,6 +38,11 @@ export interface SessionPrefs {
   cockpitAgent?: boolean;
   /** Alerts this session sends out. Absent means silent. */
   notifications?: SessionNotifications;
+  /** The worktree a session last reported working in, so a page reload (or a
+   *  server restart with the process still live) keeps its files and diffs
+   *  pointed there instead of falling back to the original checkout. Null or
+   *  absent means the session is in its original directory. */
+  worktreeCwd?: string | null;
 }
 
 function prefsDir(): string {

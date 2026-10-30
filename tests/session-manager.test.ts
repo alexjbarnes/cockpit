@@ -47,6 +47,7 @@ vi.mock("@/server/transcript", () => ({
   transcriptExists: vi.fn(() => false),
   findSessionCwd: () => Promise.resolve(null),
   getTranscriptPath: () => "/tmp/fake-transcript.jsonl",
+  readTranscriptCwd: vi.fn(() => Promise.resolve(null)),
   loadPromptHistory: () => Promise.resolve([]),
   sumTranscriptUsage: () => Promise.resolve({ input: 0, output: 0, cacheRead: 0, cacheCreate: 0 }),
 }));
@@ -215,6 +216,44 @@ describe("SessionManager", () => {
     });
   });
 
+  describe("hydrateWorktreeFromTranscript", () => {
+    it("recovers the worktree the transcript last named for a session without a stored one", async () => {
+      const transcript = await import("@/server/transcript");
+      const prefsMod = await import("@/server/session-prefs");
+      const session = manager.createSession("/repo");
+      vi.mocked(transcript.readTranscriptCwd).mockResolvedValueOnce("/tmp");
+
+      await manager.hydrateWorktreeFromTranscript(session.id);
+
+      expect((manager as any).sessions.get(session.id).info.worktreeCwd).toBe("/tmp");
+      expect(vi.mocked(prefsMod.setSessionPrefs)).toHaveBeenCalledWith(session.id, { worktreeCwd: "/tmp" });
+    });
+
+    it("leaves a session alone when the transcript names its own cwd, or a path that is gone", async () => {
+      const transcript = await import("@/server/transcript");
+      const own = manager.createSession("/repo");
+      vi.mocked(transcript.readTranscriptCwd).mockResolvedValueOnce("/repo");
+      await manager.hydrateWorktreeFromTranscript(own.id);
+      expect((manager as any).sessions.get(own.id).info.worktreeCwd).toBeUndefined();
+
+      const gone = manager.createSession("/repo");
+      vi.mocked(transcript.readTranscriptCwd).mockResolvedValueOnce("/definitely/not/here");
+      await manager.hydrateWorktreeFromTranscript(gone.id);
+      expect((manager as any).sessions.get(gone.id).info.worktreeCwd).toBeUndefined();
+    });
+
+    it("reads once per session and skips one that already has a worktree", async () => {
+      const transcript = await import("@/server/transcript");
+      const session = manager.createSession("/repo");
+      vi.mocked(transcript.readTranscriptCwd).mockClear();
+      vi.mocked(transcript.readTranscriptCwd).mockResolvedValueOnce("/tmp");
+
+      await manager.hydrateWorktreeFromTranscript(session.id);
+      await manager.hydrateWorktreeFromTranscript(session.id);
+      expect(vi.mocked(transcript.readTranscriptCwd)).toHaveBeenCalledTimes(1);
+    });
+  });
+
   describe("getSession", () => {
     it("returns null for unknown id", async () => {
       expect(await manager.getSession("nonexistent")).toBeNull();
@@ -257,6 +296,20 @@ describe("SessionManager", () => {
         const s = (manager as any).sessions.get(ensured.info.id)!;
         expect(ensured.info.contextSize).toBe("1m");
         expect(s.contextWindowSize).toBe(1_000_000);
+      } finally {
+        (prefsMod as { getSessionPrefs: (id: string) => unknown }).getSessionPrefs = orig;
+      }
+    });
+
+    it("restores the worktree the session last reported", async () => {
+      const prefsMod = await import("@/server/session-prefs");
+      const orig = prefsMod.getSessionPrefs;
+      (prefsMod as { getSessionPrefs: (id: string) => unknown }).getSessionPrefs = () => ({
+        worktreeCwd: "/repo/.worktrees/feature",
+      });
+      try {
+        const ensured = manager.ensureSession("restored-worktree", "/repo");
+        expect(ensured.info.worktreeCwd).toBe("/repo/.worktrees/feature");
       } finally {
         (prefsMod as { getSessionPrefs: (id: string) => unknown }).getSessionPrefs = orig;
       }

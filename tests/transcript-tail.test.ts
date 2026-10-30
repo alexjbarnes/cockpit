@@ -7,7 +7,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { loadMoreMessages, loadTranscript, readMoreLines } from "@/server/transcript";
+import { loadMoreMessages, loadTranscript, readMoreLines, readTranscriptCwd } from "@/server/transcript";
 
 const cwd = "/work/padas";
 
@@ -159,5 +159,23 @@ describe("a transcript's tail past the CLI's session records", () => {
     const more = await loadMoreMessages(sessionId, cwd, tail.byteOffset, 150);
     expect(contents(more.messages)).toEqual(Array.from({ length: 50 }, (_, i) => `note ${i + 1}`));
     expect(more.newByteOffset).toBe(0);
+  });
+
+  describe("readTranscriptCwd", () => {
+    const worktree = "/work/padas/.worktrees/feature";
+
+    it("returns the cwd of the newest entry, which is the worktree after a move", async () => {
+      write([user("before the move"), { ...user("after the move"), cwd: worktree }]);
+      expect(await readTranscriptCwd(sessionId, cwd)).toBe(worktree);
+    });
+
+    it("falls back to the relocated record when no newer entry names a cwd", async () => {
+      write([user("before the move"), { type: "relocated", relocatedCwd: worktree }]);
+      expect(await readTranscriptCwd(sessionId, cwd)).toBe(worktree);
+    });
+
+    it("returns null when the transcript is missing", async () => {
+      expect(await readTranscriptCwd(sessionId, cwd)).toBeNull();
+    });
   });
 });

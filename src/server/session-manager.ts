@@ -58,7 +58,15 @@ import { notifySessionEvent, type SessionNotifyContext } from "./session-notify"
 import { findChainForCliSession, getSessionPrefs, type SessionRuntime, setSessionPrefs } from "./session-prefs";
 import { getCockpitMcp } from "./singleton";
 import { createStreamState, processEvents, type StreamState } from "./stream-processor";
-import { findSessionCwd, loadMoreMessages, loadPromptHistory, loadTranscript, sumTranscriptUsage, transcriptExists } from "./transcript";
+import {
+  findSessionCwd,
+  loadMoreMessages,
+  loadPromptHistory,
+  loadTranscript,
+  readTranscriptCwd,
+  sumTranscriptUsage,
+  transcriptExists,
+} from "./transcript";
 
 export type { SessionRuntime };
 
@@ -316,6 +324,8 @@ function enforceableSandbox(config: SandboxConfig): SandboxConfig {
 
 export class SessionManager {
   private sessions = new Map<string, Session>();
+  /** Sessions whose transcript has been consulted for a worktree. */
+  private worktreeHydrated = new Set<string>();
   private _cockpitAgentSessionPromise: Promise<string> | null = null;
   /**
    * Injectable so a test can state which transport it exercises instead of
@@ -484,6 +494,30 @@ export class SessionManager {
     }
   }
 
+  /**
+   * A session created before the worktree was stored in its prefs has no
+   * recorded one. Its transcript names the directory the CLI last wrote from,
+   * which is the worktree after EnterWorktree, so recover it once from there.
+   * Hooks keep the value current after that, and the read happens once per
+   * session per process.
+   */
+  async hydrateWorktreeFromTranscript(sessionId: string): Promise<void> {
+    if (this.worktreeHydrated.has(sessionId)) return;
+    this.worktreeHydrated.add(sessionId);
+    const session = this.sessions.get(sessionId);
+    if (!session || session.info.worktreeCwd) return;
+    const found = await readTranscriptCwd(session.cliSessionId, session.info.cwd);
+    if (!found || found === session.info.cwd || !existsSync(found)) return;
+    // The session may have moved on (or a hook may have answered) while the
+    // transcript was being read.
+    const current = this.sessions.get(sessionId);
+    if (!current || current.info.worktreeCwd) return;
+    this.log(sessionId, `worktree recovered from transcript: ${found}`);
+    current.info.worktreeCwd = found;
+    setSessionPrefs(sessionId, { worktreeCwd: found });
+    current.emitter.emit("info_updated", sessionId, { ...current.info });
+  }
+
   ensureSession(id: string, cwd: string, opts?: { pinCliSessionId?: string }): Session {
     let session = this.sessions.get(id);
     if (!session) {
@@ -523,6 +557,7 @@ export class SessionManager {
           runtime: restoredRuntime,
           pendingRequestCount: 0,
           notifications: prefs?.notifications,
+          ...(prefs?.worktreeCwd ? { worktreeCwd: prefs.worktreeCwd } : {}),
         },
         harnessProcess: null,
         emitter: new EventEmitter(),
@@ -3043,6 +3078,11 @@ Additional Cockpit rules beyond the CLI's defaults:
         this.log(sessionId, `cwd changed: ${cwd}`);
         if (worktreeCwd) session.info.worktreeCwd = worktreeCwd;
         else delete session.info.worktreeCwd;
+        // Persisted so a browser reload keeps the session's files and diffs
+        // pointed at the worktree; before this, the value was live-only and a
+        // reload fell back to the original checkout until the next hook. The
+        // first hook after a restart corrects it if the CLI is back at base.
+        setSessionPrefs(sessionId, { worktreeCwd: worktreeCwd ?? null });
         session.emitter.emit("info_updated", sessionId, { ...session.info });
       },
       onTranscriptUpdate: (messages, lastUsage) => {
