@@ -36,6 +36,7 @@ export interface Settings {
   telemetryEnabled: boolean;
   allowSonnet1m: boolean;
   sessionAlerts: boolean;
+  streamRuntimeEnabled: boolean;
   terminalFontSize: number;
   terminalTheme: TerminalTheme;
   terminalScrollback: number;
@@ -59,6 +60,7 @@ const defaultSettings: Settings = {
   telemetryEnabled: false,
   allowSonnet1m: false,
   sessionAlerts: false,
+  streamRuntimeEnabled: false,
   terminalFontSize: 14,
   terminalTheme: "dark" as TerminalTheme,
   terminalScrollback: 1000,
@@ -68,29 +70,38 @@ export function useSettings() {
   const [settings, setSettings] = useState<Settings>(defaultSettings);
   const [loaded, setLoaded] = useState(false);
 
-  const reload = useCallback(() => {
-    fetch("/api/defaults")
-      .then((res) => res.json())
-      .then((data) => {
-        if (data.model && !data.modelSlots) {
-          data.modelSlots = { main: data.model };
-          delete data.model;
-        }
-        if (data.modelSlots?.main?.includes("[")) {
-          const split = splitLegacyModel(data.modelSlots.main);
-          data.modelSlots = {
-            ...data.modelSlots,
-            main: split.model,
-            mainContext: data.modelSlots.mainContext ?? split.contextSize,
-          };
-        }
-        setSettings({ ...defaultSettings, ...data });
-        setLoaded(true);
-      })
-      .catch(() => setLoaded(true));
+  // Returns what it read, so a caller that is about to build on the defaults
+  // (the new-session dialog) can await the latest values instead of racing the
+  // effect that fills the hook's own state.
+  const reload = useCallback(async (): Promise<Settings> => {
+    try {
+      const res = await fetch("/api/defaults");
+      const data = await res.json();
+      if (data.model && !data.modelSlots) {
+        data.modelSlots = { main: data.model };
+        delete data.model;
+      }
+      if (data.modelSlots?.main?.includes("[")) {
+        const split = splitLegacyModel(data.modelSlots.main);
+        data.modelSlots = {
+          ...data.modelSlots,
+          main: split.model,
+          mainContext: data.modelSlots.mainContext ?? split.contextSize,
+        };
+      }
+      const next = { ...defaultSettings, ...data } as Settings;
+      setSettings(next);
+      setLoaded(true);
+      return next;
+    } catch {
+      setLoaded(true);
+      return defaultSettings;
+    }
   }, []);
 
-  useEffect(() => reload(), [reload]);
+  useEffect(() => {
+    void reload();
+  }, [reload]);
 
   const updateSetting = useCallback(<K extends keyof Settings>(key: K, value: Settings[K]) => {
     setSettings((prev) => {

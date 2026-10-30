@@ -534,6 +534,10 @@ const TOOL_DEFINITIONS = [
         reviewsEnabled: { type: "boolean" },
         issuesEnabled: { type: "boolean" },
         modalPagesEnabled: { type: "boolean" },
+        streamRuntimeEnabled: {
+          type: "boolean",
+          description: "Offer the deprecated Stream (headless) runtime. Existing Stream sessions and jobs keep working either way.",
+        },
         permissionMode: {
           type: "string",
           enum: ["manual", "auto", "bypass"],
@@ -1164,6 +1168,7 @@ async function handleToolCall(
           "reviewsEnabled",
           "issuesEnabled",
           "modalPagesEnabled",
+          "streamRuntimeEnabled",
           "permissionMode",
           "sandbox",
           "modelSlots",

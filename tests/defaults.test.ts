@@ -40,6 +40,7 @@ describe("defaults", () => {
       telemetryEnabled: false,
       allowSonnet1m: false,
       sessionAlerts: false,
+      streamRuntimeEnabled: false,
     });
   });
 
@@ -73,7 +74,22 @@ describe("defaults", () => {
       telemetryEnabled: false,
       allowSonnet1m: false,
       sessionAlerts: false,
+      streamRuntimeEnabled: false,
     });
+  });
+
+  it("streamRuntimeEnabled defaults off and round-trips through setDefaults", async () => {
+    const fs = await import("node:fs");
+    vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify({}));
+    vi.mocked(fs.writeFileSync).mockImplementation(() => {});
+    vi.mocked(fs.mkdirSync).mockImplementation(() => "");
+
+    const { getDefaults, setDefaults } = await import("@/server/defaults");
+    expect(getDefaults().streamRuntimeEnabled).toBe(false);
+
+    const result = setDefaults({ streamRuntimeEnabled: true });
+    expect(result.streamRuntimeEnabled).toBe(true);
+    expect(JSON.parse(String(vi.mocked(fs.writeFileSync).mock.calls[0][1])).streamRuntimeEnabled).toBe(true);
   });
 
   it("migrates legacy model field to modelSlots on read", async () => {

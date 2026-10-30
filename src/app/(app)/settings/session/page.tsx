@@ -19,10 +19,22 @@ const permissionOptions: { value: SessionPermissionMode; label: string; activeCl
   { value: "bypass", label: "Bypass", activeClassName: "bg-orange-500 text-white hover:bg-orange-500/90" },
 ];
 
-function Toggle({ enabled, color, disabled, onToggle }: { enabled: boolean; color?: string; disabled?: boolean; onToggle: () => void }) {
+function Toggle({
+  enabled,
+  color,
+  disabled,
+  testId,
+  onToggle,
+}: {
+  enabled: boolean;
+  color?: string;
+  disabled?: boolean;
+  testId?: string;
+  onToggle: () => void;
+}) {
   const bg = enabled ? color || "bg-green-500" : "bg-muted-foreground/30";
   return (
-    <button onClick={onToggle} disabled={disabled} className="shrink-0 disabled:opacity-60">
+    <button onClick={onToggle} disabled={disabled} data-testid={testId} className="shrink-0 disabled:opacity-60">
       <span className={`inline-flex h-7 w-12 items-center rounded-full transition-colors ${bg}`}>
         <span
           className={`inline-block h-5 w-5 rounded-full bg-white shadow transition-transform ${enabled ? "translate-x-6" : "translate-x-1"}`}
@@ -32,7 +44,7 @@ function Toggle({ enabled, color, disabled, onToggle }: { enabled: boolean; colo
   );
 }
 
-function SettingRow({ label, children }: { label: string; children: React.ReactNode }) {
+function SettingRow({ label, children }: { label: React.ReactNode; children: React.ReactNode }) {
   return (
     <div className="flex items-start justify-between gap-3 py-2.5 text-sm">
       <span className="shrink-0 py-1">{label}</span>
@@ -219,6 +231,27 @@ export default function SessionSettingsPage() {
             </p>
           </div>
         ) : null}
+        <SettingRow
+          label={
+            <span className="flex items-center gap-2">
+              Stream (headless) runtime
+              <span className="rounded-sm border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-600 dark:text-amber-400">
+                Deprecated
+              </span>
+            </span>
+          }
+        >
+          <Toggle
+            enabled={settings.streamRuntimeEnabled}
+            testId="toggle-stream-runtime"
+            onToggle={() => updateSetting("streamRuntimeEnabled", !settings.streamRuntimeEnabled)}
+          />
+        </SettingRow>
+        <p className="-mt-1 pb-2 text-xs text-muted-foreground">
+          Stream runs Claude under the CLI&apos;s <code>-p</code> flag, which is moving to bare mode: bare mode skips OAuth and would stop
+          authenticating against a subscription. Off by default; when on, new sessions can choose Stream and a session&apos;s Harness tab
+          offers it. An existing Stream session keeps running and can switch to PTY.
+        </p>
         <SettingRow label="Alert me about other sessions">
           <Toggle enabled={settings.sessionAlerts} onToggle={() => updateSetting("sessionAlerts", !settings.sessionAlerts)} />
         </SettingRow>

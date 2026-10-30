@@ -10,6 +10,15 @@ The list is paginated. Large session counts no longer lock the browser.
 
 Click a row to open it. The menu icon opens rename, pin, and delete actions. Delete removes the session and its transcript permanently.
 
+## New session
+
+New session opens in two steps:
+
+- **Where.** Open a directory, or clone a repository from its URL, and name the session. When Settings offers the deprecated Stream runtime, choose PTY or Stream here; otherwise the session runs on PTY.
+- **How.** Four rows, each showing what it will use and expanding to change it: notifications (off, or one provider and which events), model with context size and thinking level, permissions, and Sandbox Bash.
+
+**Create with defaults** on the first step skips the second. A clone continues to the second step with the cloned path filled in. Every choice is stored on the session when it is created, so the first turn already runs with it.
+
 ## Sidebar
 
 The sidebar is split into collapsible sections. Each section header shows a title, an item count badge, and a chevron to expand or collapse. Section open/closed state is persisted across page loads.
@@ -62,7 +71,7 @@ Each session has its own settings, separate from the defaults you set globally. 
 - Model. Built-in Haiku, Sonnet, and Opus with a version switcher, plus any models from connected gateways or custom providers (see [Model providers](providers.md)).
 - Context size. 200K or 1M, shown as pills for models that support both.
 - Thinking level. Low, Medium, High, XHigh, Max. Only the levels the model supports are shown.
-- Runtime. Switch this session between Stream and PTY (see [Runtime mode](#runtime-mode)).
+- Harness. Switch this session between PTY and Stream (see [Runtime mode](#runtime-mode)). Stream appears only when Settings offers it; a session already on Stream shows it and can switch to PTY.
 - Permission mode: Manual, Auto (Anthropic models only) or Bypass. The settings icon is green in Auto and orange in Bypass. It turns red when Claude Code reports a mode other than the one chosen, and the panel says which mode it is in and what that means.
 - Sandbox Bash, with extra allowed domains for this session on top of the shared rules (see [Settings: Sandbox](settings.md#sandbox)). Changing either restarts the CLI.
 
@@ -72,10 +81,10 @@ Changes apply on the next turn. A context-size change restarts the underlying CL
 
 Cockpit can drive Claude Code two ways, chosen per session:
 
-- **Stream (headless).** The default. Cockpit runs the CLI in streaming-JSON mode and renders the structured event stream directly.
-- **PTY (interactive).** Cockpit runs the real CLI inside a pseudo-terminal, the same engine you get in a normal terminal. Message content is read from the CLI's JSONL transcript, so the live view matches a reload. Hook events drive status, permissions, compaction progress, and background tasks. This mode also matters for billing: subscription plans bill programmatic and interactive usage differently, and PTY keeps sessions on the interactive side.
+- **PTY (interactive).** The default. Cockpit runs the real CLI inside a pseudo-terminal, the same engine you get in a normal terminal. Message content is read from the CLI's JSONL transcript, so the live view matches a reload. Hook events drive status, permissions, compaction progress, and background tasks. This mode also matters for billing: subscription plans bill programmatic and interactive usage differently, and PTY keeps sessions on the interactive side.
+- **Stream (headless).** Deprecated. Cockpit runs the CLI in streaming-JSON mode and renders the structured event stream directly. It is hidden unless Settings → Session Defaults turns it on, because the CLI's `-p` flag is moving to bare mode, which skips OAuth and would stop authenticating against a subscription. An existing Stream session or scheduled job keeps working.
 
-Pick the runtime when you create a session (the new-session dialog has a two-step backend picker) or switch it later from the session settings. The choice is saved and survives a server restart.
+Pick the runtime in the new-session dialog when Stream is enabled, or switch it later from the session settings. A session already on Stream keeps its Harness tab showing that, with a button to switch to PTY. The choice is saved and survives a server restart.
 
 ## Attachments
 

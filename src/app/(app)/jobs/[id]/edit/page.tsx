@@ -1084,9 +1084,11 @@ export default function JobEditPage() {
                 <Button variant={runtime === "pty" ? "default" : "outline"} size="sm" onClick={() => setRuntime("pty")}>
                   PTY
                 </Button>
-                <Button variant={runtime === "stream" ? "default" : "outline"} size="sm" onClick={() => setRuntime("stream")}>
-                  Stream (deprecated)
-                </Button>
+                {(settings.streamRuntimeEnabled || runtime === "stream") && (
+                  <Button variant={runtime === "stream" ? "default" : "outline"} size="sm" onClick={() => setRuntime("stream")}>
+                    Stream (deprecated)
+                  </Button>
+                )}
               </div>
             </div>
 

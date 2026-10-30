@@ -65,6 +65,13 @@ export interface AppDefaults {
    * error if it's not actually enabled. Other models' 1M is unaffected.
    */
   allowSonnet1m: boolean;
+  /**
+   * Offer the deprecated Stream (headless) runtime in the new-session dialog,
+   * the composer's Harness tab and the job editor. Off by default. A
+   * presentation gate only: an existing Stream session or job keeps running,
+   * and the API keeps accepting `runtime: "stream"` either way.
+   */
+  streamRuntimeEnabled: boolean;
 }
 
 function prefsDir(): string {
@@ -92,6 +99,7 @@ const fallback: AppDefaults = {
   modalPagesEnabled: true,
   telemetryEnabled: false,
   allowSonnet1m: false,
+  streamRuntimeEnabled: false,
 };
 
 /**
@@ -124,7 +132,7 @@ function applyEnvOverrides(d: AppDefaults): AppDefaults {
 
 const PERMISSION_MODES: readonly string[] = ["manual", "auto", "bypass"] satisfies SessionPermissionMode[];
 
-function isPermissionMode(v: unknown): v is SessionPermissionMode {
+export function isPermissionMode(v: unknown): v is SessionPermissionMode {
   return typeof v === "string" && PERMISSION_MODES.includes(v);
 }
 
@@ -155,7 +163,7 @@ function parseModelSlots(v: unknown): ModelSlots | undefined {
 /** A sandbox config as it may be stored or sent: `enabled` must be a boolean,
  *  and the allowlist keeps only non-empty strings, trimmed. Anything else is
  *  not a config, and the caller falls back rather than guessing. */
-function parseSandbox(v: unknown): SandboxConfig | undefined {
+export function parseSandbox(v: unknown): SandboxConfig | undefined {
   if (typeof v !== "object" || v === null) return undefined;
   const { enabled, allowedDomains } = v as Record<string, unknown>;
   if (typeof enabled !== "boolean") return undefined;

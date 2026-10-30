@@ -15,8 +15,8 @@ The Settings page picks the defaults for new sessions:
 - Model. The picker lists Anthropic's Haiku, Sonnet, Opus and Fable with their versions, and every model from a connected gateway or custom provider (see [Providers](providers.md)), with a search and a provider filter. A provider's model is stored qualified, `provider:model`. Models can be set per slot: main, subagent, and fast.
 - Context size. 200K (default) or 1M, for models that support both. A provider's model offers whichever sizes its catalogue declares.
 - Thinking level. Low, Medium, High, XHigh, Max. Trades latency for depth of reasoning. Only the levels the model supports are offered, and picking a model that cannot run the current level moves it to one it can.
-- Default runtime is Stream; choose Stream or PTY per session (see [Sessions: runtime mode](sessions.md#runtime-mode)).
-- Permission bypass. Off by default. When on, Claude skips permission prompts. An orange warning is shown when active.
+- Runtime. PTY is the default. The deprecated Stream (headless) runtime is off by default; turning it on adds Stream to the new-session dialog, a session's Harness tab and the job editor (see [Sessions: runtime mode](sessions.md#runtime-mode)). The gate is presentation only: an existing Stream session or job keeps working, and the API still accepts it.
+- Permission mode. Manual (default), Auto (Anthropic models only) or Bypass. Bypass skips permission prompts and shows an orange warning when active.
 - Sandbox Bash. Off by default. When on, new sessions run Bash in the OS sandbox, with any domains listed here added to the shared rules below.
 
 Existing sessions keep their own settings. Defaults only apply to new sessions.

@@ -68,6 +68,10 @@ export interface HarnessOptions {
   /** Runs once the config is seeded and before cockpit starts, to add files
    *  of a spec's own to it (a telemetry store, providers, session prefs). */
   prepare?: (dirs: { configDir: string; claudeDir: string }) => void;
+  /** Extra keys merged into defaults.json after the harness's own, so a spec
+   *  can seed a setting the run needs (streamRuntimeEnabled, a permission
+   *  mode, a model). */
+  defaults?: Record<string, unknown>;
 }
 
 // Process groups (pgids) of cockpit servers still running in this worker.
@@ -123,6 +127,7 @@ export async function startHarness(opts: HarnessOptions = {}): Promise<Harness> 
     groqViaMock: opts.groqViaMock,
     deepseekViaMock: opts.deepseekViaMock,
     telemetry: opts.telemetry,
+    defaults: opts.defaults,
   });
   opts.prepare?.({ configDir, claudeDir });
 
@@ -192,6 +197,7 @@ interface SeedOpts {
   groqViaMock?: boolean;
   deepseekViaMock?: boolean;
   telemetry?: boolean;
+  defaults?: Record<string, unknown>;
 }
 
 /** Catalog model id used by the OpenRouter integration seeding. */
@@ -361,6 +367,7 @@ function seedConfig(opts: SeedOpts): void {
         thinkingLevel: opts.thinkingLevel ?? "high",
         permissionMode: "bypass",
         ...(opts.telemetry ? { telemetryEnabled: true } : {}),
+        ...(opts.defaults ?? {}),
       },
       null,
       2,

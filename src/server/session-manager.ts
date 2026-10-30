@@ -292,6 +292,15 @@ function cliSpawnMode(mode: SessionPermissionMode, runtime: SessionRuntime): str
   return mode;
 }
 
+/** The context size to store for `model`: the requested one when the model
+ *  offers it, otherwise the first it offers. A model whose sizes are unknown
+ *  keeps the requested size, which is what the spawn will ask for. */
+function resolveContextSizeFor(model: string, requested: ContextSize): ContextSize {
+  const sizes = resolveModel(model)?.contextSizes ?? resolveProviderModel(model)?.model.contextSizes;
+  if (!sizes || sizes.length === 0) return requested;
+  return sizes.includes(requested) ? requested : sizes[0];
+}
+
 /** A sandbox config as this host can run it: enabling is refused where the
  *  sandbox cannot be enforced, and an empty allowlist is dropped. */
 function enforceableSandbox(config: SandboxConfig): SandboxConfig {
@@ -341,8 +350,13 @@ export class SessionManager {
     name?: string,
     options?: {
       bypassPermissions?: boolean;
+      permissionMode?: SessionPermissionMode;
       sandbox?: SandboxConfig;
       runtime?: SessionRuntime;
+      model?: string;
+      contextSize?: ContextSize;
+      thinkingLevel?: ThinkingLevel;
+      notifications?: SessionNotifications;
       cockpitAgent?: boolean;
       runContext?: RunContext;
     },
@@ -350,21 +364,25 @@ export class SessionManager {
     const id = uuidv4();
     const now = Date.now();
     const defaults = getDefaults();
-    const modelSlots: ModelSlots = { main: defaults.modelSlots.main ?? "sonnet" };
+    const main = options?.model?.trim() || defaults.modelSlots.main || "sonnet";
+    const modelSlots: ModelSlots = { main };
     const isCockpitAgent = options?.cockpitAgent === true;
     const rt = options?.runtime ?? this.defaultRuntime;
     const sessionName = isCockpitAgent ? "Cockpit Assistant" : name || path.basename(cwd) || cwd;
-    // An explicit flag (a job's own bypass setting, a review session's false,
-    // the new-session dialog's true) wins over the default mode.
-    const permissionMode = startingPermissionMode(
-      options?.bypassPermissions !== undefined ? (options.bypassPermissions ? "bypass" : "manual") : defaults.permissionMode,
-      modelSlots.main,
-      isCockpitAgent,
-    );
-    // The thinking default applies to whatever model is the default too, which
-    // may be another provider's: its spawn ignores an effort it cannot run, so
-    // the level is settled here the way a model switch settles it.
-    const thinkingLevel = this.startingThinkingLevel(modelSlots.main, defaults.thinkingLevel);
+    // The size is settled against the model that will run: a pick carries the
+    // default context with it, which may be a size that model does not offer.
+    const contextSize = resolveContextSizeFor(main, options?.contextSize ?? defaults.modelSlots.mainContext ?? DEFAULT_CONTEXT_SIZE);
+    // An explicit mode wins; the legacy boolean (a job's own bypass setting, a
+    // review session's false) is read when no mode was named; otherwise the
+    // default. The new-session dialog sends the mode itself.
+    const requestedMode =
+      options?.permissionMode ??
+      (options?.bypassPermissions !== undefined ? (options.bypassPermissions ? "bypass" : "manual") : defaults.permissionMode);
+    const permissionMode = startingPermissionMode(requestedMode, main, isCockpitAgent);
+    // The thinking default applies to whatever model is chosen, which may be
+    // another provider's: its spawn ignores an effort it cannot run, so the
+    // level is settled here the way a model switch settles it.
+    const thinkingLevel = this.startingThinkingLevel(main, options?.thinkingLevel ?? defaults.thinkingLevel);
     // The assistant has no sandbox control. A job passes its own switch, so
     // the default for interactive sessions never decides a job's sandbox.
     const sandbox: SandboxConfig = isCockpitAgent ? { enabled: false } : enforceableSandbox(options?.sandbox ?? defaults.sandbox);
@@ -376,9 +394,10 @@ export class SessionManager {
       lastActiveAt: now,
       status: "idle",
       model: modelSlots.main,
-      contextSize: defaults.modelSlots?.mainContext ?? DEFAULT_CONTEXT_SIZE,
+      contextSize,
       runtime: rt,
       pendingRequestCount: 0,
+      ...(options?.notifications ? { notifications: options.notifications } : {}),
     };
 
     this.sessions.set(id, {
@@ -389,6 +408,7 @@ export class SessionManager {
       previousCliSessionIds: [],
       permissionMode,
       sandbox,
+      notifications: options?.notifications,
       planMode: false,
       needsRespawnForPermissions: false,
       compacting: false,
@@ -432,6 +452,7 @@ export class SessionManager {
       runtime: rt,
       permissionMode,
       sandbox,
+      ...(options?.notifications ? { notifications: options.notifications } : {}),
       ...(isCockpitAgent ? { cockpitAgent: true } : {}),
     });
 
@@ -1435,13 +1456,9 @@ export class SessionManager {
 
     const currentSize = session.info.contextSize ?? DEFAULT_CONTEXT_SIZE;
     const requestedSize = contextSize ?? currentSize;
-    const resolvedSize: ContextSize = (() => {
-      // Anthropic models constrain the size via the static table; a foreign
-      // model constrains it via its (possibly curated) provider contextSizes.
-      const sizes = resolveModel(model)?.contextSizes ?? resolveProviderModel(model)?.model.contextSizes;
-      if (!sizes || sizes.length === 0) return requestedSize;
-      return sizes.includes(requestedSize) ? requestedSize : sizes[0];
-    })();
+    // Anthropic models constrain the size via the static table; a foreign
+    // model constrains it via its (possibly curated) provider contextSizes.
+    const resolvedSize = resolveContextSizeFor(model, requestedSize);
     // CLAUDE_CODE_DISABLE_1M_CONTEXT and CLAUDE_CODE_MAX_CONTEXT_TOKENS are
     // both applied at spawn, so any change to the window the CLI enforces
     // requires a restart to take effect.

@@ -1249,6 +1249,16 @@ describe("cockpit-config MCP server (in-process HTTP)", () => {
       expect(settings.modalPagesEnabled).toBe(true);
     });
 
+    it("update_settings allows streamRuntimeEnabled", async () => {
+      await callTool("update_settings", { streamRuntimeEnabled: true });
+      try {
+        const settings = (await callToolParsed("get_settings")) as { streamRuntimeEnabled?: boolean };
+        expect(settings.streamRuntimeEnabled).toBe(true);
+      } finally {
+        await callTool("update_settings", { streamRuntimeEnabled: false }); // restore the default
+      }
+    });
+
     it("update_settings allows modelSlots", async () => {
       const modelSlots = { main: "claude-opus-4-5-20251101", mainContext: "1m" };
       await callTool("update_settings", { modelSlots });

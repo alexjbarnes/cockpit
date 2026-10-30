@@ -1,11 +1,16 @@
 import path from "node:path";
 import { NextRequest, NextResponse } from "next/server";
+import { CONTEXT_SIZES, type ContextSize } from "@/lib/models";
 import { validateSession } from "@/server/auth";
 import { debugLog } from "@/server/debug-logger";
+import { isPermissionMode, parseSandbox } from "@/server/defaults";
 import { getJobSessionIds } from "@/server/job-storage";
+import { parseSessionNotifications } from "@/server/notification-settings";
 import { getCockpitDir } from "@/server/paths";
 import { getSessionManager } from "@/server/singleton";
 import { scanAllSessions } from "@/server/transcript";
+import type { SandboxConfig, SessionNotifications, SessionPermissionMode, ThinkingLevel } from "@/types";
+import { THINKING_LEVELS } from "@/types";
 
 const SESSIONS_PER_GROUP_LIMIT = 20;
 
@@ -119,30 +124,66 @@ export async function POST(req: NextRequest) {
   const cwd = body.cwd as string;
   const name = body.name as string | undefined;
   const runtimeRaw = body.runtime as string | undefined;
+  // Runtime stays lenient: an unknown value means the server default, and
+  // "stream" is still accepted here even when Settings hides it, since jobs,
+  // scripts and existing clients create stream sessions directly.
   const runtime = runtimeRaw === "pty" || runtimeRaw === "stream" ? runtimeRaw : undefined;
-  const model = typeof body.model === "string" ? body.model : undefined;
-  const contextSizeRaw = typeof body.contextSize === "string" ? body.contextSize : undefined;
-  const contextSize = contextSizeRaw === "200k" || contextSizeRaw === "1m" ? contextSizeRaw : undefined;
-  const bypassPermissions = body.bypassPermissions === true;
-  const cockpitAgent = body.cockpitAgent === true;
+  const model = typeof body.model === "string" && body.model.trim() ? body.model.trim() : undefined;
 
   if (!cwd) {
     return NextResponse.json({ error: "cwd is required" }, { status: 400 });
   }
 
-  const session = getSessionManager().createSession(cwd, name, {
-    runtime,
-    bypassPermissions: bypassPermissions || undefined,
-    cockpitAgent: cockpitAgent || undefined,
-  });
-  if (model) {
-    getSessionManager().setModel(session.id, model, contextSize);
+  let contextSize: ContextSize | undefined;
+  if (body.contextSize !== undefined) {
+    if (typeof body.contextSize !== "string" || !(body.contextSize in CONTEXT_SIZES)) {
+      return NextResponse.json({ error: "contextSize must be 200k or 1m" }, { status: 400 });
+    }
+    contextSize = body.contextSize as ContextSize;
   }
-  if (cockpitAgent) {
-    const thinkingLevel = typeof body.thinkingLevel === "string" ? body.thinkingLevel : undefined;
-    if (thinkingLevel) {
-      getSessionManager().setThinkingLevel(session.id, thinkingLevel as import("@/types").ThinkingLevel);
+
+  let thinkingLevel: ThinkingLevel | undefined;
+  if (body.thinkingLevel !== undefined) {
+    if (typeof body.thinkingLevel !== "string" || !(THINKING_LEVELS as readonly string[]).includes(body.thinkingLevel)) {
+      return NextResponse.json({ error: "invalid thinkingLevel" }, { status: 400 });
+    }
+    thinkingLevel = body.thinkingLevel as ThinkingLevel;
+  }
+
+  let permissionMode: SessionPermissionMode | undefined;
+  if (body.permissionMode !== undefined) {
+    if (!isPermissionMode(body.permissionMode)) {
+      return NextResponse.json({ error: "invalid permissionMode" }, { status: 400 });
+    }
+    permissionMode = body.permissionMode;
+  }
+
+  let sandbox: SandboxConfig | undefined;
+  if (body.sandbox !== undefined && body.sandbox !== null) {
+    sandbox = parseSandbox(body.sandbox);
+    if (!sandbox) {
+      return NextResponse.json({ error: "invalid sandbox" }, { status: 400 });
     }
   }
+
+  let notifications: SessionNotifications | undefined;
+  if (body.notifications !== undefined && body.notifications !== null) {
+    notifications = parseSessionNotifications(body.notifications);
+    if (!notifications) {
+      return NextResponse.json({ error: "invalid notifications" }, { status: 400 });
+    }
+  }
+
+  const session = getSessionManager().createSession(cwd, name, {
+    runtime,
+    permissionMode,
+    sandbox,
+    model,
+    contextSize,
+    thinkingLevel,
+    notifications,
+    bypassPermissions: body.bypassPermissions === true || undefined,
+    cockpitAgent: body.cockpitAgent === true || undefined,
+  });
   return NextResponse.json({ sessionId: session.id });
 }

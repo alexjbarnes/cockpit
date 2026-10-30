@@ -87,4 +87,23 @@ describe("notification-settings", () => {
     const settings = getNotificationSettings();
     expect(settings.baseUrl).toBe("https://my.app");
   });
+
+  describe("parseSessionNotifications", () => {
+    it("keeps a trimmed provider id and only the boolean events it knows", async () => {
+      const { parseSessionNotifications } = await import("@/server/notification-settings");
+      expect(
+        parseSessionNotifications({ providerId: " telegram ", events: { finished: false, question: "yes", permission: true } }),
+      ).toEqual({ providerId: "telegram", events: { finished: false, permission: true } });
+    });
+
+    it("accepts a provider with no events", async () => {
+      const { parseSessionNotifications } = await import("@/server/notification-settings");
+      expect(parseSessionNotifications({ providerId: "ntfy", events: {} })).toEqual({ providerId: "ntfy" });
+    });
+
+    it.each([null, undefined, {}, { providerId: "  " }, { providerId: 42 }])("treats %o as no choice", async (value) => {
+      const { parseSessionNotifications } = await import("@/server/notification-settings");
+      expect(parseSessionNotifications(value)).toBeUndefined();
+    });
+  });
 });

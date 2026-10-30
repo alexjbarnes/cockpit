@@ -33,6 +33,7 @@ const DOMAIN_LABELS: Record<string, Record<string, string>> = {
     issuesEnabled: "Issues enabled",
     modalPagesEnabled: "Pages open in a modal",
     telemetryEnabled: "Telemetry recorded",
+    streamRuntimeEnabled: "Stream runtime offered",
     bypassAllPermissions: "Bypass all permissions",
     permissionMode: "Default permission mode",
     sandbox: "Default sandbox",

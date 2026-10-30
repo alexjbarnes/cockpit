@@ -1500,6 +1500,52 @@ describe("SessionManager", () => {
       });
     });
 
+    // The new-session dialog names a mode rather than the old boolean, and the
+    // mode wins when a legacy caller sends both.
+    it("takes the permission mode the creator names, ahead of the legacy flag", async () => {
+      await withDefaults({ permissionMode: "manual" }, () => {
+        const bypass = manager.createSession("/tmp", undefined, { permissionMode: "bypass", bypassPermissions: false });
+        expect(manager.getPermissionMode(bypass.id)).toBe("bypass");
+        const manual = manager.createSession("/tmp", undefined, { permissionMode: "manual", bypassPermissions: true });
+        expect(manager.getPermissionMode(manual.id)).toBe("manual");
+      });
+    });
+
+    it("clamps a creator's auto at birth on a non-Anthropic model", async () => {
+      await seedZen();
+      await withDefaults({}, () => {
+        const session = manager.createSession("/tmp", undefined, { model: "zen:ds-free", permissionMode: "auto" });
+        expect(manager.getPermissionMode(session.id)).toBe("manual");
+      });
+    });
+
+    it("seeds the model, context, thinking and notifications named at creation", async () => {
+      const prefsMod = await import("@/server/session-prefs");
+      const session = manager.createSession("/tmp", "Work", {
+        model: "claude-haiku-4-5-20251001",
+        // That version offers 200k only; the request settles to what it has.
+        contextSize: "1m",
+        thinkingLevel: "low",
+        notifications: { providerId: "telegram", events: { finished: true } },
+      });
+      const stored = (manager as any).sessions.get(session.id)!;
+
+      expect(session.model).toBe("claude-haiku-4-5-20251001");
+      expect(session.contextSize).toBe("200k");
+      expect(session.notifications).toEqual({ providerId: "telegram", events: { finished: true } });
+      expect(stored.thinkingLevel).toBe("low");
+      expect(stored.modelSlots.main).toBe("claude-haiku-4-5-20251001");
+      expect(vi.mocked(prefsMod.setSessionPrefs)).toHaveBeenCalledWith(
+        session.id,
+        expect.objectContaining({
+          model: "claude-haiku-4-5-20251001",
+          contextSize: "200k",
+          thinkingLevel: "low",
+          notifications: { providerId: "telegram", events: { finished: true } },
+        }),
+      );
+    });
+
     it("keeps a cockpit agent in manual whatever the default", async () => {
       await withDefaults({ permissionMode: "bypass" }, () => {
         const session = manager.createSession("/tmp", undefined, { cockpitAgent: true });

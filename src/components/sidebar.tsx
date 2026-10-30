@@ -35,6 +35,7 @@ import { useSettings } from "@/hooks/use-settings";
 import { useWebSocket } from "@/hooks/use-websocket";
 import { type AssistantDot, assistantDot } from "@/lib/assistant-dot";
 import { useCheckedFiles } from "@/lib/checked-files";
+import { type NewSessionInput, newSessionBody } from "@/lib/new-session";
 import { createStaleGuard } from "@/lib/stale-guard";
 import { cn } from "@/lib/utils";
 import type { SessionInfo } from "@/types";
@@ -597,18 +598,25 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
     [sessions],
   );
 
-  const createSession = async (cwd: string, name: string, runtime: "pty" | "stream") => {
-    const res = await fetch("/api/sessions", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ cwd, name: name || undefined, runtime }),
-    });
-    if (res.ok) {
+  const createSession = async (input: NewSessionInput): Promise<{ ok: boolean; error?: string }> => {
+    try {
+      const res = await fetch("/api/sessions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(newSessionBody(input)),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        return { ok: false, error: typeof data.error === "string" ? data.error : "Could not create the session" };
+      }
       const data = await res.json();
       await pinSession(data.sessionId);
       await fetchSessions();
       close();
-      router.push(`/sessions/${data.sessionId}?cwd=${encodeURIComponent(cwd)}`);
+      router.push(`/sessions/${data.sessionId}?cwd=${encodeURIComponent(input.cwd.trim())}`);
+      return { ok: true };
+    } catch {
+      return { ok: false, error: "Failed to connect" };
     }
   };
 
@@ -677,7 +685,14 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
             badge={sessions.length > 0 ? String(sessions.length) : undefined}
             actions={
               <div className="flex items-center">
-                <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => setDialogOpen(true)} title="New session">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-6 w-6"
+                  onClick={() => setDialogOpen(true)}
+                  title="New session"
+                  data-testid="sidebar-new-session"
+                >
                   <Plus className="h-3.5 w-3.5" />
                 </Button>
                 <Button
