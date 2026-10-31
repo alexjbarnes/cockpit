@@ -31,6 +31,7 @@ import { Button } from "@/components/ui/button";
 import { useIsDesktop } from "@/hooks/use-is-desktop";
 import { useSettings } from "@/hooks/use-settings";
 import { checkOutcome, type PrCheck, tallyChecks } from "@/lib/checks";
+import { reindexForFullContent } from "@/lib/pierre-diff";
 import { cn } from "@/lib/utils";
 
 // --- Types ---
@@ -74,24 +75,6 @@ interface FileDiff {
 function isDark(): boolean {
   if (typeof document === "undefined") return false;
   return document.documentElement.classList.contains("dark");
-}
-
-function reindexForFullContent(meta: FileDiffMetadata, oldContent: string, newContent: string) {
-  const oldLines = oldContent.split(/\r?\n/).map((l) => l + "\n");
-  const newLines = newContent.split(/\r?\n/).map((l) => l + "\n");
-  for (const hunk of meta.hunks) {
-    const delDelta = hunk.deletionStart - 1 - hunk.deletionLineIndex;
-    const addDelta = hunk.additionStart - 1 - hunk.additionLineIndex;
-    hunk.deletionLineIndex = hunk.deletionStart - 1;
-    hunk.additionLineIndex = hunk.additionStart - 1;
-    for (const content of hunk.hunkContent) {
-      content.deletionLineIndex += delDelta;
-      content.additionLineIndex += addDelta;
-    }
-  }
-  meta.deletionLines = oldLines;
-  meta.additionLines = newLines;
-  meta.isPartial = false;
 }
 
 function fileStatusIcon(path: string, prFiles: PRFile[]) {
