@@ -13,7 +13,7 @@ import {
 } from "@dnd-kit/core";
 import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { ChevronRight, GripVertical } from "lucide-react";
+import { Check, ChevronRight, Copy, GripVertical } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
@@ -37,11 +37,38 @@ interface RowProps {
   /** The grip. Absent when the list is not draggable (the project view). */
   handle?: React.ReactNode;
   className?: string;
+  /** Show a button that copies the issue's key. The session header's modal
+   *  asks for it; the Issues page keeps the row as it was. */
+  copyable?: boolean;
+}
+
+/** Copies the row's key, with a tick for a moment. Stops the click and the key
+ *  press from reaching the row, which opens the issue. */
+function CopyIssueKey({ value }: { value: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation();
+        navigator.clipboard?.writeText(value).catch(() => {});
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
+      }}
+      onKeyDown={(e) => e.stopPropagation()}
+      data-testid={`copy-issue-${value}`}
+      aria-label="Copy issue ID"
+      title="Copy issue ID"
+      className="-mr-1 flex h-7 w-7 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground"
+    >
+      {copied ? <Check className="h-3.5 w-3.5 text-green-500" /> : <Copy className="h-3.5 w-3.5" />}
+    </button>
+  );
 }
 
 /** One issue in a list. Also the drag overlay's content, which is why it is
  *  exported: the overlay draws the same row, minus the handle. */
-export function IssueRow({ issue, projectName, onClick, handle, className }: RowProps) {
+export function IssueRow({ issue, projectName, onClick, handle, className, copyable }: RowProps) {
   const priority = priorityLabel(issue.priority);
   return (
     <div
@@ -70,11 +97,22 @@ export function IssueRow({ issue, projectName, onClick, handle, className }: Row
           <span>{timeAgo(issue.updatedAt)}</span>
         </div>
       </div>
+      {copyable && <CopyIssueKey value={issue.key} />}
     </div>
   );
 }
 
-function SortableIssueRow({ issue, projectName, onClick }: { issue: Issue; projectName?: string; onClick: () => void }) {
+function SortableIssueRow({
+  issue,
+  projectName,
+  onClick,
+  copyable,
+}: {
+  issue: Issue;
+  projectName?: string;
+  onClick: () => void;
+  copyable?: boolean;
+}) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: issue.id });
   return (
     <div ref={setNodeRef} style={{ transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.4 : 1 }}>
@@ -82,6 +120,7 @@ function SortableIssueRow({ issue, projectName, onClick }: { issue: Issue; proje
         issue={issue}
         projectName={projectName}
         onClick={onClick}
+        copyable={copyable}
         handle={
           // A real button so the gesture has something to grab: the row itself is
           // a button too (it opens the issue), and a drag must not be a click.
@@ -112,6 +151,7 @@ function StatusGroup({
   onIssueClick,
   dragging,
   showEmpty,
+  copyable,
 }: {
   group: IssueStatusGroup;
   project?: Project;
@@ -119,6 +159,7 @@ function StatusGroup({
   onIssueClick: (issue: Issue) => void;
   dragging: boolean;
   showEmpty: boolean;
+  copyable?: boolean;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: group.status, data: { status: group.status } });
   if (group.issues.length === 0 && !showEmpty) return null;
@@ -141,6 +182,7 @@ function StatusGroup({
                 issue={issue}
                 projectName={projectNames.get(issue.projectId)}
                 onClick={() => onIssueClick(issue)}
+                copyable={copyable}
               />
             ))}
           </SortableContext>
@@ -168,6 +210,8 @@ export interface IssueListProps {
   onDrop: (activeKey: string, targetStatus: string, targetIndex: number) => void;
   /** Shown while the server is being told; the row is dragged either way. */
   className?: string;
+  /** Give every row a button that copies its key. */
+  copyable?: boolean;
 }
 
 /**
@@ -175,7 +219,7 @@ export interface IssueListProps {
  * a row into another group to change its status. Shared by the Issues page and
  * the session header's modal so the two cannot drift.
  */
-export function IssueList({ issues, statusGroups, project, projectNames, onIssueClick, onDrop, className }: IssueListProps) {
+export function IssueList({ issues, statusGroups, project, projectNames, onIssueClick, onDrop, className, copyable }: IssueListProps) {
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { delay: 150, tolerance: 5 } }));
   const byId = useMemo(() => new Map(issues.map((issue) => [issue.id, issue])), [issues]);
@@ -227,6 +271,7 @@ export function IssueList({ issues, statusGroups, project, projectNames, onIssue
             onIssueClick={onIssueClick}
             dragging={draggingId !== null}
             showEmpty={draggingId !== null}
+            copyable={copyable}
           />
         ))}
       </div>

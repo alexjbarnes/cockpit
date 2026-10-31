@@ -144,6 +144,20 @@ test("the session header opens its project's issues", async ({ page, harness }) 
   test.setTimeout(120_000);
   const repoPath = mkdtempSync(path.join(tmpdir(), "cockpit-it-issues-"));
   try {
+    // Capture what the row's copy button writes, without asking the browser
+    // for the real clipboard.
+    await page.addInitScript(() => {
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: {
+          writeText: (text: string) => {
+            (window as Window & { __copiedKey?: string }).__copiedKey = text;
+            return Promise.resolve();
+          },
+        },
+      });
+    });
+
     const patched = await page.request.patch(`${harness.cockpitUrl}/api/defaults`, { data: { issuesEnabled: true } });
     expect(patched.ok()).toBe(true);
 
@@ -155,6 +169,7 @@ test("the session header opens its project's issues", async ({ page, harness }) 
       data: { projectId: project.id, title: "Belongs to this session" },
     });
     expect(issueRes.ok()).toBe(true);
+    const { issue } = (await issueRes.json()) as { issue: { key: string } };
 
     // A session working in that repository.
     harness.trustWorkDir(repoPath);
@@ -170,6 +185,11 @@ test("the session header opens its project's issues", async ({ page, harness }) 
     await expect(modal).toBeVisible();
     await expect(page.getByTestId("session-issues-project")).toHaveValue(project.id);
     await expect(modal).toContainText("Belongs to this session");
+
+    // The row's copy button writes the key and leaves the list open.
+    await page.getByTestId(`copy-issue-${issue.key}`).click();
+    expect(await page.evaluate(() => (window as Window & { __copiedKey?: string }).__copiedKey)).toBe(issue.key);
+    await expect(modal).toBeVisible();
 
     // Not every page: the button is for the session you are in.
     await page.goto(`${harness.cockpitUrl}/reviews`);

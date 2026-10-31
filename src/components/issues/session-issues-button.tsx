@@ -255,6 +255,7 @@ export function SessionIssuesButton() {
                     router.push(`/issues/${encodeURIComponent(issue.key)}?from=${from}`);
                   }}
                   onDrop={handleDrop}
+                  copyable
                   className={cn("pb-2")}
                 />
               )}
