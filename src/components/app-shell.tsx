@@ -14,10 +14,12 @@ import { BackgroundTasksButton } from "@/components/task-indicator";
 import { Button } from "@/components/ui/button";
 import { UsageButton } from "@/components/usage-modal";
 import { useEmbedded } from "@/hooks/use-embedded";
+import { useSettings } from "@/hooks/use-settings";
 import { WebSocketProvider } from "@/hooks/use-websocket";
 import { headerActionsVisibility } from "@/lib/header-actions";
 import { isModalPath, type PageModalMessage, pageModalMessage } from "@/lib/page-modal";
 import type { BackgroundTask, InitData } from "@/types";
+import { PageModal, usePageModal } from "./page-modal";
 
 export interface SidebarSectionConfig {
   id: string;
@@ -62,6 +64,9 @@ interface ShellContextValue {
   closeSidebar: () => void;
   tabActions: TabActions | null;
   setTabActions: (actions: TabActions | null) => void;
+  /** Opens a page in the page modal when the setting allows it. Returns false
+   *  when it did not, so the caller can navigate instead. */
+  openPageModal: (path: string) => boolean;
 }
 
 const ShellContext = createContext<ShellContextValue>({
@@ -84,6 +89,7 @@ const ShellContext = createContext<ShellContextValue>({
   closeSidebar: () => {},
   tabActions: null,
   setTabActions: () => {},
+  openPageModal: () => false,
 });
 
 export function useShell() {
@@ -268,6 +274,10 @@ export function AppShell({ children }: { children: ReactNode }) {
   const [sidebarSectionsMap, setSidebarSectionsMap] = useState<Map<string, SidebarSectionConfig>>(new Map());
   const [runtime, setRuntimeState] = useState<"pty" | "stream">("stream");
   const [tabActions, setTabActionsState] = useState<TabActions | null>(null);
+  // The page modal lives here rather than in the sidebar so anything in the
+  // shell, including a session's context panel, can open a page in it.
+  const { settings: appSettings, reload: reloadSettings } = useSettings();
+  const pageModal = usePageModal(reloadSettings);
 
   const setSidebarSection = useCallback((section: SidebarSectionConfig) => {
     setSidebarSectionsMap((prev) => {
@@ -318,6 +328,18 @@ export function AppShell({ children }: { children: ReactNode }) {
     setTabActionsState(actions);
   }, []);
 
+  /** Opens a page over the current one when the setting allows it; false means
+   *  the caller should navigate instead. Inside the modal's own frame there is
+   *  nowhere to put a second one, so it is always false there. */
+  const openPageModal = useCallback(
+    (path: string) => {
+      if (embedded || !appSettings.modalPagesEnabled || !isModalPath(path.split("?")[0])) return false;
+      pageModal.open(path);
+      return true;
+    },
+    [embedded, appSettings.modalPagesEnabled, pageModal.open],
+  );
+
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === "b") {
@@ -355,6 +377,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             closeSidebar,
             tabActions,
             setTabActions,
+            openPageModal,
           }}
         >
           <AgentTranscriptProvider sessionId={sessionId} cwd={cwd}>
@@ -370,6 +393,7 @@ export function AppShell({ children }: { children: ReactNode }) {
               }}
             >
               {!embedded && <Sidebar ref={sidebarRef} />}
+              {!embedded && <PageModal path={pageModal.path} onClose={pageModal.close} onOpenInApp={pageModal.openInApp} />}
               <div className="flex-1 min-h-0 min-w-0 flex flex-col">
                 <header className="shrink-0 flex items-center gap-2 border-b px-4 py-2 bg-background">
                   {!embedded && (

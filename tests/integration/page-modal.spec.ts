@@ -9,6 +9,7 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { Page } from "@playwright/test";
+import { textResponse } from "../mock-api/builder";
 import { expect, test } from "./fixtures";
 import type { Harness } from "./harness";
 
@@ -117,6 +118,41 @@ test("with the setting on, the footer's pages open over the session and close ba
     await expect(page).toHaveURL(otherSessionUrl);
     await page.goBack();
     await expect(page).toHaveURL(sessionUrl);
+  } finally {
+    rmSync(workDir, { recursive: true, force: true });
+  }
+});
+
+test("Session insights from the context panel opens in the page modal too", async ({ page, harness }) => {
+  test.setTimeout(120_000);
+  const workDir = makeWorkDir(harness);
+  try {
+    const patched = await page.request.patch(`${harness.cockpitUrl}/api/defaults`, {
+      data: { modalPagesEnabled: true, telemetryEnabled: true },
+    });
+    expect(patched.ok()).toBe(true);
+    const sessionUrl = await createSession(page, harness, workDir);
+    await openSession(page, sessionUrl);
+
+    // The ring only exists once the session has usage, so give it a turn.
+    harness.mock.setScript([{ events: textResponse("All done.") }]);
+    await page.waitForTimeout(5000);
+    await page.getByTestId("message-input").fill("say something");
+    await page.getByTestId("btn-send").click();
+    await expect(page.getByText("All done.")).toBeVisible({ timeout: 30_000 });
+
+    await page.getByTestId("context-indicator").click();
+    await page.getByTestId("session-insights-link").click();
+
+    // The session stays underneath, and the page the link names is in the
+    // modal's frame, exactly as a footer page would be.
+    await expect(page.getByTestId("page-modal")).toBeVisible();
+    expect(page.url()).toBe(sessionUrl);
+    const inner = page.frame({ name: "cockpit-page-modal" });
+    expect(inner).not.toBeNull();
+    await expect
+      .poll(() => inner!.url(), { timeout: 15_000 })
+      .toContain(`/insights?session=${new URL(sessionUrl).pathname.split("/").pop()}`);
   } finally {
     rmSync(workDir, { recursive: true, force: true });
   }
