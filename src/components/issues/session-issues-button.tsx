@@ -1,10 +1,11 @@
 "use client";
 
-import { ClipboardList, Loader2, X } from "lucide-react";
+import { ClipboardList, Loader2, Plus, X } from "lucide-react";
 import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useShell } from "@/components/app-shell";
 import { IssueList } from "@/components/issues/issue-list";
+import { NewIssueDialog } from "@/components/issues/new-issue-dialog";
 import { Button } from "@/components/ui/button";
 import { useScrollRestoration } from "@/hooks/use-scroll-restoration";
 import { useSettings } from "@/hooks/use-settings";
@@ -46,6 +47,7 @@ export function SessionIssuesButton() {
   const [projectId, setProjectId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [moveError, setMoveError] = useState<string | null>(null);
+  const [newOpen, setNewOpen] = useState(false);
   const dropGuard = useRef(createStaleGuard()).current;
 
   // Where the list was, kept for this session's tab, so coming back from an
@@ -59,6 +61,7 @@ export function SessionIssuesButton() {
     (next: boolean) => {
       if (!next) {
         setProjectId(null);
+        setNewOpen(false);
         // After the list has unmounted: on its way out the scroll restorer
         // saves the position one last time, which would undo an earlier remove.
         setTimeout(() => {
@@ -187,81 +190,104 @@ export function SessionIssuesButton() {
       </Button>
 
       {open && (
-        <div
-          className="fixed inset-0 z-50 flex items-start justify-center bg-black/50 p-3 sm:p-6"
-          onMouseDown={(e) => {
-            if (e.target === e.currentTarget) setOpenInUrl(false);
-          }}
-        >
+        <>
           <div
-            className="flex max-h-[85vh] w-full max-w-2xl flex-col overflow-hidden rounded-lg border bg-background shadow-lg"
-            data-testid="session-issues-modal"
+            className="fixed inset-0 z-50 flex items-start justify-center bg-black/50 p-3 sm:p-6"
+            onMouseDown={(e) => {
+              if (e.target === e.currentTarget) setOpenInUrl(false);
+            }}
           >
-            <div className="flex shrink-0 items-center gap-2 border-b px-4 py-3">
-              <ClipboardList className="h-4 w-4 text-muted-foreground" />
-              <h2 className="text-sm font-semibold">Issues</h2>
-              <select
-                value={projectId ?? ""}
-                onChange={(e) => chooseProject(e.target.value)}
-                data-testid="session-issues-project"
-                className="ml-2 rounded-md border bg-background px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-ring"
-              >
-                <option value="">All projects</option>
-                {projects
-                  .filter((p) => !p.archived)
-                  .map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.name}
-                    </option>
-                  ))}
-              </select>
-              {matched && projectId === matched.id && (
-                <span className="truncate text-xs text-muted-foreground">from this session's directory</span>
-              )}
-              <button
-                onClick={() => setOpenInUrl(false)}
-                className="ml-auto rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
-                aria-label="Close"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
+            <div
+              className="flex max-h-[85vh] w-full max-w-2xl flex-col overflow-hidden rounded-lg border bg-background shadow-lg"
+              data-testid="session-issues-modal"
+            >
+              <div className="flex shrink-0 items-center gap-2 border-b px-4 py-3">
+                <ClipboardList className="h-4 w-4 text-muted-foreground" />
+                <h2 className="text-sm font-semibold">Issues</h2>
+                <select
+                  value={projectId ?? ""}
+                  onChange={(e) => chooseProject(e.target.value)}
+                  data-testid="session-issues-project"
+                  className="ml-2 rounded-md border bg-background px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-ring"
+                >
+                  <option value="">All projects</option>
+                  {projects
+                    .filter((p) => !p.archived)
+                    .map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name}
+                      </option>
+                    ))}
+                </select>
+                {matched && projectId === matched.id && (
+                  <span className="truncate text-xs text-muted-foreground">from this session's directory</span>
+                )}
+                <button
+                  onClick={() => setNewOpen(true)}
+                  className="ml-auto rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+                  aria-label="New issue"
+                  title="New issue"
+                  data-testid="session-issues-new"
+                >
+                  <Plus className="h-4 w-4" />
+                </button>
+                <button
+                  onClick={() => setOpenInUrl(false)}
+                  className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+                  aria-label="Close"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
 
-            <div ref={listRef} className="min-h-0 flex-1 overflow-y-auto p-3" data-testid="session-issues-list">
-              {moveError && (
-                <div className="mb-3 rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive">
-                  {moveError}
-                </div>
-              )}
-              {/* A refresh keeps the list on screen: swapping it for a spinner
+              <div ref={listRef} className="min-h-0 flex-1 overflow-y-auto p-3" data-testid="session-issues-list">
+                {moveError && (
+                  <div className="mb-3 rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+                    {moveError}
+                  </div>
+                )}
+                {/* A refresh keeps the list on screen: swapping it for a spinner
                   would drop the scroll position just restored. */}
-              {loading && issues.length === 0 ? (
-                <div className="flex items-center justify-center py-10">
-                  <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
-                </div>
-              ) : groups.length === 0 ? (
-                <p className="py-10 text-center text-sm text-muted-foreground">No issues in this project.</p>
-              ) : (
-                <IssueList
-                  issues={visible}
-                  statusGroups={groups}
-                  project={selected}
-                  projectNames={projectNames}
-                  onIssueClick={(issue) => {
-                    // Carry where we are — the URL still says ?issues=1, so
-                    // closing or deleting the issue comes back to this session
-                    // with the list reopened, not to the bare session.
-                    const from = encodeURIComponent(window.location.pathname + window.location.search);
-                    router.push(`/issues/${encodeURIComponent(issue.key)}?from=${from}`);
-                  }}
-                  onDrop={handleDrop}
-                  copyable
-                  className={cn("pb-2")}
-                />
-              )}
+                {loading && issues.length === 0 ? (
+                  <div className="flex items-center justify-center py-10">
+                    <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                  </div>
+                ) : groups.length === 0 ? (
+                  <p className="py-10 text-center text-sm text-muted-foreground">No issues in this project.</p>
+                ) : (
+                  <IssueList
+                    issues={visible}
+                    statusGroups={groups}
+                    project={selected}
+                    projectNames={projectNames}
+                    onIssueClick={(issue) => {
+                      // Carry where we are — the URL still says ?issues=1, so
+                      // closing or deleting the issue comes back to this session
+                      // with the list reopened, not to the bare session.
+                      const from = encodeURIComponent(window.location.pathname + window.location.search);
+                      router.push(`/issues/${encodeURIComponent(issue.key)}?from=${from}`);
+                    }}
+                    onDrop={handleDrop}
+                    copyable
+                    className={cn("pb-2")}
+                  />
+                )}
+              </div>
             </div>
           </div>
-        </div>
+          <NewIssueDialog
+            open={newOpen}
+            onOpenChange={setNewOpen}
+            projects={projects}
+            defaultProjectId={projectId || matched?.id || ""}
+            onCreated={(issue) => {
+              setIssues((prev) => [...prev, issue]);
+              // Show the list the issue landed in, so creating one never sends
+              // the user out of the modal to find it.
+              chooseProject(issue.projectId);
+            }}
+          />
+        </>
       )}
     </>
   );

@@ -1,15 +1,14 @@
 "use client";
 
-import { ClipboardList, Loader2, Plus, X } from "lucide-react";
+import { ClipboardList, Plus, X } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePageHeader } from "@/components/app-shell";
 import { GroupHeader, IssueList } from "@/components/issues/issue-list";
 import { KanbanBoard } from "@/components/issues/kanban-board";
+import { NewIssueDialog } from "@/components/issues/new-issue-dialog";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
 import { useScrollRestoration } from "@/hooks/use-scroll-restoration";
 import { useSettings } from "@/hooks/use-settings";
 import type { IssueProjectGroup, QuickFilter } from "@/lib/issue-display";
@@ -161,109 +160,6 @@ function ProjectGroupCard({ group, onIssueClick }: { group: IssueProjectGroup; o
           })}
       </CardContent>
     </Card>
-  );
-}
-
-function NewIssueDialog({
-  open,
-  onOpenChange,
-  projects,
-  defaultProjectId,
-  onCreated,
-}: {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  projects: Project[];
-  defaultProjectId: string;
-  onCreated: (issue: Issue) => void;
-}) {
-  const [projectId, setProjectId] = useState(defaultProjectId);
-  const [title, setTitle] = useState("");
-  const [description, setDescription] = useState("");
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (open) {
-      setProjectId(defaultProjectId || projects[0]?.id || "");
-      setTitle("");
-      setDescription("");
-      setError(null);
-    }
-  }, [open, defaultProjectId, projects]);
-
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    if (!projectId || !title.trim()) return;
-    setSaving(true);
-    setError(null);
-    try {
-      const res = await fetch("/api/issues", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ projectId, title: title.trim(), description: description.trim() || undefined }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        setError(data.error || "Failed to create issue");
-        return;
-      }
-      onCreated(data.issue);
-      onOpenChange(false);
-    } catch {
-      setError("Failed to connect");
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent onClose={() => onOpenChange(false)}>
-        <DialogHeader>
-          <DialogTitle>New Issue</DialogTitle>
-        </DialogHeader>
-        {projects.length === 0 ? (
-          <p className="text-sm text-muted-foreground mt-2">Create a project first, in Settings &gt; Projects.</p>
-        ) : (
-          <form onSubmit={handleSubmit} className="space-y-3 mt-2">
-            <div className="space-y-1.5">
-              <label className="text-sm font-medium">Project</label>
-              <select value={projectId} onChange={(e) => setProjectId(e.target.value)} className={`w-full ${SELECT_CLASS}`}>
-                {projects.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name} ({p.prefix})
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="space-y-1.5">
-              <label className="text-sm font-medium">Title</label>
-              <Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="What needs doing?" required autoFocus />
-            </div>
-            <div className="space-y-1.5">
-              <label className="text-sm font-medium">Description (optional)</label>
-              <textarea
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                placeholder="Markdown supported"
-                className="w-full min-h-[100px] rounded-md border bg-background px-3 py-2 text-sm resize-y focus:outline-none focus:ring-2 focus:ring-ring"
-              />
-            </div>
-            {error && <p className="text-sm text-destructive">{error}</p>}
-            <div className="flex justify-end gap-2 pt-1">
-              <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
-                Cancel
-              </Button>
-              <Button type="submit" disabled={saving || !title.trim()}>
-                {saving ? <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" /> : null}
-                Create
-              </Button>
-            </div>
-          </form>
-        )}
-      </DialogContent>
-    </Dialog>
   );
 }
 
