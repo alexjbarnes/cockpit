@@ -17,6 +17,7 @@ import {
   recommendedEffort,
   resolveModel,
 } from "@/lib/models";
+import { mergePromptHistory, promptHistorySessionIds } from "@/lib/prompt-history";
 import { widensSandbox } from "@/lib/sandbox-requests";
 import { getAssistantSettings, updateAssistantSettings } from "@/server/assistant-settings";
 import { supportedPermissionModes } from "@/server/claude-bin";
@@ -303,6 +304,14 @@ function cliSpawnMode(mode: SessionPermissionMode, runtime: SessionRuntime): str
 /** The context size to store for `model`: the requested one when the model
  *  offers it, otherwise the first it offers. A model whose sizes are unknown
  *  keeps the requested size, which is what the spawn will ask for. */
+/** Prompt history for a cockpit session, newest first. Every CLI session
+ *  behind it contributes its own newest-first list; the session running now
+ *  comes first, then the previous ones backwards. */
+async function loadMergedPromptHistory(cliSessionId: string, previousCliSessionIds: readonly string[], cwd: string): Promise<string[]> {
+  const segments = await Promise.all(promptHistorySessionIds(cliSessionId, previousCliSessionIds).map((id) => loadPromptHistory(id, cwd)));
+  return mergePromptHistory(segments);
+}
+
 function resolveContextSizeFor(model: string, requested: ContextSize): ContextSize {
   const sizes = resolveModel(model)?.contextSizes ?? resolveProviderModel(model)?.model.contextSizes;
   if (!sizes || sizes.length === 0) return requested;
@@ -734,17 +743,7 @@ export class SessionManager {
         session.info.name = firstUser.content.slice(0, 120);
       }
     }
-    const allCliIds = [...session.previousCliSessionIds, session.cliSessionId];
-    const historyArrays = await Promise.all(allCliIds.map((id) => loadPromptHistory(id, session.info.cwd)));
-    const seen = new Set<string>();
-    const allPrompts: string[] = [];
-    for (const arr of historyArrays) {
-      for (const p of arr) {
-        if (seen.has(p)) continue;
-        seen.add(p);
-        allPrompts.push(p);
-      }
-    }
+    const allPrompts = await loadMergedPromptHistory(session.cliSessionId, session.previousCliSessionIds, session.info.cwd);
 
     const normalized = lastUsage ? { used: lastUsage.used, total: session.contextWindowSize } : null;
     return { info: session.info, messages: clientMessages, hasMore, lastUsage: normalized, promptHistory: allPrompts };
@@ -810,17 +809,7 @@ export class SessionManager {
         session.info.name = firstUser.content.slice(0, 120);
       }
     }
-    const allCliIds = [...session.previousCliSessionIds, session.cliSessionId];
-    const historyArrays = await Promise.all(allCliIds.map((id) => loadPromptHistory(id, cwd)));
-    const seen = new Set<string>();
-    const allPrompts: string[] = [];
-    for (const arr of historyArrays) {
-      for (const p of arr) {
-        if (seen.has(p)) continue;
-        seen.add(p);
-        allPrompts.push(p);
-      }
-    }
+    const allPrompts = await loadMergedPromptHistory(session.cliSessionId, session.previousCliSessionIds, cwd);
 
     const normalized = lastUsage ? { used: lastUsage.used, total: session.contextWindowSize } : null;
     return { info: session.info, messages: clientMessages, hasMore, lastUsage: normalized, promptHistory: allPrompts };
@@ -874,17 +863,7 @@ export class SessionManager {
       }
     }
 
-    const allCliIds = [...prevIds, cliId];
-    const historyArrays = await Promise.all(allCliIds.map((id) => loadPromptHistory(id, cwd)));
-    const seen = new Set<string>();
-    const allPrompts: string[] = [];
-    for (const arr of historyArrays) {
-      for (const p of arr) {
-        if (seen.has(p)) continue;
-        seen.add(p);
-        allPrompts.push(p);
-      }
-    }
+    const allPrompts = await loadMergedPromptHistory(cliId, prevIds, cwd);
 
     const prefs = getSessionPrefs(cliId);
     const viewSize = prefs?.contextSize ?? prefs?.modelSlots?.mainContext ?? DEFAULT_CONTEXT_SIZE;

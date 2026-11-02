@@ -131,6 +131,8 @@ Type `/` to open the menu. Cockpit supports the same slash commands as Claude Co
 
 Press the up arrow in an empty input to open the prompt history modal, Atuin-style. It lists prompts you have sent, newest first, and is searchable. Pick one to drop it back into the input. History is read from the full session transcript, not just the current view.
 
+Typing the start of a prompt you have sent before shows the rest in grey after the caret, the way Fish completes a command; press Right, End or Tab to accept it, or tap the grey text on a phone. Tab only completes while the suggestion is showing; otherwise it keeps toggling Plan/Build. The suggestion is the most recent prompt starting with what you typed, and lowercase typing matches regardless of the history's casing. History from before a `/clear` in the same session is included, after the current one.
+
 ## Session linking via /clear
 
 `/clear` starts a fresh CLI conversation, but Cockpit keeps the chat view continuous. The server stitches the new transcript onto the previous one, so you see the full history even though Claude only sees post-clear messages.

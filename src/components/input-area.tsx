@@ -40,6 +40,7 @@ import { THINKING_LEVELS } from "@/lib/model-picker";
 import { CONTEXT_SIZES, type ContextSize, describeModelSelection, modelOneMRequiresCredits, resolveProviderId } from "@/lib/models";
 import { detectLanguage, extensionForLabel, shouldCollapsePaste } from "@/lib/paste-detect";
 import { effectivePermissionMode, permissionModeMismatch } from "@/lib/permission-mode";
+import { suggestCompletion } from "@/lib/prompt-suggestion";
 import type {
   ContextUsage,
   DocumentAttachment,
@@ -404,6 +405,8 @@ export function InputArea({
   );
   const [mentionSelectedIndex, setMentionSelectedIndex] = useState(0);
   const [cursorPos, setCursorPos] = useState(0);
+  const [caretAtEnd, setCaretAtEnd] = useState(false);
+  const [composing, setComposing] = useState(false);
   const [pendingImages, setPendingImages] = useState<ImageAttachment[]>([]);
   const [pendingDocs, setPendingDocs] = useState<DocumentAttachment[]>([]);
   const [pendingTextFiles, setPendingTextFiles] = useState<TextFileAttachment[]>([]);
@@ -412,6 +415,7 @@ export function InputArea({
     { type: "image"; src: string; index: number } | { type: "text"; content: string; name: string; index: number } | null
   >(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const suggestionRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const mentionItemsRef = useRef<MentionItem[]>([]);
   const slashItemsRef = useRef<SlashCommand[]>([]);
@@ -423,6 +427,13 @@ export function InputArea({
 
   const mention = getMentionContext(text, cursorPos);
   const showMention = !showMenu && mention.active && !!cwd;
+
+  // Fish-style completion: the rest of the most recent prompt that starts with
+  // what is typed, shown in the input and accepted with Right or End. Only at
+  // the end of the text, while focused, and never over a menu or an IME
+  // composition.
+  const suggestion =
+    inputFocused && caretAtEnd && !composing && !showMenu && !showMention && !historyOpen ? suggestCompletion(text, promptHistory) : null;
 
   const handleSelectCommand = useCallback(
     (cmd: SlashCommand) => {
@@ -521,6 +532,53 @@ export function InputArea({
   const openSendMode = useCallback(() => setSendModeOpen(true), []);
   const sendModePress = useLongPress(openSendMode, isResponding);
 
+  const handleInput = useCallback(() => {
+    const el = textareaRef.current;
+    // Measure the cap BEFORE collapsing to auto, since it reads the row's
+    // current chrome height against the textarea's current height.
+    const cap = maxTextareaHeight(el);
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = Math.min(el.scrollHeight, cap) + "px";
+  }, []);
+
+  // The keyboard opening (or any viewport change) shrinks the room the input
+  // has without firing an input event, so re-apply the cap on resize.
+  useEffect(() => {
+    const target: { addEventListener: typeof window.addEventListener; removeEventListener: typeof window.removeEventListener } =
+      window.visualViewport ?? window;
+    target.addEventListener("resize", handleInput);
+    return () => target.removeEventListener("resize", handleInput);
+  }, [handleInput]);
+
+  // The ghost layer sits over the textarea rather than inside it, so it has to
+  // follow the textarea when the text outgrows the visible rows.
+  const syncSuggestionScroll = useCallback(() => {
+    const el = textareaRef.current;
+    const mirror = suggestionRef.current;
+    if (!el || !mirror) return;
+    mirror.scrollTop = el.scrollTop;
+    mirror.scrollLeft = el.scrollLeft;
+  }, []);
+
+  const acceptSuggestion = useCallback(
+    (completion: string) => {
+      // Keep what was typed and append only the rest, so the typed casing
+      // survives a case-insensitive match.
+      const next = text + completion.slice(text.length);
+      setText(next);
+      setCaretAtEnd(true);
+      requestAnimationFrame(() => {
+        const el = textareaRef.current;
+        if (!el) return;
+        el.focus();
+        el.setSelectionRange(next.length, next.length);
+        handleInput();
+      });
+    },
+    [text, handleInput],
+  );
+
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLTextAreaElement>) => {
       if (showMenu) {
@@ -595,6 +653,23 @@ export function InputArea({
         }
       }
 
+      // Right at the end of the text is where Fish accepts its suggestion, and
+      // End lands there too. Tab does as well while a ghost is showing; without
+      // one it keeps its Plan/Build toggle. Shift/Alt/Ctrl keep the textarea's
+      // own behaviour.
+      if (
+        suggestion &&
+        (e.key === "ArrowRight" || e.key === "End" || e.key === "Tab") &&
+        !e.shiftKey &&
+        !e.altKey &&
+        !e.ctrlKey &&
+        !e.metaKey
+      ) {
+        e.preventDefault();
+        acceptSuggestion(suggestion);
+        return;
+      }
+
       if (e.key === "Tab" && !e.shiftKey && showPlanToggle) {
         e.preventDefault();
         onSetPlanMode(!planMode);
@@ -626,6 +701,8 @@ export function InputArea({
       handleSend,
       handleSelectCommand,
       handleSelectMention,
+      suggestion,
+      acceptSuggestion,
       text,
       mention.start,
       slash.start,
@@ -638,25 +715,6 @@ export function InputArea({
       promptHistory,
     ],
   );
-
-  const handleInput = useCallback(() => {
-    const el = textareaRef.current;
-    // Measure the cap BEFORE collapsing to auto, since it reads the row's
-    // current chrome height against the textarea's current height.
-    const cap = maxTextareaHeight(el);
-    if (!el) return;
-    el.style.height = "auto";
-    el.style.height = Math.min(el.scrollHeight, cap) + "px";
-  }, []);
-
-  // The keyboard opening (or any viewport change) shrinks the room the input
-  // has without firing an input event, so re-apply the cap on resize.
-  useEffect(() => {
-    const target: { addEventListener: typeof window.addEventListener; removeEventListener: typeof window.removeEventListener } =
-      window.visualViewport ?? window;
-    target.addEventListener("resize", handleInput);
-    return () => target.removeEventListener("resize", handleInput);
-  }, [handleInput]);
 
   const pasteCountRef = useRef(0);
 
@@ -693,14 +751,18 @@ export function InputArea({
           setText(before + after);
           collapseText(insertedText);
           setCursorPos(before.length);
+          setCaretAtEnd(false);
           setSelectedIndex(0);
           setMentionSelectedIndex(0);
           return;
         }
       }
 
+      const start = e.target.selectionStart ?? newValue.length;
+      const end = e.target.selectionEnd ?? start;
       setText(newValue);
-      setCursorPos(e.target.selectionStart ?? 0);
+      setCursorPos(start);
+      setCaretAtEnd(start === newValue.length && end === newValue.length);
       setSelectedIndex(0);
       setMentionSelectedIndex(0);
     },
@@ -1344,6 +1406,14 @@ export function InputArea({
               onKeyDown={handleKeyDown}
               onInput={handleInput}
               onPaste={handlePaste}
+              onSelect={(e) => {
+                const el = e.currentTarget;
+                setCaretAtEnd(el.selectionStart === el.selectionEnd && el.selectionStart === el.value.length);
+                setCursorPos(el.selectionStart ?? 0);
+              }}
+              onCompositionStart={() => setComposing(true)}
+              onCompositionEnd={() => setComposing(false)}
+              onScroll={syncSuggestionScroll}
               onFocus={() => setInputFocused(true)}
               onBlur={() => setInputFocused(false)}
               placeholder={
@@ -1364,6 +1434,32 @@ export function InputArea({
                 planMode ? "border-blue-500/50 focus-visible:ring-blue-500/50" : "border-input focus-visible:ring-ring"
               }`}
             />
+            {/* Mirrors the textarea's metrics so the completion lands exactly
+                where the next characters would be. The typed prefix is laid
+                out but invisible; only the suggestion is painted. */}
+            {suggestion && (
+              <div
+                ref={suggestionRef}
+                aria-hidden="true"
+                data-testid="prompt-suggestion"
+                className="pointer-events-none absolute inset-0 select-none overflow-hidden rounded-md border border-transparent px-3 py-2 pb-7 text-sm whitespace-pre-wrap break-words text-muted-foreground/60"
+              >
+                <span className="text-transparent">{text}</span>
+                {/* Tapping the grey text accepts it, which is how a phone
+                    without arrow keys or a Tab key reaches the completion. The
+                    rest of the layer still passes taps through to the textarea. */}
+                <span
+                  data-testid="prompt-suggestion-accept"
+                  className="pointer-events-auto cursor-pointer"
+                  onPointerDown={(e) => {
+                    e.preventDefault();
+                    acceptSuggestion(suggestion);
+                  }}
+                >
+                  {suggestion.slice(text.length)}
+                </span>
+              </div>
+            )}
             <button
               onClick={handleFilePick}
               title="Attach file"
