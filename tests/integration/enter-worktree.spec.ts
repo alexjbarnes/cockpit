@@ -194,6 +194,24 @@ test("a session from before the stored worktree recovers it from its transcript"
         }
       })
       .toBe(worktree);
+
+    // Opened as history (the sessions list does this), the same session used to
+    // oscillate: the server named the worktree only when the client asked with
+    // the original cwd, so each answer made the other side reconnect. It must
+    // settle after the one reconnect that carries the worktree.
+    const connects: string[] = [];
+    page.on("websocket", (ws) => {
+      // Sent by the page, not received: the connects are what must stop.
+      ws.on("framesent", (frame) => {
+        const text = typeof frame.payload === "string" ? frame.payload : frame.payload.toString();
+        if (text.includes('"session:connect"')) connects.push(text);
+      });
+    });
+    await page.goto(`${harness.cockpitUrl}/sessions/${sessionId}?cwd=${encodeURIComponent(repo)}&historyView=true`);
+    await expect(page.getByTestId("worktree-tag")).toContainText("repo-feature", { timeout: 15_000 });
+    await page.waitForTimeout(1500);
+    expect(connects.length).toBeLessThanOrEqual(2);
+    await expect(page.getByTestId("worktree-tag")).toContainText("repo-feature");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

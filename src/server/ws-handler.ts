@@ -14,7 +14,7 @@ import { SessionManager } from "./session-manager";
 import { getSessionPrefs } from "./session-prefs";
 import { forgetViewer, setViewer } from "./session-viewers";
 import type { TerminalManager } from "./terminal-manager";
-import { readTranscriptCwd } from "./transcript";
+import { findSessionCwd, readTranscriptCwd } from "./transcript";
 
 const RESIZE_PREFIX = "\x01R";
 
@@ -330,9 +330,13 @@ export function createWebSocketHandler(
               }
               // A session whose worktree was never stored still says where it
               // last was in its transcript; history view has no manager entry
-              // for a hook to correct, so read it here.
-              const transcriptCwd = await readTranscriptCwd(msg.sessionId, historyCwd);
-              if (transcriptCwd && transcriptCwd !== historyCwd && existsSync(transcriptCwd)) {
+              // for a hook to correct, so read it here. Compare against the
+              // session's own first cwd, not the one the client asked with: once
+              // it learns the worktree it reconnects with that cwd, and an
+              // answer that differed would make the two flip back and forth.
+              const originalCwd = (await findSessionCwd(msg.sessionId)) ?? historyCwd;
+              const transcriptCwd = await readTranscriptCwd(msg.sessionId, originalCwd);
+              if (transcriptCwd && transcriptCwd !== originalCwd && existsSync(transcriptCwd)) {
                 result.info.worktreeCwd = transcriptCwd;
               }
               debugLog(`[ws:${wsId}] session ${sid} history view loaded in ${(performance.now() - t0).toFixed(0)}ms`);
