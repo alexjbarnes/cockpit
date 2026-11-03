@@ -3,6 +3,7 @@ import { createServer, type Server } from "node:http";
 import { Server as McpServer } from "@modelcontextprotocol/sdk/server/index.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+import { resolveProjectStatuses, sortIssuesByOrder } from "@/lib/issue-display";
 import { CONTEXT_SIZES } from "@/lib/models";
 import { rememberClaudeConfig } from "@/server/claude-config-guard";
 import { readClaudeUserConfig, updateClaudeUserConfig } from "@/server/claude-user-config";
@@ -13,14 +14,18 @@ import {
   addIssueComment,
   allowedStatusesFor,
   applyIssueUpdate,
+  applyProjectUpdate,
   buildIssue,
+  buildProject,
   getIssue,
   getProject,
   type IssueUpdateInput,
   loadIssues,
   loadProjects,
   persistAttachmentFile,
+  placeIssue,
   saveIssue,
+  saveProject,
 } from "@/server/issue-storage";
 import { buildJob, deleteJob, getJob, getLatestRun, getRun, loadJobs, saveJob } from "@/server/job-storage";
 import { discoverMcpServerNames } from "@/server/mcp-discovery";
@@ -161,10 +166,13 @@ const TOOL_SCOPES: Record<string, readonly McpScope[]> = {
   // system prompt (see run-context.ts's McpCaller doc), so these tool
   // descriptions are its only affordance for using the tracker at all.
   list_projects: ["assistant", "job", "session"],
+  create_project: ["assistant", "job", "session"],
   list_issues: ["assistant", "job", "session"],
   get_issue: ["assistant", "job", "session"],
   create_issue: ["assistant", "job", "session"],
   update_issue: ["assistant", "job", "session"],
+  reorder_issue: ["assistant", "job", "session"],
+  reorder_issue_statuses: ["assistant", "job", "session"],
   add_issue_comment: ["assistant", "job", "session"],
   add_issue_attachment: ["assistant", "job", "session"],
 };
@@ -174,7 +182,7 @@ function scopesFor(name: string): readonly McpScope[] {
 }
 
 /**
- * The seven issue/project tools, gated separately from TOOL_SCOPES by the
+ * The issue/project tools, gated separately from TOOL_SCOPES by the
  * `issuesEnabled` setting (default off — see defaults.ts). Unlike TOOL_SCOPES,
  * which is static per caller kind, this is read fresh from getDefaults() on
  * every tools/list and tools/call so a toggle in Settings takes effect
@@ -182,10 +190,13 @@ function scopesFor(name: string): readonly McpScope[] {
  */
 const ISSUE_TOOLS = new Set([
   "list_projects",
+  "create_project",
   "list_issues",
   "get_issue",
   "create_issue",
   "update_issue",
+  "reorder_issue",
+  "reorder_issue_statuses",
   "add_issue_comment",
   "add_issue_attachment",
 ]);
@@ -304,6 +315,9 @@ function issueSummary(issue: Issue): Record<string, unknown> {
     status: issue.status,
     priority: issue.priority,
     labels: issue.labels,
+    // The manual position within the status, as reorder_issue sets it. Null
+    // means it has never been placed and sorts after the numbered ones.
+    order: issue.order ?? null,
     createdAt: issue.createdAt,
     updatedAt: issue.updatedAt,
     commentCount: issue.comments.length,
@@ -741,6 +755,21 @@ const TOOL_DEFINITIONS = [
     inputSchema: { type: "object", properties: {}, required: [] },
   },
   {
+    name: "create_project",
+    description:
+      'Create a project in the native issue tracker. name and prefix are required; the prefix is uppercased and must be unique across projects, and becomes the first half of every issue key (e.g. "CK-1"). Its issues start on the full built-in status lifecycle. Returns the created project.',
+    inputSchema: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "Project name." },
+        prefix: { type: "string", description: 'Uppercase letters and digits, e.g. "CK". Unique across projects.' },
+        description: { type: "string", description: "Markdown description. Optional." },
+        repoPath: { type: "string", description: "Absolute path of the repository this project's work happens in. Optional." },
+      },
+      required: ["name", "prefix"],
+    },
+  },
+  {
     name: "list_issues",
     description:
       'List issues, optionally filtered by project (its id or prefix, e.g. "CK"), status and/or label; filters combine with AND. Omit all three to list every issue in every project. Returns a trimmed summary (no description, comments or activity — use get_issue for the full record). An unrecognised project filter returns an empty list; an unrecognised status is refused with the valid status names, since status is a fixed set and a typo there is always a mistake.',
@@ -799,6 +828,49 @@ const TOOL_DEFINITIONS = [
         labels: { type: "array", items: { type: "string" } },
       },
       required: ["key"],
+    },
+  },
+  {
+    name: "reorder_issue",
+    description:
+      "Move an issue to a position within a status, the same placement dragging a row produces. Give the target status and either the issue it should sit before or the one it should sit after; with neither it goes to the end. Moving it to a different status also fires the onIssueStatus trigger.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        key: { type: "string", description: 'Issue key, e.g. "CK-12".' },
+        status: {
+          type: "string",
+          description:
+            "The status to place it in: a built-in or one of its project's custom statuses (from list_projects). Omit to keep its current status.",
+        },
+        beforeKey: {
+          type: "string",
+          description: "Place the issue immediately before this issue's key, which must be in the target status. Omit when using afterKey.",
+        },
+        afterKey: {
+          type: "string",
+          description: "Place the issue immediately after this issue's key, which must be in the target status. Omit when using beforeKey.",
+        },
+      },
+      required: ["key"],
+    },
+  },
+  {
+    name: "reorder_issue_statuses",
+    description:
+      "Reorder a project's status sections (the headings in its issue list and the columns on its board). Give the statuses in the order they should appear; any current status left out keeps its default position after them. An empty order clears the project's custom order.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        project: { type: "string", description: 'Project id or prefix (e.g. "CK").' },
+        order: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "Status names in display order: built-ins and the project's own custom statuses. Names not listed keep their default place after these.",
+        },
+      },
+      required: ["project", "order"],
     },
   },
   {
@@ -1424,6 +1496,58 @@ async function handleToolCall(
         }));
         return { content: [{ type: "text", text: JSON.stringify(projects, null, 2) }] };
       }
+      case "create_project": {
+        const name = typeof args.name === "string" ? args.name.trim() : "";
+        const prefix = typeof args.prefix === "string" ? args.prefix.trim() : "";
+        if (!name || !prefix) {
+          return {
+            content: [{ type: "text", text: JSON.stringify({ error: "name and prefix are both required and must be non-empty" }) }],
+            isError: true,
+          };
+        }
+        if (args.description !== undefined && typeof args.description !== "string") {
+          return { content: [{ type: "text", text: JSON.stringify({ error: "description must be a string" }) }], isError: true };
+        }
+        if (args.repoPath !== undefined && typeof args.repoPath !== "string") {
+          return { content: [{ type: "text", text: JSON.stringify({ error: "repoPath must be a string" }) }], isError: true };
+        }
+        try {
+          // Same construction and persistence path as the REST route, so an
+          // MCP-created project cannot differ from one made in the UI.
+          const project = buildProject({
+            name,
+            prefix,
+            ...(args.description !== undefined ? { description: args.description as string } : {}),
+            ...(args.repoPath !== undefined ? { repoPath: args.repoPath as string } : {}),
+          });
+          saveProject(project);
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify(
+                  {
+                    created: {
+                      id: project.id,
+                      name: project.name,
+                      prefix: project.prefix,
+                      repoPath: project.repoPath,
+                      archived: project.archived,
+                    },
+                  },
+                  null,
+                  2,
+                ),
+              },
+            ],
+          };
+        } catch (err) {
+          return {
+            content: [{ type: "text", text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }],
+            isError: true,
+          };
+        }
+      }
       case "list_issues": {
         // A status filter may be a built-in or any project's custom status;
         // validate against the union across every project so a real custom
@@ -1461,10 +1585,22 @@ async function handleToolCall(
           projects = loadProjects();
         }
 
+        // Manual order is per status, so rank inside each status group while
+        // keeping the groups in the order they were read. A caller scanning a
+        // status then sees the same top-to-bottom order as the issue list.
         const issues = projects
-          .flatMap((p) => loadIssues(p.id))
-          .filter((issue) => statusFilter === undefined || issue.status === statusFilter)
-          .filter((issue) => labelFilter === undefined || (issue.labels ?? []).includes(labelFilter))
+          .flatMap((p) => {
+            const matching = loadIssues(p.id)
+              .filter((issue) => statusFilter === undefined || issue.status === statusFilter)
+              .filter((issue) => labelFilter === undefined || (issue.labels ?? []).includes(labelFilter));
+            const groups = new Map<string, Issue[]>();
+            for (const issue of matching) {
+              const group = groups.get(issue.status);
+              if (group) group.push(issue);
+              else groups.set(issue.status, [issue]);
+            }
+            return [...groups.values()].flatMap((group) => sortIssuesByOrder(group));
+          })
           .map(issueSummary);
 
         return { content: [{ type: "text", text: JSON.stringify(issues, null, 2) }] };
@@ -1592,6 +1728,121 @@ async function handleToolCall(
         // unnecessary write rather than re-saving unchanged data.
         if (updated !== issue) saveIssue(updated);
         return { content: [{ type: "text", text: JSON.stringify({ before: issue, after: updated }, null, 2) }] };
+      }
+      case "reorder_issue": {
+        const key = typeof args.key === "string" ? args.key.trim() : "";
+        if (!key) {
+          return { content: [{ type: "text", text: JSON.stringify({ error: "key is required" }) }], isError: true };
+        }
+        const issue = getIssue(key);
+        if (!issue) {
+          return { content: [{ type: "text", text: JSON.stringify({ error: `Issue not found: ${key}` }) }], isError: true };
+        }
+
+        const allowed = allowedStatusesFor(getProject(issue.projectId));
+        let status = issue.status;
+        if (args.status !== undefined) {
+          if (typeof args.status !== "string" || !allowed.includes(args.status)) {
+            return {
+              content: [
+                { type: "text", text: JSON.stringify({ error: `Unknown status "${args.status}". Valid statuses: ${allowed.join(", ")}` }) },
+              ],
+              isError: true,
+            };
+          }
+          status = args.status;
+        }
+
+        const beforeKey = typeof args.beforeKey === "string" && args.beforeKey.trim() ? args.beforeKey.trim() : undefined;
+        const afterKey = typeof args.afterKey === "string" && args.afterKey.trim() ? args.afterKey.trim() : undefined;
+        if (beforeKey && afterKey) {
+          return {
+            content: [{ type: "text", text: JSON.stringify({ error: "Give beforeKey or afterKey, not both" }) }],
+            isError: true,
+          };
+        }
+        for (const neighbour of [beforeKey, afterKey]) {
+          if (!neighbour) continue;
+          const other = getIssue(neighbour);
+          if (!other) {
+            return { content: [{ type: "text", text: JSON.stringify({ error: `Issue not found: ${neighbour}` }) }], isError: true };
+          }
+          if (other.key === issue.key) {
+            return {
+              content: [{ type: "text", text: JSON.stringify({ error: "beforeKey and afterKey must name another issue" }) }],
+              isError: true,
+            };
+          }
+          // placeIssue would quietly fall back to the end of the status for a
+          // neighbour it cannot find in that status, which looks successful
+          // while placing the issue somewhere the caller never asked for.
+          if (other.status !== status) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: JSON.stringify({ error: `${other.key} is in "${other.status}", not the target status "${status}"` }),
+                },
+              ],
+              isError: true,
+            };
+          }
+        }
+
+        const changed = placeIssue(issue.key, status, beforeKey, afterKey);
+        const moved = changed.find((i) => i.key === issue.key);
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({ key: moved?.key ?? issue.key, status: moved?.status ?? status, order: moved?.order ?? null }, null, 2),
+            },
+          ],
+        };
+      }
+      case "reorder_issue_statuses": {
+        const projectArg = typeof args.project === "string" ? args.project.trim() : "";
+        if (!projectArg) {
+          return { content: [{ type: "text", text: JSON.stringify({ error: "project is required" }) }], isError: true };
+        }
+        const project = resolveProject(projectArg);
+        if (!project) {
+          return { content: [{ type: "text", text: JSON.stringify({ error: `Unknown project: ${projectArg}` }) }], isError: true };
+        }
+        if (!Array.isArray(args.order) || !args.order.every((s) => typeof s === "string")) {
+          return {
+            content: [{ type: "text", text: JSON.stringify({ error: "order must be an array of status names" }) }],
+            isError: true,
+          };
+        }
+        const valid = resolveProjectStatuses(project).map((s) => s.name);
+        const order: string[] = [];
+        const seen = new Set<string>();
+        for (const raw of args.order) {
+          const name = raw.trim();
+          if (!valid.includes(name)) {
+            return {
+              content: [{ type: "text", text: JSON.stringify({ error: `Unknown status "${name}". Valid statuses: ${valid.join(", ")}` }) }],
+              isError: true,
+            };
+          }
+          if (seen.has(name)) {
+            return { content: [{ type: "text", text: JSON.stringify({ error: `"${name}" is listed more than once` }) }], isError: true };
+          }
+          seen.add(name);
+          order.push(name);
+        }
+
+        const updated = applyProjectUpdate(project, { statusOrder: order });
+        saveProject(updated);
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({ project: updated.id, statuses: resolveProjectStatuses(updated).map((s) => s.name) }, null, 2),
+            },
+          ],
+        };
       }
       case "add_issue_comment": {
         const key = typeof args.key === "string" ? args.key.trim() : "";
