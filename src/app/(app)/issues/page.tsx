@@ -20,6 +20,7 @@ import {
   ISSUE_STATUSES,
   labelColor,
   NO_LABEL_GROUP,
+  resolveProjectStatuses,
 } from "@/lib/issue-display";
 import { mergeIssueChanges, resolveIssueDrop, sendIssuePlacement } from "@/lib/issue-drag";
 import { createStaleGuard } from "@/lib/stale-guard";
@@ -284,8 +285,16 @@ export default function IssuesPage() {
   const selectedProject = useMemo(() => projects.find((p) => p.id === projectFilter), [projects, projectFilter]);
 
   // Empty statuses are in the list so a drag can drop into one; the list itself
-  // renders them only while a drag is in flight.
-  const statusGroups = useMemo(() => groupIssuesByStatus(filtered, { includeEmpty: true }), [filtered]);
+  // renders them only while a drag is in flight. A selected project supplies
+  // its own status set and display order; All Projects keeps the canonical one.
+  const statusGroups = useMemo(
+    () =>
+      groupIssuesByStatus(filtered, {
+        includeEmpty: true,
+        ...(selectedProject ? { statuses: resolveProjectStatuses(selectedProject).map((s) => s.name) } : {}),
+      }),
+    [filtered, selectedProject],
+  );
   const projectGroups = useMemo(() => groupIssuesByProject(filtered, projects), [filtered, projects]);
 
   const hasFilters = projectFilter !== "" || (view === "status" && statusFilter !== "");

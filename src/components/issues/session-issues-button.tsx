@@ -219,9 +219,6 @@ export function SessionIssuesButton() {
                       </option>
                     ))}
                 </select>
-                {matched && projectId === matched.id && (
-                  <span className="truncate text-xs text-muted-foreground">from this session's directory</span>
-                )}
                 <button
                   onClick={() => setNewOpen(true)}
                   className="ml-auto rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"

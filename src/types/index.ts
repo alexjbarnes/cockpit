@@ -497,6 +497,11 @@ export interface Project {
   // lifecycle in canonical order (i.e. today's behaviour, no migration needed).
   disabledStatuses?: string[]; // built-in statuses this project hides
   customStatuses?: CustomStatus[]; // additive columns, order = array order
+  // Display order for this project's status sections, by name, covering both
+  // built-ins and its custom statuses. A status it does not name keeps its
+  // default position after the named ones, so a partial list is a prefix
+  // rather than a filter. Applied by resolveProjectStatuses.
+  statusOrder?: string[];
 }
 
 /**

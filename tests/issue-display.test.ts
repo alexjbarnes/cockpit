@@ -60,6 +60,7 @@ function makeProject(overrides: Partial<Project> = {}): Project {
     nextNumber: overrides.nextNumber ?? 1,
     disabledStatuses: overrides.disabledStatuses,
     customStatuses: overrides.customStatuses,
+    statusOrder: overrides.statusOrder,
   };
 }
 
@@ -474,6 +475,34 @@ describe("resolveProjectStatuses", () => {
       .filter((s) => !s.builtin)
       .map((s) => s.name);
     expect(custom).toEqual(["Blocked", "Waiting"]);
+  });
+
+  it("puts the statuses named by statusOrder first, then the rest in default order", () => {
+    const project = makeProject({
+      statusOrder: ["Accepted", "Backlog"],
+      customStatuses: [{ name: "Blocked" }],
+    });
+    const names = resolveProjectStatuses(project).map((s) => s.name);
+    expect(names.slice(0, 2)).toEqual(["Accepted", "Backlog"]);
+    expect(names.slice(2, -1)).toEqual(ISSUE_STATUSES.filter((s) => s !== "Accepted" && s !== "Backlog"));
+    // an unnamed custom status still comes after every built-in
+    expect(names[names.length - 1]).toBe("Blocked");
+  });
+
+  it("can place a custom status in the stored order too", () => {
+    const project = makeProject({ customStatuses: [{ name: "Blocked" }], statusOrder: ["Blocked", "Backlog"] });
+    expect(
+      resolveProjectStatuses(project)
+        .slice(0, 2)
+        .map((s) => s.name),
+    ).toEqual(["Blocked", "Backlog"]);
+  });
+
+  it("ignores an order entry for a disabled status", () => {
+    const project = makeProject({ disabledStatuses: ["Backlog"], statusOrder: ["Backlog", "Accepted"] });
+    const names = resolveProjectStatuses(project).map((s) => s.name);
+    expect(names[0]).toBe("Accepted");
+    expect(names).not.toContain("Backlog");
   });
 });
 

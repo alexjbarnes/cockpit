@@ -182,6 +182,28 @@ export type ProjectInput = Partial<Omit<Project, "id" | "createdAt" | "updatedAt
  *  real built-ins; custom statuses must be non-empty, unique among themselves
  *  (case-insensitive), and must not shadow a built-in name. Returns cleaned
  *  copies (trimmed names) so storage never holds stray whitespace. */
+/** Validate a project's status display order. Names are trimmed, must be
+ *  unique and must be one of the statuses the project can show; a status not
+ *  named keeps its default position. */
+function validateStatusOrder(statusOrder: unknown, known: readonly string[]): string[] | undefined {
+  if (statusOrder === undefined) return undefined;
+  if (!Array.isArray(statusOrder) || !statusOrder.every((s) => typeof s === "string")) {
+    throw new Error("statusOrder must be an array of status names");
+  }
+  const knownSet = new Set(known);
+  const seen = new Set<string>();
+  const cleaned: string[] = [];
+  for (const raw of statusOrder) {
+    const name = raw.trim();
+    if (!name) throw new Error("statusOrder may not contain an empty status name");
+    if (!knownSet.has(name)) throw new Error(`statusOrder names unknown status "${name}". Valid statuses: ${known.join(", ")}`);
+    if (seen.has(name)) throw new Error(`statusOrder names "${name}" more than once`);
+    seen.add(name);
+    cleaned.push(name);
+  }
+  return cleaned;
+}
+
 function validateStatusConfig(
   disabledStatuses: unknown,
   customStatuses: unknown,
@@ -231,6 +253,10 @@ export function buildProject(input: ProjectInput): Project {
   if (input.repoPath !== undefined) assertString(input.repoPath, "repoPath");
   if (input.archived !== undefined) assertBoolean(input.archived, "archived");
   const statusConfig = validateStatusConfig(input.disabledStatuses, input.customStatuses);
+  const statusOrder = validateStatusOrder(input.statusOrder, [
+    ...ISSUE_STATUSES,
+    ...(statusConfig.customStatuses ?? []).map((s) => s.name),
+  ]);
 
   const now = Date.now();
   return {
@@ -244,11 +270,12 @@ export function buildProject(input: ProjectInput): Project {
     updatedAt: now,
     nextNumber: 1,
     ...statusConfig,
+    ...(statusOrder === undefined ? {} : { statusOrder }),
   };
 }
 
 export type ProjectUpdateInput = Partial<
-  Pick<Project, "name" | "prefix" | "description" | "repoPath" | "archived" | "disabledStatuses" | "customStatuses">
+  Pick<Project, "name" | "prefix" | "description" | "repoPath" | "archived" | "disabledStatuses" | "customStatuses" | "statusOrder">
 >;
 
 /**
@@ -264,6 +291,10 @@ export function applyProjectUpdate(project: Project, patch: ProjectUpdateInput):
   if (patch.repoPath !== undefined) assertString(patch.repoPath, "repoPath");
   if (patch.archived !== undefined) assertBoolean(patch.archived, "archived");
   const statusConfig = validateStatusConfig(patch.disabledStatuses, patch.customStatuses);
+  // The order may name a custom status this same patch is adding, and must not
+  // keep naming one the patch removes.
+  const effectiveCustom = patch.customStatuses !== undefined ? (statusConfig.customStatuses ?? []) : (project.customStatuses ?? []);
+  const statusOrder = validateStatusOrder(patch.statusOrder, [...ISSUE_STATUSES, ...effectiveCustom.map((s) => s.name)]);
 
   const next: Project = { ...project };
   let changed = false;
@@ -275,6 +306,21 @@ export function applyProjectUpdate(project: Project, patch: ProjectUpdateInput):
   if (patch.customStatuses !== undefined && JSON.stringify(statusConfig.customStatuses) !== JSON.stringify(next.customStatuses)) {
     next.customStatuses = statusConfig.customStatuses;
     changed = true;
+  }
+  if (patch.statusOrder !== undefined && JSON.stringify(statusOrder) !== JSON.stringify(next.statusOrder)) {
+    next.statusOrder = statusOrder;
+    changed = true;
+  }
+  // A removed custom status would otherwise linger in the stored order. It is
+  // ignored when resolving, but it would refuse a later statusOrder patch that
+  // does not happen to name it again.
+  if (patch.customStatuses !== undefined && next.statusOrder) {
+    const valid = new Set([...ISSUE_STATUSES, ...effectiveCustom.map((s) => s.name)]);
+    const pruned = next.statusOrder.filter((name) => valid.has(name));
+    if (pruned.length !== next.statusOrder.length) {
+      next.statusOrder = pruned.length > 0 ? pruned : undefined;
+      changed = true;
+    }
   }
 
   if (patch.name !== undefined && patch.name !== next.name) {
