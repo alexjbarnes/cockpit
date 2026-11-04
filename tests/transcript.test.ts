@@ -2298,6 +2298,60 @@ describe("transcript module", () => {
       expect(result[0].sessions[0].name).toBe("Untitled session");
     });
 
+    it("skips a context compaction summary when naming a session", async () => {
+      (existsSync as any).mockReturnValue(true);
+      const { createInterface } = await import("node:readline");
+      (readdir as any).mockResolvedValueOnce(["project1"]).mockResolvedValueOnce(["sess1.jsonl"]);
+      (stat as any).mockResolvedValue({ mtimeMs: 1700000000000 });
+
+      const mockRl = {
+        [Symbol.asyncIterator]: async function* () {
+          yield JSON.stringify({
+            type: "user",
+            cwd: "/home/test",
+            isCompactSummary: true,
+            message: { content: "This session is being continued from a previous conversation that ran out of context." },
+            timestamp: "2024-01-01T00:00:00Z",
+          });
+          yield JSON.stringify({
+            type: "user",
+            cwd: "/home/test",
+            message: { content: "Url submit" },
+            timestamp: "2024-01-01T00:01:00Z",
+          });
+        },
+        close: vi.fn(),
+      };
+      (createInterface as any).mockReturnValue(mockRl);
+
+      const result = await scanAllSessions();
+      expect(result[0].sessions[0].name).toBe("Url submit");
+    });
+
+    it("does not name a session after a compaction summary when it is the only user message", async () => {
+      (existsSync as any).mockReturnValue(true);
+      const { createInterface } = await import("node:readline");
+      (readdir as any).mockResolvedValueOnce(["project1"]).mockResolvedValueOnce(["sess1.jsonl"]);
+      (stat as any).mockResolvedValue({ mtimeMs: 1700000000000 });
+
+      const mockRl = {
+        [Symbol.asyncIterator]: async function* () {
+          yield JSON.stringify({
+            type: "user",
+            cwd: "/home/test",
+            isCompactSummary: true,
+            message: { content: "This session is being continued from a previous conversation that ran out of context." },
+            timestamp: "2024-01-01T00:00:00Z",
+          });
+        },
+        close: vi.fn(),
+      };
+      (createInterface as any).mockReturnValue(mockRl);
+
+      const result = await scanAllSessions();
+      expect(result[0].sessions[0].name).toBe("Untitled session");
+    });
+
     it("uses Untitled session when no title found", async () => {
       (existsSync as any).mockReturnValue(true);
       const { createInterface } = await import("node:readline");

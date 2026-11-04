@@ -41,6 +41,9 @@ interface TranscriptEntry {
   cwd?: string;
   timestamp?: string;
   isMeta?: boolean;
+  /** Set on the user message Claude Code writes when it compacts a previous
+   *  context: the summary is not a prompt the user typed. */
+  isCompactSummary?: boolean;
   uuid?: string;
   message?: {
     id?: string;
@@ -722,6 +725,7 @@ function parseLines(lines: string[]): { messages: ChatMessage[]; lastUsage: { us
                 blocks: [],
                 timestamp: entry.timestamp ? new Date(entry.timestamp).getTime() : Date.now(),
                 textFiles: textFiles.length > 0 ? textFiles : undefined,
+                ...(entry.isCompactSummary ? { isCompactSummary: true } : {}),
               });
             }
           }
@@ -779,6 +783,7 @@ function parseLines(lines: string[]): { messages: ChatMessage[]; lastUsage: { us
                 images: images.length > 0 ? images : undefined,
                 documents: documents.length > 0 ? documents : undefined,
                 textFiles: textFiles.length > 0 ? textFiles : undefined,
+                ...(entry.isCompactSummary ? { isCompactSummary: true } : {}),
               });
             }
           }
@@ -1137,7 +1142,7 @@ async function extractSessionMeta(filePath: string): Promise<SessionMeta | null>
         createdAt = new Date(entry.timestamp).getTime();
       }
 
-      if (entry.type === "user" && entry.message && !title) {
+      if (entry.type === "user" && entry.message && !title && !entry.isCompactSummary) {
         const content = entry.message.content;
         let candidate = "";
         if (typeof content === "string") {
@@ -1583,7 +1588,7 @@ export async function globalSearch(
       try {
         const entry: TranscriptEntry = JSON.parse(lines[j]);
         if (entry.type === "user" && entry.cwd && !cwd) cwd = entry.cwd;
-        if (entry.type === "user" && entry.message && !sessionTitle) {
+        if (entry.type === "user" && entry.message && !sessionTitle && !entry.isCompactSummary) {
           const content = entry.message.content;
           let candidate = "";
           if (typeof content === "string") candidate = content;

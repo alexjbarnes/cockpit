@@ -83,6 +83,10 @@ export interface ChatMessage {
   /** A user message sent while Claude was working that Claude has not read
    *  yet. Only ever on the local copy: the transcript's has no such flag. */
   awaitingRead?: boolean;
+  /** Claude Code wrote this entry itself when a previous context ran out. It
+   *  is a summary of the conversation, not a prompt, so it must not name the
+   *  session. */
+  isCompactSummary?: boolean;
 }
 
 export interface GlobalSearchResult {

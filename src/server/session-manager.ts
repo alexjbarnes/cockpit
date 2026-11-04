@@ -19,6 +19,7 @@ import {
 } from "@/lib/models";
 import { mergePromptHistory, promptHistorySessionIds } from "@/lib/prompt-history";
 import { widensSandbox } from "@/lib/sandbox-requests";
+import { promptName } from "@/lib/session-name";
 import { getAssistantSettings, updateAssistantSettings } from "@/server/assistant-settings";
 import { supportedPermissionModes } from "@/server/claude-bin";
 import { getCockpitDir } from "@/server/paths";
@@ -737,11 +738,9 @@ export class SessionManager {
     const hasMore = messages.length > PAGE || byteOffset > 0 || (stitching && session.previousCliSessionIds.length > 0);
 
     const defaultName = path.basename(session.info.cwd) || session.info.cwd;
-    if (session.info.name === defaultName && messages.length > 0) {
-      const firstUser = messages.find((m) => m.role === "user" && m.content && !m.content.startsWith("[") && !m.content.startsWith("<"));
-      if (firstUser) {
-        session.info.name = firstUser.content.slice(0, 120);
-      }
+    if (session.info.name === defaultName) {
+      const name = promptName(messages);
+      if (name) session.info.name = name;
     }
     const allPrompts = await loadMergedPromptHistory(session.cliSessionId, session.previousCliSessionIds, session.info.cwd);
 
@@ -803,11 +802,9 @@ export class SessionManager {
 
     // Derive title from first user message if name is still the default
     const defaultName = path.basename(cwd) || cwd;
-    if (session.info.name === defaultName && messages.length > 0) {
-      const firstUser = messages.find((m) => m.role === "user" && m.content && !m.content.startsWith("[") && !m.content.startsWith("<"));
-      if (firstUser) {
-        session.info.name = firstUser.content.slice(0, 120);
-      }
+    if (session.info.name === defaultName) {
+      const name = promptName(messages);
+      if (name) session.info.name = name;
     }
     const allPrompts = await loadMergedPromptHistory(session.cliSessionId, session.previousCliSessionIds, cwd);
 
@@ -856,12 +853,8 @@ export class SessionManager {
     const clientMessages = messages.length > PAGE ? messages.slice(-PAGE) : messages;
 
     let name = path.basename(cwd) || cwd;
-    if (messages.length > 0) {
-      const firstUser = messages.find((m) => m.role === "user" && m.content && !m.content.startsWith("[") && !m.content.startsWith("<"));
-      if (firstUser) {
-        name = firstUser.content.slice(0, 120);
-      }
-    }
+    const derivedName = promptName(messages);
+    if (derivedName) name = derivedName;
 
     const allPrompts = await loadMergedPromptHistory(cliId, prevIds, cwd);
 
