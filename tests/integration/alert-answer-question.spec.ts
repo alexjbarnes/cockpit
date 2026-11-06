@@ -112,6 +112,14 @@ test("a question from another session is answered from the banner", async ({ pag
 
     // Answer it in place: the banner's own prompt, not the session's page.
     await page.getByTestId("session-alert-answer").click();
+
+    // Reading the question takes longer than the stack's 12s auto-fold. An
+    // open answer must hold it open; before, the whole stack collapsed under
+    // the user mid-answer and the prompt vanished.
+    await page.waitForTimeout(13_000);
+    await expect(banner.getByRole("button", { name: "Submit" })).toBeVisible();
+    await expect(page.getByTestId("session-alerts-collapsed")).toBeHidden();
+
     await banner.getByText("Every roaster").first().click();
     await banner.getByRole("button", { name: "Submit" }).click();
 

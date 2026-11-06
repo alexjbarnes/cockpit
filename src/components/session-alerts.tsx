@@ -64,6 +64,20 @@ export function SessionAlerts() {
 
   const removeAlert = useCallback((key: string) => {
     setAlerts((prev) => prev.filter((a) => a.key !== key));
+    // Drop the banner's own bookkeeping too, or a long-lived page keeps every
+    // expanded key it has ever seen and the fold below never runs again.
+    setExpanded((prev) => {
+      if (!prev.has(key)) return prev;
+      const next = new Set(prev);
+      next.delete(key);
+      return next;
+    });
+    setClipped((prev) => {
+      if (!prev.has(key)) return prev;
+      const next = new Set(prev);
+      next.delete(key);
+      return next;
+    });
   }, []);
 
   /** Record whether a body is taller than its collapsed box. Only ever called
@@ -123,14 +137,17 @@ export function SessionAlerts() {
     };
   }, [alerts, expanded, removeAlert]);
 
-  // Fold the stack after a while, but leave it on screen.
+  // Fold the stack after a while, but leave it on screen. An open banner is
+  // being read or answered, so it holds the stack open; the timer starts again
+  // when the last one is closed.
+  const anyExpanded = alerts.some((a) => expanded.has(a.key));
   const foldedRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   useEffect(() => {
     clearTimeout(foldedRef.current);
-    if (collapsed || alerts.length === 0) return;
+    if (collapsed || alerts.length === 0 || anyExpanded) return;
     foldedRef.current = setTimeout(() => setCollapsed(true), AUTO_COLLAPSE_MS);
     return () => clearTimeout(foldedRef.current);
-  }, [alerts, collapsed]);
+  }, [alerts, collapsed, anyExpanded]);
 
   const respond = useCallback(
     (alert: Alert, allowed: boolean) => {
