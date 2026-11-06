@@ -1269,6 +1269,18 @@ describe("cockpit-config MCP server (in-process HTTP)", () => {
       }
     });
 
+    it("update_settings allows ignoredSessionFolders and cleans the list", async () => {
+      await callTool("update_settings", {
+        ignoredSessionFolders: [" /tmp/archive/ ", "/tmp/archive", "relative", "/tmp/reviews"],
+      });
+      try {
+        const settings = (await callToolParsed("get_settings")) as { ignoredSessionFolders?: string[] };
+        expect(settings.ignoredSessionFolders).toEqual(["/tmp/archive", "/tmp/reviews"]);
+      } finally {
+        await callTool("update_settings", { ignoredSessionFolders: [] }); // restore for the rest of the suite
+      }
+    });
+
     it("update_settings allows modelSlots", async () => {
       const modelSlots = { main: "claude-opus-4-5-20251101", mainContext: "1m" };
       await callTool("update_settings", { modelSlots });

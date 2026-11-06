@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
+import { isCwdIgnored } from "@/lib/ignored-folders";
 import { validateSession } from "@/server/auth";
+import { getDefaults } from "@/server/defaults";
 import { getJobSessionIds } from "@/server/job-storage";
 import { getCockpitDir } from "@/server/paths";
 import { getSessionManager } from "@/server/singleton";
@@ -22,6 +24,11 @@ export async function GET(req: NextRequest) {
   }
 
   if (cwd === getCockpitDir()) {
+    return NextResponse.json({ sessions: [] });
+  }
+
+  const ignoredFolders = getDefaults().ignoredSessionFolders;
+  if (isCwdIgnored(cwd, ignoredFolders)) {
     return NextResponse.json({ sessions: [] });
   }
 
@@ -55,7 +62,11 @@ export async function GET(req: NextRequest) {
   const JOB_TITLE_PREFIX = "You are running as an autonomous scheduled job";
   const jobSessionIds = getJobSessionIds();
   const filtered: SessionInfo[] = sessions.filter(
-    (s) => !jobSessionIds.has(s.id) && !s.name?.startsWith("[job] ") && !s.name?.startsWith(JOB_TITLE_PREFIX),
+    (s) =>
+      !isCwdIgnored(s.cwd, ignoredFolders) &&
+      !jobSessionIds.has(s.id) &&
+      !s.name?.startsWith("[job] ") &&
+      !s.name?.startsWith(JOB_TITLE_PREFIX),
   );
   filtered.sort((a, b) => b.lastActiveAt - a.lastActiveAt);
 

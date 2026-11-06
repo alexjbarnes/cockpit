@@ -1,9 +1,10 @@
 import path from "node:path";
 import { NextRequest, NextResponse } from "next/server";
+import { isCwdIgnored } from "@/lib/ignored-folders";
 import { CONTEXT_SIZES, type ContextSize } from "@/lib/models";
 import { validateSession } from "@/server/auth";
 import { debugLog } from "@/server/debug-logger";
-import { isPermissionMode, parseSandbox } from "@/server/defaults";
+import { getDefaults, isPermissionMode, parseSandbox } from "@/server/defaults";
 import { getJobSessionIds } from "@/server/job-storage";
 import { parseSessionNotifications } from "@/server/notification-settings";
 import { getCockpitDir } from "@/server/paths";
@@ -69,6 +70,15 @@ export async function GET(req: NextRequest) {
       const dirName = path.basename(mem.cwd) || mem.cwd;
       groups.push({ cwd: mem.cwd, dirName, sessions: [mem], totalSessionCount: 1 });
     }
+  }
+
+  // Drop folders the user has ignored, after the in-memory merge so a session
+  // with no transcript file is caught too. Empty groups go with the filter
+  // below; clearing here keeps totalSessionCount and the 20-row truncation
+  // honest.
+  const ignoredFolders = getDefaults().ignoredSessionFolders;
+  for (const group of groups) {
+    if (isCwdIgnored(group.cwd, ignoredFolders)) group.sessions = [];
   }
 
   // Filter out scheduled job sessions. The reliable signal is the run's recorded

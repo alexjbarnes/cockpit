@@ -1,13 +1,16 @@
 "use client";
 
-import { ArrowLeft, ChevronDown } from "lucide-react";
+import { ArrowLeft, ChevronDown, FolderOpen, Trash2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { usePageHeader } from "@/components/app-shell";
+import { DirectoryPicker } from "@/components/directory-picker";
 import { ModelPickerList } from "@/components/model-picker-list";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 import { type ThinkingLevel, useSettings } from "@/hooks/use-settings";
+import { normaliseFolderPath } from "@/lib/ignored-folders";
 import { ALL_PROVIDERS, defaultSelectionFor, modelTuning, valueForEntry } from "@/lib/model-picker";
 import { CONTEXT_SIZES, type ContextSize, describeModelSelection } from "@/lib/models";
 import type { Provider, SandboxSupport, SessionPermissionMode } from "@/types";
@@ -82,7 +85,7 @@ function ButtonGroup<T extends string>({
 export default function SessionSettingsPage() {
   usePageHeader("Session Defaults", { hideActions: true });
   const router = useRouter();
-  const { settings, updateSetting } = useSettings();
+  const { settings, updateSetting, loaded } = useSettings();
   // Gate the sandbox toggle on whether this host can enforce one, as the
   // session panel does, rather than offer a default that would do nothing.
   const [sandboxSupport, setSandboxSupport] = useState<SandboxSupport | null>(null);
@@ -101,6 +104,32 @@ export default function SessionSettingsPage() {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [providerFilter, setProviderFilter] = useState(ALL_PROVIDERS);
+  const [folderDraft, setFolderDraft] = useState("");
+  const [folderError, setFolderError] = useState("");
+  const [browsingFolders, setBrowsingFolders] = useState(false);
+  const folders = settings.ignoredSessionFolders ?? [];
+
+  function addFolder(raw: string) {
+    const folder = normaliseFolderPath(raw);
+    if (!folder) {
+      setFolderError("Enter an absolute folder path, for example /Users/you/archive.");
+      return;
+    }
+    if (folders.includes(folder)) {
+      setFolderError("That folder is already ignored.");
+      return;
+    }
+    setFolderError("");
+    setFolderDraft("");
+    updateSetting("ignoredSessionFolders", [...folders, folder]);
+  }
+
+  function removeFolder(folder: string) {
+    updateSetting(
+      "ignoredSessionFolders",
+      folders.filter((f) => f !== folder),
+    );
+  }
   useEffect(() => {
     fetch("/api/providers")
       .then((res) => res.json())
@@ -231,6 +260,90 @@ export default function SessionSettingsPage() {
             </p>
           </div>
         ) : null}
+
+        <div className="my-3 space-y-2 rounded-md border border-border p-3" data-testid="ignored-folders">
+          <div>
+            <p className="text-sm font-medium">Ignored session folders</p>
+            <p className="text-xs text-muted-foreground">
+              Sessions in these folders, and anything below them, are hidden from every session list and from global search. Opening one by
+              its URL still works.
+            </p>
+          </div>
+          <form
+            className="flex flex-wrap items-center gap-2"
+            onSubmit={(e) => {
+              e.preventDefault();
+              addFolder(folderDraft);
+            }}
+          >
+            <Input
+              value={folderDraft}
+              onChange={(e) => {
+                setFolderDraft(e.target.value);
+                setFolderError("");
+              }}
+              placeholder="/Users/you/archive"
+              aria-label="Folder path to ignore"
+              data-testid="ignored-folder-input"
+              className="h-8 min-w-0 flex-1 font-mono text-xs"
+              disabled={!loaded}
+            />
+            <Button type="submit" size="sm" disabled={!loaded || !folderDraft.trim()} data-testid="ignored-folder-add">
+              Add
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={!loaded}
+              onClick={() => setBrowsingFolders(true)}
+              data-testid="ignored-folder-browse"
+            >
+              <FolderOpen className="mr-1 h-3.5 w-3.5" />
+              Browse
+            </Button>
+          </form>
+          {folderError && (
+            <p role="alert" data-testid="ignored-folder-error" className="text-xs text-destructive">
+              {folderError}
+            </p>
+          )}
+          {browsingFolders && (
+            <DirectoryPicker
+              onSelect={(path) => {
+                setBrowsingFolders(false);
+                addFolder(path);
+              }}
+              onCancel={() => setBrowsingFolders(false)}
+            />
+          )}
+          {folders.length === 0 ? (
+            <p className="text-xs text-muted-foreground">No ignored folders.</p>
+          ) : (
+            <ul className="space-y-1">
+              {folders.map((folder) => (
+                <li
+                  key={folder}
+                  data-testid="ignored-folder-row"
+                  className="flex items-center gap-2 rounded border border-border bg-muted/30 px-2 py-1"
+                >
+                  <span className="min-w-0 flex-1 break-all font-mono text-xs">{folder}</span>
+                  <button
+                    type="button"
+                    onClick={() => removeFolder(folder)}
+                    disabled={!loaded}
+                    aria-label={`Remove ${folder}`}
+                    data-testid="ignored-folder-remove"
+                    className="shrink-0 rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-60"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
         <SettingRow
           label={
             <span className="flex items-center gap-2">

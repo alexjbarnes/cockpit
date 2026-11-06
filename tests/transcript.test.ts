@@ -2767,6 +2767,46 @@ describe("transcript module", () => {
       expect(result.results[0].preview).toContain("hello world");
     });
 
+    it("skips transcripts whose cwd is inside an ignored folder", async () => {
+      setupListFiles(["ignored.jsonl", "kept.jsonl"]);
+      (readFile as any).mockImplementation((p: string) => {
+        const cwd = p.includes("ignored.jsonl") ? "/archive/ai-reviews/nested" : "/repos/cockpit";
+        const reply = p.includes("ignored.jsonl") ? "hello from ignored" : "hello from kept";
+        return Promise.resolve(
+          jsonl(
+            { type: "user", cwd, message: { content: "prompt" }, timestamp: "2024-01-01T00:00:00Z" },
+            { type: "assistant", message: { content: [{ type: "text", text: reply }] }, timestamp: "2024-01-01T00:01:00Z" },
+          ),
+        );
+      });
+
+      const result = await globalSearch("hello", 50, 0, ["/archive"]);
+      expect(result.results).toHaveLength(1);
+      expect(result.results[0].cwd).toBe("/repos/cockpit");
+    });
+
+    it("does not count ignored matches towards a pagination offset", async () => {
+      setupListFiles(["ignored.jsonl", "kept.jsonl"]);
+      (readFile as any).mockImplementation((p: string) => {
+        const cwd = p.includes("ignored.jsonl") ? "/archive" : "/repos/cockpit";
+        const replies = p.includes("ignored.jsonl") ? ["hello ignored"] : ["hello first visible", "hello second visible"];
+        return Promise.resolve(
+          jsonl(
+            { type: "user", cwd, message: { content: "prompt" }, timestamp: "2024-01-01T00:00:00Z" },
+            ...replies.map((text, i) => ({
+              type: "assistant",
+              message: { content: [{ type: "text", text }] },
+              timestamp: `2024-01-01T00:0${i + 1}:00Z`,
+            })),
+          ),
+        );
+      });
+
+      const result = await globalSearch("hello", 1, 1, ["/archive"]);
+      expect(result.results).toHaveLength(1);
+      expect(result.results[0].preview).toContain("second visible");
+    });
+
     it("skips files that don't contain the query", async () => {
       setupListFiles(["s1.jsonl", "s2.jsonl"]);
 

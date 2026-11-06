@@ -41,6 +41,7 @@ describe("defaults", () => {
       allowSonnet1m: false,
       sessionAlerts: false,
       streamRuntimeEnabled: false,
+      ignoredSessionFolders: [],
     });
   });
 
@@ -75,6 +76,7 @@ describe("defaults", () => {
       allowSonnet1m: false,
       sessionAlerts: false,
       streamRuntimeEnabled: false,
+      ignoredSessionFolders: [],
     });
   });
 
@@ -90,6 +92,38 @@ describe("defaults", () => {
     const result = setDefaults({ streamRuntimeEnabled: true });
     expect(result.streamRuntimeEnabled).toBe(true);
     expect(JSON.parse(String(vi.mocked(fs.writeFileSync).mock.calls[0][1])).streamRuntimeEnabled).toBe(true);
+  });
+
+  it("cleans and expands ignored session folders on read", async () => {
+    const fs = await import("node:fs");
+    vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify({ ignoredSessionFolders: [" /a/ ", "/a", "relative", "~/reviews/"] }));
+
+    const { getDefaults } = await import("@/server/defaults");
+    expect(getDefaults().ignoredSessionFolders).toEqual(["/a", "/home/user/reviews"]);
+  });
+
+  it("reads a malformed ignored-folder value as an empty list", async () => {
+    const fs = await import("node:fs");
+    vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify({ ignoredSessionFolders: " /a " }));
+
+    const { getDefaults } = await import("@/server/defaults");
+    expect(getDefaults().ignoredSessionFolders).toEqual([]);
+  });
+
+  it("cleans ignored session folders on write and keeps the old list for a malformed value", async () => {
+    const fs = await import("node:fs");
+    vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify({ ignoredSessionFolders: ["/keep"] }));
+    vi.mocked(fs.writeFileSync).mockImplementation(() => {});
+    vi.mocked(fs.mkdirSync).mockImplementation(() => "");
+
+    const { setDefaults } = await import("@/server/defaults");
+    const result = setDefaults({ ignoredSessionFolders: [" /a/ ", "/a", "relative", "~/x"] });
+    expect(result.ignoredSessionFolders).toEqual(["/a", "/home/user/x"]);
+    expect(JSON.parse(String(vi.mocked(fs.writeFileSync).mock.calls[0][1])).ignoredSessionFolders).toEqual(["/a", "/home/user/x"]);
+
+    vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify({ ignoredSessionFolders: ["/keep"] }));
+    const after = setDefaults({ ignoredSessionFolders: "not-an-array" as unknown as string[] });
+    expect(after.ignoredSessionFolders).toEqual(["/keep"]);
   });
 
   it("migrates legacy model field to modelSlots on read", async () => {

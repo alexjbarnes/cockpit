@@ -1,5 +1,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
+import { parseIgnoredFolders } from "@/lib/ignored-folders";
 import { CONTEXT_SIZES, type ContextSize } from "@/lib/models";
 import { getCockpitDir } from "@/server/paths";
 import { type ModelSlots, type SandboxConfig, type SessionPermissionMode, THINKING_LEVELS, type ThinkingLevel } from "@/types";
@@ -72,6 +74,12 @@ export interface AppDefaults {
    * and the API keeps accepting `runtime: "stream"` either way.
    */
   streamRuntimeEnabled: boolean;
+  /**
+   * Absolute folders whose Claude sessions are hidden from every session list
+   * and from global search. A session in one of them, or anywhere below it, is
+   * ignored; opening its direct URL still works. Empty by default.
+   */
+  ignoredSessionFolders: string[];
 }
 
 function prefsDir(): string {
@@ -100,6 +108,7 @@ const fallback: AppDefaults = {
   telemetryEnabled: false,
   allowSonnet1m: false,
   streamRuntimeEnabled: false,
+  ignoredSessionFolders: [],
 };
 
 /**
@@ -186,6 +195,7 @@ function readStoredDefaults(): AppDefaults {
     }
     normalisePermissionMode(raw);
     raw.sandbox = parseSandbox(raw.sandbox) ?? fallback.sandbox;
+    raw.ignoredSessionFolders = parseIgnoredFolders(raw.ignoredSessionFolders, homedir());
     return { ...fallback, ...raw };
   } catch {
     return { ...fallback };
@@ -222,6 +232,12 @@ export function setDefaults(partial: Partial<AppDefaults> & { bypassAllPermissio
     const sandbox = parseSandbox(next.sandbox);
     if (sandbox) next.sandbox = sandbox;
     else delete next.sandbox;
+  }
+  // A malformed value must not wipe a list the user already set; an explicit
+  // array, including [], is the way to change it.
+  if (next.ignoredSessionFolders !== undefined) {
+    if (Array.isArray(next.ignoredSessionFolders)) next.ignoredSessionFolders = parseIgnoredFolders(next.ignoredSessionFolders, homedir());
+    else delete next.ignoredSessionFolders;
   }
   const updated = { ...current, ...next } as AppDefaults;
   try {

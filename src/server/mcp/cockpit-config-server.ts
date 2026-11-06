@@ -552,6 +552,12 @@ const TOOL_DEFINITIONS = [
           type: "boolean",
           description: "Offer the deprecated Stream (headless) runtime. Existing Stream sessions and jobs keep working either way.",
         },
+        ignoredSessionFolders: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "Absolute folders whose sessions are hidden from every session list and from global search, including descendants. Direct session URLs still open.",
+        },
         permissionMode: {
           type: "string",
           enum: ["manual", "auto", "bypass"],
@@ -1241,6 +1247,7 @@ async function handleToolCall(
           "issuesEnabled",
           "modalPagesEnabled",
           "streamRuntimeEnabled",
+          "ignoredSessionFolders",
           "permissionMode",
           "sandbox",
           "modelSlots",

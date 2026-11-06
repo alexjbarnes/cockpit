@@ -34,6 +34,7 @@ const DOMAIN_LABELS: Record<string, Record<string, string>> = {
     modalPagesEnabled: "Pages open in a modal",
     telemetryEnabled: "Telemetry recorded",
     streamRuntimeEnabled: "Stream runtime offered",
+    ignoredSessionFolders: "Ignored session folders",
     bypassAllPermissions: "Bypass all permissions",
     permissionMode: "Default permission mode",
     sandbox: "Default sandbox",

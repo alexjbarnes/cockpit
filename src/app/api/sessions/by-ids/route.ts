@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
+import { isCwdIgnored } from "@/lib/ignored-folders";
 import { validateSession } from "@/server/auth";
 import { debugLog } from "@/server/debug-logger";
+import { getDefaults } from "@/server/defaults";
 import { getSessionPrefs } from "@/server/session-prefs";
 import { getSessionManager } from "@/server/singleton";
 import { scanSessionsByIds } from "@/server/transcript";
@@ -49,6 +51,7 @@ export async function GET(req: NextRequest) {
   const activeMap = new Map(manager.listActiveSessions().map((s) => [s.id, s]));
   const knownMap = new Map(manager.listKnownSessions().map((s) => [s.id, s]));
 
+  const ignoredFolders = getDefaults().ignoredSessionFolders;
   const sessions: SessionInfo[] = [];
   const found = new Set<string>();
   const seen = new Set<string>();
@@ -59,6 +62,8 @@ export async function GET(req: NextRequest) {
     // only in the manager, under the id it was created with.
     const hit = chain.map((c) => byScanId.get(c) ?? knownMap.get(c)).find((s): s is SessionInfo => !!s);
     if (!hit || seen.has(hit.id)) continue;
+    // Hidden, but the pin stays stored: removing the folder brings it back.
+    if (isCwdIgnored(hit.cwd, ignoredFolders)) continue;
     seen.add(hit.id);
     found.add(id);
 

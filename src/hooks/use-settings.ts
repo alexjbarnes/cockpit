@@ -37,6 +37,7 @@ export interface Settings {
   allowSonnet1m: boolean;
   sessionAlerts: boolean;
   streamRuntimeEnabled: boolean;
+  ignoredSessionFolders: string[];
   terminalFontSize: number;
   terminalTheme: TerminalTheme;
   terminalScrollback: number;
@@ -61,6 +62,7 @@ const defaultSettings: Settings = {
   allowSonnet1m: false,
   sessionAlerts: false,
   streamRuntimeEnabled: false,
+  ignoredSessionFolders: [],
   terminalFontSize: 14,
   terminalTheme: "dark" as TerminalTheme,
   terminalScrollback: 1000,

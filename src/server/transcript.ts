@@ -3,6 +3,7 @@ import { open, readdir, readFile, stat, unlink, writeFile } from "node:fs/promis
 import path from "node:path";
 import { createInterface } from "node:readline";
 import { v4 as uuidv4 } from "uuid";
+import { isCwdIgnored } from "@/lib/ignored-folders";
 import { extractTextFiles } from "@/lib/paste-detect";
 import { unwrapPastedContent } from "@/lib/pasted-content";
 import { getClaudeDir } from "@/server/paths";
@@ -1545,6 +1546,7 @@ export async function globalSearch(
   query: string,
   limit: number,
   offset = 0,
+  ignoredFolders: readonly string[] = [],
 ): Promise<{ results: GlobalSearchResult[]; totalFilesSearched: number; truncated: boolean }> {
   const MAX_FILES = 500;
   const MAX_PARSED_BASE = 30;
@@ -1606,6 +1608,7 @@ export async function globalSearch(
     }
 
     if (!cwd) continue;
+    if (isCwdIgnored(cwd, ignoredFolders)) continue;
     if (cwd.endsWith(".cockpit/reviews") || cwd.endsWith(".cockpit/jobs")) continue;
 
     const dirName = path.basename(cwd) || cwd;

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { validateSession } from "@/server/auth";
+import { getDefaults } from "@/server/defaults";
 import { globalSearch } from "@/server/transcript";
 
 function authenticate(req: NextRequest): boolean {
@@ -19,7 +20,7 @@ export async function GET(req: NextRequest) {
 
   const limit = Math.min(Number(req.nextUrl.searchParams.get("limit")) || 50, 100);
   const offset = Math.max(Number(req.nextUrl.searchParams.get("offset")) || 0, 0);
-  const { results, totalFilesSearched, truncated } = await globalSearch(q, limit, offset);
+  const { results, totalFilesSearched, truncated } = await globalSearch(q, limit, offset, getDefaults().ignoredSessionFolders);
 
   return NextResponse.json({ results, totalFilesSearched, truncated });
 }

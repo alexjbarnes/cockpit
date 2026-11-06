@@ -18,6 +18,7 @@ The Settings page picks the defaults for new sessions:
 - Runtime. PTY is the default. The deprecated Stream (headless) runtime is off by default; turning it on adds Stream to the new-session dialog, a session's Harness tab and the job editor (see [Sessions: runtime mode](sessions.md#runtime-mode)). The gate is presentation only: an existing Stream session or job keeps working, and the API still accepts it.
 - Permission mode. Manual (default), Auto (Anthropic models only) or Bypass. Bypass skips permission prompts and shows an orange warning when active.
 - Sandbox Bash. Off by default. When on, new sessions run Bash in the OS sandbox, with any domains listed here added to the shared rules below.
+- Ignored session folders. Absolute folders whose Claude sessions are hidden from every session list and from global search, including anything below them. A session still opens by its direct URL. Add a path by typing it or with Browse; each entry can be removed.
 
 Existing sessions keep their own settings. Defaults only apply to new sessions.
 
