@@ -15,6 +15,9 @@ import { createStaleGuard } from "@/lib/stale-guard";
 import { cn } from "@/lib/utils";
 import type { Issue, Project } from "@/types";
 
+const COLLAPSED_GROUPS_KEY = "cockpit_session_issue_collapsed";
+const EMPTY_STATUS_SET: ReadonlySet<string> = new Set();
+
 /**
  * The session header's way into its project's issues: the ones belonging to the
  * repository this session is working in, over the top of the session, draggable
@@ -23,7 +26,7 @@ import type { Issue, Project } from "@/types";
  * outside every repo, and neither should leave the button dead.
  */
 export function SessionIssuesButton() {
-  const { cwd } = useShell();
+  const { cwd, openPageModal } = useShell();
   const pathname = usePathname();
   const { settings, loaded, reload } = useSettings();
   // Open state lives in the URL (?issues=1) so that coming back from an issue —
@@ -31,7 +34,15 @@ export function SessionIssuesButton() {
   // from, instead of landing on the session with the modal gone.
   const [open, setOpen] = useState(false);
 
+  // The insert hand-off closes the list first, but the page modal then takes
+  // its history entry back off; the popstate that follows would read the old
+  // URL (still ?issues=1) and reopen what the user just left.
+  const skipNextSync = useRef(false);
   const syncOpenFromUrl = useCallback(() => {
+    if (skipNextSync.current) {
+      skipNextSync.current = false;
+      return;
+    }
     setOpen(new URLSearchParams(window.location.search).get("issues") === "1");
   }, []);
 
@@ -48,6 +59,57 @@ export function SessionIssuesButton() {
   const [loading, setLoading] = useState(false);
   const [moveError, setMoveError] = useState<string | null>(null);
   const [newOpen, setNewOpen] = useState(false);
+  // Which status sections are folded, remembered across opens and reloads.
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string> | null>(null);
+  useEffect(() => {
+    try {
+      const raw = JSON.parse(localStorage.getItem(COLLAPSED_GROUPS_KEY) ?? "[]");
+      setCollapsedGroups(new Set(Array.isArray(raw) ? raw.filter((v): v is string => typeof v === "string") : []));
+    } catch {
+      setCollapsedGroups(new Set());
+    }
+  }, []);
+  useEffect(() => {
+    if (!collapsedGroups) return;
+    try {
+      localStorage.setItem(COLLAPSED_GROUPS_KEY, JSON.stringify([...collapsedGroups]));
+    } catch {
+      // storage unavailable: the choice lasts as long as this page does
+    }
+  }, [collapsedGroups]);
+  // A delete inside the page modal happens without this list remounting, so
+  // drop the row when the issue page says it is gone.
+  useEffect(() => {
+    const onIssueDeleted = (event: Event) => {
+      const key = (event as CustomEvent<{ key?: string }>).detail?.key;
+      if (!key) return;
+      setIssues((prev) => prev.filter((issue) => issue.key !== key));
+    };
+    // The issue page in the page modal asks for its key to go to the composer:
+    // close this list so the composer behind it is what the user sees.
+    const onInsert = () => {
+      skipNextSync.current = true;
+      setOpen(false);
+      const params = new URLSearchParams(window.location.search);
+      params.delete("issues");
+      const query = params.toString();
+      window.history.replaceState(null, "", `${window.location.pathname}${query ? `?${query}` : ""}`);
+    };
+    window.addEventListener("cockpit:issue-deleted", onIssueDeleted);
+    window.addEventListener("cockpit:insert-issue", onInsert);
+    return () => {
+      window.removeEventListener("cockpit:issue-deleted", onIssueDeleted);
+      window.removeEventListener("cockpit:insert-issue", onInsert);
+    };
+  }, []);
+  const toggleGroup = useCallback((status: string) => {
+    setCollapsedGroups((prev) => {
+      const next = new Set(prev ?? []);
+      if (next.has(status)) next.delete(status);
+      else next.add(status);
+      return next;
+    });
+  }, []);
   const dropGuard = useRef(createStaleGuard()).current;
 
   // Where the list was, kept for this session's tab, so coming back from an
@@ -73,6 +135,9 @@ export function SessionIssuesButton() {
           }
         }, 0);
       }
+      // Opening always starts from a loading body: the previous open's rows
+      // would otherwise paint for a frame, then be replaced by fresh ones.
+      if (next) setLoading(true);
       const params = new URLSearchParams(window.location.search);
       if (next) params.set("issues", "1");
       else params.delete("issues");
@@ -99,8 +164,13 @@ export function SessionIssuesButton() {
     setLoading(true);
     try {
       const [issuesRes, projectsRes] = await Promise.all([fetch("/api/issues"), fetch("/api/projects")]);
-      const issuesData = issuesRes.ok ? ((await issuesRes.json()) as { issues: Issue[] }) : { issues: [] };
-      const projectsData = projectsRes.ok ? ((await projectsRes.json()) as { projects: Project[] }) : { projects: [] };
+      // Read both bodies before touching state. Setting issues first let the
+      // list paint in the canonical status order while projects (and so the
+      // project's stored order) had not arrived yet, then jump to its order.
+      const [issuesData, projectsData] = await Promise.all([
+        issuesRes.ok ? (issuesRes.json() as Promise<{ issues?: Issue[] }>) : Promise.resolve({ issues: [] }),
+        projectsRes.ok ? (projectsRes.json() as Promise<{ projects?: Project[] }>) : Promise.resolve({ projects: [] }),
+      ]);
       setIssues(issuesData.issues ?? []);
       setProjects(projectsData.projects ?? []);
       setProjectId((current) => {
@@ -159,6 +229,20 @@ export function SessionIssuesButton() {
   );
 
   const router = useRouter();
+  // Closing the list and handing the key to the composer through the URL:
+  // InputArea picks `insert` up, appends it to the draft and clears the param.
+  const insertIssue = useCallback(
+    (issue: Issue) => {
+      setOpen(false);
+      setNewOpen(false);
+      const params = new URLSearchParams(window.location.search);
+      params.delete("issues");
+      params.set("insert", issue.key);
+      const query = params.toString();
+      router.replace(`${window.location.pathname}${query ? `?${query}` : ""}`, { scroll: false });
+    },
+    [router],
+  );
   const selected = projects.find((p) => p.id === projectId);
   const visible = useMemo(() => (projectId ? issues.filter((issue) => issue.projectId === projectId) : issues), [issues, projectId]);
   const groups = useMemo(
@@ -198,7 +282,7 @@ export function SessionIssuesButton() {
             }}
           >
             <div
-              className="flex max-h-[85vh] w-full max-w-2xl flex-col overflow-hidden rounded-lg border bg-background shadow-lg"
+              className="flex h-[min(85vh,44rem)] max-h-[85vh] w-full max-w-2xl flex-col overflow-hidden rounded-lg border bg-background shadow-lg"
               data-testid="session-issues-modal"
             >
               <div className="flex shrink-0 items-center gap-2 border-b px-4 py-3">
@@ -243,14 +327,14 @@ export function SessionIssuesButton() {
                     {moveError}
                   </div>
                 )}
-                {/* A refresh keeps the list on screen: swapping it for a spinner
-                  would drop the scroll position just restored. */}
-                {loading && issues.length === 0 ? (
-                  <div className="flex items-center justify-center py-10">
+                {loading ? (
+                  <div className="flex h-full items-center justify-center" data-testid="session-issues-loading">
                     <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
                   </div>
                 ) : groups.length === 0 ? (
-                  <p className="py-10 text-center text-sm text-muted-foreground">No issues in this project.</p>
+                  <p className="flex h-full items-center justify-center text-center text-sm text-muted-foreground">
+                    No issues in this project.
+                  </p>
                 ) : (
                   <IssueList
                     issues={visible}
@@ -262,10 +346,18 @@ export function SessionIssuesButton() {
                       // closing or deleting the issue comes back to this session
                       // with the list reopened, not to the bare session.
                       const from = encodeURIComponent(window.location.pathname + window.location.search);
-                      router.push(`/issues/${encodeURIComponent(issue.key)}?from=${from}`);
+                      const path = `/issues/${encodeURIComponent(issue.key)}?from=${from}`;
+                      // Over the session, in the same page-modal as the
+                      // sidebar's pages, so closing the issue lands back on
+                      // this list rather than replacing the session.
+                      if (!openPageModal(path)) router.push(path);
                     }}
                     onDrop={handleDrop}
                     copyable
+                    onInsert={insertIssue}
+                    collapsible
+                    collapsedGroups={collapsedGroups ?? EMPTY_STATUS_SET}
+                    onToggleGroup={toggleGroup}
                     className={cn("pb-2")}
                   />
                 )}

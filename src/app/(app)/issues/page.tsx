@@ -252,14 +252,15 @@ export default function IssuesPage() {
 
   const fetchAll = useCallback(async () => {
     const [issuesRes, projectsRes] = await Promise.all([fetch("/api/issues"), fetch("/api/projects")]);
-    if (issuesRes.ok) {
-      const data = await issuesRes.json();
-      setIssues(data.issues || []);
-    }
-    if (projectsRes.ok) {
-      const data = await projectsRes.json();
-      setProjects(data.projects || []);
-    }
+    // Read both bodies before touching state, so the list cannot paint in the
+    // canonical status order while the projects that carry a stored order are
+    // still missing.
+    const [issuesData, projectsData] = await Promise.all([
+      issuesRes.ok ? (issuesRes.json() as Promise<{ issues?: Issue[] }>) : Promise.resolve({ issues: [] }),
+      projectsRes.ok ? (projectsRes.json() as Promise<{ projects?: Project[] }>) : Promise.resolve({ projects: [] }),
+    ]);
+    setIssues(issuesData.issues || []);
+    setProjects(projectsData.projects || []);
     setLoading(false);
   }, []);
 
@@ -299,7 +300,10 @@ export default function IssuesPage() {
 
   const hasFilters = projectFilter !== "" || (view === "status" && statusFilter !== "");
 
-  if (!settingsLoaded || !settings.issuesEnabled) return null;
+  // Wait for the saved view and filters too: painting the default filter first
+  // and then swapping to the saved one is the same jump this page avoids for
+  // status order.
+  if (!settingsLoaded || !filtersHydrated || !settings.issuesEnabled) return null;
 
   return (
     <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto p-4 pb-24 space-y-4">

@@ -1,17 +1,20 @@
 "use client";
 
-import { ArrowLeft, Loader2, Paperclip, Pencil, Trash2, X } from "lucide-react";
+import { ArrowLeft, Loader2, MessageSquarePlus, Paperclip, Pencil, Trash2, X } from "lucide-react";
 import Link from "next/link";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { usePageHeader } from "@/components/app-shell";
+import { CopyIssueKey } from "@/components/issues/copy-issue-key";
 import { MarkdownRender } from "@/components/markdown-render";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { useEmbedded } from "@/hooks/use-embedded";
 import { useSettings } from "@/hooks/use-settings";
 import { actorHref, actorLabel, describeActivityAction, issueReturnPath, resolveProjectStatuses, statusColor } from "@/lib/issue-display";
+import { pageModalMessage } from "@/lib/page-modal";
 import { cn } from "@/lib/utils";
 import type { Issue, IssueActor, Project } from "@/types";
 
@@ -54,6 +57,25 @@ export default function IssueDetailPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const backTo = issueReturnPath(searchParams.get("from"));
+  const embedded = useEmbedded();
+  // Inside the page modal, back closes the modal and reveals whatever opened
+  // it (the session's issue list) rather than navigating the iframe to the
+  // session page.
+  const goBack = useCallback(() => {
+    if (embedded) {
+      window.parent.postMessage(pageModalMessage({ type: "close" }), window.location.origin);
+      return;
+    }
+    router.push(backTo);
+  }, [embedded, backTo, router]);
+
+  /** From the session's list, put the key in the composer behind the modal and
+   *  close both the issue modal and the list. */
+  const insertIntoSession = useCallback(() => {
+    if (!key) return;
+    window.parent.dispatchEvent(new CustomEvent("cockpit:insert-issue", { detail: { key } }));
+    window.parent.postMessage(pageModalMessage({ type: "close" }), window.location.origin);
+  }, [key]);
   usePageHeader("Issue", { hideActions: true });
   const { settings, loaded: settingsLoaded } = useSettings();
 
@@ -223,7 +245,10 @@ export default function IssueDetailPage() {
         setDeleteError(body.error || `Delete failed (${res.status})`);
         return;
       }
-      router.push(backTo);
+      // The session's list sits behind the page modal and did not remount, so
+      // tell it which row to drop before the modal closes.
+      (embedded ? window.parent : window).dispatchEvent(new CustomEvent("cockpit:issue-deleted", { detail: { key: issue.key } }));
+      goBack();
     } catch (err) {
       setDeleteError(err instanceof Error ? err.message : "Delete failed");
     } finally {
@@ -244,7 +269,7 @@ export default function IssueDetailPage() {
   if (notFound || !issue) {
     return (
       <div className="flex-1 p-4">
-        <Button variant="ghost" size="sm" onClick={() => router.push(backTo)}>
+        <Button variant="ghost" size="sm" onClick={goBack}>
           <ArrowLeft className="h-4 w-4 mr-1" />
           Back
         </Button>
@@ -263,11 +288,25 @@ export default function IssueDetailPage() {
     <div className="flex-1 min-h-0 overflow-y-auto p-4">
       <div className="max-w-3xl mx-auto space-y-4 pb-8">
         <div className="flex items-center gap-2">
-          <Button variant="ghost" size="icon" onClick={() => router.push(backTo)}>
+          <Button variant="ghost" size="icon" onClick={goBack} aria-label="Back">
             <ArrowLeft className="h-4 w-4" />
           </Button>
           <span className="font-mono text-sm text-muted-foreground">{issue.key}</span>
-          {project && <span className="text-sm text-muted-foreground">{project.name}</span>}
+          <CopyIssueKey value={issue.key} />
+          {embedded && backTo.startsWith("/sessions/") && (
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={insertIntoSession}
+              title="Put issue ID in the session's message box"
+              aria-label="Put issue ID in the session's message box"
+              data-testid={`insert-issue-${issue.key}`}
+              className="shrink-0"
+            >
+              <MessageSquarePlus className="h-4 w-4" />
+            </Button>
+          )}
+          {project && <span className="min-w-0 truncate text-sm text-muted-foreground">{project.name}</span>}
           <Button
             variant="ghost"
             size="icon"

@@ -24,6 +24,7 @@ import {
   X,
   Zap,
 } from "lucide-react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { type ClipboardEvent, type DragEvent, type KeyboardEvent, useCallback, useEffect, useRef, useState } from "react";
 import { CodeBlock, languageFromPath } from "@/components/code-block";
 import { MarkdownRender } from "@/components/markdown-render";
@@ -83,6 +84,12 @@ const MIN_MESSAGES_PX = 56;
  * non-textarea chrome (attachment chips, toolbar, padding) so a pasted file
  * shrinks the writing area rather than pushing it out of view.
  */
+/** Add a key to the draft, keeping a single space before it. */
+function appendToDraft(text: string, key: string): string {
+  const base = text.replace(/\s+$/, "");
+  return base ? `${base} ${key}` : key;
+}
+
 function maxTextareaHeight(el: HTMLTextAreaElement | null): number {
   const row = el?.closest<HTMLElement>("[data-input-row]");
   // Not row.parentElement: that wrapper is sized by the row itself, so it would
@@ -336,10 +343,46 @@ export function InputArea({
   providers,
 }: InputAreaProps) {
   const { connected } = useWebSocket();
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const insertParam = searchParams.get("insert");
+  const handledInsert = useRef<string | null>(null);
   const [text, setText] = useState(() => sessionDrafts.get(sessionId) || "");
   const [queueModalOpen, setQueueModalOpen] = useState(false);
   const [sendModeOpen, setSendModeOpen] = useState(false);
   const [mcpOpen, setMcpOpen] = useState(false);
+
+  // The session's Issues list hands an issue key over as ?insert=KEY. Append
+  // it to whatever is already drafted, then clear the parameter without adding
+  // a history entry so a reload does not paste it again.
+  useEffect(() => {
+    if (!insertParam) {
+      handledInsert.current = null;
+      return;
+    }
+    if (handledInsert.current === insertParam) return;
+    handledInsert.current = insertParam;
+    setText((prev) => appendToDraft(prev, insertParam));
+    const params = new URLSearchParams(searchParams.toString());
+    params.delete("insert");
+    const query = params.toString();
+    router.replace(`${pathname}${query ? `?${query}` : ""}`, { scroll: false });
+    requestAnimationFrame(() => textareaRef.current?.focus());
+  }, [insertParam, pathname, router, searchParams]);
+
+  // The issue page opened over this session dispatches the same hand-off from
+  // inside the page-modal iframe.
+  useEffect(() => {
+    const onInsert = (event: Event) => {
+      const key = (event as CustomEvent<{ key?: string }>).detail?.key;
+      if (!key) return;
+      setText((prev) => appendToDraft(prev, key));
+      requestAnimationFrame(() => textareaRef.current?.focus());
+    };
+    window.addEventListener("cockpit:insert-issue", onInsert);
+    return () => window.removeEventListener("cockpit:insert-issue", onInsert);
+  }, []);
 
   useEffect(() => {
     setText(sessionDrafts.get(sessionId) || "");

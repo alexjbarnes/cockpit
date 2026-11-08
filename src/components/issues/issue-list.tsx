@@ -13,8 +13,9 @@ import {
 } from "@dnd-kit/core";
 import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { Check, ChevronRight, Copy, GripVertical } from "lucide-react";
+import { ChevronRight, GripVertical, MessageSquarePlus } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
+import { CopyIssueKey } from "@/components/issues/copy-issue-key";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { dropIndex, type IssueStatusGroup, priorityLabel, sortIssuesByOrder, statusColor } from "@/lib/issue-display";
@@ -40,35 +41,13 @@ interface RowProps {
   /** Show a button that copies the issue's key. The session header's modal
    *  asks for it; the Issues page keeps the row as it was. */
   copyable?: boolean;
-}
-
-/** Copies the row's key, with a tick for a moment. Stops the click and the key
- *  press from reaching the row, which opens the issue. */
-function CopyIssueKey({ value }: { value: string }) {
-  const [copied, setCopied] = useState(false);
-  return (
-    <button
-      type="button"
-      onClick={(e) => {
-        e.stopPropagation();
-        navigator.clipboard?.writeText(value).catch(() => {});
-        setCopied(true);
-        setTimeout(() => setCopied(false), 1500);
-      }}
-      onKeyDown={(e) => e.stopPropagation()}
-      data-testid={`copy-issue-${value}`}
-      aria-label="Copy issue ID"
-      title="Copy issue ID"
-      className="-mr-1 flex h-7 w-7 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground"
-    >
-      {copied ? <Check className="h-3.5 w-3.5 text-green-500" /> : <Copy className="h-3.5 w-3.5" />}
-    </button>
-  );
+  /** Show a button that puts the issue's key in the session's message box. */
+  onInsert?: (issue: Issue) => void;
 }
 
 /** One issue in a list. Also the drag overlay's content, which is why it is
  *  exported: the overlay draws the same row, minus the handle. */
-export function IssueRow({ issue, projectName, onClick, handle, className, copyable }: RowProps) {
+export function IssueRow({ issue, projectName, onClick, handle, className, copyable, onInsert }: RowProps) {
   const priority = priorityLabel(issue.priority);
   return (
     <div
@@ -87,7 +66,33 @@ export function IssueRow({ issue, projectName, onClick, handle, className, copya
       )}
     >
       {handle}
-      <span className="font-mono text-xs text-muted-foreground shrink-0">{issue.key}</span>
+      {/* Key and actions share one column, so the title gets the rest of the
+        row. On a phone the icons used to sit beside the title and were what
+        truncated it. */}
+      <div className="flex shrink-0 flex-col items-start gap-0.5">
+        <span className="font-mono text-xs text-muted-foreground">{issue.key}</span>
+        {(onInsert || copyable) && (
+          <div className="flex items-center">
+            {onInsert && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onInsert(issue);
+                }}
+                onKeyDown={(e) => e.stopPropagation()}
+                data-testid={`insert-issue-${issue.key}`}
+                aria-label="Put issue ID in the message box"
+                title="Put issue ID in the message box"
+                className="-mr-1 flex h-7 w-7 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground"
+              >
+                <MessageSquarePlus className="h-3.5 w-3.5" />
+              </button>
+            )}
+            {copyable && <CopyIssueKey value={issue.key} />}
+          </div>
+        )}
+      </div>
       <div className="flex-1 min-w-0">
         <div className="truncate text-sm font-medium">{issue.title}</div>
         <div className="flex items-center gap-2 mt-0.5 text-xs text-muted-foreground">
@@ -97,7 +102,6 @@ export function IssueRow({ issue, projectName, onClick, handle, className, copya
           <span>{timeAgo(issue.updatedAt)}</span>
         </div>
       </div>
-      {copyable && <CopyIssueKey value={issue.key} />}
     </div>
   );
 }
@@ -107,11 +111,13 @@ function SortableIssueRow({
   projectName,
   onClick,
   copyable,
+  onInsert,
 }: {
   issue: Issue;
   projectName?: string;
   onClick: () => void;
   copyable?: boolean;
+  onInsert?: (issue: Issue) => void;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: issue.id });
   return (
@@ -121,6 +127,7 @@ function SortableIssueRow({
         projectName={projectName}
         onClick={onClick}
         copyable={copyable}
+        onInsert={onInsert}
         handle={
           // A real button so the gesture has something to grab: the row itself is
           // a button too (it opens the issue), and a drag must not be a click.
@@ -152,6 +159,10 @@ function StatusGroup({
   dragging,
   showEmpty,
   copyable,
+  onInsert,
+  collapsible,
+  collapsedGroups,
+  onToggleGroup,
 }: {
   group: IssueStatusGroup;
   project?: Project;
@@ -160,39 +171,64 @@ function StatusGroup({
   dragging: boolean;
   showEmpty: boolean;
   copyable?: boolean;
+  onInsert?: (issue: Issue) => void;
+  collapsible?: boolean;
+  collapsedGroups?: ReadonlySet<string>;
+  onToggleGroup?: (status: string) => void;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: group.status, data: { status: group.status } });
   if (group.issues.length === 0 && !showEmpty) return null;
+  const closed = !!collapsible && !!collapsedGroups?.has(group.status);
+
+  const heading = (
+    <>
+      <span className={cn("h-2.5 w-2.5 shrink-0 rounded-full", statusColor(group.status, project))} />
+      <h2 className="text-sm font-semibold">{group.status}</h2>
+      <Badge variant="secondary">{group.issues.length}</Badge>
+    </>
+  );
 
   return (
     <div data-testid={`issue-group-${group.status}`}>
-      <div className="flex items-center gap-2 mb-1.5 px-1">
-        <span className={cn("h-2.5 w-2.5 shrink-0 rounded-full", statusColor(group.status, project))} />
-        <h2 className="text-sm font-semibold">{group.status}</h2>
-        <Badge variant="secondary">{group.issues.length}</Badge>
-      </div>
-      <Card className={cn("py-0 overflow-hidden", dragging && "border-dashed", dragging && isOver && "ring-1 ring-primary")}>
-        <CardContent ref={setNodeRef} className="p-0">
-          {/* The id is the status: dnd-kit reports it as the hovered item's
+      {collapsible ? (
+        <button
+          type="button"
+          onClick={() => onToggleGroup?.(group.status)}
+          aria-expanded={!closed}
+          data-testid={`issue-status-toggle-${group.status}`}
+          className="mb-1.5 flex w-full items-center gap-2 rounded px-1 py-0.5 text-left hover:bg-accent/40"
+        >
+          <ChevronRight className={cn("h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform", !closed && "rotate-90")} />
+          {heading}
+        </button>
+      ) : (
+        <div className="flex items-center gap-2 mb-1.5 px-1">{heading}</div>
+      )}
+      {!closed && (
+        <Card className={cn("py-0 overflow-hidden", dragging && "border-dashed", dragging && isOver && "ring-1 ring-primary")}>
+          <CardContent ref={setNodeRef} className="p-0">
+            {/* The id is the status: dnd-kit reports it as the hovered item's
               containerId, which is how a drop knows which status it landed in. */}
-          <SortableContext id={group.status} items={group.issues.map((issue) => issue.id)} strategy={verticalListSortingStrategy}>
-            {group.issues.map((issue) => (
-              <SortableIssueRow
-                key={issue.id}
-                issue={issue}
-                projectName={projectNames.get(issue.projectId)}
-                onClick={() => onIssueClick(issue)}
-                copyable={copyable}
-              />
-            ))}
-          </SortableContext>
-          {group.issues.length === 0 && (
-            <div className="px-4 py-6 text-center text-xs text-muted-foreground" data-testid={`issue-group-empty-${group.status}`}>
-              Drop here
-            </div>
-          )}
-        </CardContent>
-      </Card>
+            <SortableContext id={group.status} items={group.issues.map((issue) => issue.id)} strategy={verticalListSortingStrategy}>
+              {group.issues.map((issue) => (
+                <SortableIssueRow
+                  key={issue.id}
+                  issue={issue}
+                  projectName={projectNames.get(issue.projectId)}
+                  onClick={() => onIssueClick(issue)}
+                  copyable={copyable}
+                  onInsert={onInsert}
+                />
+              ))}
+            </SortableContext>
+            {group.issues.length === 0 && (
+              <div className="px-4 py-6 text-center text-xs text-muted-foreground" data-testid={`issue-group-empty-${group.status}`}>
+                Drop here
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }
@@ -212,6 +248,13 @@ export interface IssueListProps {
   className?: string;
   /** Give every row a button that copies its key. */
   copyable?: boolean;
+  /** Give every row a button that puts its key in the session's message box. */
+  onInsert?: (issue: Issue) => void;
+  /** Make each status heading fold its rows away. The session's list keeps
+   *  which ones are closed; the Issues page leaves this off. */
+  collapsible?: boolean;
+  collapsedGroups?: ReadonlySet<string>;
+  onToggleGroup?: (status: string) => void;
 }
 
 /**
@@ -219,7 +262,20 @@ export interface IssueListProps {
  * a row into another group to change its status. Shared by the Issues page and
  * the session header's modal so the two cannot drift.
  */
-export function IssueList({ issues, statusGroups, project, projectNames, onIssueClick, onDrop, className, copyable }: IssueListProps) {
+export function IssueList({
+  issues,
+  statusGroups,
+  project,
+  projectNames,
+  onIssueClick,
+  onDrop,
+  className,
+  copyable,
+  onInsert,
+  collapsible,
+  collapsedGroups,
+  onToggleGroup,
+}: IssueListProps) {
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { delay: 150, tolerance: 5 } }));
   const byId = useMemo(() => new Map(issues.map((issue) => [issue.id, issue])), [issues]);
@@ -272,6 +328,10 @@ export function IssueList({ issues, statusGroups, project, projectNames, onIssue
             dragging={draggingId !== null}
             showEmpty={draggingId !== null}
             copyable={copyable}
+            onInsert={onInsert}
+            collapsible={collapsible}
+            collapsedGroups={collapsedGroups}
+            onToggleGroup={onToggleGroup}
           />
         ))}
       </div>

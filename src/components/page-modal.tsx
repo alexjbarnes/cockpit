@@ -74,9 +74,13 @@ function PageModalFrame({ path, onClose, onOpenInApp }: { path: string; onClose:
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
+  // An issue is opened from the session's own issue modal; match that modal's
+  // box exactly so moving between the two does not change the frame.
+  const issue = path.startsWith("/issues/");
+
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 sm:p-6"
+      className={cn("fixed inset-0 z-[60] flex justify-center bg-black/60 p-3 sm:p-6", issue ? "items-start" : "items-center")}
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
@@ -84,7 +88,12 @@ function PageModalFrame({ path, onClose, onOpenInApp }: { path: string; onClose:
       <div
         ref={panelRef}
         tabIndex={-1}
-        className="relative flex h-full w-full flex-col overflow-hidden bg-background outline-none sm:h-[85dvh] sm:max-w-5xl sm:rounded-lg sm:border sm:shadow-lg"
+        className={cn(
+          "relative flex w-full flex-col overflow-hidden bg-background outline-none shadow-lg",
+          issue
+            ? "h-[min(85vh,44rem)] max-h-[85vh] max-w-2xl rounded-lg border"
+            : "h-full sm:h-[85dvh] sm:max-w-5xl sm:rounded-lg sm:border",
+        )}
         data-testid="page-modal"
       >
         {!ready && (
