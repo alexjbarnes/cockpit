@@ -173,6 +173,7 @@ export function DiffView({ cwd, filePath }: DiffViewProps) {
                   fileDiff={fileDiff}
                   options={{
                     theme: { dark: "pierre-dark", light: "pierre-light" },
+                    preferredHighlighter: "highlights",
                     themeType: isDark() ? "dark" : "light",
                     overflow: "wrap",
                     diffStyle: settings.diffStyle,

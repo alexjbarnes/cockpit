@@ -377,6 +377,7 @@ function LazyDiff({
 
   const diffOptions = {
     theme: { dark: "pierre-dark", light: "pierre-light" },
+    preferredHighlighter: "highlights" as const,
     themeType: isDark() ? ("dark" as const) : ("light" as const),
     overflow: "wrap" as const,
     diffStyle: settings.diffStyle as "split" | "unified",

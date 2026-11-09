@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { highlightCode, languageFromPath, stripLineNumbers } from "@/lib/code-highlight";
+import { highlightCode, languageFromPath, stripLineNumbers, tokensToHtml } from "@/lib/code-highlight";
 
 describe("languageFromPath", () => {
   it("maps common extensions to shiki language IDs", () => {
@@ -89,44 +89,71 @@ describe("stripLineNumbers", () => {
 
 describe("highlightCode", () => {
   it("produces colored HTML for Go code", async () => {
-    const html = await highlightCode('func main() {\n\tfmt.Println("hello")\n}', "go", "github-dark");
+    const html = await highlightCode('func main() {\n\tfmt.Println("hello")\n}', "go", "pierre-dark");
     expect(html).not.toBeNull();
     expect(html).toContain("color:");
     expect(html).toContain("func");
-    expect(html).toContain('<pre class="shiki');
+    expect(html).toContain('<pre class="highlights" data-theme="pierre-dark"');
   });
 
   it("produces colored HTML for TypeScript code", async () => {
-    const html = await highlightCode('const x: number = 42;\nfunction hello(): string { return "hi"; }', "typescript", "github-dark");
+    const html = await highlightCode('const x: number = 42;\nfunction hello(): string { return "hi"; }', "typescript", "pierre-dark");
     expect(html).not.toBeNull();
     expect(html).toContain("color:");
     expect(html).toContain("const");
   });
 
-  it("supports github-light theme", async () => {
-    const html = await highlightCode("let x = 1;", "javascript", "github-light");
+  it("supports the pierre-light theme", async () => {
+    const html = await highlightCode("let x = 1;", "javascript", "pierre-light");
     expect(html).not.toBeNull();
-    expect(html).toContain("github-light");
+    expect(html).toContain('data-theme="pierre-light"');
     expect(html).toContain("color:");
   });
 
   it("supports Python", async () => {
-    const html = await highlightCode("def hello():\n    print('hi')", "python", "github-dark");
+    const html = await highlightCode("def hello():\n    print('hi')", "python", "pierre-dark");
     expect(html).not.toBeNull();
     expect(html).toContain("color:");
   });
 
   it("returns null for unsupported languages", async () => {
-    const html = await highlightCode("some code", "not-a-real-language", "github-dark");
+    const html = await highlightCode("some code", "not-a-real-language", "pierre-dark");
     expect(html).toBeNull();
   });
 
   it("produces different output for dark vs light themes", async () => {
     const code = "const x = 42;";
-    const dark = await highlightCode(code, "javascript", "github-dark");
-    const light = await highlightCode(code, "javascript", "github-light");
+    const dark = await highlightCode(code, "javascript", "pierre-dark");
+    const light = await highlightCode(code, "javascript", "pierre-light");
     expect(dark).not.toBeNull();
     expect(light).not.toBeNull();
     expect(dark).not.toBe(light);
+  });
+});
+
+describe("tokensToHtml", () => {
+  it("emits one line span per line, including empty lines", () => {
+    const token = (content: string, extra: Record<string, unknown> = {}) => ({ content, offset: 0, ...extra });
+    const lines = [[token("const ", { color: "#ff678d" }), token("x", { color: "#ffa359" })], [], [token("}", { color: "#ff678d" })]];
+    const html = tokensToHtml(lines, "#fafafa", "pierre-dark");
+    expect(html.match(/class="line"/g)).toHaveLength(3);
+    expect(html).toContain('<span class="line"></span>');
+    expect(html).toContain("color:#ff678d");
+    expect(html).toContain("color:#fafafa");
+  });
+
+  it("escapes HTML in token content", () => {
+    const html = tokensToHtml([[{ content: '<div> & "x"', offset: 0 }]], "", "pierre-dark");
+    expect(html).toContain('&lt;div&gt; &amp; "x"');
+    expect(html).not.toContain("<div>");
+  });
+
+  it("carries italic and bold font styles", () => {
+    const token = (content: string, fontStyle: number) => ({ content, offset: 0, fontStyle });
+    const html = tokensToHtml([[token("a", 1), token("b", 2), token("c", 4), token("d", 8)]], "", "pierre-dark");
+    expect(html).toContain("font-style:italic");
+    expect(html).toContain("font-weight:700");
+    expect(html).toContain("text-decoration:underline");
+    expect(html).toContain("text-decoration:line-through");
   });
 });

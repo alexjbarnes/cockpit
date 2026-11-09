@@ -8,81 +8,9 @@ import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import { Compartment, EditorState } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
 import { tags } from "@lezer/highlight";
-import { githubDarkInit, githubLightInit } from "@uiw/codemirror-theme-github";
 import { basicSetup } from "codemirror";
 import { useEffect, useRef } from "react";
-
-/** The same surface the read-only CodeBlock uses: the app background, its
- *  monospace size and padding, and the faint line numbers, without CodeMirror's
- *  active-line band or gutter border. */
-const codeSettings = {
-  background: "transparent",
-  foreground: "var(--color-foreground)",
-  caret: "var(--color-foreground)",
-  selection: "color-mix(in oklch, var(--chart-1) 30%, transparent)",
-  selectionMatch: "color-mix(in oklch, var(--chart-4) 25%, transparent)",
-  lineHighlight: "transparent",
-  gutterBackground: "transparent",
-  gutterForeground: "rgba(115, 138, 148, 0.4)",
-  gutterActiveForeground: "rgba(115, 138, 148, 0.4)",
-  gutterBorder: "transparent",
-  fontFamily: "var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace)",
-  fontSize: "12px",
-};
-
-const githubDarkCode = githubDarkInit({ settings: codeSettings });
-const githubLightCode = githubLightInit({ settings: codeSettings });
-
-const codeChrome = EditorView.theme({
-  "&": {
-    backgroundColor: "transparent",
-    color: "var(--color-foreground)",
-    height: "100%",
-  },
-  ".cm-scroller": {
-    fontFamily: "var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace)",
-    fontSize: "12px",
-    lineHeight: "1.6",
-  },
-  ".cm-content": {
-    padding: "8px",
-    caretColor: "var(--color-foreground)",
-  },
-  ".cm-gutters": {
-    backgroundColor: "transparent",
-    borderRight: "none",
-    color: "rgba(115, 138, 148, 0.4)",
-  },
-  ".cm-lineNumbers .cm-gutterElement": {
-    padding: "0 1.5ch 0 0",
-    minWidth: "3ch",
-  },
-  ".cm-activeLine": {
-    backgroundColor: "transparent",
-  },
-  ".cm-activeLineGutter": {
-    backgroundColor: "transparent",
-  },
-  ".cm-cursor, .cm-dropCursor": {
-    borderLeftColor: "var(--color-foreground)",
-  },
-  "&.cm-focused .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection": {
-    backgroundColor: "color-mix(in oklch, var(--chart-1) 30%, transparent)",
-  },
-  ".cm-selectionMatch": {
-    backgroundColor: "color-mix(in oklch, var(--chart-4) 25%, transparent)",
-  },
-  ".cm-searchMatch": {
-    backgroundColor: "color-mix(in oklch, var(--chart-4) 35%, transparent)",
-  },
-  ".cm-searchMatch.cm-searchMatch-selected": {
-    backgroundColor: "color-mix(in oklch, var(--chart-4) 55%, transparent)",
-  },
-  ".cm-panels": {
-    backgroundColor: "var(--color-background)",
-    color: "var(--color-foreground)",
-  },
-});
+import { pierreCodeTheme } from "@/lib/pierre-codemirror";
 
 /** Markdown's mark tokens: the `#`, `**`, `>` and link syntax stays quiet so
  *  the prose itself reads as the content. */
@@ -163,9 +91,9 @@ function isProseLanguage(language?: string): boolean {
 
 function themeFor(language?: string) {
   if (isProseLanguage(language)) return proseExtensions;
-  // github-dark/light match the read-only CodeBlock's Shiki theme, so a code
-  // file does not change palette when Edit is pressed.
-  return [isDark() ? githubDarkCode : githubLightCode, codeChrome];
+  // The same Pierre palette the code blocks and diffs use, so a code file does
+  // not change colours when Edit is pressed.
+  return pierreCodeTheme(isDark());
 }
 
 /** The language name `languageFromPath` gives a file, mapped to a CodeMirror

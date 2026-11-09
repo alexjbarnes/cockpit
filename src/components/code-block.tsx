@@ -11,9 +11,23 @@ function cacheKey(code: string, lang: string, theme: string): string {
   return `${theme}:${lang}:${code}`;
 }
 
+function useIsDark(): boolean {
+  const [dark, setDark] = useState(false);
+
+  useEffect(() => {
+    const check = () => setDark(document.documentElement.classList.contains("dark"));
+    check();
+    const observer = new MutationObserver(check);
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
+    return () => observer.disconnect();
+  }, []);
+
+  return dark;
+}
+
 export function prehighlight(code: string, language: string, dark: boolean): void {
   const { code: stripped } = stripLineNumbers(code);
-  const theme = dark ? "github-dark" : "github-light";
+  const theme = dark ? "pierre-dark" : "pierre-light";
   const key = cacheKey(stripped, language, theme);
   if (htmlCache.has(key)) return;
   highlightCode(stripped, language, theme).then((result) => {
@@ -30,8 +44,10 @@ interface CodeBlockProps {
 }
 
 export function CodeBlock({ code, language, dark, fullHeight, wrap }: CodeBlockProps) {
+  const detectedDark = useIsDark();
+  const darkMode = dark ?? detectedDark;
   const { code: strippedCode, startLine } = stripLineNumbers(code);
-  const theme = dark ? "github-dark" : "github-light";
+  const theme = darkMode ? "pierre-dark" : "pierre-light";
   const key = language ? cacheKey(strippedCode, language, theme) : "";
   const [html, setHtml] = useState<string | null>(language ? (htmlCache.get(key) ?? null) : null);
 

@@ -109,9 +109,9 @@ export function extensionForLabel(label: string): string | undefined {
 }
 
 /**
- * Detection runs on highlight.js, whose grammars the page already loads through
- * `rehype-highlight` for rendering code blocks, so this shares them rather than
- * adding anything to what a user downloads.
+ * Detection runs on highlight.js, loaded on demand by this module only when a
+ * paste needs identifying; code blocks are highlighted by the Pierre
+ * highlighter instead.
  *
  * This replaced Google's magika, measured over 179 real source files in 15
  * languages, in both shapes that arrive here — a whole file, and a 30-line
@@ -250,9 +250,8 @@ let hljsPromise: Promise<Hljs> | null = null;
  * lowlight re-implements the loop and keeps a grammar's score even when the
  * text hits something that grammar forbids, so `ini` — which scores on any
  * `key = value` line — won on Java, TypeScript and JavaScript alike and dragged
- * accuracy down by 17 points. The grammars themselves are the same modules
- * `rehype-highlight` already loads through lowlight, so this shares them rather
- * than adding a second copy.
+ * accuracy down by 17 points. These are highlight.js's own common grammars,
+ * loaded on demand only when detection runs.
  */
 export async function detectLanguage(text: string): Promise<string | null> {
   const sample = text.slice(0, 8192);

@@ -291,6 +291,7 @@ function StackedDiffs({
                       fileDiff={state.fileDiff}
                       options={{
                         theme: { dark: "pierre-dark", light: "pierre-light" },
+                        preferredHighlighter: "highlights",
                         themeType: isDark() ? "dark" : "light",
                         overflow: "wrap",
                         diffStyle,
@@ -736,6 +737,7 @@ export function ChangesView({ cwd, sessionId, embeddedChat = true }: { cwd: stri
                         fileDiff={singleFileDiff}
                         options={{
                           theme: { dark: "pierre-dark", light: "pierre-light" },
+                          preferredHighlighter: "highlights",
                           themeType: isDark() ? "dark" : "light",
                           overflow: "wrap",
                           diffStyle: settings.diffStyle,
