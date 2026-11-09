@@ -308,6 +308,24 @@ test("on a phone, comments stay inside the issue page and the session's list kee
     await page.getByTestId("session-issues").click();
     const list = page.getByTestId("session-issues-list");
     await expect(list.getByRole("button", { name: /\bPLC-1\b/ }).first()).toBeVisible({ timeout: 15_000 });
+    // The wheel scrolls the list, and keeps scrolling it while a row is held.
+    await list.hover();
+    await page.mouse.wheel(0, 500);
+    await expect.poll(() => list.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
+    await list.evaluate((el) => {
+      el.scrollTop = 0;
+    });
+    const handle = list.getByRole("button", { name: "Drag to reorder" }).first();
+    const handleBox = await handle.boundingBox();
+    expect(handleBox).not.toBeNull();
+    await page.mouse.move(handleBox!.x + 6, handleBox!.y + 6);
+    await page.mouse.down();
+    await page.mouse.move(handleBox!.x + 6, handleBox!.y + 20, { steps: 5 });
+    await page.waitForTimeout(300);
+    await page.mouse.wheel(0, 500);
+    await expect.poll(() => list.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
+    await page.keyboard.press("Escape");
+    await page.mouse.up();
 
     // Well down the list, then open a row that is on screen.
     await list.evaluate((el) => {

@@ -14,7 +14,7 @@ import {
 import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { ChevronRight, GripVertical, MessageSquarePlus } from "lucide-react";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CopyIssueKey } from "@/components/issues/copy-issue-key";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
@@ -277,8 +277,27 @@ export function IssueList({
   onToggleGroup,
 }: IssueListProps) {
   const [draggingId, setDraggingId] = useState<string | null>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const draggingRef = useRef(false);
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { delay: 150, tolerance: 5 } }));
   const byId = useMemo(() => new Map(issues.map((issue) => [issue.id, issue])), [issues]);
+
+  // Some browsers (notably Safari) do not scroll an overflow container from
+  // the wheel while a pointer drag is active, which strands a row near the
+  // edge of a long list. Scroll the list ourselves during the drag.
+  useEffect(() => {
+    const el = rootRef.current;
+    if (!el) return;
+    const onWheel = (event: WheelEvent) => {
+      if (!draggingRef.current) return;
+      const scroller = el.parentElement;
+      if (!scroller || scroller.scrollHeight <= scroller.clientHeight) return;
+      scroller.scrollTop += event.deltaY;
+      event.preventDefault();
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, []);
 
   const endDrag = useCallback(
     (event: DragEndEvent) => {
@@ -313,11 +332,20 @@ export function IssueList({
     <DndContext
       sensors={sensors}
       collisionDetection={closestCorners}
-      onDragStart={(event: DragStartEvent) => setDraggingId(String(event.active.id))}
-      onDragEnd={endDrag}
-      onDragCancel={() => setDraggingId(null)}
+      onDragStart={(event: DragStartEvent) => {
+        draggingRef.current = true;
+        setDraggingId(String(event.active.id));
+      }}
+      onDragEnd={(event) => {
+        draggingRef.current = false;
+        endDrag(event);
+      }}
+      onDragCancel={() => {
+        draggingRef.current = false;
+        setDraggingId(null);
+      }}
     >
-      <div className={cn("space-y-4", className)} data-testid="issue-list">
+      <div ref={rootRef} className={cn("space-y-4", className)} data-testid="issue-list">
         {statusGroups.map((group) => (
           <StatusGroup
             key={group.status}
