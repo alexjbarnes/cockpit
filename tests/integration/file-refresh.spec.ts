@@ -11,6 +11,7 @@ import { mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { expect, test } from "./fixtures";
+import { openSidebarFiles } from "./sidebar-files";
 
 const CLAUDE_BIN = process.env.CLAUDE_BIN ?? "claude";
 const CLAUDE_AVAILABLE = (() => {
@@ -42,10 +43,10 @@ test("an open Markdown preview shows a change made on disk", async ({ page, harn
     await expect(page.getByTestId("message-input")).toBeVisible();
     await page.waitForTimeout(5000);
 
-    await page.getByText("Session Files", { exact: true }).click();
+    await openSidebarFiles(page);
     // The tree is fetched; under load it can take a while to list the file.
-    await expect(page.getByText("NOTE.md", { exact: true }).first()).toBeVisible({ timeout: 30_000 });
-    await page.getByText("NOTE.md", { exact: true }).first().click();
+    await expect(page.getByRole("treeitem", { name: "NOTE.md" })).toBeVisible({ timeout: 30_000 });
+    await page.getByRole("treeitem", { name: "NOTE.md" }).click();
     await page.getByTitle("Show preview").click();
     await expect(page.getByRole("heading", { name: "One" })).toBeVisible();
 

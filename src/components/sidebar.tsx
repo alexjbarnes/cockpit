@@ -7,13 +7,7 @@ import {
   Bot,
   CalendarClock,
   ChartLine,
-  Check,
   ClipboardList,
-  ExternalLink,
-  FileEdit,
-  FileMinus,
-  FilePlus,
-  FileSymlink,
   GitPullRequest,
   GripVertical,
   Inbox,
@@ -25,16 +19,13 @@ import {
 import { usePathname, useRouter } from "next/navigation";
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { type SidebarSectionConfig, useShell } from "@/components/app-shell";
-import { FilePicker } from "@/components/file-picker";
-import { FileTree } from "@/components/file-tree";
+import { SidebarFilesChanges } from "@/components/sidebar-files-changes";
 import { SidebarSection } from "@/components/sidebar-section";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useJobFailureCount } from "@/hooks/use-jobs";
 import { useSettings } from "@/hooks/use-settings";
 import { useWebSocket } from "@/hooks/use-websocket";
 import { type AssistantDot, assistantDot } from "@/lib/assistant-dot";
-import { useCheckedFiles } from "@/lib/checked-files";
 import { type NewSessionInput, newSessionBody } from "@/lib/new-session";
 import { createStaleGuard } from "@/lib/stale-guard";
 import { cn } from "@/lib/utils";
@@ -330,7 +321,7 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
   const router = useRouter();
   const pathname = usePathname();
   const { send, subscribe, connected } = useWebSocket();
-  const { sidebarSections, cwd, sessionId: shellSessionId, openPageModal } = useShell();
+  const { sidebarSections, cwd, openPageModal } = useShell();
   const { settings } = useSettings();
   // Settings changed inside the modal apply here as soon as it closes.
   const [open, setOpen] = useState(false);
@@ -729,9 +720,7 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
 
           <DynamicSections sections={sidebarSections} exclude={REVIEW_ADJACENT_SECTIONS} />
 
-          {cwd && !sidebarSections.has("git-changes") && <SidebarChanges cwd={cwd} sessionId={shellSessionId} />}
-
-          {cwd && !sidebarSections.has("file-tree") && <SidebarFileTree cwd={cwd} />}
+          {cwd && <SidebarFilesChanges cwd={cwd} />}
 
           {settings.reviewsEnabled && <RecentReviewsSection onNavigate={close} onWatchIds={watchReviewIds} />}
 
@@ -952,200 +941,6 @@ function DynamicSections({ sections, exclude }: { sections: Map<string, SidebarS
         </SidebarSection>
       ))}
     </>
-  );
-}
-
-function isMobile() {
-  return typeof window !== "undefined" && window.innerWidth < 768;
-}
-
-function SidebarFileTree({ cwd }: { cwd: string }) {
-  const { tabActions, closeSidebar } = useShell();
-  const [pickerOpen, setPickerOpen] = useState(false);
-
-  const handleSelect = useCallback(
-    (filePath: string) => {
-      tabActions?.openFile(filePath);
-      if (isMobile()) closeSidebar();
-    },
-    [tabActions, closeSidebar],
-  );
-
-  const handlePickFile = useCallback(
-    (filePath: string) => {
-      handleSelect(filePath);
-      setPickerOpen(false);
-    },
-    [handleSelect],
-  );
-
-  return (
-    <SidebarSection
-      id="files"
-      title="Session Files"
-      defaultOpen={false}
-      actions={
-        <button
-          onClick={() => setPickerOpen(true)}
-          title="Open file"
-          className="flex items-center justify-center rounded p-0.5 hover:bg-accent text-muted-foreground"
-        >
-          <Plus className="h-3.5 w-3.5" />
-        </button>
-      }
-    >
-      <FileTree cwd={cwd} selectedFile={null} onSelectFile={handleSelect} />
-      <Dialog open={pickerOpen} onOpenChange={setPickerOpen}>
-        <DialogContent className="sm:max-w-lg">
-          <DialogHeader>
-            <DialogTitle>Open File</DialogTitle>
-          </DialogHeader>
-          <FilePicker startPath={cwd} onSelect={handlePickFile} onCancel={() => setPickerOpen(false)} />
-        </DialogContent>
-      </Dialog>
-    </SidebarSection>
-  );
-}
-
-function changeStatusIcon(status: string) {
-  switch (status) {
-    case "added":
-    case "untracked":
-      return <FilePlus className="h-3.5 w-3.5 text-green-500" />;
-    case "deleted":
-      return <FileMinus className="h-3.5 w-3.5 text-red-500" />;
-    case "renamed":
-      return <FileSymlink className="h-3.5 w-3.5 text-blue-500" />;
-    default:
-      return <FileEdit className="h-3.5 w-3.5 text-yellow-500" />;
-  }
-}
-
-function SidebarChanges({ cwd }: { cwd: string; sessionId?: string }) {
-  const pathname = usePathname();
-  const { tabActions } = useShell();
-  const { subscribe } = useWebSocket();
-  const { checkedFiles, toggleFile } = useCheckedFiles(cwd);
-  const [branch, setBranch] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const [files, setFiles] = useState<Array<{ path: string; status: string; additions: number; deletions: number }>>([]);
-  const cwdRef = useRef(cwd);
-  cwdRef.current = cwd;
-
-  const fetchStatus = useCallback(() => {
-    // Capture the cwd this request is for. fs_changed fires for every
-    // subscribed session, so several status fetches can be in flight across a
-    // session switch. Without this guard a late response for the previous cwd
-    // overwrites the current one and the panel sticks on the old session.
-    const target = cwdRef.current;
-    fetch(`/api/git/status?cwd=${encodeURIComponent(target)}`)
-      .then((r) => {
-        if (!r.ok) throw new Error("Not a git repository");
-        return r.json();
-      })
-      .then((data) => {
-        if (cwdRef.current !== target) return;
-        setFiles(data.files || []);
-        setBranch(data.branch || "");
-        setError(null);
-      })
-      .catch((err) => {
-        if (cwdRef.current !== target) return;
-        setFiles([]);
-        setBranch("");
-        setError(err instanceof Error ? err.message : "Failed to load");
-      });
-  }, []);
-
-  // biome-ignore lint/correctness/useExhaustiveDependencies: pathname triggers refetch on navigation
-  useEffect(() => {
-    fetchStatus();
-  }, [cwd, pathname, fetchStatus]);
-
-  useEffect(() => {
-    return subscribe((msg) => {
-      if (msg.type !== "session:fs_changed") return;
-      fetchStatus();
-    });
-  }, [subscribe, fetchStatus]);
-
-  const totalAdded = files.reduce((sum, f) => sum + f.additions, 0);
-  const totalDeleted = files.reduce((sum, f) => sum + f.deletions, 0);
-
-  return (
-    <SidebarSection
-      id="session-changes"
-      title="Session Changes"
-      badge={files.length > 0 ? String(files.length) : undefined}
-      defaultOpen={false}
-    >
-      {error ? (
-        <p className="px-3 py-3 text-sm text-muted-foreground">{error}</p>
-      ) : files.length === 0 ? (
-        <p className="px-3 py-3 text-sm text-muted-foreground">Working tree clean</p>
-      ) : (
-        <>
-          <div className="px-3 py-1.5 text-xs text-muted-foreground flex items-center gap-2 border-b">
-            {branch && (
-              <>
-                <span>Branch:</span>
-                <span className="font-mono font-bold text-foreground">{branch}</span>
-                <span className="mx-0.5">·</span>
-              </>
-            )}
-            <span>{files.length} changed</span>
-            {totalAdded > 0 && <span className="text-green-500">+{totalAdded}</span>}
-            {totalDeleted > 0 && <span className="text-red-500">-{totalDeleted}</span>}
-            <div className="flex-1" />
-            <button
-              type="button"
-              title="Open commit view"
-              onClick={() => {
-                tabActions?.openChanges();
-              }}
-              className="hover:text-foreground transition-colors"
-            >
-              <ExternalLink className="h-3 w-3" />
-            </button>
-          </div>
-          {files.map((file) => (
-            <div key={file.path} className="flex items-center gap-1 px-3 py-1 text-xs hover:bg-accent/50 transition-colors">
-              <button
-                type="button"
-                role="checkbox"
-                aria-checked={checkedFiles.has(file.path)}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  toggleFile(file.path);
-                }}
-                className={cn(
-                  "h-3.5 w-3.5 shrink-0 rounded-full border flex items-center justify-center transition-colors",
-                  checkedFiles.has(file.path)
-                    ? "border-primary bg-primary text-primary-foreground"
-                    : "border-muted-foreground/30 bg-transparent hover:border-muted-foreground/50",
-                )}
-              >
-                {checkedFiles.has(file.path) && <Check className="h-2 w-2" strokeWidth={3} />}
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  tabActions?.openDiff(file.path);
-                }}
-                className="flex items-center gap-2 flex-1 min-w-0 text-left"
-              >
-                {changeStatusIcon(file.status)}
-                <span className="font-mono truncate flex-1 min-w-0">{file.path}</span>
-                <span className="shrink-0 flex gap-1 text-[10px] font-mono">
-                  {file.additions > 0 && <span className="text-green-500">+{file.additions}</span>}
-                  {file.deletions > 0 && <span className="text-red-500">-{file.deletions}</span>}
-                </span>
-              </button>
-            </div>
-          ))}
-        </>
-      )}
-    </SidebarSection>
   );
 }
 

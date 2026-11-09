@@ -54,11 +54,12 @@ export function SidebarSection({
   };
 
   return (
-    <div className="border-b last:border-b-0">
+    <div className="border-b last:border-b-0" data-testid={`sidebar-section-${id}`}>
       <div className="flex items-center">
         <button
           type="button"
           onClick={toggle}
+          aria-expanded={open}
           className="flex flex-1 items-center gap-1.5 px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground hover:bg-accent/50 transition-colors min-w-0"
         >
           <ChevronRight className={cn("h-3 w-3 shrink-0 transition-transform", open && "rotate-90")} />

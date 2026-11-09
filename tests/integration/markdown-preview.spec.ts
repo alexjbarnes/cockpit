@@ -10,6 +10,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { expect, test } from "./fixtures";
+import { openSidebarFiles } from "./sidebar-files";
 
 const CLAUDE_BIN = process.env.CLAUDE_BIN ?? "claude";
 const CLAUDE_AVAILABLE = (() => {
@@ -51,8 +52,8 @@ test("a Markdown preview styles headings, lists and code", async ({ page, harnes
     await page.goto(`${harness.cockpitUrl}/sessions/${sessionId}?cwd=${encodeURIComponent(workDir)}`);
     await expect(page.getByTestId("message-input")).toBeVisible();
 
-    await page.getByText("Session Files", { exact: true }).click();
-    await page.getByText("PLAN.md", { exact: true }).first().click();
+    await openSidebarFiles(page);
+    await page.getByRole("treeitem", { name: "PLAN.md" }).click();
     await page.getByTitle("Show preview").click();
 
     const preview = page.locator(".message-prose").last();

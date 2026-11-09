@@ -12,6 +12,7 @@ import path from "node:path";
 import type { Page } from "@playwright/test";
 import { textResponse, toolUseResponse } from "../mock-api/builder";
 import { expect, test } from "./fixtures";
+import { openSidebarFiles } from "./sidebar-files";
 
 const CLAUDE_BIN = process.env.CLAUDE_BIN ?? "claude";
 const CLAUDE_AVAILABLE = (() => {
@@ -84,15 +85,15 @@ test("a session that enters a worktree keeps its conversation and goes on replyi
     await expect(page.getByTestId("worktree-tag")).toBeVisible({ timeout: 15_000 });
     await expect(page.getByTestId("worktree-tag")).toContainText("repo-feature");
     writeFileSync(path.join(worktree, "feature.txt"), "made in the worktree\n");
-    await page.getByText("Session Files", { exact: true }).click();
-    await expect(page.getByText("feature.txt", { exact: true }).first()).toBeVisible({ timeout: 30_000 });
+    await openSidebarFiles(page);
+    await expect(page.getByRole("treeitem", { name: "feature.txt" })).toBeVisible({ timeout: 30_000 });
 
     // A reload keeps the view in the worktree. The last reported cwd is stored
     // with the session, so the tag and the file tree do not fall back to the
     // original checkout while no hook is arriving to say where the CLI is.
     await page.reload();
     await expect(page.getByTestId("worktree-tag")).toContainText("repo-feature", { timeout: 15_000 });
-    await expect(page.getByText("feature.txt", { exact: true }).first()).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByRole("treeitem", { name: "feature.txt" })).toBeVisible({ timeout: 30_000 });
 
     harness.mock.setScript([{ events: second }]);
     await send(page, "still there?");

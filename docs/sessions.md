@@ -27,8 +27,7 @@ Sections:
 
 - **Sessions.** Pinned and active sessions. Click any row to switch. Drag to reorder pinned sessions.
 - **Reviews.** Pinned PR reviews. Each row shows repo, PR number, title, and a status beacon. Hide this section entirely with the Reviews toggle in Settings.
-- **Changes.** Git status for the active session's working directory. Shows modified, added, and deleted files. If the session has no changes or the status fetch fails, the section shows an error state instead of disappearing.
-- **Files.** File tree for the active session's working directory.
+- **Files & changes.** One panel for the active session's working directory, with a Changes/Files switch at the top. Changes lists the working tree's modified, added and deleted files with their status colours and line counts; clicking one opens its diff. Files is the directory's file tree, with changed files still marked; clicking one opens the file. The chosen view is remembered. Git-ignored files are shown muted, generated folders such as `node_modules` and `dist` are left out, and the Open File button opens the same tree to reach anything it does not list. Commit checkboxes live in the full Changes tab.
 
 Status beacons on session and review rows:
 
