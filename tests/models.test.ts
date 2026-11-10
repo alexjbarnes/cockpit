@@ -503,19 +503,21 @@ describe("describeProviderModel", () => {
   });
 });
 
-describe("Fable 5.1", () => {
+describe("Fable 5.2", () => {
   it("is the default fable, resolvable by alias and modelId", () => {
-    expect(resolveModel("fable")?.modelId).toBe("claude-fable-5-1");
-    expect(resolveModel("claude-fable-5-1")?.alias).toBe("fable");
-    expect(findModelById("claude-fable-5-1")?.displayName).toBe("Fable 5.1");
-    expect(defaultForAlias("fable")?.modelId).toBe("claude-fable-5-1");
+    expect(resolveModel("fable")?.modelId).toBe("claude-fable-5-2");
+    expect(resolveModel("claude-fable-5-2")?.alias).toBe("fable");
+    expect(findModelById("claude-fable-5-2")?.displayName).toBe("Fable 5.2");
+    expect(defaultForAlias("fable")?.modelId).toBe("claude-fable-5-2");
   });
 
-  // Sessions pinned to the older id keep running on it; only the bare alias moves.
-  it("leaves Fable 5 selectable but no longer the default", () => {
+  // Sessions pinned to the older ids keep running on them; only the bare alias moves.
+  it("leaves Fable 5.1 and Fable 5 selectable but no longer the default", () => {
+    expect(findModelById("claude-fable-5-1")?.displayName).toBe("Fable 5.1");
+    expect(findModelById("claude-fable-5-1")?.isDefault).toBeUndefined();
     expect(findModelById("claude-fable-5")?.displayName).toBe("Fable 5");
     expect(findModelById("claude-fable-5")?.isDefault).toBeUndefined();
-    expect(versionsForAlias("fable").map((m) => m.version)).toEqual(["5", "5.1"]);
+    expect(versionsForAlias("fable").map((m) => m.version)).toEqual(["5", "5.1", "5.2"]);
   });
 
   it("supports the full effort range including xhigh and max", () => {
@@ -657,7 +659,7 @@ describe('thinking "off"', () => {
     expect(describeModelSelection("opus", "off", "200k", undefined).thinking).toBe("off");
     expect(describeModelSelection("fable", "off", "1m", undefined)).toEqual({
       provider: null,
-      label: "Fable 5.1",
+      label: "Fable 5.2",
       thinking: "off",
       context: "1m",
     });

@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.11.0] - 2026-11-10
 
 ### Added
 - **An issue opened from a session stays over that session.** Clicking a row in the session's Issues list opens the issue in the page modal, in the same box as the list, including on a phone. Back, the modal's close control, or deleting the issue returns to the list, which keeps its place and drops a deleted row. With the page-modal setting off, it navigates as before.
@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A new session asks where Claude works, then how it runs.** The dialog opened on a backend picker. It now has two steps: the directory (or a clone, which continues with the cloned path) and an optional name, then a short list of settings, each showing what it will use and expanding to change it: notifications, model with context size and thinking level, permissions, and Sandbox Bash. Create with defaults on the first step skips the second. Everything chosen is stored before the session first spawns, so the first turn already runs with it.
 - **A session that moves into a git worktree follows it.** Claude Code's `EnterWorktree` moves a session's working directory, and every hook payload names where it now is. Cockpit shows a Worktree tag above the tabs, and the session files tree, diffs, changes view and new terminals read from the worktree, so its edits are visible instead of an unchanged original checkout. The worktree is live state: the session keeps the directory it was created in, and a restarted CLI starts back there.
 - **A new session's default model can be any provider's, not just Anthropic's.** Session Defaults offered the four Anthropic aliases, so a gateway or custom provider could only be the default by hand-editing `defaults.json`, though the server already started sessions on a qualified `provider:model` there. The Model row now opens the same picker the session panel uses: Anthropic's models, every connected provider's catalogue, a search and a provider filter. The context and thinking rows follow the chosen model, and a thinking level the model cannot run moves to one it can, as switching inside a session already did.
+- **Fable 5.2 is the default Fable.** The model picker lists Fable 5.2, and the bare `fable` alias now resolves to it. Fable 5.1 and Fable 5 stay selectable, so sessions pinned to them keep running unchanged.
 
 ### Changed
 - **The embedded terminal runs on Ghostty's VT engine.** The terminal panel renders through `ghostty-web`, Ghostty's `libghostty-vt` parser compiled to WebAssembly, instead of xterm.js, with the same themes, font size, scrollback, reconnect and mobile key bar. Every theme now carries its full 16-colour ANSI palette, so coloured command output matches the chosen preset. A theme or scrollback change, including the stored values arriving after a page load, rebuilds the view and replays the shell's output, leaving the shell itself running. Text from an on-screen keyboard is forwarded to the shell, which Ghostty's hardware-key encoder alone does not do.
@@ -55,6 +56,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Tapping a notification no longer reloads the app.** With the app already open, a tap reloaded the whole page to reach the session or message it named, dropping the connection and fetching everything again. The app now moves there itself and keeps what it had loaded, and only a page that cannot answer is reloaded as before.
 - **A notification no longer arrives for the session you are looking at after a reconnect.** The server keeps what each connection is looking at, and the page only said so when it loaded or came back to the front, so after any reconnect the session on screen counted as unwatched and its questions, permissions and finished turns were sent as notifications.
 - **Showing all of a project's sessions no longer stalls the server.** Finding a session's settings scanned an entry for every session and job run there has ever been, about 2ms a time with 12,000 of them, so listing a project with a thousand sessions held the server, and every page's connection, for more than two seconds. The lookup is indexed now.
+
+### Internal
+- The integration suite waits for the file tree to appear instead of sleeping, and stops counting sockets. Tests were updated to match the CLI and settings page as they are now.
 
 ## [0.10.0] - 2026-10-23
 
