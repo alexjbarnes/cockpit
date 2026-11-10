@@ -1,6 +1,6 @@
 # Embedded terminal
 
-Cockpit includes a full terminal in the browser, so you can run commands next to a session without leaving the UI. It is a real shell on the server (node-pty), rendered with xterm.js.
+Cockpit includes a full terminal in the browser, so you can run commands next to a session without leaving the UI. It is a real shell on the server (node-pty), rendered with `ghostty-web`, the WebAssembly build of Ghostty's `libghostty-vt` parser and canvas renderer.
 
 ## Opening a terminal
 
@@ -16,7 +16,7 @@ Open the terminal settings modal from the panel to adjust:
 - **Font size.**
 - **Scrollback.** Number of lines retained.
 
-Changes apply live without restarting the shell.
+Font size applies live. Theme and scrollback rebuild the terminal view and replay the shell's output, without restarting the shell.
 
 ## Behaviour
 
@@ -28,3 +28,4 @@ Changes apply live without restarting the shell.
 
 - Terminals are served over a dedicated WebSocket, separate from the session stream.
 - Nerd Font glyphs render if a Nerd Font is installed and selected by your browser's monospace font.
+- The renderer is [ghostty-web](https://github.com/coder/ghostty-web) (MIT). Its parser is compiled to WebAssembly and loaded when a terminal tab first opens.
