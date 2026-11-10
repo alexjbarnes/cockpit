@@ -1,7 +1,8 @@
 "use client";
 
 import { Check, Copy } from "lucide-react";
-import { type HTMLAttributes, useCallback, useRef, useState } from "react";
+import { Children, type HTMLAttributes, isValidElement, type ReactNode, useCallback, useState } from "react";
+import { CodeBlock } from "@/components/code-block";
 
 function fallbackCopy(text: string): boolean {
   const ta = document.createElement("textarea");
@@ -17,34 +18,51 @@ function fallbackCopy(text: string): boolean {
   }
 }
 
-export function MarkdownCodeBlock(props: HTMLAttributes<HTMLPreElement>) {
+function textOf(node: ReactNode): string {
+  if (typeof node === "string" || typeof node === "number") return String(node);
+  if (Array.isArray(node)) return node.map(textOf).join("");
+  if (isValidElement<{ children?: ReactNode }>(node)) return textOf(node.props.children);
+  return "";
+}
+
+function codeAndLanguage(children: ReactNode): { code: string; language?: string } {
+  const child = Children.toArray(children)[0];
+  if (!isValidElement<{ className?: string; children?: ReactNode }>(child)) return { code: textOf(children) };
+  const className = child.props.className ?? "";
+  const language = /language-([\w-]+)/.exec(className)?.[1];
+  return { code: textOf(child.props.children), language };
+}
+
+/** A fenced block in rendered Markdown. The code is highlighted by the same
+ *  Pierre highlighter as a file, so the fence, the file viewer and the diff
+ *  renderer share one palette and one set of line numbers. */
+export function MarkdownCodeBlock({ children }: HTMLAttributes<HTMLPreElement>) {
   const [copied, setCopied] = useState(false);
-  const preRef = useRef<HTMLPreElement>(null);
+  const { code, language } = codeAndLanguage(children);
 
   const handleCopy = useCallback(() => {
-    const text = preRef.current?.textContent ?? "";
     const onSuccess = () => {
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     };
     if (navigator.clipboard?.writeText) {
       navigator.clipboard
-        .writeText(text)
+        .writeText(code)
         .then(onSuccess)
         .catch(() => {
-          fallbackCopy(text) && onSuccess();
+          fallbackCopy(code) && onSuccess();
         });
     } else {
-      fallbackCopy(text) && onSuccess();
+      fallbackCopy(code) && onSuccess();
     }
-  }, []);
+  }, [code]);
 
   return (
-    <div className="group/code relative">
-      <pre ref={preRef} {...props} />
+    <div className="not-prose group/code relative">
+      <CodeBlock code={code} language={language} fullHeight wrap />
       <button
         onClick={handleCopy}
-        className="absolute top-2 right-2 p-1.5 rounded bg-background/80 border border-border text-muted-foreground hover:text-foreground opacity-60 sm:opacity-0 sm:group-hover/code:opacity-100 transition-opacity"
+        className="absolute top-3 right-3 rounded border border-border bg-background/80 p-1.5 text-muted-foreground opacity-60 transition-opacity hover:text-foreground sm:opacity-0 sm:group-hover/code:opacity-100"
         title="Copy code"
       >
         {copied ? <Check className="h-3.5 w-3.5 text-green-500" /> : <Copy className="h-3.5 w-3.5" />}

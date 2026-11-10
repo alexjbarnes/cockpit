@@ -52,6 +52,16 @@ describe("formatConfigChange", () => {
     expect(result.rows.find((r) => r.label === "Reviews enabled")?.value).toBe("No");
   });
 
+  it("labels the stream runtime gate", () => {
+    const result = formatConfigChange("settings", "update", { streamRuntimeEnabled: true });
+    expect(result.rows.find((r) => r.label === "Stream runtime offered")?.value).toBe("Yes");
+  });
+
+  it("labels ignored session folders and joins them", () => {
+    const result = formatConfigChange("settings", "update", { ignoredSessionFolders: ["/archive", "/reviews"] });
+    expect(result.rows.find((r) => r.label === "Ignored session folders")?.value).toBe("/archive, /reviews");
+  });
+
   it("formats provider+add with envVars key list", () => {
     const result = formatConfigChange("provider", "add", {
       name: "custom-provider",

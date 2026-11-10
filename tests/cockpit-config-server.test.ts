@@ -14,12 +14,13 @@ vi.mock("@/server/singleton", () => ({
 
 import { setDefaults } from "@/server/defaults";
 import { getInboxMessages } from "@/server/inbox";
-import { buildProject, saveProject } from "@/server/issue-storage";
+import { buildProject, getProject, saveProject } from "@/server/issue-storage";
 import { saveRun } from "@/server/job-storage";
 import { CockpitMcpServer } from "@/server/mcp/cockpit-config-server";
 import { registerAuthToken, registerRunContext, registerSessionContext } from "@/server/mcp/run-context";
 import { setNotificationSettings } from "@/server/notification-settings";
 import { getJobScheduler } from "@/server/singleton";
+import { ISSUE_STATUSES } from "@/types";
 
 const HOST = "127.0.0.1";
 let server: CockpitMcpServer;
@@ -171,10 +172,13 @@ describe("cockpit-config MCP server (in-process HTTP)", () => {
       // Phase 2.3: the native issue tracker, scoped to assistant/job/session
       // alike (unlike add_inbox_message below), so the assistant sees these too.
       "list_projects",
+      "create_project",
       "list_issues",
       "get_issue",
       "create_issue",
       "update_issue",
+      "reorder_issue",
+      "reorder_issue_statuses",
       "add_issue_comment",
       "add_issue_attachment",
     ]) {
@@ -724,10 +728,13 @@ describe("cockpit-config MCP server (in-process HTTP)", () => {
         "add_inbox_message",
         "list_notify_targets",
         "list_projects",
+        "create_project",
         "list_issues",
         "get_issue",
         "create_issue",
         "update_issue",
+        "reorder_issue",
+        "reorder_issue_statuses",
         "add_issue_comment",
         "add_issue_attachment",
       ]);
@@ -827,10 +834,13 @@ describe("cockpit-config MCP server (in-process HTTP)", () => {
         "list_notify_targets",
         "get_job_transcript",
         "list_projects",
+        "create_project",
         "list_issues",
         "get_issue",
         "create_issue",
         "update_issue",
+        "reorder_issue",
+        "reorder_issue_statuses",
         "add_issue_comment",
         "add_issue_attachment",
       ]);
@@ -1249,12 +1259,34 @@ describe("cockpit-config MCP server (in-process HTTP)", () => {
       expect(settings.modalPagesEnabled).toBe(true);
     });
 
+    it("update_settings allows streamRuntimeEnabled", async () => {
+      await callTool("update_settings", { streamRuntimeEnabled: true });
+      try {
+        const settings = (await callToolParsed("get_settings")) as { streamRuntimeEnabled?: boolean };
+        expect(settings.streamRuntimeEnabled).toBe(true);
+      } finally {
+        await callTool("update_settings", { streamRuntimeEnabled: false }); // restore the default
+      }
+    });
+
+    it("update_settings allows ignoredSessionFolders and cleans the list", async () => {
+      await callTool("update_settings", {
+        ignoredSessionFolders: [" /tmp/archive/ ", "/tmp/archive", "relative", "/tmp/reviews"],
+      });
+      try {
+        const settings = (await callToolParsed("get_settings")) as { ignoredSessionFolders?: string[] };
+        expect(settings.ignoredSessionFolders).toEqual(["/tmp/archive", "/tmp/reviews"]);
+      } finally {
+        await callTool("update_settings", { ignoredSessionFolders: [] }); // restore for the rest of the suite
+      }
+    });
+
     it("update_settings allows modelSlots", async () => {
-      const modelSlots = { main: "claude-opus-4-5-20251101", mainContext: "100k" };
+      const modelSlots = { main: "claude-opus-4-5-20251101", mainContext: "1m" };
       await callTool("update_settings", { modelSlots });
       const settings = (await callToolParsed("get_settings")) as { modelSlots?: Record<string, string> };
       expect(settings.modelSlots?.main).toBe("claude-opus-4-5-20251101");
-      expect(settings.modelSlots?.mainContext).toBe("100k");
+      expect(settings.modelSlots?.mainContext).toBe("1m");
     });
   });
 
@@ -1531,6 +1563,63 @@ describe("cockpit-config MCP server (in-process HTTP)", () => {
       expect(b?.repoPath).toBeUndefined();
     });
 
+    describe("create_project", () => {
+      it("creates a project, normalises its prefix and ignores caller-supplied ids and counters", async () => {
+        const result = (await callToolParsed("create_project", {
+          name: "New Tracker",
+          prefix: " newp ",
+          description: "A tracker made over MCP",
+          repoPath: "/repo/newp",
+          id: "fake-id",
+          nextNumber: 99,
+        })) as { created: { id: string; name: string; prefix: string; repoPath?: string; archived?: boolean } };
+        expect(result.created.name).toBe("New Tracker");
+        expect(result.created.prefix).toBe("NEWP");
+        expect(result.created.repoPath).toBe("/repo/newp");
+        expect(result.created.id).not.toBe("fake-id");
+
+        const projects = (await callToolParsed("list_projects")) as { id: string; prefix: string; repoPath?: string }[];
+        const saved = projects.find((p) => p.id === result.created.id);
+        expect(saved).toBeDefined();
+        expect(saved?.prefix).toBe("NEWP");
+        expect(saved?.repoPath).toBe("/repo/newp");
+      });
+
+      it("lets a session caller create a project over the same HTTP path", async () => {
+        const result = (await callToolAsParsed(ISSUE_SESSION_TOKEN, "create_project", {
+          name: "Session Project",
+          prefix: "SESS",
+        })) as { created: { id: string; name: string; prefix: string } };
+        expect(result.created.prefix).toBe("SESS");
+
+        const projects = (await callToolParsed("list_projects")) as { id: string; prefix: string }[];
+        expect(projects.some((p) => p.id === result.created.id)).toBe(true);
+      });
+
+      it("refuses a prefix another project already uses", async () => {
+        const result = (await callToolParsed("create_project", { name: "Duplicate", prefix: "issb" })) as { error: string };
+        expect(result.error).toContain("already used");
+      });
+
+      it("refuses a missing name or prefix", async () => {
+        const noName = (await callToolParsed("create_project", { prefix: "ZZZ" })) as { error: string };
+        expect(noName.error).toContain("required");
+        const noPrefix = (await callToolParsed("create_project", { name: "No prefix" })) as { error: string };
+        expect(noPrefix.error).toContain("required");
+      });
+
+      it("refuses a non-string description or repoPath", async () => {
+        const description = (await callToolParsed("create_project", { name: "Bad description", prefix: "BAD1", description: 42 })) as {
+          error: string;
+        };
+        expect(description.error).toContain("description");
+        const repoPath = (await callToolParsed("create_project", { name: "Bad repo", prefix: "BAD2", repoPath: 42 })) as {
+          error: string;
+        };
+        expect(repoPath.error).toContain("repoPath");
+      });
+    });
+
     describe("create_issue", () => {
       it("assigns the key and starts every issue at Backlog, never honouring a caller-supplied key/id/status/activity", async () => {
         const result = (await callToolParsed("create_issue", {
@@ -1789,6 +1878,117 @@ describe("cockpit-config MCP server (in-process HTTP)", () => {
       });
     });
 
+    describe("reorder_issue", () => {
+      it("places an issue before another and list_issues follows the new order", async () => {
+        const created: string[] = [];
+        for (const title of ["Move first", "Move second", "Move third"]) {
+          const r = (await callToolParsed("create_issue", { project: "ISSA", title })) as { created: { key: string } };
+          created.push(r.created.key);
+        }
+        const [a, b, c] = created;
+
+        const moved = (await callToolParsed("reorder_issue", { key: c, beforeKey: a })) as {
+          key: string;
+          status: string;
+          order: number;
+        };
+        expect(moved).toMatchObject({ key: c, status: "Backlog" });
+        expect(moved.order).toBeGreaterThan(0);
+
+        const list = (await callToolParsed("list_issues", { project: "ISSA", status: "Backlog" })) as Array<{
+          key: string;
+          order: number | null;
+        }>;
+        const ours = list.filter((i) => [a, b, c].includes(i.key)).map((i) => i.key);
+        expect(ours).toEqual([c, a, b]);
+        // The manual position is visible, so a caller can plan its next move.
+        expect(list.find((i) => i.key === c)?.order).toBeGreaterThan(0);
+      });
+
+      it("moves an issue to another status, to the end when no neighbour is given", async () => {
+        const created = (await callToolParsed("create_issue", { project: "ISSA", title: "Change section" })) as {
+          created: { key: string };
+        };
+        const moved = (await callToolParsed("reorder_issue", { key: created.created.key, status: "Needs Detail" })) as {
+          status: string;
+        };
+        expect(moved.status).toBe("Needs Detail");
+        const fetched = (await callToolParsed("get_issue", { key: created.created.key })) as { status: string };
+        expect(fetched.status).toBe("Needs Detail");
+      });
+
+      it("refuses a neighbour in another status, both neighbours, an unknown status and a missing key", async () => {
+        const created = (await callToolParsed("create_issue", { project: "ISSA", title: "Neighbour rules" })) as {
+          created: { key: string };
+        };
+        const other = (await callToolParsed("create_issue", { project: "ISSA", title: "Elsewhere" })) as {
+          created: { key: string };
+        };
+        await callToolParsed("update_issue", { key: other.created.key, status: "Needs Detail" });
+
+        const wrongStatus = (await callToolParsed("reorder_issue", {
+          key: created.created.key,
+          status: "Backlog",
+          beforeKey: other.created.key,
+        })) as { error: string };
+        expect(wrongStatus.error).toContain("not the target status");
+
+        const both = (await callToolParsed("reorder_issue", {
+          key: created.created.key,
+          beforeKey: other.created.key,
+          afterKey: other.created.key,
+        })) as { error: string };
+        expect(both.error).toContain("not both");
+
+        const badStatus = (await callToolParsed("reorder_issue", {
+          key: created.created.key,
+          status: "Nope",
+        })) as { error: string };
+        expect(badStatus.error).toContain("Unknown status");
+
+        const noKey = (await callToolParsed("reorder_issue", {})) as { error: string };
+        expect(noKey.error).toContain("required");
+      });
+    });
+
+    describe("reorder_issue_statuses", () => {
+      it("stores a project's section order, returns the effective sequence, and clears it", async () => {
+        const project = buildProject({ name: "Order project", prefix: "ORDP", customStatuses: [{ name: "Blocked" }] });
+        saveProject(project);
+
+        const reordered = (await callToolParsed("reorder_issue_statuses", {
+          project: "ORDP",
+          order: ["Blocked", "Backlog", "Accepted"],
+        })) as { project: string; statuses: string[] };
+        expect(reordered.project).toBe(project.id);
+        expect(reordered.statuses.slice(0, 3)).toEqual(["Blocked", "Backlog", "Accepted"]);
+        expect(getProject(project.id)?.statusOrder).toEqual(["Blocked", "Backlog", "Accepted"]);
+
+        // Clearing restores the canonical built-ins, then the custom status.
+        const cleared = (await callToolParsed("reorder_issue_statuses", { project: "ORDP", order: [] })) as {
+          statuses: string[];
+        };
+        expect(cleared.statuses).toEqual([...ISSUE_STATUSES, "Blocked"]);
+      });
+
+      it("refuses unknown and duplicate names, and a missing project", async () => {
+        const unknown = (await callToolParsed("reorder_issue_statuses", {
+          project: "ISSA",
+          order: ["Nope"],
+        })) as { error: string };
+        expect(unknown.error).toContain("Unknown status");
+
+        const duplicate = (await callToolParsed("reorder_issue_statuses", {
+          project: "ISSA",
+          order: ["Backlog", "Backlog"],
+        })) as { error: string };
+        expect(duplicate.error).toContain("more than once");
+
+        const missing = (await callToolParsed("reorder_issue_statuses", {})) as { error: string };
+        expect(missing.error).toContain("project is required");
+      });
+    });
+
     describe("add_issue_comment", () => {
       it("attributes the comment to the token, with no author field to spoof", async () => {
         const created = (await callToolParsed("create_issue", { project: "ISSA", title: "Comment test" })) as {
@@ -2034,10 +2234,13 @@ describe("cockpit-config MCP server (in-process HTTP)", () => {
     const GATE_SESSION_TOKEN = "session-token-for-issues-gate";
     const ISSUE_TOOL_NAMES = [
       "list_projects",
+      "create_project",
       "list_issues",
       "get_issue",
       "create_issue",
       "update_issue",
+      "reorder_issue",
+      "reorder_issue_statuses",
       "add_issue_comment",
       "add_issue_attachment",
     ];
@@ -2055,7 +2258,7 @@ describe("cockpit-config MCP server (in-process HTTP)", () => {
       setDefaults({ issuesEnabled: true });
     });
 
-    it("hides all seven issue/project tools from tools/list for assistant, job and session callers when off", async () => {
+    it("hides every issue/project tool from tools/list for assistant, job and session callers when off", async () => {
       setDefaults({ issuesEnabled: false });
       for (const authToken of [token, GATE_JOB_TOKEN, GATE_SESSION_TOKEN]) {
         const res = await mcpPost({ jsonrpc: "2.0", id: 900, method: "tools/list", params: {} }, authToken);

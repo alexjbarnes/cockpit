@@ -12,6 +12,13 @@ updates:
       all-npm:
         patterns:
           - "*"
+    # @pierre/trees' theming peers on @pierre/theme ^1.1.0 while @pierre/diffs
+    # pins 2.0.0 itself, so the tree needs the hoisted 1.1.0 copy. Bumping the
+    # direct dependency to 2.x drops it and breaks `npm ci`.
+    ignore:
+      - dependency-name: "@pierre/theme"
+        update-types:
+          - version-update:semver-major
 
   - package-ecosystem: github-actions
     directory: /

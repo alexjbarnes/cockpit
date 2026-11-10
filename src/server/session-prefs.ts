@@ -30,10 +30,19 @@ export interface SessionPrefs {
   previousCliSessionIds?: string[];
   openTabs?: PersistedTab[];
   activeTabId?: string;
+  /** The split view: the tab shown in the right pane, and every tab that
+   *  belongs to it. Null or absent means no split. */
+  splitTabId?: string | null;
+  rightPaneTabIds?: string[];
   runtime?: SessionRuntime;
   cockpitAgent?: boolean;
   /** Alerts this session sends out. Absent means silent. */
   notifications?: SessionNotifications;
+  /** The worktree a session last reported working in, so a page reload (or a
+   *  server restart with the process still live) keeps its files and diffs
+   *  pointed there instead of falling back to the original checkout. Null or
+   *  absent means the session is in its original directory. */
+  worktreeCwd?: string | null;
 }
 
 function prefsDir(): string {
@@ -46,6 +55,8 @@ function prefsFile(): string {
 let cache: Record<string, SessionPrefs> | null = null;
 /** What the file looked like when `cache` was filled. See stamp(). */
 let cacheStamp: string | null = null;
+/** Bumped whenever `cache` is refilled or written, so the chain index knows it is stale. */
+let cacheVersion = 0;
 
 /**
  * Identity of the prefs file on disk right now, or null when that can't be
@@ -78,6 +89,7 @@ function load(): Record<string, SessionPrefs> {
   const current = stamp();
   if (cache && current !== null && current === cacheStamp) return cache;
   cacheStamp = current;
+  cacheVersion++;
   // Refill the same object rather than replacing it, so a reference a caller is
   // already holding stays the live map. A reload that swapped `cache` for a new
   // object would silently drop whatever the caller then wrote into the old one.
@@ -107,6 +119,7 @@ function load(): Record<string, SessionPrefs> {
 
 function save(): void {
   if (!cache) return;
+  cacheVersion++;
   try {
     // Atomic write (write-then-rename, see atomic-write.ts): a process killed
     // mid-write can never leave prefsFile() holding truncated JSON that wipes
@@ -184,17 +197,54 @@ export function findChainForCliSession(targetCliId: string): { cockpitId: string
  * between, re-read it half way through a read-modify-write.
  */
 function findChainIn(all: Record<string, SessionPrefs>, targetCliId: string): { cockpitId: string; truncatedPrevIds: string[] } | null {
+  // Every session lookup comes through here, and the file keeps an entry for
+  // every session and job run there has been (12,000 and more), so a scan per
+  // call cost about 2ms: listing a project's thousand sessions held the server
+  // for over two seconds. The cache gets an index instead.
+  if (all === cache) {
+    if (chainIndex?.version !== cacheVersion) chainIndex = { version: cacheVersion, owners: indexChains(all) };
+    const owner = chainIndex.owners.get(targetCliId);
+    if (owner === undefined) return null;
+    const hit = chainMember(owner, all[owner], targetCliId);
+    if (hit) return hit;
+  }
+  for (const [cockpitId, prefs] of Object.entries(all)) {
+    const hit = chainMember(cockpitId, prefs, targetCliId);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+/** The chain index for `cache`, and the version of it that it was built from. */
+let chainIndex: { version: number; owners: Map<string, string> } | null = null;
+
+/** Each CLI id in a chain, mapped to the first entry (in the map's order) that
+ *  names it as its current or a previous id, which is the entry a scan finds. */
+function indexChains(all: Record<string, SessionPrefs>): Map<string, string> {
+  const owners = new Map<string, string>();
   for (const [cockpitId, prefs] of Object.entries(all)) {
     if (!prefs.previousCliSessionIds || !prefs.cliSessionId) continue;
-
-    if (prefs.cliSessionId === targetCliId) {
-      return { cockpitId, truncatedPrevIds: [...prefs.previousCliSessionIds] };
+    for (const id of [prefs.cliSessionId, ...prefs.previousCliSessionIds]) {
+      if (!owners.has(id)) owners.set(id, cockpitId);
     }
+  }
+  return owners;
+}
 
-    const idx = prefs.previousCliSessionIds.indexOf(targetCliId);
-    if (idx >= 0) {
-      return { cockpitId, truncatedPrevIds: prefs.previousCliSessionIds.slice(0, idx) };
-    }
+function chainMember(
+  cockpitId: string,
+  prefs: SessionPrefs | undefined,
+  targetCliId: string,
+): { cockpitId: string; truncatedPrevIds: string[] } | null {
+  if (!prefs?.previousCliSessionIds || !prefs.cliSessionId) return null;
+
+  if (prefs.cliSessionId === targetCliId) {
+    return { cockpitId, truncatedPrevIds: [...prefs.previousCliSessionIds] };
+  }
+
+  const idx = prefs.previousCliSessionIds.indexOf(targetCliId);
+  if (idx >= 0) {
+    return { cockpitId, truncatedPrevIds: prefs.previousCliSessionIds.slice(0, idx) };
   }
   return null;
 }

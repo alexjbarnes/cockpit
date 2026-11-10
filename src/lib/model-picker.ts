@@ -2,10 +2,12 @@ import {
   allowedEffortLevels,
   CONTEXT_SIZES,
   type ContextSize,
+  DEFAULT_CONTEXT_SIZE,
   defaultForAlias,
   findModelById,
   type ModelAlias,
   type ModelEntry,
+  recommendedEffort,
   versionsForAlias,
 } from "@/lib/models";
 import type { Provider, ProviderModel, ThinkingLevel } from "@/types";
@@ -67,6 +69,40 @@ export function valueForAlias(alias: ModelAlias): string {
   const entry = defaultForAlias(alias);
   if (!entry) return alias;
   return valueForEntry(entry);
+}
+
+export interface DefaultSelection {
+  model: string;
+  contextSize: ContextSize;
+  thinkingLevel: ThinkingLevel;
+}
+
+/**
+ * What the Session Defaults page stores when a model is picked there. The
+ * context and thinking settings are kept when the new model can run them, so a
+ * pick does not reset a choice that still applies, and otherwise follow the
+ * same rules the in-session switch uses: an Anthropic model's recommended
+ * effort, or the last level a provider model offers. A model with no thinking
+ * levels leaves the setting alone, since its spawn ignores it.
+ */
+export function defaultSelectionFor(
+  value: string,
+  current: { contextSize: ContextSize; thinkingLevel: ThinkingLevel },
+  providers: Provider[] | undefined,
+  allowSonnet1m = false,
+): DefaultSelection {
+  const tuning = modelTuning(value, current.contextSize, providers, allowSonnet1m);
+  const contextSize = tuning.contextSizes.includes(current.contextSize)
+    ? current.contextSize
+    : (tuning.contextSizes[0] ?? DEFAULT_CONTEXT_SIZE);
+
+  const levels = tuning.thinkingLevels.map((t) => t.value);
+  let thinkingLevel = current.thinkingLevel;
+  if (levels.length > 0 && !levels.includes(thinkingLevel)) {
+    thinkingLevel = recommendedEffort(tuning.parsed.entry) ?? levels[levels.length - 1] ?? thinkingLevel;
+  }
+
+  return { model: value, contextSize, thinkingLevel };
 }
 
 export interface ModelTuning {

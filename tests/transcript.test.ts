@@ -2298,6 +2298,60 @@ describe("transcript module", () => {
       expect(result[0].sessions[0].name).toBe("Untitled session");
     });
 
+    it("skips a context compaction summary when naming a session", async () => {
+      (existsSync as any).mockReturnValue(true);
+      const { createInterface } = await import("node:readline");
+      (readdir as any).mockResolvedValueOnce(["project1"]).mockResolvedValueOnce(["sess1.jsonl"]);
+      (stat as any).mockResolvedValue({ mtimeMs: 1700000000000 });
+
+      const mockRl = {
+        [Symbol.asyncIterator]: async function* () {
+          yield JSON.stringify({
+            type: "user",
+            cwd: "/home/test",
+            isCompactSummary: true,
+            message: { content: "This session is being continued from a previous conversation that ran out of context." },
+            timestamp: "2024-01-01T00:00:00Z",
+          });
+          yield JSON.stringify({
+            type: "user",
+            cwd: "/home/test",
+            message: { content: "Url submit" },
+            timestamp: "2024-01-01T00:01:00Z",
+          });
+        },
+        close: vi.fn(),
+      };
+      (createInterface as any).mockReturnValue(mockRl);
+
+      const result = await scanAllSessions();
+      expect(result[0].sessions[0].name).toBe("Url submit");
+    });
+
+    it("does not name a session after a compaction summary when it is the only user message", async () => {
+      (existsSync as any).mockReturnValue(true);
+      const { createInterface } = await import("node:readline");
+      (readdir as any).mockResolvedValueOnce(["project1"]).mockResolvedValueOnce(["sess1.jsonl"]);
+      (stat as any).mockResolvedValue({ mtimeMs: 1700000000000 });
+
+      const mockRl = {
+        [Symbol.asyncIterator]: async function* () {
+          yield JSON.stringify({
+            type: "user",
+            cwd: "/home/test",
+            isCompactSummary: true,
+            message: { content: "This session is being continued from a previous conversation that ran out of context." },
+            timestamp: "2024-01-01T00:00:00Z",
+          });
+        },
+        close: vi.fn(),
+      };
+      (createInterface as any).mockReturnValue(mockRl);
+
+      const result = await scanAllSessions();
+      expect(result[0].sessions[0].name).toBe("Untitled session");
+    });
+
     it("uses Untitled session when no title found", async () => {
       (existsSync as any).mockReturnValue(true);
       const { createInterface } = await import("node:readline");
@@ -2711,6 +2765,46 @@ describe("transcript module", () => {
       expect(result.results[0].sessionId).toBe("sess1");
       expect(result.results[0].cwd).toBe("/tmp/project");
       expect(result.results[0].preview).toContain("hello world");
+    });
+
+    it("skips transcripts whose cwd is inside an ignored folder", async () => {
+      setupListFiles(["ignored.jsonl", "kept.jsonl"]);
+      (readFile as any).mockImplementation((p: string) => {
+        const cwd = p.includes("ignored.jsonl") ? "/archive/ai-reviews/nested" : "/repos/cockpit";
+        const reply = p.includes("ignored.jsonl") ? "hello from ignored" : "hello from kept";
+        return Promise.resolve(
+          jsonl(
+            { type: "user", cwd, message: { content: "prompt" }, timestamp: "2024-01-01T00:00:00Z" },
+            { type: "assistant", message: { content: [{ type: "text", text: reply }] }, timestamp: "2024-01-01T00:01:00Z" },
+          ),
+        );
+      });
+
+      const result = await globalSearch("hello", 50, 0, ["/archive"]);
+      expect(result.results).toHaveLength(1);
+      expect(result.results[0].cwd).toBe("/repos/cockpit");
+    });
+
+    it("does not count ignored matches towards a pagination offset", async () => {
+      setupListFiles(["ignored.jsonl", "kept.jsonl"]);
+      (readFile as any).mockImplementation((p: string) => {
+        const cwd = p.includes("ignored.jsonl") ? "/archive" : "/repos/cockpit";
+        const replies = p.includes("ignored.jsonl") ? ["hello ignored"] : ["hello first visible", "hello second visible"];
+        return Promise.resolve(
+          jsonl(
+            { type: "user", cwd, message: { content: "prompt" }, timestamp: "2024-01-01T00:00:00Z" },
+            ...replies.map((text, i) => ({
+              type: "assistant",
+              message: { content: [{ type: "text", text }] },
+              timestamp: `2024-01-01T00:0${i + 1}:00Z`,
+            })),
+          ),
+        );
+      });
+
+      const result = await globalSearch("hello", 1, 1, ["/archive"]);
+      expect(result.results).toHaveLength(1);
+      expect(result.results[0].preview).toContain("second visible");
     });
 
     it("skips files that don't contain the query", async () => {

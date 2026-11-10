@@ -17,7 +17,9 @@ import {
   recommendedEffort,
   resolveModel,
 } from "@/lib/models";
+import { mergePromptHistory, promptHistorySessionIds } from "@/lib/prompt-history";
 import { widensSandbox } from "@/lib/sandbox-requests";
+import { promptName } from "@/lib/session-name";
 import { getAssistantSettings, updateAssistantSettings } from "@/server/assistant-settings";
 import { supportedPermissionModes } from "@/server/claude-bin";
 import { getCockpitDir } from "@/server/paths";
@@ -58,7 +60,15 @@ import { notifySessionEvent, type SessionNotifyContext } from "./session-notify"
 import { findChainForCliSession, getSessionPrefs, type SessionRuntime, setSessionPrefs } from "./session-prefs";
 import { getCockpitMcp } from "./singleton";
 import { createStreamState, processEvents, type StreamState } from "./stream-processor";
-import { findSessionCwd, loadMoreMessages, loadPromptHistory, loadTranscript, sumTranscriptUsage, transcriptExists } from "./transcript";
+import {
+  findSessionCwd,
+  loadMoreMessages,
+  loadPromptHistory,
+  loadTranscript,
+  readTranscriptCwd,
+  sumTranscriptUsage,
+  transcriptExists,
+} from "./transcript";
 
 export type { SessionRuntime };
 
@@ -146,6 +156,9 @@ interface Session {
    * taken past the compaction's lines.
    */
   pendingCompactFlush: boolean;
+  /** The last transcript tail sent to pages, serialised, so an update that
+   *  changes nothing they show is not sent again. */
+  lastTranscriptJson?: string;
   /**
    * When the pending compaction was requested (ms since epoch). A compaction
    * marker or reply in the transcript is this compaction's outcome only if it
@@ -289,6 +302,23 @@ function cliSpawnMode(mode: SessionPermissionMode, runtime: SessionRuntime): str
   return mode;
 }
 
+/** The context size to store for `model`: the requested one when the model
+ *  offers it, otherwise the first it offers. A model whose sizes are unknown
+ *  keeps the requested size, which is what the spawn will ask for. */
+/** Prompt history for a cockpit session, newest first. Every CLI session
+ *  behind it contributes its own newest-first list; the session running now
+ *  comes first, then the previous ones backwards. */
+async function loadMergedPromptHistory(cliSessionId: string, previousCliSessionIds: readonly string[], cwd: string): Promise<string[]> {
+  const segments = await Promise.all(promptHistorySessionIds(cliSessionId, previousCliSessionIds).map((id) => loadPromptHistory(id, cwd)));
+  return mergePromptHistory(segments);
+}
+
+function resolveContextSizeFor(model: string, requested: ContextSize): ContextSize {
+  const sizes = resolveModel(model)?.contextSizes ?? resolveProviderModel(model)?.model.contextSizes;
+  if (!sizes || sizes.length === 0) return requested;
+  return sizes.includes(requested) ? requested : sizes[0];
+}
+
 /** A sandbox config as this host can run it: enabling is refused where the
  *  sandbox cannot be enforced, and an empty allowlist is dropped. */
 function enforceableSandbox(config: SandboxConfig): SandboxConfig {
@@ -304,6 +334,8 @@ function enforceableSandbox(config: SandboxConfig): SandboxConfig {
 
 export class SessionManager {
   private sessions = new Map<string, Session>();
+  /** Sessions whose transcript has been consulted for a worktree. */
+  private worktreeHydrated = new Set<string>();
   private _cockpitAgentSessionPromise: Promise<string> | null = null;
   /**
    * Injectable so a test can state which transport it exercises instead of
@@ -338,8 +370,13 @@ export class SessionManager {
     name?: string,
     options?: {
       bypassPermissions?: boolean;
+      permissionMode?: SessionPermissionMode;
       sandbox?: SandboxConfig;
       runtime?: SessionRuntime;
+      model?: string;
+      contextSize?: ContextSize;
+      thinkingLevel?: ThinkingLevel;
+      notifications?: SessionNotifications;
       cockpitAgent?: boolean;
       runContext?: RunContext;
     },
@@ -347,17 +384,25 @@ export class SessionManager {
     const id = uuidv4();
     const now = Date.now();
     const defaults = getDefaults();
-    const modelSlots: ModelSlots = { main: defaults.modelSlots.main ?? "sonnet" };
+    const main = options?.model?.trim() || defaults.modelSlots.main || "sonnet";
+    const modelSlots: ModelSlots = { main };
     const isCockpitAgent = options?.cockpitAgent === true;
     const rt = options?.runtime ?? this.defaultRuntime;
     const sessionName = isCockpitAgent ? "Cockpit Assistant" : name || path.basename(cwd) || cwd;
-    // An explicit flag (a job's own bypass setting, a review session's false,
-    // the new-session dialog's true) wins over the default mode.
-    const permissionMode = startingPermissionMode(
-      options?.bypassPermissions !== undefined ? (options.bypassPermissions ? "bypass" : "manual") : defaults.permissionMode,
-      modelSlots.main,
-      isCockpitAgent,
-    );
+    // The size is settled against the model that will run: a pick carries the
+    // default context with it, which may be a size that model does not offer.
+    const contextSize = resolveContextSizeFor(main, options?.contextSize ?? defaults.modelSlots.mainContext ?? DEFAULT_CONTEXT_SIZE);
+    // An explicit mode wins; the legacy boolean (a job's own bypass setting, a
+    // review session's false) is read when no mode was named; otherwise the
+    // default. The new-session dialog sends the mode itself.
+    const requestedMode =
+      options?.permissionMode ??
+      (options?.bypassPermissions !== undefined ? (options.bypassPermissions ? "bypass" : "manual") : defaults.permissionMode);
+    const permissionMode = startingPermissionMode(requestedMode, main, isCockpitAgent);
+    // The thinking default applies to whatever model is chosen, which may be
+    // another provider's: its spawn ignores an effort it cannot run, so the
+    // level is settled here the way a model switch settles it.
+    const thinkingLevel = this.startingThinkingLevel(main, options?.thinkingLevel ?? defaults.thinkingLevel);
     // The assistant has no sandbox control. A job passes its own switch, so
     // the default for interactive sessions never decides a job's sandbox.
     const sandbox: SandboxConfig = isCockpitAgent ? { enabled: false } : enforceableSandbox(options?.sandbox ?? defaults.sandbox);
@@ -369,9 +414,10 @@ export class SessionManager {
       lastActiveAt: now,
       status: "idle",
       model: modelSlots.main,
-      contextSize: defaults.modelSlots?.mainContext ?? DEFAULT_CONTEXT_SIZE,
+      contextSize,
       runtime: rt,
       pendingRequestCount: 0,
+      ...(options?.notifications ? { notifications: options.notifications } : {}),
     };
 
     this.sessions.set(id, {
@@ -382,12 +428,13 @@ export class SessionManager {
       previousCliSessionIds: [],
       permissionMode,
       sandbox,
+      notifications: options?.notifications,
       planMode: false,
       needsRespawnForPermissions: false,
       compacting: false,
       pendingCompactFlush: false,
       compactRequestedAt: 0,
-      thinkingLevel: defaults.thinkingLevel,
+      thinkingLevel,
       streamState: null,
       contextUsage: null,
       contextWindowSize: this.resolveContextWindow(info.model, info.contextSize ?? DEFAULT_CONTEXT_SIZE),
@@ -421,10 +468,11 @@ export class SessionManager {
       model: modelSlots.main,
       contextSize: info.contextSize,
       modelSlots,
-      thinkingLevel: defaults.thinkingLevel,
+      thinkingLevel,
       runtime: rt,
       permissionMode,
       sandbox,
+      ...(options?.notifications ? { notifications: options.notifications } : {}),
       ...(isCockpitAgent ? { cockpitAgent: true } : {}),
     });
 
@@ -454,6 +502,30 @@ export class SessionManager {
     } else {
       console.warn(`[cockpit-agent] onInit returned null for session ${id.slice(0, 8)}`);
     }
+  }
+
+  /**
+   * A session created before the worktree was stored in its prefs has no
+   * recorded one. Its transcript names the directory the CLI last wrote from,
+   * which is the worktree after EnterWorktree, so recover it once from there.
+   * Hooks keep the value current after that, and the read happens once per
+   * session per process.
+   */
+  async hydrateWorktreeFromTranscript(sessionId: string): Promise<void> {
+    if (this.worktreeHydrated.has(sessionId)) return;
+    this.worktreeHydrated.add(sessionId);
+    const session = this.sessions.get(sessionId);
+    if (!session || session.info.worktreeCwd) return;
+    const found = await readTranscriptCwd(session.cliSessionId, session.info.cwd);
+    if (!found || found === session.info.cwd || !existsSync(found)) return;
+    // The session may have moved on (or a hook may have answered) while the
+    // transcript was being read.
+    const current = this.sessions.get(sessionId);
+    if (!current || current.info.worktreeCwd) return;
+    this.log(sessionId, `worktree recovered from transcript: ${found}`);
+    current.info.worktreeCwd = found;
+    setSessionPrefs(sessionId, { worktreeCwd: found });
+    current.emitter.emit("info_updated", sessionId, { ...current.info });
   }
 
   ensureSession(id: string, cwd: string, opts?: { pinCliSessionId?: string }): Session {
@@ -495,6 +567,7 @@ export class SessionManager {
           runtime: restoredRuntime,
           pendingRequestCount: 0,
           notifications: prefs?.notifications,
+          ...(prefs?.worktreeCwd ? { worktreeCwd: prefs.worktreeCwd } : {}),
         },
         harnessProcess: null,
         emitter: new EventEmitter(),
@@ -665,23 +738,11 @@ export class SessionManager {
     const hasMore = messages.length > PAGE || byteOffset > 0 || (stitching && session.previousCliSessionIds.length > 0);
 
     const defaultName = path.basename(session.info.cwd) || session.info.cwd;
-    if (session.info.name === defaultName && messages.length > 0) {
-      const firstUser = messages.find((m) => m.role === "user" && m.content && !m.content.startsWith("[") && !m.content.startsWith("<"));
-      if (firstUser) {
-        session.info.name = firstUser.content.slice(0, 120);
-      }
+    if (session.info.name === defaultName) {
+      const name = promptName(messages);
+      if (name) session.info.name = name;
     }
-    const allCliIds = [...session.previousCliSessionIds, session.cliSessionId];
-    const historyArrays = await Promise.all(allCliIds.map((id) => loadPromptHistory(id, session.info.cwd)));
-    const seen = new Set<string>();
-    const allPrompts: string[] = [];
-    for (const arr of historyArrays) {
-      for (const p of arr) {
-        if (seen.has(p)) continue;
-        seen.add(p);
-        allPrompts.push(p);
-      }
-    }
+    const allPrompts = await loadMergedPromptHistory(session.cliSessionId, session.previousCliSessionIds, session.info.cwd);
 
     const normalized = lastUsage ? { used: lastUsage.used, total: session.contextWindowSize } : null;
     return { info: session.info, messages: clientMessages, hasMore, lastUsage: normalized, promptHistory: allPrompts };
@@ -741,23 +802,11 @@ export class SessionManager {
 
     // Derive title from first user message if name is still the default
     const defaultName = path.basename(cwd) || cwd;
-    if (session.info.name === defaultName && messages.length > 0) {
-      const firstUser = messages.find((m) => m.role === "user" && m.content && !m.content.startsWith("[") && !m.content.startsWith("<"));
-      if (firstUser) {
-        session.info.name = firstUser.content.slice(0, 120);
-      }
+    if (session.info.name === defaultName) {
+      const name = promptName(messages);
+      if (name) session.info.name = name;
     }
-    const allCliIds = [...session.previousCliSessionIds, session.cliSessionId];
-    const historyArrays = await Promise.all(allCliIds.map((id) => loadPromptHistory(id, cwd)));
-    const seen = new Set<string>();
-    const allPrompts: string[] = [];
-    for (const arr of historyArrays) {
-      for (const p of arr) {
-        if (seen.has(p)) continue;
-        seen.add(p);
-        allPrompts.push(p);
-      }
-    }
+    const allPrompts = await loadMergedPromptHistory(session.cliSessionId, session.previousCliSessionIds, cwd);
 
     const normalized = lastUsage ? { used: lastUsage.used, total: session.contextWindowSize } : null;
     return { info: session.info, messages: clientMessages, hasMore, lastUsage: normalized, promptHistory: allPrompts };
@@ -804,24 +853,10 @@ export class SessionManager {
     const clientMessages = messages.length > PAGE ? messages.slice(-PAGE) : messages;
 
     let name = path.basename(cwd) || cwd;
-    if (messages.length > 0) {
-      const firstUser = messages.find((m) => m.role === "user" && m.content && !m.content.startsWith("[") && !m.content.startsWith("<"));
-      if (firstUser) {
-        name = firstUser.content.slice(0, 120);
-      }
-    }
+    const derivedName = promptName(messages);
+    if (derivedName) name = derivedName;
 
-    const allCliIds = [...prevIds, cliId];
-    const historyArrays = await Promise.all(allCliIds.map((id) => loadPromptHistory(id, cwd)));
-    const seen = new Set<string>();
-    const allPrompts: string[] = [];
-    for (const arr of historyArrays) {
-      for (const p of arr) {
-        if (seen.has(p)) continue;
-        seen.add(p);
-        allPrompts.push(p);
-      }
-    }
+    const allPrompts = await loadMergedPromptHistory(cliId, prevIds, cwd);
 
     const prefs = getSessionPrefs(cliId);
     const viewSize = prefs?.contextSize ?? prefs?.modelSlots?.mainContext ?? DEFAULT_CONTEXT_SIZE;
@@ -1428,13 +1463,9 @@ export class SessionManager {
 
     const currentSize = session.info.contextSize ?? DEFAULT_CONTEXT_SIZE;
     const requestedSize = contextSize ?? currentSize;
-    const resolvedSize: ContextSize = (() => {
-      // Anthropic models constrain the size via the static table; a foreign
-      // model constrains it via its (possibly curated) provider contextSizes.
-      const sizes = resolveModel(model)?.contextSizes ?? resolveProviderModel(model)?.model.contextSizes;
-      if (!sizes || sizes.length === 0) return requestedSize;
-      return sizes.includes(requestedSize) ? requestedSize : sizes[0];
-    })();
+    // Anthropic models constrain the size via the static table; a foreign
+    // model constrains it via its (possibly curated) provider contextSizes.
+    const resolvedSize = resolveContextSizeFor(model, requestedSize);
     // CLAUDE_CODE_DISABLE_1M_CONTEXT and CLAUDE_CODE_MAX_CONTEXT_TOKENS are
     // both applied at spawn, so any change to the window the CLI enforces
     // requires a restart to take effect.
@@ -1551,7 +1582,10 @@ export class SessionManager {
    *  contextLength; the enum default covers the rest. */
   private resolveContextWindow(model: string | undefined, size: ContextSize): number {
     const resolved = model ? resolveProviderModel(model) : null;
-    if (resolved?.model.contextSizes.includes(size)) return contextSizeToWindow(size);
+    // A provider entry written before contextSizes existed has none: fall
+    // through to its contextLength, and to the enum default when that is
+    // absent too.
+    if (resolved?.model.contextSizes?.includes(size)) return contextSizeToWindow(size);
     if (resolved?.model.contextLength && resolved.model.contextLength > 0) return resolved.model.contextLength;
     return contextSizeToWindow(size);
   }
@@ -2703,6 +2737,18 @@ Additional Cockpit rules beyond the CLI's defaults:
     this.spawnProcess(session, sessionId);
   }
 
+  /** The thinking level a new session starts with. The configured default
+   *  stands when the model can run it (or has no thinking at all, in which case
+   *  its spawn passes no effort). Otherwise the model's recommended level for
+   *  Anthropic's, or the last one it offers for a provider's. */
+  private startingThinkingLevel(modelId: string | undefined, level: ThinkingLevel): ThinkingLevel {
+    const entry = resolveModel(modelId);
+    if (entry) return coerceEffort(level, entry) ?? level;
+    const levels = this.modelEffortLevels(modelId);
+    if (levels.length === 0 || level === "off" || levels.includes(level)) return level;
+    return levels[levels.length - 1];
+  }
+
   /** Check effort levels for built-in models or custom provider models. */
   private modelEffortLevels(modelId: string | null | undefined): ThinkingLevel[] {
     if (!modelId) return [];
@@ -2781,7 +2827,7 @@ Additional Cockpit rules beyond the CLI's defaults:
       // auto-compact with the model's real window. A curated 200k/1m model
       // follows the session's pick, mirroring resolveContextWindow so the
       // gauge and the CLI always agree on the denominator.
-      if (resolved.model.contextSizes.includes(effectiveContextSize)) {
+      if (resolved.model.contextSizes?.includes(effectiveContextSize)) {
         providerEnvVars.CLAUDE_CODE_MAX_CONTEXT_TOKENS = String(contextSizeToWindow(effectiveContextSize));
       } else if (resolved.model.contextLength && resolved.model.contextLength > 0) {
         providerEnvVars.CLAUDE_CODE_MAX_CONTEXT_TOKENS = String(resolved.model.contextLength);
@@ -2995,8 +3041,33 @@ Additional Cockpit rules beyond the CLI's defaults:
           this.flushQueuedMessage(session, sessionId);
         }
       },
+      onCwdChanged: (cwd) => {
+        // EnterWorktree moves the CLI into a git worktree. The session keeps
+        // its original cwd as who it is; the worktree is where its files and
+        // diffs are now, and the UI points at it until the CLI comes back.
+        const worktreeCwd = cwd === session.info.cwd ? undefined : cwd;
+        if (worktreeCwd === session.info.worktreeCwd) return;
+        this.log(sessionId, `cwd changed: ${cwd}`);
+        if (worktreeCwd) session.info.worktreeCwd = worktreeCwd;
+        else delete session.info.worktreeCwd;
+        // Persisted so a browser reload keeps the session's files and diffs
+        // pointed at the worktree; before this, the value was live-only and a
+        // reload fell back to the original checkout until the next hook. The
+        // first hook after a restart corrects it if the CLI is back at base.
+        setSessionPrefs(sessionId, { worktreeCwd: worktreeCwd ?? null });
+        session.emitter.emit("info_updated", sessionId, { ...session.info });
+      },
       onTranscriptUpdate: (messages, lastUsage) => {
-        session.emitter.emit("transcript", sessionId, messages);
+        // The watcher reports every write to the file, and most of the CLI's
+        // writes are records the chat never shows (each API request and its
+        // blobs). Each update is the whole tail, tens to hundreds of KB, so a
+        // repeat went to every page for nothing, and on a phone it held up the
+        // heartbeat behind it.
+        const json = JSON.stringify(messages);
+        if (json !== session.lastTranscriptJson) {
+          session.lastTranscriptJson = json;
+          session.emitter.emit("transcript", sessionId, messages);
+        }
         // The latest compaction's marker, not one an earlier compaction left in the tail.
         const compacted = messages.some((m) => m.content === "__compacted__" && m.timestamp >= session.compactRequestedAt);
         if (lastUsage) {

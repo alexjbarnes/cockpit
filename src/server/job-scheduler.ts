@@ -36,9 +36,10 @@ const JOB_PROMPT_HEADER = [
   "Do not ask clarifying questions. Do not wait for user input. Make reasonable assumptions and proceed.",
   "Complete the task fully, then stop.",
   "",
-  "Subagents: if you use the Agent tool you MUST pass run_in_background: false and wait for the result.",
-  "A backgrounded agent ends your turn to wait for a task notification, and with no operator here to",
-  "resume you the run is torn down and its work is lost. Never end a turn intending to be woken up.",
+  "Subagents: the Agent tool runs asynchronously. Launching one does not end this job: when your turn ends",
+  "while it works, the run stays open and the CLI wakes you with a task notification when the agent reports.",
+  "Read the result and finish every remaining step before your final message. Do not poll the task's output file,",
+  "sleep in Bash or use Monitor to wait for it, and do not report results before the notification arrives.",
   "",
   "Error reporting: a cockpit-error block marks this run FAILED, so emit one only when you could not finish the task —",
   "permission errors, tool failures, missing data, anything that stopped you.",
@@ -715,6 +716,10 @@ export class JobScheduler {
       ...(job.inboxOutput ? { runContext: { jobId: job.id, jobName: job.name, runId, notifyProviders: job.notifyProviders } } : {}),
     });
     const sessionId = sessionInfo.id;
+    // The stream runtime (`claude -p`) ends its process with the turn, so no
+    // later idle can be woken by a task notification. Waiting would only
+    // stretch a dead run to the watchdog, so that path keeps failing fast.
+    const canWaitForBackground = sessionInfo.runtime !== "stream";
     const jlog = (label: string, data?: Record<string, unknown>) => logDiag(sessionId, `job:${label}`, { jobId: job.id, runId, ...data });
     jlog("session-created", { cwd: jobCwd, runtime: sessionInfo.runtime });
 
@@ -785,9 +790,20 @@ export class JobScheduler {
         });
       } else if (event.type === "task_update" && event.taskInfo?.taskId) {
         const { taskId, status } = event.taskInfo;
-        if (status === "running") pendingTasks.add(taskId);
+        // "progress" is an activity line on a task that is still running, not
+        // a completion; removing it here let a progressing agent look finished.
+        if (status === "running" || status === "progress") pendingTasks.add(taskId);
         else pendingTasks.delete(taskId);
         jlog("task-update", { taskId, status, pending: pendingTasks.size });
+      } else if (event.type === "task_sync") {
+        // The CLI's whole background_tasks list, attached to Stop and
+        // SubagentStop. It is authoritative: individual task updates can be
+        // missed, and an empty list is how completion is reported.
+        pendingTasks.clear();
+        for (const task of event.tasks ?? []) {
+          if (task.status === "running") pendingTasks.add(task.taskId);
+        }
+        jlog("task-sync", { tasks: (event.tasks ?? []).map((t) => ({ taskId: t.taskId, status: t.status })), pending: pendingTasks.size });
       } else if (event.type === "permission_request" && event.requestId) {
         if (job.bypassPermissions) {
           jlog("permission", { toolName: event.toolName ?? "unknown", requestId: event.requestId, bypass: true, allowed: true });
@@ -927,6 +943,18 @@ export class JobScheduler {
             pendingTasks: pendingTasks.size,
             elapsedMs: Date.now() - sentAt,
           });
+          // A background agent outlives the turn that launched it. The CLI
+          // wakes the model with a task notification when it reports, which
+          // starts another turn and ends in another idle; tearing the PTY down
+          // here would kill the agent instead.
+          if (canWaitForBackground && pendingTasks.size > 0) {
+            jlog("waiting-on-background", {
+              pending: pendingTasks.size,
+              taskIds: [...pendingTasks],
+              elapsedMs: Date.now() - sentAt,
+            });
+            return;
+          }
           cleanup("success");
         }
       });
@@ -971,7 +999,10 @@ export class JobScheduler {
         run.completedAt = Date.now();
         run.durationMs = run.completedAt - run.startedAt;
         if (finalStatus === "timeout") {
-          run.error = `Exceeded max duration of ${job.maxDurationMinutes || 30} minutes`;
+          run.error =
+            pendingTasks.size > 0
+              ? `Exceeded max duration of ${job.maxDurationMinutes || 30} minutes while ${pendingTasks.size} background task(s) still ran`
+              : `Exceeded max duration of ${job.maxDurationMinutes || 30} minutes`;
           this.sessionManager.destroySession(sessionId);
         }
 
@@ -995,9 +1026,13 @@ export class JobScheduler {
           jlog("no-assistant-message", { toolCount: run.toolsUsed.length });
         }
 
-        if (finalStatus === "success" && pendingTasks.size > 0) {
+        // A PTY run that is still waiting here ended for another reason
+        // (stopped or timeout), so the wait branch above already covers it.
+        // Only the stream runtime, which cannot come back, fails on pending
+        // work at the first idle.
+        if (finalStatus === "success" && !canWaitForBackground && pendingTasks.size > 0) {
           finalStatus = "failure";
-          run.error = `Job ended its turn with ${pendingTasks.size} background subagent(s) still running, so their work was never collected`;
+          run.error = `Job ended its turn with ${pendingTasks.size} background task(s) still running, so their work was never collected`;
           jlog("pending-background-tasks", { pending: pendingTasks.size });
         }
 

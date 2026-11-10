@@ -268,6 +268,13 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
     };
   }, [sessionId, send]);
 
+  // The server keeps this per connection, so a new one starts out watching
+  // nothing: without saying it again, every reconnect let a notification through
+  // for the session on screen.
+  useEffect(() => {
+    if (connected) send({ type: "session:set_viewing", sessionId, visible: document.visibilityState === "visible" });
+  }, [connected, sessionId, send]);
+
   // Dismissed on the user's grant rather than on reaching "running": a spawn
   // with no message to send stops at an idle REPL, so waiting for a turn would
   // leave the card up over a session that had already started fine. If the

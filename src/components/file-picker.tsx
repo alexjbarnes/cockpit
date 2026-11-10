@@ -1,134 +1,108 @@
 "use client";
 
-import { ChevronRight, CornerLeftUp, File, Folder, Loader2 } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { CornerLeftUp, Loader2 } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { SessionFileTree } from "@/components/session-file-tree";
 import { Button } from "@/components/ui/button";
-import { splitPathSegments } from "@/lib/path";
-
-interface BrowseEntry {
-  name: string;
-  path: string;
-  type: "directory" | "file";
-}
+import { absolutePath, type SessionPathListing } from "@/lib/session-tree";
 
 interface FilePickerProps {
   onSelect: (path: string) => void;
   onCancel: () => void;
-  startPath?: string;
+  startPath: string;
 }
 
+/** The parent of an absolute `/`-separated path, stopping at its root. */
+function parentPath(path: string): string {
+  const trimmed = path.replace(/\/+$/, "");
+  const cut = trimmed.lastIndexOf("/");
+  if (cut <= 0) return "/";
+  const parent = trimmed.slice(0, cut);
+  return /^[a-zA-Z]:$/.test(parent) ? `${parent}/` : parent;
+}
+
+/**
+ * Pick a file with the same tree the sidebar uses: the directory is walked
+ * once, folders expand in place and the same language icons and muted
+ * git-ignored files appear. The picker stays inside its starting directory;
+ * the session's Open File dialog is for files the session works with.
+ */
 export function FilePicker({ onSelect, onCancel, startPath }: FilePickerProps) {
-  const [currentPath, setCurrentPath] = useState(startPath ?? "");
-  const [entries, setEntries] = useState<BrowseEntry[]>([]);
+  const [currentPath, setCurrentPath] = useState(startPath);
+  const [listing, setListing] = useState<SessionPathListing | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const requestRef = useRef(0);
 
-  const fetchEntries = useCallback(async (dirPath?: string) => {
+  const load = useCallback(async (root: string) => {
+    const request = ++requestRef.current;
     setLoading(true);
     setError("");
-    const params = new URLSearchParams({ includeFiles: "true" });
-    if (dirPath) params.set("path", dirPath);
-
     try {
-      const res = await fetch(`/api/filesystem/browse?${params}`);
+      const res = await fetch(`/api/filesystem/tree?cwd=${encodeURIComponent(root)}`);
       if (!res.ok) {
-        const body = await res.json().catch(() => ({ error: "Failed to browse" }));
-        setError(body.error || "Failed to browse");
-        setEntries([]);
-        return;
+        const body = (await res.json().catch(() => ({ error: "Failed to browse" }))) as { error?: string };
+        throw new Error(body.error || "Failed to browse");
       }
-      const data = await res.json();
-      setCurrentPath(data.path);
-      setEntries(data.entries);
-    } catch {
-      setError("Failed to connect");
-      setEntries([]);
+      const data = (await res.json()) as SessionPathListing;
+      if (request !== requestRef.current) return;
+      setListing(data);
+    } catch (err) {
+      if (request !== requestRef.current) return;
+      setListing(null);
+      setError(err instanceof Error ? err.message : "Failed to connect");
     } finally {
-      setLoading(false);
+      if (request === requestRef.current) setLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    fetchEntries(startPath);
-  }, [fetchEntries, startPath]);
+    load(currentPath);
+  }, [currentPath, load]);
 
-  const hasDriveLetter = /^[a-zA-Z]:[/\\]/.test(currentPath);
-  const rootLabel = hasDriveLetter ? currentPath.slice(0, 3) : "/";
-  const rootPath = hasDriveLetter ? currentPath.slice(0, 3) : "/";
-  const allSegments = splitPathSegments(currentPath);
-  const segments = hasDriveLetter ? allSegments.slice(1) : allSegments;
+  const ignoredStatuses = useMemo(() => (listing?.ignored ?? []).map((path) => ({ path, status: "ignored" as const })), [listing]);
+
+  const atStart = currentPath === startPath;
 
   return (
     <div className="space-y-3">
-      <div className="flex items-center gap-1 text-xs font-mono overflow-x-auto">
-        <button type="button" onClick={() => fetchEntries(rootPath)} className="shrink-0 text-muted-foreground hover:text-foreground">
-          {rootLabel}
+      <div className="flex min-w-0 items-center gap-2 text-xs">
+        <button
+          type="button"
+          disabled={atStart}
+          onClick={() => setCurrentPath(parentPath(currentPath))}
+          title="Parent folder"
+          className="shrink-0 rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-40"
+        >
+          <CornerLeftUp className="h-3.5 w-3.5" />
         </button>
-        {segments.map((seg, i) => {
-          const segPath = rootPath + segments.slice(0, i + 1).join("/");
-          const isLast = i === segments.length - 1;
-          return (
-            <span key={segPath} className="flex items-center gap-1">
-              <ChevronRight className="h-3 w-3 text-muted-foreground shrink-0" />
-              {isLast ? (
-                <span className="text-foreground font-medium">{seg}</span>
-              ) : (
-                <button type="button" onClick={() => fetchEntries(segPath)} className="text-muted-foreground hover:text-foreground">
-                  {seg}
-                </button>
-              )}
-            </span>
-          );
-        })}
+        <span className="truncate font-mono text-muted-foreground">{currentPath}</span>
       </div>
 
-      <div className="border rounded-md max-h-56 overflow-y-auto">
-        {loading && (
-          <div className="flex items-center justify-center py-8">
-            <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-          </div>
-        )}
-        {error && <div className="px-3 py-4 text-sm text-destructive">{error}</div>}
-        {!loading && !error && currentPath !== rootPath && (
-          <button
-            type="button"
-            onClick={() => {
-              const parent = currentPath.replace(/\/[^/]+\/?$/, "") || rootPath;
-              fetchEntries(parent);
-            }}
-            className="flex w-full items-center gap-2 px-3 py-1.5 text-sm hover:bg-muted/50 text-left text-muted-foreground"
-          >
-            <CornerLeftUp className="h-4 w-4 shrink-0" />
-            <span>..</span>
-          </button>
-        )}
-        {!loading && !error && entries.length === 0 && <div className="px-3 py-4 text-sm text-muted-foreground">Empty directory</div>}
-        {!loading &&
-          !error &&
-          entries.map((entry) =>
-            entry.type === "directory" ? (
-              <button
-                key={entry.path}
-                type="button"
-                onClick={() => fetchEntries(entry.path)}
-                className="flex w-full items-center gap-2 px-3 py-1.5 text-sm hover:bg-muted/50 text-left"
-              >
-                <Folder className="h-4 w-4 shrink-0 text-muted-foreground" />
-                <span className="truncate">{entry.name}</span>
-              </button>
-            ) : (
-              <button
-                key={entry.path}
-                type="button"
-                onClick={() => onSelect(entry.path)}
-                className="flex w-full items-center gap-2 px-3 py-1.5 text-sm hover:bg-muted/50 text-left"
-              >
-                <File className="h-4 w-4 shrink-0 text-muted-foreground" />
-                <span className="truncate">{entry.name}</span>
-              </button>
-            ),
+      {loading ? (
+        <div className="flex items-center justify-center py-8">
+          <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+        </div>
+      ) : error ? (
+        <div className="px-3 py-4 text-sm text-destructive">{error}</div>
+      ) : !listing || listing.paths.length === 0 ? (
+        <div className="px-3 py-4 text-sm text-muted-foreground">Empty directory</div>
+      ) : (
+        <>
+          <SessionFileTree
+            key={currentPath}
+            mode="picker"
+            testId="file-picker-tree"
+            height="min(60vh, 24rem)"
+            paths={listing.paths}
+            gitStatus={ignoredStatuses}
+            onOpen={(relativePath) => onSelect(absolutePath(currentPath, relativePath))}
+          />
+          {listing.truncated && (
+            <p className="text-[10px] text-muted-foreground">Showing the first {listing.paths.length.toLocaleString()} files.</p>
           )}
-      </div>
+        </>
+      )}
 
       <div className="flex justify-end">
         <Button type="button" variant="outline" size="sm" onClick={onCancel}>

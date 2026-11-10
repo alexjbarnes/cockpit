@@ -4,7 +4,6 @@ import {
   Bell,
   Box,
   Brain,
-  Check,
   ChevronRight,
   Cpu,
   Eye,
@@ -25,6 +24,7 @@ import {
   X,
   Zap,
 } from "lucide-react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { type ClipboardEvent, type DragEvent, type KeyboardEvent, useCallback, useEffect, useRef, useState } from "react";
 import { CodeBlock, languageFromPath } from "@/components/code-block";
 import { MarkdownRender } from "@/components/markdown-render";
@@ -41,6 +41,7 @@ import { THINKING_LEVELS } from "@/lib/model-picker";
 import { CONTEXT_SIZES, type ContextSize, describeModelSelection, modelOneMRequiresCredits, resolveProviderId } from "@/lib/models";
 import { detectLanguage, extensionForLabel, shouldCollapsePaste } from "@/lib/paste-detect";
 import { effectivePermissionMode, permissionModeMismatch } from "@/lib/permission-mode";
+import { suggestCompletion } from "@/lib/prompt-suggestion";
 import type {
   ContextUsage,
   DocumentAttachment,
@@ -60,6 +61,7 @@ import { ContextIndicator } from "./context-indicator";
 import { PromptHistoryModal } from "./prompt-history-modal";
 import { QueueModal } from "./queue-modal";
 import { SendModeModal } from "./send-mode-modal";
+import { SessionNotificationsSettings } from "./session-notifications";
 
 const RECENT_MODELS_KEY = "cockpit-recent-models";
 
@@ -82,6 +84,12 @@ const MIN_MESSAGES_PX = 56;
  * non-textarea chrome (attachment chips, toolbar, padding) so a pasted file
  * shrinks the writing area rather than pushing it out of view.
  */
+/** Add a key to the draft, keeping a single space before it. */
+function appendToDraft(text: string, key: string): string {
+  const base = text.replace(/\s+$/, "");
+  return base ? `${base} ${key}` : key;
+}
+
 function maxTextareaHeight(el: HTMLTextAreaElement | null): number {
   const row = el?.closest<HTMLElement>("[data-input-row]");
   // Not row.parentElement: that wrapper is sized by the row itself, so it would
@@ -261,6 +269,9 @@ interface InputAreaProps {
   onDismissBtw?: () => void;
   currentRuntime?: "pty" | "stream";
   onSetRuntime?: (runtime: "pty" | "stream") => void;
+  /** Whether Settings offers the deprecated Stream runtime. A session already
+   *  on Stream still shows its current runtime so it can switch back. */
+  streamEnabled?: boolean;
   onRestart?: () => void;
   notifications?: SessionNotifications | null;
   onSetNotifications?: (notifications: SessionNotifications | null) => void;
@@ -325,16 +336,53 @@ export function InputArea({
   onDismissBtw,
   currentRuntime,
   onSetRuntime,
+  streamEnabled = false,
   onRestart,
   notifications = null,
   onSetNotifications,
   providers,
 }: InputAreaProps) {
   const { connected } = useWebSocket();
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const insertParam = searchParams.get("insert");
+  const handledInsert = useRef<string | null>(null);
   const [text, setText] = useState(() => sessionDrafts.get(sessionId) || "");
   const [queueModalOpen, setQueueModalOpen] = useState(false);
   const [sendModeOpen, setSendModeOpen] = useState(false);
   const [mcpOpen, setMcpOpen] = useState(false);
+
+  // The session's Issues list hands an issue key over as ?insert=KEY. Append
+  // it to whatever is already drafted, then clear the parameter without adding
+  // a history entry so a reload does not paste it again.
+  useEffect(() => {
+    if (!insertParam) {
+      handledInsert.current = null;
+      return;
+    }
+    if (handledInsert.current === insertParam) return;
+    handledInsert.current = insertParam;
+    setText((prev) => appendToDraft(prev, insertParam));
+    const params = new URLSearchParams(searchParams.toString());
+    params.delete("insert");
+    const query = params.toString();
+    router.replace(`${pathname}${query ? `?${query}` : ""}`, { scroll: false });
+    requestAnimationFrame(() => textareaRef.current?.focus());
+  }, [insertParam, pathname, router, searchParams]);
+
+  // The issue page opened over this session dispatches the same hand-off from
+  // inside the page-modal iframe.
+  useEffect(() => {
+    const onInsert = (event: Event) => {
+      const key = (event as CustomEvent<{ key?: string }>).detail?.key;
+      if (!key) return;
+      setText((prev) => appendToDraft(prev, key));
+      requestAnimationFrame(() => textareaRef.current?.focus());
+    };
+    window.addEventListener("cockpit:insert-issue", onInsert);
+    return () => window.removeEventListener("cockpit:insert-issue", onInsert);
+  }, []);
 
   useEffect(() => {
     setText(sessionDrafts.get(sessionId) || "");
@@ -400,6 +448,8 @@ export function InputArea({
   );
   const [mentionSelectedIndex, setMentionSelectedIndex] = useState(0);
   const [cursorPos, setCursorPos] = useState(0);
+  const [caretAtEnd, setCaretAtEnd] = useState(false);
+  const [composing, setComposing] = useState(false);
   const [pendingImages, setPendingImages] = useState<ImageAttachment[]>([]);
   const [pendingDocs, setPendingDocs] = useState<DocumentAttachment[]>([]);
   const [pendingTextFiles, setPendingTextFiles] = useState<TextFileAttachment[]>([]);
@@ -408,6 +458,7 @@ export function InputArea({
     { type: "image"; src: string; index: number } | { type: "text"; content: string; name: string; index: number } | null
   >(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const suggestionRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const mentionItemsRef = useRef<MentionItem[]>([]);
   const slashItemsRef = useRef<SlashCommand[]>([]);
@@ -419,6 +470,13 @@ export function InputArea({
 
   const mention = getMentionContext(text, cursorPos);
   const showMention = !showMenu && mention.active && !!cwd;
+
+  // Fish-style completion: the rest of the most recent prompt that starts with
+  // what is typed, shown in the input and accepted with Right or End. Only at
+  // the end of the text, while focused, and never over a menu or an IME
+  // composition.
+  const suggestion =
+    inputFocused && caretAtEnd && !composing && !showMenu && !showMention && !historyOpen ? suggestCompletion(text, promptHistory) : null;
 
   const handleSelectCommand = useCallback(
     (cmd: SlashCommand) => {
@@ -517,6 +575,53 @@ export function InputArea({
   const openSendMode = useCallback(() => setSendModeOpen(true), []);
   const sendModePress = useLongPress(openSendMode, isResponding);
 
+  const handleInput = useCallback(() => {
+    const el = textareaRef.current;
+    // Measure the cap BEFORE collapsing to auto, since it reads the row's
+    // current chrome height against the textarea's current height.
+    const cap = maxTextareaHeight(el);
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = Math.min(el.scrollHeight, cap) + "px";
+  }, []);
+
+  // The keyboard opening (or any viewport change) shrinks the room the input
+  // has without firing an input event, so re-apply the cap on resize.
+  useEffect(() => {
+    const target: { addEventListener: typeof window.addEventListener; removeEventListener: typeof window.removeEventListener } =
+      window.visualViewport ?? window;
+    target.addEventListener("resize", handleInput);
+    return () => target.removeEventListener("resize", handleInput);
+  }, [handleInput]);
+
+  // The ghost layer sits over the textarea rather than inside it, so it has to
+  // follow the textarea when the text outgrows the visible rows.
+  const syncSuggestionScroll = useCallback(() => {
+    const el = textareaRef.current;
+    const mirror = suggestionRef.current;
+    if (!el || !mirror) return;
+    mirror.scrollTop = el.scrollTop;
+    mirror.scrollLeft = el.scrollLeft;
+  }, []);
+
+  const acceptSuggestion = useCallback(
+    (completion: string) => {
+      // Keep what was typed and append only the rest, so the typed casing
+      // survives a case-insensitive match.
+      const next = text + completion.slice(text.length);
+      setText(next);
+      setCaretAtEnd(true);
+      requestAnimationFrame(() => {
+        const el = textareaRef.current;
+        if (!el) return;
+        el.focus();
+        el.setSelectionRange(next.length, next.length);
+        handleInput();
+      });
+    },
+    [text, handleInput],
+  );
+
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLTextAreaElement>) => {
       if (showMenu) {
@@ -591,6 +696,23 @@ export function InputArea({
         }
       }
 
+      // Right at the end of the text is where Fish accepts its suggestion, and
+      // End lands there too. Tab does as well while a ghost is showing; without
+      // one it keeps its Plan/Build toggle. Shift/Alt/Ctrl keep the textarea's
+      // own behaviour.
+      if (
+        suggestion &&
+        (e.key === "ArrowRight" || e.key === "End" || e.key === "Tab") &&
+        !e.shiftKey &&
+        !e.altKey &&
+        !e.ctrlKey &&
+        !e.metaKey
+      ) {
+        e.preventDefault();
+        acceptSuggestion(suggestion);
+        return;
+      }
+
       if (e.key === "Tab" && !e.shiftKey && showPlanToggle) {
         e.preventDefault();
         onSetPlanMode(!planMode);
@@ -622,6 +744,8 @@ export function InputArea({
       handleSend,
       handleSelectCommand,
       handleSelectMention,
+      suggestion,
+      acceptSuggestion,
       text,
       mention.start,
       slash.start,
@@ -634,25 +758,6 @@ export function InputArea({
       promptHistory,
     ],
   );
-
-  const handleInput = useCallback(() => {
-    const el = textareaRef.current;
-    // Measure the cap BEFORE collapsing to auto, since it reads the row's
-    // current chrome height against the textarea's current height.
-    const cap = maxTextareaHeight(el);
-    if (!el) return;
-    el.style.height = "auto";
-    el.style.height = Math.min(el.scrollHeight, cap) + "px";
-  }, []);
-
-  // The keyboard opening (or any viewport change) shrinks the room the input
-  // has without firing an input event, so re-apply the cap on resize.
-  useEffect(() => {
-    const target: { addEventListener: typeof window.addEventListener; removeEventListener: typeof window.removeEventListener } =
-      window.visualViewport ?? window;
-    target.addEventListener("resize", handleInput);
-    return () => target.removeEventListener("resize", handleInput);
-  }, [handleInput]);
 
   const pasteCountRef = useRef(0);
 
@@ -689,14 +794,18 @@ export function InputArea({
           setText(before + after);
           collapseText(insertedText);
           setCursorPos(before.length);
+          setCaretAtEnd(false);
           setSelectedIndex(0);
           setMentionSelectedIndex(0);
           return;
         }
       }
 
+      const start = e.target.selectionStart ?? newValue.length;
+      const end = e.target.selectionEnd ?? start;
       setText(newValue);
-      setCursorPos(e.target.selectionStart ?? 0);
+      setCursorPos(start);
+      setCaretAtEnd(start === newValue.length && end === newValue.length);
       setSelectedIndex(0);
       setMentionSelectedIndex(0);
     },
@@ -921,7 +1030,7 @@ export function InputArea({
                 {(
                   [
                     ["model", Brain, "Model", undefined],
-                    ["runtime", Terminal, "Harness", undefined],
+                    ["runtime", Terminal, "Harness", "settings-tab-runtime"],
                     ["notifications", Bell, "Notifications", "settings-tab-notifications"],
                   ] as const
                 ).map(([tab, Icon, label, testId]) => (
@@ -969,34 +1078,49 @@ export function InputArea({
                       <span className="text-xs font-medium text-foreground">Claude Code</span>
                     </div>
 
-                    {onSetRuntime && (
+                    {onSetRuntime && (streamEnabled || currentRuntime === "stream") && (
                       <div className="flex items-center gap-2">
                         <Zap className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
                         <span className="text-xs text-muted-foreground">Backend</span>
-                        <div className="ml-auto flex gap-1">
-                          <button
-                            onClick={() => onSetRuntime("pty")}
-                            data-testid="runtime-pty"
-                            className={`rounded px-2 py-0.5 text-xs transition-colors ${
-                              currentRuntime === "pty"
-                                ? "bg-primary text-primary-foreground"
-                                : "bg-muted text-muted-foreground hover:text-foreground"
-                            }`}
-                          >
-                            PTY
-                          </button>
-                          <button
-                            onClick={() => onSetRuntime("stream")}
-                            data-testid="runtime-stream"
-                            className={`rounded px-2 py-0.5 text-xs transition-colors ${
-                              currentRuntime === "stream"
-                                ? "bg-primary text-primary-foreground"
-                                : "bg-muted text-muted-foreground hover:text-foreground"
-                            }`}
-                          >
-                            Stream
-                          </button>
-                        </div>
+                        {streamEnabled ? (
+                          <div className="ml-auto flex gap-1">
+                            <button
+                              onClick={() => onSetRuntime("pty")}
+                              data-testid="runtime-pty"
+                              className={`rounded px-2 py-0.5 text-xs transition-colors ${
+                                currentRuntime === "pty"
+                                  ? "bg-primary text-primary-foreground"
+                                  : "bg-muted text-muted-foreground hover:text-foreground"
+                              }`}
+                            >
+                              PTY
+                            </button>
+                            <button
+                              onClick={() => onSetRuntime("stream")}
+                              data-testid="runtime-stream"
+                              className={`rounded px-2 py-0.5 text-xs transition-colors ${
+                                currentRuntime === "stream"
+                                  ? "bg-primary text-primary-foreground"
+                                  : "bg-muted text-muted-foreground hover:text-foreground"
+                              }`}
+                            >
+                              Stream
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="ml-auto flex items-center gap-2">
+                            <span className="text-xs text-muted-foreground" data-testid="runtime-current">
+                              Stream (deprecated)
+                            </span>
+                            <button
+                              onClick={() => onSetRuntime("pty")}
+                              data-testid="runtime-pty"
+                              className="rounded bg-primary px-2 py-0.5 text-xs text-primary-foreground"
+                            >
+                              Switch to PTY
+                            </button>
+                          </div>
+                        )}
                       </div>
                     )}
 
@@ -1175,100 +1299,12 @@ export function InputArea({
                 {/* Notifications tab: what this session sends out, and
                           through which of the configured providers. */}
                 {settingsTab === "notifications" && (
-                  <div className="space-y-4" data-testid="settings-notifications">
-                    <div className="space-y-2">
-                      <div className="flex items-center gap-2">
-                        <Bell className="h-3.5 w-3.5 text-muted-foreground" />
-                        <span className="text-xs font-medium text-foreground">Send notifications</span>
-                      </div>
-                      <p className="text-[11px] text-muted-foreground">
-                        One provider per session. Off means this session never messages you on its own.
-                      </p>
-                      <div className="space-y-1.5">
-                        <button
-                          onClick={() => onSetNotifications?.(null)}
-                          data-testid="notify-off"
-                          className={`flex w-full items-center justify-between rounded-lg border px-3 py-2 text-xs transition-colors ${
-                            !notifications?.providerId ? "border-primary bg-primary/10" : "border-border hover:bg-muted/50"
-                          }`}
-                        >
-                          <span>Off</span>
-                          {!notifications?.providerId && <Check className="h-3.5 w-3.5 text-primary" />}
-                        </button>
-                        {notifyProviders.map((provider) => {
-                          const selected = notifications?.providerId === provider.id;
-                          return (
-                            <button
-                              key={provider.id}
-                              onClick={() =>
-                                onSetNotifications?.({
-                                  providerId: provider.id,
-                                  events: notifications?.events ?? { finished: true, question: true, permission: true },
-                                })
-                              }
-                              data-testid={`notify-provider-${provider.id}`}
-                              className={`flex w-full items-center justify-between rounded-lg border px-3 py-2 text-xs transition-colors ${
-                                selected ? "border-primary bg-primary/10" : "border-border hover:bg-muted/50"
-                              }`}
-                            >
-                              <span className="flex items-center gap-2">
-                                {provider.name}
-                                <span className="text-muted-foreground">{provider.type}</span>
-                                {!provider.enabled && <span className="text-muted-foreground">(disabled)</span>}
-                              </span>
-                              {selected && <Check className="h-3.5 w-3.5 text-primary" />}
-                            </button>
-                          );
-                        })}
-                        {/* A provider this session chose and that has since been
-                                  deleted: saying so is better than silence. */}
-                        {notifications?.providerId && !notifyProviders.some((p) => p.id === notifications.providerId) && (
-                          <div className="flex items-center justify-between rounded-lg border border-dashed px-3 py-2 text-xs text-muted-foreground">
-                            <span>This session's provider is no longer configured</span>
-                          </div>
-                        )}
-                        {notifyProviders.length === 0 && notifications?.providerId === undefined && (
-                          <p className="text-[11px] text-muted-foreground">
-                            No providers configured yet. Add one in Settings → Notifications.
-                          </p>
-                        )}
-                      </div>
-                    </div>
-
-                    {notifications?.providerId && (
-                      <div className="space-y-2">
-                        <span className="text-xs font-medium text-foreground">Tell me when</span>
-                        <div className="space-y-1.5">
-                          {(
-                            [
-                              ["finished", "A turn finishes"],
-                              ["question", "Claude asks a question"],
-                              ["permission", "A permission is waiting"],
-                            ] as const
-                          ).map(([key, label]) => {
-                            const on = notifications?.events?.[key] !== false;
-                            return (
-                              <button
-                                key={key}
-                                onClick={() =>
-                                  onSetNotifications?.({
-                                    ...notifications,
-                                    events: { ...notifications?.events, [key]: !on },
-                                  })
-                                }
-                                data-testid={`notify-event-${key}`}
-                                className={`flex w-full items-center justify-between rounded-lg border px-3 py-2 text-xs transition-colors ${
-                                  on ? "border-primary bg-primary/10" : "border-border hover:bg-muted/50"
-                                }`}
-                              >
-                                <span>{label}</span>
-                                {on && <Check className="h-3.5 w-3.5 text-primary" />}
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    )}
+                  <div data-testid="settings-notifications">
+                    <SessionNotificationsSettings
+                      notifications={notifications}
+                      providers={notifyProviders}
+                      onChange={(next) => onSetNotifications?.(next)}
+                    />
                   </div>
                 )}
               </div>
@@ -1413,6 +1449,14 @@ export function InputArea({
               onKeyDown={handleKeyDown}
               onInput={handleInput}
               onPaste={handlePaste}
+              onSelect={(e) => {
+                const el = e.currentTarget;
+                setCaretAtEnd(el.selectionStart === el.selectionEnd && el.selectionStart === el.value.length);
+                setCursorPos(el.selectionStart ?? 0);
+              }}
+              onCompositionStart={() => setComposing(true)}
+              onCompositionEnd={() => setComposing(false)}
+              onScroll={syncSuggestionScroll}
               onFocus={() => setInputFocused(true)}
               onBlur={() => setInputFocused(false)}
               placeholder={
@@ -1433,6 +1477,32 @@ export function InputArea({
                 planMode ? "border-blue-500/50 focus-visible:ring-blue-500/50" : "border-input focus-visible:ring-ring"
               }`}
             />
+            {/* Mirrors the textarea's metrics so the completion lands exactly
+                where the next characters would be. The typed prefix is laid
+                out but invisible; only the suggestion is painted. */}
+            {suggestion && (
+              <div
+                ref={suggestionRef}
+                aria-hidden="true"
+                data-testid="prompt-suggestion"
+                className="pointer-events-none absolute inset-0 select-none overflow-hidden rounded-md border border-transparent px-3 py-2 pb-7 text-sm whitespace-pre-wrap break-words text-muted-foreground/60"
+              >
+                <span className="text-transparent">{text}</span>
+                {/* Tapping the grey text accepts it, which is how a phone
+                    without arrow keys or a Tab key reaches the completion. The
+                    rest of the layer still passes taps through to the textarea. */}
+                <span
+                  data-testid="prompt-suggestion-accept"
+                  className="pointer-events-auto cursor-pointer"
+                  onPointerDown={(e) => {
+                    e.preventDefault();
+                    acceptSuggestion(suggestion);
+                  }}
+                >
+                  {suggestion.slice(text.length)}
+                </span>
+              </div>
+            )}
             <button
               onClick={handleFilePick}
               title="Attach file"

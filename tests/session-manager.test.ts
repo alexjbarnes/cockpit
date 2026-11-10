@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("node:child_process", () => ({
   spawn: vi.fn(() => {
@@ -47,6 +47,7 @@ vi.mock("@/server/transcript", () => ({
   transcriptExists: vi.fn(() => false),
   findSessionCwd: () => Promise.resolve(null),
   getTranscriptPath: () => "/tmp/fake-transcript.jsonl",
+  readTranscriptCwd: vi.fn(() => Promise.resolve(null)),
   loadPromptHistory: () => Promise.resolve([]),
   sumTranscriptUsage: () => Promise.resolve({ input: 0, output: 0, cacheRead: 0, cacheCreate: 0 }),
 }));
@@ -215,6 +216,44 @@ describe("SessionManager", () => {
     });
   });
 
+  describe("hydrateWorktreeFromTranscript", () => {
+    it("recovers the worktree the transcript last named for a session without a stored one", async () => {
+      const transcript = await import("@/server/transcript");
+      const prefsMod = await import("@/server/session-prefs");
+      const session = manager.createSession("/repo");
+      vi.mocked(transcript.readTranscriptCwd).mockResolvedValueOnce("/tmp");
+
+      await manager.hydrateWorktreeFromTranscript(session.id);
+
+      expect((manager as any).sessions.get(session.id).info.worktreeCwd).toBe("/tmp");
+      expect(vi.mocked(prefsMod.setSessionPrefs)).toHaveBeenCalledWith(session.id, { worktreeCwd: "/tmp" });
+    });
+
+    it("leaves a session alone when the transcript names its own cwd, or a path that is gone", async () => {
+      const transcript = await import("@/server/transcript");
+      const own = manager.createSession("/repo");
+      vi.mocked(transcript.readTranscriptCwd).mockResolvedValueOnce("/repo");
+      await manager.hydrateWorktreeFromTranscript(own.id);
+      expect((manager as any).sessions.get(own.id).info.worktreeCwd).toBeUndefined();
+
+      const gone = manager.createSession("/repo");
+      vi.mocked(transcript.readTranscriptCwd).mockResolvedValueOnce("/definitely/not/here");
+      await manager.hydrateWorktreeFromTranscript(gone.id);
+      expect((manager as any).sessions.get(gone.id).info.worktreeCwd).toBeUndefined();
+    });
+
+    it("reads once per session and skips one that already has a worktree", async () => {
+      const transcript = await import("@/server/transcript");
+      const session = manager.createSession("/repo");
+      vi.mocked(transcript.readTranscriptCwd).mockClear();
+      vi.mocked(transcript.readTranscriptCwd).mockResolvedValueOnce("/tmp");
+
+      await manager.hydrateWorktreeFromTranscript(session.id);
+      await manager.hydrateWorktreeFromTranscript(session.id);
+      expect(vi.mocked(transcript.readTranscriptCwd)).toHaveBeenCalledTimes(1);
+    });
+  });
+
   describe("getSession", () => {
     it("returns null for unknown id", async () => {
       expect(await manager.getSession("nonexistent")).toBeNull();
@@ -257,6 +296,20 @@ describe("SessionManager", () => {
         const s = (manager as any).sessions.get(ensured.info.id)!;
         expect(ensured.info.contextSize).toBe("1m");
         expect(s.contextWindowSize).toBe(1_000_000);
+      } finally {
+        (prefsMod as { getSessionPrefs: (id: string) => unknown }).getSessionPrefs = orig;
+      }
+    });
+
+    it("restores the worktree the session last reported", async () => {
+      const prefsMod = await import("@/server/session-prefs");
+      const orig = prefsMod.getSessionPrefs;
+      (prefsMod as { getSessionPrefs: (id: string) => unknown }).getSessionPrefs = () => ({
+        worktreeCwd: "/repo/.worktrees/feature",
+      });
+      try {
+        const ensured = manager.ensureSession("restored-worktree", "/repo");
+        expect(ensured.info.worktreeCwd).toBe("/repo/.worktrees/feature");
       } finally {
         (prefsMod as { getSessionPrefs: (id: string) => unknown }).getSessionPrefs = orig;
       }
@@ -1498,6 +1551,52 @@ describe("SessionManager", () => {
         const session = manager.createSession("/tmp", undefined, { bypassPermissions: true });
         expect(manager.getPermissionMode(session.id)).toBe("bypass");
       });
+    });
+
+    // The new-session dialog names a mode rather than the old boolean, and the
+    // mode wins when a legacy caller sends both.
+    it("takes the permission mode the creator names, ahead of the legacy flag", async () => {
+      await withDefaults({ permissionMode: "manual" }, () => {
+        const bypass = manager.createSession("/tmp", undefined, { permissionMode: "bypass", bypassPermissions: false });
+        expect(manager.getPermissionMode(bypass.id)).toBe("bypass");
+        const manual = manager.createSession("/tmp", undefined, { permissionMode: "manual", bypassPermissions: true });
+        expect(manager.getPermissionMode(manual.id)).toBe("manual");
+      });
+    });
+
+    it("clamps a creator's auto at birth on a non-Anthropic model", async () => {
+      await seedZen();
+      await withDefaults({}, () => {
+        const session = manager.createSession("/tmp", undefined, { model: "zen:ds-free", permissionMode: "auto" });
+        expect(manager.getPermissionMode(session.id)).toBe("manual");
+      });
+    });
+
+    it("seeds the model, context, thinking and notifications named at creation", async () => {
+      const prefsMod = await import("@/server/session-prefs");
+      const session = manager.createSession("/tmp", "Work", {
+        model: "claude-haiku-4-5-20251001",
+        // That version offers 200k only; the request settles to what it has.
+        contextSize: "1m",
+        thinkingLevel: "low",
+        notifications: { providerId: "telegram", events: { finished: true } },
+      });
+      const stored = (manager as any).sessions.get(session.id)!;
+
+      expect(session.model).toBe("claude-haiku-4-5-20251001");
+      expect(session.contextSize).toBe("200k");
+      expect(session.notifications).toEqual({ providerId: "telegram", events: { finished: true } });
+      expect(stored.thinkingLevel).toBe("low");
+      expect(stored.modelSlots.main).toBe("claude-haiku-4-5-20251001");
+      expect(vi.mocked(prefsMod.setSessionPrefs)).toHaveBeenCalledWith(
+        session.id,
+        expect.objectContaining({
+          model: "claude-haiku-4-5-20251001",
+          contextSize: "200k",
+          thinkingLevel: "low",
+          notifications: { providerId: "telegram", events: { finished: true } },
+        }),
+      );
     });
 
     it("keeps a cockpit agent in manual whatever the default", async () => {
@@ -3773,6 +3872,112 @@ describe("SessionManager", () => {
 
       expect(errors).toContain("Overloaded (HTTP 529)");
       expect(s.info.contextSize).toBe("1m"); // ordinary error must not revert
+    });
+  });
+
+  describe("a provider model written before contextSizes existed", () => {
+    const legacy = JSON.stringify([
+      {
+        id: "mock",
+        name: "Mock",
+        envVars: {},
+        models: [
+          { modelId: "legacy-flat", displayName: "Legacy flat" },
+          { modelId: "legacy-length", displayName: "Legacy with a length", contextLength: 128_000 },
+        ],
+      },
+    ]);
+
+    it("falls back to its contextLength, or the chosen size, instead of throwing", async () => {
+      const { writeFileSync } = await import("node:fs");
+      const { join } = await import("node:path");
+      writeFileSync(join(process.env.COCKPIT_CONFIG_DIR!, "providers.json"), legacy);
+
+      expect((manager as any).resolveContextWindow("mock:legacy-flat", "200k")).toBe(200_000);
+      expect((manager as any).resolveContextWindow("mock:legacy-length", "200k")).toBe(128_000);
+    });
+
+    // The provider cache reloads on the file's mtime, which this filesystem
+    // records in 10ms steps: the next test's seed must land in a later step or
+    // it reads this file instead.
+    afterEach(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    });
+  });
+
+  describe("a new session's thinking level", () => {
+    const providerFile = JSON.stringify([
+      {
+        id: "zen",
+        name: "OpenCode Zen",
+        isBuiltin: true,
+        envVars: {},
+        enabledModels: ["kimi-k3"],
+        models: [{ modelId: "kimi-k3", displayName: "Kimi K3", effortLevels: ["medium", "high"], contextSizes: ["200k"] }],
+      },
+    ]);
+
+    it("settles on a level the provider's default model offers", async () => {
+      const { writeFileSync } = await import("node:fs");
+      const { join } = await import("node:path");
+      writeFileSync(join(process.env.COCKPIT_CONFIG_DIR!, "providers.json"), providerFile);
+
+      expect((manager as any).startingThinkingLevel("zen:kimi-k3", "xhigh")).toBe("high");
+      expect((manager as any).startingThinkingLevel("zen:kimi-k3", "medium")).toBe("medium");
+      // A model with no thinking keeps the configured default harmless.
+      expect((manager as any).startingThinkingLevel("zen:ds-free", "high")).toBe("high");
+    });
+
+    it("leaves an Anthropic default alone when it can run the level", () => {
+      expect((manager as any).startingThinkingLevel("sonnet", "high")).toBe("high");
+      expect((manager as any).startingThinkingLevel("claude-sonnet-4-6", "xhigh")).toBe("medium");
+    });
+  });
+
+  describe("a session that enters a worktree", () => {
+    it("records the worktree as live state and clears it when the CLI returns", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      const updates: Array<{ worktreeCwd?: string }> = [];
+      s.emitter.on("info_updated", (_id: string, info: { worktreeCwd?: string }) => updates.push({ ...info }));
+      const { callbacks } = (manager as any).buildHarnessCallbacks(s, session.id, createStreamState());
+
+      callbacks.onCwdChanged("/tmp");
+      expect(updates).toHaveLength(0);
+
+      callbacks.onCwdChanged("/worktrees/feature");
+      expect(s.info.worktreeCwd).toBe("/worktrees/feature");
+      expect(updates.at(-1)?.worktreeCwd).toBe("/worktrees/feature");
+
+      callbacks.onCwdChanged("/worktrees/feature");
+      expect(updates).toHaveLength(1);
+
+      callbacks.onCwdChanged("/tmp");
+      expect(s.info.worktreeCwd).toBeUndefined();
+      expect(updates).toHaveLength(2);
+    });
+  });
+
+  describe("transcript updates", () => {
+    const message = (id: string, content: string) => ({ id, role: "assistant", content, toolUses: [], blocks: [], timestamp: 1 });
+
+    it("sends pages a transcript tail only when it differs from the last one sent", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      const sent: unknown[] = [];
+      s.emitter.on("transcript", (_id: string, messages: unknown) => sent.push(messages));
+      const usage: unknown[] = [];
+      s.emitter.on("usage", (_id: string, u: unknown) => usage.push(u));
+      const { callbacks } = (manager as any).buildHarnessCallbacks(s, session.id, createStreamState());
+
+      callbacks.onTranscriptUpdate([message("a1", "Working on it")], { used: 1000, total: 200_000 });
+      // The CLI appended records the chat never shows: the same tail again.
+      callbacks.onTranscriptUpdate([message("a1", "Working on it")], { used: 1000, total: 200_000 });
+      callbacks.onTranscriptUpdate([message("a1", "Working on it. Done.")], { used: 1200, total: 200_000 });
+
+      expect(sent).toEqual([[message("a1", "Working on it")], [message("a1", "Working on it. Done.")]]);
+      // Everything else an update drives still runs on every one.
+      expect(usage).toHaveLength(3);
     });
   });
 

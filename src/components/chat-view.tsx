@@ -490,18 +490,20 @@ export function ChatView({
     if (!cwd) return;
     cancelThinkingCheck();
     const targetModel = thinkingCheck?.targetModel;
+    // Never carry a stream runtime into a new session while Settings hides it.
+    const runtime = settings.streamRuntimeEnabled && currentRuntime === "stream" ? "stream" : "pty";
     try {
       const res = await fetch("/api/sessions", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ cwd, runtime: currentRuntime, model: targetModel }),
+        body: JSON.stringify({ cwd, runtime, model: targetModel }),
       });
       if (res.ok) {
         const data = await res.json();
         router.push(`/sessions/${data.sessionId}?cwd=${encodeURIComponent(cwd)}`);
       }
     } catch {}
-  }, [cwd, currentRuntime, thinkingCheck?.targetModel, cancelThinkingCheck, router]);
+  }, [cwd, currentRuntime, thinkingCheck?.targetModel, cancelThinkingCheck, router, settings.streamRuntimeEnabled]);
 
   return (
     // data-input-bounds: the height the input row must live within. InputArea
@@ -793,6 +795,7 @@ export function ChatView({
           onDismissBtw={dismissBtw}
           currentRuntime={currentRuntime}
           onSetRuntime={setRuntime}
+          streamEnabled={settings.streamRuntimeEnabled}
           onRestart={restartSession}
           notifications={notifications}
           onSetNotifications={setNotifications}

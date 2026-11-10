@@ -10,6 +10,15 @@ The list is paginated. Large session counts no longer lock the browser.
 
 Click a row to open it. The menu icon opens rename, pin, and delete actions. Delete removes the session and its transcript permanently.
 
+## New session
+
+New session opens in two steps:
+
+- **Where.** Open a directory, or clone a repository from its URL, and name the session. When Settings offers the deprecated Stream runtime, choose PTY or Stream here; otherwise the session runs on PTY.
+- **How.** Four rows, each showing what it will use and expanding to change it: notifications (off, or one provider and which events), model with context size and thinking level, permissions, and Sandbox Bash.
+
+**Create with defaults** on the first step skips the second. A clone continues to the second step with the cloned path filled in. Every choice is stored on the session when it is created, so the first turn already runs with it.
+
 ## Sidebar
 
 The sidebar is split into collapsible sections. Each section header shows a title, an item count badge, and a chevron to expand or collapse. Section open/closed state is persisted across page loads.
@@ -18,8 +27,7 @@ Sections:
 
 - **Sessions.** Pinned and active sessions. Click any row to switch. Drag to reorder pinned sessions.
 - **Reviews.** Pinned PR reviews. Each row shows repo, PR number, title, and a status beacon. Hide this section entirely with the Reviews toggle in Settings.
-- **Changes.** Git status for the active session's working directory. Shows modified, added, and deleted files. If the session has no changes or the status fetch fails, the section shows an error state instead of disappearing.
-- **Files.** File tree for the active session's working directory.
+- **Files & changes.** One panel for the active session's working directory, with a Changes/Files switch at the top. Changes lists the working tree's modified, added and deleted files with their status colours and line counts; clicking one opens its diff. Files is the directory's file tree, with changed files still marked; clicking one opens the file. The chosen view is remembered. Git-ignored files are shown muted, generated folders such as `node_modules` and `dist` are left out, and the Open File button opens the same tree to reach anything it does not list. Commit checkboxes live in the full Changes tab.
 
 Status beacons on session and review rows:
 
@@ -51,7 +59,9 @@ Long histories use windowed rendering. The initial view loads 50 messages, with 
 
 ## Tabbed layout
 
-A session view is a set of tabs. Alongside the chat you can open file, diff, and changes tabs, plus an [embedded terminal](terminal.md). On wider screens you can split into two panes and drag tabs between them. Tabs persist across page refreshes, so your layout comes back when you return.
+A session view is a set of tabs. Alongside the chat you can open file, diff, and changes tabs, plus an [embedded terminal](terminal.md). On wider screens you can split into two panes and drag tabs between them. Tabs and the split persist across page refreshes, so your layout comes back when you return.
+
+When Claude Code moves into a git worktree (the `EnterWorktree` tool), the session follows it: a Worktree tag above the tabs names it, and the file tree, diffs, changes view and new terminals read from the worktree. The last reported worktree is stored with the session, so a page reload keeps pointing there instead of falling back to the original checkout. A session opened for the first time since the value was introduced recovers it from its transcript, whose newest entry names the directory Claude last wrote from. The session itself keeps the directory it was created in, and a restarted CLI resumes in the worktree it was in, which its next hook reports.
 
 ## Session settings
 
@@ -60,7 +70,7 @@ Each session has its own settings, separate from the defaults you set globally. 
 - Model. Built-in Haiku, Sonnet, and Opus with a version switcher, plus any models from connected gateways or custom providers (see [Model providers](providers.md)).
 - Context size. 200K or 1M, shown as pills for models that support both.
 - Thinking level. Low, Medium, High, XHigh, Max. Only the levels the model supports are shown.
-- Runtime. Switch this session between Stream and PTY (see [Runtime mode](#runtime-mode)).
+- Harness. Switch this session between PTY and Stream (see [Runtime mode](#runtime-mode)). Stream appears only when Settings offers it; a session already on Stream shows it and can switch to PTY.
 - Permission mode: Manual, Auto (Anthropic models only) or Bypass. The settings icon is green in Auto and orange in Bypass. It turns red when Claude Code reports a mode other than the one chosen, and the panel says which mode it is in and what that means.
 - Sandbox Bash, with extra allowed domains for this session on top of the shared rules (see [Settings: Sandbox](settings.md#sandbox)). Changing either restarts the CLI.
 
@@ -70,10 +80,10 @@ Changes apply on the next turn. A context-size change restarts the underlying CL
 
 Cockpit can drive Claude Code two ways, chosen per session:
 
-- **Stream (headless).** The default. Cockpit runs the CLI in streaming-JSON mode and renders the structured event stream directly.
-- **PTY (interactive).** Cockpit runs the real CLI inside a pseudo-terminal, the same engine you get in a normal terminal. Message content is read from the CLI's JSONL transcript, so the live view matches a reload. Hook events drive status, permissions, compaction progress, and background tasks. This mode also matters for billing: subscription plans bill programmatic and interactive usage differently, and PTY keeps sessions on the interactive side.
+- **PTY (interactive).** The default. Cockpit runs the real CLI inside a pseudo-terminal, the same engine you get in a normal terminal. Message content is read from the CLI's JSONL transcript, so the live view matches a reload. Hook events drive status, permissions, compaction progress, and background tasks. This mode also matters for billing: subscription plans bill programmatic and interactive usage differently, and PTY keeps sessions on the interactive side.
+- **Stream (headless).** Deprecated. Cockpit runs the CLI in streaming-JSON mode and renders the structured event stream directly. It is hidden unless Settings → Session Defaults turns it on, because the CLI's `-p` flag is moving to bare mode, which skips OAuth and would stop authenticating against a subscription. An existing Stream session or scheduled job keeps working.
 
-Pick the runtime when you create a session (the new-session dialog has a two-step backend picker) or switch it later from the session settings. The choice is saved and survives a server restart.
+Pick the runtime in the new-session dialog when Stream is enabled, or switch it later from the session settings. A session already on Stream keeps its Harness tab showing that, with a button to switch to PTY. The choice is saved and survives a server restart.
 
 ## Attachments
 
@@ -119,6 +129,8 @@ Type `/` to open the menu. Cockpit supports the same slash commands as Claude Co
 ## Prompt history
 
 Press the up arrow in an empty input to open the prompt history modal, Atuin-style. It lists prompts you have sent, newest first, and is searchable. Pick one to drop it back into the input. History is read from the full session transcript, not just the current view.
+
+Typing the start of a prompt you have sent before shows the rest in grey after the caret, the way Fish completes a command; press Right, End or Tab to accept it, or tap the grey text on a phone. Tab only completes while the suggestion is showing; otherwise it keeps toggling Plan/Build. The suggestion is the most recent prompt starting with what you typed, and lowercase typing matches regardless of the history's casing. History from before a `/clear` in the same session is included, after the current one.
 
 ## Session linking via /clear
 

@@ -4,6 +4,7 @@
 import { describe, expect, it } from "vitest";
 import {
   ALL_PROVIDERS,
+  defaultSelectionFor,
   filterPicker,
   MODEL_ALIASES,
   modelMatches,
@@ -52,6 +53,47 @@ describe("valueForEntry and valueForAlias", () => {
 
   it("store a picked alias as its default version", () => {
     expect(valueForAlias("opus")).toBe(defaultForAlias("opus")?.modelId);
+  });
+});
+
+describe("defaultSelectionFor", () => {
+  const zen = provider("zen", [
+    model("kimi-k3", { effortLevels: ["medium", "high"], contextSizes: ["200k", "1m"] }),
+    model("ds-free", { effortLevels: [], contextSizes: ["200k"] }),
+  ]);
+
+  it("stores a provider's model with the context size it already has", () => {
+    expect(defaultSelectionFor("zen:kimi-k3", { contextSize: "1m", thinkingLevel: "high" }, [zen])).toEqual({
+      model: "zen:kimi-k3",
+      contextSize: "1m",
+      thinkingLevel: "high",
+    });
+  });
+
+  it("falls back to a size the new model offers", () => {
+    const narrow = provider("zen", [model("kimi-k3", { contextSizes: ["200k"] })]);
+    expect(defaultSelectionFor("zen:kimi-k3", { contextSize: "1m", thinkingLevel: "high" }, [narrow]).contextSize).toBe("200k");
+  });
+
+  it("settles thinking on a level the provider's model offers", () => {
+    expect(defaultSelectionFor("zen:kimi-k3", { contextSize: "200k", thinkingLevel: "xhigh" }, [zen]).thinkingLevel).toBe("high");
+    // "off" is a choice, not a missing level, and every thinking model accepts it.
+    expect(defaultSelectionFor("zen:kimi-k3", { contextSize: "200k", thinkingLevel: "off" }, [zen]).thinkingLevel).toBe("off");
+  });
+
+  it("leaves thinking alone for a model that has none", () => {
+    expect(defaultSelectionFor("zen:ds-free", { contextSize: "200k", thinkingLevel: "high" }, [zen]).thinkingLevel).toBe("high");
+  });
+
+  it("recommends a level for an Anthropic model that cannot run the current one", () => {
+    // Sonnet 4.6 has no xhigh; its recommendation is medium.
+    expect(defaultSelectionFor("claude-sonnet-4-6", { contextSize: "200k", thinkingLevel: "xhigh" }, undefined).thinkingLevel).toBe(
+      "medium",
+    );
+  });
+
+  it("keeps a level the Anthropic model can run", () => {
+    expect(defaultSelectionFor("opus", { contextSize: "200k", thinkingLevel: "low" }, undefined).thinkingLevel).toBe("low");
   });
 });
 

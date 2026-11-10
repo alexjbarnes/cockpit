@@ -1,93 +1,45 @@
 "use client";
 
+import type { Terminal as GhosttyTerminal } from "ghostty-web";
 import { ChevronDown, Keyboard, Minus, Palette, Plus, Settings2, TextCursor, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useIsDesktop } from "@/hooks/use-is-desktop";
 import { type TerminalTheme, useSettings } from "@/hooks/use-settings";
+import { TERMINAL_THEMES, terminalTheme } from "@/lib/terminal-themes";
 import { cn } from "@/lib/utils";
 
 const RESIZE_PREFIX = "\x01R";
 const RESIZE_DEBOUNCE_MS = 150;
 
-const TERMINAL_THEMES: Record<TerminalTheme, { label: string; bg: string; fg: string; cursor: string; selection: string }> = {
-  cockpit: {
-    label: "Cockpit",
-    bg: "#111111",
-    fg: "#e8e8e8",
-    cursor: "#e8e8e8",
-    selection: "rgba(255, 255, 255, 0.15)",
-  },
-  dark: {
-    label: "Dark",
-    bg: "#1e1e1e",
-    fg: "#d4d4d4",
-    cursor: "#aeafad",
-    selection: "rgba(86, 156, 214, 0.3)",
-  },
-  dracula: {
-    label: "Dracula",
-    bg: "#282a36",
-    fg: "#f8f8f2",
-    cursor: "#f8f8f2",
-    selection: "rgba(68, 71, 90, 0.5)",
-  },
-  catppuccin: {
-    label: "Catppuccin",
-    bg: "#1e1e2e",
-    fg: "#cdd6f4",
-    cursor: "#f5e0dc",
-    selection: "rgba(88, 91, 112, 0.4)",
-  },
-  tokyoNight: {
-    label: "Tokyo Night",
-    bg: "#1a1b26",
-    fg: "#a9b1d6",
-    cursor: "#c0caf5",
-    selection: "rgba(41, 46, 66, 0.5)",
-  },
-  nord: {
-    label: "Nord",
-    bg: "#2e3440",
-    fg: "#d8dee9",
-    cursor: "#d8dee9",
-    selection: "rgba(67, 76, 94, 0.5)",
-  },
-  gruvbox: {
-    label: "Gruvbox",
-    bg: "#282828",
-    fg: "#ebdbb2",
-    cursor: "#ebdbb2",
-    selection: "rgba(168, 153, 132, 0.3)",
-  },
-  solarized: {
-    label: "Solarized",
-    bg: "#002b36",
-    fg: "#839496",
-    cursor: "#93a1a1",
-    selection: "rgba(38, 139, 210, 0.3)",
-  },
-  monokai: {
-    label: "Monokai",
-    bg: "#272822",
-    fg: "#f8f8f2",
-    cursor: "#f8f8f0",
-    selection: "rgba(73, 72, 62, 0.5)",
-  },
-  oneDark: {
-    label: "One Dark",
-    bg: "#282c34",
-    fg: "#abb2bf",
-    cursor: "#528bff",
-    selection: "rgba(62, 68, 81, 0.5)",
-  },
-};
+type Ghostty = typeof import("ghostty-web");
+
+let ghosttyPromise: Promise<Ghostty> | null = null;
+
+/** Load and compile ghostty-web's WebAssembly once per page. Terminals are
+ *  opened rarely, so the module stays out of the main bundle until a tab
+ *  mounts; a failed load is retried on the next mount. */
+function loadGhostty(): Promise<Ghostty> {
+  if (!ghosttyPromise) {
+    ghosttyPromise = import("ghostty-web")
+      .then(async (mod) => {
+        await mod.init();
+        return mod;
+      })
+      .catch((error) => {
+        ghosttyPromise = null;
+        throw error;
+      });
+  }
+  return ghosttyPromise;
+}
 
 const termInstanceCache = new Map<
   string,
   {
-    term: import("@xterm/xterm").Terminal;
-    fit: import("@xterm/addon-fit").FitAddon;
+    term: GhosttyTerminal;
     wrapper: HTMLDivElement;
+    theme: TerminalTheme;
+    scrollback: number;
   }
 >();
 
@@ -168,7 +120,7 @@ const EXTRA_KEY_ROWS: Array<Array<{ label: string; data?: string; modifier?: "ct
 /** The terminal's text, newest lines last, as one string — what select mode
  *  hands to the browser so a phone can select and copy it. Capped: the overlay
  *  is a DOM node, and nobody selects their way through 10k lines on a phone. */
-function bufferText(term: import("@xterm/xterm").Terminal): string {
+function bufferText(term: GhosttyTerminal): string {
   const buffer = term.buffer.active;
   const first = Math.max(0, buffer.length - 2500);
   const lines: string[] = [];
@@ -248,8 +200,8 @@ interface InnerProps extends TerminalPanelProps {
 
 function TerminalPanelInner({ terminalId, cwd: _cwd, active = true, onReconnect, reconnecting }: InnerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const termRef = useRef<import("@xterm/xterm").Terminal | null>(null);
-  const fitRef = useRef<import("@xterm/addon-fit").FitAddon | null>(null);
+  const termRef = useRef<GhosttyTerminal | null>(null);
+  const fitRef = useRef<(() => void) | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [ctrlActive, setCtrlActive] = useState(false);
@@ -269,10 +221,18 @@ function TerminalPanelInner({ terminalId, cwd: _cwd, active = true, onReconnect,
   const retryTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   const resizeTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   const connectedOnceRef = useRef(false);
+  const [viewKey, setViewKey] = useState(0);
   const [kbOpen, setKbOpen] = useState(false);
   const fullHeightRef = useRef(0);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const { settings, updateSetting } = useSettings();
+  // The settings provider starts on defaults and loads the stored values
+  // asynchronously. Read the latest values when the terminal is built, and
+  // remember which ones it was built with, so a late load can rebuild it.
+  const liveSettingsRef = useRef(settings);
+  liveSettingsRef.current = settings;
+  const builtThemeRef = useRef<TerminalTheme | null>(null);
+  const builtScrollbackRef = useRef<number | null>(null);
 
   useEffect(() => {
     // interactiveWidget is "resizes-content" (see app/layout.tsx), so the soft
@@ -286,8 +246,8 @@ function TerminalPanelInner({ terminalId, cwd: _cwd, active = true, onReconnect,
       const h = measure();
       fullHeightRef.current = Math.max(fullHeightRef.current, h);
       setKbOpen(h < fullHeightRef.current * 0.75);
-      if (!activeRef.current || !fitRef.current) return;
-      fitRef.current.fit();
+      if (!activeRef.current) return;
+      fitRef.current?.();
     };
     const target: EventTarget = vv ?? window;
     target.addEventListener("resize", handler);
@@ -295,8 +255,8 @@ function TerminalPanelInner({ terminalId, cwd: _cwd, active = true, onReconnect,
   }, []);
 
   useEffect(() => {
-    if (active && fitRef.current) {
-      fitRef.current.fit();
+    if (active) {
+      fitRef.current?.();
     }
   }, [active]);
 
@@ -309,7 +269,7 @@ function TerminalPanelInner({ terminalId, cwd: _cwd, active = true, onReconnect,
     const el = containerRef.current;
     if (!el) return;
     const observer = new ResizeObserver(() => {
-      if (activeRef.current) fitRef.current?.fit();
+      if (activeRef.current) fitRef.current?.();
     });
     observer.observe(el);
     return () => observer.disconnect();
@@ -318,108 +278,204 @@ function TerminalPanelInner({ terminalId, cwd: _cwd, active = true, onReconnect,
   useEffect(() => {
     const term = termRef.current;
     if (!term) return;
-    const theme = TERMINAL_THEMES[settings.terminalTheme] ?? TERMINAL_THEMES.dark;
-    term.options.theme = {
-      background: theme.bg,
-      foreground: theme.fg,
-      cursor: theme.cursor,
-      selectionBackground: theme.selection,
-    };
-    if (containerRef.current) {
-      containerRef.current.parentElement!.style.backgroundColor = theme.bg;
-    }
-  }, [settings.terminalTheme]);
-
-  useEffect(() => {
-    const term = termRef.current;
-    if (!term) return;
     term.options.fontSize = settings.terminalFontSize;
-    fitRef.current?.fit();
+    fitRef.current?.();
   }, [settings.terminalFontSize]);
 
-  useEffect(() => {
-    const term = termRef.current;
-    if (!term) return;
-    term.options.scrollback = settings.terminalScrollback;
-  }, [settings.terminalScrollback]);
-
-  // biome-ignore lint/correctness/useExhaustiveDependencies: settings used only for initial values; live updates handled by dedicated effects above
+  // biome-ignore lint/correctness/useExhaustiveDependencies: settings used only for initial values; font size updates live, while theme and scrollback rebuild the terminal view
   useEffect(() => {
     let cancelled = false;
-    let term: import("@xterm/xterm").Terminal | null = null;
-    let fit: import("@xterm/addon-fit").FitAddon | null = null;
+    let term: GhosttyTerminal | null = null;
     const disposables: Array<{ dispose(): void }> = [];
 
     async function init() {
       const el = containerRef.current;
       if (!el || cancelled) return;
+      const touchDevice = window.matchMedia("(hover: none) and (pointer: coarse)").matches;
 
       const cached = termInstanceCache.get(terminalId);
 
+      // ghostty's fit addon subtracts a fixed 15px for a scrollbar that is
+      // drawn over the canvas anyway, which leaves a band down the right of
+      // the pane and goes stale while the key bar is appearing. Size the
+      // terminal from its own renderer metrics instead, using the full box.
+      function fitTerminal() {
+        const wrapperEl = term?.element;
+        const metrics = term?.renderer?.getMetrics();
+        if (!term || !wrapperEl || wrapperEl.clientWidth === 0 || wrapperEl.clientHeight === 0) return;
+        if (!metrics?.width || !metrics.height) return;
+        const cols = Math.max(2, Math.floor(wrapperEl.clientWidth / metrics.width));
+        const rows = Math.max(1, Math.floor(wrapperEl.clientHeight / metrics.height));
+        if (cols !== term.cols || rows !== term.rows) term.resize(cols, rows);
+      }
+      fitRef.current = fitTerminal;
+
       if (cached) {
         term = cached.term;
-        fit = cached.fit;
         termRef.current = term;
-        fitRef.current = fit;
         connectedOnceRef.current = true;
         el.appendChild(cached.wrapper);
-        const theme = TERMINAL_THEMES[settings.terminalTheme] ?? TERMINAL_THEMES.dark;
-        term.options.theme = { background: theme.bg, foreground: theme.fg, cursor: theme.cursor, selectionBackground: theme.selection };
-        term.options.fontSize = settings.terminalFontSize;
-        term.options.scrollback = settings.terminalScrollback;
-        fit.fit();
+        builtThemeRef.current = cached.theme;
+        builtScrollbackRef.current = cached.scrollback;
+        fitTerminal();
       } else {
-        const [{ Terminal }, { FitAddon }] = await Promise.all([import("@xterm/xterm"), import("@xterm/addon-fit")]);
+        const { Terminal } = await loadGhostty();
         if (cancelled) return;
 
-        const theme = TERMINAL_THEMES[settings.terminalTheme] ?? TERMINAL_THEMES.dark;
+        const initial = liveSettingsRef.current;
         term = new Terminal({
           cursorBlink: true,
-          fontSize: settings.terminalFontSize,
-          scrollback: settings.terminalScrollback,
+          fontSize: initial.terminalFontSize,
+          scrollback: initial.terminalScrollback,
           fontFamily: TERMINAL_FONT_FAMILY,
-          theme: {
-            background: theme.bg,
-            foreground: theme.fg,
-            cursor: theme.cursor,
-            selectionBackground: theme.selection,
-          },
+          theme: terminalTheme(initial.terminalTheme),
         });
         termRef.current = term;
-
-        fit = new FitAddon();
-        fitRef.current = fit;
-        term.loadAddon(fit);
+        builtThemeRef.current = initial.terminalTheme;
+        builtScrollbackRef.current = initial.terminalScrollback;
 
         const wrapper = document.createElement("div");
         wrapper.style.width = "100%";
         wrapper.style.height = "100%";
         el.appendChild(wrapper);
         term.open(wrapper);
-        fit.fit();
+        fitTerminal();
 
-        termInstanceCache.set(terminalId, { term, fit, wrapper });
+        // Ghostty makes this wrapper contenteditable and focuses a clipped
+        // 1px textarea for input. The contenteditable drew its own caret and
+        // capitalised the first letter, and a visible text field draws
+        // Android's selection handle over the terminal. Keep the wrapper out
+        // of focus and park the textarea off-screen; a pointerdown on the
+        // pane focuses it, which still counts as a user gesture for the
+        // keyboard.
+        wrapper.contentEditable = "false";
+        wrapper.style.caretColor = "transparent";
+        const textarea = term.textarea;
+        if (textarea) {
+          textarea.style.left = "-9999px";
+          textarea.style.top = "0";
+          textarea.style.width = "1px";
+          textarea.style.height = "1px";
+          textarea.style.clipPath = "none";
+          textarea.style.opacity = "0";
+          textarea.style.pointerEvents = "none";
+          textarea.style.color = "transparent";
+          textarea.style.background = "transparent";
+          textarea.style.fontSize = "16px";
+          textarea.style.caretColor = "transparent";
+          textarea.style.userSelect = "none";
+          textarea.style.webkitUserSelect = "none";
+          textarea.style.setProperty("-webkit-touch-callout", "none");
+          textarea.setAttribute("autocapitalize", "off");
+          textarea.setAttribute("autocomplete", "off");
+          textarea.setAttribute("autocorrect", "off");
+          textarea.setAttribute("spellcheck", "false");
+          textarea.setAttribute("enterkeyhint", "enter");
+          const blockSelection = (event: Event) => event.preventDefault();
+          textarea.addEventListener("selectstart", blockSelection);
+          textarea.addEventListener("contextmenu", blockSelection);
+        }
+
+        termInstanceCache.set(terminalId, {
+          term,
+          wrapper,
+          theme: initial.terminalTheme,
+          scrollback: initial.terminalScrollback,
+        });
       }
 
-      disposables.push(
-        term.onData((data: string) => {
-          let payload = data;
-          if (ctrlRef.current && data.length === 1) {
-            const upper = data.toUpperCase().charCodeAt(0);
-            if (upper >= 64 && upper < 96) {
-              payload = String.fromCharCode(upper - 64);
-              ctrlRef.current = false;
-              setCtrlActive(false);
-            }
+      // Focusing from the pointerdown keeps the keyboard's opening inside the
+      // user gesture even though the input lives off-screen.
+      if (touchDevice) {
+        const focusInput = () => {
+          const input = term?.textarea;
+          if (input && document.activeElement !== input) input.focus();
+        };
+        el.addEventListener("pointerdown", focusInput, { passive: true });
+        disposables.push({ dispose: () => el.removeEventListener("pointerdown", focusInput) });
+      }
+
+      function deliver(data: string) {
+        let payload = data;
+        if (ctrlRef.current && data.length === 1) {
+          const upper = data.toUpperCase().charCodeAt(0);
+          if (upper >= 64 && upper < 96) {
+            payload = String.fromCharCode(upper - 64);
+            ctrlRef.current = false;
+            setCtrlActive(false);
           }
-          if (altRef.current && payload.length === 1) {
-            payload = `\x1b${payload}`;
-            altRef.current = false;
-            setAltActive(false);
+        }
+        if (altRef.current && payload.length === 1) {
+          payload = `\x1b${payload}`;
+          altRef.current = false;
+          setAltActive(false);
+        }
+        sendData(payload);
+      }
+
+      disposables.push(term.onData(deliver));
+
+      // An on-screen keyboard inserts text rather than producing the keydown
+      // events ghostty encodes, and ghostty only reads composition results.
+      // Forward the textarea's edits ourselves so phone input reaches the PTY;
+      // IME composition still goes through ghostty's compositionend path.
+      const inputElement = term.element;
+      const softKeyboard = term.textarea;
+      if (inputElement) {
+        const clearComposer = () => {
+          if (!softKeyboard) return;
+          softKeyboard.value = "";
+          softKeyboard.setSelectionRange(0, 0);
+        };
+        const onBeforeInput = (event: Event) => {
+          const input = event as InputEvent;
+          if (input.inputType.includes("Composition")) return;
+          switch (input.inputType) {
+            case "insertText":
+            case "insertFromPaste":
+            case "insertReplacementText":
+              if (input.data) deliver(input.data);
+              event.preventDefault();
+              clearComposer();
+              break;
+            case "insertLineBreak":
+            case "insertParagraph":
+              deliver("\r");
+              event.preventDefault();
+              break;
+            case "deleteContentBackward":
+              deliver("\x7f");
+              event.preventDefault();
+              break;
+            case "deleteContentForward":
+              deliver("\x1b[3~");
+              event.preventDefault();
+              break;
+            default:
+              break;
           }
-          sendData(payload);
-        }),
-      );
+        };
+        const onInput = (event: Event) => {
+          const input = event as InputEvent;
+          if (input.isComposing || input.inputType.includes("Composition")) return;
+          if (!(event.target instanceof HTMLTextAreaElement) || !event.target.value) return;
+          deliver(event.target.value.replace(/\r?\n/g, "\r"));
+          clearComposer();
+        };
+        const onCompositionEnd = () => {
+          clearComposer();
+        };
+        inputElement.addEventListener("beforeinput", onBeforeInput);
+        inputElement.addEventListener("input", onInput);
+        inputElement.addEventListener("compositionend", onCompositionEnd);
+        disposables.push({
+          dispose() {
+            inputElement.removeEventListener("beforeinput", onBeforeInput);
+            inputElement.removeEventListener("input", onInput);
+            inputElement.removeEventListener("compositionend", onCompositionEnd);
+          },
+        });
+      }
 
       disposables.push(
         term.onResize(({ cols, rows }) => {
@@ -457,6 +513,9 @@ function TerminalPanelInner({ terminalId, cwd: _cwd, active = true, onReconnect,
           if (lines !== 0) {
             scrollAccum -= lines * pxPerLine;
             term?.scrollLines(lines);
+            // scrollLines shows the bar only when it is the wheel path; the
+            // touch path has to ask for it explicitly.
+            (term as unknown as { showScrollbar?: () => void } | null)?.showScrollbar?.();
           }
         },
         { passive: true },
@@ -559,7 +618,7 @@ function TerminalPanelInner({ terminalId, cwd: _cwd, active = true, onReconnect,
       termRef.current = null;
       fitRef.current = null;
     };
-  }, [terminalId]);
+  }, [terminalId, viewKey]);
 
   const sendToTerminal = useCallback((data: string) => {
     const ws = wsRef.current;
@@ -567,6 +626,25 @@ function TerminalPanelInner({ terminalId, cwd: _cwd, active = true, onReconnect,
       ws.send(data);
     }
   }, []);
+
+  // Ghostty bakes the theme and scrollback into the terminal when it is
+  // created, so changing either rebuilds the view and reattaches to the same
+  // PTY with a full replay. The shell itself is not restarted, and the
+  // settings modal stays open.
+  const rebuildTerminal = useCallback(() => {
+    disposeTerminalInstance(terminalId);
+    connectedOnceRef.current = false;
+    setViewKey((k) => k + 1);
+  }, [terminalId]);
+
+  // A stored theme or scrollback that arrives after the terminal was built
+  // (the settings provider loads them asynchronously) needs the same rebuild
+  // a settings click gets, or the canvas keeps the default palette.
+  useEffect(() => {
+    if (!termRef.current) return;
+    if (builtThemeRef.current === settings.terminalTheme && builtScrollbackRef.current === settings.terminalScrollback) return;
+    rebuildTerminal();
+  }, [settings.terminalTheme, settings.terminalScrollback, rebuildTerminal]);
 
   const handleToolbarKey = useCallback(
     (key: { label: string; data?: string; modifier?: "ctrl" | "alt" }) => {
@@ -630,7 +708,7 @@ function TerminalPanelInner({ terminalId, cwd: _cwd, active = true, onReconnect,
     );
   }
 
-  const currentTheme = TERMINAL_THEMES[settings.terminalTheme] ?? TERMINAL_THEMES.dark;
+  const currentTheme = terminalTheme(settings.terminalTheme);
 
   // The shell reserves the gesture bar's strip for every page; the terminal
   // takes it back with the equal and opposite margin, so its colour runs to the
@@ -639,13 +717,13 @@ function TerminalPanelInner({ terminalId, cwd: _cwd, active = true, onReconnect,
     <div
       className="flex flex-col flex-1 min-h-0"
       style={{
-        backgroundColor: currentTheme.bg,
+        backgroundColor: currentTheme.background,
         marginBottom: "calc(-1 * env(safe-area-inset-bottom))",
         paddingBottom: "env(safe-area-inset-bottom)",
       }}
     >
       <div className="flex-1 min-h-0 relative overflow-hidden">
-        <div ref={containerRef} className="absolute inset-0 px-3 pt-2" />
+        <div ref={containerRef} className="absolute inset-0" data-testid="terminal-viewport" />
         <button
           type="button"
           onClick={() => setSettingsOpen(true)}
@@ -656,7 +734,7 @@ function TerminalPanelInner({ terminalId, cwd: _cwd, active = true, onReconnect,
         {selectMode && (
           <div
             className="absolute inset-0 z-20 overflow-auto px-3 pt-2"
-            style={{ backgroundColor: currentTheme.bg, color: currentTheme.fg }}
+            style={{ backgroundColor: currentTheme.background, color: currentTheme.foreground }}
             data-testid="terminal-select-overlay"
           >
             <pre
@@ -675,7 +753,7 @@ function TerminalPanelInner({ terminalId, cwd: _cwd, active = true, onReconnect,
         )}
       </div>
       {!isDesktop && (kbOpen || keysExpanded || selectMode) && (
-        <div className="shrink-0 relative z-10 border-t border-border/50" style={{ backgroundColor: currentTheme.bg }}>
+        <div className="shrink-0 relative z-10 border-t border-border/50" style={{ backgroundColor: currentTheme.background }}>
           {selectMode ? (
             <div className="flex items-center gap-1.5 px-2 py-1.5" data-testid="terminal-select-bar">
               <div
@@ -877,7 +955,7 @@ function TerminalPanelInner({ terminalId, cwd: _cwd, active = true, onReconnect,
                           : "border-input hover:bg-muted text-muted-foreground",
                       )}
                     >
-                      <div className="h-4 w-4 rounded-sm border border-border/50" style={{ backgroundColor: theme.bg }} />
+                      <div className="h-4 w-4 rounded-sm border border-border/50" style={{ backgroundColor: theme.background }} />
                       {theme.label}
                     </button>
                   ))}

@@ -12,12 +12,13 @@ To reset the password: set `COCKPIT_RESET_PASSWORD=true` and restart.
 
 The Settings page picks the defaults for new sessions:
 
-- Model. Built-in Haiku, Sonnet, or Opus with a version switcher, or any model from a connected gateway or custom provider (see [Providers](#providers)). Models can be set per slot: main, subagent, and fast.
-- Context size. 200K (default) or 1M, for models that support both.
-- Thinking level. Low, Medium, High, XHigh, Max. Trades latency for depth of reasoning. Only the levels the model supports are offered.
-- Default runtime is Stream; choose Stream or PTY per session (see [Sessions: runtime mode](sessions.md#runtime-mode)).
-- Permission bypass. Off by default. When on, Claude skips permission prompts. An orange warning is shown when active.
+- Model. The picker lists Anthropic's Haiku, Sonnet, Opus and Fable with their versions, and every model from a connected gateway or custom provider (see [Providers](providers.md)), with a search and a provider filter. A provider's model is stored qualified, `provider:model`. Models can be set per slot: main, subagent, and fast.
+- Context size. 200K (default) or 1M, for models that support both. A provider's model offers whichever sizes its catalogue declares.
+- Thinking level. Low, Medium, High, XHigh, Max. Trades latency for depth of reasoning. Only the levels the model supports are offered, and picking a model that cannot run the current level moves it to one it can.
+- Runtime. PTY is the default. The deprecated Stream (headless) runtime is off by default; turning it on adds Stream to the new-session dialog, a session's Harness tab and the job editor (see [Sessions: runtime mode](sessions.md#runtime-mode)). The gate is presentation only: an existing Stream session or job keeps working, and the API still accepts it.
+- Permission mode. Manual (default), Auto (Anthropic models only) or Bypass. Bypass skips permission prompts and shows an orange warning when active.
 - Sandbox Bash. Off by default. When on, new sessions run Bash in the OS sandbox, with any domains listed here added to the shared rules below.
+- Ignored session folders. Absolute folders whose Claude sessions are hidden from every session list and from global search, including anything below them. A session still opens by its direct URL. Add a path by typing it or with Browse; each entry can be removed.
 
 Existing sessions keep their own settings. Defaults only apply to new sessions.
 
@@ -136,7 +137,7 @@ While telemetry is on, the sidebar footer's chart button opens Insights (`/insig
 - **Health**: API errors and retries, tool failures, MCP servers that failed to connect, and the time Claude Code spent running hooks.
 - **Activity**: lines added and removed, edits by language, commits and pull requests, prompts per day and by weekday and hour.
 
-Tapping a session anywhere it is listed, or **Session insights** in a session's context ring, narrows every tab to that session and adds **Turns** (each turn split into where its time went, opening into a timeline of its requests and tool calls) and **Context** (how full the context was at each request).
+Tapping a session anywhere it is listed, or **Session insights** in a session's context ring, narrows every tab to that session and adds **Turns** (each turn split into where its time went, opening into a timeline of its requests and tool calls) and **Context** (how full the context was at each request). The context ring's link follows the same "pages in a modal" setting as the sidebar's pages: over the session when it is on, in place when it is off.
 
 Spend is priced by the provider that served each request. Anthropic's models use Claude Code's own figure, which is what the requests would cost at API prices; other providers' models use the provider's catalogue prices at the time you look, and a model with no price is counted as unpriced rather than free. The provider is recorded with each session's telemetry; for telemetry recorded before that, it comes from the session's model setting. Your own active time is not shown: Claude Code only counts typing in its own terminal, which cockpit replaces. Who answered a permission prompt (you, bypass, cockpit's rules or the terminal) is recorded by cockpit from this release on.
 

@@ -1048,6 +1048,26 @@ describe("per-project status config", () => {
     const cleared = applyProjectUpdate(updated, { customStatuses: [] });
     expect(cleared.customStatuses).toEqual([]);
   });
+
+  it("buildProject validates statusOrder names: known, unique, non-empty, trimmed", () => {
+    expect(() => buildProject({ name: "x", prefix: "CK", statusOrder: ["Nope"] })).toThrow(/unknown status/i);
+    expect(() => buildProject({ name: "x", prefix: "CK", statusOrder: ["Backlog", "Backlog"] })).toThrow(/more than once/);
+    expect(() => buildProject({ name: "x", prefix: "CK", statusOrder: ["  "] })).toThrow(/empty/);
+    const p = buildProject({
+      name: "x",
+      prefix: "CK",
+      customStatuses: [{ name: "Blocked" }],
+      statusOrder: [" Blocked ", "Backlog"],
+    });
+    expect(p.statusOrder).toEqual(["Blocked", "Backlog"]);
+  });
+
+  it("applyProjectUpdate drops a removed custom status from the stored order", () => {
+    const p = makeProject("CK", { customStatuses: [{ name: "Blocked" }], statusOrder: ["Blocked", "Backlog"] });
+    expect(applyProjectUpdate(p, { customStatuses: [] }).statusOrder).toEqual(["Backlog"]);
+    const only = makeProject("CK2", { customStatuses: [{ name: "Blocked" }], statusOrder: ["Blocked"] });
+    expect(applyProjectUpdate(only, { customStatuses: [] }).statusOrder).toBeUndefined();
+  });
 });
 
 describe("placeIssue", () => {

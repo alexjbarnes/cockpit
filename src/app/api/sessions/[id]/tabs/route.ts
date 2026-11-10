@@ -23,6 +23,8 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
   return NextResponse.json({
     openTabs,
     activeTabId: prefs?.activeTabId || "chat",
+    splitTabId: prefs?.splitTabId ?? null,
+    rightPaneTabIds: prefs?.rightPaneTabIds ?? [],
   });
 }
 
@@ -33,10 +35,23 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
   const { id } = await params;
   const body = await req.json();
   const openTabs = body.openTabs || [];
-  logDiag(id, "tabs:persist", { count: openTabs.length, terminals: countTerminals(openTabs), activeTabId: body.activeTabId || "chat" });
+  // The split names tabs by id (`file::/path`, `terminal::<id>`), which survives
+  // a reload unchanged, so it is restored exactly where it was left.
+  const splitTabId = typeof body.splitTabId === "string" ? body.splitTabId : null;
+  const rightPaneTabIds = Array.isArray(body.rightPaneTabIds)
+    ? body.rightPaneTabIds.filter((v: unknown): v is string => typeof v === "string")
+    : [];
+  logDiag(id, "tabs:persist", {
+    count: openTabs.length,
+    terminals: countTerminals(openTabs),
+    activeTabId: body.activeTabId || "chat",
+    splitTabId,
+  });
   setSessionPrefs(id, {
     openTabs,
     activeTabId: body.activeTabId || "chat",
+    splitTabId,
+    rightPaneTabIds,
   });
   return NextResponse.json({ ok: true });
 }

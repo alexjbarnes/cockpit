@@ -20,7 +20,6 @@ import {
   Loader2,
   Send,
   Sparkles,
-  Trash2,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useShell } from "@/components/app-shell";
@@ -32,6 +31,7 @@ import { useIsDesktop } from "@/hooks/use-is-desktop";
 import { useSettings } from "@/hooks/use-settings";
 import { useWebSocket } from "@/hooks/use-websocket";
 import { useCheckedFiles } from "@/lib/checked-files";
+import { reindexForFullContent } from "@/lib/pierre-diff";
 import { cn } from "@/lib/utils";
 
 function Checkbox({ checked, onChange, onClick }: { checked: boolean; onChange: () => void; onClick?: (e: React.MouseEvent) => void }) {
@@ -84,102 +84,9 @@ function statusIcon(status: string) {
   }
 }
 
-function statusLabel(status: string) {
-  switch (status) {
-    case "added":
-      return "A";
-    case "deleted":
-      return "D";
-    case "renamed":
-      return "R";
-    case "untracked":
-      return "?";
-    default:
-      return "M";
-  }
-}
-
 function isDark(): boolean {
   if (typeof document === "undefined") return false;
   return document.documentElement.classList.contains("dark");
-}
-
-function reindexForFullContent(meta: FileDiffMetadata, oldContent: string, newContent: string) {
-  const oldLines = oldContent.split(/\r?\n/).map((l) => l + "\n");
-  const newLines = newContent.split(/\r?\n/).map((l) => l + "\n");
-  for (const hunk of meta.hunks) {
-    const delDelta = hunk.deletionStart - 1 - hunk.deletionLineIndex;
-    const addDelta = hunk.additionStart - 1 - hunk.additionLineIndex;
-    hunk.deletionLineIndex = hunk.deletionStart - 1;
-    hunk.additionLineIndex = hunk.additionStart - 1;
-    for (const content of hunk.hunkContent) {
-      content.deletionLineIndex += delDelta;
-      content.additionLineIndex += addDelta;
-    }
-  }
-  meta.deletionLines = oldLines;
-  meta.additionLines = newLines;
-  meta.isPartial = false;
-}
-
-interface FileListProps {
-  files: GitFileChange[];
-  selectedFile: string | null;
-  checkedFiles: Set<string>;
-  onFileClick: (file: GitFileChange) => void;
-  onContextMenu: (e: React.MouseEvent, file: GitFileChange) => void;
-  onToggleFile: (path: string) => void;
-  onToggleAll: () => void;
-}
-
-function FileList({ files, selectedFile, checkedFiles, onFileClick, onContextMenu, onToggleFile, onToggleAll }: FileListProps) {
-  if (files.length === 0) {
-    return <div className="flex items-center justify-center py-12 text-sm text-muted-foreground">Working tree clean</div>;
-  }
-
-  return (
-    <>
-      <div className="px-3 py-1.5 border-b flex items-center gap-2">
-        <Checkbox checked={checkedFiles.size === files.length} onChange={onToggleAll} />
-        <span className="text-xs text-muted-foreground">Select all</span>
-      </div>
-      {files.map((file) => (
-        <div
-          key={file.path}
-          className={cn(
-            "flex items-center gap-2 px-3 py-1.5 text-sm cursor-pointer border-b last:border-b-0 hover:bg-muted/50",
-            selectedFile === file.path && "bg-muted",
-          )}
-          onClick={() => onFileClick(file)}
-          onContextMenu={(e) => onContextMenu(e, file)}
-        >
-          <Checkbox checked={checkedFiles.has(file.path)} onChange={() => onToggleFile(file.path)} onClick={(e) => e.stopPropagation()} />
-          {statusIcon(file.status)}
-          <span className="font-mono text-xs truncate flex-1 min-w-0 text-left" dir="rtl" title={file.path}>
-            <bdo dir="ltr">{file.path}</bdo>
-          </span>
-          {(file.additions > 0 || file.deletions > 0) && (
-            <span className="text-xs font-mono shrink-0 flex items-center gap-1">
-              {file.additions > 0 && <span className="text-green-500">+{file.additions}</span>}
-              {file.deletions > 0 && <span className="text-red-500">-{file.deletions}</span>}
-            </span>
-          )}
-          <span
-            className={cn(
-              "text-xs font-mono shrink-0",
-              file.status === "added" || file.status === "untracked"
-                ? "text-green-500"
-                : file.status === "deleted"
-                  ? "text-red-500"
-                  : "text-yellow-500",
-            )}
-          >
-            {statusLabel(file.status)}
-          </span>
-        </div>
-      ))}
-    </>
-  );
 }
 
 // --- Stacked Diffs ---
@@ -384,6 +291,7 @@ function StackedDiffs({
                       fileDiff={state.fileDiff}
                       options={{
                         theme: { dark: "pierre-dark", light: "pierre-light" },
+                        preferredHighlighter: "highlights",
                         themeType: isDark() ? "dark" : "light",
                         overflow: "wrap",
                         diffStyle,
@@ -444,19 +352,9 @@ function getCachedState(cwd: string): ChangesState {
 
 // --- Main Component ---
 
-export function ChangesView({
-  cwd,
-  sessionId,
-  embeddedChat = true,
-  manageSidebar = true,
-}: {
-  cwd: string;
-  sessionId?: string | null;
-  embeddedChat?: boolean;
-  manageSidebar?: boolean;
-}) {
+export function ChangesView({ cwd, sessionId, embeddedChat = true }: { cwd: string; sessionId?: string | null; embeddedChat?: boolean }) {
   const { settings } = useSettings();
-  const { setSidebarSection, removeSidebarSection, closeSidebar, tabActions } = useShell();
+  const { tabActions } = useShell();
   const { send, subscribe } = useWebSocket();
   const isDesktop = useIsDesktop();
   const [status, setStatus] = useState<GitStatus | null>(null);
@@ -467,11 +365,10 @@ export function ChangesView({
   const [diff, setDiff] = useState<string | null>(null);
   const [singleFileDiff, setSingleFileDiff] = useState<FileDiffMetadata | null>(null);
   const [diffLoading, setDiffLoading] = useState(false);
-  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; file: GitFileChange } | null>(null);
   const [commitMsg, setCommitMsg] = useState(cached.commitMsg);
   const [committing, setCommitting] = useState(false);
   const [commitResult, setCommitResult] = useState<{ ok: boolean; message: string } | null>(null);
-  const { checkedFiles, toggleFile, toggleAll: sharedToggleAll, setCheckedFiles } = useCheckedFiles(cwd);
+  const { checkedFiles, toggleFile, setCheckedFiles } = useCheckedFiles(cwd);
   const [pushOnCommit, setPushOnCommit] = useState(cached.pushOnCommit);
   const [commitPanelOpen, setCommitPanelOpen] = useState(cached.commitPanelOpen);
   const [generating, setGenerating] = useState(false);
@@ -481,7 +378,6 @@ export function ChangesView({
   const [chatRatio, setChatRatio] = useState(cached.chatRatio);
   const [scrollToFile, setScrollToFile] = useState<string | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
-  const contextMenuRef = useRef<HTMLDivElement>(null);
 
   // Persist state changes to cache
   useEffect(() => {
@@ -615,47 +511,6 @@ export function ChangesView({
     fetchDiff(first.path);
   }, [status, selectedFile, stackedMode, fetchDiff]);
 
-  const handleFileClick = useCallback(
-    (file: GitFileChange) => {
-      if (stackedMode) {
-        setScrollToFile(file.path);
-      } else {
-        setSelectedFile(file.path);
-        fetchDiff(file.path);
-        setContextMenu(null);
-        closeSidebar();
-      }
-    },
-    [stackedMode, fetchDiff, closeSidebar],
-  );
-
-  const handleContextMenu = useCallback((e: React.MouseEvent, file: GitFileChange) => {
-    e.preventDefault();
-    setContextMenu({ x: e.clientX, y: e.clientY, file });
-  }, []);
-
-  const handleDiscard = useCallback(
-    async (file: GitFileChange) => {
-      setContextMenu(null);
-      try {
-        const res = await fetch("/api/git/discard", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ cwd, file: file.path, status: file.status }),
-        });
-        if (!res.ok) throw new Error("Failed");
-        if (selectedFile === file.path) {
-          setSelectedFile(null);
-          setDiff(null);
-        }
-        fetchStatus();
-      } catch {
-        // Could show error toast
-      }
-    },
-    [cwd, selectedFile, fetchStatus],
-  );
-
   const handleCommit = useCallback(async () => {
     if (!commitMsg.trim() || checkedFiles.size === 0) return;
     setCommitting(true);
@@ -729,11 +584,6 @@ export function ChangesView({
     }
   }, [cwd, fetchStatus]);
 
-  const toggleAll = useCallback(() => {
-    if (!status) return;
-    sharedToggleAll(status.files.map((f) => f.path));
-  }, [status, sharedToggleAll]);
-
   const handleResize = useCallback((delta: number) => {
     const width = window.innerWidth || 1;
     setChatRatio((r) => Math.max(MIN_CHAT_RATIO, Math.min(MAX_CHAT_RATIO, r + delta / width)));
@@ -750,56 +600,6 @@ export function ChangesView({
     },
     [cwd, tabActions],
   );
-
-  useEffect(() => {
-    if (!manageSidebar) return;
-    if (!status || status.files.length === 0) {
-      removeSidebarSection("git-changes");
-      return;
-    }
-    setSidebarSection({
-      id: "git-changes",
-      title: "Changes",
-      order: 20,
-      badge: String(status.files.length),
-      content: (
-        <FileList
-          files={status.files}
-          selectedFile={stackedMode ? null : selectedFile}
-          checkedFiles={checkedFiles}
-          onFileClick={handleFileClick}
-          onContextMenu={handleContextMenu}
-          onToggleFile={toggleFile}
-          onToggleAll={toggleAll}
-        />
-      ),
-    });
-    return () => removeSidebarSection("git-changes");
-  }, [
-    manageSidebar,
-    status,
-    selectedFile,
-    checkedFiles,
-    stackedMode,
-    handleFileClick,
-    handleContextMenu,
-    toggleFile,
-    toggleAll,
-    setSidebarSection,
-    removeSidebarSection,
-  ]);
-
-  // Close context menu on click outside
-  useEffect(() => {
-    if (!contextMenu) return;
-    const handler = (e: MouseEvent) => {
-      if (contextMenuRef.current && !contextMenuRef.current.contains(e.target as Node)) {
-        setContextMenu(null);
-      }
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, [contextMenu]);
 
   if (loading) {
     return (
@@ -937,6 +737,7 @@ export function ChangesView({
                         fileDiff={singleFileDiff}
                         options={{
                           theme: { dark: "pierre-dark", light: "pierre-light" },
+                          preferredHighlighter: "highlights",
                           themeType: isDark() ? "dark" : "light",
                           overflow: "wrap",
                           diffStyle: settings.diffStyle,
@@ -1026,23 +827,6 @@ export function ChangesView({
           </>
         )}
       </div>
-
-      {/* Context menu */}
-      {contextMenu && (
-        <div
-          ref={contextMenuRef}
-          className="fixed z-50 rounded border bg-background shadow-lg py-1 min-w-[140px]"
-          style={{ left: contextMenu.x, top: contextMenu.y }}
-        >
-          <button
-            onClick={() => handleDiscard(contextMenu.file)}
-            className="w-full px-3 py-1.5 text-sm text-left hover:bg-muted flex items-center gap-2 text-red-500"
-          >
-            <Trash2 className="h-3.5 w-3.5" />
-            Discard changes
-          </button>
-        </div>
-      )}
     </div>
   );
 }

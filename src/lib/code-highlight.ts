@@ -1,6 +1,16 @@
+import type { ThemedToken } from "@pierre/highlights";
 import { pathBasename } from "@/lib/path";
 
-const EXT_TO_LANG: Record<string, string> = {
+export type HighlightTheme = "pierre-dark" | "pierre-light";
+
+/** Language names our extension map uses that Pierre spells differently. */
+export const LANGUAGE_ALIASES: Record<string, string> = {};
+
+export function aliasedLanguage(language: string): string {
+  return LANGUAGE_ALIASES[language] ?? language;
+}
+
+export const EXT_TO_LANG: Record<string, string> = {
   ts: "typescript",
   tsx: "tsx",
   js: "javascript",
@@ -78,10 +88,41 @@ export function stripLineNumbers(raw: string): { code: string; startLine: number
   return { code: stripped.join("\n"), startLine };
 }
 
-export async function highlightCode(code: string, language: string, theme: "github-dark" | "github-light"): Promise<string | null> {
+function escapeHtml(text: string): string {
+  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function tokenHtml(token: ThemedToken): string {
+  const styles: string[] = [];
+  if (token.color) styles.push(`color:${token.color}`);
+  const fontStyle = token.fontStyle ?? 0;
+  if (fontStyle & 1) styles.push("font-style:italic");
+  if (fontStyle & 2) styles.push("font-weight:700");
+  if (fontStyle & 4) styles.push("text-decoration:underline");
+  if (fontStyle & 8) styles.push("text-decoration:line-through");
+  const attr = styles.length > 0 ? ` style="${styles.join(";")}"` : "";
+  return `<span${attr}>${escapeHtml(token.content)}</span>`;
+}
+
+/** Turn Pierre's per-line tokens into the HTML the code block styles expect:
+ *  one `.line` span per line, which keeps the counter-based line numbers and
+ *  the wrap CSS working. */
+export function tokensToHtml(tokens: readonly (readonly ThemedToken[])[], fg: string, theme: HighlightTheme): string {
+  const lines = tokens.map((line) => `<span class="line">${line.map(tokenHtml).join("")}</span>`).join("\n");
+  const color = fg ? ` style="color:${fg}"` : "";
+  return `<pre class="highlights" data-theme="${theme}"${color}><code>${lines}</code></pre>`;
+}
+
+export async function highlightCode(code: string, language: string, theme: HighlightTheme): Promise<string | null> {
   try {
-    const shiki = await import("shiki/bundle/full");
-    return await shiki.codeToHtml(code, { lang: language, theme });
+    const [highlights, themeModule] = await Promise.all([
+      import("@pierre/highlights"),
+      theme === "pierre-dark" ? import("@pierre/highlights/themes/pierre-dark") : import("@pierre/highlights/themes/pierre-light"),
+    ]);
+    const lang = aliasedLanguage(language);
+    if (!highlights.isSupportedLanguage(lang)) return null;
+    const result = highlights.codeToTokens(code, { lang, theme: themeModule.default });
+    return tokensToHtml(result.tokens, result.fg ?? "", theme);
   } catch {
     return null;
   }

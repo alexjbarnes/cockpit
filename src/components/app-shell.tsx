@@ -2,7 +2,7 @@
 
 import { Menu, Terminal, X } from "lucide-react";
 import Image from "next/image";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { AgentTranscriptProvider } from "@/components/agent-transcript-modal";
 import { AuthGuard } from "@/components/auth-guard";
@@ -14,10 +14,12 @@ import { BackgroundTasksButton } from "@/components/task-indicator";
 import { Button } from "@/components/ui/button";
 import { UsageButton } from "@/components/usage-modal";
 import { useEmbedded } from "@/hooks/use-embedded";
+import { useSettings } from "@/hooks/use-settings";
 import { WebSocketProvider } from "@/hooks/use-websocket";
 import { headerActionsVisibility } from "@/lib/header-actions";
 import { isModalPath, type PageModalMessage, pageModalMessage } from "@/lib/page-modal";
 import type { BackgroundTask, InitData } from "@/types";
+import { PageModal, usePageModal } from "./page-modal";
 
 export interface SidebarSectionConfig {
   id: string;
@@ -62,6 +64,9 @@ interface ShellContextValue {
   closeSidebar: () => void;
   tabActions: TabActions | null;
   setTabActions: (actions: TabActions | null) => void;
+  /** Opens a page in the page modal when the setting allows it. Returns false
+   *  when it did not, so the caller can navigate instead. */
+  openPageModal: (path: string) => boolean;
 }
 
 const ShellContext = createContext<ShellContextValue>({
@@ -84,6 +89,7 @@ const ShellContext = createContext<ShellContextValue>({
   closeSidebar: () => {},
   tabActions: null,
   setTabActions: () => {},
+  openPageModal: () => false,
 });
 
 export function useShell() {
@@ -231,6 +237,30 @@ function EmbeddedPageBridge({ pathname }: { pathname: string }) {
   return null;
 }
 
+/** Goes where a tapped notification points, when the service worker asks
+ *  (see notificationclick in sw.js). Moving within the app keeps its connection
+ *  and what it has loaded; the worker reloads the page only if nobody answers. */
+function ServiceWorkerNavigation() {
+  const router = useRouter();
+
+  useEffect(() => {
+    const sw = typeof navigator === "undefined" ? undefined : navigator.serviceWorker;
+    if (!sw) return;
+    const onMessage = (event: MessageEvent) => {
+      if (event.data?.type !== "cockpit:navigate" || typeof event.data.url !== "string") return;
+      const url = new URL(event.data.url, window.location.origin);
+      if (url.origin !== window.location.origin) return;
+      router.push(url.pathname + url.search + url.hash);
+      event.ports[0]?.postMessage(true);
+    };
+    sw.addEventListener("message", onMessage);
+    sw.startMessages();
+    return () => sw.removeEventListener("message", onMessage);
+  }, [router]);
+
+  return null;
+}
+
 export function AppShell({ children }: { children: ReactNode }) {
   const sidebarRef = useRef<SidebarHandle>(null);
   const embedded = useEmbedded();
@@ -244,6 +274,10 @@ export function AppShell({ children }: { children: ReactNode }) {
   const [sidebarSectionsMap, setSidebarSectionsMap] = useState<Map<string, SidebarSectionConfig>>(new Map());
   const [runtime, setRuntimeState] = useState<"pty" | "stream">("stream");
   const [tabActions, setTabActionsState] = useState<TabActions | null>(null);
+  // The page modal lives here rather than in the sidebar so anything in the
+  // shell, including a session's context panel, can open a page in it.
+  const { settings: appSettings, reload: reloadSettings } = useSettings();
+  const pageModal = usePageModal(reloadSettings);
 
   const setSidebarSection = useCallback((section: SidebarSectionConfig) => {
     setSidebarSectionsMap((prev) => {
@@ -294,6 +328,18 @@ export function AppShell({ children }: { children: ReactNode }) {
     setTabActionsState(actions);
   }, []);
 
+  /** Opens a page over the current one when the setting allows it; false means
+   *  the caller should navigate instead. Inside the modal's own frame there is
+   *  nowhere to put a second one, so it is always false there. */
+  const openPageModal = useCallback(
+    (path: string) => {
+      if (embedded || !appSettings.modalPagesEnabled || !isModalPath(path.split("?")[0])) return false;
+      pageModal.open(path);
+      return true;
+    },
+    [embedded, appSettings.modalPagesEnabled, pageModal.open],
+  );
+
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === "b") {
@@ -331,6 +377,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             closeSidebar,
             tabActions,
             setTabActions,
+            openPageModal,
           }}
         >
           <AgentTranscriptProvider sessionId={sessionId} cwd={cwd}>
@@ -346,6 +393,7 @@ export function AppShell({ children }: { children: ReactNode }) {
               }}
             >
               {!embedded && <Sidebar ref={sidebarRef} />}
+              {!embedded && <PageModal path={pageModal.path} onClose={pageModal.close} onOpenInApp={pageModal.openInApp} />}
               <div className="flex-1 min-h-0 min-w-0 flex flex-col">
                 <header className="shrink-0 flex items-center gap-2 border-b px-4 py-2 bg-background">
                   {!embedded && (
@@ -390,6 +438,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             {/* Only the real shell: the page-modal iframe renders its own, and
                 two shells would each raise a banner for the same event. */}
             {!embedded && <SessionAlerts />}
+            {!embedded && <ServiceWorkerNavigation />}
             {embedded && <EmbeddedPageBridge pathname={pathname} />}
           </AgentTranscriptProvider>
         </ShellContext.Provider>

@@ -43,6 +43,7 @@ export function DiffViewer({ filePath, oldString, newString, dark }: DiffViewerP
           patch={patch}
           options={{
             theme: { dark: "pierre-dark", light: "pierre-light" },
+            preferredHighlighter: "highlights",
             themeType: dark ? "dark" : "light",
             disableFileHeader: true,
             overflow: "wrap",

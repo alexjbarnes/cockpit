@@ -1,10 +1,11 @@
 // Regression: opening the Settings page must not shift content downward when
 // the Claude Code and Cockpit version cards finish loading.
 //
-// The version cards are reserved from first paint with a min-height wrapper.
-// Before the fix, the cards appeared late and pushed the nav rows down
-// (cumulative layout shift). This test intercepts the version endpoints
-// behind manual gates so the before/after layout state is deterministic.
+// The version cards are reserved from first paint with a min-height wrapper,
+// so they are on screen while their numbers load. Before the fix, the cards
+// appeared late and pushed the nav rows down (cumulative layout shift). This
+// test intercepts the version endpoints behind manual gates so the before and
+// after states are deterministic; what must not change is their layout.
 
 import { expect, test } from "./fixtures";
 
@@ -56,20 +57,22 @@ test("settings version cards do not shift the nav row on load", async ({ page, h
 
   await page.goto(`${harness.cockpitUrl}/settings`);
 
-  // Self-validate that interception is holding: the nav row should be visible
-  // but the version cards should NOT yet be present
+  // Self-validate that interception is holding: the nav row and both cards are
+  // on screen, but the cards are still showing their placeholders.
   const anchor = page.getByRole("button", { name: "Session Defaults" });
   await expect(anchor).toBeVisible();
-  await expect(page.getByText("Claude Code")).toHaveCount(0);
-  await expect(page.getByText("Cockpit", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("Claude Code")).toBeVisible();
+  await expect(page.getByText("Cockpit", { exact: true })).toBeVisible();
+  await expect(page.getByText("2.0.0")).toHaveCount(0);
+  await expect(page.getByText("0.4.0")).toHaveCount(0);
   const before = await anchor.boundingBox();
   expect(before).not.toBeNull();
 
-  // Release both version gates and wait for the cards to appear
+  // Release both version gates and wait for the numbers to land.
   releaseVersion();
   releaseCockpit();
-  await expect(page.getByText("Claude Code")).toBeVisible();
-  await expect(page.getByText("Cockpit", { exact: true })).toBeVisible();
+  await expect(page.getByText("2.0.0")).toBeVisible();
+  await expect(page.getByText("0.4.0")).toBeVisible();
 
   const after = await anchor.boundingBox();
   expect(after).not.toBeNull();

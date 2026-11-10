@@ -1,6 +1,7 @@
 "use client";
 
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useRef, useState } from "react";
+import { aliveAtPongDeadline, PONG_TIMEOUT_MS, replaceOnResume, socketHealth } from "@/lib/ws-health";
 import type { ClientMessage, ServerMessage } from "@/types";
 
 type MessageHandler = (msg: ServerMessage) => void;
@@ -28,6 +29,12 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
   const pongTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const awaitingPong = useRef(false);
   const healthTimer = useRef<ReturnType<typeof setInterval>>(undefined);
+  /** When the current socket was created, and when anything last arrived on it. */
+  const createdAt = useRef(0);
+  const lastReceivedAt = useRef(0);
+  /** Wall-clock time the page was hidden, or 0 while it is visible. The
+   *  monotonic clock can stand still while a phone is locked. */
+  const hiddenAt = useRef(0);
 
   const scheduleReconnect = useCallback(() => {
     if (!mountedRef.current) return;
@@ -85,6 +92,7 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
 
     const ws = new WebSocket(url);
     wsRef.current = ws;
+    createdAt.current = performance.now();
     connectingRef.current = false;
 
     ws.onopen = () => {
@@ -99,6 +107,7 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
     };
 
     ws.onmessage = (event) => {
+      lastReceivedAt.current = performance.now();
       const msg: ServerMessage = JSON.parse(event.data);
       if (msg.type === "pong") {
         clearTimeout(pongTimer.current);
@@ -118,6 +127,8 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
       if (wsRef.current === ws) {
         wsRef.current = null;
       }
+      clearTimeout(pongTimer.current);
+      awaitingPong.current = false;
       if (inflightRef.current.length > 0) {
         queueRef.current.push(...inflightRef.current);
         inflightRef.current = [];
@@ -161,6 +172,8 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
       ws.close();
       wsRef.current = null;
     }
+    clearTimeout(pongTimer.current);
+    awaitingPong.current = false;
     setConnected(false);
     reconnectDelay.current = 500;
     connectRef.current?.();
@@ -169,6 +182,40 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
   // Periodic health check: while page is visible, verify connection every 3s.
   // Mobile browsers aggressively kill WebSockets even for visible pages.
   useEffect(() => {
+    // Ping an open socket, give one still opening time to finish, and replace
+    // one that is dead. See ws-health for the limits.
+    const check = () => {
+      const ws = wsRef.current;
+      if (!ws) return;
+
+      const health = socketHealth(ws.readyState, createdAt.current, performance.now());
+      if (health === "opening") return;
+      if (health === "dead") {
+        console.log(`[ws] health: dead connection (readyState=${ws.readyState}), tearing down`);
+        tearDownAndReconnect();
+        return;
+      }
+
+      if (awaitingPong.current) return;
+      awaitingPong.current = true;
+      const sentAt = performance.now();
+      try {
+        ws.send(JSON.stringify({ type: "ping" }));
+      } catch {
+        awaitingPong.current = false;
+        tearDownAndReconnect();
+        return;
+      }
+
+      clearTimeout(pongTimer.current);
+      pongTimer.current = setTimeout(() => {
+        awaitingPong.current = false;
+        if (aliveAtPongDeadline(sentAt, lastReceivedAt.current)) return;
+        console.log("[ws] health: no pong and nothing received, tearing down");
+        tearDownAndReconnect();
+      }, PONG_TIMEOUT_MS);
+    };
+
     const startHealthCheck = () => {
       clearInterval(healthTimer.current);
       if (document.visibilityState !== "visible") return;
@@ -182,33 +229,7 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
           connectRef.current?.();
           return;
         }
-
-        const ws = wsRef.current;
-        if (!ws) return;
-
-        // Dead connection - tear down
-        if (ws.readyState !== WebSocket.OPEN) {
-          console.log(`[ws] health: dead connection (readyState=${ws.readyState}), tearing down`);
-          tearDownAndReconnect();
-          return;
-        }
-
-        // Probe with ping
-        if (awaitingPong.current) return;
-        awaitingPong.current = true;
-        try {
-          ws.send(JSON.stringify({ type: "ping" }));
-        } catch {
-          awaitingPong.current = false;
-          tearDownAndReconnect();
-          return;
-        }
-
-        clearTimeout(pongTimer.current);
-        pongTimer.current = setTimeout(() => {
-          awaitingPong.current = false;
-          tearDownAndReconnect();
-        }, 2000);
+        check();
       }, 3000);
     };
 
@@ -216,6 +237,8 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
       if (document.visibilityState === "visible") {
         console.log(`[ws] page visible (hasWs=${!!wsRef.current}, connecting=${connectingRef.current})`);
         startHealthCheck();
+        const hiddenFor = hiddenAt.current ? Date.now() - hiddenAt.current : 0;
+        hiddenAt.current = 0;
 
         // Immediate check on becoming visible
         if (!wsRef.current && !connectingRef.current) {
@@ -225,31 +248,14 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
           connectRef.current?.();
           return;
         }
-
-        const ws = wsRef.current;
-        if (!ws) return;
-
-        if (ws.readyState !== WebSocket.OPEN) {
+        if (wsRef.current && replaceOnResume(hiddenFor, window.matchMedia("(pointer: coarse)").matches)) {
+          console.log(`[ws] back after ${Math.round(hiddenFor / 1000)}s in the background, replacing the connection`);
           tearDownAndReconnect();
           return;
         }
-
-        if (awaitingPong.current) return;
-        awaitingPong.current = true;
-        try {
-          ws.send(JSON.stringify({ type: "ping" }));
-        } catch {
-          awaitingPong.current = false;
-          tearDownAndReconnect();
-          return;
-        }
-
-        clearTimeout(pongTimer.current);
-        pongTimer.current = setTimeout(() => {
-          awaitingPong.current = false;
-          tearDownAndReconnect();
-        }, 2000);
+        check();
       } else {
+        hiddenAt.current = Date.now();
         clearInterval(healthTimer.current);
       }
     };

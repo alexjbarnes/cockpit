@@ -257,6 +257,27 @@ describe("HookRouter + bridge round-trip", () => {
     router.unregister(sessionId);
   });
 
+  it("reports the working directory every hook payload names", async () => {
+    const sessionId = "session-cwd";
+    const seen: string[] = [];
+    const token = router.register(sessionId, {
+      onCwdChanged(cwd) {
+        seen.push(cwd);
+      },
+      onPreToolUse() {},
+    });
+    for (const cwd of ["/repo", "/repo/.worktrees/feature"]) {
+      const res = await fetch(`${url}/hook/PreToolUse`, {
+        method: "POST",
+        headers: { "x-cockpit-session": sessionId, "x-cockpit-token": token, "content-type": "application/json" },
+        body: JSON.stringify({ tool_name: "Read", cwd }),
+      });
+      expect(res.status).toBe(200);
+    }
+    expect(seen).toEqual(["/repo", "/repo/.worktrees/feature"]);
+    router.unregister(sessionId);
+  });
+
   it("dispatches UserPromptSubmit to the registered handler", async () => {
     const sessionId = "session-ups";
     let received: unknown;

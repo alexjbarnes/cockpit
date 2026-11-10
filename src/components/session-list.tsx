@@ -6,7 +6,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { useSettings } from "@/hooks/use-settings";
 import { useWebSocket } from "@/hooks/use-websocket";
+import { type NewSessionInput, newSessionBody } from "@/lib/new-session";
 import type { SessionGroup, SessionInfo } from "@/types";
 import { GlobalSearchButton } from "./global-search-modal";
 import { NewSessionDialog } from "./new-session-dialog";
@@ -152,6 +154,7 @@ function DirectoryGroup({
 export function SessionList() {
   const router = useRouter();
   const { connected } = useWebSocket();
+  const { settings } = useSettings();
   const [groups, setGroups] = useState<SessionGroup[]>(cachedGroups || []);
   const [favorites, setFavorites] = useState<Set<string>>(new Set());
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -205,16 +208,23 @@ export function SessionList() {
     });
   };
 
-  const createSession = async (cwd: string, name: string, runtime: "pty" | "stream") => {
-    const res = await fetch("/api/sessions", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ cwd, name: name || undefined, runtime }),
-    });
-    if (res.ok) {
+  const createSession = async (input: NewSessionInput): Promise<{ ok: boolean; error?: string }> => {
+    try {
+      const res = await fetch("/api/sessions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(newSessionBody(input)),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        return { ok: false, error: typeof data.error === "string" ? data.error : "Could not create the session" };
+      }
       const data = await res.json();
       await pinSession(data.sessionId);
-      router.push(`/sessions/${data.sessionId}?cwd=${encodeURIComponent(cwd)}`);
+      router.push(`/sessions/${data.sessionId}?cwd=${encodeURIComponent(input.cwd.trim())}`);
+      return { ok: true };
+    } catch {
+      return { ok: false, error: "Failed to connect" };
     }
   };
 
@@ -287,7 +297,12 @@ export function SessionList() {
           isFavorite
           onToggleFavorite={() => toggleFavorite(group.cwd)}
           onSelectSession={navigateToSession}
-          onCreateSession={(cwd) => setQuickCreateCwd(cwd)}
+          onCreateSession={(cwd) => {
+            // With Stream hidden there is nothing to choose, so the picker is
+            // skipped entirely.
+            if (settings.streamRuntimeEnabled) setQuickCreateCwd(cwd);
+            else void createSession({ cwd, runtime: "pty" });
+          }}
           onDeleteSession={(s) => setDeleteTarget({ type: "single", session: s })}
           onDeleteAll={(g) => setDeleteTarget({ type: "bulk", group: g })}
         />
@@ -302,14 +317,19 @@ export function SessionList() {
           isFavorite={false}
           onToggleFavorite={() => toggleFavorite(group.cwd)}
           onSelectSession={navigateToSession}
-          onCreateSession={(cwd) => setQuickCreateCwd(cwd)}
+          onCreateSession={(cwd) => {
+            // With Stream hidden there is nothing to choose, so the picker is
+            // skipped entirely.
+            if (settings.streamRuntimeEnabled) setQuickCreateCwd(cwd);
+            else void createSession({ cwd, runtime: "pty" });
+          }}
           onDeleteSession={(s) => setDeleteTarget({ type: "single", session: s })}
           onDeleteAll={(g) => setDeleteTarget({ type: "bulk", group: g })}
         />
       ))}
 
       <div className="fixed bottom-6 right-6">
-        <Button size="lg" className="rounded-full shadow-lg" onClick={() => setDialogOpen(true)}>
+        <Button size="lg" className="rounded-full shadow-lg" onClick={() => setDialogOpen(true)} data-testid="new-session-open">
           <Plus className="h-5 w-5 mr-1" />
           New Session
         </Button>
@@ -333,7 +353,7 @@ export function SessionList() {
               onClick={() => {
                 const cwd = quickCreateCwd!;
                 setQuickCreateCwd(null);
-                createSession(cwd, "", "pty");
+                void createSession({ cwd, runtime: "pty" });
               }}
               className="w-full text-left rounded-lg border border-input bg-card px-4 py-3 transition-colors hover:border-foreground hover:bg-accent"
             >
@@ -350,7 +370,7 @@ export function SessionList() {
               onClick={() => {
                 const cwd = quickCreateCwd!;
                 setQuickCreateCwd(null);
-                createSession(cwd, "", "stream");
+                void createSession({ cwd, runtime: "stream" });
               }}
               className="w-full text-left rounded-lg border border-input bg-card px-4 py-3 transition-colors hover:border-foreground hover:bg-accent"
             >

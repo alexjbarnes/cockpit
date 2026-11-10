@@ -4,6 +4,10 @@ export interface SessionInfo {
   id: string;
   name: string;
   cwd: string;
+  /** Where the CLI is working now, when it is not `cwd`: EnterWorktree moves a
+   *  session into a git worktree, and the file tree, diffs and changes follow
+   *  it. Live only, cleared when the CLI is back in `cwd`. */
+  worktreeCwd?: string;
   createdAt: number;
   lastActiveAt: number;
   status: "idle" | "running";
@@ -79,6 +83,10 @@ export interface ChatMessage {
   /** A user message sent while Claude was working that Claude has not read
    *  yet. Only ever on the local copy: the transcript's has no such flag. */
   awaitingRead?: boolean;
+  /** Claude Code wrote this entry itself when a previous context ran out. It
+   *  is a summary of the conversation, not a prompt, so it must not name the
+   *  session. */
+  isCompactSummary?: boolean;
 }
 
 export interface GlobalSearchResult {
@@ -493,6 +501,11 @@ export interface Project {
   // lifecycle in canonical order (i.e. today's behaviour, no migration needed).
   disabledStatuses?: string[]; // built-in statuses this project hides
   customStatuses?: CustomStatus[]; // additive columns, order = array order
+  // Display order for this project's status sections, by name, covering both
+  // built-ins and its custom statuses. A status it does not name keeps its
+  // default position after the named ones, so a partial list is a prefix
+  // rather than a filter. Applied by resolveProjectStatuses.
+  statusOrder?: string[];
 }
 
 /**

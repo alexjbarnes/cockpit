@@ -149,7 +149,10 @@ const SCENES: Scene[] = [
     name: "split",
     async run(s, page) {
       await s.caption("Files, a terminal and the chat, side by side", "Open anything in a tab, split the view, and edit in place");
-      await s.click(page.getByText("Session Files", { exact: true }), { settle: 300 });
+      await s.click(page.getByTestId("sidebar-section-files-changes").getByRole("button", { name: /files & changes/i }), {
+        settle: 300,
+      });
+      await s.click(page.getByTestId("sidebar-files-changes-switch").getByRole("button", { name: "Files" }), { settle: 300 });
       await s.click(page.getByText("README.md", { exact: true }).first(), { settle: 400 });
       await s.click(page.locator('button[title="Split view"]'), { settle: 500 });
       await s.click(page.getByTestId("file-edit"), { settle: 300 });

@@ -40,6 +40,8 @@ describe("defaults", () => {
       telemetryEnabled: false,
       allowSonnet1m: false,
       sessionAlerts: false,
+      streamRuntimeEnabled: false,
+      ignoredSessionFolders: [],
     });
   });
 
@@ -73,7 +75,55 @@ describe("defaults", () => {
       telemetryEnabled: false,
       allowSonnet1m: false,
       sessionAlerts: false,
+      streamRuntimeEnabled: false,
+      ignoredSessionFolders: [],
     });
+  });
+
+  it("streamRuntimeEnabled defaults off and round-trips through setDefaults", async () => {
+    const fs = await import("node:fs");
+    vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify({}));
+    vi.mocked(fs.writeFileSync).mockImplementation(() => {});
+    vi.mocked(fs.mkdirSync).mockImplementation(() => "");
+
+    const { getDefaults, setDefaults } = await import("@/server/defaults");
+    expect(getDefaults().streamRuntimeEnabled).toBe(false);
+
+    const result = setDefaults({ streamRuntimeEnabled: true });
+    expect(result.streamRuntimeEnabled).toBe(true);
+    expect(JSON.parse(String(vi.mocked(fs.writeFileSync).mock.calls[0][1])).streamRuntimeEnabled).toBe(true);
+  });
+
+  it("cleans and expands ignored session folders on read", async () => {
+    const fs = await import("node:fs");
+    vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify({ ignoredSessionFolders: [" /a/ ", "/a", "relative", "~/reviews/"] }));
+
+    const { getDefaults } = await import("@/server/defaults");
+    expect(getDefaults().ignoredSessionFolders).toEqual(["/a", "/home/user/reviews"]);
+  });
+
+  it("reads a malformed ignored-folder value as an empty list", async () => {
+    const fs = await import("node:fs");
+    vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify({ ignoredSessionFolders: " /a " }));
+
+    const { getDefaults } = await import("@/server/defaults");
+    expect(getDefaults().ignoredSessionFolders).toEqual([]);
+  });
+
+  it("cleans ignored session folders on write and keeps the old list for a malformed value", async () => {
+    const fs = await import("node:fs");
+    vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify({ ignoredSessionFolders: ["/keep"] }));
+    vi.mocked(fs.writeFileSync).mockImplementation(() => {});
+    vi.mocked(fs.mkdirSync).mockImplementation(() => "");
+
+    const { setDefaults } = await import("@/server/defaults");
+    const result = setDefaults({ ignoredSessionFolders: [" /a/ ", "/a", "relative", "~/x"] });
+    expect(result.ignoredSessionFolders).toEqual(["/a", "/home/user/x"]);
+    expect(JSON.parse(String(vi.mocked(fs.writeFileSync).mock.calls[0][1])).ignoredSessionFolders).toEqual(["/a", "/home/user/x"]);
+
+    vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify({ ignoredSessionFolders: ["/keep"] }));
+    const after = setDefaults({ ignoredSessionFolders: "not-an-array" as unknown as string[] });
+    expect(after.ignoredSessionFolders).toEqual(["/keep"]);
   });
 
   it("migrates legacy model field to modelSlots on read", async () => {
@@ -310,6 +360,35 @@ describe("defaults", () => {
       process.env.COCKPIT_TELEMETRY_ENABLED = "maybe";
       expect(await read({ telemetryEnabled: true })).toBe(true);
     });
+  });
+
+  it("stores any provider's model as the default, keeping only well-shaped slots", async () => {
+    const fs = await import("node:fs");
+    vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify({}));
+
+    const { setDefaults } = await import("@/server/defaults");
+    const result = setDefaults({
+      modelSlots: { main: "  zen:kimi-k3 ", mainContext: "1m", subagent: "claude-haiku-5-5", fast: "" },
+    });
+
+    expect(result.modelSlots).toEqual({ main: "zen:kimi-k3", mainContext: "1m", subagent: "claude-haiku-5-5" });
+  });
+
+  it("refuses a default with no model, an unknown context size or an unknown thinking level", async () => {
+    const fs = await import("node:fs");
+    vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify({}));
+
+    const { setDefaults } = await import("@/server/defaults");
+    const result = setDefaults({
+      modelSlots: { main: "   ", mainContext: "1m" },
+      thinkingLevel: "turbo" as never,
+    });
+
+    expect(result.modelSlots).toEqual({ main: "sonnet" });
+    expect(result.thinkingLevel).toBe("high");
+
+    const kept = setDefaults({ modelSlots: { main: "zen:kimi-k3", mainContext: "2m" as never } });
+    expect(kept.modelSlots).toEqual({ main: "zen:kimi-k3" });
   });
 
   it("setDefaults handles write failure gracefully", async () => {

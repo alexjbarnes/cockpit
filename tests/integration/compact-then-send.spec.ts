@@ -12,7 +12,9 @@
 // the CLI can REFUSE a compaction ("Not enough messages to compact."), in which
 // case no PreCompact/PostCompact hook ever fires and nothing else clears
 // session.compacting — so every later message queues behind a compaction that
-// will never finish.
+// will never finish. An empty conversation is what it refuses: since CLI
+// 2.1.29x a single exchange is compacted rather than declined, so the refusal
+// is provoked before the session's first message.
 
 import { execSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
@@ -61,20 +63,19 @@ test("a refused /compact does not wedge the session", async ({ page, harness }) 
     harness.mock.setScript([{ events: textResponse("first reply") }, { events: textResponse("second reply") }]);
     await openSession(page, harness, workDir);
 
-    await send(page, "first message");
-    await expect(page.getByText("first reply")).toBeVisible({ timeout: 30_000 });
-
-    // One exchange is below the CLI's threshold, so it declines rather than
-    // compacting — no PreCompact, no PostCompact, no hooks at all.
+    // Nothing to compact yet, so the CLI declines rather than compacting — no
+    // PreCompact, no PostCompact, no hooks at all.
     await send(page, "/compact");
     await expect(page.getByText("Not enough messages to compact.")).toBeVisible({ timeout: 30_000 });
 
     // Nothing else clears session.compacting, so this queues behind a
     // compaction that already finished by declining, and never goes anywhere.
-    await send(page, "second message");
-    await expect(page.getByText("second reply"), "a declined compaction must not swallow the next message").toBeVisible({
+    await send(page, "first message");
+    await expect(page.getByText("first reply"), "a declined compaction must not swallow the next message").toBeVisible({
       timeout: 45_000,
     });
+    await send(page, "second message");
+    await expect(page.getByText("second reply")).toBeVisible({ timeout: 30_000 });
   } finally {
     rmSync(workDir, { recursive: true, force: true });
   }

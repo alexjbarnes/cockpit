@@ -1,22 +1,19 @@
 "use client";
 
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, ChevronDown, FolderOpen, Trash2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { usePageHeader } from "@/components/app-shell";
+import { DirectoryPicker } from "@/components/directory-picker";
+import { ModelPickerList } from "@/components/model-picker-list";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 import { type ThinkingLevel, useSettings } from "@/hooks/use-settings";
-import {
-  allowedEffortLevels,
-  CONTEXT_SIZES,
-  type ContextSize,
-  defaultForAlias,
-  type ModelAlias,
-  recommendedEffort,
-  resolveModel,
-  versionsForAlias,
-} from "@/lib/models";
-import type { SandboxSupport, SessionPermissionMode } from "@/types";
+import { normaliseFolderPath } from "@/lib/ignored-folders";
+import { ALL_PROVIDERS, defaultSelectionFor, modelTuning, valueForEntry } from "@/lib/model-picker";
+import { CONTEXT_SIZES, type ContextSize, describeModelSelection } from "@/lib/models";
+import type { Provider, SandboxSupport, SessionPermissionMode } from "@/types";
 
 // Bypass keeps the orange the session panel uses for it, as a warning.
 const permissionOptions: { value: SessionPermissionMode; label: string; activeClassName?: string }[] = [
@@ -25,19 +22,22 @@ const permissionOptions: { value: SessionPermissionMode; label: string; activeCl
   { value: "bypass", label: "Bypass", activeClassName: "bg-orange-500 text-white hover:bg-orange-500/90" },
 ];
 
-const thinkingOptions: { value: ThinkingLevel; label: string }[] = [
-  { value: "off", label: "Off" },
-  { value: "low", label: "Low" },
-  { value: "medium", label: "Medium" },
-  { value: "high", label: "High" },
-  { value: "xhigh", label: "XHigh" },
-  { value: "max", label: "Max" },
-];
-
-function Toggle({ enabled, color, disabled, onToggle }: { enabled: boolean; color?: string; disabled?: boolean; onToggle: () => void }) {
+function Toggle({
+  enabled,
+  color,
+  disabled,
+  testId,
+  onToggle,
+}: {
+  enabled: boolean;
+  color?: string;
+  disabled?: boolean;
+  testId?: string;
+  onToggle: () => void;
+}) {
   const bg = enabled ? color || "bg-green-500" : "bg-muted-foreground/30";
   return (
-    <button onClick={onToggle} disabled={disabled} className="shrink-0 disabled:opacity-60">
+    <button onClick={onToggle} disabled={disabled} data-testid={testId} className="shrink-0 disabled:opacity-60">
       <span className={`inline-flex h-7 w-12 items-center rounded-full transition-colors ${bg}`}>
         <span
           className={`inline-block h-5 w-5 rounded-full bg-white shadow transition-transform ${enabled ? "translate-x-6" : "translate-x-1"}`}
@@ -47,11 +47,11 @@ function Toggle({ enabled, color, disabled, onToggle }: { enabled: boolean; colo
   );
 }
 
-function SettingRow({ label, children }: { label: string; children: React.ReactNode }) {
+function SettingRow({ label, children }: { label: React.ReactNode; children: React.ReactNode }) {
   return (
-    <div className="flex items-start justify-between py-2.5 text-sm">
-      <span className="py-1">{label}</span>
-      {children}
+    <div className="flex items-start justify-between gap-3 py-2.5 text-sm">
+      <span className="shrink-0 py-1">{label}</span>
+      <div className="min-w-0">{children}</div>
     </div>
   );
 }
@@ -85,7 +85,7 @@ function ButtonGroup<T extends string>({
 export default function SessionSettingsPage() {
   usePageHeader("Session Defaults", { hideActions: true });
   const router = useRouter();
-  const { settings, updateSetting } = useSettings();
+  const { settings, updateSetting, loaded } = useSettings();
   // Gate the sandbox toggle on whether this host can enforce one, as the
   // session panel does, rather than offer a default that would do nothing.
   const [sandboxSupport, setSandboxSupport] = useState<SandboxSupport | null>(null);
@@ -98,48 +98,71 @@ export default function SessionSettingsPage() {
       );
   }, []);
 
-  const mainModel = settings.modelSlots?.main ?? "sonnet";
-  const mainContext: ContextSize = settings.modelSlots?.mainContext ?? "200k";
-  const entry = resolveModel(mainModel);
-  const selectedAlias = entry?.alias || "sonnet";
-  const versions = versionsForAlias(selectedAlias);
-  const showVersions = versions.length > 1;
-  const effortLevels = allowedEffortLevels(entry);
-  const visibleThinking = thinkingOptions.filter((opt) =>
-    opt.value === "off" ? effortLevels.length > 0 : effortLevels.includes(opt.value as ThinkingLevel),
-  );
-  // Sonnet 4.6's 1M needs usage credits, so only offer it as a default when the
-  // user has opted in. Other models' sizes are unchanged.
-  const availableContextSizes = (entry?.contextSizes ?? []).filter(
-    (s) => s !== "1m" || !entry?.oneMRequiresCredits || settings.allowSonnet1m,
-  );
+  // Every model a session can run: the Anthropic aliases and each connected
+  // provider's catalogue, the same list the session panel picks from.
+  const [providers, setProviders] = useState<Provider[]>([]);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [providerFilter, setProviderFilter] = useState(ALL_PROVIDERS);
+  const [folderDraft, setFolderDraft] = useState("");
+  const [folderError, setFolderError] = useState("");
+  const [browsingFolders, setBrowsingFolders] = useState(false);
+  const folders = settings.ignoredSessionFolders ?? [];
 
-  function selectAlias(alias: ModelAlias) {
-    const def = defaultForAlias(alias);
-    if (!def) return;
-    updateSetting("modelSlots", {
-      ...settings.modelSlots,
-      main: def.modelId,
-      mainContext: def.contextSizes.includes(mainContext) ? mainContext : (def.contextSizes[0] ?? "200k"),
-    });
-    const rec = recommendedEffort(def);
-    if (rec) updateSetting("thinkingLevel", rec);
+  function addFolder(raw: string) {
+    const folder = normaliseFolderPath(raw);
+    if (!folder) {
+      setFolderError("Enter an absolute folder path, for example /Users/you/archive.");
+      return;
+    }
+    if (folders.includes(folder)) {
+      setFolderError("That folder is already ignored.");
+      return;
+    }
+    setFolderError("");
+    setFolderDraft("");
+    updateSetting("ignoredSessionFolders", [...folders, folder]);
   }
 
-  function selectVersion(version: string) {
-    const ver = versions.find((m) => m.version === version);
+  function removeFolder(folder: string) {
+    updateSetting(
+      "ignoredSessionFolders",
+      folders.filter((f) => f !== folder),
+    );
+  }
+  useEffect(() => {
+    fetch("/api/providers")
+      .then((res) => res.json())
+      .then((data) => {
+        if (Array.isArray(data)) setProviders(data);
+      })
+      .catch(() => {});
+  }, []);
+
+  const mainModel = settings.modelSlots?.main ?? "sonnet";
+  const mainContext: ContextSize = settings.modelSlots?.mainContext ?? "200k";
+  const tuning = modelTuning(mainModel, mainContext, providers, settings.allowSonnet1m);
+  const selection = describeModelSelection(mainModel, settings.thinkingLevel, mainContext, providers);
+  const contextSizes = tuning.contextSizes;
+  const shownContext = contextSizes.includes(mainContext) ? mainContext : (contextSizes[0] ?? "200k");
+  const versions = tuning.versions;
+
+  function pickModel(value: string) {
+    const next = defaultSelectionFor(
+      value,
+      { contextSize: mainContext, thinkingLevel: settings.thinkingLevel },
+      providers,
+      settings.allowSonnet1m,
+    );
+    updateSetting("modelSlots", { ...settings.modelSlots, main: next.model, mainContext: next.contextSize });
+    if (next.thinkingLevel !== settings.thinkingLevel) updateSetting("thinkingLevel", next.thinkingLevel);
+    setPickerOpen(false);
+  }
+
+  function selectVersion(modelId: string) {
+    const ver = versions.find((m) => m.modelId === modelId);
     if (!ver) return;
-    const nextSlots = {
-      ...settings.modelSlots,
-      main: ver.modelId,
-      mainContext: ver.contextSizes.includes(mainContext) ? mainContext : (ver.contextSizes[0] ?? "200k"),
-    };
-    updateSetting("modelSlots", nextSlots);
-    const levels = allowedEffortLevels(ver);
-    if (!levels.includes(settings.thinkingLevel)) {
-      const rec = recommendedEffort(ver);
-      if (rec) updateSetting("thinkingLevel", rec);
-    }
+    pickModel(valueForEntry(ver));
   }
 
   return (
@@ -150,46 +173,46 @@ export default function SessionSettingsPage() {
       </Button>
       <div className="space-y-1">
         <SettingRow label="Model">
-          <ButtonGroup
-            options={
-              [
-                { value: "haiku", label: "Haiku" },
-                { value: "sonnet", label: "Sonnet" },
-                { value: "opus", label: "Opus" },
-                { value: "fable", label: "Fable" },
-              ] as { value: string; label: string }[]
-            }
-            value={selectedAlias}
-            onChange={(v) => selectAlias(v as ModelAlias)}
-          />
+          <Button
+            variant="outline"
+            size="sm"
+            data-testid="default-model-open"
+            onClick={() => setPickerOpen(true)}
+            className="max-w-72 justify-between gap-2 font-normal"
+          >
+            <span className="truncate">{selection.provider ? `${selection.provider} · ${selection.label}` : selection.label}</span>
+            <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+          </Button>
         </SettingRow>
-        {showVersions && (
+        {versions.length > 1 && (
           <SettingRow label="Version">
             <ButtonGroup
-              options={versions.map((m) => ({ value: m.version, label: m.version }))}
-              value={entry?.version || versions[0].version}
+              options={versions.map((m) => ({ value: m.modelId, label: m.version }))}
+              value={tuning.parsed.entry?.modelId ?? versions[0].modelId}
               onChange={selectVersion}
             />
           </SettingRow>
         )}
-        {entry && availableContextSizes.length >= 2 && (
+        {contextSizes.length >= 2 && (
           <SettingRow label="Context">
             <ButtonGroup
-              options={availableContextSizes.map((s) => ({ value: s, label: CONTEXT_SIZES[s].label }))}
-              value={availableContextSizes.includes(mainContext) ? mainContext : "200k"}
-              onChange={(v) =>
-                updateSetting("modelSlots", {
-                  ...settings.modelSlots,
-                  main: entry.modelId,
-                  mainContext: v,
-                })
-              }
+              options={contextSizes.map((s) => ({ value: s, label: CONTEXT_SIZES[s].label }))}
+              value={shownContext}
+              onChange={(v) => updateSetting("modelSlots", { ...settings.modelSlots, main: mainModel, mainContext: v })}
             />
           </SettingRow>
         )}
-        {visibleThinking.length > 0 && (
+        {tuning.thinkingLevels.length > 0 ? (
           <SettingRow label="Thinking">
-            <ButtonGroup options={visibleThinking} value={settings.thinkingLevel} onChange={(v) => updateSetting("thinkingLevel", v)} />
+            <ButtonGroup
+              options={tuning.thinkingLevels}
+              value={settings.thinkingLevel}
+              onChange={(v: ThinkingLevel) => updateSetting("thinkingLevel", v)}
+            />
+          </SettingRow>
+        ) : (
+          <SettingRow label="Thinking">
+            <span className="text-xs text-muted-foreground">{selection.label} has no thinking levels.</span>
           </SettingRow>
         )}
         <SettingRow label="Permission mode">
@@ -237,6 +260,111 @@ export default function SessionSettingsPage() {
             </p>
           </div>
         ) : null}
+
+        <div className="my-3 space-y-2 rounded-md border border-border p-3" data-testid="ignored-folders">
+          <div>
+            <p className="text-sm font-medium">Ignored session folders</p>
+            <p className="text-xs text-muted-foreground">
+              Sessions in these folders, and anything below them, are hidden from every session list and from global search. Opening one by
+              its URL still works.
+            </p>
+          </div>
+          <form
+            className="flex flex-wrap items-center gap-2"
+            onSubmit={(e) => {
+              e.preventDefault();
+              addFolder(folderDraft);
+            }}
+          >
+            <Input
+              value={folderDraft}
+              onChange={(e) => {
+                setFolderDraft(e.target.value);
+                setFolderError("");
+              }}
+              placeholder="/Users/you/archive"
+              aria-label="Folder path to ignore"
+              data-testid="ignored-folder-input"
+              className="h-8 min-w-0 flex-1 font-mono text-xs"
+              disabled={!loaded}
+            />
+            <Button type="submit" size="sm" disabled={!loaded || !folderDraft.trim()} data-testid="ignored-folder-add">
+              Add
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={!loaded}
+              onClick={() => setBrowsingFolders(true)}
+              data-testid="ignored-folder-browse"
+            >
+              <FolderOpen className="mr-1 h-3.5 w-3.5" />
+              Browse
+            </Button>
+          </form>
+          {folderError && (
+            <p role="alert" data-testid="ignored-folder-error" className="text-xs text-destructive">
+              {folderError}
+            </p>
+          )}
+          {browsingFolders && (
+            <DirectoryPicker
+              onSelect={(path) => {
+                setBrowsingFolders(false);
+                addFolder(path);
+              }}
+              onCancel={() => setBrowsingFolders(false)}
+            />
+          )}
+          {folders.length === 0 ? (
+            <p className="text-xs text-muted-foreground">No ignored folders.</p>
+          ) : (
+            <ul className="space-y-1">
+              {folders.map((folder) => (
+                <li
+                  key={folder}
+                  data-testid="ignored-folder-row"
+                  className="flex items-center gap-2 rounded border border-border bg-muted/30 px-2 py-1"
+                >
+                  <span className="min-w-0 flex-1 break-all font-mono text-xs">{folder}</span>
+                  <button
+                    type="button"
+                    onClick={() => removeFolder(folder)}
+                    disabled={!loaded}
+                    aria-label={`Remove ${folder}`}
+                    data-testid="ignored-folder-remove"
+                    className="shrink-0 rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-60"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
+        <SettingRow
+          label={
+            <span className="flex items-center gap-2">
+              Stream (headless) runtime
+              <span className="rounded-sm border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-600 dark:text-amber-400">
+                Deprecated
+              </span>
+            </span>
+          }
+        >
+          <Toggle
+            enabled={settings.streamRuntimeEnabled}
+            testId="toggle-stream-runtime"
+            onToggle={() => updateSetting("streamRuntimeEnabled", !settings.streamRuntimeEnabled)}
+          />
+        </SettingRow>
+        <p className="-mt-1 pb-2 text-xs text-muted-foreground">
+          Stream runs Claude under the CLI&apos;s <code>-p</code> flag, which is moving to bare mode: bare mode skips OAuth and would stop
+          authenticating against a subscription. Off by default; when on, new sessions can choose Stream and a session&apos;s Harness tab
+          offers it. An existing Stream session keeps running and can switch to PTY.
+        </p>
         <SettingRow label="Alert me about other sessions">
           <Toggle enabled={settings.sessionAlerts} onToggle={() => updateSetting("sessionAlerts", !settings.sessionAlerts)} />
         </SettingRow>
@@ -248,6 +376,23 @@ export default function SessionSettingsPage() {
           <Toggle enabled={settings.allowSonnet1m} onToggle={() => updateSetting("allowSonnet1m", !settings.allowSonnet1m)} />
         </SettingRow>
       </div>
+
+      <Dialog open={pickerOpen} onOpenChange={setPickerOpen}>
+        <DialogContent className="flex h-[min(80vh,560px)] max-w-xl flex-col p-4">
+          <DialogTitle className="mb-3 shrink-0 text-sm font-medium">Default model</DialogTitle>
+          <ModelPickerList
+            currentModel={mainModel}
+            providers={providers}
+            recentModels={[]}
+            onSelectModel={pickModel}
+            tuning={tuning}
+            query={query}
+            onQuery={setQuery}
+            providerFilter={providerFilter}
+            onProviderFilter={setProviderFilter}
+          />
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

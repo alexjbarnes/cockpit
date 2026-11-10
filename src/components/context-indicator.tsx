@@ -3,6 +3,7 @@
 import { ChartLine, Shrink, X } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useState } from "react";
+import { useShell } from "@/components/app-shell";
 import { Button } from "@/components/ui/button";
 import { useSettings } from "@/hooks/use-settings";
 import type { ContextUsage } from "@/types";
@@ -29,6 +30,7 @@ function formatTokens(n: number): string {
 export function ContextIndicator({ usage, sessionId, cwd, onCompact }: ContextIndicatorProps) {
   const [open, setOpen] = useState(false);
   const { settings } = useSettings();
+  const { openPageModal } = useShell();
   const [totals, setTotals] = useState<TokenTotals | null>(null);
   useEffect(() => {
     if (!open) return;
@@ -168,6 +170,14 @@ export function ContextIndicator({ usage, sessionId, cwd, onCompact }: ContextIn
             {settings.telemetryEnabled && (
               <Link
                 href={`/insights?session=${encodeURIComponent(sessionId)}`}
+                onClick={(e) => {
+                  // Same setting as the sidebar's pages: over the session when
+                  // the page modal is on, in place when it is off.
+                  if (openPageModal(`/insights?session=${encodeURIComponent(sessionId)}`)) {
+                    e.preventDefault();
+                    setOpen(false);
+                  }
+                }}
                 className="mt-4 flex items-center justify-center gap-2 rounded-md border px-3 py-1.5 text-sm hover:bg-muted"
                 data-testid="session-insights-link"
               >

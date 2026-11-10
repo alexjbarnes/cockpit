@@ -144,6 +144,20 @@ test("the session header opens its project's issues", async ({ page, harness }) 
   test.setTimeout(120_000);
   const repoPath = mkdtempSync(path.join(tmpdir(), "cockpit-it-issues-"));
   try {
+    // Capture what the row's copy button writes, without asking the browser
+    // for the real clipboard.
+    await page.addInitScript(() => {
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: {
+          writeText: (text: string) => {
+            (window as Window & { __copiedKey?: string }).__copiedKey = text;
+            return Promise.resolve();
+          },
+        },
+      });
+    });
+
     const patched = await page.request.patch(`${harness.cockpitUrl}/api/defaults`, { data: { issuesEnabled: true } });
     expect(patched.ok()).toBe(true);
 
@@ -155,6 +169,7 @@ test("the session header opens its project's issues", async ({ page, harness }) 
       data: { projectId: project.id, title: "Belongs to this session" },
     });
     expect(issueRes.ok()).toBe(true);
+    const { issue } = (await issueRes.json()) as { issue: { key: string } };
 
     // A session working in that repository.
     harness.trustWorkDir(repoPath);
@@ -170,6 +185,49 @@ test("the session header opens its project's issues", async ({ page, harness }) 
     await expect(modal).toBeVisible();
     await expect(page.getByTestId("session-issues-project")).toHaveValue(project.id);
     await expect(modal).toContainText("Belongs to this session");
+
+    // The row's copy button writes the key and leaves the list open.
+    await page.getByTestId(`copy-issue-${issue.key}`).click();
+    expect(await page.evaluate(() => (window as Window & { __copiedKey?: string }).__copiedKey)).toBe(issue.key);
+    await expect(modal).toBeVisible();
+
+    // Opening the issue shows it in the page modal over the session, in the
+    // same box, and its back control closes that modal back onto this list.
+    const listBox = await modal.boundingBox();
+    await modal.getByText("Belongs to this session").click();
+    const pageModal = page.getByTestId("page-modal");
+    await expect(pageModal).toBeVisible();
+    const frame = page.frameLocator('[data-testid="page-modal"] iframe');
+    await expect(frame.getByRole("heading", { name: "Belongs to this session" })).toBeVisible({ timeout: 20_000 });
+    const issueBox = await pageModal.boundingBox();
+    expect(Math.abs((issueBox?.width ?? 0) - (listBox?.width ?? 0))).toBeLessThanOrEqual(1);
+    expect(Math.abs((issueBox?.height ?? 0) - (listBox?.height ?? 0))).toBeLessThanOrEqual(1);
+    await frame.getByRole("button", { name: "Back" }).click();
+    await expect(pageModal).toBeHidden();
+    await expect(modal).toBeVisible();
+
+    // Inserting puts the key in this session's composer and closes the list.
+    await page.getByTestId(`insert-issue-${issue.key}`).click();
+    await expect(modal).toBeHidden();
+    await expect(page.getByTestId("message-input")).toHaveValue(issue.key);
+    // The hand-off parameter is cleared, so a reload does not paste it again.
+    await expect.poll(() => page.url().includes("insert=")).toBe(false);
+
+    // The issue page over the session has the same action, and closes both
+    // modals so the composer is what is left.
+    await page.getByTestId("message-input").fill("");
+    await page.getByTestId("session-issues").click();
+    await page.getByTestId("issue-list").getByRole("button", { name: /SES-1/ }).first().click();
+    await expect(pageModal).toBeVisible();
+    await frame.getByTestId(`insert-issue-${issue.key}`).click();
+    await expect(pageModal).toBeHidden();
+    await expect(modal).toBeHidden();
+    await expect(page.getByTestId("message-input")).toHaveValue(issue.key);
+
+    // The issue's own page has the copy control beside its key.
+    await page.goto(`${harness.cockpitUrl}/issues/${issue.key}`);
+    await page.getByTestId(`copy-issue-${issue.key}`).click();
+    expect(await page.evaluate(() => (window as Window & { __copiedKey?: string }).__copiedKey)).toBe(issue.key);
 
     // Not every page: the button is for the session you are in.
     await page.goto(`${harness.cockpitUrl}/reviews`);
@@ -197,15 +255,21 @@ test("deleting an issue opened from a session comes back to that session", async
     await page.getByTestId("session-issues").click();
     await page.getByTestId("issue-list").getByRole("button", { name: /RTN-1/ }).first().click();
 
-    // The issue page knows where it was opened from.
-    await expect(page).toHaveURL(/\/issues\/RTN-1\?from=/, { timeout: 15_000 });
+    // The issue opens over the session, in the page modal.
+    const pageModal = page.getByTestId("page-modal");
+    await expect(pageModal).toBeVisible({ timeout: 15_000 });
+    const frame = page.frameLocator('[data-testid="page-modal"] iframe');
+    await expect(frame.getByRole("heading", { name: "Doomed issue" })).toBeVisible({ timeout: 20_000 });
 
-    await page.locator("button.text-destructive").first().click();
-    await page.locator("button[class*='destructive']").last().click();
+    await frame.locator("button.text-destructive").first().click();
+    await frame.locator("button[class*='destructive']").last().click();
 
-    await expect(page).toHaveURL(new RegExp(`/sessions/${sessionId}\\?cwd=`), { timeout: 15_000 });
-    // Back where it started, with the list it was opened from open again.
+    // Deleting closes the issue modal back onto the session, which never left
+    // its URL, and the list underneath has dropped the row.
+    await expect(pageModal).toBeHidden({ timeout: 15_000 });
+    await expect(page).toHaveURL(new RegExp(`/sessions/${sessionId}\\?cwd=`));
     await expect(page.getByTestId("session-issues-modal")).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId("issue-list").getByRole("button", { name: /RTN-1/ })).toHaveCount(0);
   } finally {
     rmSync(repoPath, { recursive: true, force: true });
   }
@@ -244,6 +308,24 @@ test("on a phone, comments stay inside the issue page and the session's list kee
     await page.getByTestId("session-issues").click();
     const list = page.getByTestId("session-issues-list");
     await expect(list.getByRole("button", { name: /\bPLC-1\b/ }).first()).toBeVisible({ timeout: 15_000 });
+    // The wheel scrolls the list, and keeps scrolling it while a row is held.
+    await list.hover();
+    await page.mouse.wheel(0, 500);
+    await expect.poll(() => list.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
+    await list.evaluate((el) => {
+      el.scrollTop = 0;
+    });
+    const handle = list.getByRole("button", { name: "Drag to reorder" }).first();
+    const handleBox = await handle.boundingBox();
+    expect(handleBox).not.toBeNull();
+    await page.mouse.move(handleBox!.x + 6, handleBox!.y + 6);
+    await page.mouse.down();
+    await page.mouse.move(handleBox!.x + 6, handleBox!.y + 20, { steps: 5 });
+    await page.waitForTimeout(300);
+    await page.mouse.wheel(0, 500);
+    await expect.poll(() => list.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
+    await page.keyboard.press("Escape");
+    await page.mouse.up();
 
     // Well down the list, then open a row that is on screen.
     await list.evaluate((el) => {
@@ -263,23 +345,26 @@ test("on a phone, comments stay inside the issue page and the session's list kee
       .getByRole("button", { name: new RegExp(`\\b${key}\\b`) })
       .first()
       .click();
-    await expect(page).toHaveURL(new RegExp(`/issues/${key}\\?from=`), { timeout: 15_000 });
-    await expect(page.getByText("Comments (1)")).toBeVisible({ timeout: 15_000 });
+    const pageModal = page.getByTestId("page-modal");
+    await expect(pageModal).toBeVisible({ timeout: 15_000 });
+    const frame = page.frameLocator('[data-testid="page-modal"] iframe');
+    await expect(frame.getByText("Comments (1)")).toBeVisible({ timeout: 20_000 });
 
-    // Nothing on the page is wider than the phone.
-    const sideways = await page.evaluate(() =>
-      Math.max(
-        document.documentElement.scrollWidth - document.documentElement.clientWidth,
-        ...[...document.querySelectorAll("div")]
+    // Nothing in the issue page is wider than the phone.
+    const sideways = await frame.locator("html").evaluate((html) => {
+      const doc = html.ownerDocument;
+      return Math.max(
+        doc.documentElement.scrollWidth - doc.documentElement.clientWidth,
+        ...[...doc.querySelectorAll("div")]
           .filter((d) => getComputedStyle(d).overflowY === "auto")
           .map((d) => d.scrollWidth - d.clientWidth),
-      ),
-    );
+      );
+    });
     expect(sideways, "the issue page scrolls sideways").toBeLessThanOrEqual(1);
 
-    await page.locator("button.text-destructive").first().click();
-    await page.locator("button[class*='destructive']").last().click();
-    await expect(page).toHaveURL(new RegExp(`/sessions/${sessionId}\\?`), { timeout: 15_000 });
+    await frame.locator("button.text-destructive").first().click();
+    await frame.locator("button[class*='destructive']").last().click();
+    await expect(pageModal).toBeHidden({ timeout: 15_000 });
 
     // The list it left, where it left it, without the issue just deleted.
     await expect(list).toBeVisible({ timeout: 15_000 });

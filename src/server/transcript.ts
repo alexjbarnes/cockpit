@@ -3,6 +3,7 @@ import { open, readdir, readFile, stat, unlink, writeFile } from "node:fs/promis
 import path from "node:path";
 import { createInterface } from "node:readline";
 import { v4 as uuidv4 } from "uuid";
+import { isCwdIgnored } from "@/lib/ignored-folders";
 import { extractTextFiles } from "@/lib/paste-detect";
 import { unwrapPastedContent } from "@/lib/pasted-content";
 import { getClaudeDir } from "@/server/paths";
@@ -41,6 +42,9 @@ interface TranscriptEntry {
   cwd?: string;
   timestamp?: string;
   isMeta?: boolean;
+  /** Set on the user message Claude Code writes when it compacts a previous
+   *  context: the summary is not a prompt the user typed. */
+  isCompactSummary?: boolean;
   uuid?: string;
   message?: {
     id?: string;
@@ -313,59 +317,81 @@ function stripCliXml(text: string): string {
 }
 
 const INITIAL_CHUNK_SIZE = 64 * 1024; // 64KB
+const MAX_CHUNK_SIZE = 4 * 1024 * 1024;
+
+/** Entry types parseLines builds the chat from. */
+const CHAT_ENTRY_TYPES = new Set(["user", "assistant", "attachment", "system", "progress", "result"]);
+const LEADING_TYPE_RE = /^\{"type":"([^"]*)"/;
+
+/**
+ * Whether a transcript line can add to the chat. The CLI writes two kinds of
+ * line: conversation entries (user, assistant, attachment, system), which open
+ * with "parentUuid", and session records (each API request and its blobs, the
+ * title, the mode, file history), which open with their type. One API request
+ * can write hundreds of record lines, so a tail counted in raw lines can hold no
+ * messages at all. Only the opening bytes are decoded, since a request record
+ * runs to 140KB.
+ */
+function isChatLine(line: Buffer): boolean {
+  const type = LEADING_TYPE_RE.exec(line.subarray(0, 64).toString("utf-8"))?.[1];
+  return type === undefined || CHAT_ENTRY_TYPES.has(type);
+}
+
+/**
+ * Up to `targetCount` chat lines ending at byte `end`, read backwards in growing
+ * chunks. Record lines are passed over without counting. `start` is the exact
+ * byte offset of the earliest line passed, so the next page reads from there;
+ * 0 means the file's start was reached.
+ */
+async function readChatLinesBefore(filePath: string, end: number, targetCount: number): Promise<{ lines: string[]; start: number }> {
+  const lines: string[] = [];
+  const fh = await open(filePath, "r");
+  try {
+    let start = end;
+    const take = (line: Buffer, at: number): boolean => {
+      start = at;
+      if (line.length > 0 && isChatLine(line)) {
+        const text = line.toString("utf-8").replace(/\r$/, "");
+        if (text.trim()) lines.push(text);
+      }
+      return lines.length >= targetCount;
+    };
+
+    // `pending` holds read bytes not yet split into lines: it starts at
+    // `cursor` and ends where the last line taken began.
+    let cursor = end;
+    let pending = Buffer.alloc(0);
+    let chunkSize = INITIAL_CHUNK_SIZE;
+    while (cursor > 0) {
+      const readSize = Math.min(chunkSize, cursor);
+      cursor -= readSize;
+      const chunk = Buffer.alloc(readSize);
+      await fh.read(chunk, 0, readSize, cursor);
+      pending = Buffer.concat([chunk, pending]);
+
+      let lineEnd = pending.length;
+      while (lineEnd > 0) {
+        const newline = pending.lastIndexOf(0x0a, lineEnd - 1);
+        if (newline === -1) break;
+        if (take(pending.subarray(newline + 1, lineEnd), cursor + newline + 1)) return { lines: lines.reverse(), start };
+        lineEnd = newline;
+      }
+      pending = pending.subarray(0, lineEnd);
+      chunkSize = Math.min(chunkSize * 2, MAX_CHUNK_SIZE);
+    }
+    take(pending, 0);
+    return { lines: lines.reverse(), start: 0 };
+  } finally {
+    await fh.close();
+  }
+}
 
 async function readTailLines(filePath: string, targetCount: number): Promise<{ lines: string[]; byteOffset: number; totalSize: number }> {
   const fileStat = await stat(filePath);
   const totalSize = fileStat.size;
   if (totalSize === 0) return { lines: [], byteOffset: 0, totalSize };
-
-  let chunkSize = INITIAL_CHUNK_SIZE;
-  const fh = await open(filePath, "r");
-  try {
-    while (true) {
-      const readSize = Math.min(chunkSize, totalSize);
-      const offset = totalSize - readSize;
-      const buf = Buffer.alloc(readSize);
-      await fh.read(buf, 0, readSize, offset);
-      const text = buf.toString("utf-8");
-
-      // Split into lines, discard partial first line if we didn't read from start
-      let lines: string[];
-      if (offset > 0) {
-        const firstNewline = text.indexOf("\n");
-        if (firstNewline === -1) {
-          // Entire chunk is one partial line, need a bigger chunk
-          if (chunkSize >= totalSize) {
-            lines = [text];
-          } else {
-            chunkSize *= 2;
-            continue;
-          }
-        } else {
-          lines = text.slice(firstNewline + 1).split(/\r?\n/);
-        }
-      } else {
-        lines = text.split(/\r?\n/);
-      }
-
-      lines = lines.filter((l) => l.trim());
-
-      if (lines.length >= targetCount || offset === 0) {
-        // Take only the last targetCount lines
-        const result = lines.length > targetCount ? lines.slice(-targetCount) : lines;
-        // Calculate byte offset of the first returned line
-        // We approximate by finding position in the chunk text
-        const returnedText = result.join("\n");
-        const byteOffset = Math.max(0, offset + (text.length - returnedText.length - (text.endsWith("\n") ? 1 : 0)));
-        return { lines: result, byteOffset: offset === 0 ? 0 : byteOffset, totalSize };
-      }
-
-      // Not enough lines, double chunk and retry
-      chunkSize *= 2;
-    }
-  } finally {
-    await fh.close();
-  }
+  const { lines, start } = await readChatLinesBefore(filePath, totalSize, targetCount);
+  return { lines, byteOffset: start, totalSize };
 }
 
 export async function readMoreLines(
@@ -374,48 +400,29 @@ export async function readMoreLines(
   targetCount: number,
 ): Promise<{ lines: string[]; newByteOffset: number }> {
   if (byteOffset <= 0) return { lines: [], newByteOffset: 0 };
+  const { lines, start } = await readChatLinesBefore(filePath, byteOffset, targetCount);
+  return { lines, newByteOffset: start };
+}
 
-  let chunkSize = INITIAL_CHUNK_SIZE;
-  const fh = await open(filePath, "r");
-  try {
-    while (true) {
-      const readSize = Math.min(chunkSize, byteOffset);
-      const offset = byteOffset - readSize;
-      const buf = Buffer.alloc(readSize);
-      await fh.read(buf, 0, readSize, offset);
-      const text = buf.toString("utf-8");
-
-      let lines: string[];
-      if (offset > 0) {
-        const firstNewline = text.indexOf("\n");
-        if (firstNewline === -1) {
-          if (chunkSize >= byteOffset) {
-            lines = [text];
-          } else {
-            chunkSize *= 2;
-            continue;
-          }
-        } else {
-          lines = text.slice(firstNewline + 1).split(/\r?\n/);
-        }
-      } else {
-        lines = text.split(/\r?\n/);
-      }
-
-      lines = lines.filter((l) => l.trim());
-
-      if (lines.length >= targetCount || offset === 0) {
-        const result = lines.length > targetCount ? lines.slice(-targetCount) : lines;
-        const returnedText = result.join("\n");
-        const newByteOffset = Math.max(0, offset + (text.length - returnedText.length - (text.endsWith("\n") ? 1 : 0)));
-        return { lines: result, newByteOffset: offset === 0 ? 0 : newByteOffset };
-      }
-
-      chunkSize *= 2;
-    }
-  } finally {
-    await fh.close();
+/**
+ * Parses a page, reading further back while it makes no message and more of the
+ * file remains. Attachments and tool results alone show nothing, and an empty
+ * page leaves the chat nothing to page back from.
+ */
+async function parsePage(
+  filePath: string,
+  lines: string[],
+  byteOffset: number,
+  pageLines: number,
+): Promise<{ messages: ChatMessage[]; lastUsage: { used: number; total: number } | null; lines: string[]; byteOffset: number }> {
+  let parsed = parseLines(lines);
+  while (parsed.messages.length === 0 && byteOffset > 0) {
+    const more = await readMoreLines(filePath, byteOffset, pageLines);
+    lines = [...more.lines, ...lines];
+    byteOffset = more.newByteOffset;
+    parsed = parseLines(lines);
   }
+  return { ...parsed, lines, byteOffset };
 }
 
 export async function loadLastUsage(sessionId: string, cwd: string): Promise<{ used: number; total: number } | null> {
@@ -719,6 +726,7 @@ function parseLines(lines: string[]): { messages: ChatMessage[]; lastUsage: { us
                 blocks: [],
                 timestamp: entry.timestamp ? new Date(entry.timestamp).getTime() : Date.now(),
                 textFiles: textFiles.length > 0 ? textFiles : undefined,
+                ...(entry.isCompactSummary ? { isCompactSummary: true } : {}),
               });
             }
           }
@@ -776,6 +784,7 @@ function parseLines(lines: string[]): { messages: ChatMessage[]; lastUsage: { us
                 images: images.length > 0 ? images : undefined,
                 documents: documents.length > 0 ? documents : undefined,
                 textFiles: textFiles.length > 0 ? textFiles : undefined,
+                ...(entry.isCompactSummary ? { isCompactSummary: true } : {}),
               });
             }
           }
@@ -894,15 +903,16 @@ export async function loadTranscript(sessionId: string, cwd: string, options?: {
   }
   const tRead = performance.now();
 
-  const { messages, lastUsage } = parseLines(lines);
+  const page = await parsePage(fp, lines, byteOffset, tailCount ?? TAIL_LINES);
+  const { messages, lastUsage } = page;
   const tParse = performance.now();
 
   const sid = sessionId.slice(0, 8);
   debugLog(
-    `[transcript:${sid}] ${readLabel}: ${lines.length} lines, ${messages.length} msgs | read=${(tRead - t0).toFixed(0)}ms parse=${(tParse - tRead).toFixed(0)}ms total=${(tParse - t0).toFixed(0)}ms`,
+    `[transcript:${sid}] ${readLabel}: ${page.lines.length} lines, ${messages.length} msgs | read=${(tRead - t0).toFixed(0)}ms parse=${(tParse - tRead).toFixed(0)}ms total=${(tParse - t0).toFixed(0)}ms`,
   );
 
-  return { messages, byteOffset, totalSize, lastUsage };
+  return { messages, byteOffset: page.byteOffset, totalSize, lastUsage };
 }
 
 /**
@@ -1046,18 +1056,19 @@ export async function loadMoreMessages(
 
   const fp = getTranscriptPath(sessionId, cwd);
   const t0 = performance.now();
-  const { lines, newByteOffset } = await readMoreLines(fp, byteOffset, targetLines || TAIL_LINES);
+  const pageLines = targetLines || TAIL_LINES;
+  const { lines, newByteOffset } = await readMoreLines(fp, byteOffset, pageLines);
   const tRead = performance.now();
 
-  const { messages } = parseLines(lines);
+  const page = await parsePage(fp, lines, newByteOffset, pageLines);
   const tParse = performance.now();
 
   const sid = sessionId.slice(0, 8);
   debugLog(
-    `[transcript:${sid}] more: ${lines.length} lines, ${messages.length} msgs | read=${(tRead - t0).toFixed(0)}ms parse=${(tParse - tRead).toFixed(0)}ms`,
+    `[transcript:${sid}] more: ${page.lines.length} lines, ${page.messages.length} msgs | read=${(tRead - t0).toFixed(0)}ms parse=${(tParse - tRead).toFixed(0)}ms`,
   );
 
-  return { messages, newByteOffset };
+  return { messages: page.messages, newByteOffset: page.byteOffset };
 }
 
 function extractOutput(block: TranscriptBlock): string {
@@ -1132,7 +1143,7 @@ async function extractSessionMeta(filePath: string): Promise<SessionMeta | null>
         createdAt = new Date(entry.timestamp).getTime();
       }
 
-      if (entry.type === "user" && entry.message && !title) {
+      if (entry.type === "user" && entry.message && !title && !entry.isCompactSummary) {
         const content = entry.message.content;
         let candidate = "";
         if (typeof content === "string") {
@@ -1190,6 +1201,46 @@ export async function findSessionCwd(sessionId: string): Promise<string | null> 
     }
   }
   return null;
+}
+
+/**
+ * The working directory the newest transcript entries name. Claude Code writes
+ * `cwd` on its conversation entries, and a session relocated into a worktree
+ * appends a `relocatedCwd` record, so the tail says where the CLI last was.
+ * Only the tail is read, so a long history costs one small read. Used to give
+ * sessions created before the worktree was stored the directory they are in.
+ */
+export async function readTranscriptCwd(sessionId: string, cwd: string): Promise<string | null> {
+  const filePath = getTranscriptPath(sessionId, cwd);
+  if (!existsSync(filePath)) return null;
+  let handle: Awaited<ReturnType<typeof open>> | null = null;
+  try {
+    handle = await open(filePath, "r");
+    const { size } = await handle.stat();
+    if (size === 0) return null;
+    const length = Math.min(size, 256 * 1024);
+    const buffer = Buffer.alloc(length);
+    await handle.read(buffer, 0, length, size - length);
+    const lines = buffer.toString("utf-8").split("\n");
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const line = lines[i].trim();
+      if (!line.startsWith("{")) continue;
+      let entry: { cwd?: unknown; relocatedCwd?: unknown };
+      try {
+        entry = JSON.parse(line);
+      } catch {
+        // The first line is partial when the tail did not start at byte 0.
+        continue;
+      }
+      if (typeof entry.cwd === "string" && entry.cwd) return entry.cwd;
+      if (typeof entry.relocatedCwd === "string" && entry.relocatedCwd) return entry.relocatedCwd;
+    }
+    return null;
+  } catch {
+    return null;
+  } finally {
+    if (handle) await handle.close().catch(() => {});
+  }
 }
 
 export async function scanAllSessions(): Promise<SessionGroup[]> {
@@ -1495,6 +1546,7 @@ export async function globalSearch(
   query: string,
   limit: number,
   offset = 0,
+  ignoredFolders: readonly string[] = [],
 ): Promise<{ results: GlobalSearchResult[]; totalFilesSearched: number; truncated: boolean }> {
   const MAX_FILES = 500;
   const MAX_PARSED_BASE = 30;
@@ -1538,7 +1590,7 @@ export async function globalSearch(
       try {
         const entry: TranscriptEntry = JSON.parse(lines[j]);
         if (entry.type === "user" && entry.cwd && !cwd) cwd = entry.cwd;
-        if (entry.type === "user" && entry.message && !sessionTitle) {
+        if (entry.type === "user" && entry.message && !sessionTitle && !entry.isCompactSummary) {
           const content = entry.message.content;
           let candidate = "";
           if (typeof content === "string") candidate = content;
@@ -1556,6 +1608,7 @@ export async function globalSearch(
     }
 
     if (!cwd) continue;
+    if (isCwdIgnored(cwd, ignoredFolders)) continue;
     if (cwd.endsWith(".cockpit/reviews") || cwd.endsWith(".cockpit/jobs")) continue;
 
     const dirName = path.basename(cwd) || cwd;

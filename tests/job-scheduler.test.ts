@@ -484,18 +484,103 @@ describe("JobScheduler", () => {
       expect(run.error).toBeUndefined();
     });
 
-    it("marks a run that goes idle with background subagents still pending as a failure", async () => {
-      // The 14th's signature: the model launched 13 async Agents, said
-      // "Waiting for article fetches to complete." and ended its turn. The run
-      // was recorded a success at 3.7min and the PTY killed while the task
-      // notifications were still being enqueued.
+    it("keeps the run open when the turn ends with a background subagent still running", async () => {
+      // The model launches an async Agent, says it is waiting and ends its
+      // turn. The CLI wakes it with a task notification when the agent
+      // reports, so the run must survive the first idle rather than killing
+      // the PTY and the agent with it.
       const job = makeJob();
       const promise = scheduler.executeJob(job);
       await vi.waitFor(() => expect(sm.sendMessage).toHaveBeenCalled());
 
       sm.emitEvent({ type: "task_update", taskInfo: { taskId: "a1", status: "running", title: "Agent" } });
-      sm.emitEvent({ type: "task_update", taskInfo: { taskId: "a2", status: "running", title: "Agent" } });
-      sm.emitEvent({ type: "message_done", message: { content: "Waiting for article fetches to complete." } });
+      sm.emitEvent({ type: "message_done", message: { content: "Waiting for the agent." } });
+      sm.emitStatus("idle");
+
+      expect(scheduler.getRunningJobs().has("job-1")).toBe(true);
+      expect(sm.destroySession).not.toHaveBeenCalled();
+
+      sm.emitEvent({ type: "task_update", taskInfo: { taskId: "a1", status: "completed", title: "Agent" } });
+      sm.emitEvent({ type: "message_done", message: { content: "The agent finished and the report is sent." } });
+      sm.emitStatus("idle");
+
+      const run = await promise;
+      expect(run.status).toBe("success");
+      expect(run.error).toBeUndefined();
+      expect(sm.destroySession).toHaveBeenCalledWith("session-1");
+    });
+
+    it("keeps a task pending through progress updates", async () => {
+      const job = makeJob();
+      const promise = scheduler.executeJob(job);
+      await vi.waitFor(() => expect(sm.sendMessage).toHaveBeenCalled());
+
+      sm.emitEvent({ type: "task_update", taskInfo: { taskId: "a1", status: "running", title: "Agent" } });
+      sm.emitEvent({ type: "task_update", taskInfo: { taskId: "a1", status: "progress", description: "Read 3 pages" } });
+      sm.emitEvent({ type: "message_done", message: { content: "Still folding." } });
+      sm.emitStatus("idle");
+
+      expect(scheduler.getRunningJobs().has("job-1")).toBe(true);
+
+      sm.emitEvent({ type: "task_update", taskInfo: { taskId: "a1", status: "completed", title: "Agent" } });
+      sm.emitEvent({ type: "message_done", message: { content: "Done." } });
+      sm.emitStatus("idle");
+
+      const run = await promise;
+      expect(run.status).toBe("success");
+    });
+
+    it("takes the running tasks from a task_sync, not just individual updates", async () => {
+      // Stop and SubagentStop carry the CLI's whole background_tasks list. It
+      // is the only authoritative source once the launching turn has ended.
+      const job = makeJob();
+      const promise = scheduler.executeJob(job);
+      await vi.waitFor(() => expect(sm.sendMessage).toHaveBeenCalled());
+
+      sm.emitEvent({
+        type: "task_sync",
+        tasks: [{ taskId: "a1", toolUseId: "a1", status: "running", description: "Agent" }],
+      });
+      sm.emitEvent({ type: "message_done", message: { content: "Waiting for the agent." } });
+      sm.emitStatus("idle");
+
+      expect(scheduler.getRunningJobs().has("job-1")).toBe(true);
+
+      // The notification wakes the model, and its turn ends with an empty list.
+      sm.emitEvent({ type: "task_sync", tasks: [] });
+      sm.emitEvent({ type: "message_done", message: { content: "The agent finished." } });
+      sm.emitStatus("idle");
+
+      const run = await promise;
+      expect(run.status).toBe("success");
+    });
+
+    it("names the background tasks still running when the watchdog ends a waiting run", async () => {
+      const job = makeJob({ maxDurationMinutes: 0.001 });
+      const promise = scheduler.executeJob(job);
+      await vi.waitFor(() => expect(sm.sendMessage).toHaveBeenCalled());
+
+      sm.emitEvent({ type: "task_update", taskInfo: { taskId: "a1", status: "running", title: "Agent" } });
+      sm.emitEvent({ type: "message_done", message: { content: "Waiting for the agent." } });
+      sm.emitStatus("idle");
+
+      const run = await promise;
+      expect(run.status).toBe("timeout");
+      expect(run.error).toContain("while 1 background task(s) still ran");
+    });
+
+    // The stream runtime (`claude -p`) ends its process with the turn, so
+    // there is no later idle for a notification to wake. That path keeps the
+    // old fail-fast behaviour instead of waiting for a watchdog that would
+    // only add time to the failure.
+    it("fails a stream run that ends its turn with a background task pending", async () => {
+      sm.createSession.mockReturnValueOnce({ id: "session-1", runtime: "stream" } as ReturnType<typeof sm.createSession>);
+      const job = makeJob();
+      const promise = scheduler.executeJob(job);
+      await vi.waitFor(() => expect(sm.sendMessage).toHaveBeenCalled());
+
+      sm.emitEvent({ type: "task_update", taskInfo: { taskId: "a1", status: "running", title: "Agent" } });
+      sm.emitEvent({ type: "message_done", message: { content: "Waiting for the agent." } });
       sm.emitStatus("idle");
 
       const run = await promise;
@@ -571,6 +656,24 @@ describe("JobScheduler", () => {
       expect(scheduler.getRunningJobs().has("job-1")).toBe(false);
 
       // executeJob Promise must resolve (no hang)
+      const resolvedRun = await promise;
+      expect(resolvedRun.status).toBe("stopped");
+    });
+
+    it("stops a run that is waiting on a background task", async () => {
+      const job = makeJob();
+      const promise = scheduler.executeJob(job);
+      await vi.waitFor(() => expect(sm.sendMessage).toHaveBeenCalled());
+
+      sm.emitEvent({ type: "task_update", taskInfo: { taskId: "a1", status: "running", title: "Agent" } });
+      sm.emitEvent({ type: "message_done", message: { content: "Waiting for the agent." } });
+      sm.emitStatus("idle");
+      expect(scheduler.getRunningJobs().has("job-1")).toBe(true);
+
+      const run = scheduler.stopJob("job-1");
+      expect(run.status).toBe("stopped");
+      expect(sm.destroySession).toHaveBeenCalledWith("session-1");
+
       const resolvedRun = await promise;
       expect(resolvedRun.status).toBe("stopped");
     });
@@ -948,9 +1051,11 @@ describe("job prompt construction", () => {
     expect(prompt).toContain("All tools and MCP servers are available");
   });
 
-  it("tells the job not to launch background subagents", async () => {
-    // A backgrounded Agent ends the turn to wait for a notification that no
-    // operator is there to trigger, which strands the run.
+  it("tells the job how a background task reports back", async () => {
+    // The Agent tool runs asynchronously: the run stays open across the turn
+    // that launched it, and a task notification wakes the model to collect the
+    // result. The old advice to pass run_in_background: false was ignored by
+    // the CLI and described a waiter that does not exist.
     const job = makeJob();
     const promise = scheduler.executeJob(job);
     await vi.waitFor(() => expect(sm.sendMessage).toHaveBeenCalled());
@@ -958,7 +1063,10 @@ describe("job prompt construction", () => {
     await promise;
 
     const prompt = sm.sendMessage.mock.calls[0][1] as string;
-    expect(prompt).toContain("run_in_background: false");
+    expect(prompt).not.toContain("run_in_background: false");
+    expect(prompt).toContain("task notification");
+    expect(prompt).toContain("stays open");
+    expect(prompt).not.toContain("Never end a turn intending to be woken up");
   });
 
   it("includes no-tools message when allowedTools and mcpServers are empty", async () => {

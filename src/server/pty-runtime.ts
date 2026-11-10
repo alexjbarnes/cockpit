@@ -49,6 +49,9 @@ export interface PtyRuntimeOptions {
   telemetry?: TelemetrySpawner;
   /** The provider serving the session's model, stamped on its telemetry. */
   providerId?: string;
+  /** The CLI's working directory changed (EnterWorktree). The original cwd is
+   *  passed back when it returns there. */
+  onCwdChanged?: (cwd: string) => void;
 }
 
 /**
@@ -113,6 +116,8 @@ export class PtyRuntime {
   /** The permission mode the CLI last reported in a hook payload. */
   private cliPermissionMode: string | undefined;
   private lastPreToolUse: { tool: string; input?: Record<string, unknown> } | null = null;
+  /** The CLI's working directory as last reported by a hook payload. */
+  private lastCwd: string | null = null;
   /**
    * Background work still running, by task id, taken from the CLI's own
    * `background_tasks` list rather than inferred from the Subagent hooks.
@@ -950,6 +955,14 @@ export class PtyRuntime {
 
   private buildHandler(): SessionHookHandler {
     return {
+      onCwdChanged: (cwd) => {
+        // Every event carries it, so only a change is news. The original
+        // directory is passed back too: leaving a worktree returns there.
+        if (cwd === (this.lastCwd ?? this.opts.cwd)) return;
+        this.lastCwd = cwd;
+        logDiag(this.opts.sessionId, "pty:cwd-changed", { cwd });
+        this.opts.onCwdChanged?.(cwd);
+      },
       onPreToolUse: async (payload) => {
         this.cancelErrorDebounce();
         this.ptyOutputBuffer = "";

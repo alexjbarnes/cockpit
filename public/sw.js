@@ -144,9 +144,27 @@ async function actOnApproval(allowed, approval) {
   }
 }
 
+/** Asks an open page to go to `url` itself. Resolves whether it said it would:
+ *  a page still loading, or one from a build without the listener, says
+ *  nothing. */
+function askToNavigate(client, url) {
+  return new Promise((resolve) => {
+    const channel = new MessageChannel();
+    const timer = setTimeout(() => resolve(false), 1500);
+    channel.port1.onmessage = () => {
+      clearTimeout(timer);
+      resolve(true);
+    };
+    client.postMessage({ type: "cockpit:navigate", url }, [channel.port2]);
+  });
+}
+
 // An action button acts and leaves the app alone. Anything else — a tap on the
 // notification body — focuses a window already showing cockpit rather than
-// opening a second one, and lands on the page the notification named.
+// opening a second one, and lands on the page the notification named. The page
+// moves there itself where it can: client.navigate() reloads the whole app,
+// dropping its connection and making it fetch everything again, which in the
+// installed app meant a spinner after every tap.
 self.addEventListener("notificationclick", (event) => {
   const data = event.notification.data || {};
   if (event.action === "approve" || event.action === "deny") {
@@ -166,14 +184,15 @@ self.addEventListener("notificationclick", (event) => {
   event.notification.close();
   const target = new URL(data.url || "/inbox", self.location.origin).href;
   event.waitUntil(
-    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clients) => {
-      for (const client of clients) {
-        if (new URL(client.url).origin === self.location.origin) {
-          client.navigate(target);
-          return client.focus();
-        }
-      }
-      return self.clients.openWindow(target);
-    })
+    (async () => {
+      const clients = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+      // Not the page modal's frame, which is a window client of its own.
+      const client = clients.find((c) => c.frameType !== "nested" && new URL(c.url).origin === self.location.origin);
+      if (!client) return self.clients.openWindow(target);
+      // Focus first, while the tap still allows it.
+      await client.focus().catch(() => {});
+      if (client.url === target) return;
+      if (!(await askToNavigate(client, target))) await client.navigate(target);
+    })()
   );
 });

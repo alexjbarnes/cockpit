@@ -7,13 +7,7 @@ import {
   Bot,
   CalendarClock,
   ChartLine,
-  Check,
   ClipboardList,
-  ExternalLink,
-  FileEdit,
-  FileMinus,
-  FilePlus,
-  FileSymlink,
   GitPullRequest,
   GripVertical,
   Inbox,
@@ -25,22 +19,19 @@ import {
 import { usePathname, useRouter } from "next/navigation";
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { type SidebarSectionConfig, useShell } from "@/components/app-shell";
-import { FilePicker } from "@/components/file-picker";
-import { FileTree } from "@/components/file-tree";
+import { SidebarFilesChanges } from "@/components/sidebar-files-changes";
 import { SidebarSection } from "@/components/sidebar-section";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useJobFailureCount } from "@/hooks/use-jobs";
 import { useSettings } from "@/hooks/use-settings";
 import { useWebSocket } from "@/hooks/use-websocket";
 import { type AssistantDot, assistantDot } from "@/lib/assistant-dot";
-import { useCheckedFiles } from "@/lib/checked-files";
+import { type NewSessionInput, newSessionBody } from "@/lib/new-session";
 import { createStaleGuard } from "@/lib/stale-guard";
 import { cn } from "@/lib/utils";
 import type { SessionInfo } from "@/types";
 import { AssistantModal } from "./assistant-modal";
 import { NewSessionDialog } from "./new-session-dialog";
-import { PageModal, usePageModal } from "./page-modal";
 
 const SIDEBAR_WIDTH_KEY = "cockpit_sidebar_width";
 const DEFAULT_WIDTH = 288; // 18rem = w-72
@@ -330,10 +321,9 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
   const router = useRouter();
   const pathname = usePathname();
   const { send, subscribe, connected } = useWebSocket();
-  const { sidebarSections, cwd, sessionId: shellSessionId } = useShell();
-  const { settings, reload: reloadSettings } = useSettings();
+  const { sidebarSections, cwd, openPageModal } = useShell();
+  const { settings } = useSettings();
   // Settings changed inside the modal apply here as soon as it closes.
-  const pageModal = usePageModal(reloadSettings);
   const [open, setOpen] = useState(false);
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
   const [unread, setUnread] = useState<Set<string>>(new Set());
@@ -360,6 +350,9 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
   }, []);
 
   const prevStatusRef = useRef<Map<string, string>>(new Map());
+  /** The pins as the server has them, including ones this page cannot render,
+   *  so a reorder persists those too rather than dropping them. */
+  const pinnedIdsRef = useRef<string[]>([]);
   const staleGuard = useRef(createStaleGuard()).current;
   const assistantStaleGuard = useRef(createStaleGuard()).current;
 
@@ -384,10 +377,9 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
   const openPage = useCallback(
     (path: string) => {
       close();
-      if (settings.modalPagesEnabled) pageModal.open(path);
-      else router.push(path);
+      if (!openPageModal(path)) router.push(path);
     },
-    [close, settings.modalPagesEnabled, pageModal.open, router],
+    [close, openPageModal, router],
   );
 
   const currentSessionId = pathname.startsWith("/sessions/") ? pathname.split("/")[2] : null;
@@ -475,29 +467,19 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
     if (!res || isStale()) return;
 
     const fetchedSessions: SessionInfo[] = (res.sessions || []).filter((s: SessionInfo) => !s.cwd.endsWith(".cockpit/reviews"));
-    const foundIds: string[] = Array.isArray(res.foundIds) ? res.foundIds : fetchedSessions.map((s) => s.id);
-    const foundSet = new Set(foundIds);
 
-    // Preserve the user's pinned ordering
+    // Preserve the user's pinned ordering. A pin whose session this response
+    // does not carry is left in the file and simply not rendered here: the
+    // response can come back partial (a transcript being written, a scan
+    // racing a server start, a session whose id moved on /clear), and deleting
+    // from one of those lost the user's whole pinned list. Pins are removed
+    // where they are removed deliberately: closing or deleting a session.
+    pinnedIdsRef.current = pinnedIds;
     const byId = new Map(fetchedSessions.map((s) => [s.id, s]));
     const visible: SessionInfo[] = [];
-    const survivingIds: string[] = [];
     for (const id of pinnedIds) {
       const s = byId.get(id);
-      if (s) {
-        visible.push(s);
-        survivingIds.push(id);
-      }
-    }
-
-    // Drop pins whose session files no longer exist (server confirms via foundIds)
-    const hasOrphans = pinnedIds.some((id) => !foundSet.has(id));
-    if (hasOrphans) {
-      fetch("/api/sessions/pinned", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ pinned: survivingIds }),
-      }).catch(() => {});
+      if (s) visible.push(s);
     }
 
     for (const s of visible) {
@@ -591,27 +573,38 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
 
       const next = arrayMove(sessions, oldIndex, newIndex);
       setSessions(next);
+      // Pins this page cannot render keep their place in the file too, or a
+      // reorder would delete them.
+      const order = next.map((s) => s.id);
+      const hidden = pinnedIdsRef.current.filter((id) => !order.includes(id));
       fetch("/api/sessions/pinned", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ pinned: next.map((s) => s.id) }),
+        body: JSON.stringify({ pinned: [...order, ...hidden] }),
       }).catch((err) => console.error("Failed to persist sidebar order", err));
     },
     [sessions],
   );
 
-  const createSession = async (cwd: string, name: string, runtime: "pty" | "stream") => {
-    const res = await fetch("/api/sessions", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ cwd, name: name || undefined, runtime }),
-    });
-    if (res.ok) {
+  const createSession = async (input: NewSessionInput): Promise<{ ok: boolean; error?: string }> => {
+    try {
+      const res = await fetch("/api/sessions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(newSessionBody(input)),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        return { ok: false, error: typeof data.error === "string" ? data.error : "Could not create the session" };
+      }
       const data = await res.json();
       await pinSession(data.sessionId);
       await fetchSessions();
       close();
-      router.push(`/sessions/${data.sessionId}?cwd=${encodeURIComponent(cwd)}`);
+      router.push(`/sessions/${data.sessionId}?cwd=${encodeURIComponent(input.cwd.trim())}`);
+      return { ok: true };
+    } catch {
+      return { ok: false, error: "Failed to connect" };
     }
   };
 
@@ -680,7 +673,14 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
             badge={sessions.length > 0 ? String(sessions.length) : undefined}
             actions={
               <div className="flex items-center">
-                <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => setDialogOpen(true)} title="New session">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-6 w-6"
+                  onClick={() => setDialogOpen(true)}
+                  title="New session"
+                  data-testid="sidebar-new-session"
+                >
                   <Plus className="h-3.5 w-3.5" />
                 </Button>
                 <Button
@@ -720,9 +720,7 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
 
           <DynamicSections sections={sidebarSections} exclude={REVIEW_ADJACENT_SECTIONS} />
 
-          {cwd && !sidebarSections.has("git-changes") && <SidebarChanges cwd={cwd} sessionId={shellSessionId} />}
-
-          {cwd && !sidebarSections.has("file-tree") && <SidebarFileTree cwd={cwd} />}
+          {cwd && <SidebarFilesChanges cwd={cwd} />}
 
           {settings.reviewsEnabled && <RecentReviewsSection onNavigate={close} onWatchIds={watchReviewIds} />}
 
@@ -767,7 +765,6 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
 
       <NewSessionDialog open={dialogOpen} onOpenChange={setDialogOpen} onSubmit={createSession} />
       <AssistantModal open={assistantOpen} onOpenChange={setAssistantOpen} onSession={handleAssistantSession} />
-      <PageModal path={pageModal.path} onClose={pageModal.close} onOpenInApp={pageModal.openInApp} />
     </>
   );
 });
@@ -791,27 +788,17 @@ function RecentReviewsSection({ onNavigate, onWatchIds }: { onNavigate: () => vo
     if (!res) return;
 
     const sessions: SessionInfo[] = res.sessions || [];
-    const foundIds: string[] = Array.isArray(res.foundIds) ? res.foundIds : sessions.map((s: SessionInfo) => s.id);
-    const foundSet = new Set(foundIds);
 
+    // Same rule as the sessions above: a review pin the response does not
+    // carry is left in the file rather than deleted from one partial answer.
     const byId = new Map(sessions.map((s) => [s.id, s]));
     const visible: ReviewSession[] = [];
-    const survivingIds: string[] = [];
     for (const id of pinnedIds) {
       const s = byId.get(id);
       if (s) {
         const parsed = parseReviewSession(s);
         if (parsed) visible.push(parsed);
-        survivingIds.push(id);
       }
-    }
-
-    if (pinnedIds.some((id) => !foundSet.has(id))) {
-      fetch("/api/reviews/pinned", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ pinned: survivingIds }),
-      }).catch(() => {});
     }
 
     setReviews(visible);
@@ -954,200 +941,6 @@ function DynamicSections({ sections, exclude }: { sections: Map<string, SidebarS
         </SidebarSection>
       ))}
     </>
-  );
-}
-
-function isMobile() {
-  return typeof window !== "undefined" && window.innerWidth < 768;
-}
-
-function SidebarFileTree({ cwd }: { cwd: string }) {
-  const { tabActions, closeSidebar } = useShell();
-  const [pickerOpen, setPickerOpen] = useState(false);
-
-  const handleSelect = useCallback(
-    (filePath: string) => {
-      tabActions?.openFile(filePath);
-      if (isMobile()) closeSidebar();
-    },
-    [tabActions, closeSidebar],
-  );
-
-  const handlePickFile = useCallback(
-    (filePath: string) => {
-      handleSelect(filePath);
-      setPickerOpen(false);
-    },
-    [handleSelect],
-  );
-
-  return (
-    <SidebarSection
-      id="files"
-      title="Session Files"
-      defaultOpen={false}
-      actions={
-        <button
-          onClick={() => setPickerOpen(true)}
-          title="Open file"
-          className="flex items-center justify-center rounded p-0.5 hover:bg-accent text-muted-foreground"
-        >
-          <Plus className="h-3.5 w-3.5" />
-        </button>
-      }
-    >
-      <FileTree cwd={cwd} selectedFile={null} onSelectFile={handleSelect} />
-      <Dialog open={pickerOpen} onOpenChange={setPickerOpen}>
-        <DialogContent className="sm:max-w-lg">
-          <DialogHeader>
-            <DialogTitle>Open File</DialogTitle>
-          </DialogHeader>
-          <FilePicker startPath={cwd} onSelect={handlePickFile} onCancel={() => setPickerOpen(false)} />
-        </DialogContent>
-      </Dialog>
-    </SidebarSection>
-  );
-}
-
-function changeStatusIcon(status: string) {
-  switch (status) {
-    case "added":
-    case "untracked":
-      return <FilePlus className="h-3.5 w-3.5 text-green-500" />;
-    case "deleted":
-      return <FileMinus className="h-3.5 w-3.5 text-red-500" />;
-    case "renamed":
-      return <FileSymlink className="h-3.5 w-3.5 text-blue-500" />;
-    default:
-      return <FileEdit className="h-3.5 w-3.5 text-yellow-500" />;
-  }
-}
-
-function SidebarChanges({ cwd }: { cwd: string; sessionId?: string }) {
-  const pathname = usePathname();
-  const { tabActions } = useShell();
-  const { subscribe } = useWebSocket();
-  const { checkedFiles, toggleFile } = useCheckedFiles(cwd);
-  const [branch, setBranch] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const [files, setFiles] = useState<Array<{ path: string; status: string; additions: number; deletions: number }>>([]);
-  const cwdRef = useRef(cwd);
-  cwdRef.current = cwd;
-
-  const fetchStatus = useCallback(() => {
-    // Capture the cwd this request is for. fs_changed fires for every
-    // subscribed session, so several status fetches can be in flight across a
-    // session switch. Without this guard a late response for the previous cwd
-    // overwrites the current one and the panel sticks on the old session.
-    const target = cwdRef.current;
-    fetch(`/api/git/status?cwd=${encodeURIComponent(target)}`)
-      .then((r) => {
-        if (!r.ok) throw new Error("Not a git repository");
-        return r.json();
-      })
-      .then((data) => {
-        if (cwdRef.current !== target) return;
-        setFiles(data.files || []);
-        setBranch(data.branch || "");
-        setError(null);
-      })
-      .catch((err) => {
-        if (cwdRef.current !== target) return;
-        setFiles([]);
-        setBranch("");
-        setError(err instanceof Error ? err.message : "Failed to load");
-      });
-  }, []);
-
-  // biome-ignore lint/correctness/useExhaustiveDependencies: pathname triggers refetch on navigation
-  useEffect(() => {
-    fetchStatus();
-  }, [cwd, pathname, fetchStatus]);
-
-  useEffect(() => {
-    return subscribe((msg) => {
-      if (msg.type !== "session:fs_changed") return;
-      fetchStatus();
-    });
-  }, [subscribe, fetchStatus]);
-
-  const totalAdded = files.reduce((sum, f) => sum + f.additions, 0);
-  const totalDeleted = files.reduce((sum, f) => sum + f.deletions, 0);
-
-  return (
-    <SidebarSection
-      id="session-changes"
-      title="Session Changes"
-      badge={files.length > 0 ? String(files.length) : undefined}
-      defaultOpen={false}
-    >
-      {error ? (
-        <p className="px-3 py-3 text-sm text-muted-foreground">{error}</p>
-      ) : files.length === 0 ? (
-        <p className="px-3 py-3 text-sm text-muted-foreground">Working tree clean</p>
-      ) : (
-        <>
-          <div className="px-3 py-1.5 text-xs text-muted-foreground flex items-center gap-2 border-b">
-            {branch && (
-              <>
-                <span>Branch:</span>
-                <span className="font-mono font-bold text-foreground">{branch}</span>
-                <span className="mx-0.5">·</span>
-              </>
-            )}
-            <span>{files.length} changed</span>
-            {totalAdded > 0 && <span className="text-green-500">+{totalAdded}</span>}
-            {totalDeleted > 0 && <span className="text-red-500">-{totalDeleted}</span>}
-            <div className="flex-1" />
-            <button
-              type="button"
-              title="Open commit view"
-              onClick={() => {
-                tabActions?.openChanges();
-              }}
-              className="hover:text-foreground transition-colors"
-            >
-              <ExternalLink className="h-3 w-3" />
-            </button>
-          </div>
-          {files.map((file) => (
-            <div key={file.path} className="flex items-center gap-1 px-3 py-1 text-xs hover:bg-accent/50 transition-colors">
-              <button
-                type="button"
-                role="checkbox"
-                aria-checked={checkedFiles.has(file.path)}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  toggleFile(file.path);
-                }}
-                className={cn(
-                  "h-3.5 w-3.5 shrink-0 rounded-full border flex items-center justify-center transition-colors",
-                  checkedFiles.has(file.path)
-                    ? "border-primary bg-primary text-primary-foreground"
-                    : "border-muted-foreground/30 bg-transparent hover:border-muted-foreground/50",
-                )}
-              >
-                {checkedFiles.has(file.path) && <Check className="h-2 w-2" strokeWidth={3} />}
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  tabActions?.openDiff(file.path);
-                }}
-                className="flex items-center gap-2 flex-1 min-w-0 text-left"
-              >
-                {changeStatusIcon(file.status)}
-                <span className="font-mono truncate flex-1 min-w-0">{file.path}</span>
-                <span className="shrink-0 flex gap-1 text-[10px] font-mono">
-                  {file.additions > 0 && <span className="text-green-500">+{file.additions}</span>}
-                  {file.deletions > 0 && <span className="text-red-500">-{file.deletions}</span>}
-                </span>
-              </button>
-            </div>
-          ))}
-        </>
-      )}
-    </SidebarSection>
   );
 }
 

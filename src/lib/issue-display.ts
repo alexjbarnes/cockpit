@@ -387,10 +387,13 @@ export function statusColor(name: string, project?: Project): string {
 /**
  * The ordered status columns for a project: built-in statuses in canonical
  * lifecycle order minus the project's disabledStatuses, then its customStatuses
- * in array order. With no project (the All-Projects board) it's the full
- * built-in lifecycle. This is the single source of truth for a project's column
- * set and their order — the board, the detail-page status picker, and the
- * settings editor all read it rather than hand-rolling the merge.
+ * in array order. A project's `statusOrder` moves the statuses it names to the
+ * front in that order; anything it does not name follows in the default order,
+ * so a partial list is a prefix rather than a filter. With no project (the
+ * All-Projects board) it's the full built-in lifecycle. This is the single
+ * source of truth for a project's column set and their order — the board, the
+ * detail-page status picker, and the settings editor all read it rather than
+ * hand-rolling the merge.
  */
 export function resolveProjectStatuses(project?: Project): ResolvedStatus[] {
   const disabled = new Set(project?.disabledStatuses ?? []);
@@ -404,7 +407,22 @@ export function resolveProjectStatuses(project?: Project): ResolvedStatus[] {
     builtin: false,
     color: statusColor(c.name, project),
   }));
-  return [...builtins, ...customs];
+  const statuses = [...builtins, ...customs];
+  const order = project?.statusOrder;
+  if (!order || order.length === 0) return statuses;
+
+  const rank = new Map(order.map((name, index) => [name, index]));
+  return statuses
+    .map((status, index) => ({ status, index }))
+    .sort((a, b) => {
+      const ra = rank.get(a.status.name);
+      const rb = rank.get(b.status.name);
+      if (ra === undefined && rb === undefined) return a.index - b.index;
+      if (ra === undefined) return 1;
+      if (rb === undefined) return -1;
+      return ra - rb;
+    })
+    .map(({ status }) => status);
 }
 
 /**

@@ -1,7 +1,6 @@
 "use client";
 
 import ReactMarkdown from "react-markdown";
-import rehypeHighlight from "rehype-highlight";
 import remarkGfm from "remark-gfm";
 import { MarkdownCodeBlock } from "@/components/markdown-code-block";
 import { cn } from "@/lib/utils";
@@ -35,7 +34,7 @@ export function MarkdownRender({ content, variant = "full", className }: Markdow
   }
   return (
     <div className={cn(FULL_PROSE, className)}>
-      <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]} components={fullComponents}>
+      <ReactMarkdown remarkPlugins={[remarkGfm]} components={fullComponents}>
         {content}
       </ReactMarkdown>
     </div>

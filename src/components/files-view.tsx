@@ -1,12 +1,9 @@
 "use client";
 
-import { AlertCircle, ChevronDown, ChevronUp, Eye, Loader2, Pencil, Plus, Save, Search, WrapText, X } from "lucide-react";
+import { AlertCircle, ChevronDown, ChevronUp, Eye, Loader2, Pencil, Save, Search, WrapText, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useShell } from "@/components/app-shell";
 import { CodeBlock, languageFromPath } from "@/components/code-block";
 import { CodeEditor } from "@/components/code-editor";
-import { FilePicker } from "@/components/file-picker";
-import { FileTree } from "@/components/file-tree";
 import { MarkdownRender } from "@/components/markdown-render";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -24,7 +21,6 @@ interface FileContent {
 }
 
 // Module-level caches
-const selectedFileCache = new Map<string, string | null>();
 const fileContentCache = new Map<string, FileContent>();
 const MAX_CONTENT_CACHE = 50;
 
@@ -111,21 +107,11 @@ function scrollToNthMark(container: HTMLElement, n: number) {
   }
 }
 
-export function FilesView({
-  cwd,
-  initialFile,
-  manageSidebar = true,
-}: {
-  cwd: string;
-  initialFile?: string | null;
-  manageSidebar?: boolean;
-}) {
-  const { setSidebarSection, removeSidebarSection, closeSidebar, tabActions } = useShell();
+export function FilesView({ cwd, initialFile }: { cwd: string; initialFile?: string | null }) {
   const { subscribe } = useWebSocket();
-  const [selectedFile, setSelectedFile] = useState<string | null>(() => initialFile || selectedFileCache.get(cwd) || null);
+  const [selectedFile] = useState<string | null>(initialFile || null);
   const [fileData, setFileData] = useState<FileContent | null>(null);
   const [loading, setLoading] = useState(false);
-  const [pathInputOpen, setPathInputOpen] = useState(false);
   const [wrap, setWrap] = useState(false);
   const [preview, setPreview] = useState(false);
   const [imgError, setImgError] = useState(false);
@@ -251,50 +237,6 @@ export function FilesView({
     };
   }, [searchOpen, searchQuery, fileData, wrap, preview, editing]);
 
-  const handleSelectFile = useCallback(
-    (filePath: string) => {
-      setSelectedFile(filePath);
-      selectedFileCache.set(cwd, filePath);
-      // Close sidebar on mobile
-      if (typeof window !== "undefined" && window.innerWidth < 768) {
-        closeSidebar();
-      }
-    },
-    [cwd, closeSidebar],
-  );
-
-  const openExternalFile = useCallback(
-    (filePath: string) => {
-      if (tabActions) {
-        tabActions.openFile(filePath);
-      } else {
-        handleSelectFile(filePath);
-      }
-      setPathInputOpen(false);
-    },
-    [tabActions, handleSelectFile],
-  );
-
-  useEffect(() => {
-    if (!manageSidebar) return;
-    setSidebarSection({
-      id: "file-tree",
-      title: "Files",
-      content: <FileTree cwd={cwd} selectedFile={selectedFile} onSelectFile={handleSelectFile} />,
-      order: 30,
-      actions: (
-        <button
-          onClick={() => setPathInputOpen(true)}
-          title="Open file"
-          className="flex items-center justify-center rounded p-0.5 hover:bg-accent text-muted-foreground"
-        >
-          <Plus className="h-3.5 w-3.5" />
-        </button>
-      ),
-    });
-    return () => removeSidebarSection("file-tree");
-  }, [cwd, selectedFile, handleSelectFile, setSidebarSection, removeSidebarSection, manageSidebar]);
-
   // Fetch file content when selection changes
   useEffect(() => {
     // A draft belongs to the file it was opened from, so changing file ends
@@ -368,10 +310,22 @@ export function FilesView({
       } catch {}
     };
 
-    return subscribe((msg) => {
+    const unsubscribe = subscribe((msg) => {
       if (msg.type !== "session:fs_changed") return;
       refresh();
     });
+    // A stat every few seconds while the page is visible, so an open file still
+    // refreshes if the directory watcher has stopped, or if the file sits
+    // outside the watched directory. refresh() asks for the mtime alone and
+    // fetches the content only when it changed.
+    const poll = setInterval(() => {
+      if (document.visibilityState === "visible") void refresh();
+    }, 5_000);
+
+    return () => {
+      unsubscribe();
+      clearInterval(poll);
+    };
   }, [selectedFile, subscribe]);
 
   const startEditing = useCallback(() => {
@@ -691,15 +645,6 @@ export function FilesView({
               Discard
             </Button>
           </div>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={pathInputOpen} onOpenChange={setPathInputOpen}>
-        <DialogContent className="sm:max-w-lg">
-          <DialogHeader>
-            <DialogTitle>Open File</DialogTitle>
-          </DialogHeader>
-          <FilePicker startPath={cwd} onSelect={openExternalFile} onCancel={() => setPathInputOpen(false)} />
         </DialogContent>
       </Dialog>
     </div>
