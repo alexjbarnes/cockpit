@@ -59,6 +59,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Internal
 - The integration suite waits for the file tree to appear instead of sleeping, and stops counting sockets. Tests were updated to match the CLI and settings page as they are now.
+- The lockfile keeps the hoisted `@pierre/theme` copy that `@pierre/trees`' theming expects, so a clean `npm ci` succeeds.
 
 ## [0.10.0] - 2026-10-23
 
