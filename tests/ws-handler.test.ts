@@ -2904,10 +2904,20 @@ describe("WebSocket handler", () => {
       injectFakeTerminal("term-3", "buffered content");
       const ws = await connectTerminalWs("term-3");
       await new Promise((r) => setTimeout(r, 50));
-      ws.send("\x01R100;40");
-      const data = await new Promise<string>((resolve) => {
-        ws.on("message", (d) => resolve(d.toString()));
+      const messages: string[] = [];
+      const dataPromise = new Promise<string>((resolve) => {
+        ws.on("message", (d) => {
+          const str = d.toString();
+          messages.push(str);
+          if (str.includes("buffered content")) resolve(str);
+        });
       });
+      ws.send("\x01R100;40");
+      const data = await dataPromise;
+      // The replay is preceded by the size it was written at, so the client
+      // can render it there before fitting to its own pane.
+      expect(messages[0].startsWith("\x01S")).toBe(true);
+      expect(JSON.parse(messages[0].slice(2))).toEqual({ cols: 80, rows: 24 });
       expect(data).toContain("buffered content");
       ws.close();
     });

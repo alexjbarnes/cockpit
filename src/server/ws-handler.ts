@@ -89,12 +89,18 @@ function setupTerminalWebSocket(terminalWss: WebSocketServer, terminalManager: T
         const cols = parseInt(parts[0], 10);
         const rows = parseInt(parts[1], 10);
         const replayBuffer = !bufferSent ? terminalManager.getBuffer(terminalId) : null;
+        // The buffer was written at the terminal's old size. Tell the client
+        // to render it at that size before fitting to its own, so a replay
+        // across a width change reflows instead of jumbling the output.
+        const replayTerminal = !bufferSent ? terminalManager.getTerminal(terminalId) : undefined;
+        const replaySize = replayTerminal ? { cols: replayTerminal.cols, rows: replayTerminal.rows } : undefined;
         if (cols > 0 && rows > 0) {
           terminalManager.resizeTerminal(terminalId, cols, rows);
         }
         if (!bufferSent) {
           bufferSent = true;
-          if (replayBuffer) {
+          if (replayBuffer && replaySize) {
+            ws.send(`\x01S${JSON.stringify({ cols: replaySize.cols, rows: replaySize.rows })}`);
             ws.send("\x1b[2J\x1b[3J\x1b[H" + replayBuffer);
           }
         }

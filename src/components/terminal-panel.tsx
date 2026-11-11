@@ -294,6 +294,7 @@ function TerminalPanelInner({ terminalId, cwd: _cwd, active = true, onReconnect,
     // ourselves unless a future ghostty starts doing so.
     let pendingDa1 = "";
     let ghosttyAnsweredDa1 = false;
+    let replayPending = false;
 
     async function init() {
       const el = containerRef.current;
@@ -573,6 +574,20 @@ function TerminalPanelInner({ terminalId, cwd: _cwd, active = true, onReconnect,
             term?.write(data);
             return;
           }
+          // A replay is written at the size the buffer was captured at, then
+          // fitted to this pane, so a width change reflows instead of jumbling.
+          if (data.startsWith("\x01S")) {
+            try {
+              const size = JSON.parse(data.slice(2)) as { cols?: number; rows?: number };
+              if (term && size.cols && size.rows && size.cols > 1 && size.rows > 1) {
+                term.resize(size.cols, size.rows);
+                replayPending = true;
+              }
+            } catch {
+              // ignore a malformed size frame
+            }
+            return;
+          }
           const { queries, pending } = takeDa1Queries(pendingDa1, data);
           pendingDa1 = pending;
           ghosttyAnsweredDa1 = false;
@@ -586,6 +601,10 @@ function TerminalPanelInner({ terminalId, cwd: _cwd, active = true, onReconnect,
           if (scrolled > 0 && term) {
             const added = Math.max(0, term.buffer.active.length - bufferLength);
             term.scrollToLine(scrolled + added);
+          }
+          if (replayPending) {
+            replayPending = false;
+            fitRef.current?.();
           }
           if (queries > 0 && !ghosttyAnsweredDa1) {
             for (let i = 0; i < queries; i++) sendData(DA1_RESPONSE);
