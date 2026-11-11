@@ -576,7 +576,17 @@ function TerminalPanelInner({ terminalId, cwd: _cwd, active = true, onReconnect,
           const { queries, pending } = takeDa1Queries(pendingDa1, data);
           pendingDa1 = pending;
           ghosttyAnsweredDa1 = false;
+          // ghostty snaps to the bottom on every write, which throws away a
+          // reader's scrollback position when output arrives while they are
+          // scrolled up (including a delta on returning to the session).
+          // Keep the view where it was, shifted by any lines the write added.
+          const scrolled = term && term.viewportY > 0 ? term.viewportY : 0;
+          const bufferLength = term?.buffer.active.length ?? 0;
           term?.write(data);
+          if (scrolled > 0 && term) {
+            const added = Math.max(0, term.buffer.active.length - bufferLength);
+            term.scrollToLine(scrolled + added);
+          }
           if (queries > 0 && !ghosttyAnsweredDa1) {
             for (let i = 0; i < queries; i++) sendData(DA1_RESPONSE);
           }
