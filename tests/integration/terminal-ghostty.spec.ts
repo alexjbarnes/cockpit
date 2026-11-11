@@ -76,3 +76,62 @@ test("the embedded terminal runs a shell and its buffer is selectable", async ({
     rmSync(workDir, { recursive: true, force: true });
   }
 });
+
+test("a reconnected terminal keeps working after a reload", async ({ page, harness }) => {
+  test.setTimeout(90_000);
+  const workDir = mkdtempSync(path.join(tmpdir(), "cockpit-it-terminal-reconnect-"));
+  mkdirSync(path.join(workDir, ".git"), { recursive: true });
+  harness.trustWorkDir(workDir);
+
+  try {
+    harness.mock.setScript([{ events: textResponse("ok") }]);
+    const created = await page.request.post(`${harness.cockpitUrl}/api/sessions`, {
+      data: { cwd: workDir, runtime: "pty" },
+    });
+    expect(created.ok()).toBe(true);
+    const { sessionId } = (await created.json()) as { sessionId: string };
+
+    await page.goto(`${harness.cockpitUrl}/sessions/${sessionId}?cwd=${encodeURIComponent(workDir)}`);
+    await expect(page.getByTestId("message-input")).toBeVisible();
+    await page.waitForTimeout(5000);
+    await page.getByTitle("New terminal (Ctrl+`)").click();
+    await expect(page.getByTestId("terminal-viewport").locator("canvas")).toBeVisible({ timeout: 30_000 });
+
+    const tabTerminalId = async (): Promise<string | null> => {
+      const res = await page.request.get(`${harness.cockpitUrl}/api/sessions/${sessionId}/tabs`);
+      const data = (await res.json()) as { openTabs?: Array<{ type: string; terminalId?: string }> };
+      return data.openTabs?.find((t) => t.type === "terminal")?.terminalId ?? null;
+    };
+    let oldId = "";
+    for (let i = 0; i < 30 && !oldId; i++) {
+      oldId = (await tabTerminalId()) ?? "";
+      if (!oldId) await page.waitForTimeout(500);
+    }
+    expect(oldId).not.toBe("");
+
+    // The PTY is gone (a server restart does the same). The tab still names it,
+    // so a reload shows the reconnect state.
+    await page.request.delete(`${harness.cockpitUrl}/api/terminal/${oldId}`);
+    await page.reload();
+    await expect(page.getByText("Terminal disconnected")).toBeVisible({ timeout: 30_000 });
+
+    await page.getByRole("button", { name: "Reconnect", exact: true }).click();
+    await expect(page.getByTestId("terminal-viewport").locator("canvas")).toBeVisible({ timeout: 30_000 });
+
+    // The reconnect must move the tab to the new PTY. Before that it kept the
+    // dead id, so every later mount reconnected to a terminal that was gone.
+    let newId = "";
+    for (let i = 0; i < 30 && (!newId || newId === oldId); i++) {
+      newId = (await tabTerminalId()) ?? "";
+      if (!newId || newId === oldId) await page.waitForTimeout(500);
+    }
+    expect(newId).not.toBe("");
+    expect(newId).not.toBe(oldId);
+
+    await page.reload();
+    await expect(page.getByTestId("terminal-viewport").locator("canvas")).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByText("Terminal disconnected")).toHaveCount(0);
+  } finally {
+    rmSync(workDir, { recursive: true, force: true });
+  }
+});

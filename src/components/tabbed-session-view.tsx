@@ -197,7 +197,12 @@ function TabbedContent({ sessionId, cwd, initialName, historyView }: TabbedSessi
             )}
             {leftTerminalTabs.map((tab) => (
               <div key={tab.id} className={cn("flex flex-col flex-1 min-h-0 min-w-0", activeTabId !== tab.id && "hidden")}>
-                <TerminalPanel terminalId={tab.terminalId} cwd={liveCwd} active={activeTabId === tab.id} />
+                <TerminalPanel
+                  terminalId={tab.terminalId}
+                  cwd={liveCwd}
+                  active={activeTabId === tab.id}
+                  onTerminalReplaced={tabs.replaceTerminalId}
+                />
               </div>
             ))}
           </div>
@@ -225,7 +230,12 @@ function TabbedContent({ sessionId, cwd, initialName, historyView }: TabbedSessi
             )}
             {rightTerminalTabs.map((tab) => (
               <div key={tab.id} className={cn("flex flex-col flex-1 min-h-0 min-w-0", splitTabId !== tab.id && "hidden")}>
-                <TerminalPanel terminalId={tab.terminalId} cwd={liveCwd} active={splitTabId === tab.id} />
+                <TerminalPanel
+                  terminalId={tab.terminalId}
+                  cwd={liveCwd}
+                  active={splitTabId === tab.id}
+                  onTerminalReplaced={tabs.replaceTerminalId}
+                />
               </div>
             ))}
           </div>
@@ -262,7 +272,12 @@ function TabbedContent({ sessionId, cwd, initialName, historyView }: TabbedSessi
       )}
       {terminalTabs.map((tab) => (
         <div key={tab.id} className={cn("flex flex-col flex-1 min-h-0 min-w-0", activeTabId !== tab.id && "hidden")}>
-          <TerminalPanel terminalId={tab.terminalId} cwd={liveCwd} active={activeTabId === tab.id} />
+          <TerminalPanel
+            terminalId={tab.terminalId}
+            cwd={liveCwd}
+            active={activeTabId === tab.id}
+            onTerminalReplaced={tabs.replaceTerminalId}
+          />
         </div>
       ))}
     </>

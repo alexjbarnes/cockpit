@@ -57,6 +57,8 @@ interface TerminalPanelProps {
   terminalId: string;
   cwd: string;
   active?: boolean;
+  /** Called after a reconnect starts a new PTY, so the tab can point at it. */
+  onTerminalReplaced?: (oldTerminalId: string, newTerminalId: string) => void;
 }
 
 const TOOLBAR_KEYS = [
@@ -160,7 +162,7 @@ async function copyText(text: string): Promise<boolean> {
   }
 }
 
-export function TerminalPanel({ terminalId: initialTerminalId, cwd, active = true }: TerminalPanelProps) {
+export function TerminalPanel({ terminalId: initialTerminalId, cwd, active = true, onTerminalReplaced }: TerminalPanelProps) {
   const [currentTerminalId, setCurrentTerminalId] = useState(initialTerminalId);
   const [reconnectKey, setReconnectKey] = useState(0);
   const [reconnecting, setReconnecting] = useState(false);
@@ -175,12 +177,13 @@ export function TerminalPanel({ terminalId: initialTerminalId, cwd, active = tru
       });
       if (!res.ok) return;
       const { terminalId } = await res.json();
+      onTerminalReplaced?.(currentTerminalId, terminalId);
       setCurrentTerminalId(terminalId);
       setReconnectKey((k) => k + 1);
     } finally {
       setReconnecting(false);
     }
-  }, [cwd]);
+  }, [cwd, currentTerminalId, onTerminalReplaced]);
 
   return (
     <TerminalPanelInner
