@@ -100,7 +100,7 @@ test("the exact reported shape (plugin agent with colon + URL) submits", async (
   mkdirSync(path.join(workDir, ".git"), { recursive: true });
   harness.trustWorkDir(workDir);
   try {
-    const msg = "@iph-ai-toolkit:adversarial-code-review https://github.com/IPH-ITIPS/AnalystPortal/pull/264 ZZMARKERD";
+    const msg = "@iph-ai-toolkit:adversarial-code-review https://github.com/example-org/example-repo/pull/264 ZZMARKERD";
     const landed = await userPromptReachedApi(page, harness, workDir, msg, "ZZMARKERD");
     expect(landed).toBe(true);
   } finally {
