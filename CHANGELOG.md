@@ -7,7 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **An inbox message can be acted on from the bottom of the article.** Share, Mark unread and Delete now repeat below the message, so a long message can be deleted after reading without scrolling back up.
+
 ### Fixed
+- **A terminal's output survives a pane or session change.** The server threw its replay buffer away whenever the terminal's column count changed, so switching sessions after the sidebar or split resized lost the output. The buffer is kept now, and a replay is written at the width it was captured at before the terminal fits to the pane, so it reflows instead of jumbling.
 - **A terminal keeps your place when output arrives.** Ghostty snaps to the bottom on every write, so scrolling up and then receiving output, including the delta when you return to a session, threw the view back to the prompt. The panel restores the reader's position after the write, shifted by any lines it added.
 - **The terminal answers fish's startup query.** fish asks the terminal for its Primary Device Attributes and waits ten seconds before giving up, which showed a terminal-compatibility warning on macOS. Ghostty's WebAssembly build answers other terminal queries but not this one, so the panel replies for it.
 - **Web push works with web-push 4.** The 0.11.0 dependency upgrade moved the library to named exports, and the default import left push key generation and sending broken.
