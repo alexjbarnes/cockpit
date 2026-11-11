@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **The terminal answers fish's startup query.** fish asks the terminal for its Primary Device Attributes and waits ten seconds before giving up, which showed a terminal-compatibility warning on macOS. Ghostty's WebAssembly build answers other terminal queries but not this one, so the panel replies for it.
+- **Web push works with web-push 4.** The 0.11.0 dependency upgrade moved the library to named exports, and the default import left push key generation and sending broken.
+
 ## [0.11.0] - 2026-11-10
 
 ### Added

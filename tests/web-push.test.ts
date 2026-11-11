@@ -13,12 +13,10 @@ const h = vi.hoisted(() => ({
 }));
 
 vi.mock("web-push", () => ({
-  default: {
-    generateVAPIDKeys: h.generate,
-    sendNotification: async (subscription: unknown, payload: string, options: unknown) => {
-      if (h.sendBehaviour) await h.sendBehaviour();
-      h.sent.push({ subscription, payload, options });
-    },
+  generateVAPIDKeys: h.generate,
+  sendNotification: async (subscription: unknown, payload: string, options: unknown) => {
+    if (h.sendBehaviour) await h.sendBehaviour();
+    h.sent.push({ subscription, payload, options });
   },
 }));
 

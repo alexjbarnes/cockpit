@@ -5,6 +5,7 @@ import { ChevronDown, Keyboard, Minus, Palette, Plus, Settings2, TextCursor, X }
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useIsDesktop } from "@/hooks/use-is-desktop";
 import { type TerminalTheme, useSettings } from "@/hooks/use-settings";
+import { DA1_RESPONSE, isDa1Response, takeDa1Queries } from "@/lib/terminal-query";
 import { TERMINAL_THEMES, terminalTheme } from "@/lib/terminal-themes";
 import { cn } from "@/lib/utils";
 
@@ -288,6 +289,12 @@ function TerminalPanelInner({ terminalId, cwd: _cwd, active = true, onReconnect,
     let term: GhosttyTerminal | null = null;
     const disposables: Array<{ dispose(): void }> = [];
 
+    // ghostty-web answers DSR queries but not DA1, so fish waits ten seconds
+    // at startup for a device-attributes reply that never comes. Answer it
+    // ourselves unless a future ghostty starts doing so.
+    let pendingDa1 = "";
+    let ghosttyAnsweredDa1 = false;
+
     async function init() {
       const el = containerRef.current;
       if (!el || cancelled) return;
@@ -396,6 +403,7 @@ function TerminalPanelInner({ terminalId, cwd: _cwd, active = true, onReconnect,
       }
 
       function deliver(data: string) {
+        if (isDa1Response(data)) ghosttyAnsweredDa1 = true;
         let payload = data;
         if (ctrlRef.current && data.length === 1) {
           const upper = data.toUpperCase().charCodeAt(0);
@@ -560,7 +568,18 @@ function TerminalPanelInner({ terminalId, cwd: _cwd, active = true, onReconnect,
         };
 
         ws.onmessage = (event) => {
-          term?.write(event.data);
+          const data = event.data;
+          if (typeof data !== "string") {
+            term?.write(data);
+            return;
+          }
+          const { queries, pending } = takeDa1Queries(pendingDa1, data);
+          pendingDa1 = pending;
+          ghosttyAnsweredDa1 = false;
+          term?.write(data);
+          if (queries > 0 && !ghosttyAnsweredDa1) {
+            for (let i = 0; i < queries; i++) sendData(DA1_RESPONSE);
+          }
         };
 
         ws.onclose = (event) => {
