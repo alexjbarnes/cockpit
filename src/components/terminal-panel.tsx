@@ -416,6 +416,10 @@ function TerminalPanelInner({ terminalId, cwd: _cwd, active = true, onReconnect,
       }
 
       function deliver(data: string) {
+        // A replay re-sends the queries the shell asked while the output was
+        // produced. Answering them again types the replies into the prompt:
+        // the buffer fills with literal DA1 and cursor-position responses.
+        if (replayPending) return;
         if (isDa1Response(data)) ghosttyAnsweredDa1 = true;
         let payload = data;
         if (ctrlRef.current && data.length === 1) {
@@ -605,6 +609,7 @@ function TerminalPanelInner({ terminalId, cwd: _cwd, active = true, onReconnect,
             }
             return;
           }
+          const wasReplay = replayPending;
           const { queries, pending } = takeDa1Queries(pendingDa1, data);
           pendingDa1 = pending;
           ghosttyAnsweredDa1 = false;
@@ -619,11 +624,13 @@ function TerminalPanelInner({ terminalId, cwd: _cwd, active = true, onReconnect,
             const added = Math.max(0, term.buffer.active.length - bufferLength);
             term.scrollToLine(scrolled + added);
           }
-          if (replayPending) {
+          if (wasReplay) {
             replayPending = false;
             fitRef.current?.();
           }
-          if (queries > 0 && !ghosttyAnsweredDa1) {
+          // Queries inside the replay were answered when they were first
+          // produced; replying now would type the answer into the shell.
+          if (!wasReplay && queries > 0 && !ghosttyAnsweredDa1) {
             for (let i = 0; i < queries; i++) sendData(DA1_RESPONSE);
           }
         };
