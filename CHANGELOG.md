@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Prompt suggestions can be turned off.** Settings → Appearance has a Prompt suggestions toggle, on by default. It controls the composer's grey completion of a previously sent prompt, which Right, End or Tab accepts while it is on.
 - **An inbox message can be acted on from the bottom of the article.** Share, Mark unread and Delete now repeat below the message, so a long message can be deleted after reading without scrolling back up.
 
+### Changed
+- **Prompt suggestions focus on repeatable commands.** The composer's grey completion now scores candidates and matches fuzzily instead of requiring an exact prefix. It only offers short, command-like prompts such as "commit and push" or "raise a PR"; long prose is ignored. Typing a later word ("push") or skipping a filler ("commit push") offers the whole command, and Right, Tab or a tap replaces the text; a true prefix still appends the rest.
+- **Prompt suggestions draw on every session.** A new session now offers commands you have used in other sessions, not only the current session's own history. The current session's prompts still rank first, and Up-arrow recall and the history modal stay scoped to the session.
+
 ### Fixed
 - **A manual compact no longer says the message never reached Claude.** Clicking Compact types `/compact` into the REPL and waits for a turn to start. On Claude Code 2.1.322 the command fires PreCompact but no user turn, and a real compaction outlasts the four-second confirmation window, so the send was retyped three times and failed with "Your message never reached Claude". PreCompact now confirms the send.
 - **A terminal keeps its history after a long progress-heavy command.** The server kept only the last 100KB of raw PTY output. A long `brew upgrade` is mostly carriage-return progress updates for one visible line, so the output before it was trimmed away and a browser refresh replayed only the final progress line. The replay buffer now keeps 2MB, enough for the 10,000-line scrollback the settings offer, and a trim starts on a line boundary instead of mid-sequence.

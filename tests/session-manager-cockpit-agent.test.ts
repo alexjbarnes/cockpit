@@ -27,6 +27,8 @@ vi.mock("@/server/debug-logger", () => ({
 }));
 
 vi.mock("@/server/transcript", () => ({
+  invalidateGlobalPromptHistory: vi.fn(),
+  loadGlobalPromptHistory: vi.fn().mockResolvedValue([]),
   loadTranscript: () => Promise.resolve({ messages: [], byteOffset: 0, totalSize: 0, lastUsage: null }),
   findSessionCwd: vi.fn(() => Promise.resolve(null)),
   findTranscriptFile: vi.fn(() => Promise.resolve(null)),

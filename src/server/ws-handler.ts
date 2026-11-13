@@ -353,6 +353,7 @@ export function createWebSocketHandler(
                 status: "idle",
                 hasMore: result.hasMore,
                 promptHistory: result.promptHistory,
+                suggestionHistory: result.suggestionHistory,
               });
               send(ws, { type: "session:connected", sessionId: msg.sessionId });
               send(ws, { type: "session:info_updated", sessionId: msg.sessionId, info: result.info });
@@ -514,6 +515,7 @@ export function createWebSocketHandler(
                   status: correctedStatus,
                   hasMore: session.hasMore,
                   promptHistory: session.promptHistory,
+                  suggestionHistory: session.suggestionHistory,
                   ...turnTiming,
                 });
               }
@@ -525,6 +527,7 @@ export function createWebSocketHandler(
                 status: correctedStatus,
                 hasMore: session.hasMore,
                 promptHistory: session.promptHistory,
+                suggestionHistory: session.suggestionHistory,
                 ...turnTiming,
               });
             }

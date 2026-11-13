@@ -20,6 +20,8 @@ vi.mock("@/server/auth", () => ({ validateSession: (t: string) => t === "valid" 
 vi.mock("@/server/debug-logger", () => ({ debugLog: vi.fn() }));
 vi.mock("@/server/paths", () => ({ getCockpitDir: () => "/tmp/cockpit-config" }));
 vi.mock("@/server/transcript", () => ({
+  invalidateGlobalPromptHistory: vi.fn(),
+  loadGlobalPromptHistory: vi.fn().mockResolvedValue([]),
   scanAllSessions: h.scanAllSessions,
   scanSessionsForCwd: h.scanSessionsForCwd,
   scanSessionsByIds: h.scanSessionsByIds,

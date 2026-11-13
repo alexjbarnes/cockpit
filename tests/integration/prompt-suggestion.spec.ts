@@ -73,6 +73,13 @@ test("typing a prompt's start shows the newest match, and Right, Tab or a tap ac
     await expect(input).toHaveValue("commit and tag");
     await expect(suggestion).not.toBeVisible();
 
+    // A later word finds the repeatable command it belongs to, and accepting
+    // replaces the typed text with the whole prompt.
+    await input.fill("push");
+    await expect(suggestion).toContainText("commit and push");
+    await input.press("ArrowRight");
+    await expect(input).toHaveValue("commit and push");
+
     // On by default; turning it off in Settings hides the ghost.
     const patch = await page.request.patch(`${harness.cockpitUrl}/api/defaults`, { data: { promptSuggestions: false } });
     expect(patch.ok()).toBe(true);
@@ -84,5 +91,47 @@ test("typing a prompt's start shows the newest match, and Right, Tab or a tap ac
     await expect(suggestion).toHaveCount(0);
   } finally {
     rmSync(workDir, { recursive: true, force: true });
+  }
+});
+
+test("a new session suggests commands sent in another session", async ({ page, harness }) => {
+  const firstDir = mkdtempSync(path.join(tmpdir(), "cockpit-it-suggest-a-"));
+  const secondDir = mkdtempSync(path.join(tmpdir(), "cockpit-it-suggest-b-"));
+  mkdirSync(path.join(firstDir, ".git"), { recursive: true });
+  mkdirSync(path.join(secondDir, ".git"), { recursive: true });
+  harness.trustWorkDir(firstDir);
+  harness.trustWorkDir(secondDir);
+
+  try {
+    harness.mock.setScript([{ events: textResponse("Pushed.") }]);
+
+    const first = await page.request.post(`${harness.cockpitUrl}/api/sessions`, {
+      data: { cwd: firstDir, runtime: "pty" },
+    });
+    expect(first.ok()).toBe(true);
+    const { sessionId: firstId } = (await first.json()) as { sessionId: string };
+    await page.goto(`${harness.cockpitUrl}/sessions/${firstId}?cwd=${encodeURIComponent(firstDir)}`);
+    const input = page.getByTestId("message-input");
+    await expect(input).toBeVisible();
+    await page.waitForTimeout(5000);
+    await input.fill("commit and push");
+    await page.getByTestId("btn-send").click();
+    await expect(page.getByText("Pushed.")).toBeVisible({ timeout: 30_000 });
+
+    // A brand-new session in a different folder still offers the command.
+    const second = await page.request.post(`${harness.cockpitUrl}/api/sessions`, {
+      data: { cwd: secondDir, runtime: "pty" },
+    });
+    expect(second.ok()).toBe(true);
+    const { sessionId: secondId } = (await second.json()) as { sessionId: string };
+    await page.goto(`${harness.cockpitUrl}/sessions/${secondId}?cwd=${encodeURIComponent(secondDir)}`);
+    await expect(input).toBeVisible();
+    await page.waitForTimeout(5000);
+
+    await input.fill("co");
+    await expect(page.getByTestId("prompt-suggestion")).toContainText("commit and push");
+  } finally {
+    rmSync(firstDir, { recursive: true, force: true });
+    rmSync(secondDir, { recursive: true, force: true });
   }
 });
