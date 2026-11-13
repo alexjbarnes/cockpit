@@ -84,6 +84,7 @@ export function ChatView({
     backgroundTasks,
     btw,
     promptHistory,
+    suggestionHistory,
     hasMoreHistory,
     loadingMore,
     requestMoreHistory,
@@ -755,6 +756,7 @@ export function ChatView({
         <InputArea
           sessionId={sessionId}
           promptHistory={promptHistory}
+          suggestionHistory={suggestionHistory}
           onSend={handleSend}
           onInterrupt={interrupt}
           isResponding={isResponding || errorActive}
@@ -779,6 +781,7 @@ export function ChatView({
           allowSonnet1m={settings.allowSonnet1m}
           contextUsage={contextUsage}
           dismissKeyboard={settings.dismissKeyboardOnSend}
+          promptSuggestions={settings.promptSuggestions}
           cwd={cwd}
           onCompact={handleCompact}
           initData={initData}

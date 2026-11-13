@@ -1,6 +1,6 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import webpush from "web-push";
+import { generateVAPIDKeys, sendNotification } from "web-push";
 import { debugLog } from "@/server/debug-logger";
 import { getNotificationSettings } from "@/server/notification-settings";
 import { getCockpitDir } from "@/server/paths";
@@ -44,7 +44,7 @@ export function getVapidKeys(): VapidKeys {
   } catch {
     // First run, or the file was removed: make a new pair below.
   }
-  const keys = webpush.generateVAPIDKeys();
+  const keys = generateVAPIDKeys();
   cached = keys;
   try {
     mkdirSync(getCockpitDir(), { recursive: true });
@@ -89,7 +89,7 @@ function vapidSubject(): string {
  *  cockpit sends is a "you are needed" message, so it wakes the device. */
 export async function sendWebPush(config: WebPushConfig, payload: unknown): Promise<void> {
   const keys = getVapidKeys();
-  await webpush.sendNotification(
+  await sendNotification(
     { endpoint: config.endpoint, keys: { p256dh: config.keys.p256dh, auth: config.keys.auth } },
     JSON.stringify(payload),
     {

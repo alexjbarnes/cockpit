@@ -18,6 +18,8 @@ vi.mock("@/server/job-storage", () => ({
 }));
 
 vi.mock("@/server/transcript", () => ({
+  invalidateGlobalPromptHistory: vi.fn(),
+  loadGlobalPromptHistory: vi.fn().mockResolvedValue([]),
   countTranscriptMessages: vi.fn(() => 0),
   transcriptExists: vi.fn(() => false),
 }));

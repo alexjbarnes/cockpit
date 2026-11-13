@@ -24,6 +24,37 @@ function formatDate(ts: number): string {
   return new Date(ts).toLocaleString();
 }
 
+function MessageActions({
+  shareFeedback,
+  onShare,
+  onMarkUnread,
+  onDelete,
+}: {
+  shareFeedback: null | "copied" | "failed";
+  onShare: () => void;
+  onMarkUnread: () => void;
+  onDelete: () => void;
+}) {
+  return (
+    <div className="flex items-center gap-1">
+      <Button variant="ghost" size="sm" onClick={onShare}>
+        {shareFeedback === "copied" ? <Check className="h-4 w-4 sm:mr-1" /> : <Share2 className="h-4 w-4 sm:mr-1" />}
+        <span className="hidden sm:inline">
+          {shareFeedback === "copied" ? "Copied" : shareFeedback === "failed" ? "Copy failed" : "Share"}
+        </span>
+      </Button>
+      <Button variant="ghost" size="sm" onClick={onMarkUnread}>
+        <Mail className="h-4 w-4 sm:mr-1" />
+        <span className="hidden sm:inline">Mark unread</span>
+      </Button>
+      <Button variant="ghost" size="sm" className="text-destructive hover:text-destructive" onClick={onDelete}>
+        <Trash2 className="h-4 w-4 sm:mr-1" />
+        <span className="hidden sm:inline">Delete</span>
+      </Button>
+    </div>
+  );
+}
+
 // Clipboard copy that works in a NON-secure context (plain HTTP on a LAN IP),
 // where navigator.clipboard is undefined. Uses the legacy execCommand path,
 // which is not gated to HTTPS. Must run inside the click gesture.
@@ -148,22 +179,12 @@ export default function InboxMessagePage() {
           <ArrowLeft className="h-4 w-4 mr-1" />
           Back
         </Button>
-        <div className="flex items-center gap-1">
-          <Button variant="ghost" size="sm" onClick={handleShare}>
-            {shareFeedback === "copied" ? <Check className="h-4 w-4 sm:mr-1" /> : <Share2 className="h-4 w-4 sm:mr-1" />}
-            <span className="hidden sm:inline">
-              {shareFeedback === "copied" ? "Copied" : shareFeedback === "failed" ? "Copy failed" : "Share"}
-            </span>
-          </Button>
-          <Button variant="ghost" size="sm" onClick={handleMarkUnread}>
-            <Mail className="h-4 w-4 sm:mr-1" />
-            <span className="hidden sm:inline">Mark unread</span>
-          </Button>
-          <Button variant="ghost" size="sm" className="text-destructive hover:text-destructive" onClick={() => setConfirmDelete(true)}>
-            <Trash2 className="h-4 w-4 sm:mr-1" />
-            <span className="hidden sm:inline">Delete</span>
-          </Button>
-        </div>
+        <MessageActions
+          shareFeedback={shareFeedback}
+          onShare={handleShare}
+          onMarkUnread={handleMarkUnread}
+          onDelete={() => setConfirmDelete(true)}
+        />
       </div>
 
       <div className="flex items-start gap-3">
@@ -179,6 +200,15 @@ export default function InboxMessagePage() {
 
       <div className="border-t pt-4">
         <MarkdownRender content={message.body} variant="full" />
+      </div>
+
+      <div className="flex items-center justify-end border-t pt-4">
+        <MessageActions
+          shareFeedback={shareFeedback}
+          onShare={handleShare}
+          onMarkUnread={handleMarkUnread}
+          onDelete={() => setConfirmDelete(true)}
+        />
       </div>
 
       <Dialog open={confirmDelete} onOpenChange={() => setConfirmDelete(false)}>

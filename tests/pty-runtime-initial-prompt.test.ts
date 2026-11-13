@@ -45,6 +45,8 @@ vi.mock("@/server/cli-init-fetch", () => ({
 // UserPromptSubmit hook is lost.
 const transcriptMock = vi.hoisted(() => ({ count: 0 }));
 vi.mock("@/server/transcript", () => ({
+  invalidateGlobalPromptHistory: vi.fn(),
+  loadGlobalPromptHistory: vi.fn().mockResolvedValue([]),
   countTranscriptMessages: () => transcriptMock.count,
 }));
 

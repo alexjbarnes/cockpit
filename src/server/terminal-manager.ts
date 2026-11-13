@@ -141,13 +141,10 @@ export class TerminalManager {
       return true;
     }
     const colsChanged = term.cols !== cols;
-    console.log(
-      `[terminal] resize ${id.slice(0, 8)} ${term.cols}x${term.rows} -> ${cols}x${rows}${colsChanged ? " (cols changed, clearing buffer)" : ""}`,
-    );
-    if (colsChanged) {
-      term.buffer = "";
-      term.detachOffset = 0;
-    }
+    console.log(`[terminal] resize ${id.slice(0, 8)} ${term.cols}x${term.rows} -> ${cols}x${rows}${colsChanged ? " (cols changed)" : ""}`);
+    // Keep the output across a width change. Replaying it at the new width
+    // reflows rather than losing the session for the next client that
+    // attaches, which is what clearing the buffer did.
     term.pty.resize(cols, rows);
     term.cols = cols;
     term.rows = rows;

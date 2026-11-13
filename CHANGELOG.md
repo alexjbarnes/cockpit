@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [0.11.1] - 2026-11-13
+
+### Added
+- **Prompt suggestions can be turned off.** Settings → Appearance has a Prompt suggestions toggle, on by default. It controls the composer's grey completion of a previously sent prompt, which Right, End or Tab accepts while it is on.
+- **An inbox message can be acted on from the bottom of the article.** Share, Mark unread and Delete now repeat below the message, so a long message can be deleted after reading without scrolling back up.
+
+### Changed
+- **Prompt suggestions focus on repeatable commands.** The composer's grey completion now scores candidates and matches fuzzily instead of requiring an exact prefix. It only offers short, command-like prompts such as "commit and push" or "raise a PR"; long prose is ignored. Typing a later word ("push") or skipping a filler ("commit push") offers the whole command, and Right, Tab or a tap replaces the text; a true prefix still appends the rest.
+- **Prompt suggestions draw on every session.** A new session now offers commands you have used in other sessions, not only the current session's own history. The current session's prompts still rank first, and Up-arrow recall and the history modal stay scoped to the session.
+
+### Fixed
+- **A manual compact no longer says the message never reached Claude.** Clicking Compact types `/compact` into the REPL and waits for a turn to start. On Claude Code 2.1.322 the command fires PreCompact but no user turn, and a real compaction outlasts the four-second confirmation window, so the send was retyped three times and failed with "Your message never reached Claude". PreCompact now confirms the send.
+- **A terminal keeps its history after a long progress-heavy command.** The server kept only the last 100KB of raw PTY output. A long `brew upgrade` is mostly carriage-return progress updates for one visible line, so the output before it was trimmed away and a browser refresh replayed only the final progress line. The replay buffer now keeps 2MB, enough for the 10,000-line scrollback the settings offer, and a trim starts on a line boundary instead of mid-sequence.
+- **A terminal replay no longer answers the queries in its own history.** A replay writes the shell's output back at the size it was captured at, and that buffer still contains the device-attribute and cursor-position queries the shell and prompt asked while it was produced. Answering them again typed the replies into the shell, so a browser refresh could fill the prompt with literal `^[[?62;22c` and `^[[11;1R` sequences, especially when a command was running. Terminal replies are suppressed while a replay is being written.
+- **A terminal keeps its output when you leave and return to the session.** The panel built the terminal on the default theme, font size and scrollback before the stored values arrived, then rebuilt it on the real ones. That rebuild raced the first websocket: the stale connection marked the view as connected after the rebuild had reset it, so the replacement terminal asked for a delta instead of a replay and came up empty, and the extra fit reflowed the buffer into jumbled columns. The terminal now waits for the stored settings, and each connection knows whether its own terminal already holds the buffer. A terminal whose tab is hidden also no longer resizes the PTY to its unfitted size.
+- **A reconnected terminal stays reconnected.** After a server restart the terminal tab still held the id of the dead PTY. Reconnect started a new one, but only the panel knew; the tab kept the old id, so the next session switch or reload connected to the dead terminal again and the fresh shell's output was lost. The tab, its active state and its split now move to the new terminal id and persist it.
+- **A terminal's output survives a pane or session change.** The server threw its replay buffer away whenever the terminal's column count changed, so switching sessions after the sidebar or split resized lost the output. The buffer is kept now, and a replay is written at the width it was captured at before the terminal fits to the pane, so it reflows instead of jumbling.
+- **A terminal keeps your place when output arrives.** Ghostty snaps to the bottom on every write, so scrolling up and then receiving output, including the delta when you return to a session, threw the view back to the prompt. The panel restores the reader's position after the write, shifted by any lines it added.
+- **The terminal answers fish's startup query.** fish asks the terminal for its Primary Device Attributes and waits ten seconds before giving up, which showed a terminal-compatibility warning on macOS. Ghostty's WebAssembly build answers other terminal queries but not this one, so the panel replies for it.
+- **Web push works with web-push 4.** The 0.11.0 dependency upgrade moved the library to named exports, and the default import left push key generation and sending broken.
+
+### Internal
+- Dependency bumps, and a lockfile fix that keeps the hoisted `@pierre/theme` 1.1.0 `@pierre/trees` peers on after Dependabot moved the direct dependency to 2.x.
+- The at-mention integration test uses a dummy PR URL instead of a real one.
+
 ## [0.11.0] - 2026-11-10
 
 ### Added

@@ -5,6 +5,7 @@ import { ChevronDown, Keyboard, Minus, Palette, Plus, Settings2, TextCursor, X }
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useIsDesktop } from "@/hooks/use-is-desktop";
 import { type TerminalTheme, useSettings } from "@/hooks/use-settings";
+import { DA1_RESPONSE, isDa1Response, takeDa1Queries } from "@/lib/terminal-query";
 import { TERMINAL_THEMES, terminalTheme } from "@/lib/terminal-themes";
 import { cn } from "@/lib/utils";
 
@@ -56,6 +57,8 @@ interface TerminalPanelProps {
   terminalId: string;
   cwd: string;
   active?: boolean;
+  /** Called after a reconnect starts a new PTY, so the tab can point at it. */
+  onTerminalReplaced?: (oldTerminalId: string, newTerminalId: string) => void;
 }
 
 const TOOLBAR_KEYS = [
@@ -159,7 +162,7 @@ async function copyText(text: string): Promise<boolean> {
   }
 }
 
-export function TerminalPanel({ terminalId: initialTerminalId, cwd, active = true }: TerminalPanelProps) {
+export function TerminalPanel({ terminalId: initialTerminalId, cwd, active = true, onTerminalReplaced }: TerminalPanelProps) {
   const [currentTerminalId, setCurrentTerminalId] = useState(initialTerminalId);
   const [reconnectKey, setReconnectKey] = useState(0);
   const [reconnecting, setReconnecting] = useState(false);
@@ -174,12 +177,13 @@ export function TerminalPanel({ terminalId: initialTerminalId, cwd, active = tru
       });
       if (!res.ok) return;
       const { terminalId } = await res.json();
+      onTerminalReplaced?.(currentTerminalId, terminalId);
       setCurrentTerminalId(terminalId);
       setReconnectKey((k) => k + 1);
     } finally {
       setReconnecting(false);
     }
-  }, [cwd]);
+  }, [cwd, currentTerminalId, onTerminalReplaced]);
 
   return (
     <TerminalPanelInner
@@ -220,15 +224,13 @@ function TerminalPanelInner({ terminalId, cwd: _cwd, active = true, onReconnect,
   const retryRef = useRef(0);
   const retryTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   const resizeTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
-  const connectedOnceRef = useRef(false);
   const [viewKey, setViewKey] = useState(0);
   const [kbOpen, setKbOpen] = useState(false);
   const fullHeightRef = useRef(0);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const { settings, updateSetting } = useSettings();
-  // The settings provider starts on defaults and loads the stored values
-  // asynchronously. Read the latest values when the terminal is built, and
-  // remember which ones it was built with, so a late load can rebuild it.
+  const { settings, updateSetting, loaded: settingsLoaded } = useSettings();
+  // The terminal is built only after the stored values load. Remember which
+  // ones it was built with, so a later settings change can rebuild it.
   const liveSettingsRef = useRef(settings);
   liveSettingsRef.current = settings;
   const builtThemeRef = useRef<TerminalTheme | null>(null);
@@ -284,9 +286,26 @@ function TerminalPanelInner({ terminalId, cwd: _cwd, active = true, onReconnect,
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: settings used only for initial values; font size updates live, while theme and scrollback rebuild the terminal view
   useEffect(() => {
+    // Building before the stored settings arrive builds the wrong palette,
+    // font and scrollback, and the settings effect then rebuilds the view.
+    // That rebuild raced the first connect: the stale socket set "connected"
+    // after the rebuild had cleared it, so the new terminal asked for a delta
+    // instead of a replay and came up empty. Wait for the stored values.
+    if (!settingsLoaded) return;
     let cancelled = false;
     let term: GhosttyTerminal | null = null;
     const disposables: Array<{ dispose(): void }> = [];
+    // Whether *this* terminal has a buffer already. Scoped to the effect, not
+    // shared through a ref, so a socket from a disposed view cannot tell the
+    // new terminal to skip the replay.
+    let hasConnected = false;
+
+    // ghostty-web answers DSR queries but not DA1, so fish waits ten seconds
+    // at startup for a device-attributes reply that never comes. Answer it
+    // ourselves unless a future ghostty starts doing so.
+    let pendingDa1 = "";
+    let ghosttyAnsweredDa1 = false;
+    let replayPending = false;
 
     async function init() {
       const el = containerRef.current;
@@ -313,7 +332,8 @@ function TerminalPanelInner({ terminalId, cwd: _cwd, active = true, onReconnect,
       if (cached) {
         term = cached.term;
         termRef.current = term;
-        connectedOnceRef.current = true;
+        // The cached terminal still holds its buffer, so a delta is enough.
+        hasConnected = true;
         el.appendChild(cached.wrapper);
         builtThemeRef.current = cached.theme;
         builtScrollbackRef.current = cached.scrollback;
@@ -396,6 +416,11 @@ function TerminalPanelInner({ terminalId, cwd: _cwd, active = true, onReconnect,
       }
 
       function deliver(data: string) {
+        // A replay re-sends the queries the shell asked while the output was
+        // produced. Answering them again types the replies into the prompt:
+        // the buffer fills with literal DA1 and cursor-position responses.
+        if (replayPending) return;
+        if (isDa1Response(data)) ghosttyAnsweredDa1 = true;
         let payload = data;
         if (ctrlRef.current && data.length === 1) {
           const upper = data.toUpperCase().charCodeAt(0);
@@ -544,23 +569,70 @@ function TerminalPanelInner({ terminalId, cwd: _cwd, active = true, onReconnect,
         const { token } = await res.json();
         if (cancelled) return;
 
-        const replay = connectedOnceRef.current ? "0" : "1";
+        const replay = hasConnected ? "0" : "1";
         const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
         const url = `${proto}//${window.location.host}/ws/terminal?token=${token}&terminalId=${terminalId}&replay=${replay}`;
         const ws = new WebSocket(url);
         wsRef.current = ws;
 
         ws.onopen = () => {
+          if (cancelled) return;
           retryRef.current = 0;
           setError(null);
-          connectedOnceRef.current = true;
-          if (term && term.cols > 1 && term.rows > 1) {
+          hasConnected = true;
+          // A terminal that is hidden (its tab is not active) has not been
+          // fitted, so its size is still the constructor default. Sending
+          // that would resize the PTY under every other view of it.
+          if (term && activeRef.current && term.element?.clientWidth && term.cols > 1 && term.rows > 1) {
             ws.send(`${RESIZE_PREFIX}${term.cols};${term.rows}`);
           }
         };
 
         ws.onmessage = (event) => {
-          term?.write(event.data);
+          if (cancelled) return;
+          const data = event.data;
+          if (typeof data !== "string") {
+            term?.write(data);
+            return;
+          }
+          // A replay is written at the size the buffer was captured at, then
+          // fitted to this pane, so a width change reflows instead of jumbling.
+          if (data.startsWith("\x01S")) {
+            try {
+              const size = JSON.parse(data.slice(2)) as { cols?: number; rows?: number };
+              if (term && size.cols && size.rows && size.cols > 1 && size.rows > 1) {
+                term.resize(size.cols, size.rows);
+                replayPending = true;
+              }
+            } catch {
+              // ignore a malformed size frame
+            }
+            return;
+          }
+          const wasReplay = replayPending;
+          const { queries, pending } = takeDa1Queries(pendingDa1, data);
+          pendingDa1 = pending;
+          ghosttyAnsweredDa1 = false;
+          // ghostty snaps to the bottom on every write, which throws away a
+          // reader's scrollback position when output arrives while they are
+          // scrolled up (including a delta on returning to the session).
+          // Keep the view where it was, shifted by any lines the write added.
+          const scrolled = term && term.viewportY > 0 ? term.viewportY : 0;
+          const bufferLength = term?.buffer.active.length ?? 0;
+          term?.write(data);
+          if (scrolled > 0 && term) {
+            const added = Math.max(0, term.buffer.active.length - bufferLength);
+            term.scrollToLine(scrolled + added);
+          }
+          if (wasReplay) {
+            replayPending = false;
+            fitRef.current?.();
+          }
+          // Queries inside the replay were answered when they were first
+          // produced; replying now would type the answer into the shell.
+          if (!wasReplay && queries > 0 && !ghosttyAnsweredDa1) {
+            for (let i = 0; i < queries; i++) sendData(DA1_RESPONSE);
+          }
         };
 
         ws.onclose = (event) => {
@@ -618,7 +690,7 @@ function TerminalPanelInner({ terminalId, cwd: _cwd, active = true, onReconnect,
       termRef.current = null;
       fitRef.current = null;
     };
-  }, [terminalId, viewKey]);
+  }, [terminalId, viewKey, settingsLoaded]);
 
   const sendToTerminal = useCallback((data: string) => {
     const ws = wsRef.current;
@@ -633,7 +705,6 @@ function TerminalPanelInner({ terminalId, cwd: _cwd, active = true, onReconnect,
   // settings modal stays open.
   const rebuildTerminal = useCallback(() => {
     disposeTerminalInstance(terminalId);
-    connectedOnceRef.current = false;
     setViewKey((k) => k + 1);
   }, [terminalId]);
 
@@ -641,10 +712,10 @@ function TerminalPanelInner({ terminalId, cwd: _cwd, active = true, onReconnect,
   // (the settings provider loads them asynchronously) needs the same rebuild
   // a settings click gets, or the canvas keeps the default palette.
   useEffect(() => {
-    if (!termRef.current) return;
+    if (!settingsLoaded || !termRef.current) return;
     if (builtThemeRef.current === settings.terminalTheme && builtScrollbackRef.current === settings.terminalScrollback) return;
     rebuildTerminal();
-  }, [settings.terminalTheme, settings.terminalScrollback, rebuildTerminal]);
+  }, [settingsLoaded, settings.terminalTheme, settings.terminalScrollback, rebuildTerminal]);
 
   const handleToolbarKey = useCallback(
     (key: { label: string; data?: string; modifier?: "ctrl" | "alt" }) => {

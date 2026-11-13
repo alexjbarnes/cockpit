@@ -16,6 +16,8 @@ const { sums } = vi.hoisted(() => ({
   sums: { byId: {} as Record<string, { input: number; output: number; cacheRead: number; cacheCreate: number }> },
 }));
 vi.mock("@/server/transcript", () => ({
+  invalidateGlobalPromptHistory: vi.fn(),
+  loadGlobalPromptHistory: vi.fn().mockResolvedValue([]),
   findSessionCwd: vi.fn().mockResolvedValue(null),
   sumTranscriptUsage: (sessionId: string) => Promise.resolve(sums.byId[sessionId] ?? { input: 0, output: 0, cacheRead: 0, cacheCreate: 0 }),
 }));

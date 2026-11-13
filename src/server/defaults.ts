@@ -25,6 +25,11 @@ export interface AppDefaults {
   sandbox: SandboxConfig;
   diffStyle: DiffStyle;
   dismissKeyboardOnSend: boolean;
+  /**
+   * Complete a previously sent prompt in grey as the user types its start, in
+   * the composer. On by default; see src/lib/prompt-suggestion.ts.
+   */
+  promptSuggestions: boolean;
   thinkingExpanded: boolean;
   readExpanded: boolean;
   editExpanded: boolean;
@@ -95,6 +100,7 @@ const fallback: AppDefaults = {
   sandbox: { enabled: false },
   diffStyle: "split",
   dismissKeyboardOnSend: true,
+  promptSuggestions: true,
   thinkingExpanded: false,
   readExpanded: false,
   editExpanded: false,

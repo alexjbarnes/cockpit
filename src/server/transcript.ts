@@ -6,6 +6,7 @@ import { v4 as uuidv4 } from "uuid";
 import { isCwdIgnored } from "@/lib/ignored-folders";
 import { extractTextFiles } from "@/lib/paste-detect";
 import { unwrapPastedContent } from "@/lib/pasted-content";
+import { mergePromptHistory } from "@/lib/prompt-history";
 import { getClaudeDir } from "@/server/paths";
 import type {
   ChatMessage,
@@ -20,6 +21,7 @@ import type {
 } from "@/types";
 import { THINKING_LEVELS } from "@/types";
 import { debugLog } from "./debug-logger";
+import { getDefaults } from "./defaults";
 import { getSessionPrefs } from "./session-prefs";
 
 interface TranscriptBlock {
@@ -956,6 +958,13 @@ interface PromptCacheEntry {
 // cold), which is what made switching between sessions drag.
 const promptCache = new Map<string, PromptCacheEntry>();
 
+/** How much cross-session history a suggestion list carries, and how long it
+ *  may be served before another scan. */
+const GLOBAL_PROMPT_LIMIT = 400;
+const GLOBAL_PROMPT_TTL_MS = 60_000;
+let globalPrompts: { prompts: string[]; builtAt: number } | null = null;
+let globalPromptsBuilding: Promise<string[]> | null = null;
+
 /** Extract the user-visible prompt from one transcript line, or null when the
  *  line is not a recallable prompt (tool results, slash commands, compaction
  *  headers, system reminders). */
@@ -1036,6 +1045,42 @@ export async function loadPromptHistory(sessionId: string, cwd: string, limit = 
   promptCache.set(fp, { consumedBytes: consumed, prompts });
 
   return prompts.slice(-limit).reverse();
+}
+
+/** Every session's prompts, newest session first, for suggestions in a session
+ *  that has little or no history of its own. Rebuilt at most once a minute and
+ *  whenever a prompt is sent; each transcript is read incrementally, so a
+ *  rebuild only reads what was appended since the last one. */
+export async function loadGlobalPromptHistory(): Promise<string[]> {
+  if (globalPrompts && Date.now() - globalPrompts.builtAt < GLOBAL_PROMPT_TTL_MS) return globalPrompts.prompts;
+  if (globalPromptsBuilding) return globalPromptsBuilding;
+  globalPromptsBuilding = (async () => {
+    try {
+      const groups = await scanAllSessions();
+      const ignored = getDefaults().ignoredSessionFolders;
+      const sessions = groups
+        .flatMap((group) => group.sessions)
+        .filter((s) => !isCwdIgnored(s.cwd, ignored))
+        .sort((a, b) => b.lastActiveAt - a.lastActiveAt);
+      const segments = await Promise.all(sessions.map((s) => loadPromptHistory(s.id, s.cwd)));
+      const prompts = mergePromptHistory(segments).slice(0, GLOBAL_PROMPT_LIMIT);
+      globalPrompts = { prompts, builtAt: Date.now() };
+      return prompts;
+    } catch {
+      return globalPrompts?.prompts ?? [];
+    }
+  })();
+  try {
+    return await globalPromptsBuilding;
+  } finally {
+    globalPromptsBuilding = null;
+  }
+}
+
+/** A prompt was just sent: the next reader rebuilds rather than serving the
+ *  list built before it. */
+export function invalidateGlobalPromptHistory(): void {
+  globalPrompts = null;
 }
 
 export async function loadLastAssistantMessage(cliSessionId: string, cwd: string): Promise<ChatMessage | null> {

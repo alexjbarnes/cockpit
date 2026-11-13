@@ -29,3 +29,33 @@ export function restoreSplit(splitTabId: unknown, rightPaneTabIds: unknown, open
 export function tabLayoutSignature(tabIds: string[], splitTabId: string | null, rightPaneTabIds: string[]): string {
   return `${tabIds.join("|")}#${splitTabId ?? ""}#${rightPaneTabIds.join(",")}`;
 }
+
+export interface TerminalTabIdState<T extends { type: string; id: string; terminalId?: string }> {
+  tabs: T[];
+  activeTabId: string;
+  splitTabId: string | null;
+  rightPaneTabIds: string[];
+}
+
+/** Re-point a terminal tab at a new PTY after a reconnect. The tab id, the
+ *  active tab and the split all carry the old terminal id, so they move too;
+ *  without this the next mount reconnects to the terminal that is gone. */
+export function replaceTerminalTabId<T extends { type: string; id: string; terminalId?: string }>(
+  state: TerminalTabIdState<T>,
+  oldTerminalId: string,
+  newTerminalId: string,
+): TerminalTabIdState<T> {
+  const oldTabId = `terminal::${oldTerminalId}`;
+  const newTabId = `terminal::${newTerminalId}`;
+  const index = state.tabs.findIndex((t) => t.type === "terminal" && t.terminalId === oldTerminalId);
+  if (index < 0) return state;
+
+  const tabs = state.tabs.map((t, i) => (i === index ? ({ ...t, id: newTabId, terminalId: newTerminalId } as T) : t));
+  const remap = (id: string) => (id === oldTabId ? newTabId : id);
+  return {
+    tabs,
+    activeTabId: remap(state.activeTabId),
+    splitTabId: state.splitTabId ? remap(state.splitTabId) : null,
+    rightPaneTabIds: state.rightPaneTabIds.map(remap),
+  };
+}

@@ -16,6 +16,8 @@ vi.mock("@/server/session-prefs", () => ({
 }));
 
 vi.mock("@/server/transcript", () => ({
+  invalidateGlobalPromptHistory: vi.fn(),
+  loadGlobalPromptHistory: vi.fn().mockResolvedValue([]),
   findSessionCwd: vi.fn(() => Promise.resolve(h.cwd)),
 }));
 

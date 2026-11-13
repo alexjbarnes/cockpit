@@ -3,7 +3,7 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { disposeTerminalInstance } from "@/components/terminal-panel";
 import { pathBasename } from "@/lib/path";
-import { restoreSplit, tabLayoutSignature } from "@/lib/tab-restore";
+import { replaceTerminalTabId, restoreSplit, tabLayoutSignature } from "@/lib/tab-restore";
 
 interface ChatTab {
   type: "chat";
@@ -54,6 +54,7 @@ export interface TabContextValue {
   openDiff: (filePath: string) => void;
   openChanges: () => void;
   openTerminal: (terminalId: string, label?: string) => void;
+  replaceTerminalId: (oldTerminalId: string, newTerminalId: string) => void;
   closeTab: (tabId: string) => void;
   setActiveTab: (tabId: string) => void;
   setSplitTab: (tabId: string | null) => void;
@@ -275,6 +276,10 @@ export function TabProvider({ sessionId, children }: { sessionId: string; childr
     });
   }, []);
 
+  const replaceTerminalId = useCallback((oldTerminalId: string, newTerminalId: string) => {
+    setState((prev) => replaceTerminalTabId(prev, oldTerminalId, newTerminalId));
+  }, []);
+
   const closeTab = useCallback((tabId: string) => {
     if (tabId === "chat") return;
     setState((prev) => {
@@ -361,6 +366,7 @@ export function TabProvider({ sessionId, children }: { sessionId: string; childr
         openDiff,
         openChanges,
         openTerminal,
+        replaceTerminalId,
         closeTab,
         setActiveTab,
         setSplitTab,

@@ -21,6 +21,7 @@ export type TerminalTheme =
 export interface Settings {
   diffStyle: DiffStyle;
   dismissKeyboardOnSend: boolean;
+  promptSuggestions: boolean;
   thinkingLevel: ThinkingLevel;
   permissionMode: SessionPermissionMode;
   sandbox: SandboxConfig;
@@ -46,6 +47,7 @@ export interface Settings {
 const defaultSettings: Settings = {
   diffStyle: "split",
   dismissKeyboardOnSend: true,
+  promptSuggestions: true,
   thinkingLevel: "high",
   permissionMode: "manual",
   sandbox: { enabled: false },

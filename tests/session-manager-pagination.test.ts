@@ -30,6 +30,8 @@ const mockLoadMoreMessages = vi.fn();
 const mockTranscriptExists = vi.fn();
 
 vi.mock("@/server/transcript", () => ({
+  invalidateGlobalPromptHistory: vi.fn(),
+  loadGlobalPromptHistory: vi.fn().mockResolvedValue([]),
   loadTranscript: (...args: unknown[]) => mockLoadTranscript(...args),
   loadMoreMessages: (...args: unknown[]) => mockLoadMoreMessages(...args),
   transcriptExists: (...args: unknown[]) => mockTranscriptExists(...args),

@@ -20,6 +20,8 @@ const mockLoadTranscript = vi.fn();
 const mockGetTranscriptPath = vi.fn().mockReturnValue("/tmp/test-transcript.jsonl");
 
 vi.mock("@/server/transcript", () => ({
+  invalidateGlobalPromptHistory: vi.fn(),
+  loadGlobalPromptHistory: vi.fn().mockResolvedValue([]),
   loadTranscript: mockLoadTranscript,
   getTranscriptPath: mockGetTranscriptPath,
 }));

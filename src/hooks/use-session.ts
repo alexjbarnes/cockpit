@@ -107,6 +107,9 @@ interface UseSessionReturn {
   backgroundTasks: BackgroundTask[];
   btw: BtwState | null;
   promptHistory: string[];
+  /** promptHistory plus prompts from other sessions, for the composer's
+   *  suggestion; recall keys and the history modal keep using promptHistory. */
+  suggestionHistory: string[];
   hasMoreHistory: boolean;
   loadingMore: boolean;
   requestMoreHistory: () => void;
@@ -180,6 +183,7 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
   const [hookTasks, setHookTasks] = useState<BackgroundTask[]>([]);
   const [btw, setBtw] = useState<BtwState | null>(null);
   const [promptHistory, setPromptHistory] = useState<string[]>([]);
+  const [suggestionHistory, setSuggestionHistory] = useState<string[]>([]);
   const [hasMoreHistory, setHasMoreHistory] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
 
@@ -377,6 +381,7 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
 
           if (msg.promptHistory) {
             setPromptHistory(msg.promptHistory);
+            setSuggestionHistory(msg.suggestionHistory ?? msg.promptHistory);
           }
 
           const connectTime = (window as unknown as Record<string, unknown>).__sessionConnectTime as number | undefined;
@@ -1271,10 +1276,9 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
 
       const cleaned = text.replace(/^\[Attached [^\]]+\]\n*/gm, "").trim();
       if (cleaned && !cleaned.startsWith("/")) {
-        setPromptHistory((prev) => {
-          if (prev[0] === cleaned) return prev;
-          return [cleaned, ...prev.filter((p) => p !== cleaned)];
-        });
+        const remember = (prev: string[]) => (prev[0] === cleaned ? prev : [cleaned, ...prev.filter((p) => p !== cleaned)]);
+        setPromptHistory(remember);
+        setSuggestionHistory(remember);
       }
 
       send({
@@ -1557,6 +1561,7 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
     backgroundTasks,
     btw,
     promptHistory,
+    suggestionHistory,
     hasMoreHistory,
     loadingMore,
     requestMoreHistory,

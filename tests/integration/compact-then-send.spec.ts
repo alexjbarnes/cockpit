@@ -90,8 +90,10 @@ test("a message sent after a real /compact still reaches the CLI", async ({ page
   try {
     harness.mock.setScript([
       ...Array.from({ length: EXCHANGES }, (_, i) => ({ events: textResponse(`reply ${i + 1}`) })),
-      // The compaction's own summarisation call.
-      { events: textResponse("Summary of the conversation so far.") },
+      // The compaction's own summarisation call. Held past the 4s confirm
+      // window so a /compact that is not accepted by its PreCompact hook is
+      // retyped, which is the reported failure.
+      { events: textResponse("Summary of the conversation so far."), delayMs: 15000 },
       { events: textResponse("post-compact reply") },
     ]);
     await openSession(page, harness, workDir);
@@ -104,6 +106,10 @@ test("a message sent after a real /compact still reaches the CLI", async ({ page
 
     await send(page, "/compact");
     await page.waitForTimeout(25_000);
+
+    // The /compact itself must not be retyped while the CLI is compacting:
+    // PreCompact is its acceptance signal, and there is no user turn to see.
+    await expect(page.getByText(/never reached Claude/)).toHaveCount(0);
 
     await send(page, "after the compact");
     // The reported failure: the send is swallowed and the delivery retry gives

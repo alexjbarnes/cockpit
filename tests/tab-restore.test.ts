@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { restoreSplit, tabLayoutSignature } from "@/lib/tab-restore";
+import { replaceTerminalTabId, restoreSplit, tabLayoutSignature } from "@/lib/tab-restore";
 
 const open = ["chat", "file::/repo/NOTE.md", "terminal::t1"];
 
@@ -30,6 +30,35 @@ describe("restoreSplit", () => {
 
   it("survives a payload of the wrong shape", () => {
     expect(restoreSplit(42, "nope", open)).toEqual({ splitTabId: null, rightPaneTabIds: [] });
+  });
+});
+
+describe("replaceTerminalTabId", () => {
+  const state = {
+    tabs: [
+      { type: "chat" as const, id: "chat" },
+      { type: "terminal" as const, id: "terminal::old", terminalId: "old" },
+      { type: "file" as const, id: "file::/repo/NOTE.md" },
+    ],
+    activeTabId: "terminal::old",
+    splitTabId: "terminal::old",
+    rightPaneTabIds: ["terminal::old", "file::/repo/NOTE.md"],
+  };
+
+  it("moves the tab, the active tab and the split to the new terminal", () => {
+    const next = replaceTerminalTabId(state, "old", "new");
+    expect(next.tabs).toEqual([
+      { type: "chat", id: "chat" },
+      { type: "terminal", id: "terminal::new", terminalId: "new" },
+      { type: "file", id: "file::/repo/NOTE.md" },
+    ]);
+    expect(next.activeTabId).toBe("terminal::new");
+    expect(next.splitTabId).toBe("terminal::new");
+    expect(next.rightPaneTabIds).toEqual(["terminal::new", "file::/repo/NOTE.md"]);
+  });
+
+  it("leaves the state alone when no tab holds that terminal", () => {
+    expect(replaceTerminalTabId(state, "gone", "new")).toBe(state);
   });
 });
 

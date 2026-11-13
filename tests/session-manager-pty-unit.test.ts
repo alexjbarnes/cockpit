@@ -126,6 +126,8 @@ vi.mock("@/server/debug-logger", () => ({
 }));
 
 vi.mock("@/server/transcript", () => ({
+  invalidateGlobalPromptHistory: vi.fn(),
+  loadGlobalPromptHistory: vi.fn().mockResolvedValue([]),
   loadTranscript: vi.fn().mockResolvedValue({ messages: [], byteOffset: 0, totalSize: 0, lastUsage: null }),
   loadMoreMessages: vi.fn().mockResolvedValue({ messages: [], newByteOffset: 0 }),
   transcriptExists: vi.fn().mockReturnValue(false),

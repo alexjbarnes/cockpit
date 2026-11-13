@@ -1214,6 +1214,11 @@ export class PtyRuntime {
       onPreCompact: (payload) => {
         this.cancelErrorDebounce();
         this.ptyOutputBuffer = "";
+        // A /compact typed into the REPL is accepted here: the CLI fires
+        // PreCompact but no UserPromptSubmit, and a real compaction outlasts
+        // the confirm window. Without this the send was retyped three times
+        // and reported as never reaching Claude.
+        this.promptAccepted?.();
         logDiag(this.opts.sessionId, "hook:PreCompact", { trigger: payload.trigger, payloadKeys: Object.keys(payload) });
         console.log(`[pty-runtime] PreCompact for session ${this.opts.sessionId.slice(0, 8)}`);
         this.emit(translateHookEvent("PreCompact", payload));

@@ -41,7 +41,7 @@ import { THINKING_LEVELS } from "@/lib/model-picker";
 import { CONTEXT_SIZES, type ContextSize, describeModelSelection, modelOneMRequiresCredits, resolveProviderId } from "@/lib/models";
 import { detectLanguage, extensionForLabel, shouldCollapsePaste } from "@/lib/paste-detect";
 import { effectivePermissionMode, permissionModeMismatch } from "@/lib/permission-mode";
-import { suggestCompletion } from "@/lib/prompt-suggestion";
+import { type PromptSuggestion, suggestCompletion } from "@/lib/prompt-suggestion";
 import type {
   ContextUsage,
   DocumentAttachment,
@@ -221,6 +221,9 @@ const FILE_ACCEPT = ["image/*", ".pdf", ...Array.from(TEXT_EXTENSIONS)].join(","
 interface InputAreaProps {
   sessionId: string;
   promptHistory?: string[];
+  /** promptHistory plus prompts from other sessions; only the suggestion
+   *  reads it. Recall and the history modal keep using promptHistory. */
+  suggestionHistory?: string[];
   onSend: (
     text: string,
     images?: ImageAttachment[],
@@ -253,6 +256,9 @@ interface InputAreaProps {
   allowSonnet1m?: boolean;
   contextUsage: ContextUsage | null;
   dismissKeyboard: boolean;
+  /** Show the rest of a previously sent prompt in grey as the user types its
+   *  start. On by default; Settings → Appearance can turn it off. */
+  promptSuggestions?: boolean;
   cwd?: string;
   onCompact?: () => void;
   initData?: InitData | null;
@@ -297,6 +303,7 @@ function getSlashContext(text: string, cursorPos: number): { active: boolean; qu
 export function InputArea({
   sessionId,
   promptHistory = [],
+  suggestionHistory,
   onSend,
   onInterrupt,
   isResponding,
@@ -321,6 +328,7 @@ export function InputArea({
   allowSonnet1m,
   contextUsage,
   dismissKeyboard,
+  promptSuggestions = true,
   cwd,
   onCompact,
   initData,
@@ -476,7 +484,9 @@ export function InputArea({
   // the end of the text, while focused, and never over a menu or an IME
   // composition.
   const suggestion =
-    inputFocused && caretAtEnd && !composing && !showMenu && !showMention && !historyOpen ? suggestCompletion(text, promptHistory) : null;
+    promptSuggestions && inputFocused && caretAtEnd && !composing && !showMenu && !showMention && !historyOpen
+      ? suggestCompletion(text, suggestionHistory ?? promptHistory)
+      : null;
 
   const handleSelectCommand = useCallback(
     (cmd: SlashCommand) => {
@@ -605,10 +615,11 @@ export function InputArea({
   }, []);
 
   const acceptSuggestion = useCallback(
-    (completion: string) => {
-      // Keep what was typed and append only the rest, so the typed casing
-      // survives a case-insensitive match.
-      const next = text + completion.slice(text.length);
+    (completion: PromptSuggestion) => {
+      // A prefix keeps what was typed and appends only the rest, so the typed
+      // casing survives a case-insensitive match. A fuzzy match replaces the
+      // text with the whole prompt.
+      const next = completion.prefix ? text + completion.prompt.slice(text.length) : completion.prompt;
       setText(next);
       setCaretAtEnd(true);
       requestAnimationFrame(() => {
@@ -1485,9 +1496,14 @@ export function InputArea({
                 ref={suggestionRef}
                 aria-hidden="true"
                 data-testid="prompt-suggestion"
-                className="pointer-events-none absolute inset-0 select-none overflow-hidden rounded-md border border-transparent px-3 py-2 pb-7 text-sm whitespace-pre-wrap break-words text-muted-foreground/60"
+                // A fuzzy match replaces the typed text, so the layer is opaque
+                // and covers it; a prefix leaves the typed text visible and
+                // paints only the rest.
+                className={`pointer-events-none absolute inset-0 select-none overflow-hidden rounded-md border border-transparent px-3 py-2 pb-7 text-sm whitespace-pre-wrap break-words text-muted-foreground/60 ${
+                  suggestion.prefix ? "" : "bg-background"
+                }`}
               >
-                <span className="text-transparent">{text}</span>
+                {suggestion.prefix && <span className="text-transparent">{text}</span>}
                 {/* Tapping the grey text accepts it, which is how a phone
                     without arrow keys or a Tab key reaches the completion. The
                     rest of the layer still passes taps through to the textarea. */}
@@ -1499,7 +1515,7 @@ export function InputArea({
                     acceptSuggestion(suggestion);
                   }}
                 >
-                  {suggestion.slice(text.length)}
+                  {suggestion.prefix ? suggestion.prompt.slice(text.length) : suggestion.prompt}
                 </span>
               </div>
             )}

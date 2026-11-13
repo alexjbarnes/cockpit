@@ -23,6 +23,8 @@ vi.mock("@/server/defaults", async () => {
 });
 vi.mock("@/server/session-prefs", () => ({ getSessionPrefs: () => undefined }));
 vi.mock("@/server/transcript", () => ({
+  invalidateGlobalPromptHistory: vi.fn(),
+  loadGlobalPromptHistory: vi.fn().mockResolvedValue([]),
   scanAllSessions: h.scanAllSessions,
   scanSessionsForCwd: h.scanSessionsForCwd,
   scanSessionsByIds: h.scanSessionsByIds,

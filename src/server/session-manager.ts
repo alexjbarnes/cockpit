@@ -62,6 +62,8 @@ import { getCockpitMcp } from "./singleton";
 import { createStreamState, processEvents, type StreamState } from "./stream-processor";
 import {
   findSessionCwd,
+  invalidateGlobalPromptHistory,
+  loadGlobalPromptHistory,
   loadMoreMessages,
   loadPromptHistory,
   loadTranscript,
@@ -308,9 +310,17 @@ function cliSpawnMode(mode: SessionPermissionMode, runtime: SessionRuntime): str
 /** Prompt history for a cockpit session, newest first. Every CLI session
  *  behind it contributes its own newest-first list; the session running now
  *  comes first, then the previous ones backwards. */
-async function loadMergedPromptHistory(cliSessionId: string, previousCliSessionIds: readonly string[], cwd: string): Promise<string[]> {
+async function loadMergedPromptHistory(
+  cliSessionId: string,
+  previousCliSessionIds: readonly string[],
+  cwd: string,
+): Promise<{ promptHistory: string[]; suggestionHistory: string[] }> {
   const segments = await Promise.all(promptHistorySessionIds(cliSessionId, previousCliSessionIds).map((id) => loadPromptHistory(id, cwd)));
-  return mergePromptHistory(segments);
+  const promptHistory = mergePromptHistory(segments);
+  // Suggestions also draw on every other session, so a brand-new session can
+  // offer commands used elsewhere. Recall history stays this session's own.
+  const global = await loadGlobalPromptHistory();
+  return { promptHistory, suggestionHistory: mergePromptHistory([promptHistory, global]) };
 }
 
 function resolveContextSizeFor(model: string, requested: ContextSize): ContextSize {
@@ -682,6 +692,7 @@ export class SessionManager {
     hasMore: boolean;
     lastUsage: { used: number; total: number } | null;
     promptHistory: string[];
+    suggestionHistory: string[];
   } | null> {
     let session = this.sessions.get(id);
     if (!session) {
@@ -742,10 +753,14 @@ export class SessionManager {
       const name = promptName(messages);
       if (name) session.info.name = name;
     }
-    const allPrompts = await loadMergedPromptHistory(session.cliSessionId, session.previousCliSessionIds, session.info.cwd);
+    const { promptHistory: allPrompts, suggestionHistory } = await loadMergedPromptHistory(
+      session.cliSessionId,
+      session.previousCliSessionIds,
+      session.info.cwd,
+    );
 
     const normalized = lastUsage ? { used: lastUsage.used, total: session.contextWindowSize } : null;
-    return { info: session.info, messages: clientMessages, hasMore, lastUsage: normalized, promptHistory: allPrompts };
+    return { info: session.info, messages: clientMessages, hasMore, lastUsage: normalized, promptHistory: allPrompts, suggestionHistory };
   }
 
   async getSessionByCwd(
@@ -757,6 +772,7 @@ export class SessionManager {
     hasMore: boolean;
     lastUsage: { used: number; total: number } | null;
     promptHistory: string[];
+    suggestionHistory: string[];
   } | null> {
     this.ensureSession(id, cwd);
     const session = this.sessions.get(id)!;
@@ -806,10 +822,14 @@ export class SessionManager {
       const name = promptName(messages);
       if (name) session.info.name = name;
     }
-    const allPrompts = await loadMergedPromptHistory(session.cliSessionId, session.previousCliSessionIds, cwd);
+    const { promptHistory: allPrompts, suggestionHistory } = await loadMergedPromptHistory(
+      session.cliSessionId,
+      session.previousCliSessionIds,
+      cwd,
+    );
 
     const normalized = lastUsage ? { used: lastUsage.used, total: session.contextWindowSize } : null;
-    return { info: session.info, messages: clientMessages, hasMore, lastUsage: normalized, promptHistory: allPrompts };
+    return { info: session.info, messages: clientMessages, hasMore, lastUsage: normalized, promptHistory: allPrompts, suggestionHistory };
   }
 
   async getCliSessionView(
@@ -821,6 +841,7 @@ export class SessionManager {
     hasMore: boolean;
     lastUsage: { used: number; total: number } | null;
     promptHistory: string[];
+    suggestionHistory: string[];
   } | null> {
     if (!transcriptExists(cliId, cwd)) return null;
 
@@ -856,7 +877,7 @@ export class SessionManager {
     const derivedName = promptName(messages);
     if (derivedName) name = derivedName;
 
-    const allPrompts = await loadMergedPromptHistory(cliId, prevIds, cwd);
+    const { promptHistory: allPrompts, suggestionHistory } = await loadMergedPromptHistory(cliId, prevIds, cwd);
 
     const prefs = getSessionPrefs(cliId);
     const viewSize = prefs?.contextSize ?? prefs?.modelSlots?.mainContext ?? DEFAULT_CONTEXT_SIZE;
@@ -867,6 +888,7 @@ export class SessionManager {
       hasMore: messages.length > PAGE,
       lastUsage: normalized,
       promptHistory: allPrompts,
+      suggestionHistory,
     };
   }
 
@@ -2567,6 +2589,9 @@ Additional Cockpit rules beyond the CLI's defaults:
       logDiag(sessionId, "send:no-session");
       return false;
     }
+    // A prompt just went in; the cross-session suggestion list must be rebuilt
+    // for the next session that connects rather than served from before it.
+    invalidateGlobalPromptHistory();
 
     // Set below, and checked at the `session.compacting` queue guard: this
     // message is the /compact that just raised the flag, so it must not be

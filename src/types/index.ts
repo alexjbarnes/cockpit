@@ -732,6 +732,9 @@ export type ServerMessage =
       status?: "idle" | "running";
       hasMore?: boolean;
       promptHistory?: string[];
+      /** Like promptHistory, but also carrying prompts from other sessions,
+       *  for the composer's suggestion. Recall stays on promptHistory. */
+      suggestionHistory?: string[];
       /** How long the running turn has gone since its user message was
        *  delivered, measured on the server. Elapsed rather than a timestamp, so
        *  no difference between the server's clock and the device's can skew it. */
