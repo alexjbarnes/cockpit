@@ -3,6 +3,9 @@
 import { AlertTriangle, ArrowDown, Loader2, RotateCcw, ShieldCheck, Square } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { usePlanBridgePublisher } from "@/contexts/plan-bridge";
+import { useTabContext } from "@/contexts/tab-context";
+import { useIsDesktop } from "@/hooks/use-is-desktop";
 import { useMessageSelection } from "@/hooks/use-message-selection";
 import { useSession } from "@/hooks/use-session";
 import { useSettings } from "@/hooks/use-settings";
@@ -439,6 +442,27 @@ export function ChatView({
     };
   }, [isTouch, scrollToBottom]);
 
+  // The Plan tab is a sibling of this view, so the plan waiting for an answer
+  // and the means of answering it are published for it to pick up.
+  const publishPlan = usePlanBridgePublisher();
+  const tabContext = useTabContext();
+  const isDesktopLayout = useIsDesktop();
+  const planCallbacks = useRef({ respondToPermission, sendMessage, setBypassAll, setPlanMode });
+  planCallbacks.current = { respondToPermission, sendMessage, setBypassAll, setPlanMode };
+  const pendingPlan = pendingPermissions.find((p) => p.toolName === "ExitPlanMode") ?? null;
+  useEffect(() => {
+    publishPlan?.({
+      pending: pendingPlan,
+      bypassActive,
+      respond: (requestId, allowed, extras) =>
+        planCallbacks.current.respondToPermission(requestId, allowed, allowed ? "allow" : "deny", undefined, extras),
+      sendMessage: (text) => planCallbacks.current.sendMessage(text),
+      setBypass: (enabled) => planCallbacks.current.setBypassAll(enabled),
+      setPlanMode: (enabled) => planCallbacks.current.setPlanMode(enabled),
+    });
+  }, [publishPlan, pendingPlan, bypassActive]);
+  useEffect(() => () => publishPlan?.(null), [publishPlan]);
+
   // Escape key: modal → queued message → interrupt.
   // Input area also handles Escape with stopPropagation when textarea has focus,
   // so this only fires when focus is elsewhere.
@@ -689,6 +713,7 @@ export function ChatView({
                 onSendMessage={sendMessage}
                 onSetBypass={setBypassAll}
                 onSetPlanMode={setPlanMode}
+                onReview={tabContext ? () => tabContext.openPlan({ beside: isDesktopLayout }) : undefined}
               />
             ) : p.configProposal ? (
               <ConfigProposalCard key={p.requestId} permission={p} onRespond={respondToPermission} />

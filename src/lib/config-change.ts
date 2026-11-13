@@ -32,6 +32,7 @@ const DOMAIN_LABELS: Record<string, Record<string, string>> = {
     reviewsEnabled: "Reviews enabled",
     issuesEnabled: "Issues enabled",
     modalPagesEnabled: "Pages open in a modal",
+    planReviewAutoOpen: "Plans open beside the chat",
     telemetryEnabled: "Telemetry recorded",
     streamRuntimeEnabled: "Stream runtime offered",
     ignoredSessionFolders: "Ignored session folders",

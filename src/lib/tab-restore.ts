@@ -59,3 +59,38 @@ export function replaceTerminalTabId<T extends { type: string; id: string; termi
     rightPaneTabIds: state.rightPaneTabIds.map(remap),
   };
 }
+
+export interface TabLayout<T extends { id: string }> {
+  tabs: T[];
+  activeTabId: string;
+  splitTabId: string | null;
+  rightPaneTabIds: string[];
+}
+
+/**
+ * Open the session's plan tab.
+ *
+ * `beside` puts it in the split next to the chat, which is where a plan is
+ * best read: the conversation that produced it stays in view. It only does so
+ * when nothing is split yet, since a split the user arranged is theirs.
+ * `quiet` adds the tab without changing what is on screen, for a plan that
+ * arrives while the user is looking at something else. With neither, the tab
+ * is simply shown.
+ */
+export function openPlanTab<S extends TabLayout<{ id: string }>>(
+  state: S,
+  planTab: S["tabs"][number],
+  opts: { beside?: boolean; quiet?: boolean } = {},
+): S {
+  const id = planTab.id;
+  const tabs = state.tabs.some((t) => t.id === id) ? state.tabs : [...state.tabs, planTab];
+  if (state.rightPaneTabIds.includes(id)) {
+    // Already beside the chat: bring it to the front of that pane.
+    return opts.quiet && state.splitTabId !== null ? { ...state, tabs } : { ...state, tabs, splitTabId: id };
+  }
+  if (opts.beside && state.splitTabId === null) {
+    return { ...state, tabs, splitTabId: id, rightPaneTabIds: [id], activeTabId: state.activeTabId === id ? "chat" : state.activeTabId };
+  }
+  if (opts.quiet) return tabs === state.tabs ? state : { ...state, tabs };
+  return { ...state, tabs, activeTabId: id };
+}

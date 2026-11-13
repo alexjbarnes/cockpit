@@ -34,6 +34,7 @@ export interface Settings {
   reviewsEnabled: boolean;
   issuesEnabled: boolean;
   modalPagesEnabled: boolean;
+  planReviewAutoOpen: boolean;
   telemetryEnabled: boolean;
   allowSonnet1m: boolean;
   sessionAlerts: boolean;
@@ -60,6 +61,7 @@ const defaultSettings: Settings = {
   reviewsEnabled: true,
   issuesEnabled: false,
   modalPagesEnabled: true,
+  planReviewAutoOpen: true,
   telemetryEnabled: false,
   allowSonnet1m: false,
   sessionAlerts: false,

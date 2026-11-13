@@ -17,9 +17,10 @@ vi.mock("node:child_process", () => ({
   }),
 }));
 
-vi.mock("@/server/plans", () => ({
-  findLatestPlanFile: () => "/tmp/plan.md",
-  readPlanFile: () => "plan content",
+const recordSessionPlanAnswer = vi.hoisted(() => vi.fn());
+vi.mock("@/server/plans", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/plans")>()),
+  recordSessionPlanAnswer,
 }));
 
 import { createSession as createAuthSession, setupPassword } from "@/server/auth";
@@ -2441,7 +2442,7 @@ describe("WebSocket handler", () => {
       ws.close();
     });
 
-    it("forwards permission_request for ExitPlanMode with planFilePath", async () => {
+    it("forwards permission_request for ExitPlanMode with the plan stored on the request", async () => {
       const session = manager.createSession("/tmp");
       const ws = await connectWs();
       await waitForConnect(ws, session.id);
@@ -2452,6 +2453,9 @@ describe("WebSocket handler", () => {
         requestId: "req-plan",
         toolName: "ExitPlanMode",
         toolInput: "exit plan",
+        planFilePath: "/plans/mine.md",
+        planContent: "# Mine",
+        planVersion: 2,
       });
       s.emitter.emit("event", session.id, {
         type: "permission_request",
@@ -2463,7 +2467,33 @@ describe("WebSocket handler", () => {
       const msg = await readMessage(ws);
       expect(msg.type).toBe("permission:request");
       expect(msg.toolName).toBe("ExitPlanMode");
-      expect("planFilePath" in msg).toBe(true);
+      // The text is the one kept when the request arrived, not a fresh look
+      // at the plans folder, which could be another session's file.
+      expect(msg).toMatchObject({ planFilePath: "/plans/mine.md", planContent: "# Mine", planVersion: 2 });
+      ws.close();
+    });
+
+    it("replays a pending plan to a client that connects later", async () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      s.pendingRequests.set("req-plan-late", {
+        type: "permission",
+        requestId: "req-plan-late",
+        toolName: "ExitPlanMode",
+        toolInput: "{}",
+        planContent: "# Text only",
+        planVersion: 1,
+      });
+      const ws = await connectWs();
+      const seen: Record<string, unknown>[] = [];
+      ws.on("message", (data: Buffer) => seen.push(JSON.parse(data.toString())));
+      ws.send(JSON.stringify({ type: "session:connect", sessionId: session.id }));
+      await vi.waitFor(() => expect(seen.some((m) => m.type === "permission:request")).toBe(true));
+      expect(seen.find((m) => m.type === "permission:request")).toMatchObject({
+        requestId: "req-plan-late",
+        planContent: "# Text only",
+        planVersion: 1,
+      });
       ws.close();
     });
 
@@ -2771,6 +2801,55 @@ describe("WebSocket handler", () => {
       );
       await new Promise((r) => setTimeout(r, 50));
       ws.close();
+    });
+  });
+
+  describe("permission:response with a message or an edited plan", () => {
+    async function answerPending(pending: Record<string, unknown>, answer: Record<string, unknown>) {
+      const session = manager.createSession("/tmp");
+      const ws = await connectWs();
+      ws.send(JSON.stringify({ type: "session:connect", sessionId: session.id }));
+      await new Promise((r) => setTimeout(r, 50));
+      const s = (manager as any).sessions.get(session.id)!;
+      s.pendingRequests.set(pending.requestId, { type: "permission", toolInput: "{}", ...pending });
+      const respond = vi.spyOn(manager, "respondToPermission").mockReturnValue(true);
+      recordSessionPlanAnswer.mockClear();
+      ws.send(JSON.stringify({ type: "permission:response", sessionId: session.id, requestId: pending.requestId, ...answer }));
+      await vi.waitFor(() => expect(respond).toHaveBeenCalled());
+      ws.close();
+      return { respond, sessionId: session.id };
+    }
+
+    it("passes the user's reason for a no to the CLI", async () => {
+      const raw = { command: "rm -rf build" };
+      const { respond, sessionId } = await answerPending(
+        { requestId: "req-no", toolName: "Bash", rawToolInput: raw },
+        { allowed: false, permissionMode: "deny", denyMessage: "Use the clean script" },
+      );
+      expect(respond).toHaveBeenCalledWith(sessionId, "req-no", false, raw, undefined, "Use the clean script");
+      expect(recordSessionPlanAnswer, "only a plan's answer is kept as a review").not.toHaveBeenCalled();
+    });
+
+    it("sends feedback on a plan as the answer and keeps it with the plan", async () => {
+      const { respond, sessionId } = await answerPending(
+        { requestId: "req-plan-no", toolName: "ExitPlanMode", rawToolInput: {}, planContent: "# P" },
+        { allowed: false, permissionMode: "deny", denyMessage: "Add tests", plan: { outcome: "changes_requested", annotations: [] } },
+      );
+      expect(respond).toHaveBeenCalledWith(sessionId, "req-plan-no", false, {}, undefined, "Add tests");
+      expect(recordSessionPlanAnswer).toHaveBeenCalledWith(
+        sessionId,
+        expect.objectContaining({ requestId: "req-plan-no", planContent: "# P" }),
+        expect.objectContaining({ denyMessage: "Add tests" }),
+      );
+    });
+
+    it("approves the plan as the user edited it", async () => {
+      const { respond, sessionId } = await answerPending(
+        { requestId: "req-plan-yes", toolName: "ExitPlanMode", rawToolInput: { allowedPrompts: [] } },
+        { allowed: true, permissionMode: "allow", planText: "# Edited" },
+      );
+      expect(respond).toHaveBeenCalledWith(sessionId, "req-plan-yes", true, { allowedPrompts: [], plan: "# Edited" }, undefined, undefined);
+      expect(recordSessionPlanAnswer).toHaveBeenCalledTimes(1);
     });
   });
 

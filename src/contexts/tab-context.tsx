@@ -3,7 +3,7 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { disposeTerminalInstance } from "@/components/terminal-panel";
 import { pathBasename } from "@/lib/path";
-import { replaceTerminalTabId, restoreSplit, tabLayoutSignature } from "@/lib/tab-restore";
+import { openPlanTab, replaceTerminalTabId, restoreSplit, tabLayoutSignature } from "@/lib/tab-restore";
 
 interface ChatTab {
   type: "chat";
@@ -29,6 +29,11 @@ interface ChangesTab {
   id: "changes";
 }
 
+interface PlanTab {
+  type: "plan";
+  id: "plan";
+}
+
 export interface TerminalTab {
   type: "terminal";
   id: string;
@@ -36,7 +41,7 @@ export interface TerminalTab {
   label: string;
 }
 
-export type Tab = ChatTab | FileTab | DiffTab | ChangesTab | TerminalTab;
+export type Tab = ChatTab | FileTab | DiffTab | ChangesTab | TerminalTab | PlanTab;
 
 interface TabState {
   tabs: Tab[];
@@ -54,6 +59,10 @@ export interface TabContextValue {
   openDiff: (filePath: string) => void;
   openChanges: () => void;
   openTerminal: (terminalId: string, label?: string) => void;
+  /** Open the session's plan. `beside` puts it in the split next to the chat
+   *  when nothing is there yet; `quiet` adds the tab without leaving the one
+   *  being looked at. */
+  openPlan: (opts?: { beside?: boolean; quiet?: boolean }) => void;
   replaceTerminalId: (oldTerminalId: string, newTerminalId: string) => void;
   closeTab: (tabId: string) => void;
   setActiveTab: (tabId: string) => void;
@@ -66,6 +75,7 @@ const TabContext = createContext<TabContextValue | null>(null);
 
 const CHAT_TAB: ChatTab = { type: "chat", id: "chat" };
 const CHANGES_TAB: ChangesTab = { type: "changes", id: "changes" };
+const PLAN_TAB: PlanTab = { type: "plan", id: "plan" };
 
 function fileTabId(filePath: string): string {
   return "file::" + filePath;
@@ -100,7 +110,7 @@ const DEFAULT_STATE: TabState = {
 };
 
 interface PersistedTab {
-  type: "file" | "diff" | "changes" | "terminal";
+  type: "file" | "diff" | "changes" | "terminal" | "plan";
   filePath?: string;
   terminalId?: string;
   label?: string;
@@ -111,6 +121,8 @@ function deserializeTabs(persisted: PersistedTab[]): Tab[] {
   for (const p of persisted) {
     if (p.type === "changes") {
       tabs.push(CHANGES_TAB);
+    } else if (p.type === "plan") {
+      tabs.push(PLAN_TAB);
     } else if (p.type === "file" && p.filePath) {
       tabs.push({ type: "file", id: fileTabId(p.filePath), filePath: p.filePath, label: pathBasename(p.filePath) || p.filePath });
     } else if (p.type === "diff" && p.filePath) {
@@ -128,6 +140,8 @@ function serializeTabs(tabs: Tab[]): PersistedTab[] {
     if (t.type === "chat") continue;
     if (t.type === "changes") {
       out.push({ type: "changes" });
+    } else if (t.type === "plan") {
+      out.push({ type: "plan" });
     } else if (t.type === "terminal") {
       out.push({ type: "terminal", terminalId: t.terminalId, label: t.label });
     } else {
@@ -276,6 +290,10 @@ export function TabProvider({ sessionId, children }: { sessionId: string; childr
     });
   }, []);
 
+  const openPlan = useCallback((opts?: { beside?: boolean; quiet?: boolean }) => {
+    setState((prev) => openPlanTab(prev, PLAN_TAB, opts));
+  }, []);
+
   const replaceTerminalId = useCallback((oldTerminalId: string, newTerminalId: string) => {
     setState((prev) => replaceTerminalTabId(prev, oldTerminalId, newTerminalId));
   }, []);
@@ -366,6 +384,7 @@ export function TabProvider({ sessionId, children }: { sessionId: string; childr
         openDiff,
         openChanges,
         openTerminal,
+        openPlan,
         replaceTerminalId,
         closeTab,
         setActiveTab,

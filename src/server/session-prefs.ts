@@ -9,7 +9,7 @@ import type { InitData, ModelSlots, SandboxConfig, SessionNotifications, Session
 export type SessionRuntime = "stream" | "pty";
 
 export interface PersistedTab {
-  type: "file" | "diff" | "changes";
+  type: "file" | "diff" | "changes" | "terminal" | "plan";
   filePath?: string;
 }
 

@@ -231,6 +231,16 @@ export default function AppearanceSettingsPage() {
             <Toggle enabled={settings.modalPagesEnabled} onToggle={() => updateSetting("modalPagesEnabled", !settings.modalPagesEnabled)} />
           </SettingRow>
           <SettingRow
+            label="Open plans beside the chat"
+            hint="When Claude proposes a plan, open it in the Plan tab next to the conversation. Wide screens only: on a phone the tab is added and marked, and you open it when you are ready."
+          >
+            <Toggle
+              enabled={settings.planReviewAutoOpen}
+              testId="toggle-plan-auto-open"
+              onToggle={() => updateSetting("planReviewAutoOpen", !settings.planReviewAutoOpen)}
+            />
+          </SettingRow>
+          <SettingRow
             label="Telemetry"
             hint={
               telemetryBlocked ??

@@ -280,3 +280,24 @@ pre::-webkit-scrollbar-corner,
   --chart-7: oklch(0.8 0.15 130);
   --chart-8: oklch(0.76 0.15 45);
 }
+
+/* Plan review markup, painted over the rendered plan with the CSS Custom
+   Highlight API (see src/components/plan-review/dom.ts). Literal colours:
+   custom properties are not reliably inherited by ::highlight(). */
+::highlight(plan-comment) {
+  background-color: rgb(245 158 11 / 0.3);
+}
+::highlight(plan-remove) {
+  background-color: rgb(239 68 68 / 0.18);
+  text-decoration: line-through;
+  text-decoration-color: rgb(239 68 68);
+}
+::highlight(plan-replace) {
+  background-color: rgb(59 130 246 / 0.26);
+}
+::highlight(plan-pending) {
+  background-color: rgb(125 125 125 / 0.32);
+}
+::highlight(plan-focus) {
+  background-color: rgb(245 158 11 / 0.62);
+}

@@ -53,7 +53,7 @@ import { getJob, getJobSessionIds } from "./job-storage";
 import { COCKPIT_AGENT_SYSTEM_PROMPT } from "./mcp/cockpit-agent-prompt";
 import { clearToken, type RunContext, registerAuthToken, registerRunContext, registerSessionContext } from "./mcp/run-context";
 import { getNotificationSettings } from "./notification-settings";
-import { findLatestPlanFile, readPlanFile } from "./plans";
+import { planFromRequest, rememberSessionPlan } from "./plans";
 import { UntrustedWorkspaceError } from "./pty-session";
 import { emitSessionRequestResolved } from "./session-attention";
 import { notifySessionEvent, type SessionNotifyContext } from "./session-notify";
@@ -107,6 +107,8 @@ export interface PendingRequest {
   permissionSuggestions?: Record<string, unknown>[];
   planFilePath?: string;
   planContent?: string;
+  /** The stored version of the session's plan this request is about. */
+  planVersion?: number;
   configProposal?: { toolName: string; domain: string; action: string; displayName?: string; idNames?: Record<string, string> };
 }
 
@@ -2228,7 +2230,7 @@ export class SessionManager {
         this.respondToPermission(sessionId, pa.requestId, true, pa.rawToolInput, undefined, undefined, "bypass");
         bypassedRequestIds.add(pa.requestId);
       } else {
-        const planPath = pa.toolName === "ExitPlanMode" ? findLatestPlanFile() : undefined;
+        const plan = pa.toolName === "ExitPlanMode" ? planFromRequest(pa.rawToolInput) : {};
         const reqType = pa.toolName === "AskUserQuestion" ? "question" : "permission";
         session.pendingRequests.set(pa.requestId, {
           type: reqType,
@@ -2237,8 +2239,9 @@ export class SessionManager {
           toolInput: pa.toolInput || "",
           rawToolInput: pa.rawToolInput,
           permissionSuggestions: pa.permissionSuggestions,
-          planFilePath: planPath,
-          planContent: planPath ? readPlanFile(planPath) : undefined,
+          planFilePath: plan.planFilePath,
+          planContent: plan.planContent,
+          planVersion: rememberSessionPlan(sessionId, pa.requestId, plan),
         });
         this.notifyPendingChanged(session, sessionId);
         // Everything above this point answered itself, so a request arriving

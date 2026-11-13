@@ -1,4 +1,5 @@
 import type { ContextSize } from "@/lib/models";
+import type { PlanAnnotation, PlanReviewOutcome } from "@/lib/plan-review/types";
 
 export interface SessionInfo {
   id: string;
@@ -642,6 +643,16 @@ export type ClientMessage =
       allowed: boolean;
       permissionMode?: PermissionMode;
       suggestionIndex?: number;
+      /** What the model is told when the answer is no. Plan review sends its
+       *  feedback here, so it arrives as the answer to the plan itself. */
+      denyMessage?: string;
+      /** ExitPlanMode only: the plan as the user approved it, when they edited
+       *  it or added notes. Replaces the text the model proposed. */
+      planText?: string;
+      /** ExitPlanMode only: what the answer means for the plan, and the
+       *  markup behind it, kept with the plan's version. An approval that
+       *  clears the context is sent as a no, so the outcome is stated. */
+      plan?: { outcome?: PlanReviewOutcome; annotations?: PlanAnnotation[] };
     }
   | { type: "permission:set_bypass"; sessionId: string; enabled: boolean }
   | { type: "permission:set_mode"; sessionId: string; mode: SessionPermissionMode }
@@ -691,6 +702,8 @@ export type ServerMessage =
       suggestions?: PermissionSuggestion[];
       planFilePath?: string;
       planContent?: string;
+      /** Which stored version of the session's plan this request is about. */
+      planVersion?: number;
       configProposal?: { toolName: string; domain: string; action: string; displayName?: string; idNames?: Record<string, string> };
     }
   | { type: "question:request"; sessionId: string; requestId: string; questions: string }

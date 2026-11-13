@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyMessageDone, applyTranscript, buildUserMessage, pushPendingQuestion } from "@/hooks/message-ordering";
+import { applyMessageDone, applyTranscript, buildUserMessage, pushPendingQuestion, pushPendingRequest } from "@/hooks/message-ordering";
 import { extractTextFiles } from "@/lib/paste-detect";
 import type { ChatMessage } from "@/types";
 
@@ -324,5 +324,17 @@ describe("pushPendingQuestion", () => {
     const first = pushPendingQuestion([{ requestId: "r1", questions: "q", answered: true }], { requestId: "r1", questions: "q" });
     expect(first).toHaveLength(1);
     expect(first[0].answered).toBe(true);
+  });
+});
+
+describe("pushPendingRequest", () => {
+  it("holds one entry per request, whatever else the entry carries", () => {
+    const none: Array<{ requestId: string; toolName: string; planContent?: string }> = [];
+    const first = pushPendingRequest(none, { requestId: "p1", toolName: "ExitPlanMode", planContent: "# v1" });
+    // A reconnect replays the request the client already holds.
+    const replayed = pushPendingRequest(first, { requestId: "p1", toolName: "ExitPlanMode", planContent: "# v1" });
+    expect(replayed).toBe(first);
+    const second = pushPendingRequest(replayed, { requestId: "p2", toolName: "Bash" });
+    expect(second.map((p) => p.requestId)).toEqual(["p1", "p2"]);
   });
 });

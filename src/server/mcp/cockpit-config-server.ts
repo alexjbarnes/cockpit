@@ -548,6 +548,7 @@ const TOOL_DEFINITIONS = [
         reviewsEnabled: { type: "boolean" },
         issuesEnabled: { type: "boolean" },
         modalPagesEnabled: { type: "boolean" },
+        planReviewAutoOpen: { type: "boolean", description: "Open a proposed plan in the Plan tab beside the chat (wide screens only)." },
         streamRuntimeEnabled: {
           type: "boolean",
           description: "Offer the deprecated Stream (headless) runtime. Existing Stream sessions and jobs keep working either way.",
@@ -1246,6 +1247,7 @@ async function handleToolCall(
           "reviewsEnabled",
           "issuesEnabled",
           "modalPagesEnabled",
+          "planReviewAutoOpen",
           "streamRuntimeEnabled",
           "ignoredSessionFolders",
           "permissionMode",

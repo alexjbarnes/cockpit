@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { deriveAgentTasks } from "@/lib/agent-tasks";
 import { type ContextSize, DEFAULT_CONTEXT_SIZE, resolveModel } from "@/lib/models";
+import type { PlanAnswerExtras } from "@/lib/plan-review/approval";
 import { turnStartFromElapsed } from "@/lib/turn-anchor";
 import type {
   BackgroundTask,
@@ -29,6 +30,7 @@ import {
   buildQueuedUserMessage,
   buildUserMessage,
   pushPendingQuestion,
+  pushPendingRequest,
   type QueuedText,
 } from "./message-ordering";
 import { useWebSocket } from "./use-websocket";
@@ -40,6 +42,8 @@ export interface PendingPermission {
   suggestions?: import("@/types").PermissionSuggestion[];
   planFilePath?: string;
   planContent?: string;
+  /** The stored version of the session's plan this request is about. */
+  planVersion?: number;
   configProposal?: { toolName: string; domain: string; action: string; displayName?: string; idNames?: Record<string, string> };
 }
 
@@ -121,7 +125,13 @@ interface UseSessionReturn {
     opts?: SendOptions,
   ) => void;
   interrupt: () => void;
-  respondToPermission: (requestId: string, allowed: boolean, permissionMode?: PermissionMode, suggestionIndex?: number) => void;
+  respondToPermission: (
+    requestId: string,
+    allowed: boolean,
+    permissionMode?: PermissionMode,
+    suggestionIndex?: number,
+    extras?: PlanAnswerExtras,
+  ) => void;
   respondToQuestion: (requestId: string, answers: Record<string, string>) => void;
   setModel: (model: string, contextSize?: ContextSize) => void;
   setModelSlot: (slot: "main" | "subagent" | "fast", modelId: string) => void;
@@ -1061,18 +1071,18 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
         }
 
         case "permission:request": {
-          setPendingPermissions((prev) => [
-            ...prev,
-            {
+          setPendingPermissions((prev) =>
+            pushPendingRequest(prev, {
               requestId: msg.requestId,
               toolName: msg.toolName,
               input: msg.input,
               suggestions: msg.suggestions,
               planFilePath: msg.planFilePath,
               planContent: msg.planContent,
+              planVersion: msg.planVersion,
               configProposal: msg.configProposal,
-            },
-          ]);
+            }),
+          );
           break;
         }
 
@@ -1302,8 +1312,8 @@ export function useSession(sessionId: string, cwd?: string, historyView?: boolea
   }, [send, sessionId]);
 
   const respondToPermission = useCallback(
-    (requestId: string, allowed: boolean, permissionMode?: PermissionMode, suggestionIndex?: number) => {
-      send({ type: "permission:response", sessionId, requestId, allowed, permissionMode, suggestionIndex });
+    (requestId: string, allowed: boolean, permissionMode?: PermissionMode, suggestionIndex?: number, extras?: PlanAnswerExtras) => {
+      send({ type: "permission:response", sessionId, requestId, allowed, permissionMode, suggestionIndex, ...extras });
       setPendingPermissions((prev) => prev.filter((p) => p.requestId !== requestId));
     },
     [send, sessionId],

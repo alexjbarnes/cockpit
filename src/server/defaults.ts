@@ -59,6 +59,13 @@ export interface AppDefaults {
    */
   modalPagesEnabled: boolean;
   /**
+   * When Claude proposes a plan, open it in the Plan tab beside the chat. On
+   * by default, and only ever on a wide screen: a phone gets the tab and a
+   * mark on it but is never switched to it. Off leaves the card in the chat
+   * as the only prompt, with the plan one tap away.
+   */
+  planReviewAutoOpen: boolean;
+  /**
    * Record everything Claude Code reports over OpenTelemetry (metrics, events
    * and traces, prompt and tool content included) into cockpit's own
    * telemetry database. Off by default: it is experimental, and it stores the
@@ -111,6 +118,7 @@ const fallback: AppDefaults = {
   sessionAlerts: false,
   issuesEnabled: false,
   modalPagesEnabled: true,
+  planReviewAutoOpen: true,
   telemetryEnabled: false,
   allowSonnet1m: false,
   streamRuntimeEnabled: false,

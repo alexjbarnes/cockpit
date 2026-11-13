@@ -74,3 +74,58 @@ describe("tabLayoutSignature", () => {
     expect(tabLayoutSignature(["chat", "file::/a"], null, [])).toBe(tabLayoutSignature(["chat", "file::/a"], null, []));
   });
 });
+
+import { openPlanTab } from "@/lib/tab-restore";
+
+describe("openPlanTab", () => {
+  const plan = { id: "plan" };
+  const base = { tabs: [{ id: "chat" }], activeTabId: "chat", splitTabId: null as string | null, rightPaneTabIds: [] as string[] };
+
+  it("shows the plan when simply asked to", () => {
+    const next = openPlanTab(base, plan);
+    expect(next.tabs.map((t) => t.id)).toEqual(["chat", "plan"]);
+    expect(next.activeTabId).toBe("plan");
+    expect(next.splitTabId).toBeNull();
+  });
+
+  it("opens it beside the chat when nothing is split", () => {
+    const next = openPlanTab(base, plan, { beside: true });
+    expect(next).toMatchObject({ activeTabId: "chat", splitTabId: "plan", rightPaneTabIds: ["plan"] });
+    // A plan that was the tab in front moves over, and the chat takes its place.
+    const fromFront = openPlanTab({ ...base, tabs: [{ id: "chat" }, plan], activeTabId: "plan" }, plan, { beside: true });
+    expect(fromFront).toMatchObject({ activeTabId: "chat", splitTabId: "plan" });
+  });
+
+  it("leaves a split the user arranged alone", () => {
+    const split = {
+      tabs: [{ id: "chat" }, { id: "file::/a" }],
+      activeTabId: "chat",
+      splitTabId: "file::/a",
+      rightPaneTabIds: ["file::/a"],
+    };
+    const shown = openPlanTab(split, plan, { beside: true });
+    expect(shown).toMatchObject({ splitTabId: "file::/a", rightPaneTabIds: ["file::/a"], activeTabId: "plan" });
+    const quiet = openPlanTab(split, plan, { beside: true, quiet: true });
+    expect(quiet).toMatchObject({ splitTabId: "file::/a", activeTabId: "chat" });
+    expect(quiet.tabs.map((t) => t.id)).toContain("plan");
+  });
+
+  it("adds the tab without taking the screen when quiet", () => {
+    const next = openPlanTab(base, plan, { quiet: true });
+    expect(next.tabs.map((t) => t.id)).toEqual(["chat", "plan"]);
+    expect(next.activeTabId).toBe("chat");
+    // Already open and nothing to change: the same state, so nothing re-renders or is saved.
+    expect(openPlanTab(next, plan, { quiet: true })).toBe(next);
+  });
+
+  it("brings a plan already in the right pane to its front, unless quiet", () => {
+    const behind = {
+      tabs: [{ id: "chat" }, { id: "file::/a" }, plan],
+      activeTabId: "chat",
+      splitTabId: "file::/a",
+      rightPaneTabIds: ["file::/a", "plan"],
+    };
+    expect(openPlanTab(behind, plan).splitTabId).toBe("plan");
+    expect(openPlanTab(behind, plan, { quiet: true }).splitTabId).toBe("file::/a");
+  });
+});

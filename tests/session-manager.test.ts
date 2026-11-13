@@ -4405,6 +4405,34 @@ describe("SessionManager", () => {
       expect(s.pendingRequests.has("req-ask")).toBe(true);
     });
 
+    it("shows the plan the request carries and keeps it as a version", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      const propose = (requestId: string, plan: string) =>
+        (manager as any).applyProcessedResult(s, session.id, {
+          intermediateMessages: [],
+          emit: [],
+          systemMessages: [],
+          errors: [],
+          statusChange: null,
+          compactDone: false,
+          snapshot: null,
+          permissionActions: [
+            { type: "store", requestId, toolName: "ExitPlanMode", rawToolInput: { plan, planFilePath: "/plans/this-session.md" } },
+          ],
+        });
+
+      propose("req-v1", "# First");
+      // The session's own text, not whichever plan file was written last.
+      expect(s.pendingRequests.get("req-v1")).toMatchObject({
+        planContent: "# First",
+        planFilePath: "/plans/this-session.md",
+        planVersion: 1,
+      });
+      propose("req-v2", "# Second");
+      expect(s.pendingRequests.get("req-v2")).toMatchObject({ planContent: "# Second", planVersion: 2 });
+    });
+
     // A reloaded page has no task state: the transcript records an async
     // agent's tool use as done the moment it launches, so the client judged a
     // running agent finished until the next Stop or subagent hook arrived with a

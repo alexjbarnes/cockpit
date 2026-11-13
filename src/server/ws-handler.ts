@@ -8,7 +8,7 @@ import { extractTokenFromQuery, validateSession } from "./auth";
 import { debugLog, logClientMessage, logDiag, logParsedEvent, logServerMessage, logStatus } from "./debug-logger";
 import type { ParsedEvent } from "./event-parser";
 import { watchCwd } from "./fs-watcher";
-import { findLatestPlanFile, readPlanFile } from "./plans";
+import { permissionAnswerExtras, recordSessionPlanAnswer } from "./plans";
 import { onSessionAttention, onSessionRequestResolved } from "./session-attention";
 import { SessionManager } from "./session-manager";
 import { getSessionPrefs } from "./session-prefs";
@@ -457,9 +457,10 @@ export function createWebSocketHandler(
                   toolName: req.toolName,
                   input: req.toolInput,
                 };
-                if (req.planFilePath) {
+                if (req.planFilePath || req.planContent) {
                   permMsg.planFilePath = req.planFilePath;
                   permMsg.planContent = req.planContent;
+                  permMsg.planVersion = req.planVersion;
                 }
                 if (req.configProposal) {
                   permMsg.configProposal = req.configProposal;
@@ -798,7 +799,9 @@ export function createWebSocketHandler(
               suggestions = pending.permissionSuggestions;
             }
           }
-          sessionManager.respondToPermission(msg.sessionId, msg.requestId, msg.allowed, pending?.rawToolInput, suggestions);
+          const answer = permissionAnswerExtras(pending?.toolName, pending?.rawToolInput, msg);
+          if (pending?.toolName === "ExitPlanMode") recordSessionPlanAnswer(msg.sessionId, pending, msg);
+          sessionManager.respondToPermission(msg.sessionId, msg.requestId, msg.allowed, answer.toolInput, suggestions, answer.denyReason);
           break;
         }
 
@@ -1152,14 +1155,14 @@ function handleParsedEvent(ws: WebSocket, sessionId: string, event: ParsedEvent,
           input: event.toolInput || "",
           suggestions: event.permissionSuggestions as import("@/types").PermissionSuggestion[] | undefined,
         };
-        if (toolName === "ExitPlanMode") {
-          const planPath = findLatestPlanFile();
-          if (planPath) {
-            permMsg.planFilePath = planPath;
-            permMsg.planContent = readPlanFile(planPath);
-          }
-        }
+        // The plan is the one stored with the request when it arrived, so a
+        // client connecting later is shown the same text as one already here.
         const pending = sessionManager.getPendingRequest(sessionId, requestId);
+        if (pending?.planFilePath || pending?.planContent) {
+          permMsg.planFilePath = pending.planFilePath;
+          permMsg.planContent = pending.planContent;
+          permMsg.planVersion = pending.planVersion;
+        }
         if (pending?.configProposal) {
           permMsg.configProposal = pending.configProposal;
         }

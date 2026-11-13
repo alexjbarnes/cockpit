@@ -1,7 +1,8 @@
 "use client";
 
-import { Columns2, FileDiff, FileText, GitBranch, MessageSquare, Terminal, X } from "lucide-react";
+import { ClipboardList, Columns2, FileDiff, FileText, GitBranch, MessageSquare, Terminal, X } from "lucide-react";
 import { useRef, useState } from "react";
+import { usePlanBridge } from "@/contexts/plan-bridge";
 import type { Tab } from "@/contexts/tab-context";
 import { useTabContext } from "@/contexts/tab-context";
 import { useIsDesktop } from "@/hooks/use-is-desktop";
@@ -19,6 +20,8 @@ function tabIcon(tab: Tab) {
       return <GitBranch className="h-3 w-3 md:h-3.5 md:w-3.5 shrink-0" />;
     case "terminal":
       return <Terminal className="h-3 w-3 md:h-3.5 md:w-3.5 shrink-0" />;
+    case "plan":
+      return <ClipboardList className="h-3 w-3 md:h-3.5 md:w-3.5 shrink-0" />;
   }
 }
 
@@ -33,6 +36,8 @@ function tabLabel(tab: Tab): string {
       return "Changes";
     case "terminal":
       return tab.label;
+    case "plan":
+      return "Plan";
   }
 }
 
@@ -72,6 +77,9 @@ interface TabBarProps {
 export function TabBar({ splitRatio }: TabBarProps) {
   const tabs = useTabContext();
   const isDesktop = useIsDesktop();
+  // A plan waiting for a decision marks its tab, so it is not missed while
+  // another tab is in front.
+  const planWaiting = !!usePlanBridge()?.pending;
   const dragTabId = useRef<string | null>(null);
   const [dropIndex, setDropIndex] = useState<number | null>(null);
   const [dropPane, setDropPane] = useState<"left" | "right" | null>(null);
@@ -151,6 +159,9 @@ export function TabBar({ splitRatio }: TabBarProps) {
     >
       {tabIcon(tab)}
       <span className="truncate max-w-[120px]">{tabLabel(tab)}</span>
+      {tab.type === "plan" && planWaiting && (
+        <span data-testid="plan-tab-waiting" title="Waiting for your decision" className="h-1.5 w-1.5 shrink-0 rounded-full bg-amber-500" />
+      )}
       {tab.type !== "chat" && (
         <span
           role="button"

@@ -3,6 +3,15 @@
 import { ClipboardCheck, ClipboardList, Send } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { PendingPermission } from "@/hooks/use-session";
+import {
+  approvePlan,
+  dismissPlan,
+  type PlanAnswerDeps,
+  type PlanAnswerExtras,
+  planApprovalOptions,
+  requestPlanChanges,
+} from "@/lib/plan-review/approval";
+import { noteFromText } from "@/lib/plan-review/feedback";
 import type { PermissionMode } from "@/types";
 import { PlanViewModal } from "./plan-view-modal";
 
@@ -14,29 +23,20 @@ interface AllowedPrompt {
 interface PlanApprovalPromptProps {
   permission: PendingPermission;
   bypassActive: boolean;
-  onRespond: (requestId: string, allowed: boolean, permissionMode?: PermissionMode, suggestionIndex?: number) => void;
+  onRespond: (
+    requestId: string,
+    allowed: boolean,
+    permissionMode?: PermissionMode,
+    suggestionIndex?: number,
+    extras?: PlanAnswerExtras,
+  ) => void;
   onSendMessage: (text: string) => void;
   onSetBypass: (enabled: boolean) => void;
   onSetPlanMode: (enabled: boolean) => void;
+  /** Open the plan for review in its tab. Absent where there are no tabs (the
+   *  assistant's modal), and the plan then opens in a read-only modal. */
+  onReview?: () => void;
 }
-
-interface PlanOption {
-  label: string;
-  clearContext: boolean;
-  autoAccept: boolean;
-}
-
-const ALL_OPTIONS: PlanOption[] = [
-  { label: "Yes, clear context and auto-accept edits", clearContext: true, autoAccept: true },
-  { label: "Yes, clear context and manually approve edits", clearContext: true, autoAccept: false },
-  { label: "Yes, auto-accept edits", clearContext: false, autoAccept: true },
-  { label: "Yes, manually approve edits", clearContext: false, autoAccept: false },
-];
-
-const BYPASS_OPTIONS: PlanOption[] = [
-  { label: "Yes, clear context and implement", clearContext: true, autoAccept: true },
-  { label: "Yes, continue implementing", clearContext: false, autoAccept: true },
-];
 
 export function PlanApprovalPrompt({
   permission,
@@ -45,8 +45,9 @@ export function PlanApprovalPrompt({
   onSendMessage,
   onSetBypass,
   onSetPlanMode,
+  onReview,
 }: PlanApprovalPromptProps) {
-  const options = bypassActive ? BYPASS_OPTIONS : ALL_OPTIONS;
+  const options = planApprovalOptions(bypassActive);
   const [selected, setSelected] = useState(0);
   const [showFeedback, setShowFeedback] = useState(false);
   const [feedback, setFeedback] = useState("");
@@ -74,44 +75,32 @@ export function PlanApprovalPrompt({
     }
   }, [showFeedback]);
 
-  const handleProceed = useCallback(
-    (optionIndex: number) => {
-      const opt = options[optionIndex];
-      if (opt.autoAccept) {
-        onSetBypass(true);
-      }
-      if (opt.clearContext) {
-        // Reject ExitPlanMode (stops agent from continuing in old context),
-        // clear conversation, then start a fresh turn. /clear kills the process
-        // and creates a new session ID so the CLI starts with a clean context.
-        // The new session won't know the plan file, so we include its path.
-        const planRef = permission.planFilePath ? ` at ${permission.planFilePath}` : "";
-        onRespond(permission.requestId, false, "deny");
-        onSetPlanMode(false);
-        setTimeout(() => {
-          onSendMessage("/clear");
-          setTimeout(() => onSendMessage(`Implement the plan${planRef}`), 200);
-        }, 100);
-      } else {
-        onRespond(permission.requestId, true, "allow");
-      }
-    },
-    [options, permission.requestId, permission.planFilePath, onRespond, onSendMessage, onSetBypass, onSetPlanMode],
+  const deps = useMemo<PlanAnswerDeps>(
+    () => ({
+      respond: (allowed, extras) => onRespond(permission.requestId, allowed, allowed ? "allow" : "deny", undefined, extras),
+      sendMessage: onSendMessage,
+      setBypass: onSetBypass,
+      setPlanMode: onSetPlanMode,
+    }),
+    [permission.requestId, onRespond, onSendMessage, onSetBypass, onSetPlanMode],
   );
 
-  const handleDismiss = useCallback(() => {
-    onRespond(permission.requestId, false, "deny");
-    // Re-send plan mode to CLI since ExitPlanMode may have already changed
-    // the CLI's internal permission mode before the permission was resolved
-    setTimeout(() => onSetPlanMode(true), 100);
-  }, [permission.requestId, onRespond, onSetPlanMode]);
+  const handleProceed = useCallback(
+    (optionIndex: number) => {
+      approvePlan(options[optionIndex], { planFilePath: permission.planFilePath, planContent: permission.planContent }, deps);
+    },
+    [options, permission.planFilePath, permission.planContent, deps],
+  );
 
+  const handleDismiss = useCallback(() => dismissPlan(deps), [deps]);
+
+  // The text goes back as the answer to the plan itself, so the model reads
+  // it where it expects a verdict and revises in the same turn.
   const handleSendFeedback = useCallback(() => {
     const text = feedback.trim();
     if (!text) return;
-    onRespond(permission.requestId, false, "deny");
-    setTimeout(() => onSendMessage(text), 100);
-  }, [feedback, permission.requestId, onRespond, onSendMessage]);
+    requestPlanChanges([noteFromText(text)], deps);
+  }, [feedback, deps]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -168,11 +157,12 @@ export function PlanApprovalPrompt({
                 <div className="text-sm font-medium">Would you like to proceed?</div>
                 {permission.planContent && (
                   <button
-                    onClick={() => setPlanModalOpen(true)}
-                    className="flex items-center gap-1 rounded px-1.5 py-0.5 text-xs text-blue-500 hover:bg-blue-500/10"
+                    onClick={() => (onReview ? onReview() : setPlanModalOpen(true))}
+                    data-testid="btn-review-plan"
+                    className="flex items-center gap-1 rounded border border-blue-500/50 px-2 py-1 text-xs font-medium text-blue-500 hover:bg-blue-500/10"
                   >
                     <ClipboardList className="h-3 w-3" />
-                    View plan
+                    {onReview ? "Review plan" : "View plan"}
                   </button>
                 )}
               </div>
@@ -260,12 +250,12 @@ export function PlanApprovalPrompt({
           </div>
         </div>
       </div>
-      {permission.planContent && permission.planFilePath && (
+      {permission.planContent && !onReview && (
         <PlanViewModal
           open={planModalOpen}
           onOpenChange={setPlanModalOpen}
           content={permission.planContent}
-          filePath={permission.planFilePath}
+          filePath={permission.planFilePath ?? "Plan"}
         />
       )}
     </>

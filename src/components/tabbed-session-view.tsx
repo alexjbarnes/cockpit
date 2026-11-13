@@ -3,9 +3,11 @@
 import { GitBranch } from "lucide-react";
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { PlanBridgeProvider, usePlanBridge } from "@/contexts/plan-bridge";
 import type { Tab, TerminalTab } from "@/contexts/tab-context";
 import { TabProvider, useTabContext } from "@/contexts/tab-context";
 import { useIsDesktop } from "@/hooks/use-is-desktop";
+import { useSettings } from "@/hooks/use-settings";
 import { useWebSocket } from "@/hooks/use-websocket";
 import { pathBasename } from "@/lib/path";
 import { cn } from "@/lib/utils";
@@ -14,6 +16,7 @@ import { ChangesView } from "./changes-view";
 import { ChatView } from "./chat-view";
 import { DiffView } from "./diff-view";
 import { FilesView } from "./files-view";
+import { SessionPlanView } from "./plan-review/session-plan-view";
 import { ResizeHandle } from "./resize-handle";
 import { TabBar } from "./tab-bar";
 
@@ -29,7 +32,9 @@ interface TabbedSessionViewProps {
 export function TabbedSessionView(props: TabbedSessionViewProps) {
   return (
     <TabProvider sessionId={props.sessionId}>
-      <TabbedContent {...props} />
+      <PlanBridgeProvider>
+        <TabbedContent {...props} />
+      </PlanBridgeProvider>
     </TabProvider>
   );
 }
@@ -77,6 +82,21 @@ function TabbedContent({ sessionId, cwd, initialName, historyView }: TabbedSessi
   const { activeTabId, splitTabId, rightPaneTabIds, tabs: tabList } = tabs;
   const isSplit = isDesktop && splitTabId !== null;
 
+  // A plan that arrives opens beside the chat on a wide screen, so it can be
+  // read against the conversation that produced it. On a phone the tab is
+  // added and marked but never taken to: switching what a small screen shows
+  // under someone's thumb is worse than a dot on a tab.
+  const { settings } = useSettings();
+  const planRequestId = usePlanBridge()?.pending?.requestId;
+  const openedPlanFor = useRef<string | undefined>(undefined);
+  const openPlan = tabs.openPlan;
+  useEffect(() => {
+    if (!planRequestId || openedPlanFor.current === planRequestId) return;
+    openedPlanFor.current = planRequestId;
+    if (!settings.planReviewAutoOpen) return;
+    openPlan(isDesktop ? { beside: true, quiet: true } : { quiet: true });
+  }, [planRequestId, settings.planReviewAutoOpen, isDesktop, openPlan]);
+
   const handleResize = useCallback((delta: number) => {
     const container = containerRef.current;
     if (!container) return;
@@ -120,6 +140,7 @@ function TabbedContent({ sessionId, cwd, initialName, historyView }: TabbedSessi
   const diffTabs = tabList.filter((t): t is Tab & { type: "diff" } => t.type === "diff");
   const terminalTabs = tabList.filter((t): t is TerminalTab => t.type === "terminal");
   const hasChanges = tabList.some((t) => t.type === "changes");
+  const hasPlan = tabList.some((t) => t.type === "plan");
 
   const handlePaneDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -195,6 +216,11 @@ function TabbedContent({ sessionId, cwd, initialName, historyView }: TabbedSessi
                 <ChangesView cwd={liveCwd} sessionId={sessionId} embeddedChat={false} />
               </div>
             )}
+            {hasPlan && !rightPaneTabIds.includes("plan") && (
+              <div className={cn("flex flex-col flex-1 min-h-0", activeTabId !== "plan" && "hidden")}>
+                <SessionPlanView sessionId={sessionId} active={activeTabId === "plan"} />
+              </div>
+            )}
             {leftTerminalTabs.map((tab) => (
               <div key={tab.id} className={cn("flex flex-col flex-1 min-h-0 min-w-0", activeTabId !== tab.id && "hidden")}>
                 <TerminalPanel
@@ -226,6 +252,11 @@ function TabbedContent({ sessionId, cwd, initialName, historyView }: TabbedSessi
             {rightHasChanges && (
               <div className={cn("flex flex-col flex-1 min-h-0", splitTabId !== "changes" && "hidden")}>
                 <ChangesView cwd={liveCwd} sessionId={sessionId} embeddedChat={false} />
+              </div>
+            )}
+            {hasPlan && rightPaneTabIds.includes("plan") && (
+              <div className={cn("flex flex-col flex-1 min-h-0", splitTabId !== "plan" && "hidden")}>
+                <SessionPlanView sessionId={sessionId} active={splitTabId === "plan"} />
               </div>
             )}
             {rightTerminalTabs.map((tab) => (
@@ -268,6 +299,11 @@ function TabbedContent({ sessionId, cwd, initialName, historyView }: TabbedSessi
       {hasChanges && (
         <div className={cn("flex flex-col flex-1 min-h-0", activeTabId !== "changes" && "hidden")}>
           <ChangesView cwd={liveCwd} sessionId={sessionId} embeddedChat={false} />
+        </div>
+      )}
+      {hasPlan && (
+        <div className={cn("flex flex-col flex-1 min-h-0", activeTabId !== "plan" && "hidden")}>
+          <SessionPlanView sessionId={sessionId} active={activeTabId === "plan"} />
         </div>
       )}
       {terminalTabs.map((tab) => (

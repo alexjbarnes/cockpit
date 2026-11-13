@@ -40,7 +40,16 @@ export interface PendingQuestionEntry {
  * duplicated card, each with its own selection.
  */
 export function pushPendingQuestion(prev: PendingQuestionEntry[], request: PendingQuestionEntry): PendingQuestionEntry[] {
-  return prev.some((q) => q.requestId === request.requestId) ? prev : [...prev, request];
+  return pushPendingRequest(prev, request);
+}
+
+/**
+ * The same guard for any pending request. A permission request is replayed on
+ * every reconnect and can also arrive live, so a client that held it already
+ * must not hold it twice: two entries are two cards for one decision.
+ */
+export function pushPendingRequest<T extends { requestId: string }>(prev: T[], request: T): T[] {
+  return prev.some((p) => p.requestId === request.requestId) ? prev : [...prev, request];
 }
 
 /** Build the optimistic user bubble for a flushed queued message.
