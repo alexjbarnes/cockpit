@@ -1,5 +1,6 @@
 import { existsSync, realpathSync, statSync } from "node:fs";
 import { type IPty, spawn } from "node-pty";
+import { userEnv } from "./child-env";
 
 const TEXT_TO_ENTER_DELAY_MS = 300;
 // Pause between the "clear line" write and typing the text. Sent back-to-back they
@@ -72,7 +73,9 @@ export class PtySession {
 
     const bin = this.opts.bin ?? "claude";
     const args = ["--verbose", "--settings", this.opts.settingsPath, ...(this.opts.extraArgs ?? [])];
-    const env: Record<string, string> = { ...(process.env as Record<string, string>) };
+    // Not cockpit's whole environment: NODE_ENV, PORT and its own settings
+    // belong to the server, not to what the user runs in the session.
+    const env: Record<string, string> = userEnv();
     delete env.CLAUDECODE;
     delete env.CLAUDE_CODE_ENTRYPOINT;
     // Drop any inherited 1M-context override BEFORE applying the caller's env, so a

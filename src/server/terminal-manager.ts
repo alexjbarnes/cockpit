@@ -3,6 +3,7 @@ import os from "node:os";
 import { type IPty, spawn } from "node-pty";
 import { v4 as uuidv4 } from "uuid";
 
+import { userEnv } from "./child-env";
 import { logDiag } from "./debug-logger";
 import { appendToBuffer } from "./terminal-buffer";
 
@@ -62,7 +63,7 @@ export class TerminalManager {
       cols,
       rows,
       cwd,
-      env: process.env as Record<string, string>,
+      env: userEnv(),
     });
 
     const instance: TerminalInstance = { id, pty, cwd, cols, rows, buffer: "", detachOffset: 0, client: null };

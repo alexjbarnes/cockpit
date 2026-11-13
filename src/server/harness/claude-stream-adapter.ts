@@ -1,6 +1,7 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { mkdirSync } from "node:fs";
 import { CONTEXT_SIZES, DEFAULT_CONTEXT_SIZE } from "@/lib/models";
+import { userEnv } from "@/server/child-env";
 import { getClaudeBin } from "@/server/claude-bin";
 import { EventParser } from "@/server/event-parser";
 import type { DocumentAttachment, ImageAttachment } from "@/types";
@@ -184,7 +185,7 @@ export class ClaudeStreamAdapter implements HarnessAdapter {
       args.push("--mcp-config", config.mcpConfigPath);
     }
 
-    const env = { ...process.env };
+    const env: Record<string, string | undefined> = userEnv();
     delete env.CLAUDECODE;
     delete env.CLAUDE_CODE_ENTRYPOINT;
 
@@ -208,7 +209,8 @@ export class ClaudeStreamAdapter implements HarnessAdapter {
     const isWin = process.platform === "win32";
     const proc = spawn(getClaudeBin(), args, {
       cwd: config.cwd,
-      env,
+      // Next's typings make NODE_ENV a required key; it is left out on purpose.
+      env: env as NodeJS.ProcessEnv,
       stdio: ["pipe", "pipe", "pipe"],
       ...(isWin ? { shell: true } : { detached: true }),
     });
