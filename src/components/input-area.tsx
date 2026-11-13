@@ -253,6 +253,9 @@ interface InputAreaProps {
   allowSonnet1m?: boolean;
   contextUsage: ContextUsage | null;
   dismissKeyboard: boolean;
+  /** Show the rest of a previously sent prompt in grey as the user types its
+   *  start. On by default; Settings → Appearance can turn it off. */
+  promptSuggestions?: boolean;
   cwd?: string;
   onCompact?: () => void;
   initData?: InitData | null;
@@ -321,6 +324,7 @@ export function InputArea({
   allowSonnet1m,
   contextUsage,
   dismissKeyboard,
+  promptSuggestions = true,
   cwd,
   onCompact,
   initData,
@@ -476,7 +480,9 @@ export function InputArea({
   // the end of the text, while focused, and never over a menu or an IME
   // composition.
   const suggestion =
-    inputFocused && caretAtEnd && !composing && !showMenu && !showMention && !historyOpen ? suggestCompletion(text, promptHistory) : null;
+    promptSuggestions && inputFocused && caretAtEnd && !composing && !showMenu && !showMention && !historyOpen
+      ? suggestCompletion(text, promptHistory)
+      : null;
 
   const handleSelectCommand = useCallback(
     (cmd: SlashCommand) => {

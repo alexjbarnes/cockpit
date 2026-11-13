@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Prompt suggestions can be turned off.** Settings → Appearance has a Prompt suggestions toggle, on by default. It controls the composer's grey completion of a previously sent prompt, which Right, End or Tab accepts while it is on.
 - **An inbox message can be acted on from the bottom of the article.** Share, Mark unread and Delete now repeat below the message, so a long message can be deleted after reading without scrolling back up.
 
 ### Fixed

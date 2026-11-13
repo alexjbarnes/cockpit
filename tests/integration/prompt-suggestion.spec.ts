@@ -72,6 +72,16 @@ test("typing a prompt's start shows the newest match, and Right, Tab or a tap ac
     await page.getByTestId("prompt-suggestion-accept").click();
     await expect(input).toHaveValue("commit and tag");
     await expect(suggestion).not.toBeVisible();
+
+    // On by default; turning it off in Settings hides the ghost.
+    const patch = await page.request.patch(`${harness.cockpitUrl}/api/defaults`, { data: { promptSuggestions: false } });
+    expect(patch.ok()).toBe(true);
+    await page.reload();
+    await expect(input).toBeVisible();
+    await page.waitForTimeout(1500);
+    await input.fill("co");
+    await expect(input).toHaveValue("co");
+    await expect(suggestion).toHaveCount(0);
   } finally {
     rmSync(workDir, { recursive: true, force: true });
   }

@@ -204,6 +204,12 @@ export default function AppearanceSettingsPage() {
             onToggle={() => updateSetting("dismissKeyboardOnSend", !settings.dismissKeyboardOnSend)}
           />
         </SettingRow>
+        <SettingRow
+          label="Prompt suggestions"
+          hint="Complete a previously sent prompt in grey as you type its start; Right, End or Tab accepts it"
+        >
+          <Toggle enabled={settings.promptSuggestions} onToggle={() => updateSetting("promptSuggestions", !settings.promptSuggestions)} />
+        </SettingRow>
         <SettingRow label="Reviews" hint="Show the Reviews section in the sidebar for tracking PR reviews">
           <Toggle enabled={settings.reviewsEnabled} onToggle={() => updateSetting("reviewsEnabled", !settings.reviewsEnabled)} />
         </SettingRow>
