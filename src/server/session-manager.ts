@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { v4 as uuidv4 } from "uuid";
+import { reconcileBackgroundTasks } from "@/lib/agent-tasks";
 import { classifyCliCommand } from "@/lib/cli-commands";
 import { describeJobTargets } from "@/lib/job-target-label";
 import {
@@ -1890,7 +1891,12 @@ export class SessionManager {
    * flip where the agent card's spinner vanished and then came back.
    */
   getBackgroundTasks(sessionId: string): BackgroundTask[] {
-    return this.sessions.get(sessionId)?.backgroundTasks ?? [];
+    const session = this.sessions.get(sessionId);
+    if (!session) return [];
+    // The runtime's own list wins on what is running: it is fed by the CLI's
+    // background_tasks, which keeps an agent visible after the turn that
+    // launched it ended, where the remembered list can be stale or empty.
+    return reconcileBackgroundTasks(session.backgroundTasks, session.harnessProcess?.getRunningTaskIds?.() ?? []);
   }
 
   /** How long the running turn has gone since its user message was delivered,

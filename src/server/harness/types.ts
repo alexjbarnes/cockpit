@@ -106,6 +106,11 @@ export interface HarnessProcess {
   canTakeMidTurnMessage?(): boolean;
   /** Whether messages handed over mid-turn are still waiting in the CLI's queue. */
   holdsMidTurnMessages?(): boolean;
+  /** The ids of background agents the CLI's own task list reports running.
+   *  PTY only: it is the one source that knows an agent is still working after
+   *  the turn that launched it ended, so a returning page is told from this
+   *  rather than from events it may have missed. */
+  getRunningTaskIds?(): string[];
   interrupt(): void;
   /** reason is forwarded to Claude's end_session control request for its own
    *  logging; harnesses without an equivalent concept just ignore it. */

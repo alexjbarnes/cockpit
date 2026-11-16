@@ -802,6 +802,11 @@ export class PtyRuntime {
     this.reportRunningTasks(before);
   }
 
+  /** The agents the CLI's task list currently reports running. */
+  getRunningTaskIds(): string[] {
+    return [...this.runningTasks];
+  }
+
   /**
    * Report how much background work is running, so a session that is idle and
    * accepting input can still show that work it launched is going on. Emits

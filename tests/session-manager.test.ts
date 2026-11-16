@@ -144,6 +144,40 @@ describe("SessionManager", () => {
     manager = new SessionManager({ defaultRuntime: "stream" });
   });
 
+  describe("getBackgroundTasks", () => {
+    it("reports an agent running when the runtime says so, whatever the remembered list holds", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      // The event-built list can be stale or empty: an empty background_tasks
+      // sync from a stop, or a page that was elsewhere while the agent went on.
+      s.backgroundTasks = [{ taskId: "agent-1", toolUseId: "agent-1", status: "completed", title: "Agent", description: "d" }];
+      s.harnessProcess = { isAlive: true, getRunningTaskIds: () => ["agent-1"] };
+      expect(manager.getBackgroundTasks(session.id)).toEqual([
+        { taskId: "agent-1", toolUseId: "agent-1", status: "running", title: "Agent", description: "d" },
+      ]);
+    });
+
+    it("adds a running agent the remembered list never had", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      s.backgroundTasks = [];
+      s.harnessProcess = { isAlive: true, getRunningTaskIds: () => ["agent-2"] };
+      expect(manager.getBackgroundTasks(session.id)).toEqual([
+        { taskId: "agent-2", toolUseId: "agent-2", status: "running", title: "Agent", description: "Subagent running" },
+      ]);
+    });
+
+    it("leaves a session the runtime does not name as remembered, and knows no unknown session", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      const done = { taskId: "agent-1", toolUseId: "agent-1", status: "completed" as const, title: "Agent", description: "d" };
+      s.backgroundTasks = [done];
+      s.harnessProcess = { isAlive: true, getRunningTaskIds: () => [] };
+      expect(manager.getBackgroundTasks(session.id)).toEqual([done]);
+      expect(manager.getBackgroundTasks("nope")).toEqual([]);
+    });
+  });
+
   describe("createSession", () => {
     it("creates a session with generated id", () => {
       const session = manager.createSession("/tmp");

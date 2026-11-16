@@ -51,6 +51,33 @@ function collectAgentTools(tools: ToolUse[] | undefined, out: ToolUse[]): void {
  *   no completion record in the transcript, so without this every past session
  *   would reopen showing its long-finished agents as still running.
  */
+/**
+ * The task list to hand a page that is connecting: what the session last
+ * remembered, corrected by the agents the runtime says are running right now.
+ * The remembered list is built from events, and a session that has been open
+ * while its page was elsewhere can hold a stale or empty one; the runtime's
+ * list comes from the CLI's own background_tasks, which is the only thing that
+ * knows an agent is still working after its launching turn ended. An agent the
+ * runtime names is running whatever the remembered list said, and one it does
+ * not name keeps what was remembered.
+ */
+export function reconcileBackgroundTasks(tasks: BackgroundTask[], runningIds: readonly string[]): BackgroundTask[] {
+  if (runningIds.length === 0) return tasks;
+  const running = new Set(runningIds);
+  const known = new Set<string>();
+  const reconciled = tasks.map((t) => {
+    if (!running.has(t.taskId) && !running.has(t.toolUseId)) return t;
+    known.add(t.taskId);
+    known.add(t.toolUseId);
+    return t.status === "running" ? t : { ...t, status: "running" as const };
+  });
+  for (const id of running) {
+    if (known.has(id)) continue;
+    reconciled.push({ taskId: id, toolUseId: id, status: "running", title: "Agent", description: "Subagent running" });
+  }
+  return reconciled;
+}
+
 export function deriveAgentTasks(messages: ChatMessage[], hookTasks: BackgroundTask[], sessionActive = true): BackgroundTask[] {
   // Hook events are keyed by the agent id the CLI reports, which is the id an
   // async launch hands back in its output — that is the join between the two

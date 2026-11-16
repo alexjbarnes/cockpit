@@ -3,7 +3,7 @@
 // successfully ... agentId: ac6a880af087a5341" while the agent keeps running,
 // and the CLI only reports it again on SubagentStop.
 import { describe, expect, it } from "vitest";
-import { agentIdFromOutput, deriveAgentTasks, isAsyncLaunchOutput } from "@/lib/agent-tasks";
+import { agentIdFromOutput, deriveAgentTasks, isAsyncLaunchOutput, reconcileBackgroundTasks } from "@/lib/agent-tasks";
 import type { BackgroundTask, ChatMessage, ToolUse } from "@/types";
 
 const ASYNC_OUTPUT =
@@ -175,5 +175,50 @@ describe("deriveAgentTasks", () => {
     const [task] = deriveAgentTasks([msg([tool({ id: "t1", status: "running", input: JSON.stringify({ prompt: long }) })])], []);
     expect(task.description).toHaveLength(201);
     expect(task.description.endsWith("…")).toBe(true);
+  });
+});
+
+describe("reconcileBackgroundTasks", () => {
+  const task = (taskId: string, status: "running" | "completed") => ({
+    taskId,
+    toolUseId: taskId,
+    status,
+    title: "Agent",
+    description: "d",
+  });
+
+  it("turns a remembered completion back to running when the runtime says it runs", () => {
+    const [out] = reconcileBackgroundTasks([task("a", "completed")], ["a"]);
+    expect(out.status).toBe("running");
+  });
+
+  it("adds an agent the remembered list never had", () => {
+    const out = reconcileBackgroundTasks([], ["a"]);
+    expect(out).toEqual([{ taskId: "a", toolUseId: "a", status: "running", title: "Agent", description: "Subagent running" }]);
+  });
+
+  it("leaves what the runtime does not name as it was", () => {
+    const done = task("b", "completed");
+    expect(reconcileBackgroundTasks([done], ["a"])).toContainEqual(done);
+  });
+
+  it("keeps the remembered task's own description when it has one", () => {
+    const remembered = { ...task("a", "completed"), title: "general-purpose", description: "Review the README" };
+    expect(reconcileBackgroundTasks([remembered], ["a"])[0]).toMatchObject({
+      title: "general-purpose",
+      description: "Review the README",
+      status: "running",
+    });
+  });
+
+  it("changes nothing without a running id", () => {
+    const tasks = [task("a", "completed"), task("b", "running")];
+    expect(reconcileBackgroundTasks(tasks, [])).toBe(tasks);
+  });
+
+  it("matches on either id, since a completion can be reported under the tool use id", () => {
+    const remembered = { taskId: "agent-1", toolUseId: "tool-1", status: "completed" as const, title: "Agent", description: "d" };
+    expect(reconcileBackgroundTasks([remembered], ["tool-1"])[0].status).toBe("running");
+    expect(reconcileBackgroundTasks([remembered], ["tool-1"])).toHaveLength(1);
   });
 });

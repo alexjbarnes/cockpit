@@ -73,6 +73,7 @@ export function BackgroundTasksButton({ tasks }: BackgroundTasksButtonProps) {
                     }}
                     className="flex w-full items-start gap-3 rounded-md border border-border px-3 py-2.5 text-left enabled:hover:bg-muted/50"
                     data-testid="background-task"
+                    data-status={task.status}
                   >
                     {task.status === "completed" ? (
                       <CheckCircle2 className="h-4 w-4 shrink-0 mt-0.5 text-green-500" />
