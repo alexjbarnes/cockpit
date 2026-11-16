@@ -903,9 +903,11 @@ export function persistAttachmentFile(issueKey: string, url: string): string {
  * Pure — does not persist; the caller passes the result to saveIssue(). The
  * urls are stored verbatim: run them through persistAttachmentFile first when
  * they name local files the caller does not own. Several attachments in one
- * call are one activity entry, since they were one act.
+ * call are one activity entry, since they were one act. `inline` marks a
+ * picture written into a comment or the plan, which is shown there and not
+ * listed again under Attachments.
  */
-export function addIssueAttachments(issue: Issue, inputs: { title: string; url: string }[], actor: IssueActor): Issue {
+export function addIssueAttachments(issue: Issue, inputs: { title: string; url: string; inline?: boolean }[], actor: IssueActor): Issue {
   if (inputs.length === 0) return issue;
   const now = Date.now();
   const attachments: IssueAttachment[] = inputs.map((input) => ({
@@ -913,6 +915,7 @@ export function addIssueAttachments(issue: Issue, inputs: { title: string; url: 
     title: input.title,
     url: input.url,
     createdAt: now,
+    ...(input.inline ? { inline: true } : {}),
   }));
   return {
     ...issue,
@@ -923,6 +926,6 @@ export function addIssueAttachments(issue: Issue, inputs: { title: string; url: 
 }
 
 /** One attachment: the same, for a caller that has only one. */
-export function addIssueAttachment(issue: Issue, input: { title: string; url: string }, actor: IssueActor): Issue {
+export function addIssueAttachment(issue: Issue, input: { title: string; url: string; inline?: boolean }, actor: IssueActor): Issue {
   return addIssueAttachments(issue, [input], actor);
 }

@@ -167,6 +167,8 @@ test("a session's comment and plan carry pictures, which the issue shows and ope
 
     // The comment shows its picture, with its caption.
     await page.goto(`${harness.cockpitUrl}/issues/${key}`);
+    // The Attachments card is folded away until opened.
+    await page.getByTestId("issue-attachments-toggle").click();
     const inComment = page.locator(".border.rounded-md", { hasText: "Built it." }).getByTestId("markdown-image");
     await expect(inComment).toHaveCount(1);
     await expectLoaded(inComment.locator("img"), 390);

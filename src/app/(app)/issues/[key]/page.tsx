@@ -3,7 +3,7 @@
 import { ArrowLeft, ChevronRight, Loader2, MessageSquarePlus, Paperclip, Pencil, Trash2, X } from "lucide-react";
 import Link from "next/link";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
-import { type ReactNode, useCallback, useEffect, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { usePageHeader } from "@/components/app-shell";
 import { CopyIssueKey } from "@/components/issues/copy-issue-key";
 import { IssuePlanSection } from "@/components/issues/issue-plan";
@@ -23,29 +23,47 @@ import { cn } from "@/lib/utils";
 import type { Issue, IssueActor, IssueAttachment, Project } from "@/types";
 
 const SELECT_CLASS = "rounded-md border bg-background px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring";
+/** What the attach picker offers; the upload route enforces the same list. */
+const ATTACHMENT_ACCEPT = ".png,.jpg,.jpeg,.gif,.webp,.pdf,.txt";
 
 /** The actor's name, as a link to its session transcript or job page when it
  *  has one (session/job), plain text otherwise (user, assistant). */
 /** A card that folds away, for what is reference rather than reading: closed
- *  until opened, with its count in the heading. */
-function CollapsibleCard({ title, count, testId, children }: { title: string; count?: number; testId?: string; children: ReactNode }) {
+ *  until opened, with its count in the heading. `actions` sits beside the
+ *  toggle, so a control stays reachable while the card is shut. */
+function CollapsibleCard({
+  title,
+  count,
+  testId,
+  actions,
+  children,
+}: {
+  title: string;
+  count?: number;
+  testId?: string;
+  actions?: ReactNode;
+  children: ReactNode;
+}) {
   const [open, setOpen] = useState(false);
   return (
     <Card data-testid={testId}>
       <CardHeader className="pb-2">
-        <button
-          type="button"
-          aria-expanded={open}
-          onClick={() => setOpen((v) => !v)}
-          className="flex w-full items-center gap-2 text-left"
-          data-testid={testId ? `${testId}-toggle` : undefined}
-        >
-          <ChevronRight className={cn("h-4 w-4 shrink-0 text-muted-foreground transition-transform", open && "rotate-90")} />
-          <CardTitle className="text-base">
-            {title}
-            {count !== undefined ? ` (${count})` : ""}
-          </CardTitle>
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            aria-expanded={open}
+            onClick={() => setOpen((v) => !v)}
+            className="flex min-w-0 flex-1 items-center gap-2 text-left"
+            data-testid={testId ? `${testId}-toggle` : undefined}
+          >
+            <ChevronRight className={cn("h-4 w-4 shrink-0 text-muted-foreground transition-transform", open && "rotate-90")} />
+            <CardTitle className="text-base">
+              {title}
+              {count !== undefined ? ` (${count})` : ""}
+            </CardTitle>
+          </button>
+          {actions}
+        </div>
       </CardHeader>
       {open && <CardContent>{children}</CardContent>}
     </Card>
@@ -135,6 +153,11 @@ export default function IssueDetailPage() {
 
   const [commentDraft, setCommentDraft] = useState("");
   const [savingComment, setSavingComment] = useState(false);
+
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const attachmentInputRef = useRef<HTMLInputElement>(null);
+  const commentRef = useRef<HTMLTextAreaElement>(null);
 
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -278,6 +301,65 @@ export default function IssueDetailPage() {
     } finally {
       setSavingComment(false);
     }
+  }
+
+  async function uploadAttachments(files: File[], inline: boolean): Promise<{ added: IssueAttachment[]; error: string | null }> {
+    if (!issue || files.length === 0) return { added: [], error: null };
+    setUploading(true);
+    const added: IssueAttachment[] = [];
+    let error: string | null = null;
+    try {
+      // One at a time: each response carries the whole issue, so overlapping
+      // writes would let an older answer put the list back.
+      for (const file of files) {
+        const form = new FormData();
+        form.append("file", file);
+        if (inline) form.append("inline", "1");
+        const res = await fetch(`/api/issues/${encodeURIComponent(issue.key)}/attachments`, { method: "POST", body: form });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          error = data.error || `Upload failed (${res.status})`;
+          continue;
+        }
+        setIssue(data.issue);
+        if (data.attachment) added.push(data.attachment as IssueAttachment);
+      }
+    } catch {
+      error = "Failed to connect";
+    } finally {
+      setUploading(false);
+    }
+    return { added, error };
+  }
+
+  async function handleAttachmentFiles(e: React.ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(e.target.files ?? []);
+    // Cleared now, so choosing the same file again still fires a change.
+    e.target.value = "";
+    const { error } = await uploadAttachments(files, false);
+    setUploadError(error);
+  }
+
+  // A pasted screenshot is stored as an inline picture and written into the
+  // comment as markdown, so it reads where it was pasted rather than only
+  // turning up in the Attachments card.
+  async function handleCommentPaste(e: React.ClipboardEvent<HTMLTextAreaElement>) {
+    const files = Array.from(e.clipboardData.files).filter((f) => f.type.startsWith("image/"));
+    if (!issue || files.length === 0) return;
+    e.preventDefault();
+    const el = e.currentTarget;
+    const start = el.selectionStart ?? commentDraft.length;
+    const end = el.selectionEnd ?? start;
+    const { added, error } = await uploadAttachments(files, true);
+    setCommentError(error);
+    if (added.length === 0) return;
+    const markdown = added.map((a) => `![${a.title}](${attachmentHref(issue.key, a.id)})`).join("\n");
+    setCommentDraft((draft) => draft.slice(0, start) + markdown + draft.slice(end));
+    requestAnimationFrame(() => {
+      const pos = start + markdown.length;
+      commentRef.current?.focus();
+      commentRef.current?.setSelectionRange(pos, pos);
+    });
   }
 
   async function deleteIssue() {
@@ -490,35 +572,64 @@ export default function IssueDetailPage() {
           />
         )}
 
-        {listed.length > 0 && (
-          <CollapsibleCard title="Attachments" count={listed.length} testId="issue-attachments">
-            <div className="space-y-3">
-              {pictures.length > 0 && (
-                <div data-testid="issue-attachment-images">
-                  {pictures.map((a) => (
-                    <MarkdownImage key={a.id} src={attachmentSrc(a)} alt={a.title} />
-                  ))}
-                </div>
-              )}
-              {files.length > 0 && (
-                <div className="space-y-1.5">
-                  {files.map((a) => (
-                    <a
-                      key={a.id}
-                      href={attachmentSrc(a)}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="flex items-center gap-2 text-sm text-primary hover:underline"
-                    >
-                      <Paperclip className="h-3.5 w-3.5 shrink-0" />
-                      <span className="truncate">{a.title}</span>
-                    </a>
-                  ))}
-                </div>
-              )}
-            </div>
-          </CollapsibleCard>
-        )}
+        <CollapsibleCard
+          title="Attachments"
+          count={listed.length}
+          testId="issue-attachments"
+          actions={
+            <>
+              <input
+                ref={attachmentInputRef}
+                type="file"
+                multiple
+                accept={ATTACHMENT_ACCEPT}
+                className="hidden"
+                data-testid="issue-attachment-input"
+                onChange={handleAttachmentFiles}
+              />
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 shrink-0"
+                title="Add a picture or file"
+                aria-label="Add a picture or file"
+                data-testid="issue-attachment-add"
+                disabled={uploading}
+                onClick={() => attachmentInputRef.current?.click()}
+              >
+                {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Paperclip className="h-4 w-4" />}
+              </Button>
+            </>
+          }
+        >
+          <div className="space-y-3">
+            {uploadError && <p className="text-xs text-destructive">{uploadError}</p>}
+            {listed.length === 0 && <p className="text-sm text-muted-foreground">No attachments yet.</p>}
+            {pictures.length > 0 && (
+              <div data-testid="issue-attachment-images">
+                {pictures.map((a) => (
+                  <MarkdownImage key={a.id} src={attachmentSrc(a)} alt={a.title} />
+                ))}
+              </div>
+            )}
+            {files.length > 0 && (
+              <div className="space-y-1.5">
+                {files.map((a) => (
+                  <a
+                    key={a.id}
+                    href={attachmentSrc(a)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center gap-2 text-sm text-primary hover:underline"
+                  >
+                    <Paperclip className="h-3.5 w-3.5 shrink-0" />
+                    <span className="truncate">{a.title}</span>
+                  </a>
+                ))}
+              </div>
+            )}
+          </div>
+        </CollapsibleCard>
 
         <Card>
           <CardHeader className="pb-2">
@@ -541,14 +652,17 @@ export default function IssueDetailPage() {
 
             <div className="space-y-2 pt-2 border-t">
               <textarea
+                ref={commentRef}
+                data-testid="comment-input"
                 value={commentDraft}
                 onChange={(e) => setCommentDraft(e.target.value)}
-                placeholder="Add a comment (markdown supported)"
+                onPaste={handleCommentPaste}
+                placeholder="Add a comment (markdown supported; paste a screenshot to attach it)"
                 className="w-full min-h-[80px] rounded-md border bg-background px-3 py-2 text-sm resize-y focus:outline-none focus:ring-2 focus:ring-ring"
               />
               {commentError && <p className="text-xs text-destructive">{commentError}</p>}
               <div className="flex justify-end">
-                <Button size="sm" onClick={submitComment} disabled={savingComment || !commentDraft.trim()}>
+                <Button size="sm" onClick={submitComment} disabled={savingComment || uploading || !commentDraft.trim()}>
                   {savingComment ? <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" /> : null}
                   Comment
                 </Button>

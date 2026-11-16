@@ -931,6 +931,21 @@ describe("addIssueAttachments", () => {
     const issue = buildIssue({ projectId: project.id, title: "batch" }, { kind: "user" });
     expect(addIssueAttachments(issue, [], { kind: "user" })).toBe(issue);
   });
+
+  it("marks an inline attachment, so the page shows it where it was written", () => {
+    const project = buildProject({ name: "Batch inline", prefix: "BTI" });
+    saveProject(project);
+    const issue = buildIssue({ projectId: project.id, title: "batch" }, { kind: "user" });
+    const updated = addIssueAttachments(
+      issue,
+      [
+        { title: "in a comment", url: "/a.png", inline: true },
+        { title: "a file", url: "/b.pdf" },
+      ],
+      { kind: "user" },
+    );
+    expect(updated.attachments.map((a) => a.inline)).toEqual([true, undefined]);
+  });
 });
 
 describe("persistAttachmentFile", () => {
