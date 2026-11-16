@@ -587,10 +587,15 @@ export function InputArea({
 
   const handleInput = useCallback(() => {
     const el = textareaRef.current;
+    if (!el) return;
+    // An inactive tab hides the chat (display:none), where scrollHeight reads
+    // zero. Measuring then wrote height 0, and the composer came back as one
+    // squeezed line until a focus opened the keyboard and re-measured it.
+    // Leave a hidden composer alone; the observer below sizes it on show.
+    if (el.getClientRects().length === 0) return;
     // Measure the cap BEFORE collapsing to auto, since it reads the row's
     // current chrome height against the textarea's current height.
     const cap = maxTextareaHeight(el);
-    if (!el) return;
     el.style.height = "auto";
     el.style.height = Math.min(el.scrollHeight, cap) + "px";
   }, []);
@@ -602,6 +607,22 @@ export function InputArea({
       window.visualViewport ?? window;
     target.addEventListener("resize", handleInput);
     return () => target.removeEventListener("resize", handleInput);
+  }, [handleInput]);
+
+  // A hidden composer is not measured (see handleInput), so catch it coming
+  // back, and any width change that re-wraps the text: the height written for
+  // the old width no longer fits.
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    let lastWidth = el.clientWidth;
+    const observer = new ResizeObserver(() => {
+      if (el.getClientRects().length === 0 || el.clientWidth === lastWidth) return;
+      lastWidth = el.clientWidth;
+      handleInput();
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
   }, [handleInput]);
 
   // The ghost layer sits over the textarea rather than inside it, so it has to
