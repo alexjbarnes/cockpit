@@ -106,6 +106,12 @@ test("a session's drawer holds only its files and changes", async ({ page, harne
     await page.goto(`${harness.cockpitUrl}/sessions/${sessionId}?cwd=${encodeURIComponent(workDir)}`);
     await expect(page.getByTestId("message-input")).toBeVisible();
 
+    // Sessions is the pinned list on a phone, where there is no sidebar.
+    await page.getByTestId("nav-bar-sessions").click();
+    await expect(page).toHaveURL(`${harness.cockpitUrl}/sessions`);
+    await page.goBack();
+    await expect(page.getByTestId("message-input")).toBeVisible();
+
     await expect(page.getByTestId("session-files-drawer")).toBeVisible();
     await page.getByTestId("session-files-drawer").click();
     await expect(page.getByTestId("sidebar-section-files-changes")).toBeVisible();

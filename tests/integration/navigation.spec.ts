@@ -27,7 +27,7 @@ async function enableIssues(page: Page, harness: Harness): Promise<void> {
   expect(patched.ok()).toBe(true);
 }
 
-test("Sessions always opens the pinned list, and All sessions opens the folders", async ({ page, harness }) => {
+test("Sessions returns to the session you last had, beside the sidebar", async ({ page, harness }) => {
   test.skip(!CLAUDE_AVAILABLE, `claude binary not found at ${CLAUDE_BIN} (set CLAUDE_BIN env)`);
   test.setTimeout(120_000);
   const workDir = mkdtempSync(path.join(tmpdir(), "cockpit-it-nav-"));
@@ -40,25 +40,24 @@ test("Sessions always opens the pinned list, and All sessions opens the folders"
     const sessionUrl = `${harness.cockpitUrl}/sessions/${sessionId}?cwd=${encodeURIComponent(workDir)}`;
     await page.request.patch(`${harness.cockpitUrl}/api/sessions/pinned`, { data: { add: sessionId } });
 
-    // From inside the session, Sessions goes to the pinned list, not the folders.
     await page.goto(sessionUrl);
     await expect(page.getByTestId("message-input")).toBeVisible();
+
+    // Away to Issues, and Sessions comes back to the same session, with the
+    // pinned list beside it rather than a list page of its own.
+    await page.getByTestId("nav-rail-issues").click();
+    await expect(page).toHaveURL(/\/issues$/);
     await page.getByTestId("nav-rail-sessions").click();
-    await expect(page).toHaveURL(`${harness.cockpitUrl}/sessions`);
-    await expect(page.getByTestId("pinned-list")).toBeVisible();
-
-    // The pinned row opens the session again, with its cwd.
-    await page.getByTestId(`pinned-session-${sessionId}`).click();
     await expect(page).toHaveURL(sessionUrl);
+    await expect(page.getByTestId("sidebar-section-sessions")).toBeVisible();
 
-    // From another place it is the pinned list too, not the session you left.
+    // With nothing visited yet in this browser, Sessions opens the folders,
+    // still with the sidebar beside them.
+    await page.evaluate(() => sessionStorage.removeItem("cockpit_last_sessions"));
     await page.getByTestId("nav-rail-issues").click();
     await page.getByTestId("nav-rail-sessions").click();
-    await expect(page).toHaveURL(`${harness.cockpitUrl}/sessions`);
-
-    // All sessions, the button the pinned list has always had, opens the folders.
-    await page.getByTestId("all-sessions").click();
     await expect(page).toHaveURL(`${harness.cockpitUrl}/`);
+    await expect(page.getByTestId("sidebar-section-sessions")).toBeVisible();
   } finally {
     rmSync(workDir, { recursive: true, force: true });
   }
@@ -81,9 +80,14 @@ test("a pinned session can be taken off the list without deleting it", async ({ 
     await expect(page.getByTestId(`pinned-session-${sessionId}`)).toHaveCount(0);
     await expect(page.getByTestId("pinned-empty")).toBeVisible();
 
-    // The pin is gone; the session is not.
-    const pins = (await (await page.request.get(`${harness.cockpitUrl}/api/sessions/pinned`)).json()) as { pinned: string[] };
-    expect(pins.pinned).not.toContain(sessionId);
+    // The pin is gone; the session is not. The write is in flight as the row
+    // leaves the screen, so wait for it rather than reading once.
+    await expect
+      .poll(async () => {
+        const pins = (await (await page.request.get(`${harness.cockpitUrl}/api/sessions/pinned`)).json()) as { pinned: string[] };
+        return pins.pinned;
+      })
+      .not.toContain(sessionId);
     const session = await page.request.get(`${harness.cockpitUrl}/api/sessions/${sessionId}`);
     expect(session.ok()).toBe(true);
   } finally {
