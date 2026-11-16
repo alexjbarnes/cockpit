@@ -30,6 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The pipeline skills write and read the plan as its own thing.** `refine-issue` no longer overwrites the issue's description, and revises a plan that was sent back point by point. A new `validate-issue` skill checks an implementation as its own stage.
 
 ### Fixed
+- **A long question in a session banner scrolls instead of running off the screen.** The banner stack now has a maximum height and scrolls inside the viewport, so a question with several sections and options keeps its Submit button reachable.
 - **Coming back to a session shows its agents still running.** A page reconnecting to a session was told what to show from a list built out of events, which can be stale or empty; the CLI's own running list is now authoritative, so an agent still working reads as running rather than finished until its next update.
 - **A status changed in the UI starts the jobs that watch it.** A job set to run "On issue status" only heard status changes made through the MCP tools. A move made on the issue page or by dragging on the board was emitted where the scheduler was not listening, so the job did not start.
 - **Session shells no longer inherit Cockpit's own environment.** `NODE_ENV`, `PORT` and Cockpit's internal variables are kept out of the CLI and terminal tabs, so a dev server started inside a session is not forced into production mode or onto Cockpit's port.

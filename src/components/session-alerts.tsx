@@ -232,175 +232,184 @@ export function SessionAlerts() {
 
   return (
     <div
-      className="pointer-events-none fixed inset-x-0 top-[4.25rem] z-40 flex flex-col items-center gap-2 px-2"
+      className="pointer-events-none fixed inset-x-0 top-[4.25rem] bottom-2 z-40 flex flex-col items-center px-2"
       data-testid="session-alerts"
     >
-      {shown.map((alert) => {
-        const isOpen = expanded.has(alert.key);
-        const questionText = alert.kind === "question" ? firstQuestion(alert.input) : "";
-        const questions = alert.kind === "question" ? parseQuestionsFromInput(alert.input ?? "") : [];
-        // A finished turn's body is what Claude last said, so the banner can be
-        // read rather than opened.
-        const body = alert.kind === "permission" ? summary(alert) : alert.kind === "question" ? questionText : (alert.summary ?? "");
-        return (
-          <div
-            key={alert.key}
-            data-testid={`session-alert-${alert.kind}`}
-            // A normal card with one rail: amber while something is waiting on
-            // an answer, neutral for a finished turn, which is news rather than
-            // a task. The same shape as the permission card in the chat.
-            className={`pointer-events-auto w-full max-w-2xl rounded-lg border border-l-2 bg-card p-4 shadow-xl ${
-              alert.kind === "finished" ? "border-l-border" : "border-l-amber-500"
-            }`}
-          >
-            <div className="flex items-center gap-3">
-              {alert.kind === "permission" ? (
-                <ShieldAlert className="h-4 w-4 shrink-0 text-amber-500" />
-              ) : alert.kind === "question" ? (
-                <MessageCircleQuestion className="h-4 w-4 shrink-0 text-amber-500" />
-              ) : (
-                <Check className="h-4 w-4 shrink-0 text-muted-foreground" />
-              )}
-              <span className="truncate font-medium">{alert.name}</span>
-              <span className="shrink-0 text-xs text-muted-foreground">{label(alert)}</span>
-              <span className="flex-1" />
-              {clipped.has(alert.key) && (
-                <button
-                  type="button"
-                  onClick={() => toggleExpanded(alert.key)}
-                  title={isOpen ? "Show less" : "Show all of it"}
-                  aria-label={isOpen ? "Show less" : "Show all of it"}
-                  data-testid="session-alert-expand"
-                  className="shrink-0 rounded p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
-                >
-                  {isOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
-                </button>
-              )}
-              <button
-                type="button"
-                onClick={() => removeAlert(alert.key)}
-                title="Dismiss"
-                data-testid="session-alert-dismiss"
-                className="shrink-0 rounded p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-
-            {body && !(isOpen && alert.kind === "question") && (
-              // Wrapped, not truncated: several lines of the command (or the
-              // question) are what make the banner worth looking at. The open
-              // question prompt repeats the question, so it goes here.
-              <div
-                ref={(el) => {
-                  if (!isOpen) measureBody(alert.key, el);
-                }}
-                className={`mt-2 overflow-y-auto whitespace-pre-wrap [overflow-wrap:anywhere] text-muted-foreground ${
-                  alert.kind === "permission" ? "font-mono text-[13px]" : "text-sm"
-                } ${isOpen && alert.kind !== "question" ? "max-h-[60vh]" : "max-h-24"}`}
-                data-testid="session-alert-command"
-              >
-                {body}
-              </div>
-            )}
-
-            {isOpen && alert.kind === "question" && alert.requestId && (
-              <div className="mt-3">
-                <QuestionPrompt
-                  questions={questions}
-                  requestId={alert.requestId}
-                  onSubmit={(_requestId, answers) => answerQuestion(alert, alert.requestId as string, answers)}
-                />
-              </div>
-            )}
-
-            <div className="mt-3 flex items-center gap-2">
-              {alert.kind === "permission" ? (
-                <>
-                  <button
-                    type="button"
-                    onClick={() => respond(alert, false)}
-                    data-testid="session-alert-deny"
-                    className="rounded-md px-3 py-1.5 text-xs font-medium text-muted-foreground hover:bg-accent hover:text-foreground"
-                  >
-                    Deny
-                  </button>
-                  <span className="flex-1" />
-                  <button
-                    type="button"
-                    onClick={() => open(alert)}
-                    data-testid="session-alert-review"
-                    className="rounded-md border px-3 py-1.5 text-xs font-medium hover:bg-accent"
-                  >
-                    Review
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => respond(alert, true)}
-                    data-testid="session-alert-approve"
-                    className="flex items-center gap-1.5 rounded-md bg-primary px-3.5 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90"
-                  >
-                    <Check className="h-3.5 w-3.5" />
-                    Approve
-                  </button>
-                </>
-              ) : alert.kind === "question" ? (
-                <>
-                  <button
-                    type="button"
-                    onClick={() => open(alert)}
-                    data-testid="session-alert-open"
-                    className="rounded-md px-3 py-1.5 text-xs font-medium text-muted-foreground hover:bg-accent hover:text-foreground"
-                  >
-                    Open
-                  </button>
-                  <span className="flex-1" />
+      {/* The stack scrolls inside the viewport. An open question with many
+          options is taller than the screen, and the card used to run off the
+          bottom with its Submit button unreachable. Only the card column takes
+          pointer events, so the page beside it stays usable. */}
+      <div
+        className="pointer-events-auto flex max-h-full w-full max-w-2xl flex-col items-center gap-2 overflow-y-auto"
+        data-testid="session-alerts-scroll"
+      >
+        {shown.map((alert) => {
+          const isOpen = expanded.has(alert.key);
+          const questionText = alert.kind === "question" ? firstQuestion(alert.input) : "";
+          const questions = alert.kind === "question" ? parseQuestionsFromInput(alert.input ?? "") : [];
+          // A finished turn's body is what Claude last said, so the banner can be
+          // read rather than opened.
+          const body = alert.kind === "permission" ? summary(alert) : alert.kind === "question" ? questionText : (alert.summary ?? "");
+          return (
+            <div
+              key={alert.key}
+              data-testid={`session-alert-${alert.kind}`}
+              // A normal card with one rail: amber while something is waiting on
+              // an answer, neutral for a finished turn, which is news rather than
+              // a task. The same shape as the permission card in the chat.
+              className={`pointer-events-auto w-full max-w-2xl rounded-lg border border-l-2 bg-card p-4 shadow-xl ${
+                alert.kind === "finished" ? "border-l-border" : "border-l-amber-500"
+              }`}
+            >
+              <div className="flex items-center gap-3">
+                {alert.kind === "permission" ? (
+                  <ShieldAlert className="h-4 w-4 shrink-0 text-amber-500" />
+                ) : alert.kind === "question" ? (
+                  <MessageCircleQuestion className="h-4 w-4 shrink-0 text-amber-500" />
+                ) : (
+                  <Check className="h-4 w-4 shrink-0 text-muted-foreground" />
+                )}
+                <span className="truncate font-medium">{alert.name}</span>
+                <span className="shrink-0 text-xs text-muted-foreground">{label(alert)}</span>
+                <span className="flex-1" />
+                {clipped.has(alert.key) && (
                   <button
                     type="button"
                     onClick={() => toggleExpanded(alert.key)}
-                    data-testid="session-alert-answer"
-                    className="rounded-md bg-primary px-3.5 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90"
+                    title={isOpen ? "Show less" : "Show all of it"}
+                    aria-label={isOpen ? "Show less" : "Show all of it"}
+                    data-testid="session-alert-expand"
+                    className="shrink-0 rounded p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
                   >
-                    {isOpen ? "Close" : "Answer"}
+                    {isOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
                   </button>
-                </>
-              ) : (
-                <>
-                  <span className="flex-1" />
-                  <button
-                    type="button"
-                    onClick={() => open(alert)}
-                    data-testid="session-alert-open"
-                    className="rounded-md border px-3 py-1.5 text-xs font-medium hover:bg-accent"
-                  >
-                    Open
-                  </button>
-                </>
+                )}
+                <button
+                  type="button"
+                  onClick={() => removeAlert(alert.key)}
+                  title="Dismiss"
+                  data-testid="session-alert-dismiss"
+                  className="shrink-0 rounded p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+
+              {body && !(isOpen && alert.kind === "question") && (
+                // Wrapped, not truncated: several lines of the command (or the
+                // question) are what make the banner worth looking at. The open
+                // question prompt repeats the question, so it goes here.
+                <div
+                  ref={(el) => {
+                    if (!isOpen) measureBody(alert.key, el);
+                  }}
+                  className={`mt-2 overflow-y-auto whitespace-pre-wrap [overflow-wrap:anywhere] text-muted-foreground ${
+                    alert.kind === "permission" ? "font-mono text-[13px]" : "text-sm"
+                  } ${isOpen && alert.kind !== "question" ? "max-h-[60vh]" : "max-h-24"}`}
+                  data-testid="session-alert-command"
+                >
+                  {body}
+                </div>
               )}
+
+              {isOpen && alert.kind === "question" && alert.requestId && (
+                <div className="mt-3">
+                  <QuestionPrompt
+                    questions={questions}
+                    requestId={alert.requestId}
+                    onSubmit={(_requestId, answers) => answerQuestion(alert, alert.requestId as string, answers)}
+                  />
+                </div>
+              )}
+
+              <div className="mt-3 flex items-center gap-2">
+                {alert.kind === "permission" ? (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => respond(alert, false)}
+                      data-testid="session-alert-deny"
+                      className="rounded-md px-3 py-1.5 text-xs font-medium text-muted-foreground hover:bg-accent hover:text-foreground"
+                    >
+                      Deny
+                    </button>
+                    <span className="flex-1" />
+                    <button
+                      type="button"
+                      onClick={() => open(alert)}
+                      data-testid="session-alert-review"
+                      className="rounded-md border px-3 py-1.5 text-xs font-medium hover:bg-accent"
+                    >
+                      Review
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => respond(alert, true)}
+                      data-testid="session-alert-approve"
+                      className="flex items-center gap-1.5 rounded-md bg-primary px-3.5 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90"
+                    >
+                      <Check className="h-3.5 w-3.5" />
+                      Approve
+                    </button>
+                  </>
+                ) : alert.kind === "question" ? (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => open(alert)}
+                      data-testid="session-alert-open"
+                      className="rounded-md px-3 py-1.5 text-xs font-medium text-muted-foreground hover:bg-accent hover:text-foreground"
+                    >
+                      Open
+                    </button>
+                    <span className="flex-1" />
+                    <button
+                      type="button"
+                      onClick={() => toggleExpanded(alert.key)}
+                      data-testid="session-alert-answer"
+                      className="rounded-md bg-primary px-3.5 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90"
+                    >
+                      {isOpen ? "Close" : "Answer"}
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <span className="flex-1" />
+                    <button
+                      type="button"
+                      onClick={() => open(alert)}
+                      data-testid="session-alert-open"
+                      className="rounded-md border px-3 py-1.5 text-xs font-medium hover:bg-accent"
+                    >
+                      Open
+                    </button>
+                  </>
+                )}
+              </div>
             </div>
-          </div>
-        );
-      })}
-      <div className="pointer-events-auto flex items-center gap-2">
-        {hidden > 0 && (
+          );
+        })}
+        <div className="pointer-events-auto flex items-center gap-2">
+          {hidden > 0 && (
+            <button
+              type="button"
+              onClick={() => setCollapsed(true)}
+              className="rounded-full border bg-card px-3.5 py-1.5 text-xs shadow hover:bg-accent"
+            >
+              {hidden} more
+            </button>
+          )}
           <button
             type="button"
             onClick={() => setCollapsed(true)}
-            className="rounded-full border bg-card px-3.5 py-1.5 text-xs shadow hover:bg-accent"
+            title="Collapse, but keep them here"
+            data-testid="session-alerts-collapse"
+            className="flex items-center gap-1 rounded-full border bg-card px-3.5 py-1.5 text-xs text-muted-foreground shadow hover:bg-accent"
           >
-            {hidden} more
+            <ChevronUp className="h-3.5 w-3.5" />
+            Hide
           </button>
-        )}
-        <button
-          type="button"
-          onClick={() => setCollapsed(true)}
-          title="Collapse, but keep them here"
-          data-testid="session-alerts-collapse"
-          className="flex items-center gap-1 rounded-full border bg-card px-3.5 py-1.5 text-xs text-muted-foreground shadow hover:bg-accent"
-        >
-          <ChevronUp className="h-3.5 w-3.5" />
-          Hide
-        </button>
+        </div>
       </div>
     </div>
   );

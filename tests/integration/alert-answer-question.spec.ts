@@ -134,3 +134,56 @@ test("a question from another session is answered from the banner", async ({ pag
     rmSync(workDir, { recursive: true, force: true });
   }
 });
+
+test("a question taller than the screen scrolls inside the banner", async ({ page, harness }) => {
+  test.setTimeout(180_000);
+  const patched = await page.request.patch(`${harness.cockpitUrl}/api/defaults`, { data: { sessionAlerts: true } });
+  expect(patched.ok()).toBe(true);
+
+  const workDir = mkdtempSync(path.join(tmpdir(), "cockpit-it-answerq-tall-"));
+  mkdirSync(path.join(workDir, ".git"), { recursive: true });
+  harness.trustWorkDir(workDir);
+
+  // The shape from the bug report: four questions (the CLI's limit), each with
+  // long labels and descriptions, so the open prompt is much taller than the
+  // viewport.
+  const questions = Array.from({ length: 4 }, (_, i) => ({
+    question: `Question ${i + 1}: which value should the staged URL list change use for this field?`,
+    header: `FIELD ${i + 1}`,
+    multiSelect: false,
+    options: ["Feature + R&D", "Fixes & Maintenance", "Other value", "Leave it out"].map((label) => ({
+      label: `${label} ${i + 1}`,
+      description: "A description long enough to wrap onto a second line and push the prompt well past the bottom of the screen.",
+    })),
+  }));
+
+  try {
+    harness.mock.setScript([{ events: askUserQuestionResponse(questions) }, { events: textResponse("Done.") }]);
+    await openSession(page, harness, workDir);
+
+    const asking = await page.request.post(`${harness.cockpitUrl}/api/sessions`, { data: { cwd: workDir, runtime: "pty" } });
+    const { sessionId: askingId } = (await asking.json()) as { sessionId: string };
+    await driveSession(page, harness, askingId, "ask me the long one");
+
+    const banner = page.getByTestId("session-alert-question");
+    await expect(banner).toBeVisible({ timeout: 60_000 });
+    await page.getByTestId("session-alert-answer").click();
+
+    // The card column is the scroller, and there really is more of it than the
+    // screen holds.
+    const scroller = page.getByTestId("session-alerts-scroll");
+    await expect.poll(() => scroller.evaluate((el) => el.scrollHeight - el.clientHeight), { timeout: 15_000 }).toBeGreaterThan(100);
+
+    // The bottom of the prompt, where Submit lives, can be reached and sits
+    // inside the viewport rather than below it.
+    const submit = banner.getByRole("button", { name: "Submit" });
+    await submit.scrollIntoViewIfNeeded();
+    await expect(submit).toBeVisible();
+    const box = await submit.boundingBox();
+    const viewport = page.viewportSize();
+    expect(box && viewport).toBeTruthy();
+    expect(box!.y + box!.height).toBeLessThanOrEqual(viewport!.height);
+  } finally {
+    rmSync(workDir, { recursive: true, force: true });
+  }
+});
