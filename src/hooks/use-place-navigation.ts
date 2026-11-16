@@ -40,7 +40,7 @@ export function usePlaceNavigation() {
       }
       router.push(resolvePlaceTarget(target, place, readRemembered(target)));
     },
-    [place, router],
+    [place, router, isDesktop],
   );
 
   const goMore = useCallback(() => router.push("/more"), [router]);
