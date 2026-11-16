@@ -21,7 +21,21 @@ export interface IssueStatusChangeEvent {
   to: string;
 }
 
-const emitter = new EventEmitter();
+/**
+ * One emitter for the whole process, kept on globalThis. The server's own
+ * modules and the route handlers are built separately, so each has its own
+ * copy of this file: with a module-level emitter, a status changed through a
+ * route (the issue page, the board) was emitted on one copy while the
+ * scheduler and the workflow engine listened on the other, and never heard it.
+ */
+const EMITTER_KEY = "__cockpit_issue_events__";
+function shared(): EventEmitter {
+  const g = globalThis as Record<string, unknown>;
+  if (!g[EMITTER_KEY]) g[EMITTER_KEY] = new EventEmitter();
+  return g[EMITTER_KEY] as EventEmitter;
+}
+
+const emitter = shared();
 const EVENT = "status-change";
 
 export function emitIssueStatusChange(event: IssueStatusChangeEvent): void {

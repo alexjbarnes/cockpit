@@ -1,7 +1,7 @@
 /**
- * The page modal: with the `modalPagesEnabled` setting on (its default), the
- * sidebar footer's pages (jobs, inbox, issues, insights, settings) open in a modal over
- * the current page instead of replacing it. The modal shows the real page in
+ * The page modal: with the `modalPagesEnabled` setting on (its default), a
+ * page opened from inside another (an issue from a session's list, a session's
+ * insights) opens in a modal over the current page instead of replacing it. The modal shows the real page in
  * an iframe, and the document inside talks to the one outside through
  * postMessage.
  */
@@ -17,6 +17,7 @@ const MODAL_SECTIONS = new Set([
   "jobs",
   "inbox",
   "issues",
+  "workflows",
   "insights",
   "settings",
   "agents",

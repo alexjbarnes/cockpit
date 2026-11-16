@@ -8,6 +8,7 @@ import { Sheet } from "@/components/ui/sheet";
 import type { TextAnchor } from "@/lib/plan-review/anchor";
 import { changedLines, changeSummary } from "@/lib/plan-review/diff";
 import { PLAN_LABELS } from "@/lib/plan-review/labels";
+import { planRoots, planTitle } from "@/lib/plan-review/lineage";
 import type { PlanAnnotation, PlanAnnotationKind, PlanDraft, PlanReviewOutcome, PlanVersion } from "@/lib/plan-review/types";
 import { cn } from "@/lib/utils";
 import { PlanDocument, type PlanDocumentHandle, type PlanSelection } from "./plan-document";
@@ -39,6 +40,9 @@ interface PlanReviewSurfaceProps {
   reviewable: number | null;
   actions?: PlanReviewActions;
   onDraftChange: (draft: Omit<PlanDraft, "hash"> | null) => void;
+  /** Every version is the same plan, however much one differs from the last.
+   *  True for an issue, which has one plan; a session can propose several. */
+  singlePlan?: boolean;
   empty?: React.ReactNode;
   className?: string;
 }
@@ -92,7 +96,16 @@ function when(ms: number): string {
  * and the decision. It is the same component in a session's Plan tab and in an
  * issue's review modal; only `actions` differs.
  */
-export function PlanReviewSurface({ versions, draft, reviewable, actions, onDraftChange, empty, className }: PlanReviewSurfaceProps) {
+export function PlanReviewSurface({
+  versions,
+  draft,
+  reviewable,
+  actions,
+  onDraftChange,
+  singlePlan,
+  empty,
+  className,
+}: PlanReviewSurfaceProps) {
   const rootRef = useRef<HTMLDivElement>(null);
   const docRef = useRef<PlanDocumentHandle>(null);
   const dark = useIsDark();
@@ -135,8 +148,27 @@ export function PlanReviewSurface({ versions, draft, reviewable, actions, onDraf
 
   const version = versions.find((v) => v.n === selectedN) ?? newest;
   const index = version ? versions.indexOf(version) : -1;
-  const previous = index > 0 ? versions[index - 1] : undefined;
-  const base = versions.find((v) => v.n === baseN && version && v.n < version.n) ?? previous;
+  // A session's list can hold more than one plan. Only the versions of the
+  // plan on screen are its history: an unrelated plan is not compared with
+  // the one before it.
+  const roots = useMemo(() => (singlePlan ? versions.map(() => versions[0].n) : planRoots(versions)), [versions, singlePlan]);
+  const previous = index > 0 && roots[index] === roots[index - 1] ? versions[index - 1] : undefined;
+  const earlier = useMemo(
+    () => (version ? versions.filter((v, i) => v.n < version.n && roots[i] === roots[index]) : []),
+    [versions, roots, version, index],
+  );
+  const base = earlier.find((v) => v.n === baseN) ?? previous;
+  const plans = useMemo(() => {
+    const groups: { root: number; title: string; versions: PlanVersion[] }[] = [];
+    versions.forEach((v, i) => {
+      const group = groups[groups.length - 1];
+      if (group && group.root === roots[i]) group.versions.push(v);
+      else groups.push({ root: roots[i], title: "", versions: [v] });
+    });
+    for (const group of groups)
+      group.title = planTitle(group.versions[group.versions.length - 1].content) || `Plan from version ${group.root}`;
+    return groups.reverse();
+  }, [versions, roots]);
   const canReview = !!actions && !!version && reviewable !== null && version.n === reviewable;
 
   // ── The draft: local first, stored a moment later ───────────────────
@@ -192,6 +224,15 @@ export function PlanReviewSurface({ versions, draft, reviewable, actions, onDraf
     setAnnotations(draft.annotations);
     setEditedText(draft.version === reviewable ? draft.editedText : undefined);
   }, [draft, reviewable]);
+
+  // Markup carries from one version of a plan to the next, never to another
+  // plan: notes on a plan that was dropped say nothing about its successor.
+  const draftRoot = draft ? roots[versions.findIndex((v) => v.n === draft.version)] : undefined;
+  const reviewRoot = reviewable !== null ? roots[versions.findIndex((v) => v.n === reviewable)] : undefined;
+  const foreignDraft = draftRoot !== undefined && reviewRoot !== undefined && draftRoot !== reviewRoot;
+  useEffect(() => {
+    if (foreignDraft) change([], undefined);
+  }, [foreignDraft, change]);
 
   // The plan was answered somewhere else: what was drafted here is spent.
   const answered = useRef(reviewable);
@@ -455,11 +496,21 @@ export function PlanReviewSurface({ versions, draft, reviewable, actions, onDraf
           }}
           className="rounded-md border bg-background px-2 py-1.5 text-xs font-medium"
         >
-          {[...versions].reverse().map((v) => (
-            <option key={v.n} value={v.n}>
-              {`Version ${v.n}${v.n === reviewable ? " (to review)" : v.review ? `, ${OUTCOME[v.review.outcome].text.toLowerCase()}` : ""}`}
-            </option>
-          ))}
+          {plans.map((plan) => {
+            const options = [...plan.versions].reverse().map((v) => (
+              <option key={v.n} value={v.n}>
+                {`Version ${v.n}${v.n === reviewable ? " (to review)" : v.review ? `, ${OUTCOME[v.review.outcome].text.toLowerCase()}` : ""}`}
+              </option>
+            ));
+            // One plan needs no heading; several are told apart by their titles.
+            return plans.length === 1 ? (
+              options
+            ) : (
+              <optgroup key={plan.root} label={plan.title}>
+                {options}
+              </optgroup>
+            );
+          })}
         </select>
         <span className="text-muted-foreground">{when(version.createdAt)}</span>
         {version.author?.kind === "user" && <span className="rounded bg-muted px-1.5 py-0.5 text-[11px]">your edit</span>}
@@ -531,7 +582,7 @@ export function PlanReviewSurface({ versions, draft, reviewable, actions, onDraf
         <div className="min-h-0 min-w-0 flex-1 overflow-y-auto" data-testid="plan-scroll">
           {view === "changes" && base ? (
             <div className="p-3">
-              {versions.filter((v) => v.n < version.n).length > 1 && (
+              {earlier.length > 1 && (
                 <label className="mb-2 flex items-center gap-2 text-xs text-muted-foreground">
                   Compared with
                   <select
@@ -540,14 +591,11 @@ export function PlanReviewSurface({ versions, draft, reviewable, actions, onDraf
                     onChange={(e) => setBaseN(Number(e.target.value))}
                     className="rounded-md border bg-background px-2 py-1 text-xs text-foreground"
                   >
-                    {versions
-                      .filter((v) => v.n < version.n)
-                      .reverse()
-                      .map((v) => (
-                        <option key={v.n} value={v.n}>
-                          Version {v.n}
-                        </option>
-                      ))}
+                    {[...earlier].reverse().map((v) => (
+                      <option key={v.n} value={v.n}>
+                        Version {v.n}
+                      </option>
+                    ))}
                   </select>
                 </label>
               )}

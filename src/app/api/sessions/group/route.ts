@@ -6,6 +6,7 @@ import { getJobSessionIds } from "@/server/job-storage";
 import { getCockpitDir } from "@/server/paths";
 import { getSessionManager } from "@/server/singleton";
 import { scanSessionsForCwd } from "@/server/transcript";
+import { getWorkflowSessionIds } from "@/server/workflow-storage";
 import type { SessionInfo } from "@/types";
 
 function authenticate(req: NextRequest): boolean {
@@ -60,7 +61,8 @@ export async function GET(req: NextRequest) {
   }
 
   const JOB_TITLE_PREFIX = "You are running as an autonomous scheduled job";
-  const jobSessionIds = getJobSessionIds();
+  // A workflow's run is hidden the same way: it is reached from its issue.
+  const jobSessionIds = new Set([...getJobSessionIds(), ...getWorkflowSessionIds()]);
   const filtered: SessionInfo[] = sessions.filter(
     (s) =>
       !isCwdIgnored(s.cwd, ignoredFolders) &&

@@ -16,11 +16,13 @@ import {
   Trash2,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { usePageHeader } from "@/components/app-shell";
+import { InboxSwitch } from "@/components/nav/place-switch";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useScrollRestoration } from "@/hooks/use-scroll-restoration";
+import { useSettings } from "@/hooks/use-settings";
 import { cn } from "@/lib/utils";
 import type { InboxMessage } from "@/types";
 
@@ -47,7 +49,12 @@ function timeAgo(ts: number): string {
 }
 
 export default function InboxPage() {
-  usePageHeader("Inbox", { hideActions: true });
+  const { settings, loaded: settingsLoaded } = useSettings();
+  const headerActions = useMemo(
+    () => (settingsLoaded && settings.issuesEnabled ? <InboxSwitch side="inbox" /> : undefined),
+    [settingsLoaded, settings.issuesEnabled],
+  );
+  usePageHeader("Inbox", { hideActions: true, actions: headerActions });
   const scrollRef = useScrollRestoration<HTMLDivElement>("inbox-scroll");
 
   const router = useRouter();

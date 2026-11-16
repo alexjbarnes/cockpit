@@ -34,6 +34,9 @@ export interface Settings {
   reviewsEnabled: boolean;
   issuesEnabled: boolean;
   modalPagesEnabled: boolean;
+  workflowsEnabled: boolean;
+  workflowsPaused: boolean;
+  workflowMaxParallel: number;
   planReviewAutoOpen: boolean;
   telemetryEnabled: boolean;
   allowSonnet1m: boolean;
@@ -61,6 +64,9 @@ const defaultSettings: Settings = {
   reviewsEnabled: true,
   issuesEnabled: false,
   modalPagesEnabled: true,
+  workflowsEnabled: false,
+  workflowsPaused: false,
+  workflowMaxParallel: 2,
   planReviewAutoOpen: true,
   telemetryEnabled: false,
   allowSonnet1m: false,

@@ -8,18 +8,22 @@ process.env.CLAUDE_CONFIG_DIR = mkdtempSync(join(tmpdir(), "claude-test-"));
 
 vi.mock("@/server/singleton", () => ({
   getJobScheduler: vi.fn(),
+  // update_settings wakes the workflow engine; there is none in these tests.
+  getWorkflowEngine: vi.fn(() => null),
   // mcp-discovery's runtime-servers source; get_job_options reaches it.
   getSessionManager: vi.fn(() => ({ getKnownMcpServers: () => ["runtime-seen-server"] })),
 }));
 
 import { setDefaults } from "@/server/defaults";
 import { getInboxMessages } from "@/server/inbox";
-import { buildProject, getProject, saveProject } from "@/server/issue-storage";
+import { buildProject, getProject, loadProjects, saveProject } from "@/server/issue-storage";
 import { saveRun } from "@/server/job-storage";
 import { CockpitMcpServer } from "@/server/mcp/cockpit-config-server";
-import { registerAuthToken, registerRunContext, registerSessionContext } from "@/server/mcp/run-context";
+import { registerAuthToken, registerRunContext, registerSessionContext, registerWorkflowRunContext } from "@/server/mcp/run-context";
 import { setNotificationSettings } from "@/server/notification-settings";
 import { getJobScheduler } from "@/server/singleton";
+import { setProjectWorkflow, workflowForProject } from "@/server/workflow-storage";
+import type { Project } from "@/types";
 import { ISSUE_STATUSES } from "@/types";
 
 const HOST = "127.0.0.1";
@@ -181,6 +185,11 @@ describe("cockpit-config MCP server (in-process HTTP)", () => {
       "reorder_issue_statuses",
       "add_issue_comment",
       "add_issue_attachment",
+      "set_issue_plan",
+      "get_issue_plan",
+      "list_workflows",
+      "get_workflow",
+      "update_workflow",
     ]) {
       expect(names).toContain(name);
     }
@@ -737,6 +746,8 @@ describe("cockpit-config MCP server (in-process HTTP)", () => {
         "reorder_issue_statuses",
         "add_issue_comment",
         "add_issue_attachment",
+        "set_issue_plan",
+        "get_issue_plan",
       ]);
 
       const adminList = await mcpPost({ jsonrpc: "2.0", id: 9, method: "tools/list", params: {} });
@@ -788,7 +799,7 @@ describe("cockpit-config MCP server (in-process HTTP)", () => {
           params: { name, arguments: { title: "t", body: "b" } },
         });
         const text = (res.body as { result?: { content: { text: string }[] } })?.result?.content?.[0]?.text ?? "";
-        expect(JSON.parse(text).error).toBe(`${name} is only available to: job, session`);
+        expect(JSON.parse(text).error).toBe(`${name} is only available to: job, session, workflow`);
       }
     });
   });
@@ -843,6 +854,12 @@ describe("cockpit-config MCP server (in-process HTTP)", () => {
         "reorder_issue_statuses",
         "add_issue_comment",
         "add_issue_attachment",
+        "set_issue_plan",
+        "get_issue_plan",
+        "list_workflows",
+        "get_workflow",
+        "update_workflow",
+        "delete_workflow",
       ]);
     });
 
@@ -2004,6 +2021,77 @@ describe("cockpit-config MCP server (in-process HTTP)", () => {
         expect(result.issue.comments).toHaveLength(1);
       });
 
+      it("shows a picture named by its file in the comment, and gives an agent the stored file back", async () => {
+        const created = (await callToolParsed("create_issue", { project: "ISSA", title: "Picture comment test" })) as {
+          created: { key: string };
+        };
+        const key = created.created.key;
+        const src = join(process.env.COCKPIT_CONFIG_DIR as string, "comment-shot.png");
+        writeFileSync(src, "png bytes");
+
+        const result = (await callToolParsed("add_issue_comment", { key, body: `Done.\n\n![Phone width](${src})` })) as {
+          added: { body: string };
+          issue: { attachments: Array<{ id: string; url: string; title: string; inline?: boolean }>; activity: Array<{ kind: string }> };
+        };
+        const [attachment] = result.issue.attachments;
+        expect(attachment).toMatchObject({ title: "Phone width", inline: true });
+        expect(result.added.body).toBe(`Done.\n\n![Phone width](/api/issues/${key}/attachments/${attachment.id})`);
+        expect(result.issue.activity.map((a) => a.kind)).toEqual(["created", "commented"]);
+        rmSync(src);
+        expect(readFileSync(attachment.url, "utf-8")).toBe("png bytes");
+
+        const read = (await callToolParsed("get_issue", { key })) as { comments: Array<{ body: string }> };
+        expect(read.comments[0].body).toBe(`Done.\n\n![Phone width](${attachment.url})`);
+      });
+
+      it("refuses a comment whose picture is missing, and adds nothing", async () => {
+        const created = (await callToolParsed("create_issue", { project: "ISSA", title: "Missing picture test" })) as {
+          created: { key: string };
+        };
+        const key = created.created.key;
+        const result = (await callToolParsed("add_issue_comment", { key, body: "![x](/tmp/cockpit-no-such-shot.png)" })) as {
+          error: string;
+        };
+        expect(result.error).toContain("does not exist");
+        const read = (await callToolParsed("get_issue", { key })) as { comments: unknown[]; attachments: unknown[] };
+        expect(read.comments).toHaveLength(0);
+        expect(read.attachments).toHaveLength(0);
+      });
+
+      it("keeps a plan's pictures, reads them back as files, and makes no new version of the same plan", async () => {
+        const created = (await callToolParsed("create_issue", { project: "ISSA", title: "Picture plan test" })) as {
+          created: { key: string };
+        };
+        const key = created.created.key;
+        const a = join(process.env.COCKPIT_CONFIG_DIR as string, "option-a.png");
+        const b = join(process.env.COCKPIT_CONFIG_DIR as string, "option-b.png");
+        writeFileSync(a, "design a");
+        writeFileSync(b, "design b");
+        const content = `# Picture plan\n\n![Option A](${a})\n\n![Option B](${b})`;
+
+        const first = (await callToolParsed("set_issue_plan", { key, content })) as { written: { version: number } };
+        expect(first.written.version).toBe(1);
+
+        const issue = (await callToolParsed("get_issue", { key })) as {
+          attachments: Array<{ id: string; url: string; inline?: boolean }>;
+          plan: { content: string };
+        };
+        expect(issue.attachments).toHaveLength(2);
+        expect(issue.attachments.every((x) => x.inline)).toBe(true);
+        const forAgent = `# Picture plan\n\n![Option A](${issue.attachments[0].url})\n\n![Option B](${issue.attachments[1].url})`;
+        expect(issue.plan.content).toBe(forAgent);
+        const plan = (await callToolParsed("get_issue_plan", { key })) as { plan: { content: string } };
+        expect(plan.plan.content).toBe(forAgent);
+
+        // The same files again, and the text as it was read back: both are the
+        // plan already stored.
+        for (const again of [content, forAgent]) {
+          const repeat = (await callToolParsed("set_issue_plan", { key, content: again })) as { unchanged: { version: number } };
+          expect(repeat.unchanged.version).toBe(1);
+        }
+        expect(((await callToolParsed("get_issue", { key })) as { attachments: unknown[] }).attachments).toHaveLength(2);
+      });
+
       it("refuses an empty body", async () => {
         const created = (await callToolParsed("create_issue", { project: "ISSA", title: "Empty comment test" })) as {
           created: { key: string };
@@ -2020,6 +2108,306 @@ describe("cockpit-config MCP server (in-process HTTP)", () => {
       it("requires a key and a body", async () => {
         const result = (await callToolParsed("add_issue_comment", {})) as { error: string };
         expect(result.error).toContain("required");
+      });
+    });
+
+    describe("a workflow's run", () => {
+      const STAGE_TOKEN = "stage-token-for-issues";
+      let own: string;
+      let other: string;
+      let projectId: string;
+
+      beforeAll(async () => {
+        const issa = loadProjects().find((p) => p.prefix === "ISSA") as Project;
+        projectId = issa.id;
+        setProjectWorkflow(issa, {
+          statuses: {
+            "Refine Ready": { kind: "queue", to: "Refining" },
+            Refining: { kind: "agent", skill: "plan-issue", next: ["Plan Review", "Needs Detail"] },
+          },
+        });
+        own = ((await callToolParsed("create_issue", { project: "ISSA", title: "The stage's issue" })) as { created: { key: string } })
+          .created.key;
+        other = ((await callToolParsed("create_issue", { project: "ISSA", title: "Somebody else's" })) as { created: { key: string } })
+          .created.key;
+        await callToolParsed("update_issue", { key: own, status: "Refining" });
+        registerWorkflowRunContext(STAGE_TOKEN, {
+          projectId,
+          workStatus: "Refining",
+          skill: "plan-issue",
+          runId: "stage-run-1",
+          issueKey: own,
+          sessionId: "stage-session-1",
+          notifyProviders: ["phone"],
+        });
+      });
+
+      it("is offered the issue and plan tools, and none that manage jobs, projects or a board's order", async () => {
+        const list = await mcpPost({ jsonrpc: "2.0", id: 71, method: "tools/list", params: {} }, STAGE_TOKEN);
+        const tools = ((list.body as { result?: { tools: { name: string }[] } })?.result?.tools ?? []).map((t) => t.name);
+        expect(tools).toEqual([
+          "add_inbox_message",
+          "list_notify_targets",
+          "list_projects",
+          "list_issues",
+          "get_issue",
+          "create_issue",
+          "update_issue",
+          "add_issue_comment",
+          "add_issue_attachment",
+          "set_issue_plan",
+          "get_issue_plan",
+        ]);
+        for (const refused of ["create_job", "create_project", "reorder_issue", "reorder_issue_statuses", "update_settings"]) {
+          const result = (await callToolAsParsed(STAGE_TOKEN, refused, {})) as { error: string };
+          expect(result.error, refused).toMatch(/only available to/);
+        }
+      });
+
+      it("writes as the skill it runs, with a link back to its session", async () => {
+        const commented = (await callToolAsParsed(STAGE_TOKEN, "add_issue_comment", { key: own, body: "Looked into it." })) as {
+          added: { author: unknown };
+        };
+        expect(commented.added.author).toEqual({
+          kind: "workflow",
+          workStatus: "Refining",
+          skill: "plan-issue",
+          runId: "stage-run-1",
+          sessionId: "stage-session-1",
+        });
+        const planned = (await callToolAsParsed(STAGE_TOKEN, "set_issue_plan", { key: own, content: "# The stage's issue\n\nDo it." })) as {
+          written: { version: number };
+        };
+        expect(planned.written.version).toBe(1);
+      });
+
+      it("can move its own issue only where its workflow says, and is told where that is", async () => {
+        const refused = (await callToolAsParsed(STAGE_TOKEN, "update_issue", { key: own, status: "Done" })) as { error: string };
+        expect(refused.error).toContain("cannot move");
+        expect(refused.error).toContain('It can move it to: "Plan Review", "Needs Detail".');
+        expect(((await callToolParsed("get_issue", { key: own })) as { status: string }).status).toBe("Refining");
+
+        // Other fields are its to change, and a status it already has is no move.
+        const titled = (await callToolAsParsed(STAGE_TOKEN, "update_issue", { key: own, title: "Retitled", status: "Refining" })) as {
+          after: { title: string; status: string };
+        };
+        expect(titled.after).toMatchObject({ title: "Retitled", status: "Refining" });
+
+        const moved = (await callToolAsParsed(STAGE_TOKEN, "update_issue", { key: own, status: "Plan Review" })) as {
+          after: { status: string; activity: { actor: { kind: string } }[] };
+        };
+        expect(moved.after.status).toBe("Plan Review");
+        expect(moved.after.activity.at(-1)?.actor.kind).toBe("workflow");
+      });
+
+      it("cannot move any other issue, though it can comment on one", async () => {
+        const refused = (await callToolAsParsed(STAGE_TOKEN, "update_issue", { key: other, status: "Done" })) as { error: string };
+        expect(refused.error).toContain(`can only change that issue's status`);
+        expect(((await callToolParsed("get_issue", { key: other })) as { status: string }).status).toBe("Backlog");
+        const commented = (await callToolAsParsed(STAGE_TOKEN, "add_issue_comment", { key: other, body: "Related." })) as {
+          added: unknown;
+        };
+        expect(commented.added).toBeTruthy();
+      });
+
+      it("has nothing to move to when no agent works in its status any more", async () => {
+        registerWorkflowRunContext("stage-token-orphan", {
+          projectId,
+          workStatus: "Gone",
+          skill: "gone",
+          runId: "r",
+          issueKey: other,
+          sessionId: "s",
+        });
+        const refused = (await callToolAsParsed("stage-token-orphan", "update_issue", { key: other, status: "Done" })) as { error: string };
+        expect(refused.error).toContain("It can move it to: nothing.");
+      });
+
+      it("reports to the inbox as itself, with its rule's own targets", async () => {
+        const result = (await callToolAsParsed(STAGE_TOKEN, "add_inbox_message", { title: "Stage report", body: "All planned." })) as {
+          id?: string;
+        };
+        expect(result).toBeTruthy();
+        const message = getInboxMessages().find((m) => m.title === "Stage report");
+        expect(message).toMatchObject({ sessionId: "stage-session-1", sessionName: `${own} plan-issue` });
+        expect(message?.jobId).toBeUndefined();
+      });
+    });
+
+    describe("workflows", () => {
+      const rover = () => loadProjects().find((p) => p.prefix === "ISSB") as Project;
+
+      it("are built from nothing, read back and changed by the assistant or a session", async () => {
+        const before = (await callToolParsed("list_workflows")) as { project: string; hasWorkflow: boolean }[];
+        expect(before.find((w) => w.project === "ISSB")).toMatchObject({ name: "Rover", hasWorkflow: false });
+        const empty = (await callToolAsParsed(ISSUE_SESSION_TOKEN, "get_workflow", { project: "ISSB" })) as {
+          workflow: unknown;
+          statuses: string[];
+          skills: unknown[];
+          problems: string[];
+        };
+        expect(empty.workflow).toBeNull();
+        expect(empty.statuses.slice(0, 3)).toEqual(["Backlog", "Needs Detail", "Refine Ready"]);
+        expect(empty.skills).toEqual([]);
+        expect(empty.problems[0]).toContain("no repo path");
+
+        // A session sets the whole thing up, with a status the project does not have yet.
+        const made = (await callToolAsParsed(ISSUE_SESSION_TOKEN, "update_workflow", {
+          project: "issb",
+          maxParallel: 4,
+          statuses: {
+            "Refine Ready": { kind: "queue", to: "Refining" },
+            Refining: { kind: "agent", skill: "plan-issue", next: ["Plan Review"], model: "opus" },
+            "Plan Review": {
+              kind: "human",
+              review: "plan",
+              next: [
+                { status: "Implementation Ready", label: "Approve", role: "approve" },
+                { status: "Refine Ready", label: "Send back", role: "sendBack" },
+              ],
+            },
+            "Implementation Ready": { kind: "agent", skill: "implement-issue", next: ["Validation"] },
+          },
+          // Not a field of a workflow: it must not be stored.
+          createdAt: 1,
+        })) as {
+          workflow: {
+            enabled: boolean;
+            maxParallel: number;
+            createdAt: number;
+            statuses: Record<string, { skill?: string; permission?: string }>;
+          };
+          addedStatuses: string[];
+        };
+        expect(made.workflow).toMatchObject({ enabled: true, maxParallel: 4 });
+        expect(made.workflow.createdAt).not.toBe(1);
+        expect(made.workflow.statuses.Refining).toMatchObject({ skill: "plan-issue", model: "opus", permission: "bypass" });
+        expect(made.addedStatuses).toEqual(["Validation"]);
+        expect(rover().customStatuses).toEqual([{ name: "Validation" }]);
+
+        const listed = (await callToolParsed("list_workflows")) as { project: string; statuses?: Record<string, string> }[];
+        expect(listed.find((w) => w.project === "ISSB")?.statuses).toEqual({
+          "Refine Ready": "queue for Refining",
+          Refining: "agent runs plan-issue, then Plan Review",
+          "Plan Review": "waits for the user (plan review)",
+          "Implementation Ready": "agent runs implement-issue, then Validation",
+        });
+
+        // Only what is named changes; null clears a status.
+        const changed = (await callToolParsed("update_workflow", {
+          project: "ISSB",
+          enabled: false,
+          statuses: { "Implementation Ready": null },
+        })) as { workflow: { enabled: boolean; statuses: Record<string, unknown> } };
+        expect(changed.workflow.enabled).toBe(false);
+        expect(Object.keys(changed.workflow.statuses)).toEqual(["Refine Ready", "Refining", "Plan Review"]);
+
+        const replaced = (await callToolParsed("update_workflow", {
+          project: "ISSB",
+          replace: true,
+          statuses: { "Code Review": { kind: "human", next: ["Accepted"] } },
+        })) as { workflow: { statuses: Record<string, unknown> } };
+        expect(Object.keys(replaced.workflow.statuses)).toEqual(["Code Review"]);
+      });
+
+      it("refuse what is not a workflow, and a project that is not there", async () => {
+        const refused = (await callToolParsed("update_workflow", {
+          project: "ISSB",
+          statuses: { "Refine Ready": { kind: "queue", to: "Backlog" } },
+        })) as { error: string };
+        expect(refused.error).toMatch(/no agent works in "Backlog"/);
+        for (const name of ["get_workflow", "update_workflow", "delete_workflow"]) {
+          expect(((await callToolParsed(name, { project: "NOPE" })) as { error: string }).error, name).toMatch(/Project not found: NOPE/);
+          expect(((await callToolParsed(name, {})) as { error: string }).error, name).toMatch(/Project not found/);
+        }
+      });
+
+      it("are removed, and are never a job's to change", async () => {
+        const denied = (await callToolAsParsed(ISSUE_JOB_TOKEN, "update_workflow", { project: "ISSB", enabled: true })) as {
+          error: string;
+        };
+        expect(denied.error).toBe("update_workflow is only available to: assistant, session");
+        const gone = (await callToolAsParsed(ISSUE_JOB_TOKEN, "delete_workflow", { project: "ISSB" })) as { error: string };
+        expect(gone.error).toBe("delete_workflow is only available to: assistant, session");
+
+        expect(await callToolParsed("delete_workflow", { project: "ISSB" })).toEqual({ deleted: true });
+        expect(workflowForProject(rover())).toBeUndefined();
+        expect(await callToolParsed("delete_workflow", { project: "ISSB" })).toEqual({ deleted: false });
+      });
+    });
+
+    describe("the issue's plan", () => {
+      it("is written apart from the description, versioned, and read back with its review", async () => {
+        const created = (await callToolParsed("create_issue", {
+          project: "ISSA",
+          title: "Plan test",
+          description: "The requirement.",
+        })) as {
+          created: { key: string };
+        };
+        const key = created.created.key;
+
+        const none = (await callToolParsed("get_issue", { key })) as { plan: unknown };
+        expect(none.plan).toBeNull();
+        expect(((await callToolParsed("get_issue_plan", { key })) as { error: string }).error).toMatch(/no plan yet/);
+
+        const first = (await callToolAsParsed(ISSUE_JOB_TOKEN, "set_issue_plan", { key, content: "# Plan\n\nStep one." })) as {
+          written: { version: number };
+        };
+        expect(first.written.version).toBe(1);
+        // The same text again is the same version, not a new one.
+        const again = (await callToolAsParsed(ISSUE_JOB_TOKEN, "set_issue_plan", { key, content: "# Plan\n\nStep one." })) as {
+          unchanged: { version: number };
+        };
+        expect(again.unchanged.version).toBe(1);
+        const second = (await callToolAsParsed(ISSUE_SESSION_TOKEN, "set_issue_plan", {
+          key,
+          content: "# Plan\n\nStep one.\nStep two.",
+        })) as {
+          written: { version: number };
+        };
+        expect(second.written.version).toBe(2);
+
+        const issue = (await callToolParsed("get_issue", { key })) as {
+          description: string;
+          plan: { version: number; content: string; author: { kind: string }; review: unknown };
+          activity: { kind: string; planVersion?: number; actor: { kind: string } }[];
+        };
+        expect(issue.description).toBe("The requirement.");
+        expect(issue.plan).toMatchObject({
+          version: 2,
+          content: "# Plan\n\nStep one.\nStep two.",
+          author: { kind: "session" },
+          review: null,
+        });
+        // Each version is on the issue's activity, in its author's name, with no author field to spoof.
+        expect(issue.activity.filter((a) => a.kind === "plan_written").map((a) => [a.planVersion, a.actor.kind])).toEqual([
+          [1, "job"],
+          [2, "session"],
+        ]);
+
+        const old = (await callToolParsed("get_issue_plan", { key, version: 1 })) as {
+          plan: { version: number; content: string };
+          versions: { version: number; outcome: string | null }[];
+        };
+        expect(old.plan).toMatchObject({ version: 1, content: "# Plan\n\nStep one." });
+        expect(old.versions.map((v) => v.version)).toEqual([1, 2]);
+        expect(((await callToolParsed("get_issue_plan", { key, version: 9 })) as { error: string }).error).toMatch(/no plan version 9/);
+      });
+
+      it("refuses an empty plan, a missing key and an unknown issue", async () => {
+        const created = (await callToolParsed("create_issue", { project: "ISSA", title: "Empty plan test" })) as {
+          created: { key: string };
+        };
+        expect(((await callToolParsed("set_issue_plan", { key: created.created.key, content: "  " })) as { error: string }).error).toMatch(
+          /non-empty/,
+        );
+        expect(((await callToolParsed("set_issue_plan", { content: "# x" })) as { error: string }).error).toMatch(/key is required/);
+        expect(((await callToolParsed("get_issue_plan", {})) as { error: string }).error).toMatch(/key is required/);
+        expect(((await callToolParsed("set_issue_plan", { key: "NOPE-1", content: "# x" })) as { error: string }).error).toMatch(
+          /not found/i,
+        );
+        expect(((await callToolParsed("get_issue_plan", { key: "NOPE-1" })) as { error: string }).error).toMatch(/not found/i);
       });
     });
 
@@ -2057,6 +2445,32 @@ describe("cockpit-config MCP server (in-process HTTP)", () => {
           title: "Remote",
         })) as { added: { url: string } };
         expect(result.added.url).toBe("https://example.com/shot.png");
+      });
+
+      it("attaches several files in one call, as one activity entry", async () => {
+        const created = (await callToolParsed("create_issue", { project: "ISSA", title: "Batch attachment test" })) as {
+          created: { key: string };
+        };
+        const key = created.created.key;
+        const a = join(process.env.COCKPIT_CONFIG_DIR as string, "batch-a.png");
+        const b = join(process.env.COCKPIT_CONFIG_DIR as string, "batch-b.png");
+        writeFileSync(a, "a-bytes");
+        writeFileSync(b, "b-bytes");
+        const result = (await callToolParsed("add_issue_attachment", {
+          key,
+          attachments: [
+            { url: a, title: "A" },
+            { url: b, title: "B" },
+          ],
+        })) as {
+          added: { url: string; title: string }[];
+          issue: { attachments: unknown[]; activity: { kind: string }[] };
+        };
+        expect(result.added.map((x) => x.title)).toEqual(["A", "B"]);
+        expect(result.issue.attachments).toHaveLength(2);
+        expect(readFileSync(result.added[0].url, "utf-8")).toBe("a-bytes");
+        // One act, one entry: the noise a screenshot set used to make.
+        expect(result.issue.activity.filter((x) => x.kind === "attachment_added")).toHaveLength(1);
       });
 
       it("refuses a local path that does not exist rather than storing a dead link", async () => {
@@ -2243,6 +2657,11 @@ describe("cockpit-config MCP server (in-process HTTP)", () => {
       "reorder_issue_statuses",
       "add_issue_comment",
       "add_issue_attachment",
+      "set_issue_plan",
+      "get_issue_plan",
+      "list_workflows",
+      "get_workflow",
+      "update_workflow",
     ];
 
     beforeAll(() => {

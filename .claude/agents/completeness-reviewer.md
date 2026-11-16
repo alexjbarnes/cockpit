@@ -20,7 +20,7 @@ A labelled payload from `implement-issue`:
 If you cannot determine the issue key or worktree, return `CRITICAL - cannot review - missing issue key or worktree path`.
 
 ## What to read
-1. From the issue (`mcp__cockpit-config__get_issue`, which returns the full description plus every comment): the **Request** block (the original ask, verbatim), the **Acceptance Criteria**, the **User-Facing Behaviour**, and **Out of Scope**.
+1. From the issue (`mcp__cockpit-config__get_issue`, which returns the description, the plan and every comment): the **request**, which is the issue's description (the original ask, verbatim), and from the plan in `plan.content` (or the description, for an issue with `plan: null`, where the ask is its **Request** block): the **Acceptance Criteria**, the **User-Facing Behaviour**, and **Out of Scope**.
 2. The comments: any human feedback at the Code Review gate from a prior round overrides the written criteria where it conflicts.
 3. The implementation: `git -C <worktree> diff next` for the full change, plus the test files it added or changed.
 

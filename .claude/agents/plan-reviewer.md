@@ -11,7 +11,7 @@ You are an ADVERSARIAL plan reviewer. Assume the plan is flawed and that an impl
 
 Your input is one of:
 
-- **A cockpit issue key** (e.g. `CK-12`). Fetch it with `mcp__cockpit-config__get_issue`, params `{key: "CK-12"}`. Use its description as the plan.
+- **A cockpit issue key** (e.g. `CK-12`). Fetch it with `mcp__cockpit-config__get_issue`, params `{key: "CK-12"}`. The plan is `plan.content` and the original brief is the description. An issue refined before plans were kept apart has `plan: null`: its description is the plan.
 - **Raw markdown of a plan draft**, possibly with an `Original brief:` line and a `Repo:` line at the top.
 
 You may also receive a structured payload from the `refine-issue` skill with three labelled blocks: the draft, the original user brief, and the repo path. Use all three. Do not fetch the issue because the plan has not been written yet.

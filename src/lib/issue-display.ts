@@ -224,12 +224,21 @@ export type QuickFilter = "active" | "backlog" | "all";
  * no-op passthrough. There's no Linear "Triage" equivalent in cockpit's
  * ISSUE_STATUSES, so Backlog is the whole backlog-type set.
  */
-export function filterByQuickFilter(issues: Issue[], filter: QuickFilter): Issue[] {
-  if (filter === "backlog") return issues.filter((issue) => issue.status === "Backlog");
-  if (filter === "active") {
-    return issues.filter((issue) => issue.status !== "Backlog" && issue.status !== "Done" && issue.status !== "Cancelled");
+export function filterByQuickFilter(issues: Issue[], filter: QuickFilter, projects?: readonly Project[]): Issue[] {
+  if (filter === "all") return issues;
+  // A custom status marked not active files with the backlog, so a column like
+  // Future is not counted as started. Without the projects to consult, only the
+  // built-in names decide, as before.
+  const inactiveByProject = new Map<string, Set<string>>();
+  for (const project of projects ?? []) {
+    const names = new Set((project.customStatuses ?? []).filter((s) => s.active === false).map((s) => s.name));
+    if (names.size > 0) inactiveByProject.set(project.id, names);
   }
-  return issues;
+  const inactive = (issue: Issue) => inactiveByProject.get(issue.projectId)?.has(issue.status) ?? false;
+  if (filter === "backlog") return issues.filter((issue) => issue.status === "Backlog" || inactive(issue));
+  return issues.filter(
+    (issue) => issue.status !== "Backlog" && issue.status !== "Done" && issue.status !== "Cancelled" && !inactive(issue),
+  );
 }
 
 export interface IssueLabelGroup {
@@ -493,6 +502,10 @@ export function actorLabel(actor: IssueActor): string {
       // adds nothing. The label links to the session (actorHref), which is
       // the real disambiguator.
       return "Session";
+    case "workflow":
+      // The skill it ran is what a reader knows it by; the link is to its
+      // session. A record from before workflows ran skills carries a stage's name.
+      return trimName(actor.skill || (actor as { stageName?: string }).stageName || "Workflow");
     case "user":
       return "You";
     default:
@@ -526,6 +539,14 @@ export function describeActivityAction(entry: IssueActivity): string {
       return "commented";
     case "attachment_added":
       return "added an attachment";
+    case "plan_written":
+      return `wrote plan version ${entry.planVersion ?? "?"}`;
+    case "plan_reviewed": {
+      const version = `plan version ${entry.planVersion ?? "?"}`;
+      if (entry.planOutcome === "approved") return `approved ${version}`;
+      if (entry.planOutcome === "changes_requested") return `asked for changes to ${version}`;
+      return `reviewed ${version}`;
+    }
     case "field_changed": {
       if (entry.field === "status") return `changed status from ${entry.from} to ${entry.to}`;
       if (entry.field === "priority") {
@@ -547,7 +568,8 @@ export function describeActivityAction(entry: IssueActivity): string {
 export function actorHref(actor: IssueActor): string | undefined {
   switch (actor.kind) {
     case "session":
-      return `/sessions/${actor.sessionId}?historyView=true`;
+    case "workflow":
+      return actor.sessionId ? `/sessions/${actor.sessionId}?historyView=true` : undefined;
     case "job":
       return `/jobs/${actor.jobId}`;
     default:

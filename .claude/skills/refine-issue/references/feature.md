@@ -29,7 +29,7 @@ Pass to the Explore subagent. Replace `<user's description>` with the actual fea
 
 ## Template sections
 
-After the standard Request section, feature plans include these sections. Fill placeholders with Explore findings and file reads. Do not leave placeholders in the output. Sections marked `(optional)` should be omitted if no content exists rather than left empty.
+After the title heading, feature plans include these sections. Fill placeholders with Explore findings and file reads. Do not leave placeholders in the output. Sections marked `(optional)` should be omitted if no content exists rather than left empty.
 
 ### Context
 What we are building and why. One short paragraph. Include the user-visible goal and any constraint shaping the design (deadline, dependency, compliance, prior decision, related ticket).

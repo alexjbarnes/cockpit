@@ -1,13 +1,25 @@
 ---
-description: Refine a cockpit issue into an exact implementation plan an agent can execute. Reads the target issue, investigates the real code, reproduces bugs, then overwrites the issue description with a precise build spec (files, symbols, exact changes, acceptance criteria). Use when asked to refine, plan, or work up a cockpit issue, e.g. "refine CK-12".
+description: Refine a cockpit issue into an exact implementation plan an agent can execute. Reads the target issue, investigates the real code, reproduces bugs, then writes the issue's plan: a precise build spec (files, symbols, exact changes, acceptance criteria) kept as its own versioned document beside the description. Revises that plan when a reviewer sends it back. Use when asked to refine, plan, or work up a cockpit issue, e.g. "refine CK-12".
 ---
 
 # Refine a cockpit issue
 
-Turn a rough cockpit issue into a precise plan another agent will execute without interpretation. The plan replaces the issue description. The bar: an implementation agent should read the plan end-to-end and start writing code without asking a single follow-up question.
+Turn a rough cockpit issue into a precise plan another agent will execute without interpretation. The plan is the issue's own versioned document, written with `mcp__cockpit-config__set_issue_plan`. The description is the requirement as the reporter wrote it: never edit it, and never put the plan in it. The bar: an implementation agent should read the plan end-to-end and start writing code without asking a single follow-up question.
 
 ## Input
 The issue key (e.g. CK-12) from the invocation. If none was given, ask which issue, or use `mcp__cockpit-config__list_issues` to show open candidates and confirm one.
+
+## Run by a workflow
+When the prompt opens with "You are the agent for the ... status of a workflow on issue <KEY>" (or says the issue "has come back to" a status), a Cockpit workflow started this session for that one issue and told it to run this skill. This is pipeline mode, with these differences, and where they conflict with a step below they win:
+
+- **The issue is the one the prompt names.** Do not list issues, pick one, or look at any other.
+- **Cockpit has already moved it to the status you work in.** Skip any step that sets a status to say work has started.
+- **Your work ends when you move the issue** with `update_issue` to one of the statuses the prompt lists, and those are the only statuses you can move it to. The prompt lists the statuses and nothing more: which one fits which outcome is said below. Make it your last action.
+- **If you cannot do the work**, comment why on the issue, leave its status alone, and end with the `cockpit-error` block the prompt describes. Cockpit holds the issue for a person.
+- **The working directory may be the issue's own worktree.** When the prompt says so, Cockpit has already made the worktree and its `issue/<KEY>` branch, and every agent that works on the issue works in it. Use the working directory as the worktree: do not create, replace or remove a worktree or branch for the issue, and do not `cd` out of it to the main checkout. Cockpit removes it when the issue is finished.
+- **A port is kept for the run** in `$COCKPIT_RUN_PORT`, and named in the prompt. If you start a server, start it on that port and do not scan for another.
+
+For this skill that means: skip the move to `Refining` in step 2 and step 1a. In step 11, with the plan written, move the issue to `Plan Review`. When details are missing (step 2), comment what is missing and move it to `Needs Detail`. If the prompt lists other names, choose by what they mean: the one where a person reviews the plan, and the one where the issue waits for more detail.
 
 ## Invocation modes
 This skill runs in two modes. Determine which from how it was invoked.
@@ -22,11 +34,26 @@ Refinement and the adversarial review are one stage. The skill investigates once
 ## Steps
 
 ### 1. Read the issue and resolve the repo
-- `mcp__cockpit-config__get_issue` for the key. One call returns the full title, description verbatim, labels, status, and every comment — capture all of it, including any context a reporter left in a comment.
+- `mcp__cockpit-config__get_issue` for the key. One call returns the full title, description verbatim, labels, status, every comment, and `plan`: the newest version of the issue's plan with the review of it, or null when it has never been planned. Capture all of it, including any context a reporter left in a comment.
+- **If `plan.review.outcome` is `changes_requested`, this is a rework: a person read the plan and sent it back.** Go to step 1a. Otherwise this is a first refinement and step 1a does not apply.
 - Resolve the repo to investigate: `list_projects`, match the issue's `projectId`, and use that project's `repoPath` if set. Otherwise use the session's current working directory (today's behaviour, and the only case while cockpit is the sole project). Investigation and file reads in the steps below happen in that repo.
-- If the description or a comment links an image, view it directly from its URL; attachments returned by `get_issue` are also plain URLs, viewable directly.
+- A picture in a comment or in the plan is a markdown image whose target is the file it is stored in: open it with Read. If the description links an image, view it directly from its URL; attachments returned by `get_issue` are also plain paths or URLs.
 
 Do not ask follow-up clarifying questions yet. The Explore step often answers them.
+
+### 1a. Rework: revise the plan that was sent back
+
+`plan.content` is the plan as the reviewer read it, and `plan.review.feedback` is what they said: numbered notes anchored to quoted text (comments, removals, replacements, notes on the whole plan) and sometimes a diff of edits they made to the text themselves.
+
+1. Set the issue status to `Refining` via `update_issue`.
+2. Treat every point in the feedback as a requirement. Work through them in order. A comment is answered by changing the plan, a removal by taking the text out, a replacement by using the reviewer's wording, and a diff of their own edits is kept exactly.
+3. Keep everything the reviewer did not comment on as it is. This is a revision of the same plan, not a new one: same title, same structure, changed only where the feedback requires it.
+4. Where a point needs facts you do not have, investigate just that (step 5 and step 6, scoped to the point). Do not re-run the whole exploration.
+5. Where you cannot do what a point asks, do not drop it silently: say why under Open questions in the plan.
+6. Run the self-review loop (step 9) on the revised draft, capped at 2 rounds for a rework.
+7. Write the revised plan as the next version (step 11), then add one comment with `add_issue_comment` headed `Plan version <n>: revised`, listing each feedback point and how it was handled in one line each.
+
+Skip steps 2, 3, 4, 7 and 8 in a rework.
 
 ### 2. Detail check gate
 
@@ -89,16 +116,15 @@ If you would cite a file you have not read in this skill invocation, read it now
 - The reproduction goes into the plan as a re-runnable recipe. Do not depend on a scratch dir surviving.
 
 ### 8. Write the plan
-Build the full description using the template sections from the loaded reference file. Do not write it to the issue yet.
+Build the full plan using the template sections from the loaded reference file. Do not write it to the issue yet.
 
-Every plan starts with:
+Every plan starts with a top-level heading that names it, the issue's title:
 
 ```
-## Request
-> <original ask, verbatim>
+# <issue title>
 ```
 
-Then include every section specified in the reference file. Fill placeholders with Explore findings and your own file reads. Do not leave placeholders in the output. Sections marked `(optional)` should be omitted if no content exists for them rather than left empty.
+Do not restate the request: it is the issue's description, which stays where it is and travels with the plan. Then include every section specified in the reference file. Fill placeholders with Explore findings and your own file reads. Do not leave placeholders in the output. Sections marked `(optional)` should be omitted if no content exists for them rather than left empty.
 
 All plans must have:
 
@@ -125,7 +151,7 @@ Dispatch the `plan-reviewer` agent (`subagent_type: "plan-reviewer"`) to attack 
 
 ```
 **Plan draft:**
-<full description draft>
+<full plan draft>
 
 **Original brief:** <verbatim user request from the issue>
 
@@ -154,7 +180,7 @@ The agent returns Critical/High/Medium/Low findings and a PASS/FAIL verdict.
 
 Skip this step in pipeline mode. The autonomous agent writes the plan and transitions status without waiting for a human.
 
-In interactive mode, show the user the full plan as it will appear in the issue description. Accept inline edits:
+In interactive mode, show the user the full plan as it will be written to the issue. Accept inline edits:
 - "drop the out of scope section" -> remove, re-show.
 - "change the approach for step 3" -> update, re-show.
 - "this is a feature not a bug" -> reclassify, regenerate.
@@ -162,11 +188,12 @@ In interactive mode, show the user the full plan as it will appear in the issue 
 Wait for explicit confirmation before writing. Do not proceed on ambiguous responses.
 
 ### 11. Write the plan and transition status
-Write the final converged plan and move the status in one `update_issue` call: `key`, `description`, and `status: "Plan Review"`. `Plan Review` is its own named status, distinct from the implementation-side `Code Review` gate, so setting it by name is unambiguous — no group-qualified state ID to resolve first. The description opens with the user's verbatim ask, so nothing is lost when it overwrites the field. The self-review already ran inline (step 9), so the plan moves straight to the human gate. The round-by-round findings are already on the issue as comments.
+Write the final converged plan with one `set_issue_plan` call (`key`, `content`: the whole plan). It becomes the next numbered version; earlier versions and their reviews are kept, and the reviewer sees what changed since the last one. Then move the issue with `update_issue`: `key` and `status: "Plan Review"`. Do not pass `description`. `Plan Review` is its own named status, distinct from the implementation-side `Code Review` gate. The self-review already ran inline (step 9), so the plan moves straight to the human gate, where a person reads it on the issue, marks it up, and approves it or sends it back. The round-by-round findings are already on the issue as comments.
 
 ## Rules
-- Build the whole plan before writing. One `update_issue` call, not incremental edits.
-- Preserve the original ask verbatim at the top. The overwrite is why this matters.
+- When the plan turns on how something should look and there is more than one reasonable answer, show the choices instead of describing them: draw each as a small static HTML page, screenshot it, and put it in the plan as a markdown image with the file's absolute path and a caption that names it (`![Option A: tabs along the top](/tmp/.../option-a.png)`). The reviewer picks one by commenting on its caption. Cockpit copies the files into the issue, so they need only exist when `set_issue_plan` is called.
+- Build the whole plan before writing. One `set_issue_plan` call with the whole plan, not incremental edits: every call with new text is a version a person may be asked to review.
+- Never write to the issue's description. It is the requirement, and the reporter's words.
 - Quote real code from real files. Do not paraphrase snippets. If you would cite a file you have not read, read it first.
 - Include reference patterns with quoted snippets so the implementation agent knows what good looks like in this codebase.
 - Exact over vague. If you cannot name the symbol and the change, you have not finished investigating.

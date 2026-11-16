@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { validateSession } from "@/server/auth";
 import { applyProjectUpdate, deleteProject, getProject, loadIssues, saveProject } from "@/server/issue-storage";
+import { getWorkflowEngine } from "@/server/singleton";
+import { assertProjectKeepsWorkflowStatuses, deleteWorkflow } from "@/server/workflow-storage";
 
 function authenticate(req: NextRequest): boolean {
   const token = req.cookies.get("cockpit_session")?.value || req.headers.get("authorization")?.replace("Bearer ", "");
@@ -25,6 +27,9 @@ export function PUT(req: NextRequest, { params }: { params: Promise<{ id: string
       // to be inside this try too, not just saveProject — otherwise a bad
       // value would 500 instead of 400.
       const updated = applyProjectUpdate(existing, body);
+      // Its workflow moves issues into the statuses it names, so the project
+      // keeps them while the workflow does.
+      assertProjectKeepsWorkflowStatuses(updated);
       // Removing a custom status that issues still sit in would orphan them
       // (no column, and the value is no longer accepted on future edits).
       // Refuse and name the offenders so the user moves them first. Disabling a
@@ -45,6 +50,8 @@ export function PUT(req: NextRequest, { params }: { params: Promise<{ id: string
         }
       }
       saveProject(updated);
+      // A repo path or base branch set now may be what its workflow was waiting for.
+      getWorkflowEngine()?.kick();
       return NextResponse.json({ project: updated });
     } catch (err) {
       // e.g. a prefix change rejected because the project already has issues,
@@ -61,10 +68,13 @@ export function DELETE(req: NextRequest, { params }: { params: Promise<{ id: str
   }
 
   return params.then(({ id }) => {
+    // Its workflow goes with it: runs are stopped while the engine can still tell whose they are.
+    getWorkflowEngine()?.forget(id);
     const deleted = deleteProject(id);
     if (!deleted) {
       return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
+    deleteWorkflow(id);
     return NextResponse.json({ ok: true });
   });
 }

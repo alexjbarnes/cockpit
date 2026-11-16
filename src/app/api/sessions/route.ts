@@ -10,6 +10,7 @@ import { parseSessionNotifications } from "@/server/notification-settings";
 import { getCockpitDir } from "@/server/paths";
 import { getSessionManager } from "@/server/singleton";
 import { scanAllSessions } from "@/server/transcript";
+import { getWorkflowSessionIds } from "@/server/workflow-storage";
 import type { SandboxConfig, SessionNotifications, SessionPermissionMode, ThinkingLevel } from "@/types";
 import { THINKING_LEVELS } from "@/types";
 
@@ -85,7 +86,8 @@ export async function GET(req: NextRequest) {
   // sessionId (a job spawns a real session whose transcript looks like any other);
   // the name checks remain as a fallback for sessions whose run record was pruned.
   const JOB_TITLE_PREFIX = "You are running as an autonomous scheduled job";
-  const jobSessionIds = getJobSessionIds();
+  // A workflow's run is hidden the same way: it is reached from its issue.
+  const jobSessionIds = new Set([...getJobSessionIds(), ...getWorkflowSessionIds()]);
   for (const group of groups) {
     group.sessions = group.sessions.filter(
       (s) => !jobSessionIds.has(s.id) && !s.name?.startsWith("[job] ") && !s.name?.startsWith(JOB_TITLE_PREFIX),

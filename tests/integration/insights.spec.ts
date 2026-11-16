@@ -154,11 +154,11 @@ test("a session drills in to one turn's timeline, and Back and the scope's close
   await expect(page.getByTestId("insights-tab-overview")).toHaveAttribute("aria-selected", "true");
 });
 
-test("the sidebar opens Insights, in the page modal", async ({ page, harness }) => {
+test("the rail opens Insights in the main window", async ({ page, harness }) => {
   test.setTimeout(90_000);
   await page.setViewportSize({ width: 1280, height: 800 });
   await page.goto(`${harness.cockpitUrl}/`);
-  await page.getByTestId("sidebar-insights").click();
-  const frame = page.frameLocator("iframe[name=cockpit-page-modal]");
-  await expect(frame.getByTestId("tile-spend")).toContainText("$1.64+", { timeout: 30_000 });
+  await page.getByTestId("nav-rail-insights").click();
+  await expect(page).toHaveURL(/\/insights$/);
+  await expect(page.getByTestId("tile-spend")).toContainText("$1.64+", { timeout: 30_000 });
 });

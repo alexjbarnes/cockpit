@@ -4,30 +4,25 @@ import { checkClaudeUserConfig } from "@/server/claude-config-guard";
 import { configuredMcpServerNames } from "@/server/mcp-discovery";
 import { isConfiguredMcpServer } from "@/server/mcp-server-names";
 import { getJobScratchpadDir } from "@/server/paths";
+import { projectRunsWorkflow } from "@/server/workflow-storage";
 import { trustDirectory } from "@/server/workspace-trust";
-import type { AfterJobsSchedule, IssueStatusSchedule, JobRun, JobRunToolUse, ScheduledJob } from "@/types";
+import type { AfterJobsSchedule, IssueStatusSchedule, JobRun, ScheduledJob } from "@/types";
+import { startAgentRun } from "./agent-run";
 import { findMissedRun, getJobSchedules, isTimeBasedSchedule, matchesCron, scheduleToCron } from "./cron-utils";
 import { logDiag } from "./debug-logger";
-import { addInboxMessage, parseErrorBlock } from "./inbox";
+import { addInboxMessage } from "./inbox";
 import { type IssueStatusChangeEvent, onIssueStatusChange } from "./issue-events";
 import { loadIssues, loadProjects } from "./issue-storage";
 import { acquireJobLock, clearStaleLocks, forceReleaseJobLock, releaseJobLock } from "./job-lock";
 import { getLatestRun, loadJobs, loadRuns, pruneAllRuns, saveRun } from "./job-storage";
 import { checkJobModel } from "./provider-catalog";
+import { INBOX_TOOL_NAME } from "./run-permissions";
 import type { SessionManager } from "./session-manager";
 import { countTranscriptMessages } from "./transcript";
 
 /** Default extra attempts after a `failure` run when a job doesn't set maxRetries. */
 const DEFAULT_JOB_MAX_RETRIES = 1;
 
-/**
- * The MCP tool a job reports through. Replaces parsing a fenced block out of the
- * final message, which failed silently: a job could spend seventeen minutes on a
- * report, emit the block as YAML instead of JSON, and have it dropped with the
- * run still recorded a success. A tool call is schema-validated, and a rejection
- * comes back as an error the model can read and retry.
- */
-const INBOX_TOOL_NAME = "mcp__cockpit-config__add_inbox_message";
 /** Pause before a retry so a fresh session isn't spawned the instant the last one died. */
 const RETRY_BACKOFF_MS = 5_000;
 
@@ -99,135 +94,6 @@ function buildJobPrompt(job: ScheduledJob): string {
 
   parts.push("", "Task:", job.prompt);
   return parts.join("\n");
-}
-
-/**
- * Does `cmd` chain in another command? A `Bash <prefix>` rule only vouches for
- * the program it names, so anything that can run a second one is refused.
- *
- * Scanned with quote awareness, following the shell's own rules, because the
- * characters only mean "operator" when the shell would treat them as one:
- *   - single quotes: everything inside is literal, nothing can execute
- *   - double quotes: `;` `&` `|` `>` `<` are literal, but `$(` and backticks
- *     still substitute, so those stay refused
- *   - a backslash escapes the next character (except inside single quotes)
- * A blanket regex over the raw text refused ordinary payloads instead — a
- * semicolon in a `curl --data-urlencode "notes=a; b"` value, or the `&`
- * between form fields — while adding no safety, since a quoted metacharacter
- * was never going to execute anything.
- *
- * A single unquoted `|` counts: `curl <url> | sh` runs whatever the URL
- * serves, so a pipe hands execution to a program the rule never named. That
- * also means a rule cannot permit a pipeline — narrow each stage's own rule
- * and let the job run the stages as separate commands.
- *
- * An unterminated quote is malformed; refuse rather than guess at it.
- */
-function hasShellOperators(cmd: string): boolean {
-  let quote: '"' | "'" | null = null;
-  for (let i = 0; i < cmd.length; i++) {
-    const ch = cmd[i];
-    // Backslash escapes the following character everywhere but single quotes.
-    if (ch === "\\" && quote !== "'") {
-      i++;
-      continue;
-    }
-    if (quote === "'") {
-      if (ch === "'") quote = null;
-      continue;
-    }
-    if (quote === '"') {
-      if (ch === '"') quote = null;
-      // Command substitution survives double quoting.
-      else if (ch === "`" || (ch === "$" && cmd[i + 1] === "(")) return true;
-      continue;
-    }
-    if (ch === "'" || ch === '"') {
-      quote = ch;
-      continue;
-    }
-    if (ch === ";" || ch === "&" || ch === "|" || ch === ">" || ch === "<" || ch === "`") return true;
-    if (ch === "$" && cmd[i + 1] === "(") return true;
-  }
-  return quote !== null;
-}
-
-function parseToolRule(rule: string): { tool: string; restriction?: string } {
-  const spaceIdx = rule.indexOf(" ");
-  if (spaceIdx > 0) return { tool: rule.slice(0, spaceIdx), restriction: rule.slice(spaceIdx + 1) };
-  return { tool: rule };
-}
-
-function isToolAllowed(toolName: string, toolInput: string, rules: string[]): boolean {
-  for (const rule of rules) {
-    const { tool, restriction } = parseToolRule(rule);
-    if (tool !== toolName) continue;
-    if (!restriction) return true;
-    if (toolName === "Bash") {
-      let cmd = "";
-      try {
-        cmd = (JSON.parse(toolInput) as { command?: string }).command || "";
-      } catch {
-        cmd = toolInput;
-      }
-      const trimmed = cmd.trim();
-      if (hasShellOperators(trimmed)) continue;
-      if (trimmed === restriction || trimmed.startsWith(`${restriction} `)) return true;
-    }
-  }
-  return false;
-}
-
-function normalizeMcpName(name: string): string {
-  return name.replace(/[^a-zA-Z0-9]/g, "_");
-}
-
-/**
- * The prefixes a server's tool names may carry. The CLI does not always
- * normalise: a server configured as `cockpit-config` emits
- * `mcp__cockpit-config__list_projects`, hyphen intact. Matching only the
- * normalised form denied every call to any server whose name was not already
- * alphanumeric, so both spellings are accepted. Filters stay keyed by the
- * configured name, which is what the job editor and storage use.
- */
-function mcpPrefixes(serverName: string): string[] {
-  return [...new Set([serverName, normalizeMcpName(serverName)])].map((n) => `${n}__`);
-}
-
-function isMcpToolAllowed(
-  toolName: string,
-  toolInput: string,
-  enabledServers: Set<string>,
-  mcpToolFilters?: Record<string, string[]>,
-): boolean | null {
-  if (!toolName.startsWith("mcp__")) return null;
-  const remainder = toolName.slice(5);
-
-  for (const serverName of enabledServers) {
-    const prefix = mcpPrefixes(serverName).find((p) => remainder.startsWith(p));
-    if (!prefix) continue;
-    const tool = remainder.slice(prefix.length);
-    if (!mcpToolFilters || !(serverName in mcpToolFilters)) return true;
-    const filters = mcpToolFilters[serverName];
-    for (const filter of filters) {
-      if (filter === tool) return true;
-      if (filter.includes(":")) {
-        let parsed: { server?: string; tool?: string };
-        try {
-          parsed = JSON.parse(toolInput) as { server?: string; tool?: string };
-        } catch {
-          continue;
-        }
-        const [filterServer, filterTool] = filter.split(":", 2);
-        if (parsed.server === filterServer) {
-          if (filterTool === "*" || parsed.tool === filterTool) return true;
-        }
-      }
-    }
-    return false;
-  }
-
-  return false;
 }
 
 /** How many issues currently sit in the schedule's watched status (and
@@ -624,6 +490,9 @@ export class JobScheduler {
    * running) but matches against the event instead of the clock.
    */
   private handleIssueStatusChange(event: IssueStatusChangeEvent): void {
+    // A project with a workflow has its issues worked by the workflow engine. A
+    // job left over from before would work the same issue a second time.
+    if (projectRunsWorkflow(event.projectId)) return;
     const jobs = loadJobs();
     for (const job of jobs) {
       if (!job.enabled) continue;
@@ -702,355 +571,55 @@ export class JobScheduler {
     if (trustDirectory(jobCwd)) {
       logDiag(job.id, "job:scratchpad-trusted", { runId, cwd: jobCwd });
     }
-    const sessionInfo = this.sessionManager.createSession(jobCwd, `[job] ${job.name}`, {
-      bypassPermissions: !!job.bypassPermissions,
-      // The job's own switch, never the session default: a default switched on
-      // for interactive work must not reach a job whose author left it off.
-      // Its storage folder travels with it, so a sandboxed run can write the
-      // state its prompt tells it to keep there.
-      sandbox: { enabled: job.sandbox === true, jobStorageDir: getJobScratchpadDir(job.id) },
-      runtime: job.runtime,
-      // Only an inbox-reporting job gets a run context, and only a run context
-      // gets the cockpit MCP server. A job that never reports keeps no reach
-      // into cockpit at all.
-      ...(job.inboxOutput ? { runContext: { jobId: job.id, jobName: job.name, runId, notifyProviders: job.notifyProviders } } : {}),
-    });
-    const sessionId = sessionInfo.id;
-    // The stream runtime (`claude -p`) ends its process with the turn, so no
-    // later idle can be woken by a task notification. Waiting would only
-    // stretch a dead run to the watchdog, so that path keeps failing fast.
-    const canWaitForBackground = sessionInfo.runtime !== "stream";
-    const jlog = (label: string, data?: Record<string, unknown>) => logDiag(sessionId, `job:${label}`, { jobId: job.id, runId, ...data });
-    jlog("session-created", { cwd: jobCwd, runtime: sessionInfo.runtime });
-
-    const run: JobRun = {
-      id: runId,
-      jobId: job.id,
-      sessionId,
-      status: "running",
-      startedAt: Date.now(),
-      toolsUsed: [],
-      messageCount: 0,
-      prompt: job.prompt,
+    const { done } = startAgentRun<JobRun>(this.sessionManager, {
+      log: { prefix: "job", fields: { jobId: job.id, runId } },
       cwd: jobCwd,
-    };
-
-    saveRun(run);
-    this.runningJobs.set(job.id, run);
-
-    const toolTracker = new Map<string, JobRunToolUse>();
-    let lastAssistantText = "";
-    const enabledServers = new Set(job.mcpServers || []);
-    // Background subagents outlive the turn that launched them. If the turn
-    // ends with any still running, the model was waiting for a notification
-    // that nothing here will deliver, and cleanup is about to kill the PTY.
-    const pendingTasks = new Set<string>();
-
-    const unsubEvent = this.sessionManager.subscribe(sessionId, (event) => {
-      if (event.type === "tool_use_start" && event.toolId) {
-        toolTracker.set(event.toolId, {
-          name: event.toolName || "unknown",
-          input: event.toolInput || "",
-          output: "",
-          timestamp: Date.now(),
-        });
-        jlog("tool-start", { toolId: event.toolId, toolName: event.toolName ?? "unknown" });
-      } else if (event.type === "tool_result" && event.toolId) {
-        const entry = toolTracker.get(event.toolId);
-        if (entry) {
-          entry.output = event.toolOutput || "";
-          entry.durationMs = Date.now() - entry.timestamp;
-          run.toolsUsed.push(entry);
-          toolTracker.delete(event.toolId);
-          jlog("tool-result", { toolId: event.toolId, name: entry.name, durationMs: entry.durationMs, outputLen: entry.output.length });
-        }
-      } else if (event.type === "message_done") {
-        run.messageCount++;
-        let textLen = 0;
-        if (event.message) {
-          let text = event.message.content;
-          if (!text && event.message.blocks) {
-            text = event.message.blocks
-              .filter((b): b is { type: "text"; text: string } => b.type === "text")
-              .map((b) => b.text)
-              .join("\n");
-          }
-          if (text) {
-            lastAssistantText = text;
-            textLen = text.length;
-          }
-        }
-        // JOB-DEBUG: a message_done carrying tool uses but no text is the turn that
-        // ends after a tool_use without a final answer — the failure signature.
-        jlog("message-done", {
-          count: run.messageCount,
-          textLen,
-          toolUses: event.message?.toolUses?.length ?? 0,
-          updatedLastText: textLen > 0,
-        });
-      } else if (event.type === "task_update" && event.taskInfo?.taskId) {
-        const { taskId, status } = event.taskInfo;
-        // "progress" is an activity line on a task that is still running, not
-        // a completion; removing it here let a progressing agent look finished.
-        if (status === "running" || status === "progress") pendingTasks.add(taskId);
-        else pendingTasks.delete(taskId);
-        jlog("task-update", { taskId, status, pending: pendingTasks.size });
-      } else if (event.type === "task_sync") {
-        // The CLI's whole background_tasks list, attached to Stop and
-        // SubagentStop. It is authoritative: individual task updates can be
-        // missed, and an empty list is how completion is reported.
-        pendingTasks.clear();
-        for (const task of event.tasks ?? []) {
-          if (task.status === "running") pendingTasks.add(task.taskId);
-        }
-        jlog("task-sync", { tasks: (event.tasks ?? []).map((t) => ({ taskId: t.taskId, status: t.status })), pending: pendingTasks.size });
-      } else if (event.type === "permission_request" && event.requestId) {
-        if (job.bypassPermissions) {
-          jlog("permission", { toolName: event.toolName ?? "unknown", requestId: event.requestId, bypass: true, allowed: true });
-          this.sessionManager.respondToPermission(sessionId, event.requestId, true, event.rawToolInput, undefined, undefined, "bypass");
-        } else {
-          const toolName = event.toolName || "unknown";
-          const inputStr = event.toolInput || "";
-          // The inbox tool is cockpit's own reporting channel, not something the
-          // user configures per job, so it bypasses the mcpServers allowlist it
-          // would otherwise fail. The MCP server still confines a run token to
-          // this one tool, so allowing it here grants nothing else.
-          const isInboxTool = toolName === INBOX_TOOL_NAME;
-          // An MCP tool passes on either gate: the mcpServers/mcpToolFilters
-          // allowlist, or an allowedTools entry naming it outright. It used to
-          // be the server gate alone — isMcpToolAllowed returns null only for
-          // non-MCP names, so a boolean always short-circuited allowedTools —
-          // while the job editor accepted "mcp__server__tool" entries and the
-          // run's own prompt listed them, so those entries silently did
-          // nothing. OR, not AND, so a job configured with only mcpServers is
-          // unaffected. The inbox tool keeps its own gate: it is cockpit's
-          // reporting channel, governed by inboxOutput rather than either list.
-          const mcpResult = isInboxTool ? !!job.inboxOutput : isMcpToolAllowed(toolName, inputStr, enabledServers, job.mcpToolFilters);
-          const allowed = isInboxTool
-            ? mcpResult === true
-            : mcpResult === true || isToolAllowed(toolName, inputStr, job.allowedTools || []);
-          jlog("permission", {
-            toolName,
-            requestId: event.requestId,
-            mcpResult,
-            allowed,
-            enabledServers: [...enabledServers],
-          });
-          this.sessionManager.respondToPermission(
-            sessionId,
-            event.requestId,
-            allowed,
-            allowed ? (event.rawToolInput ?? {}) : undefined,
-            undefined,
-            undefined,
-            "cockpit",
-          );
-
-          const permEntry: JobRunToolUse = {
-            name: toolName,
-            input: inputStr,
-            output: "",
-            timestamp: Date.now(),
-            permitted: allowed,
-          };
-          run.toolsUsed.push(permEntry);
-        }
-      }
-    });
-
-    // JOB-DEBUG: the scheduler currently ignores compaction entirely. Track it from
-    // the system-message stream and surface every system message the run receives,
-    // so a teardown can be correlated with a compaction window.
-    let compacting = false;
-    let lastCompactAt = 0;
-    const unsubSystem = this.sessionManager.onSystem(sessionId, (text) => {
-      if (text === "__compact::start") compacting = true;
-      else if (text === "__compact::done") {
-        compacting = false;
-        lastCompactAt = Date.now();
-      }
-      jlog("system-msg", { text: text.slice(0, 140), compacting });
-    });
-
-    const initCleanup = this.sessionManager.onInit(sessionId, (initData) => {
-      const disabling: string[] = [];
-      for (const server of initData.mcpServers) {
-        if (!enabledServers.has(server.name)) {
-          disabling.push(server.name);
-          this.sessionManager.mcpToggle(sessionId, server.name, false).catch(() => {});
-        }
-      }
-      jlog("init", { available: initData.mcpServers.map((s) => s.name), disabling, enabled: [...enabledServers] });
-    });
-
-    if (job.model) {
-      this.sessionManager.setModel(sessionId, job.model, job.contextSize);
-      jlog("set-model", { model: job.model, contextSize: job.contextSize });
-    }
-    if (job.thinkingLevel) {
-      this.sessionManager.setThinkingLevel(sessionId, job.thinkingLevel);
-      jlog("set-thinking", { thinkingLevel: job.thinkingLevel });
-    }
-
-    return new Promise<JobRun>((resolve) => {
-      this.jobResolvers.set(job.id, resolve);
-      const maxMs = (job.maxDurationMinutes || 30) * 60 * 1000;
-      const sentAt = Date.now();
-      let sawRunning = false;
-      let statusEvents = 0;
-
-      const timeout = setTimeout(() => {
-        jlog("watchdog-fired", {
-          maxMs,
-          elapsedMs: Date.now() - sentAt,
-          sawRunning,
-          messageCount: run.messageCount,
-          toolCount: run.toolsUsed.length,
-        });
-        cleanup("timeout");
-      }, maxMs);
-
-      const unsubStatus = this.sessionManager.onStatus(sessionId, (status) => {
-        statusEvents++;
-        if (status === "running") sawRunning = true;
-        // An "idle" that arrives while the process is still alive is the orphan
-        // signature: the run gets marked done but the PTY keeps going untracked.
-        const processAlive = this.sessionManager.hasRunningProcess(sessionId);
-        jlog("status-event", {
-          status,
-          n: statusEvents,
-          elapsedMs: Date.now() - sentAt,
-          sawRunning,
-          processAlive,
-          // JOB-DEBUG: state that determines whether this idle is real or spurious.
-          compacting,
-          msSinceCompact: lastCompactAt ? Date.now() - lastCompactAt : null,
-          lastAssistantTextLen: lastAssistantText.length,
-          pendingTasks: pendingTasks.size,
-          messageCount: run.messageCount,
-          toolCount: run.toolsUsed.length,
-        });
-        if (status === "idle") {
-          // JOB-DEBUG: this is the exact decision that ends the run. If the CLI is
-          // still alive, or we just compacted, or there is no assistant text, this
-          // idle is the prime suspect for a premature teardown.
-          jlog("idle-cleanup-decision", {
-            processAlive,
-            compacting,
-            msSinceCompact: lastCompactAt ? Date.now() - lastCompactAt : null,
-            lastAssistantTextLen: lastAssistantText.length,
-            lastAssistantTextHead: lastAssistantText.slice(0, 160),
-            pendingTasks: pendingTasks.size,
-            elapsedMs: Date.now() - sentAt,
-          });
-          // A background agent outlives the turn that launched it. The CLI
-          // wakes the model with a task notification when it reports, which
-          // starts another turn and ends in another idle; tearing the PTY down
-          // here would kill the agent instead.
-          if (canWaitForBackground && pendingTasks.size > 0) {
-            jlog("waiting-on-background", {
-              pending: pendingTasks.size,
-              taskIds: [...pendingTasks],
-              elapsedMs: Date.now() - sentAt,
-            });
-            return;
-          }
-          cleanup("success");
-        }
-      });
-
-      const unsubError = this.sessionManager.onError(sessionId, (error) => {
-        jlog("error-event", { error, elapsedMs: Date.now() - sentAt });
-        run.error = error;
-        cleanup("failure");
-      });
-
-      let cleaned = false;
-      const cleanup = (finalStatus: "success" | "failure" | "timeout") => {
-        if (cleaned) {
-          jlog("cleanup-skipped", { requestedStatus: finalStatus, elapsedMs: Date.now() - sentAt });
-          return;
-        }
-        if (run.status === "stopped") {
-          cleaned = true;
-          jlog("cleanup-guard-stopped", { elapsedMs: Date.now() - sentAt });
-          clearTimeout(timeout);
-          resolve(run);
-          this.jobResolvers.delete(job.id);
-          return;
-        }
-        cleaned = true;
-        jlog("cleanup-begin", {
-          finalStatus,
-          elapsedMs: Date.now() - sentAt,
-          sawRunning,
-          statusEvents,
-          messageCount: run.messageCount,
-          toolCount: run.toolsUsed.length,
-          lastTextLen: lastAssistantText.length,
-        });
-        clearTimeout(timeout);
-        unsubEvent?.();
-        unsubStatus?.();
-        unsubError?.();
-        unsubSystem?.();
-        initCleanup?.();
-
-        run.completedAt = Date.now();
-        run.durationMs = run.completedAt - run.startedAt;
-        if (finalStatus === "timeout") {
-          run.error =
-            pendingTasks.size > 0
-              ? `Exceeded max duration of ${job.maxDurationMinutes || 30} minutes while ${pendingTasks.size} background task(s) still ran`
-              : `Exceeded max duration of ${job.maxDurationMinutes || 30} minutes`;
-          this.sessionManager.destroySession(sessionId);
-        }
-
-        if (finalStatus === "success" && lastAssistantText) {
-          const errorBlock = parseErrorBlock(lastAssistantText);
-          if (errorBlock) {
-            finalStatus = "failure";
-            run.error = errorBlock.details ? `${errorBlock.error}: ${errorBlock.details}` : errorBlock.error;
-            jlog("error-block-detected", { error: run.error });
-          }
-        }
-
-        // A completed turn always ends with an assistant message. Reaching idle
-        // without one means the turn was cut short rather than finished — the
-        // signature of a run torn down mid-compaction, which reported "success"
-        // for three days while producing nothing. Fail loudly instead: the
-        // failure branch below raises an inbox alert.
-        if (finalStatus === "success" && !lastAssistantText) {
-          finalStatus = "failure";
-          run.error = "Job went idle without producing any assistant message, so the turn never completed";
-          jlog("no-assistant-message", { toolCount: run.toolsUsed.length });
-        }
-
-        // A PTY run that is still waiting here ended for another reason
-        // (stopped or timeout), so the wait branch above already covers it.
-        // Only the stream runtime, which cannot come back, fails on pending
-        // work at the first idle.
-        if (finalStatus === "success" && !canWaitForBackground && pendingTasks.size > 0) {
-          finalStatus = "failure";
-          run.error = `Job ended its turn with ${pendingTasks.size} background task(s) still running, so their work was never collected`;
-          jlog("pending-background-tasks", { pending: pendingTasks.size });
-        }
-
-        run.status = finalStatus;
-
-        const transcriptCount = countTranscriptMessages(sessionId, jobCwd);
-        jlog("transcript-count", { transcriptCount, runMessageCount: run.messageCount });
-        if (transcriptCount > run.messageCount) run.messageCount = transcriptCount;
-
-        saveRun(run);
-
+      sessionName: `[job] ${job.name}`,
+      prompt: buildJobPrompt(job),
+      session: {
+        bypassPermissions: !!job.bypassPermissions,
+        // The job's own switch, never the session default: a default switched on
+        // for interactive work must not reach a job whose author left it off.
+        // Its storage folder travels with it, so a sandboxed run can write the
+        // state its prompt tells it to keep there.
+        sandbox: { enabled: job.sandbox === true, jobStorageDir: getJobScratchpadDir(job.id) },
+        runtime: job.runtime,
+        // Only an inbox-reporting job gets a run context, and with it the job
+        // caller's confinement on the cockpit MCP server.
+        ...(job.inboxOutput ? { runContext: { jobId: job.id, jobName: job.name, runId, notifyProviders: job.notifyProviders } } : {}),
+      },
+      model: job.model,
+      contextSize: job.contextSize,
+      thinkingLevel: job.thinkingLevel,
+      permissions: job.bypassPermissions
+        ? { kind: "bypass" }
+        : { kind: "allowlist", allowedTools: job.allowedTools || [], mcpToolFilters: job.mcpToolFilters, inboxTool: !!job.inboxOutput },
+      mcpServers: job.mcpServers || [],
+      maxDurationMinutes: job.maxDurationMinutes || 30,
+      record: (session) => ({
+        id: runId,
+        jobId: job.id,
+        sessionId: session.id,
+        status: "running",
+        startedAt: Date.now(),
+        toolsUsed: [],
+        messageCount: 0,
+        prompt: job.prompt,
+        cwd: jobCwd,
+      }),
+      save: saveRun,
+      started: (run, settle) => {
+        this.runningJobs.set(job.id, run);
+        this.jobResolvers.set(job.id, settle);
+      },
+      ended: (run) => {
         // A `failure` alert is suppressed on attempts that will be retried (the retry
         // wrapper passes suppressFailureAlert); the final attempt still alerts. A
         // `timeout` is terminal and never retried, so it always alerts.
-        if (finalStatus === "timeout" || (finalStatus === "failure" && !opts?.suppressFailureAlert)) {
+        if (run.status === "timeout" || (run.status === "failure" && !opts?.suppressFailureAlert)) {
           addInboxMessage({
             title: `Job failed: ${job.name}`,
-            body: `**Status:** ${finalStatus}\n\n${run.error || "Job failed with no error message"}`,
+            body: `**Status:** ${run.status}\n\n${run.error || "Job failed with no error message"}`,
             priority: "error",
             jobId: job.id,
             jobName: job.name,
@@ -1058,29 +627,16 @@ export class JobScheduler {
             notifyProviders: job.notifyProviders,
           });
         }
-
-        jlog("cleanup-done", {
-          finalStatus,
-          durationMs: run.durationMs,
-          messageCount: run.messageCount,
-          toolCount: run.toolsUsed.length,
-          error: run.error,
-        });
-
-        // A one-shot job's PTY claude sits idle at the prompt after answering;
-        // without this it never exits and leaks ~310MB per run until the next
-        // server restart. Idempotent — a timeout already destroyed it above.
-        this.sessionManager.destroySession(sessionId);
-
+      },
+      released: () => {
         this.runningJobs.delete(job.id);
         releaseJobLock(job.id);
-        resolve(run);
         this.jobResolvers.delete(job.id);
-      };
-
-      const promptText = buildJobPrompt(job);
-      jlog("send-message", { promptLen: promptText.length, maxMs });
-      this.sessionManager.sendMessage(sessionId, promptText);
+      },
+      stopped: () => {
+        this.jobResolvers.delete(job.id);
+      },
     });
+    return done;
   }
 }

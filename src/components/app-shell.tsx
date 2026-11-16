@@ -1,19 +1,26 @@
 "use client";
 
-import { Menu, Terminal, X } from "lucide-react";
+import { FolderTree, Terminal, X } from "lucide-react";
 import Image from "next/image";
 import { usePathname, useRouter } from "next/navigation";
-import { createContext, type ReactNode, useCallback, useContext, useEffect, useRef, useState } from "react";
+import { createContext, type ReactNode, Suspense, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { AgentTranscriptProvider } from "@/components/agent-transcript-modal";
+import { AssistantProvider } from "@/components/assistant-provider";
 import { AuthGuard } from "@/components/auth-guard";
 import { SessionIssuesButton } from "@/components/issues/session-issues-button";
+import { NavBar } from "@/components/nav/nav-bar";
+import { NavProvider } from "@/components/nav/nav-provider";
+import { NavRail } from "@/components/nav/nav-rail";
 import { SearchButton } from "@/components/search-modal";
 import { SessionAlerts } from "@/components/session-alerts";
+import { SessionWatchProvider } from "@/components/session-watch-provider";
 import { Sidebar, type SidebarHandle } from "@/components/sidebar";
 import { BackgroundTasksButton } from "@/components/task-indicator";
 import { Button } from "@/components/ui/button";
 import { UsageButton } from "@/components/usage-modal";
 import { useEmbedded } from "@/hooks/use-embedded";
+import { useIsDesktop } from "@/hooks/use-is-desktop";
+import { usePlaceMemory } from "@/hooks/use-place-memory";
 import { useSettings } from "@/hooks/use-settings";
 import { WebSocketProvider } from "@/hooks/use-websocket";
 import { headerActionsVisibility } from "@/lib/header-actions";
@@ -35,6 +42,8 @@ interface HeaderConfig {
   onRename?: (name: string) => void;
   hideActions?: boolean;
   usageOnly?: boolean;
+  /** A page's own control, shown at the right of the bar whatever the other actions do. */
+  actions?: ReactNode;
 }
 
 export interface TabActions {
@@ -96,13 +105,14 @@ export function useShell() {
   return useContext(ShellContext);
 }
 
-export function usePageHeader(title: string, options?: { hideActions?: boolean; usageOnly?: boolean }) {
+export function usePageHeader(title: string, options?: { hideActions?: boolean; usageOnly?: boolean; actions?: ReactNode }) {
   const { setHeader } = useShell();
   const hideActions = options?.hideActions;
   const usageOnly = options?.usageOnly;
+  const actions = options?.actions;
   useEffect(() => {
-    setHeader({ title, hideActions, usageOnly });
-  }, [title, hideActions, usageOnly, setHeader]);
+    setHeader({ title, hideActions, usageOnly, actions });
+  }, [title, hideActions, usageOnly, actions, setHeader]);
 }
 
 export function useShellCwd(cwd: string | undefined) {
@@ -261,10 +271,40 @@ function ServiceWorkerNavigation() {
   return null;
 }
 
+/** One place memory recorder, inside Suspense because it reads the query. */
+function PlaceMemory() {
+  usePlaceMemory();
+  return null;
+}
+
+/** The shell's client state that only the real page needs: the assistant, the
+ *  one session-watch sender, the navigation, and the place memory. The page
+ *  modal's frame renders its own shell without them. */
+function ShellProviders({ embedded, children }: { embedded: boolean; children: ReactNode }) {
+  if (embedded) return <>{children}</>;
+  return (
+    <SessionWatchProvider>
+      <AssistantProvider>
+        <NavProvider>
+          <Suspense fallback={null}>
+            <PlaceMemory />
+          </Suspense>
+          {children}
+        </NavProvider>
+      </AssistantProvider>
+    </SessionWatchProvider>
+  );
+}
+
 export function AppShell({ children }: { children: ReactNode }) {
   const sidebarRef = useRef<SidebarHandle>(null);
   const embedded = useEmbedded();
   const pathname = usePathname();
+  const isDesktop = useIsDesktop();
+  // The pinned session list sits beside a session and beside the Sessions
+  // home on a desktop. On a phone the home shows its own pinned strip, and a
+  // session gets the drawer.
+  const showSidebar = pathname.startsWith("/sessions/") || (pathname === "/" && isDesktop);
   const [header, setHeaderState] = useState<HeaderConfig>({ title: "Cockpit" });
   const [cwd, setCwdState] = useState<string | undefined>(undefined);
   const [sessionId, setSessionIdState] = useState<string | undefined>(undefined);
@@ -353,93 +393,134 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   const actions = headerActionsVisibility(header);
 
+  // Memoised: a page's header control is a ReactNode in `header`, and a new
+  // context value on every shell render would re-render every consumer, which
+  // in turn would set the header again.
+  const shellValue = useMemo<ShellContextValue>(
+    () => ({
+      setHeader,
+      cwd,
+      setCwd,
+      sessionId,
+      setSessionId,
+      sessionModel,
+      setSessionModel,
+      runtime,
+      setRuntime,
+      backgroundTasks,
+      setBackgroundTasks,
+      initData,
+      setInitData,
+      sidebarSections: sidebarSectionsMap,
+      setSidebarSection,
+      removeSidebarSection,
+      closeSidebar,
+      tabActions,
+      setTabActions,
+      openPageModal,
+    }),
+    [
+      setHeader,
+      cwd,
+      setCwd,
+      sessionId,
+      setSessionId,
+      sessionModel,
+      setSessionModel,
+      runtime,
+      setRuntime,
+      backgroundTasks,
+      initData,
+      sidebarSectionsMap,
+      setSidebarSection,
+      removeSidebarSection,
+      closeSidebar,
+      tabActions,
+      setTabActions,
+      openPageModal,
+    ],
+  );
+
   return (
     <AuthGuard>
       <WebSocketProvider>
-        <ShellContext.Provider
-          value={{
-            setHeader,
-            cwd,
-            setCwd,
-            sessionId,
-            setSessionId,
-            sessionModel,
-            setSessionModel,
-            runtime,
-            setRuntime,
-            backgroundTasks,
-            setBackgroundTasks,
-            initData,
-            setInitData,
-            sidebarSections: sidebarSectionsMap,
-            setSidebarSection,
-            removeSidebarSection,
-            closeSidebar,
-            tabActions,
-            setTabActions,
-            openPageModal,
-          }}
-        >
+        <ShellContext.Provider value={shellValue}>
           <AgentTranscriptProvider sessionId={sessionId} cwd={cwd}>
-            {/* The app draws under the system bars (viewport-fit=cover), so it
+            <ShellProviders embedded={embedded}>
+              {/* The app draws under the system bars (viewport-fit=cover), so it
                 pads its own content back out of the notch and the gesture bar. */}
-            <div
-              className="fixed inset-0 flex"
-              style={{
-                paddingTop: "env(safe-area-inset-top)",
-                paddingBottom: "env(safe-area-inset-bottom)",
-                paddingLeft: "env(safe-area-inset-left)",
-                paddingRight: "env(safe-area-inset-right)",
-              }}
-            >
-              {!embedded && <Sidebar ref={sidebarRef} />}
-              {!embedded && <PageModal path={pageModal.path} onClose={pageModal.close} onOpenInApp={pageModal.openInApp} />}
-              <div className="flex-1 min-h-0 min-w-0 flex flex-col">
-                <header className="shrink-0 flex items-center gap-2 border-b px-4 py-2 bg-background">
-                  {!embedded && (
-                    <Button variant="ghost" size="icon" onClick={toggleSidebar} title="Toggle sidebar (Ctrl+B)" className="md:hidden">
-                      <Menu className="h-4 w-4" />
-                    </Button>
-                  )}
-                  <div className={`${embedded ? "flex" : "hidden md:flex"} items-center gap-2 min-w-0 flex-1 overflow-hidden`}>
-                    {!embedded && <Image src="/icon-192.png" alt="" width={22} height={22} className="shrink-0 dark:invert" />}
-                    <EditableTitle title={header.title} onRename={header.onRename} />
-                  </div>
-                  {(actions.showSessionActions || actions.showUsage) && (
-                    <div className="flex items-center gap-2 shrink-0 ml-auto">
-                      {actions.showSessionActions && (
-                        <>
-                          <SessionIssuesButton />
-                          {cwd && <NewTerminalButton cwd={cwd} />}
-                          <SearchButton />
-                          {cwd && <BackgroundTasksButton tasks={backgroundTasks} />}
-                        </>
-                      )}
-                      {actions.showUsage && <UsageButton sessionModel={sessionModel} />}
-                    </div>
-                  )}
-                  {embedded && (
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      onClick={() => postToParent({ type: "close" })}
-                      title="Close"
-                      className="shrink-0"
-                      data-testid="page-modal-close"
+              <div
+                className="fixed inset-0 flex"
+                style={{
+                  paddingTop: "env(safe-area-inset-top)",
+                  paddingBottom: "env(safe-area-inset-bottom)",
+                  paddingLeft: "env(safe-area-inset-left)",
+                  paddingRight: "env(safe-area-inset-right)",
+                }}
+              >
+                {!embedded && <NavRail />}
+                {!embedded && showSidebar && <Sidebar ref={sidebarRef} />}
+                {!embedded && <PageModal path={pageModal.path} onClose={pageModal.close} onOpenInApp={pageModal.openInApp} />}
+                <div className="flex-1 min-h-0 min-w-0 flex flex-col">
+                  <header className="shrink-0 flex items-center gap-2 border-b px-4 py-2 bg-background">
+                    {!embedded && pathname.startsWith("/sessions/") && (
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={toggleSidebar}
+                        title="Files & changes"
+                        className="md:hidden"
+                        data-testid="session-files-drawer"
+                      >
+                        <FolderTree className="h-4 w-4" />
+                      </Button>
+                    )}
+                    <div
+                      className={`${embedded || (!pathname.startsWith("/sessions/") && pathname !== "/") ? "flex" : "hidden md:flex"} items-center gap-2 min-w-0 flex-1 overflow-hidden`}
                     >
-                      <X className="h-4 w-4" />
-                    </Button>
-                  )}
-                </header>
-                {/* A page the modal does not show is opened outside instead, so it is never rendered in here. */}
-                <main className="flex-1 min-h-0 min-w-0 flex flex-col">{embedded && !isModalPath(pathname) ? null : children}</main>
+                      {!embedded && (
+                        <Image src="/icon-192.png" alt="" width={22} height={22} className="hidden md:block shrink-0 dark:invert" />
+                      )}
+                      <EditableTitle title={header.title} onRename={header.onRename} />
+                    </div>
+                    {(header.actions || actions.showSessionActions || actions.showUsage) && (
+                      <div className="flex items-center gap-2 shrink-0 ml-auto">
+                        {header.actions}
+                        {actions.showSessionActions && (
+                          <>
+                            <SessionIssuesButton />
+                            {cwd && <NewTerminalButton cwd={cwd} />}
+                            <SearchButton />
+                            {cwd && <BackgroundTasksButton tasks={backgroundTasks} />}
+                          </>
+                        )}
+                        {actions.showUsage && <UsageButton sessionModel={sessionModel} />}
+                      </div>
+                    )}
+                    {embedded && (
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => postToParent({ type: "close" })}
+                        title="Close"
+                        className="shrink-0"
+                        data-testid="page-modal-close"
+                      >
+                        <X className="h-4 w-4" />
+                      </Button>
+                    )}
+                  </header>
+                  {/* A page the modal does not show is opened outside instead, so it is never rendered in here. */}
+                  <main className="flex-1 min-h-0 min-w-0 flex flex-col">{embedded && !isModalPath(pathname) ? null : children}</main>
+                  {!embedded && <NavBar />}
+                </div>
               </div>
-            </div>
-            {/* Only the real shell: the page-modal iframe renders its own, and
+              {/* Only the real shell: the page-modal iframe renders its own, and
                 two shells would each raise a banner for the same event. */}
-            {!embedded && <SessionAlerts />}
-            {!embedded && <ServiceWorkerNavigation />}
-            {embedded && <EmbeddedPageBridge pathname={pathname} />}
+              {!embedded && <SessionAlerts />}
+              {!embedded && <ServiceWorkerNavigation />}
+              {embedded && <EmbeddedPageBridge pathname={pathname} />}
+            </ShellProviders>
           </AgentTranscriptProvider>
         </ShellContext.Provider>
       </WebSocketProvider>

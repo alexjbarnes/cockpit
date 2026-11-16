@@ -32,7 +32,7 @@ test("assistant dot goes working, then unread, and clears when the modal opens",
 
   await page.goto(`${harness.cockpitUrl}/`);
 
-  const button = page.getByTestId("assistant-button");
+  const button = page.getByTestId("nav-rail-assistant");
   const dot = page.getByTestId("assistant-dot");
   await expect(button).toBeVisible();
   // Nothing has happened yet: no session, no dot.

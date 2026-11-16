@@ -4,7 +4,7 @@ description: Implement a refined cockpit issue. Branches off next in an isolated
 
 # Implement a cockpit issue
 
-The Implementation stage of the pipeline. The issue description already holds a precise, human-approved plan (produced by `refine-issue`, reviewed, and approved at the issue-level Plan Review gate). This skill executes that plan, then adversarially reviews its own code inline, in one warm run.
+The Implementation stage of the pipeline. The issue already has a precise, human-approved plan (written by `refine-issue` as the issue's own plan, reviewed, and approved at the issue-level Plan Review gate). The description is the requirement the plan answers. This skill executes that plan, then adversarially reviews its own code inline, in one warm run.
 
 The plan is the contract. Follow it. It names the files, symbols, and exact changes. Do not redesign it. If a step is wrong or blocked by reality, make the minimal correct change and record the deviation rather than improvising silently.
 
@@ -19,6 +19,26 @@ Either an explicit issue key, or none (the skill selects one).
 
 This is why a scheduled implementation job needs no selection logic in its prompt. "Run the implement-issue skill" is the whole job; the skill picks the issue.
 
+## Run by a workflow
+When the prompt opens with "You are the agent for the ... status of a workflow on issue <KEY>" (or says the issue "has come back to" a status), a Cockpit workflow started this session for that one issue and told it to run this skill. This is pipeline mode, with these differences, and where they conflict with a step below they win:
+
+- **The issue is the one the prompt names.** Do not list issues, pick one, or look at any other.
+- **Cockpit has already moved it to the status you work in.** Skip any step that sets a status to say work has started.
+- **Your work ends when you move the issue** with `update_issue` to one of the statuses the prompt lists, and those are the only statuses you can move it to. The prompt lists the statuses and nothing more: which one fits which outcome is said below. Make it your last action.
+- **If you cannot do the work**, comment why on the issue, leave its status alone, and end with the `cockpit-error` block the prompt describes. Cockpit holds the issue for a person.
+- **The working directory may be the issue's own worktree.** When the prompt says so, Cockpit has already made the worktree and its `issue/<KEY>` branch, and every agent that works on the issue works in it. Use the working directory as the worktree: do not create, replace or remove a worktree or branch for the issue, and do not `cd` out of it to the main checkout. Cockpit removes it when the issue is finished.
+- **A port is kept for the run** in `$COCKPIT_RUN_PORT`, and named in the prompt. If you start a server, start it on that port and do not scan for another.
+
+For this skill that means:
+
+- Skip step 3: the issue is already in the status you work in.
+- When the working directory is the issue's own worktree, skip the worktree commands in step 4: the worktree is the working directory, already on `issue/<KEY>`. On a first implementation it starts from the base branch; on rework it holds the earlier work, so bring it up to date with `git fetch origin` and a rebase onto `origin/next` as step 4's rework path describes. Wherever a later step says `../<NAME>-<ISSUE-ID>` or `<worktree>`, it means the working directory.
+- In step 12, start the test server on `$COCKPIT_RUN_PORT`, not on a port found by scanning.
+- **Skip steps 8, 9 and 10.** In a workflow the reviews are another agent's work, run with `validate-issue` after this one, so the author does not mark its own work. Run the verify checks (step 7), then go straight to step 11.
+- Do steps 11 and 12 as written: the PR, green CI and the test server are what the validating agent and the reviewer work from.
+- In step 13, attach the PR and move the issue to `Validation` (the status the prompt lists where the work is checked), not `Code Review`.
+- **Rework** (step 2a) also covers work sent back by validation: a "Validation" comment listing what must be fixed, posted after the last "Review server" comment, is the contract for this pass exactly as a human's change request is.
+
 ## Invocation modes
 - **Pipeline (autonomous)**: an issue enters `Implementation Ready` and an agent runs the skill end to end. Perform all status transitions. Push and open the PR without waiting for a human.
 - **Interactive**: a human runs the skill directly (e.g. "implement CK-12"). Same flow, but confirm with the human before the outward-facing actions: pushing the branch and opening the PR.
@@ -28,12 +48,12 @@ The default is pipeline mode. Treat it as interactive only when a human invoked 
 ## Steps
 
 ### 1. Read the issue, resolve the repo, and name the branch
-- `mcp__cockpit-config__get_issue` for the key. One call returns the title, full description (the plan), labels, status, and every comment. The Code Review gate often leaves approval conditions or change requests in comments; they override the plan where they conflict.
+- `mcp__cockpit-config__get_issue` for the key. One call returns the title, the description (the requirement), `plan` (the newest version of the issue's plan in `plan.content`, with its review in `plan.review`), labels, status, and every comment. An approval with notes leaves them in the plan under `## Notes from the user`: they are part of the plan. An issue refined before plans were kept apart has `plan: null` and its plan in the description; use that. The Code Review gate often leaves approval conditions or change requests in comments; they override the plan where they conflict.
 - Resolve the repo: `list_projects`, match the issue's `projectId`, and use that project's `repoPath` if set. Otherwise use the session's current working directory (today's behaviour, and the only case while cockpit is the sole project). Call the resolved absolute path `<REPO>` — every git/gh/npm command below runs against it, never against wherever the shell cwd happens to be.
 - Derive the branch name from the key: `issue/<ISSUE-ID>` (e.g. `issue/CK-12`). There is no tracker-provided branch name to read (Linear generated one; the native issue record does not); this fixed convention replaces it, and `accept-issue` derives the identical name the same way when it needs to find or recreate the branch.
 
 ### 2. Readiness check
-Confirm the description is a real refined plan, not a rough ticket. It should have an Implementation Plan section with file-and-symbol steps, plus Acceptance Criteria. Hand the issue back early rather than improvising when:
+Confirm the issue has a real refined plan, not just a rough ticket: `plan` is present and `plan.review.outcome` is `approved` (or, for an older issue, the description holds the plan). It should have an Implementation Plan section with file-and-symbol steps, plus Acceptance Criteria. A plan whose newest version is unreviewed or was sent back is not approved: stop and say so in a comment. Hand the issue back early rather than improvising when:
 - **It was never refined.** A hand-written ticket can carry the right section headings and still be ungrounded. If there is no sign it went through refine-issue (no refinement self-review comment, or the issue is still in Backlog and was never in Refining), stop, comment that it needs `refine-issue` first, and do not implement.
 - **The plan's anchors do not exist on the base branch.** Spot-check that the files and symbols the plan names are actually present where it says. If the plan references code that is not there (e.g. it assumes an unmerged refactor has already landed, or names "the block which already does X" and that block does not exist), stop and comment exactly what is missing. Do not invent the missing surface.
 
@@ -157,17 +177,17 @@ If UI changed, dispatch the `ui-reviewer` agent (`subagent_type: "ui-reviewer"`)
 **Plan UI sections:** <the plan's User-Facing Behaviour and UI Changes sections, verbatim>
 ```
 
-The agent drives the running app in the worktree with Playwright, screenshots the affected screens at desktop and mobile, attaches the screenshots to the issue, posts its own "UI review" findings comment, and returns a verdict. It writes its own attachments and comment each round (it owns the screenshot artifacts), so you do not repost them.
+The agent drives the running app in the worktree with Playwright, screenshots the affected screens at desktop and mobile, posts its own "UI review" findings comment with the screenshots shown in it, and returns a verdict. It writes its own attachments and comment each round (it owns the screenshot artifacts), so you do not repost them.
 
 Loop the same way as the code review:
 
-**On FAIL or any Critical/High UI findings:** fix them, re-run the verify checks (step 7), then re-dispatch the ui-reviewer. Each round attaches fresh screenshots and posts a fresh findings comment.
+**On FAIL or any Critical/High UI findings:** fix them, re-run the verify checks (step 7), then re-dispatch the ui-reviewer. Each round posts a fresh findings comment with fresh screenshots in it.
 
 **If a UI fix changes non-trivial logic** (not just markup or CSS), re-run the `code-reviewer` (step 9) on that delta before finishing, so a behavioural change introduced this late still gets a correctness pass. Skip this for purely presentational fixes.
 
 **When to stop iterating** (first match wins):
 1. **PASS or only Medium/Low remain.** Apply Medium fixes. Proceed.
-2. **Hard cap: 4 rounds.** If Critical/High UI findings still remain after the fourth review, stop. Proceed and carry the unresolved findings to the Code Review transition; the screenshots are already attached for the human to judge.
+2. **Hard cap: 4 rounds.** If Critical/High UI findings still remain after the fourth review, stop. Proceed and carry the unresolved findings to the Code Review transition; the screenshots are already on the issue for the human to judge.
 
 Re-verify after every fix. Never let a UI fix break the build, lint, or tests.
 
@@ -233,7 +253,7 @@ Leave the worktree and the test server running. They are the human's review surf
 - Re-verify after every fix. Never open a PR with a failing build, lint, or test run.
 - CI is the gate to the human, not the local run. After opening the PR, watch its GitHub checks (`gh pr checks --watch`) and only proceed to the test server and Code Review when they pass. If CI cannot be made green in 3 fix attempts, leave the issue in Implementation with a comment naming the failing checks. Never move a red PR to Code Review.
 - Four review rounds max. Still failing after four: open the PR, route to Code Review, and comment the unresolved findings with reasons.
-- If the change touches UI, run the ui-reviewer agent (up to 4 rounds, same as code review) so screenshots of the change are attached to the issue before the human gate. Still failing after four: carry the findings to Code Review with the screenshots attached.
+- If the change touches UI, run the ui-reviewer agent (up to 4 rounds, same as code review) so screenshots of the change are on the issue, in its UI review comment, before the human gate. Still failing after four: carry the findings to Code Review with the screenshots attached.
 - Run the completeness-reviewer agent first (before code and UI review, up to 4 rounds) as a coverage check that every acceptance criterion has implementing code or a test; purely-visual criteria are deferred to the ui-reviewer and the human. Genuinely unmet after four: carry the gaps to Code Review as a comment.
 - If a late UI fix changes non-trivial logic (not just markup or CSS), re-run the code-reviewer on that delta so the behavioural change still gets a correctness pass.
 - Start the test server with `setsid` (not bare `nohup`) so it survives the job, and strip inherited provider env vars with `env -u` (see step 12) so a Deepseek-backed agent run does not leak its `ANTHROPIC_*` model overrides into the review server. Bind a free port (never 3001), use a per-issue throwaway config dir, and a freshly generated password each time.

@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { validateSession } from "@/server/auth";
 import { allowedStatusesFor, applyIssueUpdate, deleteIssue, getIssue, getProject, saveIssue } from "@/server/issue-storage";
+import { getWorkflowEngine } from "@/server/singleton";
+import { deleteWorkflowRuns } from "@/server/workflow-storage";
 
 function authenticate(req: NextRequest): boolean {
   const token = req.cookies.get("cockpit_session")?.value || req.headers.get("authorization")?.replace("Bearer ", "");
@@ -59,10 +61,22 @@ export function DELETE(req: NextRequest, { params }: { params: Promise<{ key: st
     // Permanent, and only reachable from the UI — the MCP tools have no
     // equivalent on purpose (see deleteIssue). A missing key is a 404 rather
     // than a cheerful ok, so a mistyped key does not read as a deletion.
+    // A stage's session still working on the issue has nothing left to work on.
+    const engine = getWorkflowEngine();
+    if (engine?.liveRun(key)) {
+      try {
+        engine.stopRun(key);
+      } catch {
+        // It ended in the meantime, which is the same outcome.
+      }
+    }
+    // Its worktree is read off the issue, so it is cleared before the issue goes.
+    engine?.discard(key);
     const deleted = deleteIssue(key);
     if (!deleted) {
       return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
+    deleteWorkflowRuns(key);
     return NextResponse.json({ ok: true });
   });
 }

@@ -16,6 +16,7 @@ import { CSS } from "@dnd-kit/utilities";
 import { ChevronRight, GripVertical, MessageSquarePlus } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CopyIssueKey } from "@/components/issues/copy-issue-key";
+import { IssueFlowBadge, StatusStageTag } from "@/components/issues/issue-flow";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { dropIndex, type IssueStatusGroup, priorityLabel, sortIssuesByOrder, statusColor } from "@/lib/issue-display";
@@ -96,6 +97,7 @@ export function IssueRow({ issue, projectName, onClick, handle, className, copya
       <div className="flex-1 min-w-0">
         <div className="truncate text-sm font-medium">{issue.title}</div>
         <div className="flex items-center gap-2 mt-0.5 text-xs text-muted-foreground">
+          <IssueFlowBadge issueKey={issue.key} />
           {projectName && <span>{projectName}</span>}
           {priority !== "No priority" && <span>{priority}</span>}
           {issue.labels && issue.labels.length > 0 && <span className="truncate">{issue.labels.join(", ")}</span>}
@@ -185,6 +187,7 @@ function StatusGroup({
       <span className={cn("h-2.5 w-2.5 shrink-0 rounded-full", statusColor(group.status, project))} />
       <h2 className="text-sm font-semibold">{group.status}</h2>
       <Badge variant="secondary">{group.issues.length}</Badge>
+      <StatusStageTag status={group.status} projectId={project?.id} />
     </>
   );
 

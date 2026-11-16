@@ -16,10 +16,19 @@ import { getCockpitDir } from "./src/server/paths";
 import { startCatalogSync } from "./src/server/provider-catalog";
 import { resolveProxyUpstream, startBuiltinModelSync } from "./src/server/providers";
 import { SessionManager } from "./src/server/session-manager";
-import { setCockpitMcp, setHookRouter, setJobScheduler, setSessionManager, setTelemetry, setTerminalManager } from "./src/server/singleton";
+import {
+  setCockpitMcp,
+  setHookRouter,
+  setJobScheduler,
+  setSessionManager,
+  setTelemetry,
+  setTerminalManager,
+  setWorkflowEngine,
+} from "./src/server/singleton";
 import { TelemetryService } from "./src/server/telemetry/service";
 import { TerminalManager } from "./src/server/terminal-manager";
 import { UsageMeter } from "./src/server/usage-meter";
+import { WorkflowEngine } from "./src/server/workflow-engine";
 import { createWebSocketHandler } from "./src/server/ws-handler";
 
 const dev = process.env.NODE_ENV !== "production";
@@ -137,6 +146,12 @@ async function main() {
   const jobScheduler = new JobScheduler(sessionManager);
   setJobScheduler(jobScheduler);
   jobScheduler.start();
+
+  // Issues waiting at a workflow's agent stage are given sessions. It does
+  // nothing until the workflows setting is on.
+  const workflowEngine = new WorkflowEngine(sessionManager);
+  setWorkflowEngine(workflowEngine);
+  workflowEngine.start();
 
   // Boot-time OpenRouter catalog sync plus a daily refresh (D8: failures
   // alert through the inbox once per episode, never via UI degradation).

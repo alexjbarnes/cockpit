@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Workflows (experimental).** A project's workflow says what happens to an issue at each of the project's statuses: nothing, it queues for an agent, an agent works on it, or it waits for you. An agent works on an issue by running a skill from the project's own repo (`.claude/skills/<name>`), and ends by moving the issue to one of the statuses the workflow lists, the only move it is allowed. A status of yours shows its choices as buttons on the issue. Settings → Workflows lists each project and opens its workflow as the board's statuses in order. Each agent has its own skill, model, thinking level, permissions (all tools, listed only, or ask me), time limit and retries. Runs are limited in total, per project and per status, and issues waiting are taken most urgent first. The cockpit tools `list_workflows`, `get_workflow`, `update_workflow` and `delete_workflow` let an agent working in a project write the skills and set its workflow up. See [docs/workflows.md](docs/workflows.md).
+- **An issue's plan is its own document.** It is kept beside the description, which stays the requirement, and every version is kept. The issue page opens it for review in the plan annotator: comment on, strike or replace selected text, edit it, approve it or send it back, and compare versions. Agents write it with the new `set_issue_plan` tool and read it with `get_issue_plan`; `get_issue` returns the newest version and its review.
+- **Plan review for a session's plan.** A proposed plan opens in a Plan tab. Select text to comment, remove or replace, send the markup back as the answer to the plan, approve with notes or an edited plan, and see what changed in each revision.
+- **A worktree and a port per issue.** An agent set to work in the issue's own worktree gets a git worktree and branch for that issue, shared by every agent that works on it and removed when the issue is finished, so several issues can be worked in one repository at once. Each run gets a port of its own in `COCKPIT_RUN_PORT`.
+- **An agent can carry on in the session that worked on the issue before.** A plan sent back is revised by the session that wrote it.
+- **The issues page shows what the workflows are doing.** A bar counts what is running, queued, waiting for you and held, with a Pause switch, and each issue carries a mark for its state. Each status's heading says what happens there. An issue's page shows a track of the statuses it passes through, the run working on it with Watch and Stop, and its run history.
+
+- **Pictures in an issue's comments and plan.** An agent writes a markdown image with a file's path and a caption, through `add_issue_comment` or `set_issue_plan`. The file is copied into the issue and shown where it was written, and opens full size over the page. A hand-over comment can show the screenshots of what was built, and a plan can offer designs to choose between by commenting on a caption. An agent reading the issue gets each picture as a file it can open. Pictures attached to an issue are shown as pictures too.
+
+### Added
+- **A custom status can be tagged Not active.** On Settings → Projects, a project's own statuses carry an Active tag. One tagged Not active files with the backlog on the issues page's Active filter, so a column like Future is not counted as started. Custom statuses are active unless tagged otherwise.
+
+- **An issue's Activity and Attachments fold away.** Both cards start closed, with their counts in the heading, so the plan and the comments are what the page shows.
+- **Screenshots and files attach in one call.** `add_issue_attachment` takes an `attachments` array as well as a single `url` and `title`, and a batch is one activity entry rather than one each.
+
+### Changed
+- **The app is navigated from one row of buttons, with sessions and issues as equals.** On a desktop a rail down the left edge: Sessions, Issues, Inbox, Jobs, Insights, Reviews, then Assistant and Settings at the foot. On a phone a bar along the bottom: Sessions, Issues, Inbox, Assistant and More, with More holding Reviews, Jobs, Insights and Settings. The sidebar's footer icons are gone. Sessions always opens the pinned list (with All sessions for the folder overview); on a desktop the sidebar shows beside a session and beside the folder overview, and on a phone a session's Files & changes and PR files open from the button at the top left. Each place remembers the screen you last had there.
+- **Workflows is the second side of Issues.** A switch at the right of the page's top bar, `Issues | Workflows`, replaces the collapsible workflow card on the Issues page. The Workflows side lists what the workflows are waiting on you for and what they are working on, each row the same issue row as the list, with a button to the workflow settings. The Inbox has the same second side, `Waiting on you`.
+- **The pipeline skills write and read the plan as its own thing.** `refine-issue` no longer overwrites the issue's description, and revises a plan that was sent back point by point. A new `validate-issue` skill checks an implementation as its own stage.
+
+### Fixed
+- **A status changed in the UI starts the jobs that watch it.** A job set to run "On issue status" only heard status changes made through the MCP tools. A move made on the issue page or by dragging on the board was emitted where the scheduler was not listening, so the job did not start.
+- **Session shells no longer inherit Cockpit's own environment.** `NODE_ENV`, `PORT` and Cockpit's internal variables are kept out of the CLI and terminal tabs, so a dev server started inside a session is not forced into production mode or onto Cockpit's port.
+
 ## [0.11.1] - 2026-11-13
 
 ### Added

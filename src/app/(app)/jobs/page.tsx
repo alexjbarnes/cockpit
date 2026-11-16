@@ -421,7 +421,7 @@ export default function JobsPage() {
             ))}
       </div>
 
-      <div className="fixed bottom-6 right-6">
+      <div className="fixed right-6 bottom-[calc(5.125rem+env(safe-area-inset-bottom))] md:bottom-6">
         <Button size="lg" className="rounded-full shadow-lg" onClick={() => router.push("/jobs/new/edit")}>
           <Plus className="h-5 w-5 mr-1" />
           New Job

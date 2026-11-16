@@ -4,6 +4,7 @@ import { extname, join, resolve, sep } from "node:path";
 import { writeJsonAtomic } from "@/server/atomic-write";
 import { emitIssueStatusChange } from "@/server/issue-events";
 import { getCockpitDir, getIssueAttachmentsRoot } from "@/server/paths";
+import { deletePlanRecord } from "@/server/plan-review-storage";
 import type { CustomStatus, Issue, IssueActivity, IssueActor, IssueAttachment, IssueComment, Project } from "@/types";
 import { ISSUE_STATUSES } from "@/types";
 
@@ -231,6 +232,7 @@ function validateStatusConfig(
       if (typeof entry !== "object" || entry === null) throw new Error("each custom status must be an object with a name");
       const name = (entry as { name?: unknown }).name;
       const color = (entry as { color?: unknown }).color;
+      const active = (entry as { active?: unknown }).active;
       if (typeof name !== "string" || name.trim() === "") throw new Error("each custom status needs a non-empty name");
       const trimmed = name.trim();
       const lower = trimmed.toLowerCase();
@@ -238,7 +240,11 @@ function validateStatusConfig(
       if (seen.has(lower)) throw new Error(`duplicate custom status name "${trimmed}"`);
       seen.add(lower);
       if (color !== undefined && typeof color !== "string") throw new Error("custom status color must be a string");
-      cleaned.push(color === undefined ? { name: trimmed } : { name: trimmed, color });
+      if (active !== undefined && typeof active !== "boolean") throw new Error("custom status active must be true or false");
+      const status: CustomStatus = { name: trimmed };
+      if (color !== undefined) status.color = color;
+      if (active === false) status.active = false;
+      cleaned.push(status);
     }
     out.customStatuses = cleaned;
   }
@@ -275,7 +281,10 @@ export function buildProject(input: ProjectInput): Project {
 }
 
 export type ProjectUpdateInput = Partial<
-  Pick<Project, "name" | "prefix" | "description" | "repoPath" | "archived" | "disabledStatuses" | "customStatuses" | "statusOrder">
+  Pick<
+    Project,
+    "name" | "prefix" | "description" | "repoPath" | "archived" | "disabledStatuses" | "customStatuses" | "statusOrder" | "baseBranch"
+  >
 >;
 
 /**
@@ -290,6 +299,7 @@ export function applyProjectUpdate(project: Project, patch: ProjectUpdateInput):
   if (patch.description !== undefined) assertString(patch.description, "description");
   if (patch.repoPath !== undefined) assertString(patch.repoPath, "repoPath");
   if (patch.archived !== undefined) assertBoolean(patch.archived, "archived");
+  if (patch.baseBranch !== undefined) assertString(patch.baseBranch, "baseBranch");
   const statusConfig = validateStatusConfig(patch.disabledStatuses, patch.customStatuses);
   // The order may name a custom status this same patch is adding, and must not
   // keep naming one the patch removes.
@@ -342,6 +352,11 @@ export function applyProjectUpdate(project: Project, patch: ProjectUpdateInput):
     next.repoPath = patch.repoPath;
     changed = true;
   }
+  // An empty string clears it: the project goes back to its repo's default branch.
+  if (patch.baseBranch !== undefined && (patch.baseBranch.trim() || undefined) !== next.baseBranch) {
+    next.baseBranch = patch.baseBranch.trim() || undefined;
+    changed = true;
+  }
   if (patch.archived !== undefined && patch.archived !== next.archived) {
     next.archived = patch.archived;
     changed = true;
@@ -392,6 +407,9 @@ export function saveProject(project: Project): void {
   }
 
   const toSave: Project = { ...project, prefix };
+  // An earlier build pointed a project at a shared workflow. A project's
+  // workflow is now its own, kept by project id, so the pointer is dropped.
+  delete (toSave as { workflowId?: unknown }).workflowId;
   if (idx >= 0) {
     projects[idx] = toSave;
   } else {
@@ -551,6 +569,9 @@ export function deleteIssue(key: string): boolean {
   if (remaining.length === issues.length) return false;
 
   writeJsonAtomic(file, { issues: remaining });
+
+  // The plan and its reviews are kept beside the issue, not in it.
+  deletePlanRecord({ kind: "issue", key: target });
 
   // Attachments are copied into cockpit's own store per issue key
   // (persistAttachmentFile), so they outlive the issue unless removed here.
@@ -878,18 +899,30 @@ export function persistAttachmentFile(issueKey: string, url: string): string {
 }
 
 /**
- * Append an attachment (the ui-reviewer agent's screenshots, mainly). Pure —
- * does not persist; the caller passes the result to saveIssue(). The url is
- * stored verbatim: run it through persistAttachmentFile first when it names a
- * local file the caller does not own.
+ * Append one or more attachments (the ui-reviewer agent's screenshots, mainly).
+ * Pure — does not persist; the caller passes the result to saveIssue(). The
+ * urls are stored verbatim: run them through persistAttachmentFile first when
+ * they name local files the caller does not own. Several attachments in one
+ * call are one activity entry, since they were one act.
  */
-export function addIssueAttachment(issue: Issue, input: { title: string; url: string }, actor: IssueActor): Issue {
+export function addIssueAttachments(issue: Issue, inputs: { title: string; url: string }[], actor: IssueActor): Issue {
+  if (inputs.length === 0) return issue;
   const now = Date.now();
-  const attachment: IssueAttachment = { id: randomUUID(), title: input.title, url: input.url, createdAt: now };
+  const attachments: IssueAttachment[] = inputs.map((input) => ({
+    id: randomUUID(),
+    title: input.title,
+    url: input.url,
+    createdAt: now,
+  }));
   return {
     ...issue,
-    attachments: [...issue.attachments, attachment],
+    attachments: [...issue.attachments, ...attachments],
     updatedAt: now,
     activity: [...issue.activity, { id: randomUUID(), createdAt: now, actor, kind: "attachment_added" }],
   };
+}
+
+/** One attachment: the same, for a caller that has only one. */
+export function addIssueAttachment(issue: Issue, input: { title: string; url: string }, actor: IssueActor): Issue {
+  return addIssueAttachments(issue, [input], actor);
 }

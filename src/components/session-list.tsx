@@ -166,7 +166,6 @@ export function SessionList() {
   );
   const [deleting, setDeleting] = useState(false);
   const [quickCreateCwd, setQuickCreateCwd] = useState<string | null>(null);
-
   useEffect(() => {
     setFavorites(loadFavorites());
   }, []);
@@ -328,7 +327,7 @@ export function SessionList() {
         />
       ))}
 
-      <div className="fixed bottom-6 right-6">
+      <div className="fixed right-6 bottom-[calc(5.125rem+env(safe-area-inset-bottom))] md:bottom-6">
         <Button size="lg" className="rounded-full shadow-lg" onClick={() => setDialogOpen(true)} data-testid="new-session-open">
           <Plus className="h-5 w-5 mr-1" />
           New Session

@@ -1,10 +1,11 @@
 "use client";
 
-import { Bug, ChevronDown, ChevronRight, Download, ExternalLink, RefreshCw, Star } from "lucide-react";
+import { Bug, ChevronDown, Download, ExternalLink, RefreshCw, Star } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { type ReactNode, useCallback, useEffect, useState } from "react";
 import { usePageHeader } from "@/components/app-shell";
 import { Button } from "@/components/ui/button";
+import { NavRow } from "@/components/ui/nav-row";
 import { useScrollRestoration } from "@/hooks/use-scroll-restoration";
 import { useSettings } from "@/hooks/use-settings";
 
@@ -192,18 +193,6 @@ function ChangelogAccordion({
         </div>
       )}
     </div>
-  );
-}
-
-function NavRow({ label, onClick }: { label: string; onClick: () => void }) {
-  return (
-    <button
-      onClick={onClick}
-      className="flex w-full items-center justify-between rounded-lg px-3 py-3 text-sm hover:bg-muted/50 transition-colors"
-    >
-      <span>{label}</span>
-      <ChevronRight className="h-4 w-4 text-muted-foreground" />
-    </button>
   );
 }
 
@@ -399,6 +388,7 @@ export default function SettingsPage() {
           <NavRow label="Model Providers" onClick={() => router.push("/settings/providers")} />
           <NavRow label="Notifications" onClick={() => router.push("/settings/notifications")} />
           {settings.issuesEnabled && <NavRow label="Projects" onClick={() => router.push("/settings/projects")} />}
+          {settings.issuesEnabled && <NavRow label="Workflows" onClick={() => router.push("/settings/workflows")} />}
         </div>
 
         <div className="border-t border-border pt-4 mt-4 space-y-0.5">

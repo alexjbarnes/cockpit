@@ -128,7 +128,7 @@ It is stored in `~/.cockpit/telemetry.db`, a SQLite database readable only by yo
 
 ### Insights
 
-While telemetry is on, the sidebar footer's chart button opens Insights (`/insights`), which charts what is stored over the last 24 hours, 7 days or 30 days:
+While telemetry is on, Insights (`/insights`) opens from the navigation (the rail's chart item on a desktop, More on a phone), and charts what is stored over the last 24 hours, 7 days or 30 days:
 
 - **Overview**: spend, tokens and cache use, turns, tool calls, time waiting on you, API errors, lines changed and prompts, with spend per day by model and the sessions that cost most.
 - **Spend**: spend per day by model or provider, tokens by kind with the cache hit rate, what the spend went on (conversation, subagents, session titles, web fetches) and at which effort level, sessions, projects and scheduled jobs ranked by spend, and the most expensive turns.

@@ -52,6 +52,17 @@ export interface AppDefaults {
    */
   issuesEnabled: boolean;
   /**
+   * Workflows: an issue reaching a status an agent works at starts a session
+   * that works on it, within the limits below. Off by default: it is
+   * experimental, and it needs the issue tracker on. See workflow-engine.ts.
+   */
+  workflowsEnabled: boolean;
+  /** Hold every workflow: no new run starts. Runs already going finish. */
+  workflowsPaused: boolean;
+  /** Stage runs at once, across every workflow and project. Each is a full
+   *  CLI process, so this is what a run costs the machine. */
+  workflowMaxParallel: number;
+  /**
    * Open the sidebar footer's pages (jobs, inbox, issues, insights, settings) in a modal
    * over the current page instead of navigating away from it. On by default;
    * turning it off restores navigating to the page itself. See
@@ -101,6 +112,9 @@ function defaultsFile(): string {
   return join(prefsDir(), "defaults.json");
 }
 
+/** The most agents working at once the setting will accept. */
+export const WORKFLOW_MAX_PARALLEL_LIMIT = 20;
+
 const fallback: AppDefaults = {
   thinkingLevel: "high",
   permissionMode: "manual",
@@ -117,6 +131,9 @@ const fallback: AppDefaults = {
   reviewsEnabled: true,
   sessionAlerts: false,
   issuesEnabled: false,
+  workflowsEnabled: false,
+  workflowsPaused: false,
+  workflowMaxParallel: 2,
   modalPagesEnabled: true,
   planReviewAutoOpen: true,
   telemetryEnabled: false,
@@ -134,6 +151,7 @@ const fallback: AppDefaults = {
  */
 const ENV_OVERRIDES = {
   issuesEnabled: "COCKPIT_ISSUES_ENABLED",
+  workflowsEnabled: "COCKPIT_WORKFLOWS_ENABLED",
   telemetryEnabled: "COCKPIT_TELEMETRY_ENABLED",
 } as const satisfies Partial<Record<keyof AppDefaults, string>>;
 
@@ -252,6 +270,12 @@ export function setDefaults(partial: Partial<AppDefaults> & { bypassAllPermissio
   if (next.ignoredSessionFolders !== undefined) {
     if (Array.isArray(next.ignoredSessionFolders)) next.ignoredSessionFolders = parseIgnoredFolders(next.ignoredSessionFolders, homedir());
     else delete next.ignoredSessionFolders;
+  }
+  // How many agents work at once is how many CLI processes at once, so a value
+  // that is not a sensible count is dropped rather than stored.
+  if (next.workflowMaxParallel !== undefined) {
+    const n = next.workflowMaxParallel;
+    if (typeof n !== "number" || !Number.isInteger(n) || n < 1 || n > WORKFLOW_MAX_PARALLEL_LIMIT) delete next.workflowMaxParallel;
   }
   const updated = { ...current, ...next } as AppDefaults;
   try {

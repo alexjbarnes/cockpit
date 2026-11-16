@@ -1,11 +1,14 @@
 "use client";
 
-import { ArrowLeft, Loader2, MessageSquarePlus, Paperclip, Pencil, Trash2, X } from "lucide-react";
+import { ArrowLeft, ChevronRight, Loader2, MessageSquarePlus, Paperclip, Pencil, Trash2, X } from "lucide-react";
 import Link from "next/link";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useState } from "react";
 import { usePageHeader } from "@/components/app-shell";
 import { CopyIssueKey } from "@/components/issues/copy-issue-key";
+import { IssuePlanSection } from "@/components/issues/issue-plan";
+import { IssueWorkflowSection } from "@/components/issues/issue-workflow";
+import { MarkdownImage } from "@/components/markdown-image";
 import { MarkdownRender } from "@/components/markdown-render";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -14,14 +17,41 @@ import { Input } from "@/components/ui/input";
 import { useEmbedded } from "@/hooks/use-embedded";
 import { useSettings } from "@/hooks/use-settings";
 import { actorHref, actorLabel, describeActivityAction, issueReturnPath, resolveProjectStatuses, statusColor } from "@/lib/issue-display";
-import { pageModalMessage } from "@/lib/page-modal";
+import { attachmentHref, isImagePath } from "@/lib/markdown-images";
+import { isModalPath, pageModalMessage } from "@/lib/page-modal";
 import { cn } from "@/lib/utils";
-import type { Issue, IssueActor, Project } from "@/types";
+import type { Issue, IssueActor, IssueAttachment, Project } from "@/types";
 
 const SELECT_CLASS = "rounded-md border bg-background px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring";
 
 /** The actor's name, as a link to its session transcript or job page when it
  *  has one (session/job), plain text otherwise (user, assistant). */
+/** A card that folds away, for what is reference rather than reading: closed
+ *  until opened, with its count in the heading. */
+function CollapsibleCard({ title, count, testId, children }: { title: string; count?: number; testId?: string; children: ReactNode }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <Card data-testid={testId}>
+      <CardHeader className="pb-2">
+        <button
+          type="button"
+          aria-expanded={open}
+          onClick={() => setOpen((v) => !v)}
+          className="flex w-full items-center gap-2 text-left"
+          data-testid={testId ? `${testId}-toggle` : undefined}
+        >
+          <ChevronRight className={cn("h-4 w-4 shrink-0 text-muted-foreground transition-transform", open && "rotate-90")} />
+          <CardTitle className="text-base">
+            {title}
+            {count !== undefined ? ` (${count})` : ""}
+          </CardTitle>
+        </button>
+      </CardHeader>
+      {open && <CardContent>{children}</CardContent>}
+    </Card>
+  );
+}
+
 function ActorName({ actor, className }: { actor: IssueActor; className?: string }) {
   const href = actorHref(actor);
   const label = actorLabel(actor);
@@ -58,11 +88,12 @@ export default function IssueDetailPage() {
   const searchParams = useSearchParams();
   const backTo = issueReturnPath(searchParams.get("from"));
   const embedded = useEmbedded();
-  // Inside the page modal, back closes the modal and reveals whatever opened
-  // it (the session's issue list) rather than navigating the iframe to the
-  // session page.
+  // Inside the page modal, an issue opened over a session goes back by
+  // closing the modal, which reveals the session's own issue list: the frame
+  // cannot show a session. One opened from a page the modal does show (the
+  // Issues list, reached from the sidebar) goes back to that page inside it.
   const goBack = useCallback(() => {
-    if (embedded) {
+    if (embedded && !isModalPath(backTo.split("?")[0])) {
       window.parent.postMessage(pageModalMessage({ type: "close" }), window.location.origin);
       return;
     }
@@ -82,6 +113,8 @@ export default function IssueDetailPage() {
   const [issue, setIssue] = useState<Issue | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
+  // Counts loads of the issue, so the plan beside it is read again with each.
+  const [revision, setRevision] = useState(0);
   const [notFound, setNotFound] = useState(false);
 
   const [editing, setEditing] = useState(false);
@@ -117,11 +150,26 @@ export default function IssueDetailPage() {
     }
     const data = await res.json();
     setIssue(data.issue);
+    setRevision((n) => n + 1);
     setLoading(false);
   }, [key]);
 
   useEffect(() => {
     fetchIssue();
+  }, [fetchIssue]);
+
+  // An agent may have written a plan, commented or moved the issue while this
+  // page sat in the background; coming back to it shows what is there now.
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === "visible") fetchIssue();
+    };
+    window.addEventListener("focus", onVisible);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      window.removeEventListener("focus", onVisible);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
   }, [fetchIssue]);
 
   useEffect(() => {
@@ -284,6 +332,14 @@ export default function IssueDetailPage() {
   const statusNames = resolveProjectStatuses(project).map((s) => s.name);
   const statusOptions = statusNames.includes(issue.status) ? statusNames : [issue.status, ...statusNames];
 
+  // A picture written into a comment or the plan is shown there, so it is not
+  // listed again. A stored file is only reachable through the serving route; a
+  // remote address links directly.
+  const listed = issue.attachments.filter((a) => !a.inline);
+  const attachmentSrc = (a: IssueAttachment) => (a.url.startsWith("/") ? attachmentHref(issue.key, a.id) : a.url);
+  const pictures = listed.filter((a) => isImagePath(a.url));
+  const files = listed.filter((a) => !isImagePath(a.url));
+
   return (
     <div className="flex-1 min-h-0 overflow-y-auto p-4">
       <div className="max-w-3xl mx-auto space-y-4 pb-8">
@@ -422,29 +478,46 @@ export default function IssueDetailPage() {
           </CardContent>
         </Card>
 
-        {issue.attachments.length > 0 && (
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-base">Attachments</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-1.5">
-              {issue.attachments.map((a) => (
-                <a
-                  key={a.id}
-                  // A local file path (the ui-reviewer's screenshots) is only
-                  // reachable through the serving route; a remote url links
-                  // directly.
-                  href={a.url.startsWith("/") ? `/api/issues/${issue.key}/attachments/${a.id}` : a.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="flex items-center gap-2 text-sm text-primary hover:underline"
-                >
-                  <Paperclip className="h-3.5 w-3.5 shrink-0" />
-                  <span className="truncate">{a.title}</span>
-                </a>
-              ))}
-            </CardContent>
-          </Card>
+        <IssuePlanSection issueKey={issue.key} status={issue.status} revision={revision} onIssueChange={setIssue} />
+
+        {settings.workflowsEnabled && (
+          <IssueWorkflowSection
+            issueKey={issue.key}
+            status={issue.status}
+            revision={revision}
+            onMove={changeStatus}
+            onChanged={fetchIssue}
+          />
+        )}
+
+        {listed.length > 0 && (
+          <CollapsibleCard title="Attachments" count={listed.length} testId="issue-attachments">
+            <div className="space-y-3">
+              {pictures.length > 0 && (
+                <div data-testid="issue-attachment-images">
+                  {pictures.map((a) => (
+                    <MarkdownImage key={a.id} src={attachmentSrc(a)} alt={a.title} />
+                  ))}
+                </div>
+              )}
+              {files.length > 0 && (
+                <div className="space-y-1.5">
+                  {files.map((a) => (
+                    <a
+                      key={a.id}
+                      href={attachmentSrc(a)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="flex items-center gap-2 text-sm text-primary hover:underline"
+                    >
+                      <Paperclip className="h-3.5 w-3.5 shrink-0" />
+                      <span className="truncate">{a.title}</span>
+                    </a>
+                  ))}
+                </div>
+              )}
+            </div>
+          </CollapsibleCard>
         )}
 
         <Card>
@@ -484,11 +557,8 @@ export default function IssueDetailPage() {
           </CardContent>
         </Card>
 
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-base">Activity</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-2">
+        <CollapsibleCard title="Activity" count={issue.activity.length} testId="issue-activity">
+          <div className="space-y-2">
             {[...issue.activity].reverse().map((entry) => (
               <div key={entry.id} className="flex items-center gap-2 text-xs text-muted-foreground">
                 <span>
@@ -498,8 +568,8 @@ export default function IssueDetailPage() {
                 <span>{formatDate(entry.createdAt)}</span>
               </div>
             ))}
-          </CardContent>
-        </Card>
+          </div>
+        </CollapsibleCard>
       </div>
 
       <Dialog open={confirmDelete} onOpenChange={(open) => !deleting && setConfirmDelete(open)}>

@@ -12,6 +12,7 @@ import type { IssueStatusChangeEvent } from "@/server/issue-events";
 import { onIssueStatusChange } from "@/server/issue-events";
 import {
   addIssueAttachment,
+  addIssueAttachments,
   addIssueComment,
   allowedStatusesFor,
   applyIssueUpdate,
@@ -907,6 +908,31 @@ describe("IssueActor kinds round-trip through storage", () => {
   });
 });
 
+describe("addIssueAttachments", () => {
+  it("adds them all, with one activity entry for the call", () => {
+    const project = buildProject({ name: "Batch", prefix: "BAT" });
+    saveProject(project);
+    const issue = buildIssue({ projectId: project.id, title: "batch" }, { kind: "user" });
+    const updated = addIssueAttachments(
+      issue,
+      [
+        { title: "A", url: "/a.png" },
+        { title: "B", url: "/b.png" },
+      ],
+      { kind: "user" },
+    );
+    expect(updated.attachments.map((a) => a.title)).toEqual(["A", "B"]);
+    expect(updated.activity.filter((a) => a.kind === "attachment_added")).toHaveLength(1);
+  });
+
+  it("changes nothing for an empty list", () => {
+    const project = buildProject({ name: "Batch empty", prefix: "BTE" });
+    saveProject(project);
+    const issue = buildIssue({ projectId: project.id, title: "batch" }, { kind: "user" });
+    expect(addIssueAttachments(issue, [], { kind: "user" })).toBe(issue);
+  });
+});
+
 describe("persistAttachmentFile", () => {
   it("passes a remote url through untouched", () => {
     expect(persistAttachmentFile("CK-1", "https://example.com/a.png")).toBe("https://example.com/a.png");
@@ -1011,6 +1037,15 @@ describe("per-project status config", () => {
   it("buildProject validates custom statuses: non-empty, unique, no built-in collision, trimmed", () => {
     expect(() => buildProject({ name: "x", prefix: "CK", customStatuses: [{ name: "  " }] })).toThrow(/non-empty/);
     expect(() => buildProject({ name: "x", prefix: "CK", customStatuses: [{ name: "Backlog" }] })).toThrow(/collides/);
+    const future = buildProject({ name: "x", prefix: "CK", customStatuses: [{ name: "Future", active: false }] });
+    expect(future.customStatuses).toEqual([{ name: "Future", active: false }]);
+    // Active is the default, so it is not stored.
+    expect(buildProject({ name: "x", prefix: "CK", customStatuses: [{ name: "Blocked", active: true }] }).customStatuses).toEqual([
+      { name: "Blocked" },
+    ]);
+    expect(() =>
+      buildProject({ name: "x", prefix: "CK", customStatuses: [{ name: "Future", active: "no" as unknown as boolean }] }),
+    ).toThrow(/true or false/);
     expect(() => buildProject({ name: "x", prefix: "CK", customStatuses: [{ name: "Blocked" }, { name: "blocked" }] })).toThrow(
       /duplicate/i,
     );

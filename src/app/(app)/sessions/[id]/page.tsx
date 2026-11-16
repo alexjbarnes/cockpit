@@ -3,8 +3,9 @@
 import { useSearchParams } from "next/navigation";
 import { use, useEffect } from "react";
 import { useShellSessionId } from "@/components/app-shell";
-import { clearUnreadSession, pinSession } from "@/components/sidebar";
+import { pinSession } from "@/components/sidebar";
 import { TabbedSessionView } from "@/components/tabbed-session-view";
+import { clearUnreadSession } from "@/lib/unread-sessions";
 
 export default function SessionPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);

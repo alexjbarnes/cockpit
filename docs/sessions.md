@@ -97,14 +97,22 @@ Attached files appear as chips above the input. Remove them with the X.
 
 ## Plan mode
 
-When Claude proposes a plan, Cockpit detects it (writes to `~/.claude/plans/`) and shows a modal preview instead of inline tool output.
+When Claude proposes a plan, a card in the chat offers the ways to answer it, and the plan opens in a **Plan tab**: beside the chat on a wide screen, one tap away on a phone (Settings → Appearance turns the automatic opening off).
 
-Approval options:
+In the Plan tab:
 
-- Accept and continue. Claude executes the plan in the same session.
-- Accept and clear context. Cockpit clears the conversation, then runs the plan in a fresh context. The previous transcript is preserved (see Session linking below).
-- Reject with feedback. Provide notes; Claude revises before proposing again.
-- Reject. Claude stops.
+- Select text to comment on it, mark it for removal or suggest a replacement. On a phone, **Tap** selects a whole paragraph in one touch. Quick labels cover the common notes.
+- Add a note on the whole plan, or **Edit** the plan's text directly.
+- **Send to Claude** sends your markup back as the answer to the plan. Claude revises and proposes again in the same turn.
+- **Approve** as it stands, or with your notes and edits carried into the plan.
+- Every proposal is kept as a version. A revision shows what changed since the last one, **Changes** compares any two, and an earlier version opens with the notes you made on it. A plan for something else starts its own history.
+
+Ways to approve:
+
+- Continue. Claude executes the plan in the same session.
+- Clear context. Cockpit clears the conversation, then runs the plan in a fresh context. The previous transcript is preserved (see Session linking below).
+
+Typing in the card's box and sending it is the short way to send a plan back. Dismiss puts the plan aside without answering it.
 
 ## Permissions
 

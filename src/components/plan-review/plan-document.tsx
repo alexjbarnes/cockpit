@@ -3,6 +3,7 @@
 import { forwardRef, memo, useEffect, useId, useImperativeHandle, useLayoutEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { MarkdownImage } from "@/components/markdown-image";
 import { anchorAt, locateAnchor, makeAnchor, placeAnchors, type TextAnchor, type TextSpan } from "@/lib/plan-review/anchor";
 import type { PlanAnnotation } from "@/lib/plan-review/types";
 import { cn } from "@/lib/utils";
@@ -70,7 +71,9 @@ function ExternalLink(props: React.AnchorHTMLAttributes<HTMLAnchorElement>) {
 
 // Fenced code stays a plain <pre>: the chat's highlighted block re-renders
 // itself and adds line numbers to the text, and markup is anchored to text.
-const COMPONENTS = { a: ExternalLink };
+// A picture's caption is text like any other, so it can be selected and
+// commented on: that is how a reviewer says which of several designs they want.
+const COMPONENTS = { a: ExternalLink, img: MarkdownImage };
 const REMARK = [remarkGfm];
 const REHYPE = [rehypeSourceLines];
 

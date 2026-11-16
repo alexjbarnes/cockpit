@@ -15,19 +15,31 @@ Either an explicit issue key, or none (the skill selects one).
 - **No key, pipeline mode** (a scheduled job): run the reaper, then `mcp__cockpit-config__list_issues` with `status: "Accepted"`. If none, stop after reaping. Otherwise pick exactly ONE, oldest by `updatedAt`, and process only that. A later run takes the next.
 - **No key, interactive mode** (a human ran the skill): run the reaper, then list `Accepted` and ask which to merge.
 
+## Run by a workflow
+When the prompt opens with "You are the agent for the ... status of a workflow on issue <KEY>" (or says the issue "has come back to" a status), a Cockpit workflow started this session for that one issue and told it to run this skill. This is pipeline mode, with these differences, and where they conflict with a step below they win:
+
+- **The issue is the one the prompt names.** Do not list issues, pick one, or look at any other.
+- **Cockpit has already moved it to the status you work in.** Skip any step that sets a status to say work has started.
+- **Your work ends when you move the issue** with `update_issue` to one of the statuses the prompt lists, and those are the only statuses you can move it to. The prompt lists the statuses and nothing more: which one fits which outcome is said below. Make it your last action.
+- **If you cannot do the work**, comment why on the issue, leave its status alone, and end with the `cockpit-error` block the prompt describes. Cockpit holds the issue for a person.
+- **The working directory may be the issue's own worktree.** When the prompt says so, Cockpit has already made the worktree and its `issue/<KEY>` branch, and every agent that works on the issue works in it. Use the working directory as the worktree: do not create, replace or remove a worktree or branch for the issue, and do not `cd` out of it to the main checkout. Cockpit removes it when the issue is finished.
+- **A port is kept for the run** in `$COCKPIT_RUN_PORT`, and named in the prompt. If you start a server, start it on that port and do not scan for another.
+
+For this skill that means: skip Step 0 (Cockpit removes the worktrees of finished issues itself), and in Step 5 kill the review server but leave the worktree where it is when it is the working directory. Merge the issue the prompt names and move it to `Done` in Step 6. A pull request that could not be merged goes back to `Code Review`, as the steps below say, with a comment saying why. If the prompt lists other names, choose by what they mean.
+
 ## Step 0: Reap orphaned review surfaces
-Run this every invocation, before anything else. It cleans up test servers and worktrees for issues that are no longer under review.
+Run this every invocation, before anything else. It cleans up test servers and worktrees for issues whose work is finished or abandoned.
 
 Do this once per repo in scope: `list_projects`, and for each project's `repoPath` (falling back to the session's current working directory for a project without one — today's behaviour, and the only case while cockpit is the sole project), call that resolved path `<REPO>`:
 
 1. `git -C <REPO> worktree prune` (drop pointers to worktrees whose directory is already gone), then `git -C <REPO> worktree list`. For each worktree whose path matches `<name>-<ISSUE-ID>` (a review worktree — `<name>` is `<REPO>`'s basename, `<ISSUE-ID>` looks like a project prefix and number, e.g. `CK-12`):
 2. Fetch that issue's status (`get_issue`).
-3. If the status is **neither `Code Review` nor `Accepted`** (e.g. it was rejected back to Implementation Ready, or is already Done), reap it:
+3. Reap it **only if the issue is finished or abandoned: its status is `Done`, `Cancelled` or `Backlog`, or the issue no longer exists.** Leave every other status alone. An issue that is `Implementation Ready`, `Implementation`, `Validation`, `Code Review` or `Accepted` still has work in its worktree or is about to: with several issues in flight at once, another session may be building in that worktree right now, and removing it destroys that work. To reap:
    - Read `<worktree>/.review-server.json` for the `port`. Kill the server by port only: `lsof -ti:<port> | xargs -r kill`. **Never** kill by process name (`pkill -f "tsx server.ts"` would also kill the live :3001 instance).
    - Remove the throwaway config dir (`configDir` from the json) and the log file.
    - `git -C <REPO> worktree remove --force <path>`.
 
-The reaper is what cleans up rejected issues: when a human moves an issue from Code Review back to Implementation Ready, its server and worktree are no longer needed, and this removes them.
+An issue sent back from review keeps its worktree and server: the rework pass restores the same branch and replaces the worktree itself (implement-issue step 4). The reaper only removes what nothing will come back to.
 
 ## Step 1: Select and load the issue
 Per the Input rules, get one `Accepted` issue (`get_issue`). Resolve its repo the same way as Step 0 (`list_projects` + `repoPath`, else cwd) — call it `<REPO>` — and the branch: `issue/<ISSUE-ID>`. The worktree is at `<REPO>/../<name>-<ISSUE-ID>`; read `<worktree>/.review-server.json` for its server `port` (needed at teardown). Find the PR: `gh pr list --head issue/<ISSUE-ID> --json number,url`.

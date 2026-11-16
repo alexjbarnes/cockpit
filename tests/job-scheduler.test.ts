@@ -38,6 +38,12 @@ vi.mock("@/server/issue-storage", () => ({
   loadProjects: vi.fn(() => []),
 }));
 
+// Which projects the workflow engine has taken over. None, unless a test says so.
+const { workflowProjects } = vi.hoisted(() => ({ workflowProjects: new Set<string>() }));
+vi.mock("@/server/workflow-storage", () => ({
+  projectRunsWorkflow: (projectId: string) => workflowProjects.has(projectId),
+}));
+
 const { trustCalls } = vi.hoisted(() => ({ trustCalls: [] as string[] }));
 vi.mock("@/server/workspace-trust", () => ({
   trustDirectory: (dir: string) => {
@@ -1818,6 +1824,23 @@ describe("onIssueStatus job trigger: matching (phase 4)", () => {
     (scheduler as any).handleIssueStatusChange({ key: "CK-1", projectId: "p1", to: "Backlog" });
 
     expect(sm.createSession).toHaveBeenCalled();
+  });
+
+  // A project with a workflow has its stages run by the workflow engine. A
+  // status job left over from before would run the same stage a second time.
+  it("leaves a project's issues to the workflow engine when it has a workflow", () => {
+    const job = makeJob({ schedules: [{ type: "onIssueStatus", status: "Backlog" }] });
+    vi.mocked(loadJobs).mockReturnValue([job]);
+    workflowProjects.add("p-workflow");
+    try {
+      (scheduler as any).handleIssueStatusChange({ key: "WF-1", projectId: "p-workflow", to: "Backlog" });
+      expect(sm.createSession).not.toHaveBeenCalled();
+      // Another project's issue in the same status still starts the job.
+      (scheduler as any).handleIssueStatusChange({ key: "CK-1", projectId: "p1", to: "Backlog" });
+      expect(sm.createSession).toHaveBeenCalledTimes(1);
+    } finally {
+      workflowProjects.clear();
+    }
   });
 
   it("does not trigger when the event's status does not match the schedule's status", () => {

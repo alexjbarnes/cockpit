@@ -22,6 +22,7 @@ interface FormState {
   repoPath: string;
   disabledStatuses: string[];
   customStatuses: CustomStatus[];
+  baseBranch: string;
 }
 
 const emptyForm = (): FormState => ({
@@ -32,6 +33,7 @@ const emptyForm = (): FormState => ({
   repoPath: "",
   disabledStatuses: [],
   customStatuses: [],
+  baseBranch: "",
 });
 
 function projectToForm(p: Project): FormState {
@@ -43,6 +45,7 @@ function projectToForm(p: Project): FormState {
     repoPath: p.repoPath || "",
     disabledStatuses: p.disabledStatuses ?? [],
     customStatuses: p.customStatuses ?? [],
+    baseBranch: p.baseBranch ?? "",
   };
 }
 
@@ -73,6 +76,13 @@ function StatusEditor({ form, setForm }: { form: FormState; setForm: (f: FormSta
   }
   function setColor(name: string, color: string): void {
     setForm({ ...form, customStatuses: form.customStatuses.map((s) => (s.name === name ? { ...s, color } : s)) });
+  }
+  /** Whether the status counts as active on the issues page's Active filter. */
+  function setActive(name: string, active: boolean): void {
+    setForm({
+      ...form,
+      customStatuses: form.customStatuses.map((s) => (s.name === name ? { ...s, active: active ? undefined : false } : s)),
+    });
   }
 
   return (
@@ -120,6 +130,19 @@ function StatusEditor({ form, setForm }: { form: FormState; setForm: (f: FormSta
                 <span className="min-w-0 flex-1 truncate text-xs font-medium">{c.name}</span>
                 <button
                   type="button"
+                  aria-pressed={c.active !== false}
+                  data-testid={`custom-status-active-${c.name}`}
+                  title="Whether issues at this status count as active on the issues page"
+                  onClick={() => setActive(c.name, c.active === false)}
+                  className={cn(
+                    "shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-medium",
+                    c.active === false ? "text-muted-foreground" : "bg-secondary text-secondary-foreground",
+                  )}
+                >
+                  {c.active === false ? "Not active" : "Active"}
+                </button>
+                <button
+                  type="button"
                   onClick={() => removeCustom(c.name)}
                   className="shrink-0 text-muted-foreground hover:text-destructive"
                 >
@@ -164,8 +187,8 @@ function StatusEditor({ form, setForm }: { form: FormState; setForm: (f: FormSta
       {trimmed !== "" && !canAdd && <p className="text-xs text-destructive">That name is already a status.</p>}
       {form.customStatuses.length > 0 && (
         <p className="text-xs text-muted-foreground">
-          A custom status is added to the list as you type its name, and its colour is set here. Both are stored when the project is saved,
-          with the Save button below.
+          A custom status is added to the list as you type its name, and its colour and Active tag are set here. All of it is stored when
+          the project is saved, with the Save button below. A status tagged Not active files with the backlog on the issues page.
         </p>
       )}
     </div>
@@ -237,13 +260,26 @@ export default function ProjectsSettingsPage() {
       disabledStatuses: editForm.disabledStatuses,
       customStatuses: editForm.customStatuses,
     };
+    // The base branch is set by an update, so a new project is created first
+    // and given it second.
+    const flow = { baseBranch: editForm.baseBranch.trim() };
     try {
-      const res = await fetch(editForm.id ? `/api/projects/${editForm.id}` : "/api/projects", {
+      let res = await fetch(editForm.id ? `/api/projects/${editForm.id}` : "/api/projects", {
         method: editForm.id ? "PUT" : "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
+        body: JSON.stringify(editForm.id ? { ...body, ...flow } : body),
       });
-      const data = await res.json();
+      let data = await res.json();
+      if (res.ok && !editForm.id && flow.baseBranch) {
+        const created = data.project as Project;
+        setEditForm({ ...editForm, id: created.id });
+        res = await fetch(`/api/projects/${created.id}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(flow),
+        });
+        data = await res.json();
+      }
       if (!res.ok) {
         setFormError(data.error || "Failed to save project");
         return;
@@ -397,6 +433,24 @@ export default function ProjectsSettingsPage() {
                 <StatusEditor form={editForm} setForm={setEditForm} />
               </div>
 
+              <div className="border-t pt-3">
+                <label className="text-xs text-muted-foreground" htmlFor="project-base-branch">
+                  Base branch (optional)
+                </label>
+                <Input
+                  id="project-base-branch"
+                  data-testid="project-base-branch"
+                  value={editForm.baseBranch}
+                  onChange={(e) => setEditForm({ ...editForm, baseBranch: e.target.value })}
+                  placeholder="The repo's default branch"
+                  className="font-mono"
+                />
+                <p className="text-xs text-muted-foreground mt-1">
+                  The branch an issue's work starts from when an agent works on it. What agents do with this project's issues is set in
+                  Settings, Workflows.
+                </p>
+              </div>
+
               {formError && <p className="text-sm text-destructive">{formError}</p>}
 
               <div className="flex justify-end gap-2 pt-2 border-t">
@@ -410,7 +464,12 @@ export default function ProjectsSettingsPage() {
                 >
                   Cancel
                 </Button>
-                <Button size="sm" onClick={handleSave} disabled={saving || !editForm.name.trim() || !editForm.prefix.trim()}>
+                <Button
+                  size="sm"
+                  onClick={handleSave}
+                  disabled={saving || !editForm.name.trim() || !editForm.prefix.trim()}
+                  data-testid="project-save"
+                >
                   {saving ? <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" /> : null}
                   Save
                 </Button>

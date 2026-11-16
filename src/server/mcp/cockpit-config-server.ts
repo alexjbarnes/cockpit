@@ -5,12 +5,15 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { resolveProjectStatuses, sortIssuesByOrder } from "@/lib/issue-display";
 import { CONTEXT_SIZES } from "@/lib/models";
+import type { PlanVersion } from "@/lib/plan-review/types";
 import { rememberClaudeConfig } from "@/server/claude-config-guard";
 import { readClaudeUserConfig, updateClaudeUserConfig } from "@/server/claude-user-config";
 import { getDefaults, setDefaults } from "@/server/defaults";
 import { addInboxMessage } from "@/server/inbox";
+import { embedImages, imagesForAgent } from "@/server/issue-images";
+import { readIssuePlan, writeIssuePlan } from "@/server/issue-plan";
 import {
-  addIssueAttachment,
+  addIssueAttachments,
   addIssueComment,
   allowedStatusesFor,
   applyIssueUpdate,
@@ -31,8 +34,10 @@ import { buildJob, deleteJob, getJob, getLatestRun, getRun, loadJobs, saveJob } 
 import { discoverMcpServerNames } from "@/server/mcp-discovery";
 import { getNotificationSettings, setNotificationSettings, updateNotificationSettings } from "@/server/notification-settings";
 import { addProvider, deleteProvider, getProviders, updateProvider } from "@/server/providers";
-import { getJobScheduler } from "@/server/singleton";
+import { getJobScheduler, getWorkflowEngine } from "@/server/singleton";
 import { findSessionCwd, loadTranscript } from "@/server/transcript";
+import { deleteWorkflow, ruleAt, setProjectWorkflow, type WorkflowInput, workflowForProject } from "@/server/workflow-storage";
+import { workflowView } from "@/server/workflow-view";
 import type { InboxPriority, Issue, IssueActor, JobRun, NotificationProviderEntry, Project, ScheduledJob } from "@/types";
 import { ISSUE_STATUSES, SIMPLE_SCHEDULE_FREQUENCIES } from "@/types";
 import { isValidToken, lookupCaller, type McpCaller } from "./run-context";
@@ -141,11 +146,11 @@ function restoreRedacted<T>(incoming: T, stored: unknown): T {
  * job, or by a plain session that often runs with bypass permissions and
  * reads arbitrary repo content.
  */
-type McpScope = "assistant" | "job" | "session";
+type McpScope = "assistant" | "job" | "session" | "workflow";
 
 const TOOL_SCOPES: Record<string, readonly McpScope[]> = {
-  add_inbox_message: ["job", "session"],
-  list_notify_targets: ["job", "session"],
+  add_inbox_message: ["job", "session", "workflow"],
+  list_notify_targets: ["job", "session", "workflow"],
   // Scheduled-job tools are open to interactive sessions by user decision
   // (2026-08-08): a session already runs with the user's shell, so it could
   // write a real crontab entry anyway — the MCP gate was inconvenience, not a
@@ -165,17 +170,67 @@ const TOOL_SCOPES: Record<string, readonly McpScope[]> = {
   // Phase 2.3: the native issue tracker. A plain session gets no cockpit
   // system prompt (see run-context.ts's McpCaller doc), so these tool
   // descriptions are its only affordance for using the tracker at all.
-  list_projects: ["assistant", "job", "session"],
+  // A workflow stage's run ("workflow") works on issues, so it has the issue and
+  // plan tools, but not the ones that create projects or rearrange a board:
+  // the order of a status is the user's.
+  list_projects: ["assistant", "job", "session", "workflow"],
   create_project: ["assistant", "job", "session"],
-  list_issues: ["assistant", "job", "session"],
-  get_issue: ["assistant", "job", "session"],
-  create_issue: ["assistant", "job", "session"],
-  update_issue: ["assistant", "job", "session"],
+  list_issues: ["assistant", "job", "session", "workflow"],
+  get_issue: ["assistant", "job", "session", "workflow"],
+  create_issue: ["assistant", "job", "session", "workflow"],
+  update_issue: ["assistant", "job", "session", "workflow"],
   reorder_issue: ["assistant", "job", "session"],
   reorder_issue_statuses: ["assistant", "job", "session"],
-  add_issue_comment: ["assistant", "job", "session"],
-  add_issue_attachment: ["assistant", "job", "session"],
+  add_issue_comment: ["assistant", "job", "session", "workflow"],
+  add_issue_attachment: ["assistant", "job", "session", "workflow"],
+  set_issue_plan: ["assistant", "job", "session", "workflow"],
+  get_issue_plan: ["assistant", "job", "session", "workflow"],
+  // Workflows decide what runs unattended and with which permissions, so
+  // they are the user's to change: through the assistant or a session of
+  // theirs, never from a job or a workflow's own run, which would be rewriting its own rules.
+  list_workflows: ["assistant", "session"],
+  get_workflow: ["assistant", "session"],
+  update_workflow: ["assistant", "session"],
+  delete_workflow: ["assistant", "session"],
 };
+
+/** A plan version as an agent reads it: the text, who wrote it, and what the
+ *  reviewer said. The reviewer's markup is left out, since `feedback` is that
+ *  markup already written out for an agent. */
+function planForAgent(version: PlanVersion, issue: Issue | undefined) {
+  return {
+    version: version.n,
+    content: issue ? imagesForAgent(issue, version.content) : version.content,
+    createdAt: version.createdAt,
+    author: version.author ?? null,
+    review: version.review
+      ? { outcome: version.review.outcome, feedback: version.review.feedback, reviewedAt: version.review.reviewedAt }
+      : null,
+  };
+}
+
+/**
+ * Why a workflow's run may not move an issue to `status`, or undefined when
+ * it may. An agent's work ends by moving its own issue to one of the statuses
+ * the workflow lists for where it works, and that list is the whole of what
+ * it can do to any issue's status: the workflow, not the agent, decides what
+ * follows what. Read from the stored workflow at the moment of the call, so an
+ * edit to the workflow applies to a run already going. Every other caller is
+ * unaffected.
+ */
+function stageMoveRefusal(caller: McpCaller, issue: Issue, status: string): string | undefined {
+  if (caller.kind !== "workflow" || status === issue.status) return undefined;
+  const { work } = caller;
+  if (issue.key.toUpperCase() !== work.issueKey.toUpperCase()) {
+    return `This run is working on ${work.issueKey} and can only change that issue's status. Comment on ${issue.key} instead.`;
+  }
+  const workflow = workflowForProject({ id: work.projectId });
+  const rule = workflow ? ruleAt(workflow, work.workStatus) : undefined;
+  const moves = rule?.kind === "agent" ? rule.next : [];
+  if (moves.includes(status)) return undefined;
+  const listed = moves.map((m) => `"${m}"`).join(", ");
+  return `An agent working on ${issue.key} in "${work.workStatus}" cannot move it to "${status}". It can move it to: ${listed || "nothing"}.`;
+}
 
 function scopesFor(name: string): readonly McpScope[] {
   return TOOL_SCOPES[name] ?? ["assistant"];
@@ -199,6 +254,12 @@ const ISSUE_TOOLS = new Set([
   "reorder_issue_statuses",
   "add_issue_comment",
   "add_issue_attachment",
+  "set_issue_plan",
+  "get_issue_plan",
+  "list_workflows",
+  "get_workflow",
+  "update_workflow",
+  "delete_workflow",
 ]);
 
 const ISSUES_DISABLED_ERROR = "The issue tracker is disabled. Turn it on in Settings → Appearance to use this tool.";
@@ -275,6 +336,14 @@ function actorFromCaller(caller: McpCaller): IssueActor {
       return { kind: "assistant" };
     case "job":
       return { kind: "job", jobId: caller.run.jobId, jobName: caller.run.jobName, runId: caller.run.runId };
+    case "workflow":
+      return {
+        kind: "workflow",
+        workStatus: caller.work.workStatus,
+        skill: caller.work.skill,
+        runId: caller.work.runId,
+        sessionId: caller.work.sessionId,
+      };
     case "session":
       return { kind: "session", sessionId: caller.sessionId, sessionName: caller.sessionName };
     default: {
@@ -547,6 +616,15 @@ const TOOL_DEFINITIONS = [
         messageStitching: { type: "boolean" },
         reviewsEnabled: { type: "boolean" },
         issuesEnabled: { type: "boolean" },
+        workflowsEnabled: {
+          type: "boolean",
+          description: "Let workflows start agent sessions on issues. Needs issuesEnabled. Turning it on is the user's decision.",
+        },
+        workflowsPaused: { type: "boolean", description: "Hold every workflow: no new run starts, and runs already going finish." },
+        workflowMaxParallel: {
+          type: "number",
+          description: "Agents working on issues at once across every project's workflow, 1 to 20. Each is a full CLI process.",
+        },
         modalPagesEnabled: { type: "boolean" },
         planReviewAutoOpen: { type: "boolean", description: "Open a proposed plan in the Plan tab beside the chat (wide screens only)." },
         streamRuntimeEnabled: {
@@ -793,7 +871,7 @@ const TOOL_DEFINITIONS = [
   {
     name: "get_issue",
     description:
-      'Get one issue by its key (e.g. "CK-12"): full title and description, every comment, every attachment, and its full activity/audit trail. Errors if the key does not resolve to a real issue.',
+      'Get one issue by its key (e.g. "CK-12"): full title and description, every comment, every attachment, and its full activity/audit trail, plus `plan`: the newest version of the issue\'s plan with the review of it, if it has been reviewed (null when the issue has no plan). The description is the requirement; the plan is how it will be done. A picture in a comment or in the plan is a markdown image whose target is the file it is stored in, which you can read. Errors if the key does not resolve to a real issue.',
     inputSchema: {
       type: "object",
       properties: { key: { type: "string", description: 'Issue key, e.g. "CK-12".' } },
@@ -883,7 +961,7 @@ const TOOL_DEFINITIONS = [
   {
     name: "add_issue_comment",
     description:
-      "Add a comment to an issue, found by its key. The author is attributed automatically from your session/job/assistant identity — there is no author field to set.",
+      "Add a comment to an issue, found by its key. The author is attributed automatically from your session/job/assistant identity — there is no author field to set. To show a picture in it, write a markdown image whose target is the absolute path of the file, with a caption that says what it shows: `![Settings at phone width](/tmp/shots/settings-phone.png)`. The file is copied into the issue and shown where you wrote it, and the reader can open it full size. PNG, JPEG, GIF or WebP. Screenshots of what you built belong in the comment that hands the work over, so it can be judged from the issue.",
     inputSchema: {
       type: "object",
       properties: {
@@ -896,15 +974,144 @@ const TOOL_DEFINITIONS = [
   {
     name: "add_issue_attachment",
     description:
-      "Attach a file to an issue, found by its key — the ui-reviewer agent's screenshots are the main use. `url` may be a remote URL or a local/cockpit-served path.",
+      "Attach files to an issue, found by its key — the ui-reviewer agent's screenshots are the main use. Give one file as `url` and `title`, or several as `attachments`, which are recorded as one activity entry rather than one each. A url may be a remote URL or a local/cockpit-served path.",
     inputSchema: {
       type: "object",
       properties: {
         key: { type: "string", description: 'Issue key, e.g. "CK-12".' },
         url: { type: "string", description: "A remote URL or a local/cockpit-served path." },
         title: { type: "string" },
+        attachments: {
+          type: "array",
+          description: "Several files in one call. Ignored when `url` is given.",
+          items: {
+            type: "object",
+            properties: {
+              url: { type: "string", description: "A remote URL or a local/cockpit-served path." },
+              title: { type: "string" },
+            },
+            required: ["url", "title"],
+          },
+        },
       },
-      required: ["key", "url", "title"],
+      required: ["key"],
+    },
+  },
+  {
+    name: "set_issue_plan",
+    description:
+      "Write an issue's plan: how the work will be done, as markdown. The plan is kept apart from the description, which stays the requirement as the user wrote it, so never put the plan in the description. Each call with new text becomes the next numbered version and the earlier ones are kept; a person reviews the newest version and either approves it or sends it back with notes. When revising after a review, send the whole revised plan, not a patch. The author is attributed automatically. To show a picture in it, write a markdown image whose target is the absolute path of the file, with a caption that says what it shows: `![Settings at phone width](/tmp/shots/settings-phone.png)`. The file is copied into the issue and shown where you wrote it, and the reader can open it full size. PNG, JPEG, GIF or WebP. Use this to offer designs to choose between: one captioned picture for each, so the reviewer can say which.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        key: { type: "string", description: 'Issue key, e.g. "CK-12".' },
+        content: { type: "string", description: "The whole plan, as markdown. Open with a top-level heading that names it." },
+      },
+      required: ["key", "content"],
+    },
+  },
+  {
+    name: "get_issue_plan",
+    description:
+      "Read an issue's plan: one version in full (the newest unless `version` is given) with the review of it, and a list of every version with its author and outcome. A review with outcome \"changes_requested\" carries `feedback`, the reviewer's notes to address in the next version.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        key: { type: "string", description: 'Issue key, e.g. "CK-12".' },
+        version: { type: "number", description: "A version number. Omit for the newest." },
+      },
+      required: ["key"],
+    },
+  },
+  {
+    name: "list_workflows",
+    description:
+      "List every project and its workflow. A workflow belongs to one project and says what happens to an issue at each of the project's statuses: nothing, it queues for an agent, an agent works on it by running a skill from the project's repo, or it waits for the user. For each project: whether it has a workflow, whether it is on, and its statuses that have a rule.",
+    inputSchema: { type: "object", properties: {}, required: [] },
+  },
+  {
+    name: "get_workflow",
+    description:
+      "Get one project's workflow in full, with what is needed to change it: the project's statuses in board order, the skills found in its repo (.claude/skills/<name>/SKILL.md), and `problems` listing anything that stops an agent starting, such as a skill a status names that is not in the repo. `workflow` is null when the project has none yet.",
+    inputSchema: {
+      type: "object",
+      properties: { project: { type: "string", description: "Project id or prefix, from list_projects." } },
+      required: ["project"],
+    },
+  },
+  {
+    name: "update_workflow",
+    description:
+      "Create or change a project's workflow. Give only what changes. `statuses` is keyed by status name and merges into the workflow: a status you name is set, null clears it (nothing happens there), and the rest are left as they are. A status the project does not have yet is added to its board. " +
+      'Three kinds of rule. {"kind":"queue","to":"Refining"}: issues wait here, and when an agent is free Cockpit moves the issue to `to`, which must be a status with an agent rule. {"kind":"agent","skill":"plan-issue","next":["Plan Review","Needs Detail"]}: while the issue is in this status an agent runs that skill from the project\'s repo, and ends by moving the issue to one of `next`, the only statuses it may move it to. {"kind":"human","review":"plan","next":[{"status":"Implementation Ready","label":"Approve","role":"approve"},{"status":"Refine Ready","label":"Send back","role":"sendBack"}]}: the issue waits for the user; with review "plan" they review the issue\'s plan and the two roles are required, without it each `next` entry is a button. ' +
+      "An agent status needs no queue in front of it: without one, issues that arrive wait and are worked in that status. An agent's `next` may not name its own queue. Done and Cancelled cannot be a queue or have an agent. " +
+      "The skill must exist in the repo at .claude/skills/<skill>/SKILL.md, committed and on the project's base branch when the rule uses the issue's own worktree (the default is the project folder); until it does, nothing starts there. " +
+      "What such a skill must do, since it runs with nobody watching: it is told the issue's key; it reads the issue with get_issue (the description is the requirement, `plan` the approved plan with any review feedback, the comments what came before); it does its work in the directory it is given and makes no worktree or branch of its own; a planning skill writes the plan with set_issue_plan and leaves the description alone; it asks no questions; and its last action is update_issue moving the issue to one of the statuses it is told it may use. " +
+      "Turning a workflow on lets agents start by themselves and widening an agent's permissions lets them do more unattended: both are the user's decision. Returns the saved workflow and any statuses added to the project.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        project: { type: "string", description: "Project id or prefix, from list_projects." },
+        enabled: { type: "boolean", description: "Off: no new run starts for it. Runs already going finish." },
+        maxParallel: { type: "number", description: "Issues worked at once in this project, 1 to 50." },
+        replace: { type: "boolean", description: "With statuses: they are the whole workflow, and every status not named is cleared." },
+        statuses: {
+          type: "object",
+          description: "By status name: a rule, or null to clear the status.",
+          additionalProperties: {
+            type: ["object", "null"],
+            properties: {
+              kind: { type: "string", enum: ["queue", "agent", "human"] },
+              to: { type: "string", description: "queue: the status an agent works the issue in." },
+              skill: { type: "string", description: "agent: the skill's folder name under .claude/skills in the project's repo." },
+              next: {
+                type: "array",
+                description:
+                  "agent: status names, the only ones it may move the issue to (at least one). human: {status, label, role?} objects, one per choice.",
+                items: {},
+              },
+              review: { type: "string", enum: ["plan"], description: "human: the issue's plan is reviewed here." },
+              model: { type: "string", description: "agent: a model id as get_job_options lists them. Omit for the default model." },
+              contextSize: { type: "string", enum: [...Object.keys(CONTEXT_SIZES)] },
+              thinkingLevel: { type: "string" },
+              runtime: { type: "string", enum: ["pty", "stream"] },
+              permission: {
+                type: "string",
+                enum: ["bypass", "allowlist", "ask"],
+                description:
+                  "agent: bypass allows every tool; allowlist allows only allowedTools and mcpServers (the Skill tool and the cockpit issue tools always work); ask puts each prompt to the user.",
+              },
+              allowedTools: { type: "array", items: { type: "string" } },
+              mcpServers: { type: "array", items: { type: "string" } },
+              sandbox: { type: "boolean" },
+              maxDurationMinutes: { type: "number" },
+              maxRetries: { type: "number", description: "agent: extra attempts after a failed run, 0 to 5." },
+              maxParallel: { type: "number", description: "agent: issues worked in this status at once." },
+              workspace: {
+                type: "string",
+                enum: ["repo", "worktree"],
+                description: "agent: work in the project's folder, or in a git worktree and branch of the issue's own that Cockpit makes.",
+              },
+              continueSession: {
+                type: "boolean",
+                description: "agent: when an issue comes back to this status, carry on in the session that worked on it before.",
+              },
+              notifyProviders: { type: "array", items: { type: "string" } },
+            },
+          },
+        },
+      },
+      required: ["project"],
+    },
+  },
+  {
+    name: "delete_workflow",
+    description:
+      "Remove a project's workflow. Agents working on its issues are stopped and nothing of it stays held. The project's issues, statuses and run history are not touched.",
+    inputSchema: {
+      type: "object",
+      properties: { project: { type: "string", description: "Project id or prefix, from list_projects." } },
+      required: ["project"],
     },
   },
 ];
@@ -1004,6 +1211,12 @@ async function handleToolCall(
           // in which case dispatchNotification's default per-provider filter
           // decides, unchanged from today's behaviour.
           notifyProviders = explicitNotify ?? caller.run.notifyProviders;
+        } else if (caller.kind === "workflow") {
+          // A workflow's run reports like a job's: nobody is watching it, so its
+          // own configured targets apply unless it names others.
+          sessionId = caller.work.sessionId;
+          sessionName = `${caller.work.issueKey} ${caller.work.skill}`;
+          notifyProviders = explicitNotify ?? caller.work.notifyProviders;
         } else if (caller.kind === "session") {
           sessionId = caller.sessionId;
           sessionName = caller.sessionName;
@@ -1246,6 +1459,9 @@ async function handleToolCall(
           "messageStitching",
           "reviewsEnabled",
           "issuesEnabled",
+          "workflowsEnabled",
+          "workflowsPaused",
+          "workflowMaxParallel",
           "modalPagesEnabled",
           "planReviewAutoOpen",
           "streamRuntimeEnabled",
@@ -1258,6 +1474,8 @@ async function handleToolCall(
           Object.entries(args).filter(([k]) => allowed.includes(k as (typeof allowed)[number])),
         ) as Parameters<typeof setDefaults>[0];
         const after = setDefaults(safe);
+        // Workflows switched on, unpaused or given more room: issues may be waiting.
+        getWorkflowEngine()?.kick();
         return { content: [{ type: "text", text: JSON.stringify({ before, after }, null, 2) }] };
       }
       case "list_providers":
@@ -1623,7 +1841,126 @@ async function handleToolCall(
         if (!issue) {
           return { content: [{ type: "text", text: JSON.stringify({ error: `Issue not found: ${key}` }) }], isError: true };
         }
-        return { content: [{ type: "text", text: JSON.stringify(issue, null, 2) }] };
+        const plan = readIssuePlan(issue.key).versions.at(-1);
+        // Pictures in the text are named by the files they are stored in,
+        // which an agent can open.
+        const comments = issue.comments.map((c) => ({ ...c, body: imagesForAgent(issue, c.body) }));
+        return {
+          content: [{ type: "text", text: JSON.stringify({ ...issue, comments, plan: plan ? planForAgent(plan, issue) : null }, null, 2) }],
+        };
+      }
+      case "list_workflows": {
+        const list = loadProjects()
+          .filter((p) => !p.archived)
+          .map((p) => {
+            const workflow = workflowForProject(p);
+            return {
+              project: p.prefix,
+              name: p.name,
+              hasWorkflow: !!workflow,
+              ...(workflow
+                ? {
+                    enabled: workflow.enabled,
+                    maxParallel: workflow.maxParallel,
+                    statuses: Object.fromEntries(
+                      Object.entries(workflow.statuses).map(([status, rule]) => [
+                        status,
+                        rule.kind === "queue"
+                          ? `queue for ${rule.to}`
+                          : rule.kind === "agent"
+                            ? `agent runs ${rule.skill}, then ${rule.next.join(" or ")}`
+                            : `waits for the user${rule.review ? " (plan review)" : ""}`,
+                      ]),
+                    ),
+                  }
+                : {}),
+            };
+          });
+        return { content: [{ type: "text", text: JSON.stringify(list, null, 2) }] };
+      }
+      case "get_workflow":
+      case "update_workflow":
+      case "delete_workflow": {
+        const ref = typeof args.project === "string" ? args.project.trim() : "";
+        const project = ref ? resolveProject(ref) : undefined;
+        if (!project) {
+          return {
+            content: [{ type: "text", text: JSON.stringify({ error: `Project not found: ${ref || "(none given)"}. Use list_projects.` }) }],
+            isError: true,
+          };
+        }
+        if (name === "get_workflow") {
+          return { content: [{ type: "text", text: JSON.stringify(workflowView(project), null, 2) }] };
+        }
+        if (name === "delete_workflow") {
+          // Its runs are stopped before it goes, while the engine can still tell whose they are.
+          getWorkflowEngine()?.forget(project.id);
+          const deleted = deleteWorkflow(project.id);
+          return { content: [{ type: "text", text: JSON.stringify({ deleted }) }] };
+        }
+        // Only the fields the schema names, so nothing else a caller sends
+        // can ride into the stored workflow.
+        const patch: WorkflowInput = {};
+        if (args.enabled !== undefined) patch.enabled = args.enabled as boolean;
+        if (args.maxParallel !== undefined) patch.maxParallel = args.maxParallel as number;
+        if (args.statuses !== undefined) patch.statuses = args.statuses;
+        if (args.replace === true) patch.replace = true;
+        const saved = setProjectWorkflow(project, patch);
+        getWorkflowEngine()?.kick();
+        const view = workflowView(resolveProject(project.id) ?? project);
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({ workflow: saved.workflow, addedStatuses: saved.added, problems: view.problems }, null, 2),
+            },
+          ],
+        };
+      }
+      case "set_issue_plan": {
+        const key = typeof args.key === "string" ? args.key.trim() : "";
+        if (!key) {
+          return { content: [{ type: "text", text: JSON.stringify({ error: "key is required" }) }], isError: true };
+        }
+        const written = writeIssuePlan(key, args.content, actorFromCaller(caller), Date.now(), { embedImages: true });
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify(
+                written.created
+                  ? { written: { version: written.version.n } }
+                  : {
+                      unchanged: { version: written.version.n },
+                      note: "This is the same text as the newest version, so no new version was made.",
+                    },
+                null,
+                2,
+              ),
+            },
+          ],
+        };
+      }
+      case "get_issue_plan": {
+        const key = typeof args.key === "string" ? args.key.trim() : "";
+        if (!key) {
+          return { content: [{ type: "text", text: JSON.stringify({ error: "key is required" }) }], isError: true };
+        }
+        const { versions } = readIssuePlan(key);
+        const wanted = typeof args.version === "number" ? versions.find((v) => v.n === args.version) : versions.at(-1);
+        if (!wanted) {
+          const error = versions.length === 0 ? `${key} has no plan yet` : `${key} has no plan version ${args.version}`;
+          return { content: [{ type: "text", text: JSON.stringify({ error }) }], isError: true };
+        }
+        const list = versions.map((v) => ({
+          version: v.n,
+          createdAt: v.createdAt,
+          author: v.author ?? null,
+          outcome: v.review?.outcome ?? null,
+        }));
+        return {
+          content: [{ type: "text", text: JSON.stringify({ plan: planForAgent(wanted, getIssue(key)), versions: list }, null, 2) }],
+        };
       }
       case "create_issue": {
         const projectArg = typeof args.project === "string" ? args.project.trim() : "";
@@ -1710,6 +2047,8 @@ async function handleToolCall(
               isError: true,
             };
           }
+          const refusal = stageMoveRefusal(caller, issue, args.status);
+          if (refusal) return { content: [{ type: "text", text: JSON.stringify({ error: refusal }) }], isError: true };
           patch.status = args.status;
         }
         if (args.priority !== undefined) {
@@ -1868,18 +2207,38 @@ async function handleToolCall(
         }
 
         const actor = actorFromCaller(caller);
-        const updated = addIssueComment(issue, body, actor);
+        // A picture named by its file is copied into the issue and shown in
+        // the comment. Throws for one that is missing or not an image, which
+        // the outer catch turns into an isError response.
+        const embedded = embedImages(issue, body);
+        const updated = addIssueComment(embedded.issue, embedded.markdown, actor);
         saveIssue(updated);
         const comment = updated.comments[updated.comments.length - 1];
         return { content: [{ type: "text", text: JSON.stringify({ added: comment, issue: updated }, null, 2) }] };
       }
       case "add_issue_attachment": {
         const key = typeof args.key === "string" ? args.key.trim() : "";
-        const url = typeof args.url === "string" ? args.url.trim() : "";
-        const title = typeof args.title === "string" ? args.title.trim() : "";
-        if (!key || !url || !title) {
+        const singleUrl = typeof args.url === "string" ? args.url.trim() : "";
+        const singleTitle = typeof args.title === "string" ? args.title.trim() : "";
+        const rawList = Array.isArray(args.attachments) ? args.attachments : [];
+        const wanted: { url: string; title: string }[] = [];
+        if (singleUrl) {
+          wanted.push({ url: singleUrl, title: singleTitle });
+        } else {
+          for (const entry of rawList) {
+            const url = typeof (entry as { url?: unknown })?.url === "string" ? (entry as { url: string }).url.trim() : "";
+            const title = typeof (entry as { title?: unknown })?.title === "string" ? (entry as { title: string }).title.trim() : "";
+            wanted.push({ url, title });
+          }
+        }
+        if (!key || wanted.length === 0 || wanted.some((a) => !a.url || !a.title)) {
           return {
-            content: [{ type: "text", text: JSON.stringify({ error: "key, url and title are all required and must be non-empty" }) }],
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify({ error: "key is required, and every attachment needs a non-empty url and title" }),
+              },
+            ],
             isError: true,
           };
         }
@@ -1889,16 +2248,19 @@ async function handleToolCall(
         }
 
         const actor = actorFromCaller(caller);
-        // Copies a local file into the issue-attachments root, because the
+        // Copies local files into the issue-attachments root, because the
         // caller's path is usually one it does not own the lifetime of (a
         // chat attachment the PTY adapter deletes on the next message, a
         // screenshot in a temp dir). Throws for a missing file, which the
         // outer catch turns into an isError response.
-        const storedUrl = persistAttachmentFile(issue.key, url);
-        const updated = addIssueAttachment(issue, { title, url: storedUrl }, actor);
+        const stored = wanted.map((a) => ({ title: a.title, url: persistAttachmentFile(issue.key, a.url) }));
+        const updated = addIssueAttachments(issue, stored, actor);
         saveIssue(updated);
-        const attachment = updated.attachments[updated.attachments.length - 1];
-        return { content: [{ type: "text", text: JSON.stringify({ added: attachment, issue: updated }, null, 2) }] };
+        const added = updated.attachments.slice(issue.attachments.length);
+        // One file reads as one attachment, as it always has; a batch is a list.
+        return {
+          content: [{ type: "text", text: JSON.stringify({ added: singleUrl ? added[0] : added, issue: updated }, null, 2) }],
+        };
       }
       default:
         return { content: [{ type: "text", text: JSON.stringify({ error: `Unknown tool: ${name}` }) }], isError: true };

@@ -5,6 +5,18 @@ export interface RunContext {
   notifyProviders?: string[];
 }
 
+/** A workflow's run on one issue: who that session is to the cockpit tools.
+ *  The status the agent works in, with the skill it runs, says which run. */
+export interface WorkflowRunContext {
+  projectId: string;
+  workStatus: string;
+  skill: string;
+  runId: string;
+  issueKey: string;
+  sessionId: string;
+  notifyProviders?: string[];
+}
+
 /**
  * Tagged identity behind an MCP bearer token. A plain "RunContext | null" can
  * only say "this is a job" or "this is not a job", which was fine while those
@@ -14,6 +26,7 @@ export interface RunContext {
 export type McpCaller =
   | { kind: "assistant" }
   | { kind: "job"; run: RunContext }
+  | { kind: "workflow"; work: WorkflowRunContext }
   | { kind: "session"; sessionId: string; sessionName: string };
 
 const tokens = new Map<string, McpCaller>();
@@ -24,6 +37,10 @@ export function registerAuthToken(token: string): void {
 
 export function registerRunContext(token: string, ctx: RunContext): void {
   tokens.set(token, { kind: "job", run: ctx });
+}
+
+export function registerWorkflowRunContext(token: string, ctx: WorkflowRunContext): void {
+  tokens.set(token, { kind: "workflow", work: ctx });
 }
 
 export function registerSessionContext(token: string, sessionId: string, sessionName: string): void {

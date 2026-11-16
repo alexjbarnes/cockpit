@@ -144,7 +144,10 @@ test("on a phone, opening a file or diff from the panel closes the sidebar drawe
 
     await openSession(page, harness, repo);
 
-    await page.getByTitle("Toggle sidebar (Ctrl+B)").click();
+    await page.getByTestId("session-files-drawer").click();
+    // The drawer holds only the session's own things: no session list, no reviews.
+    await expect(page.getByTestId("sidebar-section-sessions")).toBeHidden();
+    await expect(page.getByTestId("sidebar-section-reviews")).toBeHidden();
     await openSidebarFiles(page);
     const tree = page.getByTestId("sidebar-files-changes-tree-files");
     const row = tree.getByRole("treeitem", { name: "README.md" });

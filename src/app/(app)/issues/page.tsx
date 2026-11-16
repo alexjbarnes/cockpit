@@ -4,11 +4,15 @@ import { ClipboardList, Plus, X } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePageHeader } from "@/components/app-shell";
+import { WorkflowFlowsProvider } from "@/components/issues/issue-flow";
 import { GroupHeader, IssueList } from "@/components/issues/issue-list";
 import { KanbanBoard } from "@/components/issues/kanban-board";
 import { NewIssueDialog } from "@/components/issues/new-issue-dialog";
+import { RefreshOnFlow } from "@/components/issues/refresh-on-flow";
+import { IssuesWorkflowsSwitch } from "@/components/nav/place-switch";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { Segmented } from "@/components/ui/segmented";
 import { useScrollRestoration } from "@/hooks/use-scroll-restoration";
 import { useSettings } from "@/hooks/use-settings";
 import type { IssueProjectGroup, QuickFilter } from "@/lib/issue-display";
@@ -165,7 +169,8 @@ function ProjectGroupCard({ group, onIssueClick }: { group: IssueProjectGroup; o
 }
 
 export default function IssuesPage() {
-  usePageHeader("Issues", { hideActions: true });
+  const headerActions = useMemo(() => <IssuesWorkflowsSwitch side="issues" />, []);
+  usePageHeader("Issues", { hideActions: true, actions: headerActions });
   const scrollRef = useScrollRestoration<HTMLDivElement>("issues-scroll");
   const router = useRouter();
   const { settings, loaded: settingsLoaded } = useSettings();
@@ -278,8 +283,8 @@ export default function IssuesPage() {
       projectId: projectFilter || undefined,
       status: view === "status" ? statusFilter || undefined : undefined,
     });
-    return filterByQuickFilter(byDropdowns, quickFilter);
-  }, [issues, projectFilter, statusFilter, quickFilter, view]);
+    return filterByQuickFilter(byDropdowns, quickFilter, projects);
+  }, [issues, projects, projectFilter, statusFilter, quickFilter, view]);
 
   // The board's columns are a single project's statuses; with All Projects it
   // falls back to the built-in lifecycle (selectedProject undefined).
@@ -306,144 +311,143 @@ export default function IssuesPage() {
   if (!settingsLoaded || !filtersHydrated || !settings.issuesEnabled) return null;
 
   return (
-    <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto p-4 pb-24 space-y-4">
-      <div className="flex items-center gap-2 flex-wrap">
-        <div className="inline-flex shrink-0 gap-0.5 rounded-md border p-0.5">
-          {(["status", "project", "board"] as const).map((v) => (
-            <button
-              key={v}
-              type="button"
-              onClick={() => changeView(v)}
-              aria-pressed={view === v}
-              className={cn(
-                "rounded-sm px-2.5 py-1 text-xs font-medium transition-colors",
-                view === v ? "bg-secondary text-secondary-foreground" : "text-muted-foreground hover:text-foreground",
-              )}
-            >
-              {v === "status" ? "By status" : v === "project" ? "By project" : "Board"}
-            </button>
-          ))}
+    <WorkflowFlowsProvider enabled={settings.workflowsEnabled}>
+      <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto p-4 pb-24 space-y-4">
+        <RefreshOnFlow onChange={fetchAll} />
+        <div className="flex items-center gap-2 flex-wrap">
+          <Segmented
+            variant="switch"
+            label="Issue view"
+            testId="issues-view-switch"
+            value={view}
+            options={[
+              { value: "status", label: "By status" },
+              { value: "project", label: "By project" },
+              { value: "board", label: "Board" },
+            ]}
+            onChange={changeView}
+          />
+          <div className="flex flex-wrap items-center gap-1.5">
+            {QUICK_FILTERS.map((f) => (
+              <button
+                key={f.value}
+                type="button"
+                onClick={() => setQuickFilter(f.value)}
+                aria-pressed={quickFilter === f.value}
+                className={cn(
+                  "rounded-full border px-3 py-1 text-xs font-medium transition-colors",
+                  quickFilter === f.value
+                    ? "border-primary bg-primary text-primary-foreground"
+                    : "border-input bg-background text-muted-foreground hover:text-foreground",
+                )}
+              >
+                {f.label}
+              </button>
+            ))}
+          </div>
         </div>
-        <div className="flex flex-wrap items-center gap-1.5">
-          {QUICK_FILTERS.map((f) => (
-            <button
-              key={f.value}
-              type="button"
-              onClick={() => setQuickFilter(f.value)}
-              aria-pressed={quickFilter === f.value}
-              className={cn(
-                "rounded-full border px-3 py-1 text-xs font-medium transition-colors",
-                quickFilter === f.value
-                  ? "border-primary bg-primary text-primary-foreground"
-                  : "border-input bg-background text-muted-foreground hover:text-foreground",
-              )}
-            >
-              {f.label}
-            </button>
-          ))}
-        </div>
-      </div>
 
-      <div className="flex items-center gap-2 flex-wrap">
-        <select value={projectFilter} onChange={(e) => setProjectFilter(e.target.value)} className={SELECT_CLASS}>
-          <option value="">All Projects</option>
-          {projects.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.name}
-            </option>
-          ))}
-        </select>
-        {view === "status" && (
-          <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as IssueStatus | "")} className={SELECT_CLASS}>
-            {ALL_STATUSES.map((s) => (
-              <option key={s || "all"} value={s}>
-                {s || "All Statuses"}
+        <div className="flex items-center gap-2 flex-wrap">
+          <select value={projectFilter} onChange={(e) => setProjectFilter(e.target.value)} className={SELECT_CLASS}>
+            <option value="">All Projects</option>
+            {projects.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
               </option>
             ))}
           </select>
-        )}
-        {hasFilters && (
-          <button
-            type="button"
-            onClick={() => {
-              setProjectFilter("");
-              setStatusFilter("");
-            }}
-            className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
-          >
-            <X className="h-3 w-3" />
-            Clear filters
-          </button>
-        )}
-      </div>
-
-      {loading && <p className="text-sm text-muted-foreground">Loading issues...</p>}
-
-      {!loading && issues.length === 0 && (
-        <div className="flex flex-col items-center justify-center py-16 text-center">
-          <ClipboardList className="h-12 w-12 text-muted-foreground/50 mb-4" />
-          <p className="text-sm text-muted-foreground">No issues yet.</p>
-          <p className="text-xs text-muted-foreground mt-1">
-            {projects.length === 0 ? "Create a project first, in Settings > Projects." : "Create one to start tracking work."}
-          </p>
+          {view === "status" && (
+            <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as IssueStatus | "")} className={SELECT_CLASS}>
+              {ALL_STATUSES.map((s) => (
+                <option key={s || "all"} value={s}>
+                  {s || "All Statuses"}
+                </option>
+              ))}
+            </select>
+          )}
+          {hasFilters && (
+            <button
+              type="button"
+              onClick={() => {
+                setProjectFilter("");
+                setStatusFilter("");
+              }}
+              className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+            >
+              <X className="h-3 w-3" />
+              Clear filters
+            </button>
+          )}
         </div>
-      )}
 
-      {!loading && issues.length > 0 && filtered.length === 0 && view !== "board" && (
-        <p className="text-sm text-muted-foreground py-8 text-center">No issues match these filters.</p>
-      )}
+        {loading && <p className="text-sm text-muted-foreground">Loading issues...</p>}
 
-      {moveError && (
-        <div className="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive">{moveError}</div>
-      )}
+        {!loading && issues.length === 0 && (
+          <div className="flex flex-col items-center justify-center py-16 text-center">
+            <ClipboardList className="h-12 w-12 text-muted-foreground/50 mb-4" />
+            <p className="text-sm text-muted-foreground">No issues yet.</p>
+            <p className="text-xs text-muted-foreground mt-1">
+              {projects.length === 0 ? "Create a project first, in Settings > Projects." : "Create one to start tracking work."}
+            </p>
+          </div>
+        )}
 
-      {view === "board" ? (
-        <KanbanBoard
-          issues={filtered}
-          project={selectedProject}
-          projectNames={projectNames}
-          showProject={!projectFilter}
-          onIssueClick={(issue) => router.push(`/issues/${encodeURIComponent(issue.key)}`)}
-          onDrop={handleDrop}
-        />
-      ) : view === "status" ? (
-        <IssueList
-          issues={filtered}
-          statusGroups={statusGroups}
-          project={selectedProject}
-          projectNames={projectNames}
-          onIssueClick={(issue) => router.push(`/issues/${encodeURIComponent(issue.key)}`)}
-          onDrop={handleDrop}
-        />
-      ) : (
-        <div className="space-y-4">
-          {projectGroups.map((group) => (
-            <ProjectGroupCard
-              key={group.project.id}
-              group={group}
-              onIssueClick={(issue) => router.push(`/issues/${encodeURIComponent(issue.key)}`)}
-            />
-          ))}
+        {!loading && issues.length > 0 && filtered.length === 0 && view !== "board" && (
+          <p className="text-sm text-muted-foreground py-8 text-center">No issues match these filters.</p>
+        )}
+
+        {moveError && (
+          <div className="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive">{moveError}</div>
+        )}
+
+        {view === "board" ? (
+          <KanbanBoard
+            issues={filtered}
+            project={selectedProject}
+            projectNames={projectNames}
+            showProject={!projectFilter}
+            onIssueClick={(issue) => router.push(`/issues/${encodeURIComponent(issue.key)}`)}
+            onDrop={handleDrop}
+          />
+        ) : view === "status" ? (
+          <IssueList
+            issues={filtered}
+            statusGroups={statusGroups}
+            project={selectedProject}
+            projectNames={projectNames}
+            onIssueClick={(issue) => router.push(`/issues/${encodeURIComponent(issue.key)}`)}
+            onDrop={handleDrop}
+          />
+        ) : (
+          <div className="space-y-4">
+            {projectGroups.map((group) => (
+              <ProjectGroupCard
+                key={group.project.id}
+                group={group}
+                onIssueClick={(issue) => router.push(`/issues/${encodeURIComponent(issue.key)}`)}
+              />
+            ))}
+          </div>
+        )}
+
+        <div className="fixed right-6 bottom-[calc(5.125rem+env(safe-area-inset-bottom))] md:bottom-6">
+          <Button size="lg" className="rounded-full shadow-lg" onClick={() => setNewOpen(true)}>
+            <Plus className="h-5 w-5 mr-1" />
+            New Issue
+          </Button>
         </div>
-      )}
 
-      <div className="fixed bottom-6 right-6">
-        <Button size="lg" className="rounded-full shadow-lg" onClick={() => setNewOpen(true)}>
-          <Plus className="h-5 w-5 mr-1" />
-          New Issue
-        </Button>
+        <NewIssueDialog
+          open={newOpen}
+          onOpenChange={setNewOpen}
+          projects={projects}
+          defaultProjectId={projectFilter}
+          onCreated={(issue) => {
+            setIssues((prev) => [...prev, issue]);
+            router.push(`/issues/${encodeURIComponent(issue.key)}`);
+          }}
+        />
       </div>
-
-      <NewIssueDialog
-        open={newOpen}
-        onOpenChange={setNewOpen}
-        projects={projects}
-        defaultProjectId={projectFilter}
-        onCreated={(issue) => {
-          setIssues((prev) => [...prev, issue]);
-          router.push(`/issues/${encodeURIComponent(issue.key)}`);
-        }}
-      />
-    </div>
+    </WorkflowFlowsProvider>
   );
 }

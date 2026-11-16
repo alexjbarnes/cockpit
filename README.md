@@ -18,7 +18,9 @@ Cockpit runs the real Claude Code CLI on a server, which can be your laptop or a
 - **Tabs and split view.** Chat, diffs, files and a terminal, side by side. Edit files in place.
 - **Any model.** Claude, or any model on OpenRouter (free ones included), OpenCode Zen and Go, DeepSeek, Groq, Gemini, NVIDIA NIM or CommandCode, or your own Anthropic-compatible endpoint. Switch model mid-session. Tools, edits and permissions work the same on all of them.
 - **Insights.** What each session and job costs, how fast each model is, and where the time goes.
-- **Issue tracker.** Projects and issues on a board. Jobs refine and plan them. Sessions pick them up.
+- **Issue tracker.** Projects and issues on a board. Sessions and agents pick them up.
+- **Workflows.** Say what happens at each status of a project's board: issues queue for an agent, an agent works on the issue by running a skill from the project's own repo, or it waits for you. One plans it, you review the plan, one builds it, another checks it, you review the work, and it is merged. You choose the skill, the model and thinking level, what each agent may use, and how many issues are worked at once. An agent can set all of it up for you through Cockpit's tools.
+- **Plan review.** Read a plan properly before it is built. Select text to comment on it, strike it or replace it, send it back, and see what changed in the next version. For a session's plan and for an issue's.
 - **Scheduled jobs.** Unattended runs on a schedule, when an issue changes status, or after other jobs. Each has its own model, tools, MCP servers and time budget.
 - **Inbox.** Job results land here, and on your phone through Telegram, ntfy or web push.
 - **Cockpit Assistant.** Set Cockpit up by asking: jobs, providers, MCP servers, settings. Every change waits for your approval.
@@ -28,7 +30,7 @@ Cockpit runs the real Claude Code CLI on a server, which can be your laptop or a
 - **Claude Code config.** Agents, skills, hooks, MCP servers, plugins and CLAUDE.md, all editable in the UI.
 - **Small things.** Search every session (Ctrl+Shift+F), prompt history on the up arrow, messages that queue while Claude works, and `/btw` for a side question that doesn't interrupt.
 
-Insights and the issue tracker are experimental and off by default. Turn them on in Settings → Appearance. Insights covers PTY sessions.
+Insights, the issue tracker and workflows are experimental and off by default. Turn the first two on in Settings → Appearance, and workflows in Settings → Workflows. Insights covers PTY sessions.
 
 ## Quick start
 
@@ -77,6 +79,7 @@ Cockpit listens on all interfaces. On the host, open http://localhost:3001. From
 - [Embedded terminal](docs/terminal.md): themes and the mobile key bar
 - [PR reviews](docs/pr-reviews.md)
 - [Scheduled jobs](docs/scheduled-jobs.md)
+- [Workflows](docs/workflows.md): what happens at each status, the skills agents run, the plan and its review, limits, worktrees, what happens when a run fails
 - [Settings](docs/settings.md): auth, models, providers, themes, notifications, inbox, updates, agents, skills, hooks, MCP servers, CLAUDE.md
 
 ## Development

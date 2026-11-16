@@ -393,6 +393,8 @@ export interface InboxMessage {
    *  the assistant) posted this via add_inbox_message. */
   sessionId?: string;
   sessionName?: string;
+  /** A page this message is about, such as an issue waiting for the user. */
+  url?: string;
   title: string;
   body: string;
   priority: InboxPriority;
@@ -486,6 +488,10 @@ export interface NotificationSettings {
 export interface CustomStatus {
   name: string;
   color?: string;
+  /** Whether issues at this status count as active on the issues page's
+   *  Active filter. Absent means active; a not-active status files with the
+   *  backlog instead, so a column like Future does not read as started. */
+  active?: boolean;
 }
 
 export interface Project {
@@ -507,6 +513,8 @@ export interface Project {
   // default position after the named ones, so a partial list is a prefix
   // rather than a filter. Applied by resolveProjectStatuses.
   statusOrder?: string[];
+  /** The branch an issue's work starts from. Absent: the repo's default. */
+  baseBranch?: string;
 }
 
 /**
@@ -554,6 +562,7 @@ export type IssueActor =
   | { kind: "assistant" }
   | { kind: "job"; jobId: string; jobName: string; runId: string }
   | { kind: "session"; sessionId: string; sessionName: string }
+  | { kind: "workflow"; workStatus: string; skill: string; runId: string; sessionId: string }
   | { kind: "user" };
 
 export interface IssueComment {
@@ -571,6 +580,12 @@ export interface IssueAttachment {
   title: string;
   url: string;
   createdAt: number;
+  /** A picture shown inside a comment or the plan, where it was written as a
+   *  markdown image. It is not listed again under Attachments. */
+  inline?: boolean;
+  /** SHA-256 of an inline picture's file, so the same picture written twice
+   *  is stored once. */
+  hash?: string;
 }
 
 /** The Issue field names an activity entry can carry a before/after diff for. */
@@ -579,16 +594,22 @@ export type IssueActivityField = "title" | "description" | "status" | "priority"
 /**
  * One append-only audit entry. `kind` covers the non-field events (creation,
  * comments, attachments) alongside "field_changed", which is the only kind
- * that populates `field`/`from`/`to`. Never mutated or removed once appended.
+ * that populates `field`/`from`/`to`, and the two plan kinds, which say which
+ * version of the issue's plan was written or reviewed. Never mutated or
+ * removed once appended.
  */
 export interface IssueActivity {
   id: string;
   createdAt: number;
   actor: IssueActor;
-  kind: "created" | "field_changed" | "commented" | "attachment_added";
+  kind: "created" | "field_changed" | "commented" | "attachment_added" | "plan_written" | "plan_reviewed";
   field?: IssueActivityField;
   from?: unknown;
   to?: unknown;
+  /** plan_written and plan_reviewed: which version of the issue's plan. */
+  planVersion?: number;
+  /** plan_reviewed: what the reviewer decided. */
+  planOutcome?: "approved" | "changes_requested" | "dismissed";
 }
 
 export interface Issue {
@@ -596,7 +617,7 @@ export interface Issue {
   key: string; // "CK-12", what humans and branches use
   projectId: string;
   title: string;
-  description: string; // markdown, the refine skill overwrites this wholesale
+  description: string; // markdown: the requirement as a person wrote it. The plan is kept apart (issue-plan.ts)
   // A built-in IssueStatus, or one of the issue's project customStatuses. Typed
   // as string because custom statuses are runtime values validated per project;
   // IssueStatus stays the union the automation (skills, onIssueStatus) keys off.
@@ -614,6 +635,134 @@ export interface Issue {
   comments: IssueComment[];
   attachments: IssueAttachment[];
   activity: IssueActivity[]; // append-only, who changed what
+  /** Set when the issue's workflow cannot carry on by itself: a stage failed,
+   *  stalled or was stopped. It holds the issue out of the queue until a
+   *  person retries it or moves it. */
+  attention?: IssueAttention;
+  /** The issue's own checkout, once a stage that works in one has run. */
+  workspace?: IssueWorkspace;
+}
+
+/** A git worktree of the project's repository that the stages of one issue work in. */
+export interface IssueWorkspace {
+  path: string;
+  branch: string;
+  /** What the branch was started from. */
+  base: string;
+  createdAt: number;
+}
+
+export interface IssueAttention {
+  /** The status an agent was to work the issue in when it was held. */
+  workStatus: string;
+  runId?: string;
+  reason: string;
+  at: number;
+}
+
+// Workflows: what happens to a project's issues at each of its statuses.
+
+export const WORKFLOW_PERMISSIONS = ["bypass", "allowlist", "ask"] as const;
+/** How an agent gets permission for a tool: all of them, only those on its
+ *  lists, or by asking the user through the session. */
+export type WorkflowPermission = (typeof WORKFLOW_PERMISSIONS)[number];
+
+/** Issues wait here. When an agent is free the issue moves to `to`, where it is worked on. */
+export interface WorkflowQueueRule {
+  kind: "queue";
+  /** A status whose rule is an agent's. */
+  to: string;
+}
+
+/** An agent works on the issue while it is in this status, by running a skill
+ *  from the project's repo, and ends by moving it to one of `next`. */
+export interface WorkflowAgentRule {
+  kind: "agent";
+  /** The skill's folder name under the repo's .claude/skills. */
+  skill: string;
+  /** The only statuses the agent may move the issue to. */
+  next: string[];
+  model?: string;
+  contextSize?: string;
+  thinkingLevel?: ThinkingLevel;
+  runtime?: "stream" | "pty";
+  permission?: WorkflowPermission;
+  allowedTools?: string[];
+  mcpServers?: string[];
+  mcpToolFilters?: Record<string, string[]>;
+  sandbox?: boolean;
+  maxDurationMinutes?: number;
+  /** Extra attempts after a run that failed. */
+  maxRetries?: number;
+  /** Issues worked in this status at once. */
+  maxParallel?: number;
+  /** Where the run works: the project's checkout, or a worktree of its own per issue. */
+  workspace?: "repo" | "worktree";
+  /** When an issue comes back to this status, carry on in the session that
+   *  worked on it last time, which still knows what it found. */
+  continueSession?: boolean;
+  /** Who is told when an issue is held here. */
+  notifyProviders?: string[];
+}
+
+/** One thing a person can decide at a status that waits for them. */
+export interface WorkflowChoice {
+  /** The status the issue is moved to. */
+  status: string;
+  /** What the button says. */
+  label: string;
+  /** On a plan review: which choice an approval is, and which a send-back. */
+  role?: "approve" | "sendBack";
+}
+
+/** The issue waits here for a person. */
+export interface WorkflowHumanRule {
+  kind: "human";
+  /** Show the issue's plan for review; approving or sending it back is the move. */
+  review?: "plan";
+  next: WorkflowChoice[];
+  /** Who is told the issue is waiting. */
+  notifyProviders?: string[];
+}
+
+export type WorkflowStatusRule = WorkflowQueueRule | WorkflowAgentRule | WorkflowHumanRule;
+
+/** A project's workflow: its statuses, and what happens at each. One per project. */
+export interface Workflow {
+  projectId: string;
+  /** Off: no new runs start for it. Runs already going finish. */
+  enabled: boolean;
+  /** Issues worked at once in this project. */
+  maxParallel: number;
+  /** By status name. A status that is not here is one where nothing happens. */
+  statuses: Record<string, WorkflowStatusRule>;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export type WorkflowRunStatus = "running" | "success" | "failure" | "timeout" | "stopped";
+
+/** One run of an agent on an issue. */
+export interface WorkflowRun {
+  id: string;
+  /** The status the agent worked the issue in. With `skill`, what the run was of. */
+  workStatus: string;
+  skill: string;
+  issueKey: string;
+  projectId: string;
+  sessionId: string;
+  status: WorkflowRunStatus;
+  startedAt: number;
+  completedAt?: number;
+  durationMs?: number;
+  error?: string;
+  /** The status the issue was in when the run claimed it, and where the run left it. */
+  from: string;
+  to?: string;
+  model?: string;
+  toolsUsed: JobRunToolUse[];
+  messageCount: number;
+  cwd: string;
 }
 
 /** How a message sent while Claude is working is delivered. */

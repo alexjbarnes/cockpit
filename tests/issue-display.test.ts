@@ -154,6 +154,24 @@ describe("filterByQuickFilter", () => {
   it("active keeps started/unstarted work, excluding Backlog, Done, and Cancelled", () => {
     expect(filterByQuickFilter(issues, "active").map((i) => i.id)).toEqual(["b", "c"]);
   });
+
+  it("a custom status tagged not active files with the backlog", () => {
+    const project = { id: "p1", customStatuses: [{ name: "Future", active: false }, { name: "Blocked" }] } as unknown as Project;
+    const withCustom = [
+      ...issues,
+      makeIssue({ id: "f", status: "Future", projectId: "p1" }),
+      makeIssue({ id: "g", status: "Blocked", projectId: "p1" }),
+    ];
+    expect(filterByQuickFilter(withCustom, "active", [project]).map((i) => i.id)).toEqual(["b", "c", "g"]);
+    expect(filterByQuickFilter(withCustom, "backlog", [project]).map((i) => i.id)).toEqual(["a", "f"]);
+  });
+
+  it("decides by the issue's own project", () => {
+    const one = { id: "p1", customStatuses: [{ name: "Future", active: false }] } as unknown as Project;
+    const two = { id: "p2", customStatuses: [{ name: "Future" }] } as unknown as Project;
+    const mixed = [makeIssue({ id: "x", status: "Future", projectId: "p1" }), makeIssue({ id: "y", status: "Future", projectId: "p2" })];
+    expect(filterByQuickFilter(mixed, "active", [one, two]).map((i) => i.id)).toEqual(["y"]);
+  });
 });
 
 describe("groupIssuesByProject", () => {

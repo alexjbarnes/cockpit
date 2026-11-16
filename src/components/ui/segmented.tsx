@@ -18,9 +18,10 @@ export function Segmented<T extends string>({
   onChange: (value: T) => void;
   label: string;
   testId?: string;
-  variant?: "outline" | "track";
+  variant?: "outline" | "track" | "switch";
 }) {
   const track = variant === "track";
+  const flip = variant === "switch";
   return (
     <div
       role="group"
@@ -36,11 +37,13 @@ export function Segmented<T extends string>({
           onClick={() => onChange(o.value)}
           className={cn(
             "text-xs font-medium transition-colors",
-            track ? "min-w-0 flex-1 truncate rounded-md px-2 py-1.5" : "rounded px-2.5 py-1",
+            track ? "min-w-0 flex-1 truncate rounded-md px-2 py-1.5" : flip ? "rounded-sm px-2.5 py-1" : "rounded px-2.5 py-1",
             o.value === value
               ? track
                 ? "bg-background text-foreground shadow-sm"
-                : "bg-muted text-foreground"
+                : flip
+                  ? "bg-secondary text-secondary-foreground"
+                  : "bg-muted text-foreground"
               : "text-muted-foreground hover:text-foreground",
           )}
         >

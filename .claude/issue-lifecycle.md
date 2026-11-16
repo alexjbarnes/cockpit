@@ -1,6 +1,25 @@
 # Issue Lifecycle
 
-Cockpit's native issue tracker states for the agent pipeline. Issues flow top to bottom. Each transition is either manual or triggered by an agent completing its stage.
+Cockpit's native issue tracker states for the agent pipeline. Issues flow top to bottom. Each transition is either manual or made by an agent finishing its work.
+
+## Driven by a workflow
+
+A project with a workflow (Settings → Workflows) has this pipeline run by Cockpit's workflow engine, not by scheduled jobs. The workflow belongs to the project and says what happens at each of its statuses: nothing, issues queue there for an agent, an agent works on the issue by running one of this repo's skills, or it waits for a person. This repo's is:
+
+| Status | What happens | Then the issue goes to |
+|--------|--------------|------------------------|
+| Refine Ready | Queue for an agent | Refining, when an agent is free |
+| Refining | An agent runs `refine-issue` | Plan Review, or Needs Detail |
+| Plan Review | Waits for you, in the plan annotator | Implementation Ready, or back to Refine Ready |
+| Implementation Ready | Queue for an agent | Implementation, when an agent is free |
+| Implementation | An agent runs `implement-issue` | Validation |
+| Validation | An agent runs `validate-issue` | Code Review, or back to Implementation Ready |
+| Code Review | Waits for you, at the test server | Accepted, or back to Implementation Ready |
+| Accepted | An agent runs `accept-issue`, one at a time | Done, or back to Code Review |
+
+The engine takes an issue out of its queue, moves it to the status the agent works in, starts a session for it, and tells the session which issue it has, which skill to run and which statuses it may move the issue to. Moving the issue to one of them is how the agent's work ends, and the only move its session is allowed. The skill, not the workflow, says which status fits which outcome. Several issues run at once, up to the limits set on the project's workflow, on each agent's status and in Settings. A run that fails, stalls or is stopped leaves the issue held with the reason on it, until a person runs it again or moves it.
+
+Validation is another agent's work in a workflow, not the author's. Run by hand or by the older status-triggered jobs, `implement-issue` still reviews its own work inline as described below.
 
 ## Backlog
 
@@ -49,7 +68,7 @@ Refine Ready
 
 Refining                      (refine skill: investigate -> draft -> self-review loop, every round's
                               findings posted as a comment -> fix -> repeat until clean)
-  -> Plan Review              (plan converged; reviewed plan written to description)
+  -> Plan Review              (plan converged; written as the issue's plan, a new version)
 
 Plan Review
   -> Refine Ready             (human: plan needs more work)
@@ -79,7 +98,7 @@ If details are sufficient, the agent:
 
 Inside Refining, the refine skill dispatches the `plan-reviewer` agent against its own draft. Every round's findings (Critical/High/Medium/Low + verdict) are posted as a comment on the issue, before the fix is applied. This is the observability trail for tuning the refine skill: it shows what each draft got wrong.
 
-The skill iterates (fix, re-review) until the plan is clean or the stop conditions hit (recurring findings, or a hard cap of 4 rounds). Then it writes the final plan to the description and sets Plan Review.
+The skill iterates (fix, re-review) until the plan is clean or the stop conditions hit (recurring findings, or a hard cap of 4 rounds). Then it writes the final plan as the next version of the issue's plan (`set_issue_plan`; the description is left as the reporter wrote it) and sets Plan Review.
 
 If the loop hits the cap with blocking findings still open, they go into the plan's Open Questions, a final comment flags them, and the issue still routes to Plan Review. The human decides whether to send it back to Refine Ready.
 
@@ -89,10 +108,9 @@ The `review-issue` skill exists as a manual tool for re-reviewing a plan outside
 
 ### Plan Review gate
 
-A human reviews the refined and reviewed plan before implementation begins. This is a deliberate checkpoint. The human can:
-- Approve and move to Implementation Ready.
-- Request changes and move back to Refine Ready.
-- Add comments with feedback for the next refinement pass.
+A human reviews the refined and reviewed plan before implementation begins. This is a deliberate checkpoint. The plan is its own versioned document on the issue: the issue page's Plan section opens it for review, where text is selected to comment on, mark for removal or replace, and older versions can be opened and compared. The human can:
+- Approve it, with notes or edits if they like. The issue moves to Implementation Ready, and an edited plan becomes the next version in their name.
+- Send it back with their markup. The review is kept on that version, the feedback is posted as a comment, and the issue moves to Refine Ready, where `refine-issue` revises the plan point by point and writes the next version.
 
 ## Implementation phase
 
@@ -107,7 +125,7 @@ Implementation               (implement-issue skill, in a worktree off next:
                               code-reviewer self-review loop, every round's findings
                               posted as a comment, up to 4 rounds ->
                               if UI changed: ui-reviewer loop (up to 4 rounds), screenshots
-                              attached to the issue ->
+                              shown in its comment on the issue ->
                               completeness-reviewer loop (up to 4 rounds): every acceptance
                               criterion mapped to evidence, INCOMPLETE -> fix -> re-review ->
                               push -> open PR vs next ->

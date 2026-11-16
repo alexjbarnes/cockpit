@@ -372,11 +372,45 @@ test("on a phone, comments stay inside the issue page and the session's list kee
     await expect.poll(() => list.evaluate((el) => el.scrollTop), { timeout: 10_000 }).toBeGreaterThan(before - 80);
 
     // Closing the list forgets the place: opened again, it starts at the top.
-    await page.getByRole("button", { name: "Close" }).click();
+    await page.getByTestId("session-issues-modal").getByRole("button", { name: "Close" }).click();
     await page.getByTestId("session-issues").click();
     await expect(list.getByRole("button", { name: /\bPLC-1\b/ }).first()).toBeVisible({ timeout: 15_000 });
     expect(await list.evaluate((el) => el.scrollTop)).toBe(0);
   } finally {
     rmSync(repoPath, { recursive: true, force: true });
   }
+});
+
+test("a link to another issue is followed inside the app, and a link elsewhere opens a new tab", async ({ page, harness }) => {
+  const api = harness.cockpitUrl;
+  await page.request.patch(`${api}/api/defaults`, { data: { issuesEnabled: true } });
+  const { project } = await (await page.request.post(`${api}/api/projects`, { data: { name: "Links", prefix: "LK" } })).json();
+  const target = (await (await page.request.post(`${api}/api/issues`, { data: { projectId: project.id, title: "The target" } })).json())
+    .issue;
+  const source = (
+    await (
+      await page.request.post(`${api}/api/issues`, {
+        data: {
+          projectId: project.id,
+          title: "The source",
+          description: `See [the other one](/issues/${target.key}), [the docs](https://example.com/docs) and [a file](/home/dev/file.ts).`,
+        },
+      })
+    ).json()
+  ).issue;
+
+  await page.goto(`${api}/issues/${source.key}`);
+  const inApp = page.getByRole("link", { name: "the other one" });
+  await expect(inApp).toBeVisible();
+  // A page of our own stays in this window: a new tab would leave an installed app for the browser.
+  expect(await inApp.getAttribute("target")).toBeNull();
+  await expect(page.getByRole("link", { name: "the docs" })).toHaveAttribute("target", "_blank");
+  // A path that only looks local is no page of ours.
+  await expect(page.getByRole("link", { name: "a file" })).toHaveAttribute("target", "_blank");
+
+  const open = page.context().pages().length;
+  await inApp.click();
+  await expect(page).toHaveURL(new RegExp(`/issues/${target.key}$`));
+  await expect(page.getByText("The target")).toBeVisible();
+  expect(page.context().pages().length).toBe(open);
 });

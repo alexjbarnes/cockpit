@@ -3,34 +3,21 @@
 import { DndContext, type DragEndEvent, PointerSensor, useSensor, useSensors } from "@dnd-kit/core";
 import { arrayMove, SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import {
-  Bot,
-  CalendarClock,
-  ChartLine,
-  ClipboardList,
-  GitPullRequest,
-  GripVertical,
-  Inbox,
-  LayoutGrid,
-  Plus,
-  Settings,
-  X,
-} from "lucide-react";
+import { GitPullRequest, GripVertical, LayoutGrid, Plus, X } from "lucide-react";
 import { usePathname, useRouter } from "next/navigation";
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { type SidebarSectionConfig, useShell } from "@/components/app-shell";
+import { useSessionWatch } from "@/components/session-watch-provider";
 import { SidebarFilesChanges } from "@/components/sidebar-files-changes";
 import { SidebarSection } from "@/components/sidebar-section";
 import { Button } from "@/components/ui/button";
-import { useJobFailureCount } from "@/hooks/use-jobs";
 import { useSettings } from "@/hooks/use-settings";
 import { useWebSocket } from "@/hooks/use-websocket";
-import { type AssistantDot, assistantDot } from "@/lib/assistant-dot";
 import { type NewSessionInput, newSessionBody } from "@/lib/new-session";
 import { createStaleGuard } from "@/lib/stale-guard";
+import { addUnreadSession, clearUnreadSession, getUnreadSessions } from "@/lib/unread-sessions";
 import { cn } from "@/lib/utils";
 import type { SessionInfo } from "@/types";
-import { AssistantModal } from "./assistant-modal";
 import { NewSessionDialog } from "./new-session-dialog";
 
 const SIDEBAR_WIDTH_KEY = "cockpit_sidebar_width";
@@ -89,8 +76,6 @@ function SidebarResizeHandle({ onResize }: { onResize: (delta: number) => void }
     />
   );
 }
-
-const UNREAD_KEY = "cockpit_unread_sessions";
 
 // Server-side pinned sessions API helpers
 export async function pinSession(id: string): Promise<void> {
@@ -184,37 +169,9 @@ function parseReviewSession(s: SessionInfo): ReviewSession | null {
   };
 }
 
-function getUnreadSessions(): Set<string> {
-  try {
-    const raw = localStorage.getItem(UNREAD_KEY);
-    if (raw) return new Set(JSON.parse(raw));
-  } catch {}
-  return new Set();
-}
-
-function addUnreadSession(id: string): void {
-  const set = getUnreadSessions();
-  set.add(id);
-  localStorage.setItem(UNREAD_KEY, JSON.stringify([...set]));
-}
-
-export function clearUnreadSession(id: string): void {
-  const set = getUnreadSessions();
-  set.delete(id);
-  localStorage.setItem(UNREAD_KEY, JSON.stringify([...set]));
-}
-
 export interface SidebarHandle {
   toggle: () => void;
   close: () => void;
-}
-
-/** The cockpit assistant's session as the footer button's dot needs it. It is
- *  an ordinary session, just never pinned into the list. */
-interface AssistantStatus {
-  id: string;
-  status: "idle" | "running";
-  pendingRequestCount: number;
 }
 
 function shortPath(cwd: string): string {
@@ -320,17 +277,15 @@ function SortableSessionRow({
 export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
   const router = useRouter();
   const pathname = usePathname();
-  const { send, subscribe, connected } = useWebSocket();
-  const { sidebarSections, cwd, openPageModal } = useShell();
+  const { subscribe, connected } = useWebSocket();
+  const { sidebarSections, cwd } = useShell();
   const { settings } = useSettings();
   // Settings changed inside the modal apply here as soon as it closes.
   const [open, setOpen] = useState(false);
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
   const [unread, setUnread] = useState<Set<string>>(new Set());
-  const [assistant, setAssistant] = useState<AssistantStatus | null>(null);
   const [reviewWatchIds, setReviewWatchIds] = useState<string[]>([]);
   const [dialogOpen, setDialogOpen] = useState(false);
-  const [assistantOpen, setAssistantOpen] = useState(false);
   const [width, setWidth] = useState(DEFAULT_WIDTH);
 
   useEffect(() => {
@@ -354,7 +309,6 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
    *  so a reorder persists those too rather than dropping them. */
   const pinnedIdsRef = useRef<string[]>([]);
   const staleGuard = useRef(createStaleGuard()).current;
-  const assistantStaleGuard = useRef(createStaleGuard()).current;
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -373,64 +327,23 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
 
   const close = useCallback(() => setOpen(false), []);
 
-  /** A footer page: in the page modal when that experiment is on, else in place of this one. */
-  const openPage = useCallback(
-    (path: string) => {
-      close();
-      if (!openPageModal(path)) router.push(path);
-    },
-    [close, openPageModal, router],
-  );
-
   const currentSessionId = pathname.startsWith("/sessions/") ? pathname.split("/")[2] : null;
 
   useEffect(() => {
     return subscribe((msg) => {
       if (msg.type === "session:status") {
         const { sessionId, status } = msg;
-        const isAssistant = assistant?.id === sessionId;
-        // Accept status updates for any session we're showing (pinned, running
-        // or the assistant)
-        const known = new Set(sessions.map((s) => s.id));
-        if (!known.has(sessionId) && !isAssistant) {
-          console.log(
-            "[sidebar] status update for unknown session",
-            sessionId.slice(0, 8),
-            "known:",
-            [...known].map((s) => s.slice(0, 8)),
-          );
-          return;
-        }
-        console.log("[sidebar] status updated", sessionId.slice(0, 8), "->", status);
-
+        if (!sessions.some((s) => s.id === sessionId)) return; // the assistant's session, or another page's
         const prev = prevStatusRef.current.get(sessionId);
         prevStatusRef.current.set(sessionId, status);
-
-        // The assistant has no route of its own, so "viewing" it is the modal
-        // being open.
-        const viewing = sessionId === currentSessionId || (isAssistant && assistantOpen);
-        if (prev === "running" && status === "idle" && !viewing) {
+        if (prev === "running" && status === "idle" && sessionId !== currentSessionId) {
           addUnreadSession(sessionId);
           setUnread(getUnreadSessions());
         }
-
-        if (isAssistant) {
-          setAssistant((a) => (a && a.id === sessionId ? { ...a, status } : a));
-        } else {
-          setSessions((list) => list.map((s) => (s.id === sessionId ? { ...s, status: status as SessionInfo["status"] } : s)));
-        }
+        setSessions((list) => list.map((s) => (s.id === sessionId ? { ...s, status: status as SessionInfo["status"] } : s)));
       } else if (msg.type === "session:pending") {
         const { sessionId, count } = msg;
-        if (assistant?.id === sessionId) {
-          setAssistant((a) => (a && a.id === sessionId ? { ...a, pendingRequestCount: count } : a));
-          return;
-        }
-        const known = new Set(sessions.map((s) => s.id));
-        if (!known.has(sessionId)) {
-          console.log("[sidebar] pending update for unknown session", sessionId.slice(0, 8));
-          return;
-        }
-        console.log("[sidebar] pending updated", sessionId.slice(0, 8), "->", count);
+        if (!sessions.some((s) => s.id === sessionId)) return;
         setSessions((list) => list.map((s) => (s.id === sessionId ? { ...s, pendingRequestCount: count } : s)));
       } else if (msg.type === "session:agents") {
         const { sessionId, count } = msg;
@@ -440,7 +353,7 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
         setSessions((list) => list.map((s) => (s.id === sessionId ? { ...s, name: info.name, model: info.model } : s)));
       }
     });
-  }, [subscribe, currentSessionId, sessions, assistant, assistantOpen]);
+  }, [subscribe, currentSessionId, sessions]);
 
   const fetchSessions = useCallback(async () => {
     // The effects below can start a second run while the first is still waiting
@@ -490,23 +403,6 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
     setSessions(visible);
   }, [staleGuard]);
 
-  const fetchAssistant = useCallback(async () => {
-    const isStale = assistantStaleGuard.begin();
-    const res = await fetch("/api/assistant-status")
-      .then((r) => (r.ok ? r.json() : null))
-      .catch(() => null);
-    if (!res || isStale()) return;
-    if (!res.sessionId) {
-      setAssistant(null);
-      return;
-    }
-    const id: string = res.sessionId;
-    if (!prevStatusRef.current.has(id)) {
-      prevStatusRef.current.set(id, res.status);
-    }
-    setAssistant({ id, status: res.status, pendingRequestCount: res.pendingRequestCount ?? 0 });
-  }, [assistantStaleGuard]);
-
   // Fetch immediately on mount so pinned sessions appear without waiting
   // for the WebSocket connection to establish.
   const hasFetchedRef = useRef(false);
@@ -514,32 +410,21 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
     if (!hasFetchedRef.current) {
       hasFetchedRef.current = true;
       fetchSessions();
-      fetchAssistant();
     }
-  }, [fetchSessions, fetchAssistant]);
+  }, [fetchSessions]);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: pathname triggers refetch on navigation
   useEffect(() => {
     if (open || connected) {
       fetchSessions();
-      fetchAssistant();
     }
-  }, [open, connected, pathname, fetchSessions, fetchAssistant]);
+  }, [open, connected, pathname, fetchSessions]);
 
   // One watch list per connection: the server replaces everything it watches
   // when a `session:subscribe` arrives, so the review rows' ids are merged here
-  // rather than sent by RecentReviewsSection itself, which would wipe the
-  // sessions' and the assistant's watches. Joined into a string so the status
-  // updates that replace the sessions array do not re-send it.
-  const watchedIds = useMemo(
-    () => [...sessions.map((s) => s.id), ...reviewWatchIds, ...(assistant ? [assistant.id] : [])].join(","),
-    [sessions, reviewWatchIds, assistant],
-  );
-  // biome-ignore lint/correctness/useExhaustiveDependencies: connected re-sends after a reconnect, which drops the server's per-connection watches; the ids themselves are watchedIds
-  useEffect(() => {
-    if (!watchedIds) return;
-    send({ type: "session:subscribe", sessionIds: watchedIds.split(",") });
-  }, [watchedIds, connected, send]);
+  // through the shell's single sender rather than sent separately.
+  const watchedIds = useMemo(() => [...sessions.map((s) => s.id), ...reviewWatchIds], [sessions, reviewWatchIds]);
+  useSessionWatch("sidebar", watchedIds);
 
   const stopSession = async (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
@@ -617,29 +502,7 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
     router.push(`/sessions/${session.id}?${params}`);
   };
 
-  const openAssistant = useCallback(() => {
-    if (assistant) {
-      clearUnreadSession(assistant.id);
-      setUnread(getUnreadSessions());
-    }
-    setAssistantOpen(true);
-  }, [assistant]);
-
-  // The modal's first open creates the session; until then nothing knew its
-  // id, so the watch list and the dot learn it here.
-  const handleAssistantSession = useCallback((id: string) => {
-    setAssistant((prev) => (prev?.id === id ? prev : { id, status: "idle", pendingRequestCount: 0 }));
-  }, []);
-
   const watchReviewIds = useCallback((ids: string[]) => setReviewWatchIds(ids), []);
-
-  const dot = assistant
-    ? assistantDot({
-        status: assistant.status,
-        pendingRequestCount: assistant.pendingRequestCount,
-        unread: unread.has(assistant.id),
-      })
-    : null;
 
   return (
     <>
@@ -649,6 +512,7 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
           open ? "opacity-100" : "opacity-0 pointer-events-none",
         )}
         onMouseDown={close}
+        data-testid="sidebar-backdrop"
       />
 
       <div
@@ -661,68 +525,76 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
       >
         <SidebarResizeHandle onResize={handleResize} />
         <div className="flex items-center justify-end px-3 py-1 border-b md:hidden">
-          <Button variant="ghost" size="icon" onClick={close}>
+          <Button variant="ghost" size="icon" onClick={close} data-testid="sidebar-close" aria-label="Close sidebar">
             <X className="h-4 w-4" />
           </Button>
         </div>
 
         <div className="flex-1 min-h-0 overflow-y-auto">
-          <SidebarSection
-            id="sessions"
-            title="Sessions"
-            badge={sessions.length > 0 ? String(sessions.length) : undefined}
-            actions={
-              <div className="flex items-center">
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-6 w-6"
-                  onClick={() => setDialogOpen(true)}
-                  title="New session"
-                  data-testid="sidebar-new-session"
-                >
-                  <Plus className="h-3.5 w-3.5" />
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-6 w-6"
-                  onClick={() => {
-                    close();
-                    router.push("/");
-                  }}
-                  title="All sessions"
-                >
-                  <LayoutGrid className="h-3 w-3" />
-                </Button>
-              </div>
-            }
-          >
-            {sessions.length === 0 ? (
-              <p className="px-3 py-3 text-sm text-muted-foreground">No active sessions.</p>
-            ) : (
-              <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
-                <SortableContext items={sessions.map((s) => s.id)} strategy={verticalListSortingStrategy}>
-                  {sessions.map((session) => (
-                    <SortableSessionRow
-                      key={session.id}
-                      session={session}
-                      isCurrent={currentSessionId === session.id}
-                      isUnread={unread.has(session.id)}
-                      onNavigate={navigateToSession}
-                      onAction={(e, s) => (s.status === "running" ? stopSession(e, s.id) : dismissSession(e, s.id))}
-                    />
-                  ))}
-                </SortableContext>
-              </DndContext>
-            )}
-          </SidebarSection>
+          <div className="hidden md:block">
+            <SidebarSection
+              id="sessions"
+              title="Sessions"
+              badge={sessions.length > 0 ? String(sessions.length) : undefined}
+              actions={
+                <div className="flex items-center">
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-6 w-6"
+                    onClick={() => setDialogOpen(true)}
+                    title="New session"
+                    data-testid="sidebar-new-session"
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-6 w-6"
+                    onClick={() => {
+                      close();
+                      router.push("/");
+                    }}
+                    title="All sessions"
+                  >
+                    <LayoutGrid className="h-3 w-3" />
+                  </Button>
+                </div>
+              }
+            >
+              {sessions.length === 0 ? (
+                <p className="px-3 py-3 text-sm text-muted-foreground">No active sessions.</p>
+              ) : (
+                <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
+                  <SortableContext items={sessions.map((s) => s.id)} strategy={verticalListSortingStrategy}>
+                    {sessions.map((session) => (
+                      <SortableSessionRow
+                        key={session.id}
+                        session={session}
+                        isCurrent={currentSessionId === session.id}
+                        isUnread={unread.has(session.id)}
+                        onNavigate={navigateToSession}
+                        onAction={(e, s) => (s.status === "running" ? stopSession(e, s.id) : dismissSession(e, s.id))}
+                      />
+                    ))}
+                  </SortableContext>
+                </DndContext>
+              )}
+            </SidebarSection>
+          </div>
 
-          <DynamicSections sections={sidebarSections} exclude={REVIEW_ADJACENT_SECTIONS} />
+          <div className="hidden md:block">
+            <DynamicSections sections={sidebarSections} exclude={REVIEW_ADJACENT_SECTIONS} />
+          </div>
 
           {cwd && <SidebarFilesChanges cwd={cwd} />}
 
-          {settings.reviewsEnabled && <RecentReviewsSection onNavigate={close} onWatchIds={watchReviewIds} />}
+          {settings.reviewsEnabled && (
+            <div className="hidden md:block">
+              <RecentReviewsSection onNavigate={close} onWatchIds={watchReviewIds} />
+            </div>
+          )}
 
           {settings.reviewsEnabled && (
             <SidebarSection
@@ -739,32 +611,9 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
             </SidebarSection>
           )}
         </div>
-
-        {/* Wraps rather than overflowing: with every page switched on the
-            buttons need more than the sidebar's narrowest width. */}
-        <div className="border-t px-3 py-2 flex flex-wrap items-center justify-end gap-2">
-          <AssistantButton dot={dot} onClick={openAssistant} />
-          <JobsButton onClick={() => openPage("/jobs")} />
-          <InboxButton onClick={() => openPage("/inbox")} />
-          {settings.issuesEnabled && <IssuesButton onClick={() => openPage("/issues")} />}
-          {settings.telemetryEnabled && <InsightsButton onClick={() => openPage("/insights")} />}
-          <Button
-            variant="ghost"
-            size="icon"
-            className="shrink-0 h-8 w-8 text-muted-foreground hover:text-foreground"
-            onClick={() => {
-              sessionStorage.removeItem("settings-scroll");
-              openPage("/settings");
-            }}
-            title="Settings"
-          >
-            <Settings className="h-4 w-4" />
-          </Button>
-        </div>
       </div>
 
       <NewSessionDialog open={dialogOpen} onOpenChange={setDialogOpen} onSubmit={createSession} />
-      <AssistantModal open={assistantOpen} onOpenChange={setAssistantOpen} onSession={handleAssistantSession} />
     </>
   );
 });
@@ -941,107 +790,5 @@ function DynamicSections({ sections, exclude }: { sections: Map<string, SidebarS
         </SidebarSection>
       ))}
     </>
-  );
-}
-
-function JobsButton({ onClick }: { onClick: () => void }) {
-  const { count } = useJobFailureCount();
-
-  return (
-    <Button
-      variant="ghost"
-      size="icon"
-      className="shrink-0 h-8 w-8 text-muted-foreground hover:text-foreground relative"
-      onClick={onClick}
-      title="Scheduled Jobs"
-    >
-      <CalendarClock className="h-4 w-4" />
-      {count > 0 && <span className="absolute top-1 right-1 h-2 w-2 rounded-full bg-red-500" />}
-    </Button>
-  );
-}
-
-function InboxButton({ onClick }: { onClick: () => void }) {
-  const [unread, setUnread] = useState(0);
-  const pathname = usePathname();
-
-  // biome-ignore lint/correctness/useExhaustiveDependencies: pathname triggers refetch on navigation
-  useEffect(() => {
-    const check = () => {
-      fetch("/api/inbox?count=true")
-        .then((r) => r.json())
-        .then((d) => setUnread(d.unread || 0))
-        .catch(() => {});
-    };
-    check();
-    const interval = setInterval(check, 15_000);
-    return () => clearInterval(interval);
-  }, [pathname]);
-
-  return (
-    <Button
-      variant="ghost"
-      size="icon"
-      className="shrink-0 h-8 w-8 text-muted-foreground hover:text-foreground relative"
-      onClick={onClick}
-      title="Inbox"
-    >
-      <Inbox className="h-4 w-4" />
-      {unread > 0 && <span className="absolute top-1 right-1 h-2 w-2 rounded-full bg-blue-500" />}
-    </Button>
-  );
-}
-
-function IssuesButton({ onClick }: { onClick: () => void }) {
-  return (
-    <Button
-      variant="ghost"
-      size="icon"
-      className="shrink-0 h-8 w-8 text-muted-foreground hover:text-foreground"
-      onClick={onClick}
-      title="Issues"
-    >
-      <ClipboardList className="h-4 w-4" />
-    </Button>
-  );
-}
-
-function InsightsButton({ onClick }: { onClick: () => void }) {
-  return (
-    <Button
-      variant="ghost"
-      size="icon"
-      className="shrink-0 h-8 w-8 text-muted-foreground hover:text-foreground"
-      onClick={onClick}
-      title="Insights"
-      data-testid="sidebar-insights"
-    >
-      <ChartLine className="h-4 w-4" />
-    </Button>
-  );
-}
-
-const ASSISTANT_DOTS: Record<AssistantDot, { className: string; title: string }> = {
-  pending: { className: "bg-blue-500", title: "Awaiting your input" },
-  working: { className: "bg-yellow-500", title: "Working" },
-  unread: { className: "bg-green-500", title: "New response" },
-};
-
-function AssistantButton({ dot, onClick }: { dot: AssistantDot | null; onClick: () => void }) {
-  const state = dot ? ASSISTANT_DOTS[dot] : null;
-  return (
-    <Button
-      variant="ghost"
-      size="icon"
-      className="shrink-0 h-8 w-8 text-muted-foreground hover:text-foreground relative"
-      onClick={onClick}
-      title={state ? `Cockpit Assistant: ${state.title.toLowerCase()}` : "Cockpit Assistant"}
-      data-testid="assistant-button"
-    >
-      <Bot className="h-4 w-4" />
-      {state && (
-        <span className={cn("absolute top-1 right-1 h-2 w-2 rounded-full", state.className)} data-testid="assistant-dot" data-state={dot} />
-      )}
-    </Button>
   );
 }

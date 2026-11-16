@@ -19,7 +19,7 @@ Pass to the Explore subagent. Replace `<user's description>` with the actual bug
 
 ## Template sections
 
-After the standard Request section, bug plans include these sections. Fill placeholders with Explore findings and file reads. Do not leave placeholders in the output. Sections marked `(optional)` should be omitted if no content exists rather than left empty.
+After the title heading, bug plans include these sections. Fill placeholders with Explore findings and file reads. Do not leave placeholders in the output. Sections marked `(optional)` should be omitted if no content exists rather than left empty.
 
 ### Summary
 Structured fields:

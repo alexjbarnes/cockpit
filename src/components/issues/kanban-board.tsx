@@ -16,6 +16,7 @@ import { useMemo, useState } from "react";
 import { boardColumns, dropIndex, sortIssuesByOrder } from "@/lib/issue-display";
 import { cn } from "@/lib/utils";
 import type { Issue, Project } from "@/types";
+import { IssueFlowBadge, StatusStageTag } from "./issue-flow";
 
 function priorityStripe(priority?: number): string | null {
   if (priority === 1) return "bg-red-500";
@@ -33,6 +34,8 @@ function IssueCard({ issue, projectName }: { issue: Issue; projectName?: string 
         <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
           <span className="font-mono">{issue.key}</span>
           {projectName && <span className="truncate">· {projectName}</span>}
+          <span className="flex-1" />
+          <IssueFlowBadge issueKey={issue.key} />
         </div>
         <p className="mt-0.5 text-xs font-medium leading-snug line-clamp-3">{issue.title}</p>
       </div>
@@ -64,6 +67,7 @@ function SortableCard({ issue, projectName, onClick }: { issue: Issue; projectNa
 function Column({
   name,
   color,
+  projectId,
   issues,
   projectNames,
   showProject,
@@ -71,6 +75,7 @@ function Column({
 }: {
   name: string;
   color: string;
+  projectId?: string;
   issues: Issue[];
   projectNames: Map<string, string>;
   showProject: boolean;
@@ -83,6 +88,8 @@ function Column({
         <span className={cn("h-2.5 w-2.5 shrink-0 rounded-full", color)} />
         <h3 className="truncate text-sm font-semibold">{name}</h3>
         <span className="text-xs text-muted-foreground">{issues.length}</span>
+        <span className="flex-1" />
+        <StatusStageTag status={name} projectId={projectId} />
       </div>
       <div
         ref={setNodeRef}
@@ -181,6 +188,7 @@ export function KanbanBoard({
             key={col.name}
             name={col.name}
             color={col.color}
+            projectId={project?.id}
             issues={byStatus.get(col.name) ?? []}
             projectNames={projectNames}
             showProject={showProject}

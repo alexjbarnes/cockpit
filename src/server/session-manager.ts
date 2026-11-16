@@ -51,7 +51,15 @@ import type { HarnessProcess, HarnessProcessCallbacks, HarnessSpawnConfig } from
 import type { PermissionAnswerer } from "./hook-router";
 import { getJob, getJobSessionIds } from "./job-storage";
 import { COCKPIT_AGENT_SYSTEM_PROMPT } from "./mcp/cockpit-agent-prompt";
-import { clearToken, type RunContext, registerAuthToken, registerRunContext, registerSessionContext } from "./mcp/run-context";
+import {
+  clearToken,
+  type RunContext,
+  registerAuthToken,
+  registerRunContext,
+  registerSessionContext,
+  registerWorkflowRunContext,
+  type WorkflowRunContext,
+} from "./mcp/run-context";
 import { getNotificationSettings } from "./notification-settings";
 import { planFromRequest, rememberSessionPlan } from "./plans";
 import { UntrustedWorkspaceError } from "./pty-session";
@@ -208,6 +216,9 @@ interface Session {
   cockpitAgentCleanups: (() => void)[];
   mcpToken?: string;
   runContext?: RunContext;
+  workflowContext?: Omit<WorkflowRunContext, "sessionId">;
+  /** Extra environment for the CLI, belonging to one run (its reserved port). */
+  runEnv?: Record<string, string>;
   /** True while a spawn's async startup is in flight: set immediately before
    *  calling the harness adapter's spawn() and cleared when its `ready`
    *  promise resolves, rejects, or the process exits. Gates ensureProcess so a
@@ -391,6 +402,11 @@ export class SessionManager {
       notifications?: SessionNotifications;
       cockpitAgent?: boolean;
       runContext?: RunContext;
+      /** A workflow stage's run. Like runContext, it decides who the session
+       *  is to the cockpit tools, and belongs to one run. */
+      workflowContext?: Omit<WorkflowRunContext, "sessionId">;
+      /** Extra environment for the CLI, for the run this session is. */
+      runEnv?: Record<string, string>;
     },
   ): SessionInfo {
     const id = uuidv4();
@@ -468,6 +484,8 @@ export class SessionManager {
       // mints a run-scoped MCP token, and what confines that token to the job
       // tools. Deliberately not persisted: it belongs to one run.
       runContext: options?.runContext,
+      workflowContext: options?.workflowContext,
+      runEnv: options?.runEnv,
     });
 
     // Persist everything the session was born with, not just its runtime. These
@@ -538,6 +556,25 @@ export class SessionManager {
     current.info.worktreeCwd = found;
     setSessionPrefs(sessionId, { worktreeCwd: found });
     current.emitter.emit("info_updated", sessionId, { ...current.info });
+  }
+
+  /**
+   * Bring back a session an earlier unattended run used, for another run to
+   * carry on in: the next message resumes its conversation. The run's own
+   * identity and environment are attached afresh, since neither is stored.
+   * Undefined when nothing is known of the session, so there is nothing to
+   * carry on from.
+   */
+  resumeForRun(
+    id: string,
+    cwd: string,
+    opts: { workflowContext?: Omit<WorkflowRunContext, "sessionId">; runEnv?: Record<string, string> },
+  ): SessionInfo | undefined {
+    if (!this.sessions.has(id) && !getSessionPrefs(id)) return undefined;
+    const session = this.ensureSession(id, cwd);
+    session.workflowContext = opts.workflowContext;
+    session.runEnv = opts.runEnv;
+    return session.info;
   }
 
   ensureSession(id: string, cwd: string, opts?: { pinCliSessionId?: string }): Session {
@@ -2892,6 +2929,8 @@ Additional Cockpit rules beyond the CLI's defaults:
         registerAuthToken(token);
       } else if (session.runContext) {
         registerRunContext(token, session.runContext);
+      } else if (session.workflowContext) {
+        registerWorkflowRunContext(token, { ...session.workflowContext, sessionId });
       } else {
         registerSessionContext(token, sessionId, session.info.name);
       }
@@ -2917,7 +2956,7 @@ Additional Cockpit rules beyond the CLI's defaults:
       cliSessionId: session.cliSessionId,
       willResume,
       model: cliModel ?? undefined,
-      providerEnvVars,
+      providerEnvVars: session.runEnv ? { ...providerEnvVars, ...session.runEnv } : providerEnvVars,
       // The session's own model, not the CLI's (which is the bare id): the
       // provider that answers for it decides whether auto mode's classifier
       // exists at all for this session.

@@ -1,8 +1,10 @@
-// The page modal: with modalPagesEnabled on (its default), the sidebar footer's
-// pages open in a modal over the session instead of replacing it. The modal
-// shows the real page in an iframe, which drops the sidebar, keeps its
-// navigation to itself, and hands a page it does not show (a session) back to
-// the main window. Off, the footer navigates as it always has.
+// The page modal: with modalPagesEnabled on (its default), a page opened from
+// inside another opens in a modal over it instead of replacing it. Two things
+// open pages that way now that the navigation is real links: an issue picked
+// from a session's issues list, and Session insights from the context panel.
+// The modal shows the real page in an iframe, which drops the navigation,
+// keeps its own history to itself, and hands a page it does not show (a
+// session) back to the main window. Off, the same click navigates.
 
 import { execSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
@@ -46,78 +48,81 @@ async function openSession(page: Page, url: string): Promise<void> {
   await expect(page.getByTestId("message-input")).toBeVisible();
 }
 
-test("with the setting off, the footer's pages replace the session as before", async ({ page, harness }) => {
+/** A project with one issue, and the setting this test needs. */
+async function seedIssue(page: Page, harness: Harness, modalPagesEnabled: boolean): Promise<void> {
+  const patched = await page.request.patch(`${harness.cockpitUrl}/api/defaults`, { data: { modalPagesEnabled, issuesEnabled: true } });
+  expect(patched.ok()).toBe(true);
+  const { project } = await (
+    await page.request.post(`${harness.cockpitUrl}/api/projects`, { data: { name: "Greeter", prefix: "GR" } })
+  ).json();
+  await page.request.post(`${harness.cockpitUrl}/api/issues`, { data: { projectId: project.id, title: "Add a greeting" } });
+}
+
+/** The session's own issues list, with the issue in it. */
+async function openIssuesList(page: Page, sessionUrl: string): Promise<void> {
+  await openSession(page, sessionUrl);
+  await page.getByTestId("session-issues").click();
+  await expect(page.getByTestId("session-issues-modal")).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByText("Add a greeting")).toBeVisible({ timeout: 15_000 });
+}
+
+test("with the setting off, an issue picked from a session's list replaces the session", async ({ page, harness }) => {
   const workDir = makeWorkDir(harness);
   try {
-    // Stated rather than left to the default: this is the off case, and the
-    // default is on.
-    const patched = await page.request.patch(`${harness.cockpitUrl}/api/defaults`, { data: { modalPagesEnabled: false } });
-    expect(patched.ok()).toBe(true);
-    await openSession(page, await createSession(page, harness, workDir));
-    await page.getByTitle("Scheduled Jobs").click();
-    await expect(page).toHaveURL(/\/jobs$/);
+    await seedIssue(page, harness, false);
+    const sessionUrl = await createSession(page, harness, workDir);
+    await openIssuesList(page, sessionUrl);
+
+    await page.getByText("Add a greeting").click();
+    await expect(page).toHaveURL(/\/issues\/GR-1(\?|$)/);
     await expect(page.getByTestId("page-modal")).toHaveCount(0);
   } finally {
     rmSync(workDir, { recursive: true, force: true });
   }
 });
 
-test("with the setting on, the footer's pages open over the session and close back to it", async ({ page, harness }) => {
+test("with the setting on, an issue opens over the session and closes back to it", async ({ page, harness }) => {
   test.setTimeout(90_000);
   const workDir = makeWorkDir(harness);
   try {
-    const patched = await page.request.patch(`${harness.cockpitUrl}/api/defaults`, { data: { modalPagesEnabled: true } });
-    expect(patched.ok()).toBe(true);
+    await seedIssue(page, harness, true);
     const sessionUrl = await createSession(page, harness, workDir);
-    const otherSessionUrl = await createSession(page, harness, workDir);
-    await openSession(page, sessionUrl);
+    await openIssuesList(page, sessionUrl);
+    // The session's issues list keeps itself in the URL, so that is the page
+    // the modal must leave in place.
+    const baseUrl = page.url();
     const frame = page.frameLocator(FRAME);
 
-    // Opens over the session, as the page itself without the sidebar.
-    await page.getByTitle("Scheduled Jobs").click();
+    // Opens over the session, as the page itself without the navigation.
+    await page.getByText("Add a greeting").click();
     await expect(page.getByTestId("page-modal")).toBeVisible();
     await expect(frame.getByTestId("page-modal-close")).toBeVisible({ timeout: 15_000 });
-    await expect(frame.getByText("Scheduled Jobs").first()).toBeVisible();
-    await expect(frame.getByTitle("Settings")).toHaveCount(0);
-    expect(page.url()).toBe(sessionUrl);
+    await expect(frame.getByText("Add a greeting").first()).toBeVisible();
+    await expect(frame.getByTestId("app-nav-rail")).toHaveCount(0);
+    expect(page.url()).toBe(baseUrl);
     await expect(page.getByTestId("message-input")).toBeAttached();
 
     // The close button inside puts the session back.
     await frame.getByTestId("page-modal-close").click();
     await expect(page.getByTestId("page-modal")).toHaveCount(0);
-    expect(page.url()).toBe(sessionUrl);
+    expect(page.url()).toBe(baseUrl);
 
     // Escape closes it, and never reaches the composer, where it would stop
     // Claude. The click leaves focus alone, as Safari's does.
     await page.getByTestId("message-input").focus();
-    await page.getByTitle("Inbox").dispatchEvent("click");
+    await page.getByText("Add a greeting").click();
     await expect(page.getByTestId("page-modal")).toBeFocused();
     await page.keyboard.press("Escape");
     await expect(page.getByTestId("page-modal")).toHaveCount(0);
-    expect(page.url()).toBe(sessionUrl);
+    expect(page.url()).toBe(baseUrl);
 
-    // Navigating inside stays inside, and Back closes the modal rather than
-    // stepping through its pages or leaving the session.
-    await page.getByTitle("Settings").click();
-    await frame.getByText("Appearance", { exact: true }).click();
-    await expect(frame.getByText("Pages in a modal")).toBeVisible({ timeout: 15_000 });
-    expect(page.url()).toBe(sessionUrl);
-    await page.goBack();
-    await expect(page.getByTestId("page-modal")).toHaveCount(0);
-    expect(page.url()).toBe(sessionUrl);
-
-    // A page the modal does not show, such as a session, opens in the main
-    // window, and Back then returns to the session the modal was opened from.
-    await page.getByTitle("Inbox").click();
+    // Back closes the modal rather than stepping through its pages or leaving
+    // the session.
+    await page.getByText("Add a greeting").click();
     await expect(frame.getByTestId("page-modal-close")).toBeVisible({ timeout: 15_000 });
-    const inner = page.frame({ name: "cockpit-page-modal" });
-    expect(inner).not.toBeNull();
-    const otherPath = otherSessionUrl.slice(harness.cockpitUrl.length);
-    await inner!.evaluate((p) => window.history.pushState(null, "", p), otherPath);
-    await expect(page.getByTestId("page-modal")).toHaveCount(0);
-    await expect(page).toHaveURL(otherSessionUrl);
     await page.goBack();
-    await expect(page).toHaveURL(sessionUrl);
+    await expect(page.getByTestId("page-modal")).toHaveCount(0);
+    expect(page.url()).toBe(baseUrl);
   } finally {
     rmSync(workDir, { recursive: true, force: true });
   }
@@ -145,7 +150,7 @@ test("Session insights from the context panel opens in the page modal too", asyn
     await page.getByTestId("session-insights-link").click();
 
     // The session stays underneath, and the page the link names is in the
-    // modal's frame, exactly as a footer page would be.
+    // modal's frame.
     await expect(page.getByTestId("page-modal")).toBeVisible();
     expect(page.url()).toBe(sessionUrl);
     const inner = page.frame({ name: "cockpit-page-modal" });

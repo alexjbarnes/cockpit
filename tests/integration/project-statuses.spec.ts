@@ -23,7 +23,7 @@ test.skip(!CLAUDE_AVAILABLE, `claude binary not found at ${CLAUDE_BIN} (set CLAU
 interface ProjectRow {
   id: string;
   name: string;
-  customStatuses?: { name: string; color?: string }[];
+  customStatuses?: { name: string; color?: string; active?: boolean }[];
 }
 
 test("a custom status is visible, colour and all, and saves with the project", async ({ page, harness }) => {
@@ -54,6 +54,13 @@ test("a custom status is visible, colour and all, and saves with the project", a
   expect(overflow).toBeLessThanOrEqual(1);
 
   await page.getByTestId("custom-status-colour-Blocked-bg-red-500").click();
+
+  // A custom status can be tagged Not active, so its issues file with the
+  // backlog rather than counting as started.
+  const activeTag = page.getByTestId("custom-status-active-Triage");
+  await expect(activeTag).toHaveText("Active");
+  await activeTag.click();
+  await expect(activeTag).toHaveText("Not active");
   await page.getByRole("button", { name: "Save", exact: true }).click();
 
   await expect
@@ -62,5 +69,21 @@ test("a custom status is visible, colour and all, and saves with the project", a
       const data = (await res.json()) as { projects: ProjectRow[] };
       return data.projects.find((p) => p.id === project.id)?.customStatuses ?? [];
     })
-    .toEqual([{ name: "Blocked", color: "bg-red-500" }, { name: "Triage" }]);
+    .toEqual([
+      { name: "Blocked", color: "bg-red-500" },
+      { name: "Triage", active: false },
+    ]);
+
+  // The filter follows the tag: in Triage is not active, and is in the backlog.
+  const issue = await (
+    await page.request.post(`${harness.cockpitUrl}/api/issues`, {
+      data: { projectId: project.id, title: "Some day", status: "Triage" },
+    })
+  ).json();
+  expect(issue.ok, JSON.stringify(issue)).not.toBe(false);
+  await page.goto(`${harness.cockpitUrl}/issues`);
+  await page.getByRole("button", { name: "Active", exact: true }).click();
+  await expect(page.getByText("Some day")).toHaveCount(0);
+  await page.getByRole("button", { name: "Backlog", exact: true }).click();
+  await expect(page.getByText("Some day")).toBeVisible();
 });

@@ -52,6 +52,9 @@ export function addInboxMessage(msg: {
   sessionId?: string;
   sessionName?: string;
   notifyProviders?: string[];
+  /** Where a notification about this message opens, when that is somewhere
+   *  more useful than the message itself: the issue it is about. */
+  url?: string;
 }): { entry: InboxMessage; outcome: NotificationOutcome } {
   const messages = readAll();
   const entry: InboxMessage = {
@@ -64,6 +67,7 @@ export function addInboxMessage(msg: {
     runId: msg.runId,
     sessionId: msg.sessionId,
     sessionName: msg.sessionName,
+    ...(msg.url ? { url: msg.url } : {}),
     createdAt: Date.now(),
     read: false,
   };
@@ -78,7 +82,7 @@ export function addInboxMessage(msg: {
     body: entry.body,
     priority: entry.priority,
     source: msg.sessionId ? "session" : "inbox",
-    url: `/inbox/${entry.id}`,
+    url: msg.url ?? `/inbox/${entry.id}`,
     messageId: entry.id,
     providerIds: msg.notifyProviders,
   });

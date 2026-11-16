@@ -4,9 +4,11 @@ import type { CockpitMcpServer } from "./mcp/cockpit-config-server";
 import { SessionManager } from "./session-manager";
 import type { TelemetryService } from "./telemetry/service";
 import type { TerminalManager } from "./terminal-manager";
+import type { WorkflowEngine } from "./workflow-engine";
 
 const smKey = "__cockpit_session_manager__";
 const jsKey = "__cockpit_job_scheduler__";
+const weKey = "__cockpit_workflow_engine__";
 const tmKey = "__cockpit_terminal_manager__";
 const hrKey = "__cockpit_hook_router__";
 const mcpKey = "__cockpit_mcp__";
@@ -30,6 +32,14 @@ export function getJobScheduler(): JobScheduler | null {
 
 export function setJobScheduler(scheduler: JobScheduler): void {
   (globalThis as Record<string, unknown>)[jsKey] = scheduler;
+}
+
+export function getWorkflowEngine(): WorkflowEngine | null {
+  return ((globalThis as Record<string, unknown>)[weKey] as WorkflowEngine) || null;
+}
+
+export function setWorkflowEngine(engine: WorkflowEngine): void {
+  (globalThis as Record<string, unknown>)[weKey] = engine;
 }
 
 export function getTerminalManager(): TerminalManager | null {
