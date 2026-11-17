@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { MessageBubble } from "@/components/message-bubble";
 import { Button } from "@/components/ui/button";
+import { useWebSocket } from "@/hooks/use-websocket";
 import { atLatest } from "@/lib/agent-transcript";
 import type { ChatMessage } from "@/types";
 
@@ -35,6 +36,26 @@ export function SessionPeekModal({
   const panelRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
+  const { send, connected } = useWebSocket();
+
+  // A peek is looking at the session, so a turn ending now must not raise the
+  // banner or a push. Reported like the session page reports itself, and
+  // cleared on close and while the tab is hidden.
+  useEffect(() => {
+    const report = () => send({ type: "session:set_peeking", sessionId, peeking: document.visibilityState === "visible" });
+    report();
+    document.addEventListener("visibilitychange", report);
+    return () => {
+      document.removeEventListener("visibilitychange", report);
+      send({ type: "session:set_peeking", sessionId, peeking: false });
+    };
+  }, [sessionId, send]);
+
+  // The server keeps this per connection, so a reconnect starts out peeking at
+  // nothing; say it again, as the session page does for itself.
+  useEffect(() => {
+    if (connected) send({ type: "session:set_peeking", sessionId, peeking: document.visibilityState === "visible" });
+  }, [connected, sessionId, send]);
 
   const load = useCallback(async () => {
     const params = new URLSearchParams();

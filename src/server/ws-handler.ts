@@ -12,7 +12,7 @@ import { permissionAnswerExtras, recordSessionPlanAnswer } from "./plans";
 import { onSessionAttention, onSessionRequestResolved } from "./session-attention";
 import { SessionManager } from "./session-manager";
 import { getSessionPrefs } from "./session-prefs";
-import { forgetViewer, setViewer } from "./session-viewers";
+import { forgetViewer, setPeeking, setViewer } from "./session-viewers";
 import type { TerminalManager } from "./terminal-manager";
 import { findSessionCwd, readTranscriptCwd } from "./transcript";
 
@@ -865,6 +865,11 @@ export function createWebSocketHandler(
 
         case "session:set_viewing": {
           setViewer(wsId, msg.sessionId, msg.visible);
+          break;
+        }
+
+        case "session:set_peeking": {
+          setPeeking(wsId, msg.sessionId, msg.peeking);
           break;
         }
 

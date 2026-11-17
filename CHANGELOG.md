@@ -32,6 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The pipeline skills write and read the plan as its own thing.** `refine-issue` no longer overwrites the issue's description, and revises a plan that was sent back point by point. A new `validate-issue` skill checks an implementation as its own stage.
 
 ### Fixed
+- **Peeking at a workflow session counts as watching it.** A turn ending while its Peek modal is open no longer raises the "finished a turn" banner or a push; closing the peek, or hiding the tab, restores the notification.
 - **An issue changed in the page modal is up to date in the session's list behind it.** The list stays mounted under the modal, so it kept the rows it had loaded before; it now reads them again when the modal closes.
 - **A long question in a session banner scrolls instead of running off the screen.** The banner stack now has a maximum height and scrolls inside the viewport, so a question with several sections and options keeps its Submit button reachable.
 - **Coming back to a session shows its agents still running.** A page reconnecting to a session was told what to show from a list built out of events, which can be stale or empty; the CLI's own running list is now authoritative, so an agent still working reads as running rather than finished until its next update.

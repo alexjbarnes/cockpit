@@ -140,12 +140,47 @@ async function followIssue(page: Page, harness: Harness, key: string, label: str
   await expect(running).toContainText("An agent is running plan-issue");
   await expect(page.getByTestId("workflow-stop-Refining")).toHaveAttribute("data-position", "current");
   // Peek opens the session over the issue, rather than leaving it.
+  await page.evaluate(() => {
+    const w = window as unknown as { __wsSent?: string[]; __wsHooked?: boolean };
+    w.__wsSent = [];
+    if (w.__wsHooked) return;
+    w.__wsHooked = true;
+    const send = WebSocket.prototype.send;
+    WebSocket.prototype.send = function (data) {
+      try {
+        w.__wsSent?.push(String(data));
+      } catch {
+        // a frame we cannot read is not what this is looking for
+      }
+      return send.call(this, data);
+    };
+  });
   await page.getByTestId("workflow-peek").click();
   const peek = page.getByTestId("session-peek");
   await expect(peek).toBeVisible();
   await expect(peek).toContainText("plan-issue");
+  // A peek counts as looking at the session: the server is told while the
+  // modal is open, so a turn ending now raises no banner or push.
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        (window as unknown as { __wsSent?: string[] }).__wsSent?.some(
+          (f) => f.includes('"session:set_peeking"') && f.includes('"peeking":true'),
+        ),
+      ),
+    )
+    .toBe(true);
   await page.keyboard.press("Escape");
   await expect(peek).toHaveCount(0);
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        (window as unknown as { __wsSent?: string[] }).__wsSent?.some(
+          (f) => f.includes('"session:set_peeking"') && f.includes('"peeking":false'),
+        ),
+      ),
+    )
+    .toBe(true);
   await shot(page, `${label}-2-running`);
 
   // The page follows the run without being touched: when the plan is

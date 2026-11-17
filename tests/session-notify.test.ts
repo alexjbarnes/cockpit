@@ -18,7 +18,7 @@ vi.mock("@/server/notification-settings", () => ({
 
 import { onSessionAttention } from "@/server/session-attention";
 import { notifySessionEvent, resetSessionNotifyState } from "@/server/session-notify";
-import { resetViewers, setViewer } from "@/server/session-viewers";
+import { resetViewers, setPeeking, setViewer } from "@/server/session-viewers";
 
 const ctx = {
   sessionId: "sess-1",
@@ -109,6 +109,20 @@ describe("a session someone is already watching", () => {
     setViewer("client-1", "another-session", true);
     notifySessionEvent(ctx, "finished");
     expect(attention).toHaveLength(2);
+  });
+
+  it("counts a peek at the session, and stops once the peek closes", () => {
+    h.defaults = { sessionAlerts: true };
+    setPeeking("client-1", ctx.sessionId, true);
+
+    notifySessionEvent(ctx, "finished");
+    notifySessionEvent(ctx, "permission", { requestId: "req-1", toolName: "Bash", input: "{}" });
+    expect(attention).toEqual([]);
+    expect(h.dispatch).not.toHaveBeenCalled();
+
+    setPeeking("client-1", ctx.sessionId, false);
+    notifySessionEvent(ctx, "finished");
+    expect(attention).toHaveLength(1);
   });
 });
 

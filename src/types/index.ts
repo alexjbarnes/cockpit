@@ -817,6 +817,7 @@ export type ClientMessage =
    *  the user is already watching. Null when it has navigated away from every
    *  session; `visible` is the document's own visibility. */
   | { type: "session:set_viewing"; sessionId: string | null; visible: boolean }
+  | { type: "session:set_peeking"; sessionId: string; peeking: boolean }
   | { type: "session:subscribe"; sessionIds: string[] }
   | { type: "question:response"; sessionId: string; requestId: string; answers: Record<string, string> }
   | { type: "message:cancel_queued"; sessionId: string }
