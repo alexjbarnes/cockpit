@@ -474,7 +474,13 @@ export default function IssueDetailPage() {
 
             <div className="flex flex-wrap items-center gap-2">
               <span className={cn("h-2.5 w-2.5 shrink-0 rounded-full", statusColor(issue.status, project))} />
-              <select value={issue.status} disabled={savingStatus} onChange={(e) => changeStatus(e.target.value)} className={SELECT_CLASS}>
+              <select
+                value={issue.status}
+                disabled={savingStatus}
+                onChange={(e) => changeStatus(e.target.value)}
+                className={SELECT_CLASS}
+                data-testid="issue-status"
+              >
                 {statusOptions.map((s) => (
                   <option key={s} value={s}>
                     {s}

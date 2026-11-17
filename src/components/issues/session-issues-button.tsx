@@ -208,6 +208,17 @@ export function SessionIssuesButton() {
     if (shown) load();
   }, [shown, load]);
 
+  // The page modal shows an issue over the session without unmounting this
+  // list, so an edit made in there (a status change, say) would leave these
+  // rows as they were. Read them again when the modal closes.
+  useEffect(() => {
+    const onClosed = () => {
+      if (shown) load();
+    };
+    window.addEventListener("cockpit:page-modal-closed", onClosed);
+    return () => window.removeEventListener("cockpit:page-modal-closed", onClosed);
+  }, [shown, load]);
+
   const handleDrop = useCallback(
     async (activeKey: string, targetStatus: string, targetIndex: number) => {
       const stale = dropGuard.begin();

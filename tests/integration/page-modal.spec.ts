@@ -128,6 +128,36 @@ test("with the setting on, an issue opens over the session and closes back to it
   }
 });
 
+test("an issue changed in the page modal comes back changed in the session's list", async ({ page, harness }) => {
+  test.setTimeout(90_000);
+  const workDir = makeWorkDir(harness);
+  try {
+    await seedIssue(page, harness, true);
+    const sessionUrl = await createSession(page, harness, workDir);
+    await openIssuesList(page, sessionUrl);
+    const frame = page.frameLocator(FRAME);
+
+    await page.getByText("Add a greeting").click();
+    await expect(frame.getByTestId("page-modal-close")).toBeVisible({ timeout: 15_000 });
+
+    // Move it out of Backlog on its own page, inside the modal. The select is
+    // driven by the saved issue, so this waits for the write to land.
+    await frame.getByTestId("issue-status").selectOption("Implementation");
+    await expect(frame.getByTestId("issue-status")).toHaveValue("Implementation");
+
+    await frame.getByTestId("page-modal-close").click();
+    await expect(page.getByTestId("page-modal")).toHaveCount(0);
+
+    // The list behind the modal never unmounted, so it has to have been read
+    // again: the issue now sits under its new status.
+    const list = page.getByTestId("session-issues-list");
+    await expect(list.getByText("Implementation", { exact: true })).toBeVisible({ timeout: 15_000 });
+    await expect(list.getByText("Add a greeting")).toBeVisible();
+  } finally {
+    rmSync(workDir, { recursive: true, force: true });
+  }
+});
+
 test("Session insights from the context panel opens in the page modal too", async ({ page, harness }) => {
   test.setTimeout(120_000);
   const workDir = makeWorkDir(harness);

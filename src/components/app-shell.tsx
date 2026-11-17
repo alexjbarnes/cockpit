@@ -317,7 +317,14 @@ export function AppShell({ children }: { children: ReactNode }) {
   // The page modal lives here rather than in the sidebar so anything in the
   // shell, including a session's context panel, can open a page in it.
   const { settings: appSettings, reload: reloadSettings } = useSettings();
-  const pageModal = usePageModal(reloadSettings);
+  // Whatever the modal showed may have changed the page behind it (an issue's
+  // status, for one), and that page did not unmount, so tell it the modal has
+  // closed and it can read its data again.
+  const onPageModalClosed = useCallback(() => {
+    reloadSettings();
+    window.dispatchEvent(new CustomEvent("cockpit:page-modal-closed"));
+  }, [reloadSettings]);
+  const pageModal = usePageModal(onPageModalClosed);
 
   const setSidebarSection = useCallback((section: SidebarSectionConfig) => {
     setSidebarSectionsMap((prev) => {
