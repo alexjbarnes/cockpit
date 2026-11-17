@@ -62,17 +62,46 @@ function inTurn<T>(repo: string, task: () => Promise<T>): Promise<T> {
 async function resolveBase(repo: string, baseBranch: string | undefined): Promise<string> {
   const hasRemote = await gitOk(repo, ["remote", "get-url", "origin"]);
   if (baseBranch) {
-    if (hasRemote) await gitOk(repo, ["fetch", "origin", baseBranch]);
+    if (hasRemote && !(await gitOk(repo, ["fetch", "origin", baseBranch]))) {
+      throw new Error(`Could not fetch "${baseBranch}" from origin in ${repo}`);
+    }
     if (await gitOk(repo, ["rev-parse", "--verify", "--quiet", `refs/remotes/origin/${baseBranch}`])) return `origin/${baseBranch}`;
     if (await gitOk(repo, ["rev-parse", "--verify", "--quiet", `refs/heads/${baseBranch}`])) return baseBranch;
     throw new Error(`The base branch "${baseBranch}" does not exist in ${repo}`);
   }
   if (hasRemote) {
-    await gitOk(repo, ["fetch", "origin"]);
+    if (!(await gitOk(repo, ["fetch", "origin"]))) {
+      throw new Error(`Could not fetch origin in ${repo}`);
+    }
     const head = await git(repo, ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]).catch(() => "");
     if (head) return head;
+    // A clone that never had its remote HEAD set: the branch the remote
+    // actually has beats whatever this checkout happens to be on.
+    for (const candidate of ["main", "master"]) {
+      if (await gitOk(repo, ["rev-parse", "--verify", "--quiet", `refs/remotes/origin/${candidate}`])) return `origin/${candidate}`;
+    }
   }
   return "HEAD";
+}
+
+/**
+ * Bring a clean issue worktree up to date with the base before a new stage
+ * works in it. The worktree is cut once and would otherwise stay on the base
+ * as it was that day; a dirty one is someone's unfinished work and is left
+ * alone. A merge that conflicts is aborted and reported rather than leaving
+ * the worktree half-merged.
+ */
+async function refreshWorkspace(worktree: string, base: string): Promise<void> {
+  const dirty = await git(worktree, ["status", "--porcelain"]).catch(() => "unreadable");
+  if (dirty) return;
+  const behind = await git(worktree, ["rev-list", "--count", `HEAD..${base}`]).catch(() => "0");
+  if (Number(behind) === 0) return;
+  try {
+    await git(worktree, ["merge", "--no-edit", base]);
+  } catch (err) {
+    await gitOk(worktree, ["merge", "--abort"]);
+    throw new Error(`Could not bring ${worktree} up to date with ${base}: ${err instanceof Error ? err.message : String(err)}`);
+  }
 }
 
 /**
@@ -86,17 +115,26 @@ export function ensureWorkspace(project: Project, issue: Pick<Issue, "key" | "wo
   return inTurn(repo, async () => {
     if (!(await gitOk(repo, ["rev-parse", "--git-dir"]))) throw new Error(`${repo} is not a git repository`);
     const existing = issue.workspace;
-    if (existing && existsSync(join(existing.path, ".git"))) return existing;
+    if (existing && existsSync(join(existing.path, ".git"))) {
+      // The base moves on while the issue is open, and the worktree is cut
+      // once. Bring a clean one up to date before the next stage reads it.
+      await refreshWorkspace(existing.path, await resolveBase(repo, project.baseBranch));
+      return existing;
+    }
 
     const branch = workspaceBranch(issue.key);
     const path = join(workspaceRoot(), `${basename(repo)}-${issue.key.toUpperCase()}`);
     mkdirSync(workspaceRoot(), { recursive: true });
     // Forget worktrees whose folders are gone, or git refuses the path as taken.
     await gitOk(repo, ["worktree", "prune"]);
-    if (existsSync(join(path, ".git"))) return { path, branch, base: existing?.base ?? "", createdAt: existing?.createdAt ?? Date.now() };
+    if (existsSync(join(path, ".git"))) {
+      await refreshWorkspace(path, await resolveBase(repo, project.baseBranch));
+      return { path, branch, base: existing?.base ?? "", createdAt: existing?.createdAt ?? Date.now() };
+    }
 
     if (await gitOk(repo, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`])) {
       await git(repo, ["worktree", "add", path, branch]);
+      await refreshWorkspace(path, await resolveBase(repo, project.baseBranch));
       return { path, branch, base: existing?.base ?? "", createdAt: Date.now() };
     }
     const base = await resolveBase(repo, project.baseBranch);

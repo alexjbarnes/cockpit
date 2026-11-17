@@ -32,6 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The pipeline skills write and read the plan as its own thing.** `refine-issue` no longer overwrites the issue's description, and revises a plan that was sent back point by point. A new `validate-issue` skill checks an implementation as its own stage.
 
 ### Fixed
+- **An issue's worktree starts from the remote's main and keeps up with it.** With no base branch set, a worktree was cut from whatever the local checkout was on, so it could start behind main; a failed fetch was ignored and the stale ref used. It now prefers `origin/main`/`origin/master`, reports a failed fetch, and brings a clean worktree up to the base before each stage.
 - **Peeking at a workflow session counts as watching it.** A turn ending while its Peek modal is open no longer raises the "finished a turn" banner or a push; closing the peek, or hiding the tab, restores the notification.
 - **An issue changed in the page modal is up to date in the session's list behind it.** The list stays mounted under the modal, so it kept the rows it had loaded before; it now reads them again when the modal closes.
 - **A long question in a session banner scrolls instead of running off the screen.** The banner stack now has a maximum height and scrolls inside the viewport, so a question with several sections and options keeps its Submit button reachable.

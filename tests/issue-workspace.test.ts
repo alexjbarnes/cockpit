@@ -82,6 +82,61 @@ describe("an issue's worktree", () => {
     expect(unnamed.base).toBe("origin/main");
   });
 
+  it("prefers origin/main when the clone has no origin/HEAD", async () => {
+    const origin = path.join(dir, "origin.git");
+    git(dir, "clone", "-q", "--bare", repo, origin);
+    git(repo, "remote", "add", "origin", origin);
+    git(repo, "fetch", "-q", "origin");
+    // No set-head: refs/remotes/origin/HEAD is not a symbolic ref, which is
+    // the state a plain clone can be in. The remote's branch beats HEAD.
+
+    const ws = await ensureWorkspace(project(), { key: "CK-1" });
+    expect(ws.base).toBe("origin/main");
+  });
+
+  it("fails loudly when the base cannot be fetched, rather than using a stale ref", async () => {
+    git(repo, "remote", "add", "origin", path.join(dir, "gone.git"));
+    await expect(ensureWorkspace(project({ baseBranch: "main" }), { key: "CK-1" })).rejects.toThrow(/Could not fetch "main" from origin/);
+  });
+
+  it("brings a clean worktree up to date with the base before the next stage", async () => {
+    const origin = path.join(dir, "origin.git");
+    git(dir, "clone", "-q", "--bare", repo, origin);
+    git(repo, "remote", "add", "origin", origin);
+    git(repo, "fetch", "-q", "origin");
+    git(repo, "remote", "set-head", "origin", "main");
+
+    const first = await ensureWorkspace(project({ baseBranch: "main" }), { key: "CK-1" });
+    // Main moves on after the worktree was cut.
+    writeFileSync(path.join(repo, "later.txt"), "later\n");
+    git(repo, "add", ".");
+    git(repo, "commit", "-q", "-m", "later");
+    git(repo, "push", "-q", origin, "main");
+
+    const again = await ensureWorkspace(project({ baseBranch: "main" }), { key: "CK-1", workspace: first });
+    expect(again.path).toBe(first.path);
+    expect(existsSync(path.join(first.path, "later.txt"))).toBe(true);
+  });
+
+  it("leaves a worktree with uncommitted work alone", async () => {
+    const origin = path.join(dir, "origin.git");
+    git(dir, "clone", "-q", "--bare", repo, origin);
+    git(repo, "remote", "add", "origin", origin);
+    git(repo, "fetch", "-q", "origin");
+    git(repo, "remote", "set-head", "origin", "main");
+
+    const first = await ensureWorkspace(project({ baseBranch: "main" }), { key: "CK-1" });
+    writeFileSync(path.join(first.path, "draft.txt"), "draft\n");
+    writeFileSync(path.join(repo, "later.txt"), "later\n");
+    git(repo, "add", ".");
+    git(repo, "commit", "-q", "-m", "later");
+    git(repo, "push", "-q", origin, "main");
+
+    await ensureWorkspace(project({ baseBranch: "main" }), { key: "CK-1", workspace: first });
+    expect(existsSync(path.join(first.path, "draft.txt"))).toBe(true);
+    expect(existsSync(path.join(first.path, "later.txt"))).toBe(false);
+  });
+
   it("is kept across calls, and several can be made at once in one repository", async () => {
     const made = await Promise.all(["CK-1", "CK-2", "CK-3"].map((key) => ensureWorkspace(project(), { key })));
     expect(new Set(made.map((w) => w.path)).size).toBe(3);
