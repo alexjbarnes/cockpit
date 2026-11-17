@@ -151,3 +151,28 @@ test("a place you are already in goes to its first screen", async ({ page, harne
   await page.getByTestId("nav-rail-issues").click();
   await expect(page).toHaveURL(/\/issues$/);
 });
+
+test("Issues returns to the side you last had, not the issue you opened", async ({ page, harness }) => {
+  await enableIssues(page, harness);
+  await page.request.post(`${harness.cockpitUrl}/api/projects`, { data: { name: "Sides", prefix: "SID" } });
+  const { projects } = await (await page.request.get(`${harness.cockpitUrl}/api/projects`)).json();
+  const { issue } = await (
+    await page.request.post(`${harness.cockpitUrl}/api/issues`, { data: { projectId: projects[0].id, title: "From workflows" } })
+  ).json();
+
+  // Workflows is the side you last had.
+  await page.goto(`${harness.cockpitUrl}/workflows`);
+  await expect(page).toHaveURL(/\/workflows$/);
+
+  // An issue opened from there is a detail of the place, not a side: the
+  // footer item comes back to Workflows rather than to the issue's own page.
+  await page.goto(`${harness.cockpitUrl}/issues/${issue.key}`);
+  await page.getByTestId("nav-rail-issues").click();
+  await expect(page).toHaveURL(/\/workflows$/);
+
+  // Leaving the place entirely does not change that either.
+  await page.getByTestId("nav-rail-inbox").click();
+  await expect(page).toHaveURL(/\/inbox$/);
+  await page.getByTestId("nav-rail-issues").click();
+  await expect(page).toHaveURL(/\/workflows$/);
+});

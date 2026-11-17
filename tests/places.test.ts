@@ -1,5 +1,16 @@
-import { describe, expect, it } from "vitest";
-import { isRememberedPath, memoryKey, PLACE_ROOTS, placeForPathname, resolvePlaceTarget, validRemembered } from "@/lib/places";
+import { describe, expect, it, vi } from "vitest";
+import {
+  ISSUES_SIDE_ROOTS,
+  isRememberedPath,
+  issuesSideForPath,
+  memoryKey,
+  PLACE_ROOTS,
+  placeForPathname,
+  readIssuesSide,
+  rememberIssuesSide,
+  resolvePlaceTarget,
+  validRemembered,
+} from "@/lib/places";
 
 describe("placeForPathname", () => {
   it("maps every place's pages", () => {
@@ -91,5 +102,39 @@ describe("memoryKey", () => {
   it("is one key per place", () => {
     expect(memoryKey("sessions")).toBe("cockpit_last_sessions");
     expect(memoryKey("issues")).not.toBe(memoryKey("inbox"));
+  });
+});
+
+describe("the Issues side", () => {
+  it("is named by the two list screens, and by nothing else", () => {
+    expect(issuesSideForPath("/issues")).toBe("issues");
+    expect(issuesSideForPath("/workflows")).toBe("workflows");
+    // An issue's own page is a detail of the place, not a side.
+    expect(issuesSideForPath("/issues/CK-12")).toBeNull();
+    expect(issuesSideForPath("/inbox")).toBeNull();
+  });
+
+  it("remembers the last side, and a detail page leaves it alone", () => {
+    const store = new Map<string, string>();
+    vi.stubGlobal("window", {});
+    vi.stubGlobal("sessionStorage", {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => void store.set(key, value),
+    });
+    try {
+      expect(readIssuesSide(), "the list until told otherwise").toBe("issues");
+      rememberIssuesSide("/workflows");
+      expect(readIssuesSide()).toBe("workflows");
+      rememberIssuesSide("/issues/CK-12");
+      expect(readIssuesSide()).toBe("workflows");
+      rememberIssuesSide("/issues");
+      expect(readIssuesSide()).toBe("issues");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("maps each side to its route", () => {
+    expect(ISSUES_SIDE_ROOTS).toEqual({ issues: "/issues", workflows: "/workflows" });
   });
 });

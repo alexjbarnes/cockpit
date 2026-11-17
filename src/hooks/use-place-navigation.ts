@@ -3,7 +3,15 @@
 import { usePathname, useRouter } from "next/navigation";
 import { useCallback } from "react";
 import { useIsDesktop } from "@/hooks/use-is-desktop";
-import { PLACE_ROOTS, type Place, placeForPathname, readRemembered, resolvePlaceTarget } from "@/lib/places";
+import {
+  ISSUES_SIDE_ROOTS,
+  PLACE_ROOTS,
+  type Place,
+  placeForPathname,
+  readIssuesSide,
+  readRemembered,
+  resolvePlaceTarget,
+} from "@/lib/places";
 
 /**
  * Moving between the navigation's places. On a phone Sessions opens the pinned
@@ -11,7 +19,9 @@ import { PLACE_ROOTS, type Place, placeForPathname, readRemembered, resolvePlace
  * session you last had, beside the sidebar that already lists them; with no
  * session to return to it opens the folders. Every other place you are not in
  * takes you back to the screen you last had there, and the one you are in
- * takes you to its first screen.
+ * takes you to its first screen. Issues is the exception: its item returns to
+ * the side you last had, Issues or Workflows, rather than to the last issue
+ * you opened.
  */
 export function usePlaceNavigation() {
   const router = useRouter();
@@ -30,6 +40,13 @@ export function usePlaceNavigation() {
         }
         const last = readRemembered("sessions");
         router.push(last?.startsWith("/sessions/") ? last : "/");
+        return;
+      }
+      // Issues and Workflows are the two sides of one place. The item returns
+      // to the side you last had rather than the last page you were on, so an
+      // issue opened from Workflows does not replace the side with its page.
+      if (target === "issues") {
+        router.push(ISSUES_SIDE_ROOTS[readIssuesSide()]);
         return;
       }
       // Settings always opens at the top, as the old footer button did.

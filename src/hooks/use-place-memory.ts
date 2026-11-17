@@ -2,18 +2,20 @@
 
 import { usePathname, useSearchParams } from "next/navigation";
 import { useEffect } from "react";
-import { isRememberedPath, memoryKey, placeForPathname } from "@/lib/places";
+import { isRememberedPath, memoryKey, placeForPathname, rememberIssuesSide } from "@/lib/places";
 
 /**
  * Records the screen you are on as its place's last screen, so the navigation
  * can bring you back to it. The query is kept: a session's cwd lives there,
- * and so does an Insights tab.
+ * and so does an Insights tab. The Issues side is recorded separately, so an
+ * issue's own page does not overwrite which side you were on.
  */
 export function usePlaceMemory(): void {
   const pathname = usePathname();
   const searchParams = useSearchParams();
 
   useEffect(() => {
+    rememberIssuesSide(pathname);
     if (!isRememberedPath(pathname)) return;
     const place = placeForPathname(pathname);
     if (!place || place === "more") return;

@@ -66,6 +66,47 @@ export function memoryKey(place: Place): string {
   return `cockpit_last_${place}`;
 }
 
+/** The two sides of the Issues place. They are its list screens; an issue's
+ *  own page is a detail of the place, not a side, so opening one does not
+ *  change which side you are on. */
+export type IssuesSide = "issues" | "workflows";
+
+const ISSUES_SIDE_KEY = "cockpit_issues_side";
+
+/** Where each side of the Issues place lives. */
+export const ISSUES_SIDE_ROOTS: Record<IssuesSide, string> = {
+  issues: PLACE_ROOTS.issues,
+  workflows: "/workflows",
+};
+
+/** The side a pathname names, or null for any other screen. */
+export function issuesSideForPath(pathname: string): IssuesSide | null {
+  if (pathname === "/issues") return "issues";
+  if (pathname === "/workflows") return "workflows";
+  return null;
+}
+
+/** The Issues side to open: the one you last had, else the list. */
+export function readIssuesSide(): IssuesSide {
+  if (typeof window === "undefined") return "issues";
+  try {
+    return sessionStorage.getItem(ISSUES_SIDE_KEY) === "workflows" ? "workflows" : "issues";
+  } catch {
+    return "issues";
+  }
+}
+
+/** Record the side a pathname shows, when it shows one. */
+export function rememberIssuesSide(pathname: string): void {
+  const side = issuesSideForPath(pathname);
+  if (!side) return;
+  try {
+    sessionStorage.setItem(ISSUES_SIDE_KEY, side);
+  } catch {
+    // A private window with storage off simply gets no memory.
+  }
+}
+
 /**
  * A stored path, if it is still a screen of `place`: the stored value may name
  * a page that has moved or been removed since, and a stale one must not send
