@@ -460,6 +460,18 @@ describe("how an agent's session is allowed to work", () => {
     expect(prompt).toContain("only the tools and MCP servers listed below are allowed");
     expect(prompt).not.toContain("Allowed tools:");
   });
+
+  it("tells the agent to ask in the issue rather than guess, and to take the cheapest route", () => {
+    setup(plan({}));
+    const issue = makeIssue("Refine Ready");
+    const prompt = buildRunPrompt(issue, project, agentWork(workflow)[0], repo);
+    expect(prompt).toContain("Choose the cheapest route to the goal");
+    expect(prompt).toContain("do not guess");
+    expect(prompt).toContain("a person must add detail");
+    // The old wording was a blanket licence to assume, which is what let a
+    // one-line issue become a plan built on guesses.
+    expect(prompt).not.toContain("Make reasonable assumptions and proceed");
+  });
 });
 
 describe("how an agent's work ends", () => {

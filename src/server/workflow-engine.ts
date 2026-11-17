@@ -196,11 +196,11 @@ export function buildRunPrompt(issue: Issue, project: Project, work: AgentWork, 
     ? [
         `${issue.key} has come back to "${work.workStatus}", and you are carrying on in the session that worked on it before.`,
         "What you found and wrote then still stands. Something has been asked for since: read the issue again to see what.",
-        "There is still no human operator in this session: do not ask questions or wait for input.",
+        "There is still no human operator in this session: do not ask questions or wait for input here.",
       ]
     : [
         `You are the agent for the "${work.workStatus}" status of a workflow on issue ${issue.key}, in Cockpit. There is no human operator in this session.`,
-        "Do not ask clarifying questions and do not wait for input. Make reasonable assumptions and proceed.",
+        "Do not ask questions in this session and do not wait for input.",
       ];
   return [
     ...opening,
@@ -215,6 +215,11 @@ export function buildRunPrompt(issue: Issue, project: Project, work: AgentWork, 
     `Read the issue with mcp__cockpit-config__get_issue (key "${issue.key}"). Its description is the requirement, as a person wrote it.`,
     "Its `plan`, when it has one, is how the work is to be done, with the reviewer's feedback if the plan was sent back.",
     "Its comments carry what earlier agents found and anything a person has asked for since.",
+    "",
+    "Choose the cheapest route to the goal: reuse what exists rather than add new, and do only what the issue asks.",
+    "If the issue does not say enough to work from without guessing, do not guess: put the specific questions in a comment on the issue",
+    "and move it to the status that means a person must add detail, when one of yours is for that. A guess that has to be undone is the most expensive route.",
+    "For a detail that does not change the outcome, make the smallest assumption and record it.",
     "",
     `When the work is done, move the issue on with mcp__cockpit-config__update_issue (key "${issue.key}") to one of these statuses:`,
     ...next.map((status) => `- "${status}"`),
