@@ -799,6 +799,7 @@ export class PtyRuntime {
     const before = this.runningTasks.size;
     this.runningTasks.clear();
     for (const id of running) this.runningTasks.add(id);
+    logDiag(this.opts.sessionId, "pty:background-tasks", { running: [...running], listed: raw.length, source: "hook" });
     this.reportRunningTasks(before);
   }
 
