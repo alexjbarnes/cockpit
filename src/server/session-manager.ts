@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { EventEmitter } from "node:events";
-import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { v4 as uuidv4 } from "uuid";
@@ -356,6 +356,58 @@ function enforceableSandbox(config: SandboxConfig): SandboxConfig {
   };
 }
 
+/**
+ * The checkout a directory belongs to: where its nearest .git entry lives,
+ * the git dir that entry names, and whether it is a linked worktree (a .git
+ * file) rather than a checkout's own .git directory.
+ */
+function checkoutOf(dir: string): { root: string; gitDir: string; linked: boolean } | null {
+  let at = path.resolve(dir);
+  for (;;) {
+    const entry = path.join(at, ".git");
+    if (existsSync(entry)) {
+      try {
+        if (statSync(entry).isFile()) {
+          const match = /^gitdir:\s*(.+)$/m.exec(readFileSync(entry, "utf-8"));
+          if (match) return { root: at, gitDir: path.resolve(at, match[1].trim()), linked: true };
+        } else {
+          return { root: at, gitDir: entry, linked: false };
+        }
+      } catch {
+        // A .git entry that cannot be read says nothing about the checkout.
+      }
+      return null;
+    }
+    const parent = path.dirname(at);
+    if (parent === at) return null;
+    at = parent;
+  }
+}
+
+/**
+ * Whether a cwd the CLI reports is a worktree of the session's own checkout.
+ * The CLI's reported cwd can follow the directory a tool is working in, so a
+ * file written under the repo made the session look like it had entered a
+ * worktree. A subdirectory of the checkout is just that; a linked worktree
+ * (a .git file naming <common>/worktrees/<name>) is the real thing.
+ */
+function isWorktreeCwd(originalCwd: string, cwd: string): boolean {
+  if (!cwd || cwd === originalCwd) return false;
+  const own = checkoutOf(originalCwd);
+  const found = checkoutOf(cwd);
+  if (own && found) {
+    if (!found.linked) return false;
+    const marker = `${path.sep}worktrees${path.sep}`;
+    const at = found.gitDir.indexOf(marker);
+    const common = at === -1 ? found.gitDir : found.gitDir.slice(0, at);
+    return common === own.gitDir;
+  }
+  // Not a checkout either side (a folder that is not there, or a test path):
+  // the cheap true thing is whether it is outside the session's own checkout.
+  const root = originalCwd.endsWith(path.sep) ? originalCwd : originalCwd + path.sep;
+  return !cwd.startsWith(root);
+}
+
 export class SessionManager {
   private sessions = new Map<string, Session>();
   /** Sessions whose transcript has been consulted for a worktree. */
@@ -548,7 +600,7 @@ export class SessionManager {
     const session = this.sessions.get(sessionId);
     if (!session || session.info.worktreeCwd) return;
     const found = await readTranscriptCwd(session.cliSessionId, session.info.cwd);
-    if (!found || found === session.info.cwd || !existsSync(found)) return;
+    if (!found || !isWorktreeCwd(session.info.cwd, found) || !existsSync(found)) return;
     // The session may have moved on (or a hook may have answered) while the
     // transcript was being read.
     const current = this.sessions.get(sessionId);
@@ -617,7 +669,7 @@ export class SessionManager {
           runtime: restoredRuntime,
           pendingRequestCount: 0,
           notifications: prefs?.notifications,
-          ...(prefs?.worktreeCwd ? { worktreeCwd: prefs.worktreeCwd } : {}),
+          ...(prefs?.worktreeCwd && isWorktreeCwd(cwd, prefs.worktreeCwd) ? { worktreeCwd: prefs.worktreeCwd } : {}),
         },
         harnessProcess: null,
         emitter: new EventEmitter(),
@@ -3118,7 +3170,9 @@ Additional Cockpit rules beyond the CLI's defaults:
         // EnterWorktree moves the CLI into a git worktree. The session keeps
         // its original cwd as who it is; the worktree is where its files and
         // diffs are now, and the UI points at it until the CLI comes back.
-        const worktreeCwd = cwd === session.info.cwd ? undefined : cwd;
+        // A cwd inside the original checkout is a tool's directory, not a
+        // worktree, and must not retag the session.
+        const worktreeCwd = isWorktreeCwd(session.info.cwd, cwd) ? cwd : undefined;
         if (worktreeCwd === session.info.worktreeCwd) return;
         this.log(sessionId, `cwd changed: ${cwd}`);
         if (worktreeCwd) session.info.worktreeCwd = worktreeCwd;

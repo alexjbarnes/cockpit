@@ -278,6 +278,16 @@ describe("SessionManager", () => {
       expect((manager as any).sessions.get(gone.id).info.worktreeCwd).toBeUndefined();
     });
 
+    it("ignores a transcript cwd inside the session's own checkout", async () => {
+      const transcript = await import("@/server/transcript");
+      const session = manager.createSession("/repo");
+      // A tool working in a subdirectory leaves this as the last cwd; it is
+      // not an EnterWorktree move and must not retag the session.
+      vi.mocked(transcript.readTranscriptCwd).mockResolvedValueOnce("/repo/docs/internal/shell-wireframes");
+      await manager.hydrateWorktreeFromTranscript(session.id);
+      expect((manager as any).sessions.get(session.id).info.worktreeCwd).toBeUndefined();
+    });
+
     it("reads once per session and skips one that already has a worktree", async () => {
       const transcript = await import("@/server/transcript");
       const session = manager.createSession("/repo");
@@ -341,11 +351,25 @@ describe("SessionManager", () => {
       const prefsMod = await import("@/server/session-prefs");
       const orig = prefsMod.getSessionPrefs;
       (prefsMod as { getSessionPrefs: (id: string) => unknown }).getSessionPrefs = () => ({
-        worktreeCwd: "/repo/.worktrees/feature",
+        worktreeCwd: "/worktrees/feature",
       });
       try {
         const ensured = manager.ensureSession("restored-worktree", "/repo");
-        expect(ensured.info.worktreeCwd).toBe("/repo/.worktrees/feature");
+        expect(ensured.info.worktreeCwd).toBe("/worktrees/feature");
+      } finally {
+        (prefsMod as { getSessionPrefs: (id: string) => unknown }).getSessionPrefs = orig;
+      }
+    });
+
+    it("drops a stored cwd that is inside the session's own checkout", async () => {
+      const prefsMod = await import("@/server/session-prefs");
+      const orig = prefsMod.getSessionPrefs;
+      (prefsMod as { getSessionPrefs: (id: string) => unknown }).getSessionPrefs = () => ({
+        worktreeCwd: "/repo/docs/internal/shell-wireframes",
+      });
+      try {
+        const ensured = manager.ensureSession("restored-docs", "/repo");
+        expect(ensured.info.worktreeCwd).toBeUndefined();
       } finally {
         (prefsMod as { getSessionPrefs: (id: string) => unknown }).getSessionPrefs = orig;
       }
@@ -3991,6 +4015,20 @@ describe("SessionManager", () => {
       callbacks.onCwdChanged("/tmp");
       expect(s.info.worktreeCwd).toBeUndefined();
       expect(updates).toHaveLength(2);
+    });
+
+    it("does not mistake a tool's subdirectory for a worktree", () => {
+      const session = manager.createSession("/tmp");
+      const s = (manager as any).sessions.get(session.id)!;
+      const updates: Array<{ worktreeCwd?: string }> = [];
+      s.emitter.on("info_updated", (_id: string, info: { worktreeCwd?: string }) => updates.push({ ...info }));
+      const { callbacks } = (manager as any).buildHarnessCallbacks(s, session.id, createStreamState());
+
+      // The CLI's reported cwd followed a file the agent wrote; the session is
+      // still in its own checkout.
+      callbacks.onCwdChanged("/tmp/docs/internal/shell-wireframes");
+      expect(s.info.worktreeCwd).toBeUndefined();
+      expect(updates).toHaveLength(0);
     });
   });
 
