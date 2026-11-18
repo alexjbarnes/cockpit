@@ -3,7 +3,13 @@
 // successfully ... agentId: ac6a880af087a5341" while the agent keeps running,
 // and the CLI only reports it again on SubagentStop.
 import { describe, expect, it } from "vitest";
-import { agentIdFromOutput, deriveAgentTasks, isAsyncLaunchOutput, reconcileBackgroundTasks } from "@/lib/agent-tasks";
+import {
+  agentIdFromOutput,
+  deriveAgentTasks,
+  isAsyncLaunchOutput,
+  reconcileBackgroundTasks,
+  withoutEmptyBackgroundTasks,
+} from "@/lib/agent-tasks";
 import type { BackgroundTask, ChatMessage, ToolUse } from "@/types";
 
 const ASYNC_OUTPUT =
@@ -220,5 +226,17 @@ describe("reconcileBackgroundTasks", () => {
     const remembered = { taskId: "agent-1", toolUseId: "tool-1", status: "completed" as const, title: "Agent", description: "d" };
     expect(reconcileBackgroundTasks([remembered], ["tool-1"])[0].status).toBe("running");
     expect(reconcileBackgroundTasks([remembered], ["tool-1"])).toHaveLength(1);
+  });
+});
+
+describe("withoutEmptyBackgroundTasks", () => {
+  it("drops an empty list, which is not final on a SubagentStop", () => {
+    expect(withoutEmptyBackgroundTasks({ agent_id: "a1", background_tasks: [] })).toEqual({ agent_id: "a1" });
+  });
+
+  it("keeps a non-empty list, and a payload with no list at all", () => {
+    const tasks = [{ id: "a1", status: "running" }];
+    expect(withoutEmptyBackgroundTasks({ background_tasks: tasks })).toEqual({ background_tasks: tasks });
+    expect(withoutEmptyBackgroundTasks({ agent_id: "a1" })).toEqual({ agent_id: "a1" });
   });
 });

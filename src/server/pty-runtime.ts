@@ -1,4 +1,5 @@
 import { v4 as uuidv4 } from "uuid";
+import { withoutEmptyBackgroundTasks } from "@/lib/agent-tasks";
 import { isSandboxEscape, NETWORK_ACCESS_TOOL } from "@/lib/sandbox-requests";
 import type { SandboxConfig } from "@/types";
 import { sandboxEscapePossible } from "./claude-sandbox-rules";
@@ -1208,14 +1209,17 @@ export class PtyRuntime {
         // The stop itself decides nothing: it fires ~90ms after the start while
         // this very payload's background_tasks still reports the agent running,
         // and stops also arrive for ids that never started here. Only the list
-        // counts.
-        this.syncRunningTasks(payload);
+        // counts. An empty list here is not final either: it can arrive while
+        // the agents it belongs to are still working, and treating it as "all
+        // done" wiped the set a returning page depends on.
+        const tasksPayload = withoutEmptyBackgroundTasks(payload);
+        this.syncRunningTasks(tasksPayload);
         logDiag(this.opts.sessionId, "pty:subagent-stop", {
           agentId: stringOrEmpty(payload.agent_id) || null,
           running: this.runningTasks.size,
           hadList: Array.isArray(payload.background_tasks),
         });
-        this.emit(translateHookEvent("SubagentStop", payload));
+        this.emit(translateHookEvent("SubagentStop", tasksPayload));
       },
       onPreCompact: (payload) => {
         this.cancelErrorDebounce();

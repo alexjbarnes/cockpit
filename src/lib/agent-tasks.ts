@@ -78,6 +78,20 @@ export function reconcileBackgroundTasks(tasks: BackgroundTask[], runningIds: re
   return reconciled;
 }
 
+/**
+ * A SubagentStop whose payload lists no background tasks says nothing about
+ * the other agents: measured on a real session, the stop arrives while the
+ * three agents it belongs to are still working, and its empty list used to
+ * wipe the runtime's running set, so a page returning afterwards replayed
+ * nothing and every card read done. Only Stop's empty list is final, so a
+ * SubagentStop payload with an empty list is handed on without that field.
+ */
+export function withoutEmptyBackgroundTasks(payload: Record<string, unknown>): Record<string, unknown> {
+  if (!Array.isArray(payload.background_tasks) || payload.background_tasks.length > 0) return payload;
+  const { background_tasks: _dropped, ...rest } = payload;
+  return rest;
+}
+
 export function deriveAgentTasks(messages: ChatMessage[], hookTasks: BackgroundTask[], sessionActive = true): BackgroundTask[] {
   // Hook events are keyed by the agent id the CLI reports, which is the id an
   // async launch hands back in its output — that is the join between the two
