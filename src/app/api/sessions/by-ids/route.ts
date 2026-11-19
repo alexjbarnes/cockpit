@@ -79,7 +79,11 @@ export async function GET(req: NextRequest) {
     }
     const mem = knownMap.get(hit.id) ?? knownMap.get(id);
     if (mem) {
-      session.name = mem.name;
+      // A live session still named after its folder has no name of its own yet. Keep the title the
+      // transcript scan found (Claude Code's, or the first prompt) instead of overwriting it with the folder.
+      const folder = (mem.cwd || hit.cwd).split(/[/\\]/).filter(Boolean).pop();
+      const memIsFolderDefault = mem.name === folder;
+      if (!(memIsFolderDefault && hit.name && hit.name !== "Untitled session")) session.name = mem.name;
     }
     sessions.push(session);
   }

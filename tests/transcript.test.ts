@@ -1464,6 +1464,60 @@ describe("transcript module", () => {
     });
   });
 
+  // A session is named by the title Claude Code stored in its transcript.
+  describe("stored session titles", () => {
+    async function scanWithTail(tail: string) {
+      const { scanAllSessions } = await import("@/server/transcript");
+      const { createReadStream } = await import("node:fs");
+      const { createInterface } = await import("node:readline");
+      (existsSync as any).mockReturnValue(true);
+      (readdir as any).mockResolvedValueOnce(["project-a"]).mockResolvedValueOnce(["sess1.jsonl"]);
+      (stat as any).mockResolvedValue({ mtimeMs: 2000, size: Buffer.byteLength(tail) });
+      (open as any).mockResolvedValue({
+        read: vi.fn(async (buf: Buffer, off: number, len: number, pos: number) => {
+          Buffer.from(tail).copy(buf, off, pos, pos + len);
+          return { bytesRead: len };
+        }),
+        close: vi.fn().mockResolvedValue(undefined),
+      });
+      (createReadStream as any).mockReturnValue({ destroy: vi.fn() });
+      const lines = [
+        JSON.stringify({ type: "user", cwd: "/w", message: { content: "please review this MR" }, timestamp: "2024-01-01T00:00:00Z" }),
+      ];
+      let i = 0;
+      (createInterface as any).mockReturnValue({
+        [Symbol.asyncIterator]: () => ({
+          next: () => Promise.resolve(i < lines.length ? { value: lines[i++], done: false } : { value: undefined, done: true }),
+        }),
+        close: vi.fn(),
+      });
+      const result = await scanAllSessions();
+      return result[0].sessions[0].name;
+    }
+
+    it("uses the newest ai-title instead of the first prompt", async () => {
+      const tail = `${jsonl(
+        { type: "ai-title", aiTitle: "Old title", sessionId: "sess1" },
+        { type: "user", cwd: "/w", message: { content: "later prompt" } },
+        { type: "ai-title", aiTitle: "Main2 MR 2398 finance impact", sessionId: "sess1" },
+      )}\n`;
+      expect(await scanWithTail(tail)).toBe("Main2 MR 2398 finance impact");
+    });
+
+    it("prefers a custom title over the ai-title", async () => {
+      const tail = `${jsonl(
+        { type: "custom-title", customTitle: "My rename", sessionId: "sess1" },
+        { type: "ai-title", aiTitle: "Generated title", sessionId: "sess1" },
+      )}\n`;
+      expect(await scanWithTail(tail)).toBe("My rename");
+    });
+
+    it("keeps the first prompt when the transcript has no title", async () => {
+      const tail = `${jsonl({ type: "user", cwd: "/w", message: { content: "later prompt" } })}\n`;
+      expect(await scanWithTail(tail)).toBe("please review this MR");
+    });
+  });
+
   describe("stripCommandXml edge cases", () => {
     it("extracts slash command from command-name tag (non-compact)", async () => {
       (existsSync as any).mockReturnValue(true);

@@ -76,6 +76,7 @@ import {
   loadMoreMessages,
   loadPromptHistory,
   loadTranscript,
+  readSessionTitle,
   readTranscriptCwd,
   sumTranscriptUsage,
   transcriptExists,
@@ -842,7 +843,8 @@ export class SessionManager {
 
     const defaultName = path.basename(session.info.cwd) || session.info.cwd;
     if (session.info.name === defaultName) {
-      const name = promptName(messages);
+      // The title Claude Code stored for the conversation first, then the first prompt.
+      const name = (await readSessionTitle(session.cliSessionId, session.info.cwd)) || promptName(messages);
       if (name) session.info.name = name;
     }
     const { promptHistory: allPrompts, suggestionHistory } = await loadMergedPromptHistory(
@@ -911,7 +913,8 @@ export class SessionManager {
     // Derive title from first user message if name is still the default
     const defaultName = path.basename(cwd) || cwd;
     if (session.info.name === defaultName) {
-      const name = promptName(messages);
+      // The title Claude Code stored for the conversation first, then the first prompt.
+      const name = (await readSessionTitle(session.cliSessionId, cwd)) || promptName(messages);
       if (name) session.info.name = name;
     }
     const { promptHistory: allPrompts, suggestionHistory } = await loadMergedPromptHistory(
@@ -966,7 +969,8 @@ export class SessionManager {
     const clientMessages = messages.length > PAGE ? messages.slice(-PAGE) : messages;
 
     let name = path.basename(cwd) || cwd;
-    const derivedName = promptName(messages);
+    // The title Claude Code stored for the conversation first, then the first prompt.
+    const derivedName = (await readSessionTitle(cliId, cwd)) || promptName(messages);
     if (derivedName) name = derivedName;
 
     const { promptHistory: allPrompts, suggestionHistory } = await loadMergedPromptHistory(cliId, prevIds, cwd);
