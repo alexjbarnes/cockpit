@@ -1,8 +1,9 @@
 import { execFile } from "node:child_process";
-import { readFile } from "node:fs/promises";
+import { readFile, realpath } from "node:fs/promises";
 import { join } from "node:path";
 import { NextRequest, NextResponse } from "next/server";
 import { validateSession } from "@/server/auth";
+import { isSecretPath, SECRET_FILE_ERROR } from "@/server/secret-files";
 
 function authenticate(req: NextRequest): boolean {
   const token = req.cookies.get("cockpit_session")?.value || req.headers.get("authorization")?.replace("Bearer ", "");
@@ -50,6 +51,12 @@ export async function GET(req: NextRequest) {
   const file = url.searchParams.get("file");
   if (!cwd || !file) {
     return NextResponse.json({ error: "cwd and file are required" }, { status: 400 });
+  }
+  // The name still shows in the changes list (so a secret about to be
+  // committed is noticed), but its contents are never sent.
+  const real = await realpath(join(cwd, file)).catch(() => null);
+  if (isSecretPath(file) || (real && isSecretPath(real))) {
+    return NextResponse.json({ error: SECRET_FILE_ERROR, secret: true }, { status: 403 });
   }
 
   try {

@@ -3,6 +3,7 @@ import type { Dirent } from "node:fs";
 import { readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import type { SessionPathListing } from "@/lib/session-tree";
+import { isSecretPath } from "@/server/secret-files";
 
 /** Folders a tree never descends into: they are either generated or huge, and
  *  the Open File picker is still there for anything unusual. */
@@ -134,11 +135,13 @@ export async function listSessionPaths(cwd: string, maxEntries = 20_000): Promis
     listing = { paths: await walkPaths(root), ignored: [] };
   }
 
-  const paths = listing.paths.slice(0, maxEntries);
+  // Secret files (.env, keys, tokens) are left out of the tree altogether.
+  const listed = listing.paths.filter((entry) => !isSecretPath(entry));
+  const paths = listed.slice(0, maxEntries);
   const visible = new Set(paths);
   return {
     paths,
     ignored: listing.ignored.filter((entry) => visible.has(entry)),
-    truncated: listing.paths.length > maxEntries,
+    truncated: listed.length > maxEntries,
   };
 }

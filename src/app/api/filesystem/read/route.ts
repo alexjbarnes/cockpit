@@ -2,6 +2,7 @@ import { open, readFile, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import { NextRequest, NextResponse } from "next/server";
 import { validateSession } from "@/server/auth";
+import { isSecretPath, SECRET_FILE_ERROR } from "@/server/secret-files";
 
 const MAX_BYTES = 100 * 1024; // 100KB
 const BINARY_CHECK_BYTES = 8192;
@@ -44,6 +45,10 @@ export async function GET(req: NextRequest) {
   const resolved = await realpath(path.resolve(rawPath)).catch(() => null);
   if (!resolved) {
     return NextResponse.json({ error: "Path does not exist" }, { status: 400 });
+  }
+  // Both the asked path and where it leads, so a symlink cannot reach a secret.
+  if (isSecretPath(path.resolve(rawPath)) || isSecretPath(resolved)) {
+    return NextResponse.json({ error: SECRET_FILE_ERROR, secret: true }, { status: 403 });
   }
 
   const info = await stat(resolved).catch(() => null);

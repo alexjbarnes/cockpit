@@ -3,6 +3,7 @@ import { readdir } from "node:fs/promises";
 import { join, relative, sep } from "node:path";
 import { NextRequest, NextResponse } from "next/server";
 import { validateSession } from "@/server/auth";
+import { isSecretPath } from "@/server/secret-files";
 
 function authenticate(req: NextRequest): boolean {
   const token = req.cookies.get("cockpit_session")?.value || req.headers.get("authorization")?.replace("Bearer ", "");
@@ -29,11 +30,13 @@ async function listFiles(cwd: string): Promise<string[]> {
     for (const entry of entries) {
       if (results.length >= MAX_FILES) return;
       if (entry.isDirectory()) {
-        if (!EXCLUDED_DIRS.has(entry.name)) {
+        if (!EXCLUDED_DIRS.has(entry.name) && !isSecretPath(entry.name)) {
           await walk(join(dir, entry.name), depth + 1);
         }
       } else if (entry.isFile()) {
-        results.push(relative(cwd, join(dir, entry.name)).split(sep).join("/"));
+        const rel = relative(cwd, join(dir, entry.name)).split(sep).join("/");
+        if (isSecretPath(rel)) continue;
+        results.push(rel);
       }
     }
   }

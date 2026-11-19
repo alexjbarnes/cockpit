@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { NextRequest, NextResponse } from "next/server";
 import { validateSession } from "@/server/auth";
+import { isSecretPath, SECRET_FILE_ERROR } from "@/server/secret-files";
 
 function authenticate(req: NextRequest): boolean {
   const token = req.cookies.get("cockpit_session")?.value || req.headers.get("authorization")?.replace("Bearer ", "");
@@ -23,6 +24,10 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "Path does not exist" }, { status: 400 });
   }
 
+  if (isSecretPath(path.resolve(rawPath)) || isSecretPath(resolved)) {
+    return NextResponse.json({ error: SECRET_FILE_ERROR, secret: true }, { status: 403 });
+  }
+
   const info = await stat(resolved).catch(() => null);
   if (!info?.isDirectory()) {
     return NextResponse.json({ error: "Path is not a directory" }, { status: 400 });
@@ -33,7 +38,8 @@ export async function GET(req: NextRequest) {
   const dirents = await readdir(resolved, { withFileTypes: true }).catch(() => []);
   const filtered = dirents
     .filter((d) => d.isDirectory() || (includeFiles && d.isFile()))
-    .filter((d) => showHidden || !d.name.startsWith("."));
+    .filter((d) => showHidden || !d.name.startsWith("."))
+    .filter((d) => !isSecretPath(d.name));
 
   const dirs = filtered.filter((d) => d.isDirectory()).sort((a, b) => a.name.localeCompare(b.name));
   const files = filtered.filter((d) => d.isFile()).sort((a, b) => a.name.localeCompare(b.name));

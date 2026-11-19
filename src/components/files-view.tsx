@@ -111,6 +111,7 @@ export function FilesView({ cwd, initialFile }: { cwd: string; initialFile?: str
   const { subscribe } = useWebSocket();
   const [selectedFile] = useState<string | null>(initialFile || null);
   const [fileData, setFileData] = useState<FileContent | null>(null);
+  const [readError, setReadError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [wrap, setWrap] = useState(false);
   const [preview, setPreview] = useState(false);
@@ -252,6 +253,7 @@ export function FilesView({ cwd, initialFile }: { cwd: string; initialFile?: str
     }
 
     setImgError(false);
+    setReadError(null);
 
     const cached = fileContentCache.get(selectedFile);
     if (cached) {
@@ -262,8 +264,12 @@ export function FilesView({ cwd, initialFile }: { cwd: string; initialFile?: str
     const id = ++fetchRef.current;
     setLoading(true);
     fetch(`/api/filesystem/read?path=${encodeURIComponent(selectedFile)}`)
-      .then((res) => {
-        if (!res.ok) throw new Error("Failed to read file");
+      .then(async (res) => {
+        if (!res.ok) {
+          // A secret file is refused with a reason worth showing.
+          const body = await res.json().catch(() => null);
+          throw new Error(body?.secret ? body.error : "Failed to read file");
+        }
         return res.json();
       })
       .then((data: FileContent) => {
@@ -276,9 +282,10 @@ export function FilesView({ cwd, initialFile }: { cwd: string; initialFile?: str
         fileContentCache.set(selectedFile, data);
         setFileData(data);
       })
-      .catch(() => {
+      .catch((err: Error) => {
         if (fetchRef.current !== id) return;
         setFileData(null);
+        setReadError(err.message);
       })
       .finally(() => {
         if (fetchRef.current === id) setLoading(false);
@@ -425,7 +432,9 @@ export function FilesView({ cwd, initialFile }: { cwd: string; initialFile?: str
   }
 
   if (!fileData) {
-    return <div className="flex items-center justify-center h-full text-sm text-muted-foreground">Failed to read file</div>;
+    return (
+      <div className="flex items-center justify-center h-full text-sm text-muted-foreground">{readError || "Failed to read file"}</div>
+    );
   }
 
   const rel = relativePath(cwd, selectedFile);

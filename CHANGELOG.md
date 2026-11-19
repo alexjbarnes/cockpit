@@ -40,6 +40,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A status changed in the UI starts the jobs that watch it.** A job set to run "On issue status" only heard status changes made through the MCP tools. A move made on the issue page or by dragging on the board was emitted where the scheduler was not listening, so the job did not start.
 - **Session shells no longer inherit Cockpit's own environment.** `NODE_ENV`, `PORT` and Cockpit's internal variables are kept out of the CLI and terminal tabs, so a dev server started inside a session is not forced into production mode or onto Cockpit's port.
 
+### Security
+- **Secret files stay out of the file views.** `.env` files (not `.env.example` and other templates), keys and certificates, token files, SSH private keys, credentials files such as `secrets.yaml`, `credentials.json` or Claude's `.credentials.json`, and the `.ssh`, `.gnupg`, `.aws` and `.kube` folders are no longer listed in the file tree, the `@` file picker or the folder browser, and the file viewer, the editor and the diff view refuse them, also when reached through a symlink. The viewer says why. A secret's name still shows in the changes list, so one that is about to be committed is noticed, but its diff is not sent.
+
 ## [0.11.1] - 2026-11-13
 
 ### Added

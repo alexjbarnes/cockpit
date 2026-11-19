@@ -53,17 +53,17 @@ describe("listSessionPaths", () => {
   it("returns paths relative to a session that starts in a subdirectory", async () => {
     const repo = tempDir();
     git(repo, "init", "-q", "-b", "main");
-    write(repo, ".gitignore", "src/secret.env\n");
+    write(repo, ".gitignore", "src/local.log\n");
     write(repo, "src/one.ts");
     write(repo, "src/nested/two.ts");
     write(repo, "other/three.ts");
     git(repo, "add", ".");
     git(repo, "commit", "-q", "-m", "init");
-    write(repo, "src/secret.env");
+    write(repo, "src/local.log");
 
     expect(await listSessionPaths(path.join(repo, "src"))).toEqual({
-      paths: ["nested/two.ts", "one.ts", "secret.env"],
-      ignored: ["secret.env"],
+      paths: ["local.log", "nested/two.ts", "one.ts"],
+      ignored: ["local.log"],
       truncated: false,
     });
   });

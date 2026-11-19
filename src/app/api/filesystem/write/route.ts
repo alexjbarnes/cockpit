@@ -3,6 +3,7 @@ import { open, realpath, rename, stat, unlink, writeFile } from "node:fs/promise
 import path from "node:path";
 import { NextRequest, NextResponse } from "next/server";
 import { validateSession } from "@/server/auth";
+import { isSecretPath, SECRET_FILE_ERROR } from "@/server/secret-files";
 
 // A backstop, not the editing limit: the view refuses to edit anything the read
 // route had to truncate (100KB), so reaching this means a caller that is not
@@ -70,6 +71,9 @@ export async function POST(req: NextRequest) {
   const resolved = await realpath(path.resolve(rawPath)).catch(() => null);
   if (!resolved) {
     return NextResponse.json({ error: "Path does not exist" }, { status: 400 });
+  }
+  if (isSecretPath(path.resolve(rawPath)) || isSecretPath(resolved)) {
+    return NextResponse.json({ error: SECRET_FILE_ERROR, secret: true }, { status: 403 });
   }
   const info = await stat(resolved).catch(() => null);
   if (!info?.isFile()) {
