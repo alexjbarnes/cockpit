@@ -1,9 +1,6 @@
 "use client";
 
-import { DndContext, type DragEndEvent, PointerSensor, useSensor, useSensors } from "@dnd-kit/core";
-import { arrayMove, SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
-import { CSS } from "@dnd-kit/utilities";
-import { GitPullRequest, GripVertical, LayoutGrid, Plus, X } from "lucide-react";
+import { GitPullRequest, LayoutGrid, Plus, Square, X } from "lucide-react";
 import { usePathname, useRouter } from "next/navigation";
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { type SidebarSectionConfig, useShell } from "@/components/app-shell";
@@ -174,36 +171,134 @@ export interface SidebarHandle {
   close: () => void;
 }
 
-function shortPath(cwd: string): string {
-  const parts = cwd.split(/[/\\]/);
-  return parts.length > 2 ? "~/" + parts.slice(-2).join("/") : cwd;
+// The session list reads by session, not by folder. Each folder is a header
+// once; a row leads with the session's name and says in words when it is working or waiting for you;
+// the order is most recent activity first; "remove from sidebar" and "stop" are separate quiet buttons.
+
+/** The folder's own name: the last part of its path. */
+function folderName(cwd: string): string {
+  const parts = cwd.split(/[/\\]/).filter(Boolean);
+  return parts[parts.length - 1] || cwd;
 }
 
-function SortableSessionRow({
+/** Cockpit names a session after its folder until the conversation has a title of its own. */
+function displayName(session: SessionInfo): string {
+  const name = session.name?.trim();
+  return !name || name === folderName(session.cwd) ? "New session" : name;
+}
+
+function timeAgo(ms: number): string {
+  if (!ms) return "";
+  const mins = Math.floor((Date.now() - ms) / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 30) return `${days}d ago`;
+  return new Date(ms).toLocaleDateString();
+}
+
+interface FolderGroup {
+  cwd: string;
+  sessions: SessionInfo[];
+  lastActiveAt: number;
+}
+
+/** The pinned sessions by folder: the most recently active folder first, and in each folder the most
+ *  recently active session first. Status is not part of the order, so rows do not jump while you aim at
+ *  them; a session that is working or waiting is recent anyway. */
+function groupByFolder(sessions: SessionInfo[]): FolderGroup[] {
+  const groups = new Map<string, FolderGroup>();
+  for (const s of sessions) {
+    const g = groups.get(s.cwd) ?? { cwd: s.cwd, sessions: [], lastActiveAt: 0 };
+    g.sessions.push(s);
+    g.lastActiveAt = Math.max(g.lastActiveAt, s.lastActiveAt || 0);
+    groups.set(s.cwd, g);
+  }
+  const list = [...groups.values()];
+  for (const g of list) g.sessions.sort((a, b) => (b.lastActiveAt || 0) - (a.lastActiveAt || 0));
+  return list.sort((a, b) => b.lastActiveAt - a.lastActiveAt);
+}
+
+function FolderHeader({ cwd }: { cwd: string }) {
+  return (
+    <div className="flex items-baseline gap-1.5 px-3 pt-2.5 pb-0.5 text-xs min-w-0" title={cwd}>
+      <span className="shrink-0 font-semibold text-foreground/80">{folderName(cwd)}</span>
+      <span className="truncate text-muted-foreground/70" dir="rtl">
+        <bdo dir="ltr">{cwd}</bdo>
+      </span>
+    </div>
+  );
+}
+
+function SessionRow({
   session,
   isCurrent,
   isUnread,
   onNavigate,
-  onAction,
+  onDismiss,
+  onStop,
 }: {
   session: SessionInfo;
   isCurrent: boolean;
   isUnread: boolean;
   onNavigate: (s: SessionInfo) => void;
-  onAction: (e: React.MouseEvent, s: SessionInfo) => void;
+  onDismiss: (e: React.MouseEvent, s: SessionInfo) => void;
+  onStop: (e: React.MouseEvent, s: SessionInfo) => void;
 }) {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: session.id });
+  const pending = (session.pendingRequestCount ?? 0) > 0;
+  const running = session.status === "running";
+  const agents = session.agentCount ?? 0;
+  const name = displayName(session);
 
-  const style: React.CSSProperties = {
-    transform: CSS.Transform.toString(transform),
-    transition,
-    opacity: isDragging ? 0.5 : 1,
-  };
+  let dot: React.ReactNode;
+  let label: string | null = null;
+  let labelClass = "text-muted-foreground";
+  if (pending) {
+    dot = (
+      <>
+        <div className="absolute h-4 w-4 rounded-full bg-blue-500/20 animate-ping" />
+        <div className="h-2.5 w-2.5 rounded-full bg-blue-500" title="Awaiting your input" data-testid="status-pending" />
+      </>
+    );
+    label = "Waiting for you";
+    labelClass = "text-blue-500 font-medium";
+  } else if (running) {
+    dot = (
+      <>
+        <div className="absolute h-4 w-4 rounded-full bg-yellow-500/20 animate-ping" />
+        <div className="h-2.5 w-2.5 rounded-full bg-yellow-500" title="Working" data-testid="status-running" />
+      </>
+    );
+    label = "Working";
+    labelClass = "text-yellow-600 dark:text-yellow-500";
+  } else if (agents > 0) {
+    // Idle but not finished: the turn ended while agents it launched keep
+    // working. Pulsing, not pinging, to read as background work — the
+    // session takes input in this state.
+    dot = (
+      <div
+        className="h-2.5 w-2.5 rounded-full bg-yellow-500/50 animate-pulse"
+        title={`${agents} background agent${agents === 1 ? "" : "s"} working`}
+        data-testid="status-agents"
+      />
+    );
+    label = `${agents} background agent${agents === 1 ? "" : "s"} working`;
+    labelClass = "text-yellow-600 dark:text-yellow-500";
+  } else if (isUnread) {
+    dot = <div className="h-2.5 w-2.5 rounded-full bg-green-500" title="New response" data-testid="status-unread" />;
+    label = "New reply";
+    labelClass = "text-green-600 dark:text-green-500";
+  } else {
+    dot = <div className="h-2.5 w-2.5 rounded-full bg-muted-foreground/30" data-testid="status-idle" />;
+  }
+
+  // On wide screens the buttons show on hover or keyboard focus; on phones, which have no hover, always.
+  const quietButton = "h-7 w-7 shrink-0 text-muted-foreground md:opacity-0 md:group-hover:opacity-100 focus-visible:opacity-100";
 
   return (
     <div
-      ref={setNodeRef}
-      style={style}
       role="button"
       tabIndex={0}
       onClick={() => onNavigate(session)}
@@ -213,63 +308,41 @@ function SortableSessionRow({
           onNavigate(session);
         }
       }}
+      title={`${name}\n${session.cwd}`}
       className={cn(
-        "w-full flex items-center gap-2 px-3 py-2 text-left text-sm hover:bg-accent/50 transition-colors cursor-pointer",
+        "group w-full flex items-center gap-2 pl-4 pr-1.5 py-1.5 text-left text-sm hover:bg-accent/50 transition-colors cursor-pointer",
         isCurrent && "bg-accent",
       )}
+      data-testid="sidebar-session-row"
     >
-      <button
-        type="button"
-        {...attributes}
-        {...listeners}
-        onClick={(e) => e.stopPropagation()}
-        className="shrink-0 cursor-grab active:cursor-grabbing text-muted-foreground/60 hover:text-muted-foreground touch-none"
-        title="Drag to reorder"
-        aria-label="Drag to reorder"
-      >
-        <GripVertical className="h-4 w-4" />
-      </button>
-      <div className="shrink-0 relative flex items-center justify-center h-4 w-4">
-        {(session.pendingRequestCount ?? 0) > 0 ? (
-          <>
-            <div className="absolute h-4 w-4 rounded-full bg-blue-500/20 animate-ping" />
-            <div className="h-2.5 w-2.5 rounded-full bg-blue-500" title="Awaiting your input" data-testid="status-pending" />
-          </>
-        ) : session.status === "running" ? (
-          <>
-            <div className="absolute h-4 w-4 rounded-full bg-yellow-500/20 animate-ping" />
-            <div className="h-2.5 w-2.5 rounded-full bg-yellow-500" title="Working" data-testid="status-running" />
-          </>
-        ) : (session.agentCount ?? 0) > 0 ? (
-          // Idle but not finished: the turn ended while agents it launched keep
-          // working. Pulsing, not pinging, to read as background work — the
-          // session takes input in this state.
-          <div
-            className="h-2.5 w-2.5 rounded-full bg-yellow-500/50 animate-pulse"
-            title={`${session.agentCount} background agent${session.agentCount === 1 ? "" : "s"} working`}
-            data-testid="status-agents"
-          />
-        ) : isUnread ? (
-          <div className="h-2.5 w-2.5 rounded-full bg-green-500" title="New response" data-testid="status-unread" />
-        ) : (
-          <div className="h-2.5 w-2.5 rounded-full bg-muted-foreground/30" data-testid="status-idle" />
-        )}
-      </div>
+      <div className="shrink-0 relative flex items-center justify-center h-4 w-4">{dot}</div>
       <div className="flex-1 min-w-0">
-        <div className="truncate font-medium text-left" dir="rtl" title={session.cwd}>
-          <bdo dir="ltr">{shortPath(session.cwd)}</bdo>
-        </div>
-        <div className="truncate text-xs text-muted-foreground">{session.name}</div>
+        <div className={cn("truncate text-left", isCurrent ? "font-semibold" : "font-medium")}>{name}</div>
+        <div className={cn("truncate text-xs", labelClass)}>{label ?? timeAgo(session.lastActiveAt)}</div>
       </div>
-      <Button
-        variant="ghost"
-        size="icon"
-        className="h-8 w-8 shrink-0 text-red-500 hover:text-red-600 hover:bg-red-500/10"
-        onClick={(e) => onAction(e, session)}
-        title={session.status === "running" ? "Stop session" : "Remove from sidebar"}
-      >
-        <X className="h-4 w-4" />
-      </Button>
+      {running ? (
+        <Button
+          variant="ghost"
+          size="icon"
+          className={cn(quietButton, "hover:text-red-600 hover:bg-red-500/10")}
+          onClick={(e) => onStop(e, session)}
+          title="Stop session"
+          aria-label="Stop session"
+        >
+          <Square className="h-3.5 w-3.5" />
+        </Button>
+      ) : (
+        <Button
+          variant="ghost"
+          size="icon"
+          className={cn(quietButton, "hover:text-foreground")}
+          onClick={(e) => onDismiss(e, session)}
+          title="Remove from sidebar"
+          aria-label="Remove from sidebar"
+        >
+          <X className="h-3.5 w-3.5" />
+        </Button>
+      )}
     </div>
   );
 }
@@ -305,16 +378,7 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
   }, []);
 
   const prevStatusRef = useRef<Map<string, string>>(new Map());
-  /** The pins as the server has them, including ones this page cannot render,
-   *  so a reorder persists those too rather than dropping them. */
-  const pinnedIdsRef = useRef<string[]>([]);
   const staleGuard = useRef(createStaleGuard()).current;
-
-  const sensors = useSensors(
-    useSensor(PointerSensor, {
-      activationConstraint: { delay: 150, tolerance: 5 },
-    }),
-  );
 
   useImperativeHandle(
     ref,
@@ -387,7 +451,6 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
     // racing a server start, a session whose id moved on /clear), and deleting
     // from one of those lost the user's whole pinned list. Pins are removed
     // where they are removed deliberately: closing or deleting a session.
-    pinnedIdsRef.current = pinnedIds;
     const byId = new Map(fetchedSessions.map((s) => [s.id, s]));
     const visible: SessionInfo[] = [];
     for (const id of pinnedIds) {
@@ -426,8 +489,12 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
   const watchedIds = useMemo(() => [...sessions.map((s) => s.id), ...reviewWatchIds], [sessions, reviewWatchIds]);
   useSessionWatch("sidebar", watchedIds);
 
-  const stopSession = async (e: React.MouseEvent, id: string) => {
+  const stopSession = async (e: React.MouseEvent, id: string, name: string) => {
     e.stopPropagation();
+    // Stopping ends the Claude process mid-turn, so it asks first.
+    if (!window.confirm(`Stop "${name}"?\n\nIts Claude process ends now. The conversation is kept and can be resumed.`)) {
+      return;
+    }
     const res = await fetch(`/api/sessions/${id}`, { method: "DELETE" });
     if (res.ok) {
       await unpinSession(id);
@@ -446,30 +513,6 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
     setSessions((prev) => prev.filter((s) => s.id !== id));
     if (currentSessionId === id) router.push("/");
   };
-
-  const handleDragEnd = useCallback(
-    (event: DragEndEvent) => {
-      const { active, over } = event;
-      if (!over || active.id === over.id) return;
-
-      const oldIndex = sessions.findIndex((s) => s.id === active.id);
-      const newIndex = sessions.findIndex((s) => s.id === over.id);
-      if (oldIndex < 0 || newIndex < 0) return;
-
-      const next = arrayMove(sessions, oldIndex, newIndex);
-      setSessions(next);
-      // Pins this page cannot render keep their place in the file too, or a
-      // reorder would delete them.
-      const order = next.map((s) => s.id);
-      const hidden = pinnedIdsRef.current.filter((id) => !order.includes(id));
-      fetch("/api/sessions/pinned", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ pinned: [...order, ...hidden] }),
-      }).catch((err) => console.error("Failed to persist sidebar order", err));
-    },
-    [sessions],
-  );
 
   const createSession = async (input: NewSessionInput): Promise<{ ok: boolean; error?: string }> => {
     try {
@@ -566,20 +609,24 @@ export const Sidebar = forwardRef<SidebarHandle>(function Sidebar(_props, ref) {
               {sessions.length === 0 ? (
                 <p className="px-3 py-3 text-sm text-muted-foreground">No active sessions.</p>
               ) : (
-                <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
-                  <SortableContext items={sessions.map((s) => s.id)} strategy={verticalListSortingStrategy}>
-                    {sessions.map((session) => (
-                      <SortableSessionRow
-                        key={session.id}
-                        session={session}
-                        isCurrent={currentSessionId === session.id}
-                        isUnread={unread.has(session.id)}
-                        onNavigate={navigateToSession}
-                        onAction={(e, s) => (s.status === "running" ? stopSession(e, s.id) : dismissSession(e, s.id))}
-                      />
-                    ))}
-                  </SortableContext>
-                </DndContext>
+                <div className="pb-1">
+                  {groupByFolder(sessions).map((group) => (
+                    <div key={group.cwd} data-testid="sidebar-folder-group">
+                      <FolderHeader cwd={group.cwd} />
+                      {group.sessions.map((session) => (
+                        <SessionRow
+                          key={session.id}
+                          session={session}
+                          isCurrent={currentSessionId === session.id}
+                          isUnread={unread.has(session.id)}
+                          onNavigate={navigateToSession}
+                          onDismiss={(e, s) => dismissSession(e, s.id)}
+                          onStop={(e, s) => stopSession(e, s.id, displayName(s))}
+                        />
+                      ))}
+                    </div>
+                  ))}
+                </div>
               )}
             </SidebarSection>
           </div>
