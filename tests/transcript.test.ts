@@ -1499,9 +1499,9 @@ describe("transcript module", () => {
       const tail = `${jsonl(
         { type: "ai-title", aiTitle: "Old title", sessionId: "sess1" },
         { type: "user", cwd: "/w", message: { content: "later prompt" } },
-        { type: "ai-title", aiTitle: "Main2 MR 2398 finance impact", sessionId: "sess1" },
+        { type: "ai-title", aiTitle: "Fix login redirect loop", sessionId: "sess1" },
       )}\n`;
-      expect(await scanWithTail(tail)).toBe("Main2 MR 2398 finance impact");
+      expect(await scanWithTail(tail)).toBe("Fix login redirect loop");
     });
 
     it("prefers a custom title over the ai-title", async () => {
