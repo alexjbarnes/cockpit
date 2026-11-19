@@ -50,6 +50,7 @@ vi.mock("@/server/transcript", () => ({
   findSessionCwd: () => Promise.resolve(null),
   getTranscriptPath: () => "/tmp/fake-transcript.jsonl",
   readTranscriptCwd: vi.fn(() => Promise.resolve(null)),
+  readSessionTitle: vi.fn(() => Promise.resolve("")),
   loadPromptHistory: () => Promise.resolve([]),
   sumTranscriptUsage: () => Promise.resolve({ input: 0, output: 0, cacheRead: 0, cacheCreate: 0 }),
 }));

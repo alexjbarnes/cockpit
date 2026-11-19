@@ -38,6 +38,7 @@ vi.mock("@/server/transcript", () => ({
   findSessionCwd: () => Promise.resolve(null),
   getTranscriptPath: () => "/tmp/fake-transcript.jsonl",
   loadPromptHistory: () => Promise.resolve([]),
+  readSessionTitle: () => Promise.resolve(""),
 }));
 
 vi.mock("@/server/session-prefs", () => ({

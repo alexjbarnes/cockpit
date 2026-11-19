@@ -1154,6 +1154,60 @@ interface SessionMeta {
   lastActiveAt: number;
 }
 
+// The conversation's own title. Claude Code writes it into the transcript and re-writes it as the session
+// goes on: "custom-title" after a rename, "agent-name", and the "ai-title" it makes itself (the name its
+// /resume list shows). Prefer it, newest first, over the first prompt. The entries sit near the end, so only
+// the tail is read: 256 KB, then 4 MB if none was there.
+const STORED_TITLE_TYPES: [string, string][] = [
+  ["custom-title", "customTitle"],
+  ["agent-name", "agentName"],
+  ["ai-title", "aiTitle"],
+];
+
+async function readStoredTitle(filePath: string, size: number): Promise<string> {
+  if (!size) return "";
+  let handle: Awaited<ReturnType<typeof open>> | null = null;
+  try {
+    handle = await open(filePath, "r");
+    for (const span of [256 * 1024, 4 * 1024 * 1024]) {
+      const length = Math.min(size, span);
+      const buffer = Buffer.alloc(length);
+      await handle.read(buffer, 0, length, size - length);
+      const text = buffer.toString("utf-8");
+      for (const [type, key] of STORED_TITLE_TYPES) {
+        const at = text.lastIndexOf(`"type":"${type}"`);
+        if (at < 0) continue;
+        const start = text.lastIndexOf("\n", at) + 1;
+        const end = text.indexOf("\n", at);
+        try {
+          const entry = JSON.parse(end < 0 ? text.slice(start) : text.slice(start, end)) as Record<string, unknown>;
+          const value = typeof entry[key] === "string" ? (entry[key] as string).trim() : "";
+          if (value) return value.slice(0, 120);
+        } catch {
+          // A line cut by the start of the window: try the next type.
+        }
+      }
+      if (length >= size) break;
+    }
+    return "";
+  } catch {
+    return "";
+  } finally {
+    if (handle) await handle.close().catch(() => {});
+  }
+}
+
+/** The title Claude Code stored for a session, or "" when it has none yet. */
+export async function readSessionTitle(sessionId: string, cwd: string): Promise<string> {
+  try {
+    const filePath = getTranscriptPath(sessionId, cwd);
+    const { size } = await stat(filePath);
+    return await readStoredTitle(filePath, size);
+  } catch {
+    return "";
+  }
+}
+
 async function extractSessionMeta(filePath: string): Promise<SessionMeta | null> {
   const id = path.basename(filePath, ".jsonl");
   let cwd = "";
@@ -1211,10 +1265,11 @@ async function extractSessionMeta(filePath: string): Promise<SessionMeta | null>
 
     if (!cwd) return null;
 
+    const storedTitle = await readStoredTitle(filePath, fileStat.size);
     return {
       id,
       cwd,
-      title: title || "Untitled session",
+      title: storedTitle || title || "Untitled session",
       createdAt: createdAt || lastActiveAt,
       lastActiveAt,
     };
