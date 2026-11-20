@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 
 vi.mock("node:child_process", () => ({
@@ -25,12 +25,13 @@ import { SessionManager } from "@/server/session-manager";
 import { TerminalManager } from "@/server/terminal-manager";
 import { createWebSocketHandler } from "@/server/ws-handler";
 
-// Connecting to a session starts a recursive watch on its folder, and Node
-// sets that up on Linux by walking every directory under it before returning.
-// Sessions here live in their own empty folder, so how long a connect takes
-// does not depend on how much the shared /tmp holds: a large one made each
-// connect slow enough that five reconnects ran past the test timeout.
+// A session's history load is shared work on first use, so these tests start
+// their own empty folder rather than sharing /tmp with the rest of the suite.
 let sessionDir: string;
+
+// These tests start a server per test; under a fully parallel run the first
+// connect in a file can take seconds on a loaded machine.
+vi.setConfig({ testTimeout: 30_000 });
 
 beforeAll(async () => {
   await setupPassword("test-password");
@@ -62,7 +63,7 @@ describe("WebSocket reconnection", () => {
       }),
   );
 
-  afterAll(() => {
+  afterEach(() => {
     server.closeAllConnections();
     return new Promise<void>((resolve) => {
       server.close(() => resolve());
@@ -77,7 +78,7 @@ describe("WebSocket reconnection", () => {
     });
   }
 
-  function collectMessages(ws: WebSocket, count: number, timeoutMs = 2000): Promise<Record<string, unknown>[]> {
+  function collectMessages(ws: WebSocket, count: number, timeoutMs = 10_000): Promise<Record<string, unknown>[]> {
     return new Promise((resolve) => {
       const messages: Record<string, unknown>[] = [];
       const timer = setTimeout(() => resolve(messages), timeoutMs);

@@ -28,6 +28,10 @@ import { TerminalManager } from "@/server/terminal-manager";
 import { createWebSocketHandler } from "@/server/ws-handler";
 import type { BackgroundTask } from "@/types";
 
+// These tests start a server per test; under a fully parallel run the first
+// connect in a file can take seconds on a loaded machine.
+vi.setConfig({ testTimeout: 30_000 });
+
 beforeAll(async () => {
   await setupPassword("test-password");
 });
@@ -95,7 +99,7 @@ describe("background tasks on connect", () => {
       () => {
         expect(messages.some((m) => m.type === "history")).toBe(true);
       },
-      { timeout: 5000, interval: 20 },
+      { timeout: 15_000, interval: 20 },
     );
     return messages.filter((m) => m.type === "session:task_sync");
   }

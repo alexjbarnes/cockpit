@@ -200,10 +200,16 @@ describe.skipIf(!sqlite)("Insights views", () => {
 
   it("reads every view from a real CLI capture without tripping on its shapes", () => {
     const capture = JSON.parse(readFileSync(join(__dirname, "fixtures/otlp-protobuf-capture.json"), "utf8")) as Record<string, string>;
-    const now = Date.now();
-    for (const kind of ["traces", "logs", "metrics"] as const) {
+    // The capture is fixed in time; anchor the query to its latest record, or
+    // the 30-day range excludes it as the fixture ages.
+    const batches = (["traces", "logs", "metrics"] as const).map((kind) => {
       const payload = decodeOtlpProtobuf(kind, Buffer.from(capture[kind], "base64"));
-      db.ingest({ sessionId: "capture", spawnId: "capture-spawn", receivedMs: now }, parseOtlp(kind, payload, now));
+      return parseOtlp(kind, payload, Date.now());
+    });
+    const latest = Math.max(...batches.flatMap((batch) => batch.records.map((record) => record.endMs ?? record.timeMs)));
+    const now = Number.isFinite(latest) ? latest : Date.now();
+    for (const batch of batches) {
+      db.ingest({ sessionId: "capture", spawnId: "capture-spawn", receivedMs: now }, batch);
     }
     const parsed = parseInsightsQuery(new URLSearchParams({ view: "overview", range: "30d", session: "capture" }), now);
     if ("error" in parsed) throw new Error(parsed.error);

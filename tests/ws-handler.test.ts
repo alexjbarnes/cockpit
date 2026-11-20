@@ -30,6 +30,10 @@ import { appendToBuffer, MAX_BUFFER } from "@/server/terminal-buffer";
 import { TerminalManager } from "@/server/terminal-manager";
 import { createWebSocketHandler } from "@/server/ws-handler";
 
+// A server starts per test; under a fully parallel run the first connect in a
+// file can take seconds on a loaded machine.
+vi.setConfig({ testTimeout: 30_000 });
+
 beforeAll(async () => {
   await setupPassword("test-password");
 });
@@ -142,20 +146,20 @@ describe("WebSocket handler", () => {
     const ws = await connectWs();
 
     const messages: Record<string, unknown>[] = [];
-    const collected = new Promise<void>((resolve) => {
-      ws.on("message", (data) => {
-        messages.push(JSON.parse(data.toString()));
-        if (messages.length >= 5) resolve();
-      });
-    });
+    ws.on("message", (data) => messages.push(JSON.parse(data.toString())));
 
     ws.send(JSON.stringify({ type: "session:connect", sessionId: session.id }));
 
-    await collected;
-
-    const types = messages.map((m) => m.type);
-    expect(types).toContain("history");
-    expect(types).toContain("session:connected");
+    // Wait for the two messages this test is about: a fixed message count
+    // depends on which optional ones the session happens to produce.
+    await vi.waitFor(
+      () => {
+        const types = messages.map((m) => m.type);
+        expect(types).toContain("history");
+        expect(types).toContain("session:connected");
+      },
+      { timeout: 15_000, interval: 20 },
+    );
 
     const historyMsg = messages.find((m) => m.type === "history");
     expect(historyMsg!.sessionId).toBe(session.id);

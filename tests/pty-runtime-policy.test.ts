@@ -492,14 +492,21 @@ describe("background work: status gate and reported count", () => {
     expect(counts(events), "nothing changed, so nothing is re-reported").toHaveLength(0);
   });
 
-  it("releases the gate when the list finally comes back empty", () => {
+  it("does not treat an empty list on SubagentStop as final, but does on the next Stop", () => {
     const { runtime, events } = makeRuntime("manual");
     const handler = handlerFor(runtime);
 
     handler.onSubagentStart({ agent_id: "agent-1" });
     handler.onStop({ background_tasks: [task("agent-1")] });
+    // Measured on a real session: SubagentStop arrives with an empty list
+    // while the agents it belongs to are still working.
     handler.onSubagentStop({ agent_id: "agent-1", background_tasks: [] });
+    events.length = 0;
+    handler.onPreToolUse(preToolUse);
+    expect(statusSignals(events), "an empty SubagentStop list says nothing").toHaveLength(0);
 
+    // Stop is the authoritative end of the work.
+    handler.onStop({ background_tasks: [] });
     events.length = 0;
     handler.onPreToolUse(preToolUse);
     expect(statusSignals(events)).toHaveLength(1);

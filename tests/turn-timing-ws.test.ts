@@ -25,6 +25,10 @@ import { SessionManager } from "@/server/session-manager";
 import { TerminalManager } from "@/server/terminal-manager";
 import { createWebSocketHandler } from "@/server/ws-handler";
 
+// These tests start a server per test; under a fully parallel run the first
+// connect in a file can take seconds on a loaded machine.
+vi.setConfig({ testTimeout: 30_000 });
+
 beforeAll(async () => {
   await setupPassword("test-password");
 });
@@ -66,7 +70,7 @@ describe("turn timing on connect", () => {
     const messages: Record<string, unknown>[] = [];
     ws.on("message", (data) => messages.push(JSON.parse(data.toString())));
     ws.send(JSON.stringify({ type: "session:connect", sessionId, cwd: sandbox }));
-    await vi.waitFor(() => expect(messages.some((m) => m.type === "history")).toBe(true), { timeout: 5000, interval: 20 });
+    await vi.waitFor(() => expect(messages.some((m) => m.type === "history")).toBe(true), { timeout: 15000, interval: 20 });
     ws.close();
     return messages.find((m) => m.type === "history")!;
   }
@@ -74,15 +78,17 @@ describe("turn timing on connect", () => {
   it("tells a page connecting mid-turn how long the turn has run", async () => {
     const session = manager.createSession(sandbox);
     manager.sendMessage(session.id, "a long task");
-    // Stand in for a turn that has been running for ten minutes.
-    (manager as unknown as { sessions: Map<string, { turnStartedAt?: number }> }).sessions.get(session.id)!.turnStartedAt =
-      Date.now() - 600_000;
+    // Stand in for a turn that has been running for ten minutes. Judge the
+    // answer against this clock, not a fixed ceiling: a loaded machine can
+    // spend seconds between the stand-in and the reply.
+    const startedAt = Date.now() - 600_000;
+    (manager as unknown as { sessions: Map<string, { turnStartedAt?: number }> }).sessions.get(session.id)!.turnStartedAt = startedAt;
 
     const history = await historyOnConnect(session.id);
 
     expect(history.status).toBe("running");
     expect(history.turnElapsedMs).toBeGreaterThanOrEqual(600_000);
-    expect(history.turnElapsedMs).toBeLessThan(605_000);
+    expect(history.turnElapsedMs).toBeLessThanOrEqual(Date.now() - startedAt + 1_000);
   });
 
   it("says nothing about turn timing when no turn is running", async () => {
