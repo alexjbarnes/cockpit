@@ -15,6 +15,9 @@ import { absolutePath, changeDecoration, type SessionPathListing, toTreeGitStatu
 
 const VIEW_KEY = "cockpit_sidebar_files_changes_view";
 const DEBOUNCE_MS = 800;
+/** Git is polled rather than pushed: a watcher over a large folder is the very
+ *  thing this panel used to make expensive. */
+const GIT_POLL_MS = 5_000;
 
 type View = "changes" | "files";
 
@@ -68,7 +71,6 @@ function Spinner() {
 export function SidebarFilesChanges({ cwd }: { cwd: string }) {
   const pathname = usePathname();
   const { tabActions, closeSidebar } = useShell();
-  const { subscribe } = useWebSocket();
   const [view, setView] = useState<View>("changes");
   const [pickerOpen, setPickerOpen] = useState(false);
   const [legendOpen, setLegendOpen] = useState(false);
@@ -121,12 +123,15 @@ export function SidebarFilesChanges({ cwd }: { cwd: string }) {
     fetchStatus();
   }, [cwd, pathname, fetchStatus]);
 
+  // Git is the source of truth for changes, so the panel asks it directly.
+  // Polling only while the page is visible keeps a session the user has left
+  // from costing a `git status` every few seconds.
   useEffect(() => {
-    return subscribe((msg) => {
-      if (msg.type !== "session:fs_changed" || msg.cwd !== cwdRef.current) return;
-      fetchStatus();
-    });
-  }, [subscribe, fetchStatus]);
+    const timer = setInterval(() => {
+      if (document.visibilityState === "visible") fetchStatus();
+    }, GIT_POLL_MS);
+    return () => clearInterval(timer);
+  }, [fetchStatus]);
 
   const changedPaths = useMemo(() => status?.files.map((file) => file.path) ?? [], [status]);
 
@@ -326,12 +331,14 @@ function FilesBody({
   onOpen: (path: string) => void;
 }) {
   const pathname = usePathname();
-  const { subscribe } = useWebSocket();
+  const { send, subscribe, connected } = useWebSocket();
   const [listing, setListing] = useState<SessionPathListing | null>(null);
+  const [expandedDirs, setExpandedDirs] = useState<readonly string[]>([]);
   const [error, setError] = useState(false);
   const [loading, setLoading] = useState(true);
   const cwdRef = useRef(cwd);
   cwdRef.current = cwd;
+  const onExpandedDirsChange = useCallback((dirs: readonly string[]) => setExpandedDirs(dirs), []);
 
   const load = useCallback(async () => {
     const target = cwdRef.current;
@@ -354,6 +361,7 @@ function FilesBody({
   // biome-ignore lint/correctness/useExhaustiveDependencies: cwd and pathname are the triggers; the fetch reads them through cwdRef
   useEffect(() => {
     setLoading(true);
+    setExpandedDirs([]);
     load();
   }, [cwd, pathname, load]);
 
@@ -375,6 +383,20 @@ function FilesBody({
     };
   }, [subscribe, load]);
 
+  // Only the folders on screen need live updates, so the tree reports its
+  // expansion and the server watches exactly those. "" is the session folder
+  // itself, which is always watched so a new top-level file appears.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: connected re-sends after a reconnect, which drops the server's per-connection watches
+  useEffect(() => {
+    send({ type: "watch:dirs", cwd, dirs: ["", ...expandedDirs] });
+  }, [send, cwd, expandedDirs, connected]);
+
+  useEffect(() => {
+    return () => {
+      send({ type: "watch:dirs", cwd, dirs: [] });
+    };
+  }, [send, cwd]);
+
   const paths = useMemo(() => (listing?.paths ?? []).filter((path) => !deletedPaths.has(path)), [listing, deletedPaths]);
 
   const filesGitStatus = useMemo<GitStatusEntry[]>(
@@ -388,7 +410,14 @@ function FilesBody({
 
   return (
     <>
-      <SessionFileTree mode="files" paths={paths} gitStatus={filesGitStatus} decorations={decorations} onOpen={onOpen} />
+      <SessionFileTree
+        mode="files"
+        paths={paths}
+        gitStatus={filesGitStatus}
+        decorations={decorations}
+        onOpen={onOpen}
+        onExpandedDirsChange={onExpandedDirsChange}
+      />
       {listing?.truncated && (
         <p className="border-t px-3 py-1.5 text-[10px] text-muted-foreground">Showing the first {paths.length.toLocaleString()} files.</p>
       )}

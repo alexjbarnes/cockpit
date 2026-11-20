@@ -826,7 +826,7 @@ export type ClientMessage =
   | { type: "message:delete_queued"; sessionId: string; messageId: string }
   | { type: "message:edit_queued"; sessionId: string; messageId: string }
   | { type: "history:request_more"; sessionId: string; beforeMessageId: string }
-  | { type: "watch:cwd"; cwd: string }
+  | { type: "watch:dirs"; cwd: string; dirs: string[] }
   | { type: "ping" };
 
 // Server -> Client messages

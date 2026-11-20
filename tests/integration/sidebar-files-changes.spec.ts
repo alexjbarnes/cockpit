@@ -95,6 +95,14 @@ test("the sidebar shows changes and files in one panel, remembers the view and f
     await expect(readmeRow).toBeVisible({ timeout: 20_000 });
     // A git-ignored file is still listed, muted, rather than disappearing.
     await expect(filesTree.getByRole("treeitem", { name: ".env" })).toBeVisible();
+
+    // Only the folders the user has opened are watched: expand src, write
+    // into it, and the listing refreshes without a reload.
+    await filesTree.getByRole("treeitem", { name: "src" }).click();
+    await page.waitForTimeout(1000);
+    write(repo, "src/extra.ts", "export const extra = 1;\n");
+    await expect(filesTree.getByRole("treeitem", { name: "extra.ts" })).toBeVisible({ timeout: 20_000 });
+
     await readmeRow.click();
     await expect(page.locator('[data-tab-id^="file::"]')).toHaveCount(1, { timeout: 15_000 });
 
@@ -108,11 +116,11 @@ test("the sidebar shows changes and files in one panel, remembers the view and f
     await expect(page.getByTestId("file-picker-tree")).toHaveCount(0, { timeout: 15_000 });
     await expect(page.locator('[data-tab-id^="file::"]')).toHaveCount(2, { timeout: 15_000 });
 
-    // A file created on disk appears in both views: the status count and the
-    // file listing refresh on fs_changed.
+    // A file created on disk appears in both views: the status count follows
+    // git and the file listing follows the watched folders.
     write(repo, "fresh.txt", "new\n");
     await switchGroup.getByRole("button", { name: "Changes" }).click();
-    await expect(panel.getByText("2 changed")).toBeVisible({ timeout: 20_000 });
+    await expect(panel.getByText("3 changed")).toBeVisible({ timeout: 20_000 });
     await switchGroup.getByRole("button", { name: "Files" }).click();
     await expect(filesTree.getByRole("treeitem", { name: "fresh.txt" })).toBeVisible({ timeout: 20_000 });
 

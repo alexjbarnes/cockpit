@@ -3,7 +3,7 @@
 import { type GitStatusEntry, prepareFileTreeInput } from "@pierre/trees";
 import { FileTree, useFileTree } from "@pierre/trees/react";
 import type { CSSProperties } from "react";
-import { useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import { newlySelectedPath } from "@/lib/session-tree";
 
 export type SessionTreeMode = "changes" | "files" | "picker";
@@ -19,6 +19,9 @@ interface SessionFileTreeProps {
   /** Override the sidebar's height when the tree is inside a dialog. */
   height?: string | number;
   testId?: string;
+  /** Called with the relative paths of the directories currently expanded.
+   *  The Files view uses this to watch only what it is showing. */
+  onExpandedDirsChange?: (dirs: readonly string[]) => void;
 }
 
 const DEFAULT_HEIGHT = "clamp(16rem, calc(100dvh - 22rem), 48rem)";
@@ -58,7 +61,16 @@ function directoryPaths(paths: readonly string[]): string[] {
  * views. The two differ only in the paths they are given and whether their
  * directories start open.
  */
-export function SessionFileTree({ mode, paths, gitStatus, decorations, onOpen, height, testId }: SessionFileTreeProps) {
+export function SessionFileTree({
+  mode,
+  paths,
+  gitStatus,
+  decorations,
+  onOpen,
+  height,
+  testId,
+  onExpandedDirsChange,
+}: SessionFileTreeProps) {
   const preparedInput = useMemo(() => prepareFileTreeInput(paths), [paths]);
   const pathsRef = useRef(new Set(paths));
   pathsRef.current = new Set(paths);
@@ -66,6 +78,8 @@ export function SessionFileTree({ mode, paths, gitStatus, decorations, onOpen, h
   onOpenRef.current = onOpen;
   const decorationsRef = useRef(decorations);
   decorationsRef.current = decorations;
+  const onExpandedDirsChangeRef = useRef(onExpandedDirsChange);
+  onExpandedDirsChangeRef.current = onExpandedDirsChange;
   const selectedRef = useRef<readonly string[]>([]);
   const modelRef = useRef<ReturnType<typeof useFileTree>["model"] | null>(null);
 
@@ -94,6 +108,33 @@ export function SessionFileTree({ mode, paths, gitStatus, decorations, onOpen, h
     modelRef.current = model;
   }, [model]);
 
+  /** Every directory currently expanded, in tree order. */
+  const expandedDirPaths = useCallback(() => {
+    const count = model.getVisibleCount();
+    if (count === 0) return [];
+    return model
+      .getVisibleRows(0, count - 1)
+      .filter((row) => row.kind === "directory" && row.isExpanded)
+      .map((row) => row.path.replace(/\/+$/, ""));
+  }, [model]);
+
+  // The model notifies on every change, expansion included. Report the
+  // expanded directories only when the set actually changes: this drives a
+  // websocket message and a server-side watch list.
+  useEffect(() => {
+    if (!onExpandedDirsChange) return;
+    let last = "";
+    const publish = () => {
+      const dirs = expandedDirPaths();
+      const key = dirs.join("\n");
+      if (key === last) return;
+      last = key;
+      onExpandedDirsChangeRef.current?.(dirs);
+    };
+    publish();
+    return model.subscribe(publish);
+  }, [model, onExpandedDirsChange, expandedDirPaths]);
+
   useEffect(() => {
     model.setGitStatus(gitStatus);
   }, [model, gitStatus]);
@@ -102,13 +143,14 @@ export function SessionFileTree({ mode, paths, gitStatus, decorations, onOpen, h
   useEffect(() => {
     if (resetRef.current === preparedInput) return;
     resetRef.current = preparedInput;
-    // resetPaths takes expanded paths, not an expansion policy, so a Changes
-    // tree is reopened to the same depth it had on first render.
+    // resetPaths takes expanded paths, not an expansion policy. Changes is
+    // reopened to the same depth it had on first render; Files keeps whatever
+    // the user had open, which is also the set the server is watching.
     model.resetPaths({
       preparedInput,
-      ...(mode === "changes" ? { initialExpandedPaths: directoryPaths(paths) } : {}),
+      initialExpandedPaths: mode === "changes" ? directoryPaths(paths) : expandedDirPaths(),
     });
-  }, [model, mode, paths, preparedInput]);
+  }, [model, mode, paths, preparedInput, expandedDirPaths]);
 
   return (
     <FileTree

@@ -208,7 +208,7 @@ function TabbedContent({ sessionId, cwd, initialName, historyView }: TabbedSessi
             ))}
             {leftDiffTabs.map((tab) => (
               <div key={tab.id} className={cn("flex flex-col flex-1 min-h-0", activeTabId !== tab.id && "hidden")}>
-                <DiffView cwd={liveCwd} filePath={tab.filePath} />
+                <DiffView cwd={liveCwd} filePath={tab.filePath} sessionId={sessionId} />
               </div>
             ))}
             {leftHasChanges && (
@@ -246,7 +246,7 @@ function TabbedContent({ sessionId, cwd, initialName, historyView }: TabbedSessi
             ))}
             {rightDiffTabs.map((tab) => (
               <div key={tab.id} className={cn("flex flex-col flex-1 min-h-0", splitTabId !== tab.id && "hidden")}>
-                <DiffView cwd={liveCwd} filePath={tab.filePath} />
+                <DiffView cwd={liveCwd} filePath={tab.filePath} sessionId={sessionId} />
               </div>
             ))}
             {rightHasChanges && (
@@ -293,7 +293,7 @@ function TabbedContent({ sessionId, cwd, initialName, historyView }: TabbedSessi
       ))}
       {diffTabs.map((tab) => (
         <div key={tab.id} className={cn("flex flex-col flex-1 min-h-0", activeTabId !== tab.id && "hidden")}>
-          <DiffView cwd={liveCwd} filePath={tab.filePath} />
+          <DiffView cwd={liveCwd} filePath={tab.filePath} sessionId={sessionId} />
         </div>
       ))}
       {hasChanges && (

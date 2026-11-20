@@ -35,9 +35,12 @@ function statusIcon(status: string) {
 interface DiffViewProps {
   cwd: string;
   filePath: string;
+  /** The diff belongs to a session; a turn's end refreshes it even when the
+   *  file's folder is not one the sidebar is watching. */
+  sessionId?: string | null;
 }
 
-export function DiffView({ cwd, filePath }: DiffViewProps) {
+export function DiffView({ cwd, filePath, sessionId }: DiffViewProps) {
   const { settings } = useSettings();
   const { tabActions } = useShell();
   const { subscribe } = useWebSocket();
@@ -113,6 +116,19 @@ export function DiffView({ cwd, filePath }: DiffViewProps) {
       refreshTimer.current = setTimeout(refreshDiff, 300);
     });
   }, [subscribe, refreshDiff]);
+
+  // fs_changed only reaches folders the Files tree has open. A diff opened
+  // from Changes can point anywhere, so the end of a turn refreshes it too.
+  const prevStatusRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!sessionId) return;
+    return subscribe((msg) => {
+      if (msg.type !== "session:status" || !("sessionId" in msg) || msg.sessionId !== sessionId) return;
+      const prev = prevStatusRef.current;
+      prevStatusRef.current = msg.status;
+      if (prev === "running" && msg.status === "idle") refreshDiff();
+    });
+  }, [sessionId, subscribe, refreshDiff]);
 
   const handleToggle = useCallback(() => {
     toggleFile(filePath);

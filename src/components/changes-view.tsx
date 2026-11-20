@@ -34,6 +34,10 @@ import { useCheckedFiles } from "@/lib/checked-files";
 import { reindexForFullContent } from "@/lib/pierre-diff";
 import { cn } from "@/lib/utils";
 
+/** Changes are read from git directly: a filesystem watcher over a large
+ *  repository is exactly the cost this view no longer pays. */
+const GIT_POLL_MS = 5_000;
+
 function Checkbox({ checked, onChange, onClick }: { checked: boolean; onChange: () => void; onClick?: (e: React.MouseEvent) => void }) {
   return (
     <button
@@ -355,7 +359,7 @@ function getCachedState(cwd: string): ChangesState {
 export function ChangesView({ cwd, sessionId, embeddedChat = true }: { cwd: string; sessionId?: string | null; embeddedChat?: boolean }) {
   const { settings } = useSettings();
   const { tabActions } = useShell();
-  const { send, subscribe } = useWebSocket();
+  const { subscribe } = useWebSocket();
   const isDesktop = useIsDesktop();
   const [status, setStatus] = useState<GitStatus | null>(null);
   const [loading, setLoading] = useState(true);
@@ -409,10 +413,6 @@ export function ChangesView({ cwd, sessionId, embeddedChat = true }: { cwd: stri
     fetchStatus();
   }, [fetchStatus]);
 
-  useEffect(() => {
-    send({ type: "watch:cwd", cwd });
-  }, [send, cwd]);
-
   // Auto-refresh when the chat session finishes a turn
   const prevStatusRef = useRef<string | null>(null);
   useEffect(() => {
@@ -428,12 +428,14 @@ export function ChangesView({ cwd, sessionId, embeddedChat = true }: { cwd: stri
     return unsub;
   }, [sessionId, subscribe, fetchStatus]);
 
+  // A turn is not the only time files change, so poll while the page is
+  // visible; the turn-end refresh above still lands the final state at once.
   useEffect(() => {
-    return subscribe((msg) => {
-      if (msg.type !== "session:fs_changed") return;
-      fetchStatus({ refresh: true });
-    });
-  }, [subscribe, fetchStatus]);
+    const timer = setInterval(() => {
+      if (document.visibilityState === "visible") fetchStatus({ refresh: true });
+    }, GIT_POLL_MS);
+    return () => clearInterval(timer);
+  }, [fetchStatus]);
 
   const fetchDiff = useCallback(
     (file: string) => {

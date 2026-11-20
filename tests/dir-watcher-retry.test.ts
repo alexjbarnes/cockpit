@@ -1,7 +1,6 @@
-// A watcher that fails is re-armed, not abandoned: the page keeps its
-// subscription, so dropping the watch silently stopped file updates until a
-// reload re-subscribed. node:fs's watch is faked here; the debounce and retry
-// timers are real code paths.
+// A folder watcher that fails is re-armed, not abandoned: the page keeps its
+// subscription while the folder is briefly unavailable. node:fs's watch is
+// faked here; the debounce and retry timers are real code paths.
 import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -10,7 +9,7 @@ vi.mock("node:fs", () => ({
   watch: (...args: unknown[]) => watchMock(...args),
 }));
 
-import { watchCwd } from "@/server/fs-watcher";
+import { watchDirectories } from "@/server/dir-watcher";
 
 type FakeWatcher = EventEmitter & { close: ReturnType<typeof vi.fn> };
 
@@ -20,7 +19,7 @@ function fakeWatcher(): FakeWatcher {
   return emitter;
 }
 
-describe("fs-watcher re-arming", () => {
+describe("dir-watcher re-arming", () => {
   let unsub: (() => void) | null = null;
 
   beforeEach(() => {
@@ -42,14 +41,14 @@ describe("fs-watcher re-arming", () => {
     watchMock.mockImplementation(() => watcher);
 
     const listener = vi.fn();
-    unsub = watchCwd("/probe/retry-create", listener);
+    unsub = watchDirectories("/probe/retry-create", [""], listener);
     expect(watchMock).toHaveBeenCalledTimes(1);
 
     await vi.advanceTimersByTimeAsync(1_000);
     expect(watchMock).toHaveBeenCalledTimes(2);
 
-    const onChange = watchMock.mock.calls[1][2] as (_event: string, filename: string) => void;
-    onChange("change", "NOTE.md");
+    const onChange = watchMock.mock.calls[1][2] as () => void;
+    onChange();
     await vi.advanceTimersByTimeAsync(500);
     expect(listener).toHaveBeenCalledTimes(1);
   });
@@ -60,25 +59,25 @@ describe("fs-watcher re-arming", () => {
     watchMock.mockImplementationOnce(() => first).mockImplementation(() => second);
 
     const listener = vi.fn();
-    unsub = watchCwd("/probe/retry-error", listener);
+    unsub = watchDirectories("/probe/retry-error", [""], listener);
 
     first.emit("error", new Error("inotify broke"));
     expect(first.close).toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1_000);
     expect(watchMock).toHaveBeenCalledTimes(2);
 
-    const onChange = watchMock.mock.calls[1][2] as (_event: string, filename: string) => void;
-    onChange("change", "NOTE.md");
+    const onChange = watchMock.mock.calls[1][2] as () => void;
+    onChange();
     await vi.advanceTimersByTimeAsync(500);
     expect(listener).toHaveBeenCalledTimes(1);
   });
 
-  it("does not retry a directory that no longer exists", async () => {
+  it("does not retry a folder that no longer exists", async () => {
     watchMock.mockImplementation(() => {
       throw Object.assign(new Error("gone"), { code: "ENOENT" });
     });
 
-    unsub = watchCwd("/probe/retry-gone", vi.fn());
+    unsub = watchDirectories("/probe/retry-gone", [""], vi.fn());
     await vi.advanceTimersByTimeAsync(60_000);
     expect(watchMock).toHaveBeenCalledTimes(1);
   });
