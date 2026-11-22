@@ -12,6 +12,7 @@ const h = vi.hoisted(() => ({
   listActiveSessions: vi.fn((): unknown[] => []),
   listKnownSessions: vi.fn((): unknown[] => []),
   ignoredFolders: [] as string[],
+  prefsNames: {} as Record<string, string>,
 }));
 
 vi.mock("@/server/auth", () => ({ validateSession: (t: string) => t === "valid" }));
@@ -21,7 +22,9 @@ vi.mock("@/server/defaults", async () => {
   const actual = await vi.importActual<typeof import("@/server/defaults")>("@/server/defaults");
   return { ...actual, getDefaults: () => ({ ...actual.getDefaults(), ignoredSessionFolders: h.ignoredFolders }) };
 });
-vi.mock("@/server/session-prefs", () => ({ getSessionPrefs: () => undefined }));
+vi.mock("@/server/session-prefs", () => ({
+  getSessionPrefs: (id: string) => (h.prefsNames[id] ? { name: h.prefsNames[id] } : undefined),
+}));
 vi.mock("@/server/transcript", () => ({
   invalidateGlobalPromptHistory: vi.fn(),
   loadGlobalPromptHistory: vi.fn().mockResolvedValue([]),
@@ -64,6 +67,7 @@ describe("GET /api/sessions cockpit-agent exclusion", () => {
     h.listActiveSessions.mockReturnValue([]);
     h.listKnownSessions.mockReturnValue([]);
     h.ignoredFolders = [];
+    h.prefsNames = {};
   });
 
   it("excludes the cockpit dir group whether it is on disk or in memory only", async () => {
@@ -105,6 +109,8 @@ describe("GET /api/sessions cockpit-agent exclusion", () => {
       // in-memory session in a cwd with no transcript group yet -> creates a new group
       session("mem-new", "/home/dev/other", "Fresh"),
     ]);
+    // The user's rename lives in prefs, as it does for a real /rename.
+    h.prefsNames = { "act-1": "Renamed" };
 
     const res = await GET_LIST(authedReq("http://localhost/api/sessions"));
     const body = await res.json();
@@ -190,6 +196,7 @@ describe("GET /api/sessions/group cockpit-agent exclusion", () => {
     h.listActiveSessions.mockReturnValue([]);
     h.listKnownSessions.mockReturnValue([]);
     h.ignoredFolders = [];
+    h.prefsNames = {};
   });
 
   it("returns no sessions for an ignored cwd or a descendant without scanning", async () => {
@@ -250,6 +257,8 @@ describe("GET /api/sessions/group cockpit-agent exclusion", () => {
       { ...session("disk-1", "/home/dev/proj", "Renamed"), status: "running" },
       session("mem-1", "/home/dev/proj", "In-memory"),
     ]);
+    // The user's rename lives in prefs, as it does for a real /rename.
+    h.prefsNames = { "disk-1": "Renamed" };
 
     const res = await GET_GROUP(authedReq("http://localhost/api/sessions/group?cwd=/home/dev/proj"));
     const body = await res.json();

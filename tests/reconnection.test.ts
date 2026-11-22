@@ -29,6 +29,12 @@ import { createWebSocketHandler } from "@/server/ws-handler";
 // their own empty folder rather than sharing /tmp with the rest of the suite.
 let sessionDir: string;
 
+// And their own Claude directory: the session's name lookup resolves a
+// transcript, and with CLAUDE_CONFIG_DIR unset that scan reads the real
+// ~/.claude, which is slow enough under a full parallel run to time out.
+const claudeDir = mkdtempSync(path.join(tmpdir(), "cockpit-reconnect-claude-"));
+process.env.CLAUDE_CONFIG_DIR = claudeDir;
+
 // These tests start a server per test; under a fully parallel run the first
 // connect in a file can take seconds on a loaded machine.
 vi.setConfig({ testTimeout: 30_000 });
@@ -40,6 +46,7 @@ beforeAll(async () => {
 
 afterAll(() => {
   rmSync(sessionDir, { recursive: true, force: true });
+  rmSync(claudeDir, { recursive: true, force: true });
 });
 
 describe("WebSocket reconnection", () => {

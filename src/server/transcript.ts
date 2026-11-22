@@ -1154,6 +1154,56 @@ interface SessionMeta {
   lastActiveAt: number;
 }
 
+/** Claude Code writes its own conversation title as an `ai-title` record, and
+ *  appends it again on later turns; the value is stable. The newest record is
+ *  near the end (the largest gap measured on real sessions was about 38 KB),
+ *  so a bounded tail read finds it without reading a 90 MB transcript. */
+const AI_TITLE_TAIL_BYTES = 128 * 1024;
+
+export async function readAiTitleFromTail(filePath: string): Promise<string | null> {
+  let handle: Awaited<ReturnType<typeof open>> | null = null;
+  try {
+    handle = await open(filePath, "r");
+    const { size } = await handle.stat();
+    if (size === 0) return null;
+    const length = Math.min(size, AI_TITLE_TAIL_BYTES);
+    const buffer = Buffer.alloc(length);
+    await handle.read(buffer, 0, length, size - length);
+    const lines = buffer.toString("utf-8").split("\n");
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const line = lines[i];
+      // Cheap reject before parsing: most lines are large api-request records.
+      if (!line.includes('"ai-title"')) continue;
+      try {
+        const entry = JSON.parse(line) as { type?: unknown; aiTitle?: unknown };
+        if (entry.type === "ai-title" && typeof entry.aiTitle === "string") {
+          const title = entry.aiTitle.trim();
+          if (title) return title;
+        }
+      } catch {
+        // The first line is partial when the tail did not start at byte 0.
+      }
+    }
+    return null;
+  } catch {
+    return null;
+  } finally {
+    // A mocked or partially built handle may have no close, and a throw from
+    // finally would escape this function's own catch.
+    if (typeof handle?.close === "function") {
+      try {
+        await handle.close();
+      } catch {}
+    }
+  }
+}
+
+/** The stored title for a session, resolving its transcript the same way the
+ *  rest of this module does (a session moved into a worktree lives elsewhere). */
+export async function readSessionAiTitle(sessionId: string, cwd: string): Promise<string | null> {
+  return readAiTitleFromTail(getTranscriptPath(sessionId, cwd));
+}
+
 async function extractSessionMeta(filePath: string): Promise<SessionMeta | null> {
   const id = path.basename(filePath, ".jsonl");
   let cwd = "";
@@ -1211,10 +1261,14 @@ async function extractSessionMeta(filePath: string): Promise<SessionMeta | null>
 
     if (!cwd) return null;
 
+    // The first prompt is only the fallback: Claude Code's own title is the
+    // one its /resume list shows, and it lives at the end of the file.
+    const aiTitle = await readAiTitleFromTail(filePath);
+
     return {
       id,
       cwd,
-      title: title || "Untitled session",
+      title: aiTitle ?? (title || "Untitled session"),
       createdAt: createdAt || lastActiveAt,
       lastActiveAt,
     };
@@ -1355,9 +1409,13 @@ export async function scanAllSessions(): Promise<SessionGroup[]> {
 
 function metaToSessionInfo(meta: SessionMeta): SessionInfo {
   const prefs = getSessionPrefs(meta.id);
+  // Sessions are born with their folder name in prefs, so only a different
+  // name is one the user chose; the rest keep the title the scan found.
+  const folder = path.basename(meta.cwd) || meta.cwd;
+  const userTitle = prefs?.name?.trim();
   return {
     id: meta.id,
-    name: prefs?.name || meta.title,
+    name: userTitle && userTitle !== folder ? userTitle : meta.title,
     cwd: meta.cwd,
     createdAt: meta.createdAt,
     lastActiveAt: meta.lastActiveAt,

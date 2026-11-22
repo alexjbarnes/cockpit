@@ -1,5 +1,7 @@
+import path from "node:path";
 import { NextRequest, NextResponse } from "next/server";
 import { isCwdIgnored } from "@/lib/ignored-folders";
+import { isUserSetName, scannedSessionName } from "@/lib/session-name";
 import { validateSession } from "@/server/auth";
 import { debugLog } from "@/server/debug-logger";
 import { getDefaults } from "@/server/defaults";
@@ -77,10 +79,15 @@ export async function GET(req: NextRequest) {
       // seconds and the background-agent dot went out.
       session.agentCount = running.agentCount;
     }
+    // A live session in memory is usually still called after its folder until
+    // something derives a name, while the scan has the stored title (or the
+    // first prompt). Only fall back to the in-memory name when the scan has
+    // nothing to say. A name the user set always wins.
+    const scanned = chain.map((c) => byScanId.get(c)).find((s): s is SessionInfo => !!s);
     const mem = knownMap.get(hit.id) ?? knownMap.get(id);
-    if (mem) {
-      session.name = mem.name;
-    }
+    const folder = path.basename(hit.cwd) || hit.cwd;
+    const userTitle = isUserSetName(prefs?.name, folder) ? prefs?.name : null;
+    session.name = scannedSessionName(scanned?.name, mem?.name, userTitle);
     sessions.push(session);
   }
 

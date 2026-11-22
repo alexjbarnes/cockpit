@@ -1,9 +1,12 @@
+import path from "node:path";
 import { NextRequest, NextResponse } from "next/server";
 import { isCwdIgnored } from "@/lib/ignored-folders";
+import { isUserSetName, scannedSessionName } from "@/lib/session-name";
 import { validateSession } from "@/server/auth";
 import { getDefaults } from "@/server/defaults";
 import { getJobSessionIds } from "@/server/job-storage";
 import { getCockpitDir } from "@/server/paths";
+import { getSessionPrefs } from "@/server/session-prefs";
 import { getSessionManager } from "@/server/singleton";
 import { scanSessionsForCwd } from "@/server/transcript";
 import { getWorkflowSessionIds } from "@/server/workflow-storage";
@@ -49,7 +52,11 @@ export async function GET(req: NextRequest) {
     }
     const mem = knownMap.get(session.id);
     if (mem) {
-      session.name = mem.name;
+      // The scan has the stored title (or the first prompt); the memory entry
+      // is often still the folder's basename. A user-set name wins over both.
+      const folder = path.basename(session.cwd) || session.cwd;
+      const prefsName = getSessionPrefs(session.id)?.name;
+      session.name = scannedSessionName(session.name, mem.name, isUserSetName(prefsName, folder) ? prefsName : null);
     }
   }
 

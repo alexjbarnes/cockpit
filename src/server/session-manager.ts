@@ -20,7 +20,7 @@ import {
 } from "@/lib/models";
 import { mergePromptHistory, promptHistorySessionIds } from "@/lib/prompt-history";
 import { widensSandbox } from "@/lib/sandbox-requests";
-import { promptName } from "@/lib/session-name";
+import { isUserSetName, promptName, sessionName } from "@/lib/session-name";
 import { getAssistantSettings, updateAssistantSettings } from "@/server/assistant-settings";
 import { supportedPermissionModes } from "@/server/claude-bin";
 import { getCockpitDir } from "@/server/paths";
@@ -76,6 +76,7 @@ import {
   loadMoreMessages,
   loadPromptHistory,
   loadTranscript,
+  readSessionAiTitle,
   readTranscriptCwd,
   sumTranscriptUsage,
   transcriptExists,
@@ -778,6 +779,36 @@ export class SessionManager {
     return info.id;
   }
 
+  /**
+   * The name to show for a session, in precedence order: a name the user set
+   * (Cockpit's /rename, kept in prefs), Claude Code's own conversation title,
+   * the first real prompt, then the folder.
+   *
+   * An already-derived name is only replaced by a stored title: loading the
+   * last page of a long conversation must not rename the session after
+   * whichever prompt happens to be in that page.
+   */
+  private async applyStoredName(session: Session, messages: ChatMessage[]): Promise<void> {
+    const folder = path.basename(session.info.cwd) || session.info.cwd;
+    const prefs = getSessionPrefs(session.info.id);
+    const userTitle = prefs?.name?.trim();
+    if (userTitle && userTitle !== folder) {
+      session.info.name = userTitle;
+      return;
+    }
+    // A session with nothing in its transcript yet cannot have a title, and
+    // the lookup resolves the transcript by scanning the projects dirs.
+    const aiTitle = messages.length > 0 ? await readSessionAiTitle(session.cliSessionId, session.info.cwd) : null;
+    if (aiTitle) {
+      session.info.name = sessionName({ aiTitle, folder });
+      return;
+    }
+    if (session.info.name === folder) {
+      const prompt = promptName(messages);
+      if (prompt) session.info.name = sessionName({ prompt, folder });
+    }
+  }
+
   async getSession(id: string): Promise<{
     info: SessionInfo;
     messages: ChatMessage[];
@@ -840,11 +871,7 @@ export class SessionManager {
     const clientMessages = messages.length > PAGE ? messages.slice(-PAGE) : messages;
     const hasMore = messages.length > PAGE || byteOffset > 0 || (stitching && session.previousCliSessionIds.length > 0);
 
-    const defaultName = path.basename(session.info.cwd) || session.info.cwd;
-    if (session.info.name === defaultName) {
-      const name = promptName(messages);
-      if (name) session.info.name = name;
-    }
+    await this.applyStoredName(session, messages);
     const { promptHistory: allPrompts, suggestionHistory } = await loadMergedPromptHistory(
       session.cliSessionId,
       session.previousCliSessionIds,
@@ -908,12 +935,7 @@ export class SessionManager {
     const clientMessages = messages.length > PAGE ? messages.slice(-PAGE) : messages;
     const hasMore = messages.length > PAGE || byteOffset > 0 || (stitching && session.previousCliSessionIds.length > 0);
 
-    // Derive title from first user message if name is still the default
-    const defaultName = path.basename(cwd) || cwd;
-    if (session.info.name === defaultName) {
-      const name = promptName(messages);
-      if (name) session.info.name = name;
-    }
+    await this.applyStoredName(session, messages);
     const { promptHistory: allPrompts, suggestionHistory } = await loadMergedPromptHistory(
       session.cliSessionId,
       session.previousCliSessionIds,
@@ -965,13 +987,16 @@ export class SessionManager {
     const PAGE = 50;
     const clientMessages = messages.length > PAGE ? messages.slice(-PAGE) : messages;
 
-    let name = path.basename(cwd) || cwd;
-    const derivedName = promptName(messages);
-    if (derivedName) name = derivedName;
+    const prefs = getSessionPrefs(cliId);
+    const folder = path.basename(cwd) || cwd;
+    const name = sessionName({
+      userTitle: isUserSetName(prefs?.name, folder) ? (prefs?.name ?? null) : null,
+      aiTitle: await readSessionAiTitle(cliId, cwd),
+      prompt: promptName(messages),
+      folder,
+    });
 
     const { promptHistory: allPrompts, suggestionHistory } = await loadMergedPromptHistory(cliId, prevIds, cwd);
-
-    const prefs = getSessionPrefs(cliId);
     const viewSize = prefs?.contextSize ?? prefs?.modelSlots?.mainContext ?? DEFAULT_CONTEXT_SIZE;
     const normalized = lastUsage ? { used: lastUsage.used, total: contextSizeToWindow(viewSize) } : null;
     return {

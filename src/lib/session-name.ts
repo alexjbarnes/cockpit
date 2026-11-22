@@ -22,3 +22,41 @@ export function promptName(messages: readonly PromptNameCandidate[]): string | n
   );
   return first ? first.content.slice(0, SESSION_NAME_MAX_CHARS) : null;
 }
+
+export interface SessionNameSources {
+  /** A name the user set, in Cockpit or Claude Code. It always wins. */
+  userTitle?: string | null;
+  /** The title Claude Code stores in the transcript. */
+  aiTitle?: string | null;
+  /** The first real prompt, from promptName. */
+  prompt?: string | null;
+  /** The session folder's basename. */
+  folder: string;
+}
+
+/** The name to show for a session: user, then Claude Code's title, then the
+ *  first prompt, then the folder. */
+export function sessionName({ userTitle, aiTitle, prompt, folder }: SessionNameSources): string {
+  for (const candidate of [userTitle, aiTitle, prompt, folder]) {
+    const value = candidate?.trim();
+    if (value) return value.length > SESSION_NAME_MAX_CHARS ? value.slice(0, SESSION_NAME_MAX_CHARS) : value;
+  }
+  return "Session";
+}
+
+/** Whether a stored name was chosen by the user rather than being the default
+ *  the session was born with. Sessions persist their folder name at creation,
+ *  so an equal name cannot be told apart from "no name chosen". */
+export function isUserSetName(name: string | null | undefined, folder: string): boolean {
+  const value = name?.trim();
+  return !!value && value !== folder;
+}
+
+/** The name for a session with both a transcript scan and an in-memory entry:
+ *  a name the user set, then what the scan found, then the memory entry. The
+ *  memory entry is often just the folder's basename, and must not overwrite a
+ *  title the transcript already has. */
+export function scannedSessionName(scannedName: string | undefined, memoryName: string | undefined, userTitle?: string | null): string {
+  const scanned = scannedName && scannedName !== "Untitled session" ? scannedName.trim() : null;
+  return sessionName({ userTitle, prompt: scanned, folder: memoryName?.trim() || "Session" });
+}
