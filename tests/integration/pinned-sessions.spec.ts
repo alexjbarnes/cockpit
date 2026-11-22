@@ -11,7 +11,8 @@
 // pin never matched a transcript filename.
 
 import { execSync } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { expect, test } from "./fixtures";
 
@@ -41,6 +42,62 @@ test("a pin the lookup cannot find is kept, not deleted", async ({ page, harness
 
   const pinned = (await (await page.request.get(`${harness.cockpitUrl}/api/sessions/pinned`)).json()) as { pinned: string[] };
   expect(pinned.pinned).toContain(MISSING);
+});
+
+test("dragging a pinned session reorders it on the server", async ({ page, harness }) => {
+  test.setTimeout(120_000);
+  // The pinned list is the phone's Sessions place; check the layout it is used in.
+  await page.setViewportSize({ width: 393, height: 760 });
+  const dir = mkdtempSync(path.join(tmpdir(), "cockpit-it-pinned-order-"));
+  harness.trustWorkDir(dir);
+  try {
+    const ids: string[] = [];
+    for (const name of ["First", "Second"]) {
+      const res = await page.request.post(`${harness.cockpitUrl}/api/sessions`, { data: { cwd: dir, runtime: "pty", name } });
+      expect(res.ok()).toBe(true);
+      const { sessionId } = (await res.json()) as { sessionId: string };
+      ids.push(sessionId);
+      const pinned = await page.request.patch(`${harness.cockpitUrl}/api/sessions/pinned`, { data: { add: sessionId } });
+      expect(pinned.ok()).toBe(true);
+    }
+
+    await page.goto(`${harness.cockpitUrl}/sessions`);
+    const rows = page.locator('[data-testid^="pinned-session-"]');
+    await expect(rows).toHaveCount(2, { timeout: 20_000 });
+    await expect(rows.nth(0)).toHaveAttribute("data-testid", `pinned-session-${ids[0]}`);
+
+    // The second row's handle up to the first row: down, hold past the
+    // activation delay, then a stream of moves, then release.
+    const from = await page.getByTestId(`pinned-drag-${ids[1]}`).boundingBox();
+    const first = await page.getByTestId(`pinned-drag-${ids[0]}`).boundingBox();
+    if (!from || !first) throw new Error("rows not measurable");
+    const x = from.x + from.width / 2;
+    const y = from.y + from.height / 2;
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    await page.waitForTimeout(250);
+    for (let i = 1; i <= 10; i++) {
+      await page.mouse.move(x, y + ((first.y - y) * i) / 10);
+      await page.waitForTimeout(30);
+    }
+    await page.mouse.up();
+
+    // The row moved, and dragging did not open the session.
+    await expect(rows.nth(0)).toHaveAttribute("data-testid", `pinned-session-${ids[1]}`, { timeout: 10_000 });
+    await expect(page).toHaveURL(/\/sessions$/);
+
+    await expect
+      .poll(
+        async () => {
+          const res = await page.request.get(`${harness.cockpitUrl}/api/sessions/pinned`);
+          return ((await res.json()) as { pinned: string[] }).pinned.slice(0, 2);
+        },
+        { timeout: 10_000 },
+      )
+      .toEqual([ids[1], ids[0]]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("a pin is answered under its own id when the session moved on /clear", async ({ page, harness }) => {
