@@ -2,7 +2,7 @@
 // base, kept across calls, brought back with its work, and removed.
 
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -116,6 +116,56 @@ describe("an issue's worktree", () => {
     const again = await ensureWorkspace(project({ baseBranch: "main" }), { key: "CK-1", workspace: first });
     expect(again.path).toBe(first.path);
     expect(existsSync(path.join(first.path, "later.txt"))).toBe(true);
+  });
+
+  it("finishes a merge whose only conflict is the generated graph", async () => {
+    const origin = path.join(dir, "origin.git");
+    git(dir, "clone", "-q", "--bare", repo, origin);
+    git(repo, "remote", "add", "origin", origin);
+    git(repo, "fetch", "-q", "origin");
+    git(repo, "remote", "set-head", "origin", "main");
+
+    const first = await ensureWorkspace(project({ baseBranch: "main" }), { key: "CK-1" });
+    const node = path.join(".graphene", "nodes", "web-ui.md");
+    mkdirSync(path.join(first.path, ".graphene", "nodes"), { recursive: true });
+    writeFileSync(path.join(first.path, node), "branch\n");
+    git(first.path, "add", ".");
+    git(first.path, "commit", "-q", "-m", "graph on the branch");
+
+    // Main records its own learning in the same node, and moves on.
+    mkdirSync(path.join(repo, ".graphene", "nodes"), { recursive: true });
+    writeFileSync(path.join(repo, node), "main\n");
+    writeFileSync(path.join(repo, "later.txt"), "later\n");
+    git(repo, "add", ".");
+    git(repo, "commit", "-q", "-m", "graph on main");
+    git(repo, "push", "-q", origin, "main");
+
+    const again = await ensureWorkspace(project({ baseBranch: "main" }), { key: "CK-1", workspace: first });
+    expect(again.path).toBe(first.path);
+    expect(readFileSync(path.join(first.path, node), "utf-8")).toBe("branch\n");
+    expect(existsSync(path.join(first.path, "later.txt"))).toBe(true);
+    expect(git(first.path, "status", "--porcelain")).toBe("");
+  });
+
+  it("still reports a real code conflict, and leaves the worktree clean", async () => {
+    const origin = path.join(dir, "origin.git");
+    git(dir, "clone", "-q", "--bare", repo, origin);
+    git(repo, "remote", "add", "origin", origin);
+    git(repo, "fetch", "-q", "origin");
+    git(repo, "remote", "set-head", "origin", "main");
+
+    const first = await ensureWorkspace(project({ baseBranch: "main" }), { key: "CK-2" });
+    writeFileSync(path.join(first.path, "README.md"), "branch\n");
+    git(first.path, "add", ".");
+    git(first.path, "commit", "-q", "-m", "readme on the branch");
+
+    writeFileSync(path.join(repo, "README.md"), "main side\n");
+    git(repo, "add", ".");
+    git(repo, "commit", "-q", "-m", "readme on main");
+    git(repo, "push", "-q", origin, "main");
+
+    await expect(ensureWorkspace(project({ baseBranch: "main" }), { key: "CK-2", workspace: first })).rejects.toThrow(/Could not bring/);
+    expect(git(first.path, "status", "--porcelain")).toBe("");
   });
 
   it("leaves a worktree with uncommitted work alone", async () => {

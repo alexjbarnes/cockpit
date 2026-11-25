@@ -99,6 +99,26 @@ async function refreshWorkspace(worktree: string, base: string): Promise<void> {
   try {
     await git(worktree, ["merge", "--no-edit", base]);
   } catch (err) {
+    // Graph files are generated documentation, and every branch that records
+    // what it learned edits the same node files as the base. A conflict there
+    // is not a code conflict, and holding the next stage on it wedges an
+    // issue whose code merged perfectly well. Keep this branch's graph and
+    // finish the merge; anything else is a real conflict and is aborted.
+    const conflicted = (await git(worktree, ["diff", "--name-only", "--diff-filter=U"]).catch(() => ""))
+      .split("\n")
+      .map((file) => file.trim())
+      .filter(Boolean);
+    if (conflicted.length > 0 && conflicted.every((file) => file.startsWith(".graphene/"))) {
+      try {
+        await git(worktree, ["checkout", "--ours", "--", ...conflicted]);
+        await git(worktree, ["add", "--", ...conflicted]);
+        await git(worktree, ["commit", "--no-edit"]);
+        return;
+      } catch {
+        // Fall through to the abort: a half-finished merge is worse than a
+        // reported failure.
+      }
+    }
     await gitOk(worktree, ["merge", "--abort"]);
     throw new Error(`Could not bring ${worktree} up to date with ${base}: ${err instanceof Error ? err.message : String(err)}`);
   }
