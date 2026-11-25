@@ -27,7 +27,7 @@ import { ensureWorkspace, removeWorkspace } from "./issue-workspace";
 import { checkJobModel } from "./provider-catalog";
 import { releaseRunPorts, reserveRunPort } from "./run-ports";
 import type { SessionManager } from "./session-manager";
-import { hasRepoSkill, repoSkillPath } from "./skills";
+import { hasWorkflowSkill, repoSkillPath, userSkillPath, workflowSkillPath } from "./skills";
 import {
   type AgentWork,
   agentWork,
@@ -39,6 +39,7 @@ import {
   waitingStatuses,
   workAt,
   workflowForProject,
+  workflowForProjectId,
   workRunCount,
 } from "./workflow-storage";
 import { trustDirectory } from "./workspace-trust";
@@ -209,8 +210,8 @@ export function buildRunPrompt(issue: Issue, project: Project, work: AgentWork, 
     `Project: ${project.name}`,
     ...placeLines(place),
     "",
-    `What to do: run this repository's "${skill}" skill on ${issue.key}, with the Skill tool (skill: "${skill}"), and follow it.`,
-    `It is how this project wants an issue in "${work.workStatus}" worked. The skill is at ${repoSkillPath(skill)} if you need to read it yourself.`,
+    `What to do: run the "${skill}" skill on ${issue.key}, with the Skill tool (skill: "${skill}"), and follow it.`,
+    `It is how this workflow wants an issue in "${work.workStatus}" worked. The skill is at ${workflowSkillPath(place.cwd, skill)} if you need to read it yourself.`,
     "",
     `Read the issue with mcp__cockpit-config__get_issue (key "${issue.key}"). Its description is the requirement, as a person wrote it.`,
     "Its `plan`, when it has one, is how the work is to be done, with the reviewer's feedback if the plan was sent back.",
@@ -297,8 +298,8 @@ export class WorkflowEngine {
     const all = agentWork(workflow);
     if (!project.repoPath || !existsSync(project.repoPath)) return { ready: all, blocked: [] };
     return {
-      ready: all.filter((w) => hasRepoSkill(project.repoPath, w.rule.skill)),
-      blocked: all.filter((w) => !hasRepoSkill(project.repoPath, w.rule.skill)),
+      ready: all.filter((w) => hasWorkflowSkill(project.repoPath, w.rule.skill)),
+      blocked: all.filter((w) => !hasWorkflowSkill(project.repoPath, w.rule.skill)),
     };
   }
 
@@ -366,7 +367,7 @@ export class WorkflowEngine {
   /** The work as the stored workflow has it now, when it is still the same
    *  work: an agent in that status running that skill. */
   private current(projectId: string, work: AgentWork): AgentWork | undefined {
-    const workflow = workflowForProject({ id: projectId });
+    const workflow = workflowForProjectId(projectId);
     if (!workflow) return undefined;
     return agentWork(workflow).find((w) => w.workStatus === work.workStatus && w.rule.skill === work.rule.skill);
   }
@@ -497,15 +498,15 @@ export class WorkflowEngine {
     // The skill is checked where the run will work. An issue's own worktree is
     // cut from a branch, so a skill that exists only in the project's folder,
     // uncommitted or on another branch, is not in it.
-    if (!hasRepoSkill(cwd, rule.skill)) {
+    if (!hasWorkflowSkill(cwd, rule.skill)) {
       this.live.delete(key);
       const where = issue.workspace?.path === cwd ? `${issue.key}'s worktree (branch ${issue.workspace.branch}, at ${cwd})` : cwd;
       this.flag(
         issue.key,
         work,
-        `There is no "${rule.skill}" skill in ${where}. Add ${repoSkillPath(rule.skill)} there${
+        `There is no "${rule.skill}" skill in ${where}, and none in your user skills. Add ${repoSkillPath(rule.skill)} there${
           issue.workspace?.path === cwd ? ", or merge the branch that has it into this one," : ""
-        } and run it again.`,
+        } or add ${userSkillPath(rule.skill)} for every project, then run it again.`,
       );
       this.kick();
       return;

@@ -860,6 +860,10 @@ describe("cockpit-config MCP server (in-process HTTP)", () => {
         "get_workflow",
         "update_workflow",
         "delete_workflow",
+        "list_reusable_workflows",
+        "get_reusable_workflow",
+        "update_reusable_workflow",
+        "delete_reusable_workflow",
       ]);
     });
 
@@ -2334,6 +2338,61 @@ describe("cockpit-config MCP server (in-process HTTP)", () => {
         expect(workflowForProject(rover())).toBeUndefined();
         expect(await callToolParsed("delete_workflow", { project: "ISSB" })).toEqual({ deleted: false });
       });
+
+      it("has reusable workflows a project can select, read and leave", async () => {
+        const created = (await callToolParsed("update_reusable_workflow", {
+          name: "Frontend",
+          maxParallel: 3,
+          statuses: {
+            "Refine Ready": { kind: "queue", to: "Refining" },
+            Refining: { kind: "agent", skill: "plan-issue", next: ["Plan Review"] },
+          },
+        })) as { workflow: { id: string; name: string } };
+        const reusableId = created.workflow.id;
+        expect(created.workflow.name).toBe("Frontend");
+
+        const listed = (await callToolParsed("list_reusable_workflows")) as { id: string; name: string; usedBy: string[] }[];
+        expect(listed.find((w) => w.id === reusableId)).toMatchObject({ name: "Frontend", usedBy: [] });
+
+        const read = (await callToolParsed("get_reusable_workflow", { reusable: "frontend" })) as {
+          workflow: { id: string };
+          usedBy: unknown[];
+          statuses: string[];
+        };
+        expect(read.workflow.id).toBe(reusableId);
+        expect(read.usedBy).toEqual([]);
+        expect(read.statuses).toContain("Refining");
+
+        const selected = (await callToolParsed("update_workflow", { project: "ISSB", reusable: "Frontend" })) as {
+          source: { kind: string; name?: string };
+        };
+        expect(selected.source).toMatchObject({ kind: "reusable", name: "Frontend" });
+
+        const rows = (await callToolParsed("list_workflows")) as { project: string; source: { kind: string; name?: string } }[];
+        expect(rows.find((row) => row.project === "ISSB")?.source).toMatchObject({ kind: "reusable", name: "Frontend" });
+
+        const refusedRules = (await callToolParsed("update_workflow", {
+          project: "ISSB",
+          statuses: { "Plan Review": { kind: "human", next: ["Accepted"] } },
+        })) as { error: string };
+        expect(refusedRules.error).toContain("update_reusable_workflow");
+
+        const refusedDelete = (await callToolParsed("delete_reusable_workflow", { reusable: "Frontend" })) as { error: string };
+        expect(refusedDelete.error).toContain("Rover");
+
+        const detached = (await callToolParsed("update_workflow", { project: "ISSB", reusable: null })) as {
+          source: { kind: string };
+        };
+        expect(detached.source.kind).not.toBe("reusable");
+        expect(await callToolParsed("delete_reusable_workflow", { reusable: "Frontend" })).toEqual({ deleted: true });
+      });
+
+      it("keeps the reusable tools away from jobs", async () => {
+        for (const name of ["list_reusable_workflows", "get_reusable_workflow", "update_reusable_workflow", "delete_reusable_workflow"]) {
+          const denied = (await callToolAsParsed(ISSUE_JOB_TOKEN, name, { reusable: "Frontend" })) as { error: string };
+          expect(denied.error, name).toBe(`${name} is only available to: assistant, session`);
+        }
+      });
     });
 
     describe("the issue's plan", () => {
@@ -2662,6 +2721,11 @@ describe("cockpit-config MCP server (in-process HTTP)", () => {
       "list_workflows",
       "get_workflow",
       "update_workflow",
+      "delete_workflow",
+      "list_reusable_workflows",
+      "get_reusable_workflow",
+      "update_reusable_workflow",
+      "delete_reusable_workflow",
     ];
 
     beforeAll(() => {

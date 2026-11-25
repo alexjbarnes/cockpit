@@ -37,9 +37,31 @@ import { getNotificationSettings, setNotificationSettings, updateNotificationSet
 import { addProvider, deleteProvider, getProviders, updateProvider } from "@/server/providers";
 import { getJobScheduler, getWorkflowEngine } from "@/server/singleton";
 import { findSessionCwd, loadTranscript } from "@/server/transcript";
-import { deleteWorkflow, ruleAt, setProjectWorkflow, type WorkflowInput, workflowForProject } from "@/server/workflow-storage";
-import { workflowView } from "@/server/workflow-view";
-import type { InboxPriority, Issue, IssueActor, JobRun, NotificationProviderEntry, Project, ScheduledJob } from "@/types";
+import {
+  assignReusableWorkflow,
+  deleteReusableWorkflow,
+  deleteWorkflow,
+  loadReusableWorkflows,
+  type ReusableWorkflowInput,
+  reusableForProject,
+  ruleAt,
+  setProjectWorkflow,
+  setReusableWorkflow,
+  type WorkflowInput,
+  workflowForProject,
+} from "@/server/workflow-storage";
+import { reusableWorkflowView, workflowView } from "@/server/workflow-view";
+import type {
+  InboxPriority,
+  Issue,
+  IssueActor,
+  JobRun,
+  NotificationProviderEntry,
+  Project,
+  ReusableWorkflow,
+  ScheduledJob,
+  WorkflowStatusRule,
+} from "@/types";
 import { ISSUE_STATUSES, SIMPLE_SCHEDULE_FREQUENCIES } from "@/types";
 import { isValidToken, lookupCaller, type McpCaller } from "./run-context";
 
@@ -193,6 +215,10 @@ const TOOL_SCOPES: Record<string, readonly McpScope[]> = {
   get_workflow: ["assistant", "session"],
   update_workflow: ["assistant", "session"],
   delete_workflow: ["assistant", "session"],
+  list_reusable_workflows: ["assistant", "session"],
+  get_reusable_workflow: ["assistant", "session"],
+  update_reusable_workflow: ["assistant", "session"],
+  delete_reusable_workflow: ["assistant", "session"],
 };
 
 /** A plan version as an agent reads it: the text, who wrote it, and what the
@@ -225,7 +251,7 @@ function stageMoveRefusal(caller: McpCaller, issue: Issue, status: string): stri
   if (issue.key.toUpperCase() !== work.issueKey.toUpperCase()) {
     return `This run is working on ${work.issueKey} and can only change that issue's status. Comment on ${issue.key} instead.`;
   }
-  const workflow = workflowForProject({ id: work.projectId });
+  const workflow = workflowForProject(getProject(work.projectId));
   const rule = workflow ? ruleAt(workflow, work.workStatus) : undefined;
   const moves = rule?.kind === "agent" ? rule.next : [];
   if (moves.includes(status)) return undefined;
@@ -261,6 +287,10 @@ const ISSUE_TOOLS = new Set([
   "get_workflow",
   "update_workflow",
   "delete_workflow",
+  "list_reusable_workflows",
+  "get_reusable_workflow",
+  "update_reusable_workflow",
+  "delete_reusable_workflow",
 ]);
 
 const ISSUES_DISABLED_ERROR = "The issue tracker is disabled. Turn it on in Settings → Appearance to use this tool.";
@@ -368,6 +398,28 @@ function resolveProject(idOrPrefix: string): Project | undefined {
   return projects.find((p) => p.id === idOrPrefix) ?? projects.find((p) => p.prefix.toUpperCase() === normalized);
 }
 
+/** A reusable workflow by id, then by name (case-insensitive). */
+function resolveReusable(idOrName: string): ReusableWorkflow | undefined {
+  const ref = idOrName.trim();
+  if (!ref) return undefined;
+  const all = loadReusableWorkflows();
+  return all.find((w) => w.id === ref) ?? all.find((w) => w.name.toLowerCase() === ref.toLowerCase());
+}
+
+/** One line per status with a rule, for the list tools. */
+function describeWorkflowStatuses(statuses: Record<string, WorkflowStatusRule>): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(statuses).map(([status, rule]) => [
+      status,
+      rule.kind === "queue"
+        ? `queue for ${rule.to}`
+        : rule.kind === "agent"
+          ? `agent runs ${rule.skill}, then ${rule.next.join(" or ")}`
+          : `waits for the user${rule.review ? " (plan review)" : ""}`,
+    ]),
+  );
+}
+
 /**
  * Trim an Issue down to what list_issues returns. The pipeline calls
  * list_issues constantly to scan for matching issues by status/label before
@@ -445,6 +497,58 @@ const JOB_SCHEDULE_SCHEMA = {
       required: ["type", "jobIds"],
     },
   ],
+};
+
+/** The rule shape shared by update_workflow and update_reusable_workflow, so
+ *  the two cannot drift. The server validates it in workflow-storage; this is
+ *  the model-facing description. */
+const WORKFLOW_STATUSES_SCHEMA = {
+  type: "object",
+  description: "By status name: a rule, or null to clear the status.",
+  additionalProperties: {
+    type: ["object", "null"],
+    properties: {
+      kind: { type: "string", enum: ["queue", "agent", "human"] },
+      to: { type: "string", description: "queue: the status an agent works the issue in." },
+      skill: {
+        type: "string",
+        description: "agent: the skill's folder name under .claude/skills in a project's repo, or under ~/.claude/skills.",
+      },
+      next: {
+        type: "array",
+        description:
+          "agent: status names, the only ones it may move the issue to (at least one). human: {status, label, role?} objects, one per choice.",
+        items: {},
+      },
+      review: { type: "string", enum: ["plan"], description: "human: the issue's plan is reviewed here." },
+      model: { type: "string", description: "agent: a model id as get_job_options lists them. Omit for the default model." },
+      contextSize: { type: "string", enum: [...Object.keys(CONTEXT_SIZES)] },
+      thinkingLevel: { type: "string" },
+      runtime: { type: "string", enum: ["pty", "stream"] },
+      permission: {
+        type: "string",
+        enum: ["bypass", "allowlist", "ask"],
+        description:
+          "agent: bypass allows every tool; allowlist allows only allowedTools and mcpServers (the Skill tool and the cockpit issue tools always work); ask puts each prompt to the user.",
+      },
+      allowedTools: { type: "array", items: { type: "string" } },
+      mcpServers: { type: "array", items: { type: "string" } },
+      sandbox: { type: "boolean" },
+      maxDurationMinutes: { type: "number" },
+      maxRetries: { type: "number", description: "agent: extra attempts after a failed run, 0 to 5." },
+      maxParallel: { type: "number", description: "agent: issues worked in this status at once, per project using the workflow." },
+      workspace: {
+        type: "string",
+        enum: ["repo", "worktree"],
+        description: "agent: work in the project's folder, or in a git worktree and branch of the issue's own that Cockpit makes.",
+      },
+      continueSession: {
+        type: "boolean",
+        description: "agent: when an issue comes back to this status, carry on in the session that worked on it before.",
+      },
+      notifyProviders: { type: "array", items: { type: "string" } },
+    },
+  },
 };
 
 const TOOL_DEFINITIONS = [
@@ -1033,13 +1137,13 @@ const TOOL_DEFINITIONS = [
   {
     name: "list_workflows",
     description:
-      "List every project and its workflow. A workflow belongs to one project and says what happens to an issue at each of the project's statuses: nothing, it queues for an agent, an agent works on it by running a skill from the project's repo, or it waits for the user. For each project: whether it has a workflow, whether it is on, and its statuses that have a rule.",
+      "List every project and its workflow. A workflow says what happens to an issue at each of the project's statuses: nothing, it queues for an agent, an agent works on it by running a skill, or it waits for the user. A project uses either its own workflow or a reusable one it selects. For each project: whether it has a workflow, where it comes from (own, reusable, or missing when a selected reusable workflow has been removed), whether it is on, and its statuses that have a rule. Use list_reusable_workflows for the shared definitions themselves.",
     inputSchema: { type: "object", properties: {}, required: [] },
   },
   {
     name: "get_workflow",
     description:
-      "Get one project's workflow in full, with what is needed to change it: the project's statuses in board order, the skills found in its repo (.claude/skills/<name>/SKILL.md), and `problems` listing anything that stops an agent starting, such as a skill a status names that is not in the repo. `workflow` is null when the project has none yet.",
+      "Get one project's effective workflow in full, with what is needed to change it: where it comes from (its own, or a reusable one with its name), the project's statuses in board order, the skills a run could use (the repo's .claude/skills/<name>/SKILL.md, or your ~/.claude/skills/<name>/SKILL.md), and `problems` listing anything that stops an agent starting, such as a skill a status names that neither place has. `workflow` is null when the project has none yet, and `source.kind` is \"missing\" when it selects a reusable workflow that no longer exists.",
     inputSchema: {
       type: "object",
       properties: { project: { type: "string", description: "Project id or prefix, from list_projects." } },
@@ -1049,64 +1153,26 @@ const TOOL_DEFINITIONS = [
   {
     name: "update_workflow",
     description:
-      "Create or change a project's workflow. Give only what changes. `statuses` is keyed by status name and merges into the workflow: a status you name is set, null clears it (nothing happens there), and the rest are left as they are. A status the project does not have yet is added to its board. " +
-      'Three kinds of rule. {"kind":"queue","to":"Refining"}: issues wait here, and when an agent is free Cockpit moves the issue to `to`, which must be a status with an agent rule. {"kind":"agent","skill":"plan-issue","next":["Plan Review","Needs Detail"]}: while the issue is in this status an agent runs that skill from the project\'s repo, and ends by moving the issue to one of `next`, the only statuses it may move it to. {"kind":"human","review":"plan","next":[{"status":"Implementation Ready","label":"Approve","role":"approve"},{"status":"Refine Ready","label":"Send back","role":"sendBack"}]}: the issue waits for the user; with review "plan" they review the issue\'s plan and the two roles are required, without it each `next` entry is a button. ' +
+      "Create or change a project's own workflow, or select a reusable one. Give only what changes. `reusable` selects a reusable workflow by name or id, and null returns the project to its own workflow. While a reusable one is selected, this tool cannot change `statuses`, `enabled` or `maxParallel`: change those with update_reusable_workflow, or set reusable: null first. The project's own workflow is kept while a reusable one is selected, so switching back restores it. " +
+      "`statuses` is keyed by status name and merges into the workflow: a status you name is set, null clears it (nothing happens there), and the rest are left as they are. A status the project does not have yet is added to its board. " +
+      'Three kinds of rule. {"kind":"queue","to":"Refining"}: issues wait here, and when an agent is free Cockpit moves the issue to `to`, which must be a status with an agent rule. {"kind":"agent","skill":"plan-issue","next":["Plan Review","Needs Detail"]}: while the issue is in this status an agent runs that skill and ends by moving the issue to one of `next`, the only statuses it may move it to. {"kind":"human","review":"plan","next":[{"status":"Implementation Ready","label":"Approve","role":"approve"},{"status":"Refine Ready","label":"Send back","role":"sendBack"}]}: the issue waits for the user; with review "plan" they review the issue\'s plan and the two roles are required, without it each `next` entry is a button. ' +
       "An agent status needs no queue in front of it: without one, issues that arrive wait and are worked in that status. An agent's `next` may not name its own queue. Done and Cancelled cannot be a queue or have an agent. " +
-      "The skill must exist in the repo at .claude/skills/<skill>/SKILL.md, committed and on the project's base branch when the rule uses the issue's own worktree (the default is the project folder); until it does, nothing starts there. " +
+      "The skill must exist in the repo at .claude/skills/<skill>/SKILL.md, or in your user skills at ~/.claude/skills/<skill>/SKILL.md; the repo's copy wins. When the rule uses the issue's own worktree (the default is the project folder), a repo skill must be committed and on the project's base branch, since the worktree is cut from it; a user skill is always available. " +
       "What such a skill must do, since it runs with nobody watching: it is told the issue's key; it reads the issue with get_issue (the description is the requirement, `plan` the approved plan with any review feedback, the comments what came before); it does its work in the directory it is given and makes no worktree or branch of its own; a planning skill writes the plan with set_issue_plan and leaves the description alone; it asks no questions; and its last action is update_issue moving the issue to one of the statuses it is told it may use. " +
       "Turning a workflow on lets agents start by themselves and widening an agent's permissions lets them do more unattended: both are the user's decision. Returns the saved workflow and any statuses added to the project.",
     inputSchema: {
       type: "object",
       properties: {
         project: { type: "string", description: "Project id or prefix, from list_projects." },
+        reusable: {
+          type: ["string", "null"],
+          description:
+            "A reusable workflow's name or id to select for this project, or null to return to the project's own workflow. Omit to leave the source alone.",
+        },
         enabled: { type: "boolean", description: "Off: no new run starts for it. Runs already going finish." },
         maxParallel: { type: "number", description: "Issues worked at once in this project, 1 to 50." },
         replace: { type: "boolean", description: "With statuses: they are the whole workflow, and every status not named is cleared." },
-        statuses: {
-          type: "object",
-          description: "By status name: a rule, or null to clear the status.",
-          additionalProperties: {
-            type: ["object", "null"],
-            properties: {
-              kind: { type: "string", enum: ["queue", "agent", "human"] },
-              to: { type: "string", description: "queue: the status an agent works the issue in." },
-              skill: { type: "string", description: "agent: the skill's folder name under .claude/skills in the project's repo." },
-              next: {
-                type: "array",
-                description:
-                  "agent: status names, the only ones it may move the issue to (at least one). human: {status, label, role?} objects, one per choice.",
-                items: {},
-              },
-              review: { type: "string", enum: ["plan"], description: "human: the issue's plan is reviewed here." },
-              model: { type: "string", description: "agent: a model id as get_job_options lists them. Omit for the default model." },
-              contextSize: { type: "string", enum: [...Object.keys(CONTEXT_SIZES)] },
-              thinkingLevel: { type: "string" },
-              runtime: { type: "string", enum: ["pty", "stream"] },
-              permission: {
-                type: "string",
-                enum: ["bypass", "allowlist", "ask"],
-                description:
-                  "agent: bypass allows every tool; allowlist allows only allowedTools and mcpServers (the Skill tool and the cockpit issue tools always work); ask puts each prompt to the user.",
-              },
-              allowedTools: { type: "array", items: { type: "string" } },
-              mcpServers: { type: "array", items: { type: "string" } },
-              sandbox: { type: "boolean" },
-              maxDurationMinutes: { type: "number" },
-              maxRetries: { type: "number", description: "agent: extra attempts after a failed run, 0 to 5." },
-              maxParallel: { type: "number", description: "agent: issues worked in this status at once." },
-              workspace: {
-                type: "string",
-                enum: ["repo", "worktree"],
-                description: "agent: work in the project's folder, or in a git worktree and branch of the issue's own that Cockpit makes.",
-              },
-              continueSession: {
-                type: "boolean",
-                description: "agent: when an issue comes back to this status, carry on in the session that worked on it before.",
-              },
-              notifyProviders: { type: "array", items: { type: "string" } },
-            },
-          },
-        },
+        statuses: WORKFLOW_STATUSES_SCHEMA,
       },
       required: ["project"],
     },
@@ -1114,11 +1180,57 @@ const TOOL_DEFINITIONS = [
   {
     name: "delete_workflow",
     description:
-      "Remove a project's workflow. Agents working on its issues are stopped and nothing of it stays held. The project's issues, statuses and run history are not touched.",
+      "Remove a project's own workflow. Agents working on its issues are stopped and nothing of it stays held. The project's issues, statuses and run history are not touched. A project using a reusable workflow is refused: set reusable: null with update_workflow first.",
     inputSchema: {
       type: "object",
       properties: { project: { type: "string", description: "Project id or prefix, from list_projects." } },
       required: ["project"],
+    },
+  },
+  {
+    name: "list_reusable_workflows",
+    description:
+      "List every reusable workflow: a workflow defined outside any project and selected by one or more projects. For each: its id, name, whether it is on, its per-project limits, its statuses that have a rule, and the projects using it.",
+    inputSchema: { type: "object", properties: {}, required: [] },
+  },
+  {
+    name: "get_reusable_workflow",
+    description:
+      "Get one reusable workflow in full: the workflow, the projects using it with any per-project problems (such as a skill missing from one project's repo), every skill it could name across those repos and your ~/.claude/skills, and the statuses it can be given rules for. Address it by id or name.",
+    inputSchema: {
+      type: "object",
+      properties: { reusable: { type: "string", description: "A reusable workflow's name or id, from list_reusable_workflows." } },
+      required: ["reusable"],
+    },
+  },
+  {
+    name: "update_reusable_workflow",
+    description:
+      "Create a reusable workflow, or change one. Omit `reusable` and give a `name` to create; give `reusable` (name or id) to change that one. Changes reach every project using it: a status it names that a project lacks is added to that project's board, and a hidden built-in it names is shown again. A project whose custom status differs only by case from the workflow's spelling is refused, because the shared spelling cannot be changed for one project. " +
+      "`statuses` is keyed by status name and merges: a status you name is set, null clears it, and the rest stay. The rule kinds are the same as update_workflow's: a queue for an agent, an agent running a skill with the statuses it may move to, or a status that waits for a person. `maxParallel` is issues worked at once in each project using it; a rule's `maxParallel` is the same within that status. " +
+      "A skill may be in a project's repo at .claude/skills/<skill>/SKILL.md or in your user skills at ~/.claude/skills/<skill>/SKILL.md; the repo's copy wins. A skill missing from one project's repo but present in your user directory still runs there. " +
+      "Removing a status here does not remove it from a project's board; issues in it are never orphaned. Returns the saved workflow and the projects whose boards gained statuses.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        reusable: { type: "string", description: "A reusable workflow's name or id. Omit to create one." },
+        name: { type: "string", description: "Its name, unique among reusable workflows. Required when creating." },
+        enabled: { type: "boolean", description: "Off: no project using it starts a run. Runs already going finish." },
+        maxParallel: { type: "number", description: "Issues worked at once in each project using it, 1 to 50." },
+        replace: { type: "boolean", description: "With statuses: they are the whole workflow, and every status not named is cleared." },
+        statuses: WORKFLOW_STATUSES_SCHEMA,
+      },
+      required: [],
+    },
+  },
+  {
+    name: "delete_reusable_workflow",
+    description:
+      "Remove a reusable workflow that no project selects. While any project uses it the call is refused and the projects are named; set reusable: null with update_workflow for each first. Its runs are not a concern: a workflow nobody selects has none.",
+    inputSchema: {
+      type: "object",
+      properties: { reusable: { type: "string", description: "A reusable workflow's name or id, from list_reusable_workflows." } },
+      required: ["reusable"],
     },
   },
 ];
@@ -1888,24 +2000,23 @@ async function handleToolCall(
           .filter((p) => !p.archived)
           .map((p) => {
             const workflow = workflowForProject(p);
+            const shared = reusableForProject(p);
             return {
               project: p.prefix,
               name: p.name,
               hasWorkflow: !!workflow,
+              source: shared
+                ? { kind: "reusable", id: shared.id, name: shared.name }
+                : p.reusableWorkflowId
+                  ? { kind: "missing", id: p.reusableWorkflowId }
+                  : workflow
+                    ? { kind: "own" }
+                    : { kind: "none" },
               ...(workflow
                 ? {
                     enabled: workflow.enabled,
                     maxParallel: workflow.maxParallel,
-                    statuses: Object.fromEntries(
-                      Object.entries(workflow.statuses).map(([status, rule]) => [
-                        status,
-                        rule.kind === "queue"
-                          ? `queue for ${rule.to}`
-                          : rule.kind === "agent"
-                            ? `agent runs ${rule.skill}, then ${rule.next.join(" or ")}`
-                            : `waits for the user${rule.review ? " (plan review)" : ""}`,
-                      ]),
-                    ),
+                    statuses: describeWorkflowStatuses(workflow.statuses),
                   }
                 : {}),
             };
@@ -1927,26 +2038,199 @@ async function handleToolCall(
           return { content: [{ type: "text", text: JSON.stringify(workflowView(project), null, 2) }] };
         }
         if (name === "delete_workflow") {
+          if (project.reusableWorkflowId) {
+            const shared = reusableForProject(project);
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: JSON.stringify({
+                    error: `${project.name} uses the reusable workflow "${shared?.name ?? project.reusableWorkflowId}". Set reusable: null with update_workflow first.`,
+                  }),
+                },
+              ],
+              isError: true,
+            };
+          }
           // Its runs are stopped before it goes, while the engine can still tell whose they are.
           getWorkflowEngine()?.forget(project.id);
           const deleted = deleteWorkflow(project.id);
           return { content: [{ type: "text", text: JSON.stringify({ deleted }) }] };
         }
-        // Only the fields the schema names, so nothing else a caller sends
-        // can ride into the stored workflow.
-        const patch: WorkflowInput = {};
-        if (args.enabled !== undefined) patch.enabled = args.enabled as boolean;
-        if (args.maxParallel !== undefined) patch.maxParallel = args.maxParallel as number;
-        if (args.statuses !== undefined) patch.statuses = args.statuses;
-        if (args.replace === true) patch.replace = true;
-        const saved = setProjectWorkflow(project, patch);
+
+        // update_workflow: resolve the resulting source first, then apply rules
+        // only to the project's own workflow.
+        let current = project;
+        let sourceChanged = false;
+        const ruleFields = ["enabled", "maxParallel", "statuses", "replace"].filter((key) => args[key] !== undefined);
+        if (args.reusable !== undefined) {
+          if (args.reusable !== null && typeof args.reusable !== "string") {
+            return {
+              content: [{ type: "text", text: JSON.stringify({ error: "reusable must be a workflow name or id, or null" }) }],
+              isError: true,
+            };
+          }
+          if (args.reusable === null) {
+            if (current.reusableWorkflowId !== undefined) {
+              current = assignReusableWorkflow(current, null);
+              sourceChanged = true;
+            }
+          } else {
+            const shared = resolveReusable(args.reusable);
+            if (!shared) {
+              const names = loadReusableWorkflows().map((w) => w.name);
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text: JSON.stringify({
+                      error: `Reusable workflow not found: ${args.reusable}.${names.length > 0 ? ` Known: ${names.join(", ")}.` : ""} Use list_reusable_workflows.`,
+                    }),
+                  },
+                ],
+                isError: true,
+              };
+            }
+            if (ruleFields.length > 0) {
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text: JSON.stringify({
+                      error: `${current.name} would use the reusable workflow "${shared.name}", whose rules are changed with update_reusable_workflow. Set reusable: null to change its own workflow instead.`,
+                    }),
+                  },
+                ],
+                isError: true,
+              };
+            }
+            if (current.reusableWorkflowId !== shared.id) {
+              current = assignReusableWorkflow(current, shared.id);
+              sourceChanged = true;
+            }
+          }
+        }
+        const sharedNow = reusableForProject(current);
+        if (sharedNow && ruleFields.length > 0) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify({
+                  error: `${current.name} uses the reusable workflow "${sharedNow.name}". Change it with update_reusable_workflow, or set reusable: null first.`,
+                }),
+              },
+            ],
+            isError: true,
+          };
+        }
+        if (sourceChanged) getWorkflowEngine()?.forget(project.id);
+
+        let addedStatuses: string[] = [];
+        if (!sharedNow) {
+          // Only the fields the schema names, so nothing else a caller sends
+          // can ride into the stored workflow.
+          const patch: WorkflowInput = {};
+          if (args.enabled !== undefined) patch.enabled = args.enabled as boolean;
+          if (args.maxParallel !== undefined) patch.maxParallel = args.maxParallel as number;
+          if (args.statuses !== undefined) patch.statuses = args.statuses;
+          if (args.replace === true) patch.replace = true;
+          const saved = setProjectWorkflow(current, patch);
+          addedStatuses = saved.added;
+        }
         getWorkflowEngine()?.kick();
-        const view = workflowView(resolveProject(project.id) ?? project);
+        const view = workflowView(getProject(current.id) ?? current);
         return {
           content: [
             {
               type: "text",
-              text: JSON.stringify({ workflow: saved.workflow, addedStatuses: saved.added, problems: view.problems }, null, 2),
+              text: JSON.stringify({ workflow: view.workflow, source: view.source, addedStatuses, problems: view.problems }, null, 2),
+            },
+          ],
+        };
+      }
+      case "list_reusable_workflows": {
+        const projects = loadProjects();
+        const list = loadReusableWorkflows().map((workflow) => ({
+          id: workflow.id,
+          name: workflow.name,
+          enabled: workflow.enabled,
+          maxParallel: workflow.maxParallel,
+          statuses: describeWorkflowStatuses(workflow.statuses),
+          usedBy: projects.filter((p) => p.reusableWorkflowId === workflow.id).map((p) => p.prefix),
+        }));
+        return { content: [{ type: "text", text: JSON.stringify(list, null, 2) }] };
+      }
+      case "get_reusable_workflow":
+      case "update_reusable_workflow":
+      case "delete_reusable_workflow": {
+        const ref = typeof args.reusable === "string" ? args.reusable.trim() : "";
+        if (name === "update_reusable_workflow" && !ref) {
+          if (args.name === undefined) {
+            return {
+              content: [
+                { type: "text", text: JSON.stringify({ error: "Give name to create a reusable workflow, or reusable to change one" }) },
+              ],
+              isError: true,
+            };
+          }
+          const input: ReusableWorkflowInput = { name: args.name };
+          if (args.enabled !== undefined) input.enabled = args.enabled;
+          if (args.maxParallel !== undefined) input.maxParallel = args.maxParallel;
+          if (args.statuses !== undefined) input.statuses = args.statuses;
+          if (args.replace === true) input.replace = true;
+          const saved = setReusableWorkflow(input);
+          getWorkflowEngine()?.kick();
+          const view = reusableWorkflowView(saved.workflow);
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify({ workflow: view.workflow, usedBy: view.usedBy, projects: saved.projects }, null, 2),
+              },
+            ],
+          };
+        }
+        const existing = ref ? resolveReusable(ref) : undefined;
+        if (!existing) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify({ error: `Reusable workflow not found: ${ref || "(none given)"}. Use list_reusable_workflows.` }),
+              },
+            ],
+            isError: true,
+          };
+        }
+        if (name === "get_reusable_workflow") {
+          return { content: [{ type: "text", text: JSON.stringify(reusableWorkflowView(existing), null, 2) }] };
+        }
+        if (name === "delete_reusable_workflow") {
+          try {
+            const deleted = deleteReusableWorkflow(existing.id);
+            return { content: [{ type: "text", text: JSON.stringify({ deleted }) }] };
+          } catch (err) {
+            return {
+              content: [{ type: "text", text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }],
+              isError: true,
+            };
+          }
+        }
+        const input: ReusableWorkflowInput = { id: existing.id };
+        if (args.name !== undefined) input.name = args.name;
+        if (args.enabled !== undefined) input.enabled = args.enabled;
+        if (args.maxParallel !== undefined) input.maxParallel = args.maxParallel;
+        if (args.statuses !== undefined) input.statuses = args.statuses;
+        if (args.replace === true) input.replace = true;
+        const saved = setReusableWorkflow(input);
+        getWorkflowEngine()?.kick();
+        const view = reusableWorkflowView(saved.workflow);
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({ workflow: view.workflow, usedBy: view.usedBy, projects: saved.projects }, null, 2),
             },
           ],
         };

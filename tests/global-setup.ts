@@ -22,7 +22,7 @@
 // also had the debug logger writing into the throwaway dir below as tests tore
 // it down. A suite that wants one of these sets it itself, at module scope or
 // in the test, both of which run after this file.
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll } from "vitest";
@@ -50,6 +50,12 @@ for (const key of Object.keys(process.env)) {
 
 const dir = mkdtempSync(path.join(tmpdir(), "cockpit-vitest-"));
 process.env.COCKPIT_CONFIG_DIR = dir;
+// The CLI's user skills now matter to workflows (a skill may come from
+// ~/.claude/skills), so leaving the variable unset would read the developer's
+// real directory and make a "skill missing" test machine-dependent.
+const claudeDir = path.join(dir, "claude");
+mkdirSync(claudeDir);
+process.env.CLAUDE_CONFIG_DIR = claudeDir;
 
 afterAll(() => {
   rmSync(dir, { recursive: true, force: true });

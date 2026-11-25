@@ -392,11 +392,12 @@ test("a project's workflow is set up in Settings: what happens at each status, w
     await expect(page.getByTestId("workflow-GR")).toContainText("Plan Review");
     await expect(page.getByTestId("workflow-GR")).not.toContainText("Refine Ready");
     await shot(page, "settings-9-list");
-    // The project's own settings no longer choose a workflow: it has its own.
+    // The project's own settings choose between its workflow and a reusable one.
     await page.goto(`${api}/settings/projects`);
     await page.getByTestId(`edit-project-${project.id}`).click();
     await expect(page.getByTestId("project-base-branch")).toBeVisible();
-    await expect(page.getByTestId("project-workflow")).toHaveCount(0);
+    await expect(page.getByTestId("project-workflow")).toBeVisible();
+    await expect(page.getByTestId("project-workflow")).toHaveValue("");
 
     // And it can be removed, which leaves the project and its statuses as they are.
     await page.goto(`${api}/settings/workflows/${project.id}`);
@@ -445,6 +446,102 @@ test("a project with nothing set can copy another project's workflow, as unsaved
     expect(Object.keys(after.workflow.statuses).sort()).toEqual(["Refining", "Waiting"]);
     // The status the other project had made its own is added to this one's board.
     expect(after.statuses).toContain("Waiting");
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test("a reusable workflow is made once, reaches two projects, and refuses removal while in use", async ({ page, harness }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const api = harness.cockpitUrl;
+  const repo = mkdtempSync(path.join(tmpdir(), "cockpit-it-wf-shared-"));
+  writeSkill(repo, "plan-issue", "Write the plan for an issue.");
+
+  try {
+    await page.request.patch(`${api}/api/defaults`, { data: { issuesEnabled: true } });
+    const made = async (name: string, prefix: string) =>
+      (await (await page.request.post(`${api}/api/projects`, { data: { name, prefix, repoPath: repo } })).json()).project as { id: string };
+    const greeter = await made("Greeter", "GR");
+    const rover = await made("Rover", "RV");
+
+    await page.goto(`${api}/settings/workflows`);
+    await expect(page.getByTestId("reusable-workflows-empty")).toBeVisible();
+    await page.getByTestId("reusable-workflow-new").click();
+    await page.getByTestId("reusable-workflow-name").fill("Frontend");
+    await page.getByTestId("reusable-workflow-create").click();
+    await expect(page.getByTestId("reusable-workflow-name")).toHaveValue("Frontend", { timeout: 15_000 });
+
+    // An agent works in Refining, a queue feeds it, and a person reviews the plan.
+    await page.getByTestId("status-row-Refining").click();
+    await page.getByTestId("status-kind-agent").click();
+    await page.getByTestId("rule-skill").selectOption("plan-issue");
+    await page.getByTestId("rule-next-0-status").selectOption("Plan Review");
+    await page.getByTestId("status-done").click();
+    await page.getByTestId("status-row-Refine Ready").click();
+    await page.getByTestId("status-kind-queue").click();
+    await page.getByTestId("rule-to").selectOption("Refining");
+    await page.getByTestId("status-done").click();
+    await page.getByTestId("status-row-Plan Review").click();
+    await page.getByTestId("status-kind-human").click();
+    await page.getByTestId("rule-review").getByRole("button", { name: "Review the plan" }).click();
+    await page.getByTestId("rule-approve-status").selectOption("Implementation Ready");
+    await page.getByTestId("rule-sendback-status").selectOption("Refine Ready");
+    await page.getByTestId("status-done").click();
+    await page.getByTestId("reusable-workflow-save").click();
+    await expect(page.getByTestId("reusable-workflow-save")).toBeHidden({ timeout: 15_000 });
+
+    const shared = (
+      (await (await page.request.get(`${api}/api/reusable-workflows`)).json()).reusable as { id: string; name: string }[]
+    ).find((workflow) => workflow.name === "Frontend");
+    expect(shared).toBeTruthy();
+
+    // Each project selects it from its own settings.
+    for (const project of [greeter, rover]) {
+      await page.goto(`${api}/settings/projects`);
+      await page.getByTestId(`edit-project-${project.id}`).click();
+      await page.getByTestId("project-workflow").selectOption({ label: "Frontend" });
+      await page.getByRole("button", { name: "Save", exact: true }).click();
+      await expect(page.getByTestId(`edit-project-${project.id}`)).toBeVisible({ timeout: 15_000 });
+    }
+    const greeterView = await (await page.request.get(`${api}/api/projects/${greeter.id}/workflow`)).json();
+    expect(greeterView.source).toMatchObject({ kind: "reusable", name: "Frontend" });
+
+    // A shared project shows the source and no editable draft of its own.
+    await page.goto(`${api}/settings/workflows/${greeter.id}`);
+    await expect(page.getByTestId("workflow-source")).toContainText("Shared workflow: Frontend");
+    await expect(page.getByTestId("workflow-save")).toHaveCount(0);
+
+    // A status added to the shared workflow reaches both boards.
+    const changed = await page.request.put(`${api}/api/reusable-workflows/${shared?.id}`, {
+      data: { statuses: { Waiting: { kind: "queue", to: "Refining" } } },
+    });
+    expect(changed.ok(), await changed.text()).toBe(true);
+    for (const project of [greeter, rover]) {
+      const view = await (await page.request.get(`${api}/api/projects/${project.id}/workflow`)).json();
+      expect(view.statuses).toContain("Waiting");
+    }
+
+    // It cannot be removed while a project still selects it.
+    expect((await page.request.delete(`${api}/api/reusable-workflows/${shared?.id}`)).status()).toBe(400);
+
+    // Stopping using it on one project is not enough; both have to leave.
+    await page.goto(`${api}/settings/workflows/${greeter.id}`);
+    await page.getByTestId("workflow-source-stop").click();
+    await expect(page.getByTestId("workflow-source")).toContainText("Its own workflow", { timeout: 15_000 });
+    expect((await page.request.delete(`${api}/api/reusable-workflows/${shared?.id}`)).status()).toBe(400);
+
+    await page.goto(`${api}/settings/projects`);
+    await page.getByTestId(`edit-project-${rover.id}`).click();
+    await page.getByTestId("project-workflow").selectOption({ label: "Its own workflow" });
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(page.getByTestId(`edit-project-${rover.id}`)).toBeVisible({ timeout: 15_000 });
+
+    await page.goto(`${api}/settings/workflows/reusable/${shared?.id}`);
+    await page.getByTestId("reusable-workflow-remove").click();
+    await page.getByTestId("reusable-workflow-remove-confirm").click();
+    await expect(page).toHaveURL(`${api}/settings/workflows`, { timeout: 15_000 });
+    const left = await (await page.request.get(`${api}/api/reusable-workflows`)).json();
+    expect((left.reusable as { id: string }[]).some((workflow) => workflow.id === shared?.id)).toBe(false);
   } finally {
     rmSync(repo, { recursive: true, force: true });
   }

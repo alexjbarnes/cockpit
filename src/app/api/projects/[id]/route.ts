@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { validateSession } from "@/server/auth";
-import { applyProjectUpdate, deleteProject, getProject, loadIssues, saveProject } from "@/server/issue-storage";
+import { deleteProject, getProject, loadIssues, type ProjectUpdateInput, saveProject } from "@/server/issue-storage";
 import { getWorkflowEngine } from "@/server/singleton";
-import { assertProjectKeepsWorkflowStatuses, deleteWorkflow } from "@/server/workflow-storage";
+import { deleteWorkflow, prepareProjectUpdate } from "@/server/workflow-storage";
 
 function authenticate(req: NextRequest): boolean {
   const token = req.cookies.get("cockpit_session")?.value || req.headers.get("authorization")?.replace("Bearer ", "");
@@ -20,16 +20,15 @@ export function PUT(req: NextRequest, { params }: { params: Promise<{ id: string
       return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
 
-    const body = await req.json();
+    const body = (await req.json().catch(() => null)) as Record<string, unknown> | null;
+    if (!body) return NextResponse.json({ error: "A project patch is required" }, { status: 400 });
     try {
-      // applyProjectUpdate now validates its own patch (name/prefix/
-      // description/repoPath/archived) and throws on a bad value, so it has
-      // to be inside this try too, not just saveProject — otherwise a bad
-      // value would 500 instead of 400.
-      const updated = applyProjectUpdate(existing, body);
-      // Its workflow moves issues into the statuses it names, so the project
-      // keeps them while the workflow does.
-      assertProjectKeepsWorkflowStatuses(updated);
+      // The workflow source travels with the patch so the final project is
+      // validated and saved once. `prepareProjectUpdate` applies the ordinary
+      // fields, syncs a shared workflow's statuses and checks that no status
+      // its workflow names has gone.
+      const { reusableWorkflowId, ...patch } = body;
+      const updated = prepareProjectUpdate(existing, patch as ProjectUpdateInput, reusableWorkflowId as string | null | undefined);
       // Removing a custom status that issues still sit in would orphan them
       // (no column, and the value is no longer accepted on future edits).
       // Refuse and name the offenders so the user moves them first. Disabling a
@@ -50,7 +49,11 @@ export function PUT(req: NextRequest, { params }: { params: Promise<{ id: string
         }
       }
       saveProject(updated);
-      // A repo path or base branch set now may be what its workflow was waiting for.
+      // The old workflow's rules no longer apply to a project that changed source.
+      if (existing.reusableWorkflowId !== updated.reusableWorkflowId) {
+        getWorkflowEngine()?.forget(existing.id);
+      }
+      // A repo path, base branch or workflow source set now may be what its issues were waiting for.
       getWorkflowEngine()?.kick();
       return NextResponse.json({ project: updated });
     } catch (err) {

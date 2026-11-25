@@ -12,7 +12,7 @@ import { Input } from "@/components/ui/input";
 import { useSettings } from "@/hooks/use-settings";
 import { ISSUE_STATUSES, LABEL_COLORS, statusColor } from "@/lib/issue-display";
 import { cn } from "@/lib/utils";
-import type { CustomStatus, Issue, Project } from "@/types";
+import type { CustomStatus, Issue, Project, WorkflowStatusRule } from "@/types";
 
 interface FormState {
   id: string;
@@ -23,6 +23,8 @@ interface FormState {
   disabledStatuses: string[];
   customStatuses: CustomStatus[];
   baseBranch: string;
+  /** A reusable workflow id, or "" for the project's own workflow. */
+  reusableWorkflowId: string;
 }
 
 const emptyForm = (): FormState => ({
@@ -34,6 +36,7 @@ const emptyForm = (): FormState => ({
   disabledStatuses: [],
   customStatuses: [],
   baseBranch: "",
+  reusableWorkflowId: "",
 });
 
 function projectToForm(p: Project): FormState {
@@ -46,12 +49,40 @@ function projectToForm(p: Project): FormState {
     disabledStatuses: p.disabledStatuses ?? [],
     customStatuses: p.customStatuses ?? [],
     baseBranch: p.baseBranch ?? "",
+    reusableWorkflowId: p.reusableWorkflowId ?? "",
   };
+}
+
+interface ReusableChoice {
+  id: string;
+  name: string;
+  statuses: Record<string, WorkflowStatusRule>;
+}
+
+/** Every status a workflow's rules name, for locking those rows in the editor. */
+function statusesNamedBy(rules: Record<string, WorkflowStatusRule>): Set<string> {
+  const names = new Set<string>();
+  for (const [status, rule] of Object.entries(rules)) {
+    names.add(status);
+    if (rule.kind === "queue") names.add(rule.to);
+    else if (rule.kind === "agent") for (const target of rule.next) names.add(target);
+    else for (const choice of rule.next) names.add(choice.status);
+  }
+  return names;
 }
 
 /** Built-in enable/disable toggles + custom status add/remove for the project
  *  edit dialog. Purely edits the form; the page persists it on Save. */
-function StatusEditor({ form, setForm }: { form: FormState; setForm: (f: FormState) => void }) {
+function StatusEditor({
+  form,
+  setForm,
+  locked,
+}: {
+  form: FormState;
+  setForm: (f: FormState) => void;
+  /** Statuses the selected reusable workflow names; they cannot leave the board. */
+  locked: ReadonlySet<string>;
+}) {
   const [newName, setNewName] = useState("");
   const disabled = new Set(form.disabledStatuses);
   const takenLower = new Set([
@@ -101,9 +132,11 @@ function StatusEditor({ form, setForm }: { form: FormState; setForm: (f: FormSta
             key={s}
             type="button"
             onClick={() => toggleBuiltin(s)}
+            disabled={locked.has(s)}
+            title={locked.has(s) ? "The selected reusable workflow uses this status" : undefined}
             className={cn(
               "flex items-center gap-2 rounded border px-2 py-1 text-xs transition-colors",
-              disabled.has(s) ? "opacity-40 hover:opacity-70" : "hover:bg-muted/50",
+              locked.has(s) ? "cursor-not-allowed opacity-60" : disabled.has(s) ? "opacity-40 hover:opacity-70" : "hover:bg-muted/50",
             )}
           >
             <span className={cn("h-2 w-2 shrink-0 rounded-full", statusColor(s))} />
@@ -144,7 +177,9 @@ function StatusEditor({ form, setForm }: { form: FormState; setForm: (f: FormSta
                 <button
                   type="button"
                   onClick={() => removeCustom(c.name)}
-                  className="shrink-0 text-muted-foreground hover:text-destructive"
+                  disabled={locked.has(c.name)}
+                  title={locked.has(c.name) ? "The selected reusable workflow uses this status" : "Remove this status"}
+                  className="shrink-0 text-muted-foreground hover:text-destructive disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:text-muted-foreground"
                 >
                   <Trash2 className="h-3.5 w-3.5" />
                 </button>
@@ -201,6 +236,7 @@ export default function ProjectsSettingsPage() {
   const { settings, loaded: settingsLoaded } = useSettings();
 
   const [projects, setProjects] = useState<Project[]>([]);
+  const [reusable, setReusable] = useState<ReusableChoice[]>([]);
   const [issueCounts, setIssueCounts] = useState<Map<string, number>>(new Map());
   const [loading, setLoading] = useState(true);
   const [editForm, setEditForm] = useState<FormState | null>(null);
@@ -211,7 +247,11 @@ export default function ProjectsSettingsPage() {
   const [deleting, setDeleting] = useState(false);
 
   const fetchAll = useCallback(async () => {
-    const [projectsRes, issuesRes] = await Promise.all([fetch("/api/projects"), fetch("/api/issues")]);
+    const [projectsRes, issuesRes, workflowsRes] = await Promise.all([
+      fetch("/api/projects"),
+      fetch("/api/issues"),
+      fetch("/api/workflows"),
+    ]);
     if (projectsRes.ok) {
       const data = await projectsRes.json();
       setProjects(data.projects || []);
@@ -223,6 +263,10 @@ export default function ProjectsSettingsPage() {
         counts.set(issue.projectId, (counts.get(issue.projectId) || 0) + 1);
       }
       setIssueCounts(counts);
+    }
+    if (workflowsRes.ok) {
+      const data = (await workflowsRes.json()) as { reusable?: ReusableChoice[] };
+      setReusable(data.reusable ?? []);
     }
     setLoading(false);
   }, []);
@@ -260,9 +304,9 @@ export default function ProjectsSettingsPage() {
       disabledStatuses: editForm.disabledStatuses,
       customStatuses: editForm.customStatuses,
     };
-    // The base branch is set by an update, so a new project is created first
-    // and given it second.
-    const flow = { baseBranch: editForm.baseBranch.trim() };
+    // The base branch and the workflow source are set by an update, so a new
+    // project is created first and given them second.
+    const flow = { baseBranch: editForm.baseBranch.trim(), reusableWorkflowId: editForm.reusableWorkflowId || null };
     try {
       let res = await fetch(editForm.id ? `/api/projects/${editForm.id}` : "/api/projects", {
         method: editForm.id ? "PUT" : "POST",
@@ -270,7 +314,7 @@ export default function ProjectsSettingsPage() {
         body: JSON.stringify(editForm.id ? { ...body, ...flow } : body),
       });
       let data = await res.json();
-      if (res.ok && !editForm.id && flow.baseBranch) {
+      if (res.ok && !editForm.id && (flow.baseBranch || flow.reusableWorkflowId)) {
         const created = data.project as Project;
         setEditForm({ ...editForm, id: created.id });
         res = await fetch(`/api/projects/${created.id}`, {
@@ -306,6 +350,10 @@ export default function ProjectsSettingsPage() {
   }
 
   const deleteCount = confirmDelete ? issueCounts.get(confirmDelete.id) || 0 : 0;
+  const selectedReusable = editForm?.reusableWorkflowId
+    ? reusable.find((workflow) => workflow.id === editForm.reusableWorkflowId)
+    : undefined;
+  const lockedStatuses = statusesNamedBy(selectedReusable?.statuses ?? {});
 
   if (!settingsLoaded || !settings.issuesEnabled) return null;
 
@@ -349,6 +397,11 @@ export default function ProjectsSettingsPage() {
                     <span className="text-xs text-muted-foreground">
                       {issueCounts.get(p.id) || 0} issue{(issueCounts.get(p.id) || 0) === 1 ? "" : "s"}
                     </span>
+                    {p.reusableWorkflowId && (
+                      <span className="text-xs text-muted-foreground">
+                        Shared: {reusable.find((workflow) => workflow.id === p.reusableWorkflowId)?.name ?? "missing workflow"}
+                      </span>
+                    )}
                   </div>
                   {p.repoPath && <div className="text-xs text-muted-foreground truncate font-mono mt-0.5">{p.repoPath}</div>}
                 </div>
@@ -430,7 +483,30 @@ export default function ProjectsSettingsPage() {
               </div>
 
               <div className="border-t pt-3">
-                <StatusEditor form={editForm} setForm={setEditForm} />
+                <StatusEditor form={editForm} setForm={setEditForm} locked={lockedStatuses} />
+              </div>
+
+              <div className="border-t pt-3">
+                <label className="text-xs text-muted-foreground" htmlFor="project-workflow">
+                  Workflow
+                </label>
+                <select
+                  id="project-workflow"
+                  data-testid="project-workflow"
+                  value={editForm.reusableWorkflowId}
+                  onChange={(e) => setEditForm({ ...editForm, reusableWorkflowId: e.target.value })}
+                  className="w-full rounded-md border bg-background px-2.5 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+                >
+                  <option value="">Its own workflow</option>
+                  {reusable.map((workflow) => (
+                    <option key={workflow.id} value={workflow.id}>
+                      {workflow.name}
+                    </option>
+                  ))}
+                </select>
+                <p className="text-xs text-muted-foreground mt-1">
+                  A reusable workflow is shared by several projects. Its statuses are added to this project's board when you save.
+                </p>
               </div>
 
               <div className="border-t pt-3">

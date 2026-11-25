@@ -1,15 +1,19 @@
 "use client";
 
-import { ArrowLeft, ChevronRight } from "lucide-react";
+import { ArrowLeft, ChevronRight, Loader2, Plus } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { usePageHeader } from "@/components/app-shell";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 import { CountField } from "@/components/workflows/count-field";
 import { TrackSummary } from "@/components/workflows/status-path";
 import { useSettings } from "@/hooks/use-settings";
-import { resolveProjectStatuses } from "@/lib/issue-display";
-import type { Project, Workflow } from "@/types";
+import { ISSUE_STATUSES, resolveProjectStatuses } from "@/lib/issue-display";
+import type { Project, Workflow, WorkflowStatusRule } from "@/types";
+
+type WorkflowSource = { kind: "own" } | { kind: "reusable"; id: string; name: string } | { kind: "missing"; id: string } | { kind: "none" };
 
 interface ListedProject {
   id: string;
@@ -17,6 +21,16 @@ interface ListedProject {
   prefix: string;
   repoPath: string | null;
   workflow: Workflow | null;
+  source: WorkflowSource;
+}
+
+interface ListedReusable {
+  id: string;
+  name: string;
+  enabled: boolean;
+  maxParallel: number;
+  statuses: Record<string, WorkflowStatusRule>;
+  usedBy: string[];
 }
 
 function Toggle({
@@ -52,12 +66,21 @@ export default function WorkflowsSettingsPage() {
   const router = useRouter();
   const { settings, loaded, updateSetting } = useSettings();
   const [listed, setListed] = useState<ListedProject[] | null>(null);
+  const [reusable, setReusable] = useState<ListedReusable[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
+  const [creating, setCreating] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [createError, setCreateError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
 
   const load = useCallback(async () => {
     try {
       const [workflows, all] = await Promise.all([fetch("/api/workflows"), fetch("/api/projects")]);
-      if (workflows.ok) setListed(((await workflows.json()).projects ?? []) as ListedProject[]);
+      if (workflows.ok) {
+        const data = (await workflows.json()) as { projects?: ListedProject[]; reusable?: ListedReusable[] };
+        setListed(data.projects ?? []);
+        setReusable(data.reusable ?? []);
+      }
       if (all.ok) setProjects(((await all.json()).projects ?? []) as Project[]);
     } catch {
       setListed([]);
@@ -71,6 +94,33 @@ export default function WorkflowsSettingsPage() {
   useEffect(() => {
     if (loaded && !settings.issuesEnabled) router.replace("/settings");
   }, [loaded, settings.issuesEnabled, router]);
+
+  async function createReusable() {
+    const name = newName.trim();
+    if (!name) return;
+    setSaving(true);
+    setCreateError(null);
+    try {
+      const res = await fetch("/api/reusable-workflows", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      });
+      const body = await res.json();
+      if (!res.ok) {
+        setCreateError(body.error || "Could not create the workflow");
+        return;
+      }
+      const workflow = body.workflow as { id: string };
+      setCreating(false);
+      setNewName("");
+      router.push(`/settings/workflows/reusable/${workflow.id}`);
+    } catch {
+      setCreateError("Could not reach Cockpit");
+    } finally {
+      setSaving(false);
+    }
+  }
 
   if (!loaded || !settings.issuesEnabled) return null;
 
@@ -108,10 +158,63 @@ export default function WorkflowsSettingsPage() {
         </section>
 
         <section className="space-y-3">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <h2 className="text-sm font-semibold">Reusable workflows</h2>
+              <p className="mt-0.5 text-xs text-muted-foreground">
+                Defined once and selected by several projects. A status added here reaches every project using it.
+              </p>
+            </div>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => {
+                setCreateError(null);
+                setCreating(true);
+              }}
+              data-testid="reusable-workflow-new"
+            >
+              <Plus className="mr-1 h-3.5 w-3.5" />
+              New
+            </Button>
+          </div>
+          {reusable.length === 0 && (
+            <p
+              className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground"
+              data-testid="reusable-workflows-empty"
+            >
+              No reusable workflows yet.
+            </p>
+          )}
+          {reusable.map((workflow) => (
+            <button
+              key={workflow.id}
+              type="button"
+              onClick={() => router.push(`/settings/workflows/reusable/${workflow.id}`)}
+              data-testid={`reusable-workflow-${workflow.id}`}
+              className="flex w-full items-center gap-3 rounded-lg border bg-card p-4 text-left transition-colors hover:bg-accent/40"
+            >
+              <div className="min-w-0 flex-1 space-y-2">
+                <div className="flex flex-wrap items-baseline gap-x-2">
+                  <span className="text-sm font-semibold">{workflow.name}</span>
+                  {!workflow.enabled && <span className="rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">Off</span>}
+                  <span className="text-xs text-muted-foreground">
+                    {workflow.usedBy.length === 0 ? "Not used yet" : `Used by ${workflow.usedBy.join(", ")}`}
+                  </span>
+                </div>
+                <TrackSummary rules={workflow.statuses} order={ISSUE_STATUSES} />
+              </div>
+              <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
+            </button>
+          ))}
+        </section>
+
+        <section className="space-y-3">
           <div>
             <h2 className="text-sm font-semibold">Projects</h2>
             <p className="mt-0.5 text-xs text-muted-foreground">
-              Each project has its own workflow: what happens at each of its statuses, with skills from that project's repo.
+              Each project uses its own workflow or a reusable one it selects. Its own rules are edited here; a reusable one is edited in
+              its card above.
             </p>
           </div>
           {listed === null && <p className="text-sm text-muted-foreground">Loading…</p>}
@@ -133,6 +236,12 @@ export default function WorkflowsSettingsPage() {
                   <div className="flex flex-wrap items-baseline gap-x-2">
                     <span className="text-sm font-semibold">{p.name}</span>
                     {!p.workflow.enabled && <span className="rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">Off</span>}
+                    {p.source.kind === "reusable" && (
+                      <span className="rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">Shared: {p.source.name}</span>
+                    )}
+                    {p.source.kind === "missing" && (
+                      <span className="rounded bg-destructive/10 px-1.5 py-0.5 text-[11px] text-destructive">Shared workflow missing</span>
+                    )}
                   </div>
                   <TrackSummary rules={p.workflow.statuses} order={orderOf(p.id)} />
                 </div>
@@ -143,9 +252,11 @@ export default function WorkflowsSettingsPage() {
                 <div className="min-w-0 flex-1">
                   <div className="text-sm font-semibold">{p.name}</div>
                   <p className="mt-0.5 text-xs text-muted-foreground">
-                    {p.repoPath
-                      ? "No workflow yet. Its issues only move when you move them."
-                      : "No repo path, so there is nowhere to read skills from."}
+                    {p.source.kind === "missing"
+                      ? "Its shared workflow no longer exists. Choose its own workflow or another one."
+                      : p.repoPath
+                        ? "No workflow yet. Its issues only move when you move them."
+                        : "No repo path, so there is nowhere to read skills from."}
                   </p>
                 </div>
                 {p.repoPath && (
@@ -193,6 +304,38 @@ export default function WorkflowsSettingsPage() {
           </div>
         </section>
       </div>
+
+      <Dialog open={creating} onOpenChange={(open) => !saving && setCreating(open)}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>New reusable workflow</DialogTitle>
+          </DialogHeader>
+          <p className="mt-2 text-sm text-muted-foreground">
+            Give it a name. You can set its statuses and rules on the next screen, then select it from a project in Settings, Projects.
+          </p>
+          <Input
+            autoFocus
+            value={newName}
+            onChange={(e) => setNewName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") void createReusable();
+            }}
+            placeholder="e.g. Frontend"
+            className="mt-3"
+            data-testid="reusable-workflow-name"
+          />
+          {createError && <p className="mt-2 text-sm text-destructive">{createError}</p>}
+          <div className="mt-4 flex justify-end gap-2">
+            <Button variant="outline" onClick={() => setCreating(false)} disabled={saving}>
+              Cancel
+            </Button>
+            <Button onClick={createReusable} disabled={saving || !newName.trim()} data-testid="reusable-workflow-create">
+              {saving ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : null}
+              Create
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

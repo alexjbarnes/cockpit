@@ -10,7 +10,7 @@ import { Sheet } from "@/components/ui/sheet";
 import { CountField } from "@/components/workflows/count-field";
 import type { RepoSkillView } from "@/components/workflows/skill-select";
 import { StatusEditor, type StatusEditorData } from "@/components/workflows/status-editor";
-import { StatusPath } from "@/components/workflows/status-path";
+import { StatusPath, TrackSummary } from "@/components/workflows/status-path";
 import { useSettings } from "@/hooks/use-settings";
 import { statusRows } from "@/lib/workflow-display";
 import type { Provider, Workflow, WorkflowStatusRule } from "@/types";
@@ -22,9 +22,13 @@ interface Draft {
   statuses: Record<string, WorkflowStatusRule>;
 }
 
+type WorkflowSource = { kind: "own" } | { kind: "reusable"; id: string; name: string } | { kind: "missing"; id: string } | { kind: "none" };
+
 interface View {
   project: { id: string; name: string; prefix: string; repoPath?: string; baseBranch?: string };
   workflow: Workflow | null;
+  source: WorkflowSource;
+  reusableWorkflows: { id: string; name: string }[];
   statuses: string[];
   skills: RepoSkillView[];
   problems: string[];
@@ -72,13 +76,18 @@ export default function WorkflowEditPage() {
     setSaved(JSON.stringify(d));
   }, []);
 
+  const reloadView = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/projects/${id}/workflow`);
+      if (!res.ok) return setMissing(true);
+      take((await res.json()) as View);
+    } catch {
+      setMissing(true);
+    }
+  }, [id, take]);
+
   useEffect(() => {
-    fetch(`/api/projects/${id}/workflow`)
-      .then(async (res) => {
-        if (!res.ok) return setMissing(true);
-        take((await res.json()) as View);
-      })
-      .catch(() => setMissing(true));
+    void reloadView();
     fetch("/api/workflows")
       .then((r) => r.json())
       .then((d: { projects?: OtherProject[] }) => setOthers((d.projects ?? []).filter((p) => p.id !== id && p.workflow)))
@@ -97,7 +106,7 @@ export default function WorkflowEditPage() {
         setNotifyTargets((d.providers ?? []).filter((p) => p.enabled)),
       )
       .catch(() => {});
-  }, [id, take]);
+  }, [id, reloadView]);
 
   useEffect(() => {
     if (loaded && !settings.issuesEnabled) router.replace("/settings");
@@ -151,11 +160,13 @@ export default function WorkflowEditPage() {
   }
 
   const { project } = view;
+  const shared = view.source.kind === "reusable" ? view.source : null;
+  const sourceMissing = view.source.kind === "missing";
   const dirty = JSON.stringify(draft) !== saved;
   const empty = Object.keys(draft.statuses).length === 0;
   const noRepo = project.repoPath
     ? undefined
-    : `${project.name} has no repo path, so there are no skills to choose from. Set one in Settings, Projects.`;
+    : `${project.name} has no repo path, so agents cannot work here. Your user skills are still listed; set a repo path in Settings, Projects.`;
   const data: StatusEditorData = { statuses, skills: view.skills, noRepo, providers, mcpServers, notifyTargets };
 
   function setRule(status: string, rule: WorkflowStatusRule | undefined) {
@@ -200,6 +211,79 @@ export default function WorkflowEditPage() {
     setSaving(false);
   }
 
+  async function stopUsing() {
+    setSaving(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/projects/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reusableWorkflowId: null }),
+      });
+      if (!res.ok) setError((await res.json().catch(() => ({}))).error || "Could not stop using the workflow");
+      else await reloadView();
+    } catch {
+      setError("Could not reach Cockpit");
+    }
+    setSaving(false);
+  }
+
+  // A project using a reusable workflow has no rules of its own to edit here:
+  // editing them would silently change every project using the same workflow.
+  if (shared || sourceMissing) {
+    return (
+      <div className="min-h-0 flex-1 overflow-y-auto p-4">
+        <div className="mx-auto max-w-2xl space-y-6">
+          <Button variant="ghost" size="sm" onClick={() => router.push("/settings/workflows")}>
+            <ArrowLeft className="mr-1 h-4 w-4" />
+            Workflows
+          </Button>
+
+          <header className="space-y-1">
+            <h1 className="text-xl font-semibold" data-testid="workflow-title">
+              {project.name}'s workflow
+            </h1>
+            <p className="text-sm text-muted-foreground">
+              {shared
+                ? `This project uses the reusable workflow "${shared.name}". Editing it here would change every project using it.`
+                : "The reusable workflow this project selected no longer exists. Stop using it to return to its own workflow."}
+            </p>
+          </header>
+
+          <section className="space-y-3 rounded-lg border bg-card p-4" data-testid="workflow-source">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className="text-sm font-medium">{shared ? `Shared workflow: ${shared.name}` : "Shared workflow missing"}</div>
+                <p className="mt-0.5 text-xs text-muted-foreground">
+                  {shared
+                    ? "It is edited once, for every project that uses it."
+                    : "Choose its own workflow or another reusable one in Settings, Projects."}
+                </p>
+              </div>
+              <div className="flex shrink-0 gap-2">
+                {shared && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => router.push(`/settings/workflows/reusable/${shared.id}`)}
+                    data-testid="workflow-source-edit"
+                  >
+                    Edit
+                  </Button>
+                )}
+                <Button size="sm" variant="outline" onClick={stopUsing} disabled={saving} data-testid="workflow-source-stop">
+                  Stop using
+                </Button>
+              </div>
+            </div>
+            {shared && view.workflow && <TrackSummary rules={view.workflow.statuses} order={view.statuses} />}
+            {error && <p className="text-sm text-destructive">{error}</p>}
+          </section>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-0 flex-1 overflow-y-auto p-4 pb-28">
       <div className="mx-auto max-w-2xl space-y-6">
@@ -231,13 +315,27 @@ export default function WorkflowEditPage() {
             What happens to {project.name}'s issues at each status.{" "}
             {project.repoPath ? (
               <>
-                Agents run skills from <span className="font-mono text-xs">{project.repoPath}</span>
+                Agents run skills from <span className="font-mono text-xs">{project.repoPath}</span>, or your user skills.
               </>
             ) : (
               "It has no repo path yet, so there are no skills for an agent to run."
             )}
           </p>
         </header>
+
+        <section className="flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-card p-4" data-testid="workflow-source">
+          <div className="min-w-0">
+            <div className="text-sm font-medium">Its own workflow</div>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              To use a reusable workflow instead, choose one for this project in Settings, Projects.
+            </p>
+          </div>
+          {view.reusableWorkflows.length > 0 && (
+            <span className="text-xs text-muted-foreground">
+              {view.reusableWorkflows.length} reusable {view.reusableWorkflows.length === 1 ? "workflow" : "workflows"} available.
+            </span>
+          )}
+        </section>
 
         <section className="divide-y rounded-lg border bg-card">
           <div className="flex items-center justify-between gap-4 px-4 py-3">

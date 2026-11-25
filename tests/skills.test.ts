@@ -5,9 +5,24 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { hasRepoSkill, listRepoSkills, parseFrontmatter, readSkillsFromDir, repoSkillPath, SKILL_NAME } from "@/server/skills";
+import {
+  hasRepoSkill,
+  hasUserSkill,
+  hasWorkflowSkill,
+  listRepoSkills,
+  listUserSkills,
+  listWorkflowSkills,
+  parseFrontmatter,
+  readSkillsFromDir,
+  repoSkillPath,
+  SKILL_NAME,
+  userSkillPath,
+  workflowSkillPath,
+} from "@/server/skills";
 
 let repo: string;
+let claudeDir: string;
+let prevClaudeDir: string | undefined;
 
 function skill(name: string, content: string | null): void {
   const where = path.join(repo, ".claude", "skills", name);
@@ -15,12 +30,24 @@ function skill(name: string, content: string | null): void {
   if (content !== null) writeFileSync(path.join(where, "SKILL.md"), content);
 }
 
+function userSkill(name: string, content: string | null): void {
+  const where = path.join(claudeDir, "skills", name);
+  mkdirSync(where, { recursive: true });
+  if (content !== null) writeFileSync(path.join(where, "SKILL.md"), content);
+}
+
 beforeEach(() => {
   repo = mkdtempSync(path.join(tmpdir(), "cockpit-skills-"));
+  claudeDir = mkdtempSync(path.join(tmpdir(), "cockpit-claude-"));
+  prevClaudeDir = process.env.CLAUDE_CONFIG_DIR;
+  process.env.CLAUDE_CONFIG_DIR = claudeDir;
 });
 
 afterEach(() => {
+  if (prevClaudeDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+  else process.env.CLAUDE_CONFIG_DIR = prevClaudeDir;
   rmSync(repo, { recursive: true, force: true });
+  rmSync(claudeDir, { recursive: true, force: true });
 });
 
 describe("a skill's frontmatter", () => {
@@ -81,5 +108,49 @@ describe("a skills directory read for the skills pages", () => {
       { name: "Planner", scope: "project", description: "Writes the plan." },
     ]);
     expect(await readSkillsFromDir(path.join(repo, "nope"), "user")).toEqual([]);
+  });
+});
+
+describe("the skills a workflow can run", () => {
+  it("falls back to the user's own skills, with the repo's copy winning", () => {
+    skill("plan-issue", "---\ndescription: Repo plan.\n---");
+    userSkill("plan-issue", "---\ndescription: User plan.\n---");
+    userSkill("review", "---\ndescription: User review.\n---");
+
+    expect(hasUserSkill("review")).toBe(true);
+    expect(hasUserSkill("missing")).toBe(false);
+    expect(hasUserSkill("a/b")).toBe(false);
+    expect(userSkillPath("review")).toBe(path.join(claudeDir, "skills", "review", "SKILL.md"));
+
+    expect(hasWorkflowSkill(repo, "plan-issue")).toBe(true);
+    expect(hasWorkflowSkill(repo, "review")).toBe(true);
+    expect(hasWorkflowSkill(undefined, "review")).toBe(true);
+    expect(hasWorkflowSkill(undefined, "missing")).toBe(false);
+    expect(workflowSkillPath(repo, "plan-issue")).toBe(".claude/skills/plan-issue/SKILL.md");
+    expect(workflowSkillPath(repo, "review")).toBe(userSkillPath("review"));
+  });
+
+  it("lists user skills and every project's repo skills, with a repo replacing a user copy", () => {
+    userSkill("plan-issue", "---\ndescription: User plan.\n---");
+    userSkill("review", "---\ndescription: User review.\n---");
+    skill("plan-issue", "---\ndescription: Repo plan.\n---");
+
+    const second = mkdtempSync(path.join(tmpdir(), "cockpit-skills-two-"));
+    try {
+      mkdirSync(path.join(second, ".claude", "skills", "review"), { recursive: true });
+      writeFileSync(path.join(second, ".claude", "skills", "review", "SKILL.md"), "---\ndescription: Second repo review.\n---");
+
+      const skills = listWorkflowSkills([repo, second]);
+      expect(skills.map((s) => s.name)).toEqual(["plan-issue", "review"]);
+      expect(skills.find((s) => s.name === "plan-issue")).toMatchObject({
+        scope: "repo",
+        path: ".claude/skills/plan-issue/SKILL.md",
+        description: "Repo plan.",
+      });
+      expect(skills.find((s) => s.name === "review")).toMatchObject({ scope: "repo", description: "Second repo review." });
+      expect(listUserSkills().map((s) => s.name)).toEqual(["plan-issue", "review"]);
+    } finally {
+      rmSync(second, { recursive: true, force: true });
+    }
   });
 });

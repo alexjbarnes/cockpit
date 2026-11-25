@@ -2,7 +2,7 @@ import { type NextRequest, NextResponse } from "next/server";
 import { validateSession } from "@/server/auth";
 import { getProject } from "@/server/issue-storage";
 import { getWorkflowEngine } from "@/server/singleton";
-import { deleteWorkflow, setProjectWorkflow, type WorkflowInput } from "@/server/workflow-storage";
+import { deleteWorkflow, reusableForProject, setProjectWorkflow, type WorkflowInput } from "@/server/workflow-storage";
 import { workflowView } from "@/server/workflow-view";
 
 function authenticate(req: NextRequest): boolean {
@@ -27,6 +27,15 @@ export async function PUT(req: NextRequest, { params }: Params) {
   if (!authenticate(req)) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   const project = getProject((await params).id);
   if (!project) return NextResponse.json({ error: "Not found" }, { status: 404 });
+  if (project.reusableWorkflowId) {
+    const shared = reusableForProject(project);
+    return NextResponse.json(
+      {
+        error: `${project.name} uses the reusable workflow "${shared?.name ?? project.reusableWorkflowId}". Change it in Settings, Workflows, or stop using it first.`,
+      },
+      { status: 400 },
+    );
+  }
   const body = (await req.json().catch(() => null)) as Record<string, unknown> | null;
   if (!body) return NextResponse.json({ error: "A workflow is required" }, { status: 400 });
   // Only the fields a workflow has, so nothing else a caller sends is stored.
@@ -45,11 +54,21 @@ export async function PUT(req: NextRequest, { params }: Params) {
   }
 }
 
-/** Remove the project's workflow. Its runs are stopped and nothing stays held. */
+/** Remove the project's own workflow. Its runs are stopped and nothing stays
+ *  held. A project using a reusable workflow must stop using it first. */
 export async function DELETE(req: NextRequest, { params }: Params) {
   if (!authenticate(req)) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   const project = getProject((await params).id);
   if (!project) return NextResponse.json({ error: "Not found" }, { status: 404 });
+  if (project.reusableWorkflowId) {
+    const shared = reusableForProject(project);
+    return NextResponse.json(
+      {
+        error: `${project.name} uses the reusable workflow "${shared?.name ?? project.reusableWorkflowId}". Stop using it first, in Settings, Workflows.`,
+      },
+      { status: 400 },
+    );
+  }
   getWorkflowEngine()?.forget(project.id);
   deleteWorkflow(project.id);
   return NextResponse.json({ ok: true });

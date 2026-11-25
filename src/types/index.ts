@@ -522,6 +522,10 @@ export interface Project {
   statusOrder?: string[];
   /** The branch an issue's work starts from. Absent: the repo's default. */
   baseBranch?: string;
+  /** The reusable workflow this project uses, when it is not using its own.
+   *  Set only by the workflow module, which also syncs the workflow's statuses
+   *  onto this project. The project's own workflow is kept while this is set. */
+  reusableWorkflowId?: string;
 }
 
 /**
@@ -742,6 +746,22 @@ export interface Workflow {
   /** Issues worked at once in this project. */
   maxParallel: number;
   /** By status name. A status that is not here is one where nothing happens. */
+  statuses: Record<string, WorkflowStatusRule>;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/** A workflow defined outside any project and selected by projects. It has its
+ *  own identity, so one definition can drive several projects; its limits count
+ *  per project, as a project workflow's do. */
+export interface ReusableWorkflow {
+  kind: "reusable";
+  id: string;
+  name: string;
+  /** Off: no project using it starts a run. Runs already going finish. */
+  enabled: boolean;
+  /** Issues worked at once in each project using it. */
+  maxParallel: number;
   statuses: Record<string, WorkflowStatusRule>;
   createdAt: number;
   updatedAt: number;

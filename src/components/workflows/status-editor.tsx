@@ -392,7 +392,7 @@ type Kind = "none" | WorkflowStatusRule["kind"];
 const KINDS: { kind: Kind; title: string; hint: string; Icon: typeof Bot }[] = [
   { kind: "none", title: "Nothing", hint: "It stays until someone moves it", Icon: CircleDashed },
   { kind: "queue", title: "It queues for an agent", hint: "It waits here, then moves on when an agent is free", Icon: Clock },
-  { kind: "agent", title: "An agent works on it", hint: "A Claude session runs one of this repo's skills", Icon: Bot },
+  { kind: "agent", title: "An agent works on it", hint: "A Claude session runs a workflow skill", Icon: Bot },
   { kind: "human", title: "It waits for me", hint: "Until I decide where it goes", Icon: User },
 ];
 

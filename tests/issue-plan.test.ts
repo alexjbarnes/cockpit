@@ -11,9 +11,9 @@ import { PLAN_NOTES_HEADING } from "@/lib/plan-review/feedback";
 import type { PlanAnnotation } from "@/lib/plan-review/types";
 import { onIssueStatusChange } from "@/server/issue-events";
 import { IssuePlanError, readIssuePlan, reviewIssuePlan, saveIssuePlanDraft, writeIssuePlan } from "@/server/issue-plan";
-import { buildIssue, buildProject, deleteIssue, getIssue, saveIssue, saveProject } from "@/server/issue-storage";
+import { buildIssue, buildProject, deleteIssue, getIssue, getProject, saveIssue, saveProject } from "@/server/issue-storage";
 import { readPlanRecord } from "@/server/plan-review-storage";
-import { setProjectWorkflow } from "@/server/workflow-storage";
+import { assignReusableWorkflow, setProjectWorkflow, setReusableWorkflow } from "@/server/workflow-storage";
 import type { Issue, IssueActor } from "@/types";
 
 vi.mock("@/server/auth", () => ({
@@ -81,6 +81,29 @@ describe("writing an issue's plan", () => {
       reviewable: 1,
       targets: { approve: "Implementation Ready", sendBack: "Refine Ready" },
     });
+  });
+
+  it("takes the plan gate from the reusable workflow a project selects", () => {
+    const issue = makeIssue();
+    const shared = setReusableWorkflow({
+      name: "Frontend",
+      statuses: {
+        Refining: { kind: "agent", skill: "plan-issue", next: ["Plan Review"] },
+        "Plan Review": {
+          kind: "human",
+          review: "plan",
+          next: [
+            { status: "Ship It", label: "Approve", role: "approve" },
+            { status: "Rework", label: "Send back", role: "sendBack" },
+          ],
+        },
+      },
+    }).workflow;
+    assignReusableWorkflow(getProject(issue.projectId) as NonNullable<ReturnType<typeof getProject>>, shared.id);
+    writeIssuePlan(issue.key, PLAN, AGENT);
+
+    expect(readIssuePlan(issue.key).targets).toEqual({ approve: "Ship It", sendBack: "Rework" });
+    expect(getProject(issue.projectId)?.customStatuses?.map((s) => s.name)).toEqual(["Ship It", "Rework"]);
   });
 
   it("refuses an empty plan, one that is too long, and an unknown issue", () => {

@@ -11,18 +11,25 @@ import { applyProjectUpdate, buildProject, getProject, saveProject } from "@/ser
 import {
   agentWork,
   assertProjectKeepsWorkflowStatuses,
+  assignReusableWorkflow,
+  deleteReusableWorkflow,
   deleteWorkflow,
   deleteWorkflowRuns,
+  getReusableWorkflow,
   getWorkflowSessionIds,
+  loadReusableWorkflows,
   loadUnfinishedRuns,
   loadWorkflowRuns,
   loadWorkflows,
+  prepareProjectUpdate,
   projectRunsWorkflow,
   resetWorkRuns,
   ruleAt,
   runsOf,
   saveWorkflowRun,
   setProjectWorkflow,
+  setReusableWorkflow,
+  shapeReusableWorkflow,
   shapeWorkflow,
   WORKFLOW_MAX_RUNS_PER_ISSUE,
   waitingStatuses,
@@ -447,5 +454,141 @@ describe("runs", () => {
     deleteWorkflowRuns("../etc");
     expect(loadWorkflowRuns("../etc")).toEqual([]);
     expect(() => saveWorkflowRun(run({ issueKey: "../etc" }))).toThrow(/Not an issue key/);
+  });
+});
+
+describe("reusable workflows", () => {
+  const SHARED = {
+    ...RULES,
+    Triage: { kind: "agent", skill: "plan-issue", next: ["Plan Review", "Needs Detail"] },
+    Implementation: { kind: "agent", skill: "plan-issue", next: ["Done"] },
+  };
+
+  function otherProject(): Project {
+    const other = buildProject({ name: "Rover", prefix: "RV" });
+    saveProject(other);
+    return other;
+  }
+
+  function reusable(over: Record<string, unknown> = {}) {
+    return setReusableWorkflow({ name: "Frontend", statuses: SHARED, ...over }).workflow;
+  }
+
+  it("creates one outside any project and gives each selecting project its statuses", () => {
+    const other = otherProject();
+    project = applyProjectUpdate(project, { disabledStatuses: ["Implementation"] });
+    saveProject(project);
+    const shared = reusable();
+
+    project = assignReusableWorkflow(project, shared.id);
+    const second = assignReusableWorkflow(other, shared.id);
+
+    for (const p of [project, second]) {
+      expect(p.reusableWorkflowId).toBe(shared.id);
+      expect(p.customStatuses?.map((s) => s.name)).toContain("Triage");
+      expect(p.disabledStatuses ?? []).not.toContain("Implementation");
+    }
+    expect(workflowForProject(project)).toMatchObject({ projectId: project.id, statuses: shared.statuses });
+    expect(workflowForProject(second)?.maxParallel).toBe(shared.maxParallel);
+    setDefaults({ issuesEnabled: true, workflowsEnabled: true });
+    expect(projectRunsWorkflow(project.id)).toBe(true);
+  });
+
+  it("reaches every selecting project when a status is added, and removes nothing", () => {
+    const other = otherProject();
+    const shared = reusable();
+    project = assignReusableWorkflow(project, shared.id);
+    const second = assignReusableWorkflow(other, shared.id);
+
+    const updated = setReusableWorkflow({ id: shared.id, statuses: { Waiting: { kind: "queue", to: "Refining" } } });
+    expect(updated.projects.map((p) => p.id).sort()).toEqual([project.id, second.id].sort());
+    for (const p of [getProject(project.id), getProject(second.id)]) {
+      expect(p?.customStatuses?.map((s) => s.name)).toContain("Waiting");
+    }
+
+    setReusableWorkflow({ id: shared.id, replace: true, statuses: { Refining: PLAN } });
+    expect(getProject(project.id)?.customStatuses?.map((s) => s.name)).toContain("Triage");
+  });
+
+  it("keeps the project's own workflow dormant and restores it on detach", () => {
+    setProjectWorkflow(project, { statuses: RULES });
+    const own = workflowForProject(project);
+    const shared = reusable();
+
+    project = assignReusableWorkflow(project, shared.id);
+    expect(workflowForProject(project)?.projectId).toBe(project.id);
+    expect(workflowForProject(project)?.statuses).toEqual(shared.statuses);
+
+    project = assignReusableWorkflow(project, null);
+    expect(project.reusableWorkflowId).toBeUndefined();
+    expect(workflowForProject(project)).toEqual(own);
+  });
+
+  it("canonicalises a built-in spelling but refuses a case-only custom conflict", () => {
+    const shaped = shapeReusableWorkflow({ name: "Frontend", statuses: { refining: PLAN } });
+    expect(Object.keys(shaped.statuses)).toEqual(["Refining"]);
+
+    const p = applyProjectUpdate(project, { customStatuses: [{ name: "review" }] });
+    saveProject(p);
+    const shared = setReusableWorkflow({
+      name: "Frontend",
+      statuses: { Review: { kind: "agent", skill: "plan-issue", next: ["Done"] } },
+    }).workflow;
+    expect(() => assignReusableWorkflow(getProject(p.id) as Project, shared.id)).toThrow(/has the status "review".*uses "Review"/);
+    expect(getProject(p.id)?.reusableWorkflowId).toBeUndefined();
+  });
+
+  it("resolves a dangling pointer to nothing but still counts as a workflow for jobs", () => {
+    const shared = reusable();
+    project = assignReusableWorkflow(project, shared.id);
+    writeFileSync(path.join(dir, "workflows.json"), JSON.stringify({ workflows: [] }));
+
+    expect(workflowForProject(getProject(project.id))).toBeUndefined();
+    setDefaults({ issuesEnabled: true, workflowsEnabled: true });
+    expect(projectRunsWorkflow(project.id)).toBe(true);
+  });
+
+  it("refuses to delete one that a project uses", () => {
+    const shared = reusable();
+    project = assignReusableWorkflow(project, shared.id);
+
+    expect(() => deleteReusableWorkflow(shared.id)).toThrow(/used by Cockpit/);
+    expect(getReusableWorkflow(shared.id)).toBeDefined();
+
+    assignReusableWorkflow(getProject(project.id) as Project, null);
+    expect(deleteReusableWorkflow(shared.id)).toBe(true);
+    expect(loadReusableWorkflows()).toEqual([]);
+  });
+
+  it("preserves both kinds through every writer", () => {
+    const shared = reusable();
+    setProjectWorkflow(project, { statuses: RULES });
+    expect(loadReusableWorkflows().map((w) => w.id)).toEqual([shared.id]);
+
+    deleteWorkflow(project.id);
+    expect(loadReusableWorkflows().map((w) => w.id)).toEqual([shared.id]);
+    expect(loadWorkflows()).toEqual([]);
+
+    setProjectWorkflow(project, { statuses: RULES });
+    expect(getReusableWorkflow(shared.id)).toBeDefined();
+    expect(loadWorkflows().map((w) => w.projectId)).toEqual([project.id]);
+  });
+
+  it("applies a project patch and a source change in one prepared project", () => {
+    const shared = reusable();
+    const next = prepareProjectUpdate(project, { name: "Cockpit Two" }, shared.id);
+    expect(next.name).toBe("Cockpit Two");
+    expect(next.reusableWorkflowId).toBe(shared.id);
+    expect(next.customStatuses?.map((s) => s.name)).toContain("Triage");
+
+    const detached = prepareProjectUpdate(next, { customStatuses: [] }, null);
+    expect(detached.reusableWorkflowId).toBeUndefined();
+    expect(detached.customStatuses).toEqual([]);
+  });
+
+  it("refuses to change the rules of a shared project's own workflow", () => {
+    const shared = reusable();
+    project = assignReusableWorkflow(project, shared.id);
+    expect(() => setProjectWorkflow(getProject(project.id) as Project, { statuses: RULES })).toThrow(/uses the reusable workflow/);
   });
 });

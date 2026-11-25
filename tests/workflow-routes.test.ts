@@ -18,7 +18,15 @@ vi.mock("@/server/singleton", () => ({
 
 import { setDefaults } from "@/server/defaults";
 import { buildIssue, buildProject, getIssue, getProject, saveIssue, saveProject } from "@/server/issue-storage";
-import { loadWorkflowRuns, saveWorkflowRun, setProjectWorkflow, workflowForProject } from "@/server/workflow-storage";
+import {
+  assignReusableWorkflow,
+  loadReusableWorkflows,
+  loadWorkflowRuns,
+  saveWorkflowRun,
+  setProjectWorkflow,
+  setReusableWorkflow,
+  workflowForProject,
+} from "@/server/workflow-storage";
 import type { Issue, Project } from "@/types";
 
 let dir: string;
@@ -367,5 +375,111 @@ describe("deleting an issue", () => {
     expect(engine.discard).toHaveBeenCalledWith(issue.key);
     expect(getIssue(issue.key)).toBeUndefined();
     expect(loadWorkflowRuns(issue.key)).toEqual([]);
+  });
+});
+
+describe("reusable workflow routes", () => {
+  it("lists, creates and reads a reusable workflow", async () => {
+    const collection = await import("@/app/api/reusable-workflows/route");
+    const created = await collection.POST(req("/api/reusable-workflows", { method: "POST", body: { name: "Frontend", statuses: RULES } }));
+    expect(created.status).toBe(201);
+    const body = await created.json();
+    expect(body.workflow).toMatchObject({ kind: "reusable", name: "Frontend" });
+
+    const all = await (await collection.GET(req("/api/reusable-workflows"))).json();
+    expect(all.reusable).toMatchObject([{ name: "Frontend", usedBy: [] }]);
+    expect((await collection.GET(req("/api/reusable-workflows", { auth: false }))).status).toBe(401);
+
+    const one = await import("@/app/api/reusable-workflows/[id]/route");
+    const view = await (await one.GET(req(`/api/reusable-workflows/${body.workflow.id}`), id(body.workflow.id))).json();
+    expect(view.workflow.name).toBe("Frontend");
+    expect(view.statuses).toContain("Refining");
+    expect(view.usedBy).toEqual([]);
+    expect((await one.GET(req("/x"), id("nope"))).status).toBe(404);
+  });
+
+  it("updates one, syncs a new status into its projects and refuses deletion while used", async () => {
+    const shared = setReusableWorkflow({ name: "Frontend", statuses: RULES }).workflow;
+    const project = makeProject();
+    assignReusableWorkflow(project, shared.id);
+    const one = await import("@/app/api/reusable-workflows/[id]/route");
+
+    const updated = await one.PUT(
+      req(`/api/reusable-workflows/${shared.id}`, {
+        method: "PUT",
+        body: { statuses: { Triage: { kind: "queue", to: "Refining" } } },
+      }),
+      id(shared.id),
+    );
+    expect(updated.status).toBe(200);
+    const saved = await updated.json();
+    expect(saved.projects).toMatchObject([{ id: project.id, name: "Cockpit", added: ["Triage"] }]);
+    expect(getProject(project.id)?.customStatuses?.map((s) => s.name)).toContain("Triage");
+    expect(engine.kick).toHaveBeenCalled();
+
+    const refused = await one.DELETE(req(`/api/reusable-workflows/${shared.id}`, { method: "DELETE" }), id(shared.id));
+    expect(refused.status).toBe(400);
+    expect((await refused.json()).error).toContain("Cockpit");
+
+    assignReusableWorkflow(getProject(project.id) as Project, null);
+    expect((await one.DELETE(req(`/api/reusable-workflows/${shared.id}`, { method: "DELETE" }), id(shared.id))).status).toBe(200);
+    expect(loadReusableWorkflows()).toEqual([]);
+  });
+
+  it("assigns and clears through the project PUT, stopping its old runs", async () => {
+    const shared = setReusableWorkflow({ name: "Frontend", statuses: RULES }).workflow;
+    const project = makeProject();
+    const { PUT } = await import("@/app/api/projects/[id]/route");
+
+    const assigned = await PUT(
+      req(`/api/projects/${project.id}`, { method: "PUT", body: { reusableWorkflowId: shared.id } }),
+      id(project.id),
+    );
+    expect(assigned.status).toBe(200);
+    const assignedBody = await assigned.json();
+    expect(assignedBody.project.reusableWorkflowId).toBe(shared.id);
+    expect(engine.forget).toHaveBeenCalledWith(project.id);
+    expect(workflowForProject(getProject(project.id))?.statuses).toEqual(shared.statuses);
+
+    const cleared = await PUT(req(`/api/projects/${project.id}`, { method: "PUT", body: { reusableWorkflowId: null } }), id(project.id));
+    expect(cleared.status).toBe(200);
+    expect((await cleared.json()).project.reusableWorkflowId).toBeUndefined();
+    expect(workflowForProject(getProject(project.id))).toBeUndefined();
+
+    const bad = await PUT(req(`/api/projects/${project.id}`, { method: "PUT", body: { reusableWorkflowId: "nope" } }), id(project.id));
+    expect(bad.status).toBe(400);
+    expect(engine.forget).toHaveBeenCalledTimes(2);
+  });
+
+  it("refuses rule edits and removal while a project uses one", async () => {
+    const shared = setReusableWorkflow({ name: "Frontend", statuses: RULES }).workflow;
+    const project = makeProject();
+    assignReusableWorkflow(project, shared.id);
+    const route = await import("@/app/api/projects/[id]/workflow/route");
+
+    const put = await route.PUT(req(`/api/projects/${project.id}/workflow`, { method: "PUT", body: { statuses: RULES } }), id(project.id));
+    expect(put.status).toBe(400);
+    expect((await put.json()).error).toContain("Frontend");
+
+    const del = await route.DELETE(req(`/api/projects/${project.id}/workflow`, { method: "DELETE" }), id(project.id));
+    expect(del.status).toBe(400);
+    expect(engine.forget).not.toHaveBeenCalled();
+  });
+
+  it("drops a missing skill once the user has one", async () => {
+    const project = makeProject();
+    setProjectWorkflow(project, { statuses: RULES });
+    const issue = makeIssue(project, "Refine Ready");
+    const route = await import("@/app/api/issues/[key]/workflow/route");
+
+    const before = await (await route.GET(req(`/api/issues/${issue.key}/workflow`), key(issue.key))).json();
+    expect(before.missingSkills).toEqual(["Refining"]);
+
+    const claudeDir = process.env.CLAUDE_CONFIG_DIR as string;
+    mkdirSync(path.join(claudeDir, "skills", "plan-issue"), { recursive: true });
+    writeFileSync(path.join(claudeDir, "skills", "plan-issue", "SKILL.md"), "---\nname: plan-issue\n---\n");
+
+    const after = await (await route.GET(req(`/api/issues/${issue.key}/workflow`), key(issue.key))).json();
+    expect(after.missingSkills).toEqual([]);
   });
 });

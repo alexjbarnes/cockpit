@@ -35,7 +35,15 @@ import { setDefaults } from "@/server/defaults";
 import { addInboxMessage } from "@/server/inbox";
 import { applyIssueUpdate, applyProjectUpdate, buildIssue, buildProject, getIssue, saveIssue, saveProject } from "@/server/issue-storage";
 import { buildRunPrompt, WORKFLOW_MAX_WORK_RUNS, WorkflowEngine } from "@/server/workflow-engine";
-import { agentWork, deleteWorkflow, loadWorkflowRuns, saveWorkflowRun, setProjectWorkflow } from "@/server/workflow-storage";
+import {
+  agentWork,
+  assignReusableWorkflow,
+  deleteWorkflow,
+  loadWorkflowRuns,
+  saveWorkflowRun,
+  setProjectWorkflow,
+  setReusableWorkflow,
+} from "@/server/workflow-storage";
 import type { Issue, IssueActor, Project, Workflow, WorkflowRun } from "@/types";
 
 interface FakeSession {
@@ -234,7 +242,7 @@ describe("picking up an issue", () => {
     const prompt = session.messages[0];
     expect(prompt).toContain(`workflow on issue ${issue.key},`);
     expect(prompt).toContain(`get_issue (key "${issue.key}")`);
-    expect(prompt).toContain('run this repository\'s "plan-issue" skill');
+    expect(prompt).toContain('run the "plan-issue" skill');
     expect(prompt).toContain(".claude/skills/plan-issue/SKILL.md");
     expect(prompt).toContain('- "Plan Review"');
     expect(prompt).toContain('- "Needs Detail"');
@@ -1121,5 +1129,54 @@ describe("the activity view", () => {
       blocked: [],
       queued: [{ issueKey: issue.key, title: "Widget", status: "Refine Ready", skill: "plan-issue" }],
     });
+  });
+});
+
+describe("a project using a reusable workflow", () => {
+  function twoProjectsSharing(over: Record<string, unknown> = {}): Project {
+    project = buildProject({ name: "Cockpit", prefix: "CK", repoPath: repo });
+    saveProject(project);
+    const other = buildProject({ name: "Rover", prefix: "RV", repoPath: repo });
+    saveProject(other);
+    const shared = setReusableWorkflow({ name: "Frontend", maxParallel: 1, statuses: RULES, ...over }).workflow;
+    project = assignReusableWorkflow(project, shared.id);
+    return assignReusableWorkflow(other, shared.id);
+  }
+
+  it("runs an issue in each project, counting its limit per project", () => {
+    const other = twoProjectsSharing();
+    makeIssue("Refine Ready");
+    makeIssue("Refine Ready", {}, other);
+
+    engine.fill();
+
+    expect(sm.sessions).toHaveLength(2);
+    expect(sm.sessions.map((s) => s.cwd)).toEqual([repo, repo]);
+  });
+
+  it("runs a user skill when the project's repo has none", () => {
+    const claudeDir = process.env.CLAUDE_CONFIG_DIR as string;
+    mkdirSync(path.join(claudeDir, "skills", "user-plan"), { recursive: true });
+    writeFileSync(path.join(claudeDir, "skills", "user-plan", "SKILL.md"), "---\nname: user-plan\n---\nDo it.\n");
+    setup({ ...RULES, Refining: { ...PLAN, skill: "user-plan" } });
+    makeIssue("Refine Ready");
+
+    engine.fill();
+
+    expect(sm.sessions).toHaveLength(1);
+    expect(sm.sessions[0].messages[0]).toContain(path.join(claudeDir, "skills", "user-plan", "SKILL.md"));
+  });
+
+  it("prefers the repo's copy when both have the skill", () => {
+    const claudeDir = process.env.CLAUDE_CONFIG_DIR as string;
+    mkdirSync(path.join(claudeDir, "skills", "plan-issue"), { recursive: true });
+    writeFileSync(path.join(claudeDir, "skills", "plan-issue", "SKILL.md"), "---\nname: plan-issue\n---\nUser copy.\n");
+    setup();
+    makeIssue("Refine Ready");
+
+    engine.fill();
+
+    expect(sm.sessions[0].messages[0]).toContain(".claude/skills/plan-issue/SKILL.md");
+    expect(sm.sessions[0].messages[0]).not.toContain(path.join(claudeDir, "skills", "plan-issue", "SKILL.md"));
   });
 });

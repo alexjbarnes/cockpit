@@ -6,6 +6,7 @@ export interface RepoSkillView {
   name: string;
   description?: string;
   path: string;
+  scope?: "user" | "repo";
 }
 
 /** The same select the issue page uses for a status, so one looks like the other. */
@@ -54,6 +55,7 @@ export function SkillSelect({
         <div className="rounded-md border px-2.5 py-2 text-xs" data-testid="rule-skill-info">
           {found.description && <p>{found.description}</p>}
           <p className="font-mono text-muted-foreground">{found.path}</p>
+          {found.scope === "user" && <p className="text-muted-foreground">Your user skill, loaded by every session.</p>}
         </div>
       )}
 
@@ -64,8 +66,9 @@ export function SkillSelect({
         >
           <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-700 dark:text-amber-300" />
           <span>
-            There is no skill called <span className="font-mono">{value}</span> in this repo, so nothing can start here. Add it at{" "}
-            <span className="font-mono">.claude/skills/{value}/SKILL.md</span>, or ask an agent working in the project to write it.
+            There is no skill called <span className="font-mono">{value}</span> in the repo or your user skills, so nothing can start here.
+            Add it at <span className="font-mono">.claude/skills/{value}/SKILL.md</span>, or at{" "}
+            <span className="font-mono">~/.claude/skills/{value}/SKILL.md</span> for every project.
           </span>
         </p>
       )}
@@ -78,8 +81,9 @@ export function SkillSelect({
 
       {!noRepo && skills.length === 0 && !missing && (
         <p className="rounded-md border border-amber-500/50 bg-amber-500/10 p-2.5 text-xs" data-testid="rule-skill-none">
-          This repo has no skills yet. Add one at <span className="font-mono">.claude/skills/&lt;name&gt;/SKILL.md</span>, or ask an agent
-          working in the project to write it.
+          No skills found in the repo or your user skills. Add one at{" "}
+          <span className="font-mono">.claude/skills/&lt;name&gt;/SKILL.md</span>, or at{" "}
+          <span className="font-mono">~/.claude/skills/&lt;name&gt;/SKILL.md</span>.
         </p>
       )}
     </div>

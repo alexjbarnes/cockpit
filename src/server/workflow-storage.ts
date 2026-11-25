@@ -2,20 +2,23 @@
 //
 // A project has at most one workflow: for each of its statuses, what happens
 // to an issue there. Nothing (the status is not named), a queue for an agent,
-// an agent working on it by running a skill from the project's repo, or
-// waiting for a person. All of them are kept in workflows.json, one entry per
-// project. Each run of an agent on an issue is kept in that issue's own file
-// under workflow-runs/, so two issues worked at the same moment never write
-// the same file.
+// an agent working on it by running a skill, or waiting for a person. The
+// workflow is either the project's own, kept in workflows.json keyed by
+// projectId, or a reusable one defined outside any project and selected by
+// several projects. Each run of an agent on an issue is kept in that issue's
+// own file under workflow-runs/, so two issues worked at the same moment never
+// write the same file.
 //
 // Synchronous and uncached, like issue-storage: a call reads, changes and
 // writes before returning, so two writers in one process cannot interleave.
 
+import { randomUUID } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import {
   ISSUE_STATUSES,
   type Project,
+  type ReusableWorkflow,
   THINKING_LEVELS,
   WORKFLOW_PERMISSIONS,
   type Workflow,
@@ -27,7 +30,7 @@ import {
 } from "@/types";
 import { writeJsonAtomic } from "./atomic-write";
 import { getDefaults } from "./defaults";
-import { allowedStatusesFor, applyProjectUpdate, saveProject } from "./issue-storage";
+import { allowedStatusesFor, applyProjectUpdate, getProject, loadProjects, type ProjectUpdateInput, saveProject } from "./issue-storage";
 import { getCockpitDir } from "./paths";
 import { SKILL_NAME } from "./skills";
 
@@ -55,39 +58,126 @@ function runsFile(issueKey: string): string | undefined {
 
 // ── Workflows ─────────────────────────────────────────────────────────
 
-/** Whether a stored entry is a workflow of this shape. An earlier build kept
+/** Both kinds of workflow live in the same file: a project's own entry carries
+ *  projectId, a reusable one carries kind and its own id. */
+type StoredWorkflow = Workflow | ReusableWorkflow;
+
+/** Whether a stored entry is a project's own workflow. An earlier build kept
  *  shared workflows made of named stages; those are left alone and ignored. */
 function isWorkflow(value: unknown): value is Workflow {
   if (!value || typeof value !== "object") return false;
-  const w = value as Partial<Workflow>;
-  return typeof w.projectId === "string" && !!w.statuses && typeof w.statuses === "object" && !Array.isArray(w.statuses);
+  const w = value as Partial<Workflow> & { kind?: unknown };
+  return (
+    w.kind !== "reusable" && typeof w.projectId === "string" && !!w.statuses && typeof w.statuses === "object" && !Array.isArray(w.statuses)
+  );
 }
 
-export function loadWorkflows(): Workflow[] {
+/** Whether a stored entry is a reusable workflow. One that also carries a
+ *  projectId is malformed and ignored rather than guessed at. */
+function isReusableWorkflow(value: unknown): value is ReusableWorkflow {
+  if (!value || typeof value !== "object") return false;
+  const w = value as Partial<ReusableWorkflow> & { projectId?: unknown };
+  return (
+    w.kind === "reusable" &&
+    w.projectId === undefined &&
+    typeof w.id === "string" &&
+    w.id !== "" &&
+    typeof w.name === "string" &&
+    w.name.trim() !== "" &&
+    !!w.statuses &&
+    typeof w.statuses === "object" &&
+    !Array.isArray(w.statuses)
+  );
+}
+
+/** The whole file, both kinds. Unknown and legacy entries are dropped here,
+ *  which also drops them from the next write. */
+function readWorkflowStore(): StoredWorkflow[] {
   const file = workflowsFile();
   if (!existsSync(file)) return [];
   try {
     const parsed = JSON.parse(readFileSync(file, "utf-8")) as { workflows?: unknown[] };
-    return Array.isArray(parsed.workflows) ? parsed.workflows.filter(isWorkflow) : [];
+    if (!Array.isArray(parsed.workflows)) return [];
+    return parsed.workflows.filter((entry): entry is StoredWorkflow => isWorkflow(entry) || isReusableWorkflow(entry));
   } catch {
     return [];
   }
 }
 
-/** The workflow a project's issues move through, when it has one. */
-export function workflowForProject(project: Pick<Project, "id"> | undefined): Workflow | undefined {
-  return project ? loadWorkflows().find((w) => w.projectId === project.id) : undefined;
+/** Every write goes through here, so neither kind can drop the other. */
+function writeWorkflowStore(entries: StoredWorkflow[]): void {
+  writeJsonAtomic(workflowsFile(), { workflows: entries });
+}
+
+/** Project-owned workflows, one per project. */
+export function loadWorkflows(): Workflow[] {
+  return readWorkflowStore().filter(isWorkflow);
+}
+
+export function loadReusableWorkflows(): ReusableWorkflow[] {
+  return readWorkflowStore().filter(isReusableWorkflow);
+}
+
+export function getReusableWorkflow(id: string): ReusableWorkflow | undefined {
+  return loadReusableWorkflows().find((w) => w.id === id);
+}
+
+/** A project's own workflow, ignoring any reusable one it selects. */
+function ownWorkflowForProject(projectId: string): Workflow | undefined {
+  return loadWorkflows().find((w) => w.projectId === projectId);
+}
+
+/** The reusable workflow a project selects, when it selects one. */
+export function reusableForProject(project: Project | undefined): ReusableWorkflow | undefined {
+  return project?.reusableWorkflowId ? getReusableWorkflow(project.reusableWorkflowId) : undefined;
+}
+
+/**
+ * The workflow a project's issues move through: the reusable one it selects,
+ * with the project's id filled in so callers see the same shape as an own
+ * workflow, or the project's own when it selects none. A pointer to a missing
+ * workflow resolves to nothing rather than falling back to the own workflow,
+ * so a dangling reference cannot start unexpected work.
+ */
+export function workflowForProject(project: Project | undefined): Workflow | undefined {
+  if (!project) return undefined;
+  if (project.reusableWorkflowId) {
+    const shared = getReusableWorkflow(project.reusableWorkflowId);
+    if (!shared) return undefined;
+    return {
+      projectId: project.id,
+      enabled: shared.enabled,
+      maxParallel: shared.maxParallel,
+      statuses: shared.statuses,
+      createdAt: shared.createdAt,
+      updatedAt: shared.updatedAt,
+    };
+  }
+  return ownWorkflowForProject(project.id);
+}
+
+/** For callers that hold only an id. */
+export function workflowForProjectId(projectId: string): Workflow | undefined {
+  return workflowForProject(getProject(projectId));
 }
 
 /**
  * Whether a project's issues are the workflow engine's to move: workflows are
- * switched on, and the project's own is too. The status-triggered jobs step
- * aside for such a project, or an issue would be worked twice.
+ * switched on, and the project's workflow is too. The status-triggered jobs
+ * step aside for such a project, or an issue would be worked twice. A pointer
+ * to a missing reusable workflow still counts as claimed, so those jobs do not
+ * start on a project the user believes a workflow owns.
  */
 export function projectRunsWorkflow(projectId: string): boolean {
   const settings = getDefaults();
   if (!settings.issuesEnabled || !settings.workflowsEnabled) return false;
-  return workflowForProject({ id: projectId })?.enabled === true;
+  const project = getProject(projectId);
+  if (!project) return false;
+  if (project.reusableWorkflowId) {
+    const shared = getReusableWorkflow(project.reusableWorkflowId);
+    return shared ? shared.enabled === true : true;
+  }
+  return ownWorkflowForProject(project.id)?.enabled === true;
 }
 
 /** What happens at a status, when anything does. */
@@ -409,10 +499,6 @@ export function shapeWorkflow(project: Project, input: WorkflowInput, existing?:
   };
 }
 
-function writeWorkflows(workflows: Workflow[]): void {
-  writeJsonAtomic(workflowsFile(), { workflows });
-}
-
 /**
  * Create or change a project's workflow and persist it. The project gains any
  * status the workflow names that it lacks, and shows again any built-in it had
@@ -421,7 +507,13 @@ function writeWorkflows(workflows: Workflow[]): void {
  * be a workflow.
  */
 export function setProjectWorkflow(project: Project, input: WorkflowInput): ShapedWorkflow {
-  const shaped = shapeWorkflow(project, input, workflowForProject(project));
+  if (project.reusableWorkflowId) {
+    const shared = reusableForProject(project);
+    fail(
+      `${project.name} uses the reusable workflow "${shared?.name ?? project.reusableWorkflowId}". Stop using it before changing its own workflow.`,
+    );
+  }
+  const shaped = shapeWorkflow(project, input, ownWorkflowForProject(project.id));
   if (shaped.added.length > 0 || shaped.shown.length > 0) {
     saveProject(
       applyProjectUpdate(project, {
@@ -434,16 +526,213 @@ export function setProjectWorkflow(project: Project, input: WorkflowInput): Shap
       }),
     );
   }
-  writeWorkflows([...loadWorkflows().filter((w) => w.projectId !== project.id), shaped.workflow]);
+  writeWorkflowStore([...readWorkflowStore().filter((entry) => !isWorkflow(entry) || entry.projectId !== project.id), shaped.workflow]);
   return shaped;
 }
 
-/** Remove a project's workflow. False when it had none. */
+/** Remove a project's own workflow. False when it had none. */
 export function deleteWorkflow(projectId: string): boolean {
-  const workflows = loadWorkflows();
-  if (!workflows.some((w) => w.projectId === projectId)) return false;
-  writeWorkflows(workflows.filter((w) => w.projectId !== projectId));
+  const store = readWorkflowStore();
+  if (!store.some((entry) => isWorkflow(entry) && entry.projectId === projectId)) return false;
+  writeWorkflowStore(store.filter((entry) => !isWorkflow(entry) || entry.projectId !== projectId));
   return true;
+}
+
+export interface ReusableWorkflowInput {
+  /** Absent creates one; present changes that workflow. */
+  id?: string;
+  name?: unknown;
+  enabled?: unknown;
+  maxParallel?: unknown;
+  statuses?: unknown;
+  replace?: boolean;
+}
+
+/** A built-in keeps its canonical spelling, so "refining" cannot name a status
+ *  no issue can occupy. */
+function canonicalStatusName(name: string): string {
+  const trimmed = name.trim();
+  return ISSUE_STATUSES.find((status) => status.toLowerCase() === trimmed.toLowerCase()) ?? trimmed;
+}
+
+/**
+ * A reusable workflow from what a caller sent, on top of the one it has. Pure.
+ * Built-in status names are canonicalised; custom names keep their spelling,
+ * because the engine matches status strings exactly.
+ */
+export function shapeReusableWorkflow(input: ReusableWorkflowInput, existing?: ReusableWorkflow): ReusableWorkflow {
+  const now = Date.now();
+  const rawName = input.name === undefined ? existing?.name : text(input.name, "name");
+  const name = rawName?.trim();
+  if (!name) fail("name is required");
+  const enabled = input.enabled ?? existing?.enabled ?? true;
+  if (typeof enabled !== "boolean") fail("enabled must be true or false");
+  const maxParallel = count(input.maxParallel ?? existing?.maxParallel ?? 2, "maxParallel", 1, 50) ?? 2;
+
+  // An existing custom spelling wins, so editing a rule does not rename it.
+  const known = new Map<string, string>();
+  for (const status of Object.keys(existing?.statuses ?? {})) known.set(status.toLowerCase(), status);
+  const canon = (raw: string): string => {
+    const status = canonicalStatusName(raw);
+    const key = status.toLowerCase();
+    if (!known.has(key)) known.set(key, status);
+    return known.get(key) as string;
+  };
+
+  const statuses: Record<string, WorkflowStatusRule> = {};
+  if (!input.replace || input.statuses === undefined) {
+    for (const [status, r] of Object.entries(existing?.statuses ?? {})) statuses[status] = r;
+  }
+  if (input.statuses !== undefined) {
+    if (!input.statuses || typeof input.statuses !== "object" || Array.isArray(input.statuses)) {
+      fail("statuses must be an object keyed by status name");
+    }
+    const named = new Set<string>();
+    for (const [rawName, raw] of Object.entries(input.statuses as Record<string, unknown>)) {
+      if (rawName.trim() === "") fail("A status name is required");
+      const cleared = raw === null || (typeof raw === "object" && (raw as { kind?: unknown }).kind === "none");
+      const status = canon(rawName);
+      if (named.has(status)) fail(`The status "${status}" is given twice`);
+      named.add(status);
+      if (cleared) {
+        delete statuses[status];
+        continue;
+      }
+      const shaped = rule(raw, status);
+      if (shaped.kind === "queue") statuses[status] = { kind: "queue", to: canon(shaped.to) };
+      else if (shaped.kind === "agent") statuses[status] = { ...shaped, next: shaped.next.map(canon) };
+      else statuses[status] = { ...shaped, next: shaped.next.map((c) => ({ ...c, status: canon(c.status) })) };
+    }
+  }
+  assertFits(statuses);
+
+  return {
+    kind: "reusable",
+    id: existing?.id ?? randomUUID(),
+    name,
+    enabled,
+    maxParallel,
+    statuses,
+    createdAt: existing?.createdAt ?? now,
+    updatedAt: now,
+  };
+}
+
+/**
+ * One project's next state for a reusable workflow's statuses: add the ones it
+ * lacks, show the hidden built-ins it names, remove nothing. Pure. Throws when
+ * the project spells a custom status differently, because the shared spelling
+ * is fixed and the engine matches exact strings.
+ */
+function syncSharedStatuses(
+  project: Project,
+  workflow: Pick<Workflow, "statuses">,
+): { project: Project; added: string[]; shown: string[] } {
+  const names = workflowStatuses(workflow);
+  const allowed = allowedStatusesFor(project);
+  const known = new Map(allowed.map((name) => [name.toLowerCase(), name]));
+  const added: string[] = [];
+  for (const name of names) {
+    if (allowed.includes(name)) continue;
+    const other = known.get(name.toLowerCase());
+    if (other) {
+      fail(`Project "${project.name}" has the status "${other}", but the reusable workflow uses "${name}". Rename one so they match.`);
+    }
+    added.push(name);
+  }
+  const shown = names.filter((name) => (project.disabledStatuses ?? []).includes(name));
+  if (added.length === 0 && shown.length === 0) return { project, added, shown };
+  return {
+    project: applyProjectUpdate(project, {
+      ...(added.length > 0 ? { customStatuses: [...(project.customStatuses ?? []), ...added.map((name) => ({ name }))] } : {}),
+      ...(shown.length > 0 ? { disabledStatuses: (project.disabledStatuses ?? []).filter((name) => !shown.includes(name)) } : {}),
+    }),
+    added,
+    shown,
+  };
+}
+
+/**
+ * Create or change a reusable workflow and sync its statuses into every project
+ * that selects it. All conflicts are found before anything is written. Project
+ * files go first and the workflow last, so a project never gains a rule whose
+ * status it does not have.
+ */
+export function setReusableWorkflow(input: ReusableWorkflowInput): {
+  workflow: ReusableWorkflow;
+  projects: { id: string; name: string; added: string[]; shown: string[] }[];
+} {
+  const existing = input.id ? getReusableWorkflow(input.id) : undefined;
+  if (input.id && !existing) fail(`Reusable workflow not found: ${input.id}`);
+  const workflow = shapeReusableWorkflow(input, existing);
+  const clash = loadReusableWorkflows().find(
+    (other) => other.id !== workflow.id && other.name.toLowerCase() === workflow.name.toLowerCase(),
+  );
+  if (clash) fail(`A reusable workflow called "${workflow.name}" already exists`);
+
+  const selecting = loadProjects().filter((project) => project.reusableWorkflowId === workflow.id);
+  const synced = selecting.map((project) => syncSharedStatuses(project, workflow));
+  for (let i = 0; i < synced.length; i++) {
+    if (synced[i].project !== selecting[i]) saveProject(synced[i].project);
+  }
+  writeWorkflowStore([...readWorkflowStore().filter((entry) => !isReusableWorkflow(entry) || entry.id !== workflow.id), workflow]);
+  return {
+    workflow,
+    projects: synced
+      .filter((entry) => entry.added.length > 0 || entry.shown.length > 0)
+      .map((entry) => ({ id: entry.project.id, name: entry.project.name, added: entry.added, shown: entry.shown })),
+  };
+}
+
+/** Remove a reusable workflow nobody selects. Refuses otherwise, naming the
+ *  projects that have to switch away first. */
+export function deleteReusableWorkflow(id: string): boolean {
+  const workflow = getReusableWorkflow(id);
+  if (!workflow) return false;
+  const users = loadProjects().filter((project) => project.reusableWorkflowId === id);
+  if (users.length > 0) {
+    fail(
+      `The reusable workflow "${workflow.name}" is used by ${users.map((p) => p.name).join(", ")}. Switch those projects to their own workflow first.`,
+    );
+  }
+  writeWorkflowStore(readWorkflowStore().filter((entry) => !isReusableWorkflow(entry) || entry.id !== id));
+  return true;
+}
+
+/**
+ * A project edit that may also change its workflow source, computed in one go
+ * so there is one save and the final project is what gets checked. `undefined`
+ * leaves the source alone, `null` clears the reusable pointer, an id selects
+ * one. Pure.
+ */
+export function prepareProjectUpdate(project: Project, patch: ProjectUpdateInput, reusableWorkflowId?: string | null): Project {
+  if (reusableWorkflowId !== undefined && reusableWorkflowId !== null && typeof reusableWorkflowId !== "string") {
+    fail("reusableWorkflowId must be a workflow id or null");
+  }
+  let next = applyProjectUpdate(project, patch);
+  const pointer = reusableWorkflowId === "" ? null : reusableWorkflowId;
+  if (pointer === null) {
+    if (next.reusableWorkflowId !== undefined) {
+      const { reusableWorkflowId: _dropped, ...rest } = next;
+      next = { ...rest, updatedAt: Date.now() };
+    }
+  } else if (typeof pointer === "string") {
+    const shared = getReusableWorkflow(pointer);
+    if (!shared) fail("That reusable workflow does not exist");
+    const synced = syncSharedStatuses(next, shared);
+    if (synced.project !== next || next.reusableWorkflowId !== shared.id) {
+      next = { ...synced.project, reusableWorkflowId: shared.id, updatedAt: Date.now() };
+    }
+  }
+  assertProjectKeepsWorkflowStatuses(next);
+  return next;
+}
+
+/** Select or clear a reusable workflow for a project and persist it. */
+export function assignReusableWorkflow(project: Project, id: string | null): Project {
+  const next = prepareProjectUpdate(project, {}, id);
+  if (next !== project) saveProject(next);
+  return next;
 }
 
 /**
@@ -457,9 +746,11 @@ export function assertProjectKeepsWorkflowStatuses(project: Project): void {
   const hidden = new Set(project.disabledStatuses ?? []);
   const lost = workflowStatuses(workflow).filter((s) => !allowed.has(s) || hidden.has(s));
   if (lost.length > 0) {
-    fail(
-      `${project.name}'s workflow uses the status "${lost.join('", "')}". Change the workflow first (Settings, Workflows), then remove ${lost.length === 1 ? "it" : "them"}.`,
-    );
+    const shared = reusableForProject(project);
+    const fix = shared
+      ? `Change "${shared.name}" in Settings, Workflows, or stop using it first.`
+      : `Change the workflow first (Settings, Workflows), then remove ${lost.length === 1 ? "it" : "them"}.`;
+    fail(`${project.name}'s workflow uses the status "${lost.join('", "')}". ${fix}`);
   }
 }
 

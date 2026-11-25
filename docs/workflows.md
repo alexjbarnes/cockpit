@@ -6,7 +6,7 @@ Workflows are experimental. Turn the issue tracker on in Settings → Appearance
 
 ## The shape of it
 
-Each project has its own workflow, and it is the project's own statuses, in board order. Every status is one of four things:
+A project uses either its own workflow or a reusable one it selects. Either way the statuses are the project's own board, in board order, and a reusable workflow's statuses are added to every project using it. Every status is one of four things:
 
 - **Nothing happens.** The issue stays until someone moves it. Backlog and Done are usually this.
 - **A queue for an agent.** Issues wait here. When an agent is free, Cockpit moves the issue to the status the queue points at, where the work happens. The board then shows waiting and working apart.
@@ -30,9 +30,21 @@ A status an agent works in does not need a queue in front of it. Without one, is
 
 An issue you put by hand straight into a status an agent works in, when that status has a queue, is not picked up by itself. Its page says nothing is working on it and offers to queue it.
 
+## Reusable workflows
+
+When several projects should work the same way, define the workflow once. **Settings → Workflows → New** creates a reusable workflow outside any project. Give it a name, then set what happens at each status exactly as for a project's own workflow.
+
+A project selects one in **Settings → Projects**, under **Workflow**, or from the source card on its workflow page. Selecting one adds the workflow's statuses to the project's board and stops using its own workflow, which is kept and comes back if the project stops using the shared one.
+
+A status added to a reusable workflow is added to every project using it. Nothing is ever removed from a project's board, so an issue in a status the workflow no longer names is not orphaned. A project whose custom status differs from the shared spelling only by case is refused when it selects the workflow, because the shared spelling cannot be changed for one project.
+
+Both limits count in each project. **Issues worked at once** is per project using the workflow, and a status's **At once** is per project too. **Run this workflow** is the exception: switching it off pauses every project using it.
+
+A reusable workflow that a project still uses cannot be removed. Switch those projects to their own workflow first.
+
 ## Skills
 
-An agent does its work by running a skill from the project's own repo: a folder under `.claude/skills` with a `SKILL.md` in it. The skill is the project's own description of how that work is done, so it is versioned with the code and can name the repo's branches, commands and conventions. Cockpit has no instructions of its own to fall back on. If a status names a skill that is not in the repo, nothing starts there, and the workflow page says which skill is missing and where to add it.
+An agent does its work by running a skill from the project's own repo: a folder under `.claude/skills` with a `SKILL.md` in it. The skill is the project's own description of how that work is done, so it is versioned with the code and can name the repo's branches, commands and conventions. If the repo, or the issue's worktree, has no skill of that name, Cockpit falls back to your user skills at `~/.claude/skills/<name>/SKILL.md`, which Claude Code loads in every session. The repo's copy wins when both exist. If neither has it, nothing starts there, and the workflow page says which skill is missing and where to add it.
 
 A skill a workflow runs has nobody watching it, so it must:
 
@@ -43,26 +55,30 @@ A skill a workflow runs has nobody watching it, so it must:
 - ask no questions;
 - finish by moving the issue with `update_issue` to one of the statuses it is told it may use, and say itself which of them fits which outcome.
 
-If the agent works in the issue's own worktree (see below), the skill must be committed and on the project's base branch, since the worktree is cut from it.
+If the agent works in the issue's own worktree (see below), a repo skill must be committed and on the project's base branch, since the worktree is cut from it. A user skill is available in the worktree without being committed.
 
 ## Setting one up
 
-1. **Settings → Projects.** The project needs a repo path, which is where its skills are read from.
-2. **Settings → Workflows.** Press **Set up** beside the project. Its page lists the project's statuses. Press a status and say what happens there.
+1. **Settings → Projects.** The project needs a repo path, which is where its skills are read from. Choose **Workflow**: its own, or a reusable one.
+2. **Settings → Workflows.** Press **Set up** beside the project. Its page lists the project's statuses. Press a status and say what happens there. A reusable workflow is edited from its own card instead, once for every project using it.
 3. Create an issue and move it to the first queue, or press the button on its page that does.
 
-A project with nothing set yet can copy another project's workflow. It arrives as unsaved changes, so you can read it before it runs. A status the workflow names that the project does not have is added to its board when you save.
+A project with nothing set yet can copy another project's workflow, or a reusable workflow can copy one. It arrives as unsaved changes, so you can read it before it runs. A status the workflow names that the project does not have is added to its board when you save.
 
 ### Or ask an agent to
 
-Everything on that page can be set through Cockpit's tools, so an agent working in the project's repo can write the skills and set the workflow up:
+Everything on those pages can be set through Cockpit's tools, so an agent working in a project's repo can write the skills and set the workflow up:
 
-- `list_workflows`: every project and whether it has a workflow.
-- `get_workflow`: one project's workflow, its statuses in board order, the skills found in its repo, and what stands in the way of it running.
-- `update_workflow`: create or change it. Statuses merge by name, and `null` clears one.
-- `delete_workflow`: remove it.
+- `list_workflows`: every project, where its workflow comes from, and whether it has one.
+- `get_workflow`: one project's effective workflow, its statuses in board order, the skills it can run, and what stands in the way of it running.
+- `update_workflow`: create or change a project's own workflow, or select a reusable one with `reusable`. Statuses merge by name, and `null` clears one.
+- `delete_workflow`: remove a project's own workflow.
+- `list_reusable_workflows`: every reusable workflow and the projects using it.
+- `get_reusable_workflow`: one reusable workflow, the projects using it, its skills and what each project is missing.
+- `update_reusable_workflow`: create one, or change it. Its changes reach every project using it.
+- `delete_reusable_workflow`: remove one that no project uses.
 
-These are for the assistant and for sessions of yours. An agent a workflow started cannot change the workflow it is running in. Turning a workflow on, and widening what its agents may do, are your decisions.
+These are for the assistant and for sessions of yours. An agent a workflow started cannot change the workflow it is running in. Turning a workflow on, and widening what its agents may do, are your decisions. One reusable workflow can reach many projects at once, so check its permissions as carefully as you would a job's.
 
 ## The plan
 
@@ -83,8 +99,8 @@ An agent that reads the issue later is given each picture as a file it can open.
 Three limits apply together:
 
 - **Agents working at once** in Settings → Workflows: across everything. Each is a full Claude session, about 350 MB.
-- **Issues worked at once** on a project's workflow.
-- **At once** on a status an agent works in: for work that must not overlap, such as merging.
+- **Issues worked at once** on a workflow, counted in each project using it. A reusable workflow's number is per project, not shared between them.
+- **At once** on a status an agent works in: for work that must not overlap, such as merging. In a reusable workflow it is also per project.
 
 Issues waiting are taken most urgent first, then in board order, then oldest.
 

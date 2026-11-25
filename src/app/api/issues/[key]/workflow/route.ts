@@ -4,7 +4,7 @@ import { resolveProjectStatuses } from "@/lib/issue-display";
 import { validateSession } from "@/server/auth";
 import { getIssue, getProject } from "@/server/issue-storage";
 import { getWorkflowEngine } from "@/server/singleton";
-import { hasRepoSkill } from "@/server/skills";
+import { hasWorkflowSkill } from "@/server/skills";
 import { agentWork, loadWorkflowRuns, projectRunsWorkflow, workAt, workflowForProject } from "@/server/workflow-storage";
 
 function authenticate(req: NextRequest): boolean {
@@ -42,7 +42,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ key:
     // Agents that cannot start because their skill is not in the repo.
     missingSkills: hasRepo
       ? agentWork(workflow)
-          .filter((w) => !hasRepoSkill(project?.repoPath, w.rule.skill))
+          .filter((w) => !hasWorkflowSkill(project?.repoPath, w.rule.skill))
           .map((w) => w.workStatus)
       : [],
     runs,

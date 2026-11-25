@@ -8,6 +8,10 @@ vi.mock("node:path", async () => {
   return { ...actual, join: (...args: string[]) => args.join("/") };
 });
 
+// Reads the CLI directory through a mocked homedir, so opt out of the shared
+// CLAUDE_CONFIG_DIR the setup file gives every other file.
+delete process.env.CLAUDE_CONFIG_DIR;
+
 describe("plans", () => {
   beforeEach(() => {
     vi.resetModules();

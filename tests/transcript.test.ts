@@ -32,6 +32,10 @@ vi.mock("node:readline", () => ({
   createInterface: vi.fn(),
 }));
 
+// This suite reads the CLI directory through a mocked homedir, so it opts out
+// of the shared CLAUDE_CONFIG_DIR that the setup file gives every other file.
+delete process.env.CLAUDE_CONFIG_DIR;
+
 function jsonl(...entries: Record<string, unknown>[]): string {
   return entries.map((e) => JSON.stringify(e)).join("\n");
 }

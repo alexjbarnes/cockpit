@@ -561,3 +561,69 @@ test("a session sets a project's workflow up through the cockpit tools, and an i
     rmSync(repo, { recursive: true, force: true });
   }
 });
+
+test("a reusable workflow runs a skill from the user's own directory", async ({ page, harness }) => {
+  test.setTimeout(180_000);
+  const api = harness.cockpitUrl;
+  const repo = mkdtempSync(path.join(tmpdir(), "cockpit-it-wf-user-skill-"));
+  try {
+    execFileSync("git", ["init", "-q"], { cwd: repo });
+    writeFileSync(path.join(repo, "README.md"), "# greeter\n");
+    execFileSync("git", ["add", "."], { cwd: repo });
+    execFileSync("git", ["-c", "user.email=it@example.com", "-c", "user.name=it", "commit", "-q", "-m", "init"], { cwd: repo });
+    harness.trustWorkDir(repo);
+
+    // The repository has no skill at all: the only copy is the user's.
+    const userSkill = path.join(harness.claudeDir, "skills", "user-plan", "SKILL.md");
+    mkdirSync(path.dirname(userSkill), { recursive: true });
+    writeFileSync(userSkill, "---\nname: user-plan\ndescription: Plan from the user directory.\n---\n\nWrite the plan.\n");
+
+    await page.request.patch(`${api}/api/defaults`, {
+      data: { issuesEnabled: true, workflowsEnabled: true, workflowsPaused: true, workflowMaxParallel: 2 },
+    });
+    const { project } = await (
+      await page.request.post(`${api}/api/projects`, { data: { name: "Greeter", prefix: "GR", repoPath: repo } })
+    ).json();
+    const shared = await (
+      await page.request.post(`${api}/api/reusable-workflows`, {
+        data: {
+          name: "Frontend",
+          maxParallel: 5,
+          statuses: { ...RULES, Refining: { ...PLAN_RULE, skill: "user-plan" } },
+        },
+      })
+    ).json();
+    const assigned = await page.request.put(`${api}/api/projects/${project.id}`, {
+      data: { reusableWorkflowId: shared.workflow.id },
+    });
+    expect(assigned.ok(), await assigned.text()).toBe(true);
+
+    const key = await addIssue(page, harness, project.id, "Add a greeting", "Backlog");
+    harness.mock.setScript([
+      TITLE,
+      ...conversation(
+        key,
+        [
+          { name: SET_PLAN, input: { key, content: PLAN } },
+          { name: UPDATE, input: { key, status: "Plan Review" } },
+        ],
+        "Planned.",
+      ),
+      { events: textResponse("Nothing to do.") },
+    ]);
+    await unpause(page, harness);
+    await page.request.put(`${api}/api/issues/${key}`, { data: { status: "Refine Ready" } });
+
+    await expect.poll(async () => (await readRuns(page, harness, key)).length, { timeout: 15_000 }).toBe(1);
+    const [run] = await readRuns(page, harness, key);
+    expect(run).toMatchObject({ workStatus: "Refining", skill: "user-plan", from: "Refine Ready" });
+    await expect.poll(async () => (await readIssue(page, harness, key)).status, { timeout: 120_000 }).toBe("Plan Review");
+
+    const sent = bodies(harness).join("\n");
+    expect(sent).toContain("What to do: run the");
+    expect(sent).toContain(userSkill);
+    expect(sent).not.toContain(".claude/skills/user-plan/SKILL.md");
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
