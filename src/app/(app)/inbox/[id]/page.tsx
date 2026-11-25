@@ -4,6 +4,7 @@ import { AlertCircle, AlertTriangle, ArrowLeft, Check, Info, Loader2, Mail, Shar
 import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { usePageHeader } from "@/components/app-shell";
+import { MarkdownImage } from "@/components/markdown-image";
 import { MarkdownRender } from "@/components/markdown-render";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -197,6 +198,14 @@ export default function InboxMessagePage() {
           </div>
         </div>
       </div>
+
+      {message.images && message.images.length > 0 && (
+        <div className="flex flex-wrap items-start gap-2 border-t pt-4" data-testid="inbox-images">
+          {message.images.map((image) => (
+            <MarkdownImage key={image.id} src={`/api/inbox/${message.id}/attachments/${image.id}`} alt="Attached image" />
+          ))}
+        </div>
+      )}
 
       <div className="border-t pt-4">
         <MarkdownRender content={message.body} variant="full" />

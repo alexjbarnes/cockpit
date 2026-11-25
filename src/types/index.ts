@@ -384,6 +384,11 @@ export interface JobRun {
 // Inbox
 export type InboxPriority = "info" | "warning" | "error";
 
+export interface InboxImage {
+  id: string;
+  mime: string;
+}
+
 export interface InboxMessage {
   id: string;
   jobId?: string;
@@ -398,6 +403,8 @@ export interface InboxMessage {
   title: string;
   body: string;
   priority: InboxPriority;
+  /** Pictures attached when the message was posted, served by cockpit. */
+  images?: InboxImage[];
   createdAt: number;
   read: boolean;
 }

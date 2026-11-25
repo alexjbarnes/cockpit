@@ -10,6 +10,7 @@ import { rememberClaudeConfig } from "@/server/claude-config-guard";
 import { readClaudeUserConfig, updateClaudeUserConfig } from "@/server/claude-user-config";
 import { getDefaults, setDefaults } from "@/server/defaults";
 import { addInboxMessage } from "@/server/inbox";
+import { downloadInboxImages, removeInboxImages } from "@/server/inbox-images";
 import { embedImages, imagesForAgent } from "@/server/issue-images";
 import { readIssuePlan, writeIssuePlan } from "@/server/issue-plan";
 import {
@@ -806,6 +807,12 @@ const TOOL_DEFINITIONS = [
           description:
             "Provider ids to push this report to (e.g. Telegram) in addition to the inbox. Omit for inbox-only, no push. Resolve a name to an id with list_notify_targets first.",
         },
+        imageUrls: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "Image URLs to attach to the message, up to 3. Cockpit downloads them itself: http or https, public hosts only, png/jpeg/gif/webp, 20 MB each. Use the site's own embed image URL when it has one. A failed download fails the call, so omit the image rather than retrying blindly.",
+        },
       },
       required: ["title", "body"],
     },
@@ -1245,17 +1252,44 @@ async function handleToolCall(
           };
         }
 
-        const { entry, outcome } = addInboxMessage({
-          title,
-          body,
-          priority,
-          jobId,
-          jobName,
-          runId,
-          sessionId,
-          sessionName,
-          notifyProviders,
-        });
+        const imageUrls = Array.isArray(args.imageUrls)
+          ? (args.imageUrls as unknown[]).filter((url): url is string => typeof url === "string")
+          : [];
+        const messageId = imageUrls.length > 0 ? randomUUID() : undefined;
+        let images: Awaited<ReturnType<typeof downloadInboxImages>> | undefined;
+        if (messageId) {
+          try {
+            images = await downloadInboxImages(messageId, imageUrls);
+          } catch (err) {
+            return {
+              content: [
+                { type: "text", text: JSON.stringify({ error: err instanceof Error ? err.message : "Could not attach the image" }) },
+              ],
+              isError: true,
+            };
+          }
+        }
+
+        let entry: ReturnType<typeof addInboxMessage>["entry"];
+        let outcome: ReturnType<typeof addInboxMessage>["outcome"];
+        try {
+          ({ entry, outcome } = addInboxMessage({
+            id: messageId,
+            title,
+            body,
+            priority,
+            jobId,
+            jobName,
+            runId,
+            sessionId,
+            sessionName,
+            notifyProviders,
+            images,
+          }));
+        } catch (err) {
+          if (messageId) removeInboxImages(messageId);
+          throw err;
+        }
 
         if (rateLimitedNote) {
           return {

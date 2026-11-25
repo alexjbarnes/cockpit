@@ -2,7 +2,8 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { v4 as uuidv4 } from "uuid";
 import { getCockpitDir } from "@/server/paths";
-import type { InboxMessage, InboxPriority } from "@/types";
+import type { InboxImage, InboxMessage, InboxPriority } from "@/types";
+import { clearInboxImages, removeInboxImages } from "./inbox-images";
 import { dispatchNotification, type NotificationOutcome } from "./notifications";
 
 function inboxDir(): string {
@@ -43,6 +44,9 @@ export function getUnreadCount(): number {
 }
 
 export function addInboxMessage(msg: {
+  /** Supplied when pictures were stored under this id before the entry was
+   *  written; generated otherwise. */
+  id?: string;
   title: string;
   body: string;
   priority?: InboxPriority;
@@ -52,13 +56,15 @@ export function addInboxMessage(msg: {
   sessionId?: string;
   sessionName?: string;
   notifyProviders?: string[];
+  /** Pictures already downloaded and stored for this message. */
+  images?: InboxImage[];
   /** Where a notification about this message opens, when that is somewhere
    *  more useful than the message itself: the issue it is about. */
   url?: string;
 }): { entry: InboxMessage; outcome: NotificationOutcome } {
   const messages = readAll();
   const entry: InboxMessage = {
-    id: uuidv4(),
+    id: msg.id ?? uuidv4(),
     title: msg.title,
     body: msg.body,
     priority: msg.priority || "info",
@@ -68,6 +74,7 @@ export function addInboxMessage(msg: {
     sessionId: msg.sessionId,
     sessionName: msg.sessionName,
     ...(msg.url ? { url: msg.url } : {}),
+    ...(msg.images?.length ? { images: msg.images } : {}),
     createdAt: Date.now(),
     read: false,
   };
@@ -110,6 +117,7 @@ export function deleteInboxMessage(id: string): boolean {
   if (idx === -1) return false;
   messages.splice(idx, 1);
   writeAll(messages);
+  removeInboxImages(id);
   return true;
 }
 
@@ -117,10 +125,13 @@ export function deleteInboxMessage(id: string): boolean {
 export function deleteInboxMessages(ids: string[]): number {
   const wanted = new Set(ids);
   const messages = readAll();
+  const removedIds = messages.filter((m) => wanted.has(m.id)).map((m) => m.id);
   const kept = messages.filter((m) => !wanted.has(m.id));
-  const removed = messages.length - kept.length;
-  if (removed > 0) writeAll(kept);
-  return removed;
+  if (removedIds.length > 0) {
+    writeAll(kept);
+    for (const id of removedIds) removeInboxImages(id);
+  }
+  return removedIds.length;
 }
 
 /** Mark these messages read or unread in one write. Returns how many were found. */
@@ -139,6 +150,11 @@ export function markManyRead(ids: string[], read = true): number {
 
 export function clearInbox(): void {
   writeAll([]);
+  clearInboxImages();
+}
+
+export function getInboxMessage(id: string): InboxMessage | undefined {
+  return readAll().find((message) => message.id === id);
 }
 
 const ERROR_BLOCK_RE = /```cockpit-error\s*\n([\s\S]*?)\n```/;

@@ -34,6 +34,12 @@ export function getIssueAttachmentsRoot(): string {
   return path.join(getCockpitDir(), "issue-attachments");
 }
 
+/** Root for pictures attached to inbox messages, one directory per message.
+ *  Serving is confined to this root. */
+export function getInboxAttachmentsRoot(): string {
+  return path.join(getCockpitDir(), "inbox-attachments");
+}
+
 export function getClaudeDir(): string {
   return process.env.CLAUDE_CONFIG_DIR ?? path.join(homedir(), ".claude");
 }

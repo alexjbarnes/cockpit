@@ -1,5 +1,7 @@
 // Bulk actions on inbox messages picked in select mode: one write for the lot.
 // COCKPIT_CONFIG_DIR is a throwaway directory per test file (tests/global-setup.ts).
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import path from "node:path";
 import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -9,6 +11,7 @@ vi.mock("@/server/notifications", () => ({ dispatchNotification: h.dispatch }));
 
 import { POST } from "@/app/api/inbox/route";
 import { addInboxMessage, clearInbox, deleteInboxMessages, getInboxMessages, markManyRead } from "@/server/inbox";
+import { getInboxAttachmentsRoot } from "@/server/paths";
 
 function seed(n: number): string[] {
   return Array.from({ length: n }, (_, i) => addInboxMessage({ title: `Message ${i + 1}`, body: "b" }).entry.id);
@@ -25,6 +28,35 @@ function post(body: unknown, token = "valid") {
 }
 
 beforeEach(() => clearInbox());
+
+describe("inbox pictures", () => {
+  it("keeps attached images on the message and deletes the files with it", () => {
+    const { entry } = addInboxMessage({
+      id: "message-with-image",
+      title: "With image",
+      body: "b",
+      images: [{ id: "image-1", mime: "image/png" }],
+    });
+    expect(entry.images).toEqual([{ id: "image-1", mime: "image/png" }]);
+
+    const dir = path.join(getInboxAttachmentsRoot(), entry.id);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(path.join(dir, "image-1.png"), "png");
+
+    expect(deleteInboxMessages([entry.id])).toBe(1);
+    expect(existsSync(dir)).toBe(false);
+  });
+
+  it("clears the attachment root with the inbox", () => {
+    const { entry } = addInboxMessage({ id: "clear-image", title: "t", body: "b", images: [{ id: "i", mime: "image/png" }] });
+    const dir = path.join(getInboxAttachmentsRoot(), entry.id);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(path.join(dir, "i.png"), "png");
+
+    clearInbox();
+    expect(existsSync(dir)).toBe(false);
+  });
+});
 
 describe("deleteInboxMessages", () => {
   it("deletes only the given messages and counts them", () => {
