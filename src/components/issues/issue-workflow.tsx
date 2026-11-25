@@ -279,28 +279,34 @@ export function IssueWorkflowSection({
 
           {live && (
             <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-md border bg-muted/40 p-3" data-testid="workflow-running">
-              <Loader2 className="h-4 w-4 shrink-0 animate-spin text-blue-600 dark:text-blue-400" />
-              <div className="min-w-0 flex-1 text-sm">
-                An agent is running <span className="font-mono text-[13px]">{live.skill}</span>
-                <span className="text-muted-foreground">
-                  {" "}
-                  for <Elapsed since={live.startedAt} />
-                  {live.model ? `, on ${live.model}` : ""}
-                </span>
+              {/* On a phone the text takes the row and the actions sit under it:
+                  sharing the row left it one word wide beside two buttons. */}
+              <div className="flex min-w-0 flex-1 basis-full items-start gap-3 sm:basis-0">
+                <Loader2 className="mt-0.5 h-4 w-4 shrink-0 animate-spin text-blue-600 dark:text-blue-400" />
+                <div className="min-w-0 text-sm" data-testid="workflow-running-text">
+                  An agent is running <span className="font-mono text-[13px]">{live.skill}</span>
+                  <span className="text-muted-foreground">
+                    {" "}
+                    for <Elapsed since={live.startedAt} />
+                    {live.model ? `, on ${live.model}` : ""}
+                  </span>
+                </div>
               </div>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setPeek({ sessionId: live.sessionId, cwd: live.cwd, label: live.skill })}
-                data-testid="workflow-peek"
-              >
-                <Eye className="mr-1 h-3.5 w-3.5" />
-                Peek
-              </Button>
-              <Button variant="outline" size="sm" onClick={() => act("stop")} disabled={busy !== null} data-testid="workflow-stop">
-                {busy === "stop" ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <Square className="mr-1 h-3 w-3" />}
-                Stop
-              </Button>
+              <div className="flex shrink-0 items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setPeek({ sessionId: live.sessionId, cwd: live.cwd, label: live.skill })}
+                  data-testid="workflow-peek"
+                >
+                  <Eye className="mr-1 h-3.5 w-3.5" />
+                  Peek
+                </Button>
+                <Button variant="outline" size="sm" onClick={() => act("stop")} disabled={busy !== null} data-testid="workflow-stop">
+                  {busy === "stop" ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <Square className="mr-1 h-3 w-3" />}
+                  Stop
+                </Button>
+              </div>
             </div>
           )}
 

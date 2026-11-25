@@ -608,3 +608,53 @@ test.describe("on a phone", () => {
     }
   });
 });
+
+test("on a phone the running agent's text gets the row, with the buttons under it", async ({ page, harness }) => {
+  test.setTimeout(120_000);
+  await page.setViewportSize({ width: 393, height: 760 });
+  const repo = mkdtempSync(path.join(tmpdir(), "cockpit-it-workflow-running-phone-"));
+  try {
+    const { key } = await factory(page, harness, repo);
+
+    // The running row without starting an agent: the card reads this endpoint.
+    await page.route(`**/api/issues/${key}/workflow`, (route) =>
+      route.fulfill({
+        json: {
+          workflow: { enabled: true, statuses: RULES },
+          order: ["Refine Ready", "Refining", "Plan Review", "Implementation Ready", "Implementation", "Code Review"],
+          active: true,
+          liveRunId: "run-1",
+          attention: null,
+          idle: false,
+          missingSkills: [],
+          runs: [
+            {
+              id: "run-1",
+              skill: "implement-issue",
+              status: "running",
+              startedAt: Date.now() - 6000,
+              completedAt: null,
+              sessionId: "session-1",
+              cwd: repo,
+              model: "mock:claude-sonnet-4-6",
+              toolCount: 0,
+            },
+          ],
+        },
+      }),
+    );
+
+    await page.goto(`${harness.cockpitUrl}/issues/${key}`);
+    await expect(page.getByTestId("workflow-running")).toBeVisible({ timeout: 20_000 });
+
+    const text = await page.getByTestId("workflow-running-text").boundingBox();
+    const peek = await page.getByTestId("workflow-peek").boundingBox();
+    if (!text || !peek) throw new Error("the running row is not measurable");
+    // Sharing the row with the two buttons left the text one word wide.
+    expect(text.width).toBeGreaterThan(240);
+    // The actions are under it, not beside it.
+    expect(peek.y).toBeGreaterThanOrEqual(text.y + text.height - 1);
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
