@@ -84,6 +84,16 @@ async function resolveBase(repo: string, baseBranch: string | undefined): Promis
   return "HEAD";
 }
 
+/** Git identity flags only for the halves a machine has not configured, so a
+ *  merge can finish on a fresh server or CI runner without a global identity. */
+async function identityArgs(dir: string): Promise<string[]> {
+  const [name, email] = await Promise.all([
+    git(dir, ["config", "user.name"]).catch(() => ""),
+    git(dir, ["config", "user.email"]).catch(() => ""),
+  ]);
+  return [...(name.trim() ? [] : ["-c", "user.name=Cockpit"]), ...(email.trim() ? [] : ["-c", "user.email=cockpit@localhost"])];
+}
+
 /**
  * Bring a clean issue worktree up to date with the base before a new stage
  * works in it. The worktree is cut once and would otherwise stay on the base
@@ -96,8 +106,9 @@ async function refreshWorkspace(worktree: string, base: string): Promise<void> {
   if (dirty) return;
   const behind = await git(worktree, ["rev-list", "--count", `HEAD..${base}`]).catch(() => "0");
   if (Number(behind) === 0) return;
+  const identity = await identityArgs(worktree);
   try {
-    await git(worktree, ["merge", "--no-edit", base]);
+    await git(worktree, [...identity, "merge", "--no-edit", base]);
   } catch (err) {
     // Graph files are generated documentation, and every branch that records
     // what it learned edits the same node files as the base. A conflict there
@@ -112,7 +123,7 @@ async function refreshWorkspace(worktree: string, base: string): Promise<void> {
       try {
         await git(worktree, ["checkout", "--ours", "--", ...conflicted]);
         await git(worktree, ["add", "--", ...conflicted]);
-        await git(worktree, ["commit", "--no-edit"]);
+        await git(worktree, [...identity, "commit", "--no-edit"]);
         return;
       } catch {
         // Fall through to the abort: a half-finished merge is worse than a

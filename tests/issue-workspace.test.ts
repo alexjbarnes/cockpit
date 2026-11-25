@@ -140,11 +140,24 @@ describe("an issue's worktree", () => {
     git(repo, "commit", "-q", "-m", "graph on main");
     git(repo, "push", "-q", origin, "main");
 
-    const again = await ensureWorkspace(project({ baseBranch: "main" }), { key: "CK-1", workspace: first });
-    expect(again.path).toBe(first.path);
-    expect(readFileSync(path.join(first.path, node), "utf-8")).toBe("branch\n");
-    expect(existsSync(path.join(first.path, "later.txt"))).toBe(true);
-    expect(git(first.path, "status", "--porcelain")).toBe("");
+    // A CI runner has no global git identity; the merge and its commit must
+    // still finish with the fallback identity.
+    const prevGlobal = process.env.GIT_CONFIG_GLOBAL;
+    const prevSystem = process.env.GIT_CONFIG_SYSTEM;
+    process.env.GIT_CONFIG_GLOBAL = "/dev/null";
+    process.env.GIT_CONFIG_SYSTEM = "/dev/null";
+    try {
+      const again = await ensureWorkspace(project({ baseBranch: "main" }), { key: "CK-1", workspace: first });
+      expect(again.path).toBe(first.path);
+      expect(readFileSync(path.join(first.path, node), "utf-8")).toBe("branch\n");
+      expect(existsSync(path.join(first.path, "later.txt"))).toBe(true);
+      expect(git(first.path, "status", "--porcelain")).toBe("");
+    } finally {
+      if (prevGlobal === undefined) delete process.env.GIT_CONFIG_GLOBAL;
+      else process.env.GIT_CONFIG_GLOBAL = prevGlobal;
+      if (prevSystem === undefined) delete process.env.GIT_CONFIG_SYSTEM;
+      else process.env.GIT_CONFIG_SYSTEM = prevSystem;
+    }
   });
 
   it("still reports a real code conflict, and leaves the worktree clean", async () => {
