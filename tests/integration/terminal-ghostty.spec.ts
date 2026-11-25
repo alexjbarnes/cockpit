@@ -239,3 +239,42 @@ test("a replay keeps history older than a long progress line", async ({ page, ha
     rmSync(workDir, { recursive: true, force: true });
   }
 });
+
+test("the terminal's cursor is hidden while the chat has focus", async ({ page, harness }) => {
+  test.setTimeout(90_000);
+  const workDir = mkdtempSync(path.join(tmpdir(), "cockpit-it-terminal-focus-"));
+  mkdirSync(path.join(workDir, ".git"), { recursive: true });
+  harness.trustWorkDir(workDir);
+
+  try {
+    harness.mock.setScript([{ events: textResponse("ok") }]);
+    const created = await page.request.post(`${harness.cockpitUrl}/api/sessions`, {
+      data: { cwd: workDir, runtime: "pty" },
+    });
+    expect(created.ok()).toBe(true);
+    const { sessionId } = (await created.json()) as { sessionId: string };
+
+    await page.goto(`${harness.cockpitUrl}/sessions/${sessionId}?cwd=${encodeURIComponent(workDir)}`);
+    await expect(page.getByTestId("message-input")).toBeVisible();
+    await page.getByTitle("New terminal (Ctrl+`)").click();
+    const canvas = page.getByTestId("terminal-viewport").locator("canvas");
+    await expect(canvas).toBeVisible({ timeout: 30_000 });
+    const focus = page.getByTestId("terminal-viewport").locator("[data-terminal-focused]");
+    await expect(focus).toHaveAttribute("data-terminal-focused", "true", { timeout: 10_000 });
+
+    // Switching to the chat takes focus out of the terminal, so its cursor
+    // should stop blinking and disappear even though the terminal stays open.
+    await page.getByRole("button", { name: "Chat", exact: true }).click();
+    await expect(page.getByTestId("message-input")).toBeVisible();
+    await page.getByTestId("message-input").click();
+    await expect(focus).toHaveAttribute("data-terminal-focused", "false");
+
+    // Back in the terminal tab, a click returns the cursor.
+    await page.locator("[data-tab-id]").filter({ hasText: "Terminal" }).first().click();
+    await expect(canvas).toBeVisible();
+    await canvas.click();
+    await expect(focus).toHaveAttribute("data-terminal-focused", "true");
+  } finally {
+    rmSync(workDir, { recursive: true, force: true });
+  }
+});

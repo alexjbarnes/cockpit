@@ -404,6 +404,62 @@ function TerminalPanelInner({ terminalId, cwd: _cwd, active = true, onReconnect,
         });
       }
 
+      // Ghostty blinks its canvas cursor whether or not the terminal has
+      // focus, and focuses its wrapper when opened. A terminal left behind the
+      // chat then looks selected while typing goes to the chat. Stop the blink
+      // and hide the cursor whenever focus leaves the terminal; show it again
+      // when focus returns. focusin/focusout bubble from the off-screen
+      // textarea too, which is what ghostty focuses on a click.
+      const terminal = term;
+      const focusRoot = terminal.element;
+      if (focusRoot) {
+        const renderer = terminal.renderer as
+          | {
+              setCursorBlink?: (blink: boolean) => void;
+              cursorVisible?: boolean;
+              render?: (wasm: unknown, force?: boolean, viewportY?: number, owner?: unknown, scrollbarOpacity?: number) => void;
+            }
+          | undefined;
+        // Stopping the blink does not repaint the cursor's row, so force one
+        // frame: without it the last drawn cursor stays on the canvas.
+        const repaint = () => {
+          const internals = terminal as unknown as { wasmTerm?: unknown; scrollbarOpacity?: number };
+          if (internals.wasmTerm && renderer?.render) {
+            renderer.render(internals.wasmTerm, true, terminal.viewportY, terminal, internals.scrollbarOpacity);
+          }
+        };
+        const showCursor = (focused: boolean) => {
+          focusRoot.dataset.terminalFocused = focused ? "true" : "false";
+          if (!renderer?.setCursorBlink) return;
+          if (focused) {
+            renderer.setCursorBlink(true);
+            renderer.cursorVisible = true;
+          } else {
+            // setCursorBlink(false) leaves the cursor visible, so hide it after.
+            renderer.setCursorBlink(false);
+            renderer.cursorVisible = false;
+          }
+          repaint();
+        };
+        const onFocusIn = () => showCursor(true);
+        const onFocusOut = (event: FocusEvent) => {
+          const next = event.relatedTarget;
+          if (next instanceof Node && focusRoot.contains(next)) return;
+          showCursor(false);
+        };
+        focusRoot.addEventListener("focusin", onFocusIn);
+        focusRoot.addEventListener("focusout", onFocusOut);
+        disposables.push({
+          dispose() {
+            focusRoot.removeEventListener("focusin", onFocusIn);
+            focusRoot.removeEventListener("focusout", onFocusOut);
+          },
+        });
+        // open() focuses the wrapper; a cached terminal may already have lost
+        // focus while it was unattached.
+        showCursor(focusRoot.contains(document.activeElement));
+      }
+
       // Focusing from the pointerdown keeps the keyboard's opening inside the
       // user gesture even though the input lives off-screen.
       if (touchDevice) {
