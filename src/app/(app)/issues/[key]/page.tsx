@@ -56,7 +56,12 @@ function CollapsibleCard({
             className="flex min-w-0 flex-1 items-center gap-2 text-left"
             data-testid={testId ? `${testId}-toggle` : undefined}
           >
-            <ChevronRight className={cn("h-4 w-4 shrink-0 text-muted-foreground transition-transform", open && "rotate-90")} />
+            {/* Nudged up so its centre lines up with the cap height of the
+                title rather than the middle of its line box, which sits lower
+                because of the descenders. */}
+            <ChevronRight
+              className={cn("h-4 w-4 shrink-0 -translate-y-0.5 text-muted-foreground transition-transform", open && "rotate-90")}
+            />
             <CardTitle className="text-base">
               {title}
               {count !== undefined ? ` (${count})` : ""}
