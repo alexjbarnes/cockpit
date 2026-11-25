@@ -19,6 +19,15 @@ const DEBOUNCE_MS = 800;
  *  thing this panel used to make expensive. */
 const GIT_POLL_MS = 5_000;
 
+/** Children fetched per folder, folded into one listing for the tree. */
+function mergeListing(prev: SessionPathListing, next: SessionPathListing): SessionPathListing {
+  return {
+    paths: [...new Set([...prev.paths, ...next.paths])],
+    ignored: [...new Set([...prev.ignored, ...next.ignored])],
+    truncated: prev.truncated || next.truncated,
+  };
+}
+
 type View = "changes" | "files";
 
 interface GitFileChange {
@@ -338,50 +347,89 @@ function FilesBody({
   const [loading, setLoading] = useState(true);
   const cwdRef = useRef(cwd);
   cwdRef.current = cwd;
-  const onExpandedDirsChange = useCallback((dirs: readonly string[]) => setExpandedDirs(dirs), []);
+  /** Folders whose children are in `listing`, so expanding one fetches once. */
+  const loadedDirs = useRef<Set<string>>(new Set());
+  const expandedDirsRef = useRef<readonly string[]>([]);
 
-  const load = useCallback(async () => {
-    const target = cwdRef.current;
+  const loadDir = useCallback(async (dir: string, target: string): Promise<SessionPathListing | null> => {
     try {
-      const res = await fetch(`/api/filesystem/tree?cwd=${encodeURIComponent(target)}`);
+      const res = await fetch(`/api/filesystem/tree?cwd=${encodeURIComponent(target)}&dir=${encodeURIComponent(dir)}`);
       if (!res.ok) throw new Error("Cannot list this folder");
       const data = (await res.json()) as SessionPathListing;
-      if (cwdRef.current !== target) return;
-      setListing(data);
-      setError(false);
+      return cwdRef.current === target ? data : null;
     } catch {
-      if (cwdRef.current !== target) return;
-      setListing(null);
-      setError(true);
-    } finally {
-      if (cwdRef.current === target) setLoading(false);
+      return null;
     }
   }, []);
+
+  /** Re-read the top level and every folder that is open, dropping entries
+   *  that have gone. The Files tree is lazy: only what is on screen is read. */
+  const reload = useCallback(async () => {
+    const target = cwdRef.current;
+    const dirs = ["", ...expandedDirsRef.current];
+    const results = await Promise.all(dirs.map((dir) => loadDir(dir, target)));
+    if (cwdRef.current !== target) return null;
+    const root = results[0];
+    if (!root) {
+      setListing(null);
+      setError(true);
+      setLoading(false);
+      return null;
+    }
+    loadedDirs.current = new Set(dirs);
+    setListing(results.filter((r): r is SessionPathListing => !!r).reduce(mergeListing, { paths: [], ignored: [], truncated: false }));
+    setError(false);
+    setLoading(false);
+    return root;
+  }, [loadDir]);
+
+  const onExpandedDirsChange = useCallback(
+    (dirs: readonly string[]) => {
+      setExpandedDirs(dirs);
+      expandedDirsRef.current = dirs;
+      const target = cwdRef.current;
+      for (const dir of dirs) {
+        if (loadedDirs.current.has(dir)) continue;
+        loadedDirs.current.add(dir);
+        void loadDir(dir, target).then((data) => {
+          if (!data || cwdRef.current !== target) {
+            loadedDirs.current.delete(dir);
+            return;
+          }
+          setListing((prev) => (prev ? mergeListing(prev, data) : data));
+        });
+      }
+    },
+    [loadDir],
+  );
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: cwd and pathname are the triggers; the fetch reads them through cwdRef
   useEffect(() => {
     setLoading(true);
+    setListing(null);
     setExpandedDirs([]);
-    load();
-  }, [cwd, pathname, load]);
+    expandedDirsRef.current = [];
+    loadedDirs.current = new Set();
+    void reload();
+  }, [cwd, pathname, reload]);
 
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | null = null;
     const unsubscribe = subscribe((msg) => {
       if (msg.type !== "session:fs_changed" || msg.cwd !== cwdRef.current) return;
-      // A session writing files fires this often; one walk after the flurry is
-      // enough, and the tree keeps its expansion while the list is unchanged.
+      // A session writing files fires this often; one re-read after the flurry
+      // is enough, and the tree keeps its expansion while the list is unchanged.
       if (timer) clearTimeout(timer);
       timer = setTimeout(() => {
         timer = null;
-        load();
+        void reload();
       }, DEBOUNCE_MS);
     });
     return () => {
       if (timer) clearTimeout(timer);
       unsubscribe();
     };
-  }, [subscribe, load]);
+  }, [subscribe, reload]);
 
   // Only the folders on screen need live updates, so the tree reports its
   // expansion and the server watches exactly those. "" is the session folder

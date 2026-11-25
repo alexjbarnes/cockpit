@@ -21,6 +21,10 @@ const SKIPPED_DIRECTORIES = new Set([
   "__pycache__",
   ".cache",
   ".gradle",
+  // Tool state, not source: screenshots and logs from the Playwright MCP, and
+  // nested worktrees, which repeat a repository inside itself.
+  ".playwright-mcp",
+  ".worktrees",
 ]);
 
 const GIT_EXCLUDES = [...SKIPPED_DIRECTORIES].filter((directory) => directory !== ".git").map((directory) => `--exclude=${directory}/`);
@@ -36,6 +40,12 @@ function runGit(args: string[], cwd: string): Promise<string> {
 
 function uniqueSorted(paths: Iterable<string>): string[] {
   return [...new Set(paths)].sort();
+}
+
+/** Shallow paths first, so a cap keeps the repository's own files rather than
+ *  twenty thousand entries under one tool directory. */
+function byDepthThenPath(a: string, b: string): number {
+  return a.split("/").length - b.split("/").length || a.localeCompare(b);
 }
 
 interface GitListing {
@@ -115,12 +125,72 @@ async function walkPaths(root: string): Promise<string[]> {
   return uniqueSorted(paths);
 }
 
+/** An expanded folder's immediate children are normally a handful; this only
+ *  bounds a pathological directory whose readdir itself is huge. */
+export const MAX_DIRECTORY_ENTRIES = 5_000;
+
+/** Ask git which of these entries its ignore rules cover. Exit 1 means none;
+ *  any other failure (not a repository, no git) means nothing is marked. */
+function ignoredEntries(root: string, entries: readonly string[]): Promise<Set<string>> {
+  if (entries.length === 0) return Promise.resolve(new Set());
+  return new Promise((resolve) => {
+    const child = execFile("git", ["-C", root, "check-ignore", "--stdin", "-z"], { maxBuffer: 8 * 1024 * 1024 }, (err, stdout) => {
+      if (err && (err as { code?: number }).code !== 1) {
+        resolve(new Set());
+        return;
+      }
+      resolve(new Set(stdout.split("\0").filter(Boolean)));
+    });
+    child.stdin?.end(entries.map((entry) => entry.replace(/\/$/, "")).join("\0") + "\0");
+  });
+}
+
+/**
+ * One directory's immediate children, for the lazy Files tree: the top level
+ * is listed first, and a folder is listed when it is expanded. Directories
+ * carry a trailing slash so the tree can draw them before their children are
+ * known. Generated folders are not descended into, and git-ignored entries
+ * are marked so the tree can mute them.
+ */
+export async function listSessionDirectory(cwd: string, dir = ""): Promise<SessionPathListing> {
+  const root = path.resolve(cwd);
+  const target = path.resolve(root, dir);
+  if (target !== root && !target.startsWith(root + path.sep)) throw new Error("Not this session's folder");
+
+  let entries: Dirent[];
+  try {
+    entries = await readdir(target, { withFileTypes: true });
+  } catch {
+    throw new Error("Cannot list this folder");
+  }
+  entries.sort((a, b) => a.name.localeCompare(b.name));
+
+  const paths: string[] = [];
+  for (const entry of entries) {
+    if (entry.isSymbolicLink()) continue;
+    if (entry.isDirectory() && SKIPPED_DIRECTORIES.has(entry.name)) continue;
+    const relative = path.relative(root, path.join(target, entry.name)).split(path.sep).join("/");
+    if (entry.isDirectory()) paths.push(`${relative}/`);
+    else if (entry.isFile()) paths.push(relative);
+  }
+
+  const shown = paths.slice(0, MAX_DIRECTORY_ENTRIES);
+  const ignored = await ignoredEntries(root, shown);
+  return {
+    paths: shown,
+    ignored: shown.filter((entry) => ignored.has(entry) || ignored.has(entry.replace(/\/$/, ""))),
+    truncated: paths.length > shown.length,
+  };
+}
+
 /**
  * Every file under a session's directory, as tree-ready relative paths.
  *
  * Git repositories use the index plus untracked files, including git-ignored
  * files (marked so the tree can mute them) but not generated directories such
- * as node_modules; anything else gets a bounded recursive walk.
+ * as node_modules; anything else gets a bounded recursive walk. Kept for the
+ * Open File picker, which needs the whole tree at once; the sidebar lists one
+ * expanded folder at a time (listSessionDirectory).
  */
 export async function listSessionPaths(cwd: string, maxEntries = 20_000): Promise<SessionPathListing> {
   const root = path.resolve(cwd);
@@ -134,7 +204,7 @@ export async function listSessionPaths(cwd: string, maxEntries = 20_000): Promis
     listing = { paths: await walkPaths(root), ignored: [] };
   }
 
-  const paths = listing.paths.slice(0, maxEntries);
+  const paths = [...listing.paths].sort(byDepthThenPath).slice(0, maxEntries);
   const visible = new Set(paths);
   return {
     paths,

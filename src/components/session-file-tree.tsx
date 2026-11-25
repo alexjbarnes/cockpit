@@ -72,8 +72,10 @@ export function SessionFileTree({
   onExpandedDirsChange,
 }: SessionFileTreeProps) {
   const preparedInput = useMemo(() => prepareFileTreeInput(paths), [paths]);
-  const pathsRef = useRef(new Set(paths));
-  pathsRef.current = new Set(paths);
+  // Only files open; a directory is a path with a trailing slash in the lazy
+  // listing, and selecting one must expand it rather than open a tab.
+  const filePathsRef = useRef(new Set(paths.filter((path) => !path.endsWith("/"))));
+  filePathsRef.current = new Set(paths.filter((path) => !path.endsWith("/")));
   const onOpenRef = useRef(onOpen);
   onOpenRef.current = onOpen;
   const decorationsRef = useRef(decorations);
@@ -94,7 +96,7 @@ export function SessionFileTree({
       return decorationsRef.current?.get(row.path) ?? null;
     },
     onSelectionChange: (selected) => {
-      const path = newlySelectedPath(selectedRef.current, selected, pathsRef.current);
+      const path = newlySelectedPath(selectedRef.current, selected, filePathsRef.current);
       selectedRef.current = selected;
       if (!path) return;
       onOpenRef.current(path);

@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { listSessionPaths } from "@/server/session-paths";
+import { listSessionDirectory, listSessionPaths } from "@/server/session-paths";
 
 const tempDirs: string[] = [];
 
@@ -44,7 +44,7 @@ describe("listSessionPaths", () => {
     write(repo, "node_modules/pkg/index.js");
 
     expect(await listSessionPaths(repo)).toEqual({
-      paths: [".gitignore", ".idea/workspace.xml", "README.md", "ignored.txt", "src/a.ts", "src/b.ts"],
+      paths: [".gitignore", "ignored.txt", "README.md", ".idea/workspace.xml", "src/a.ts", "src/b.ts"],
       ignored: [".idea/workspace.xml", "ignored.txt"],
       truncated: false,
     });
@@ -62,7 +62,7 @@ describe("listSessionPaths", () => {
     write(repo, "src/secret.env");
 
     expect(await listSessionPaths(path.join(repo, "src"))).toEqual({
-      paths: ["nested/two.ts", "one.ts", "secret.env"],
+      paths: ["one.ts", "secret.env", "nested/two.ts"],
       ignored: ["secret.env"],
       truncated: false,
     });
@@ -77,7 +77,7 @@ describe("listSessionPaths", () => {
     write(root, ".git/config");
     symlinkSync(root, path.join(root, "loop"));
 
-    expect(await listSessionPaths(root)).toEqual({ paths: ["notes/today.md", "readme.md"], ignored: [], truncated: false });
+    expect(await listSessionPaths(root)).toEqual({ paths: ["readme.md", "notes/today.md"], ignored: [], truncated: false });
   });
 
   it("caps a large listing and says it was truncated", async () => {
@@ -87,6 +87,44 @@ describe("listSessionPaths", () => {
     write(root, "c.txt");
 
     expect(await listSessionPaths(root, 2)).toEqual({ paths: ["a.txt", "b.txt"], ignored: [], truncated: true });
+  });
+
+  it("keeps shallow files when a deep tool folder would fill the cap", async () => {
+    const root = tempDir();
+    write(root, "README.md");
+    write(root, "src/app.ts");
+    for (let i = 0; i < 20; i++) write(root, `.claude/deep/f${i}.txt`);
+    write(root, ".playwright-mcp/shot.png");
+    write(root, ".worktrees/other/file.txt");
+
+    const listing = await listSessionPaths(root, 5);
+
+    expect(listing.paths.slice(0, 2)).toEqual(["README.md", "src/app.ts"]);
+    expect(listing.paths.some((entry) => entry.startsWith(".playwright-mcp/") || entry.startsWith(".worktrees/"))).toBe(false);
+    expect(listing.truncated).toBe(true);
+  });
+
+  it("lists one directory at a time for the lazy Files tree", async () => {
+    const repo = tempDir();
+    git(repo, "init", "-q", "-b", "main");
+    write(repo, ".gitignore", "ignored.txt\n");
+    write(repo, "README.md");
+    write(repo, "src/a.ts");
+    write(repo, "ignored.txt");
+    write(repo, "node_modules/pkg/index.js");
+    write(repo, ".playwright-mcp/shot.png");
+    write(repo, ".worktrees/other/file.txt");
+    git(repo, "add", ".");
+    git(repo, "commit", "-q", "-m", "init");
+
+    const root = await listSessionDirectory(repo);
+    expect(root.paths).toEqual([".gitignore", "ignored.txt", "README.md", "src/"]);
+    expect(root.ignored).toEqual(["ignored.txt"]);
+
+    const sub = await listSessionDirectory(repo, "src");
+    expect(sub.paths).toEqual(["src/a.ts"]);
+
+    await expect(listSessionDirectory(repo, "../outside")).rejects.toThrow();
   });
 
   it("rejects a path that is not a directory", async () => {
