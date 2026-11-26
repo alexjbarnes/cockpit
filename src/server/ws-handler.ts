@@ -122,7 +122,11 @@ export function createWebSocketHandler(
   sessionManager: SessionManager,
   terminalManager: TerminalManager,
 ): WebSocketServer {
-  const wss = new WebSocketServer({ noServer: true });
+  // Compressed (permessage-deflate). A session's history goes out as one message, and the page drops a
+  // connection that has received nothing for 5 s after its ping. On a slow link a large history could not
+  // arrive in time, so the page reconnected and was sent it again, forever. Deflated it is a fraction of
+  // the size; browsers negotiate it by themselves.
+  const wss = new WebSocketServer({ noServer: true, perMessageDeflate: true });
   const terminalWss = new WebSocketServer({ noServer: true });
 
   setupTerminalWebSocket(terminalWss, terminalManager);

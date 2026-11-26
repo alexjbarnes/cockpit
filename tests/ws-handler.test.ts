@@ -124,6 +124,12 @@ describe("WebSocket handler", () => {
     ws.close();
   });
 
+  it("compresses the chat socket", async () => {
+    const ws = await connectWs();
+    expect(ws.extensions).toContain("permessage-deflate");
+    ws.close();
+  });
+
   it("responds to ping with pong", async () => {
     const ws = await connectWs();
     ws.send(JSON.stringify({ type: "ping" }));
